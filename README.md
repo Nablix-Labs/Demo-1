@@ -31,3 +31,14 @@ NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000 npm run dev -- --hostname 127.0.0
 ```
 
 Open `http://127.0.0.1:3000`.
+
+## Deploy
+
+The frontend is deployed with GitHub Pages from `Numera-ui/`.
+
+Deploy the backend on Koyeb from `nablix-backend/Dockerfile`, then set this
+GitHub repository variable before rerunning the Pages workflow:
+
+```text
+NEXT_PUBLIC_API_BASE_URL=https://<your-koyeb-backend>.koyeb.app
+```
