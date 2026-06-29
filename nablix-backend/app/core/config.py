@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     cors_allowed_origins: list[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "https://nablix-labs.github.io",
     ]
 
     #API Keys
@@ -29,7 +30,7 @@ class Settings(BaseSettings):
     use_mock_rag: bool = True
     use_mock_student_model: bool = True
     use_mock_voice: bool = True
-    use_mock_vision: bool = False
+    use_mock_vision: bool = True
 
     #Vision OCR (used when use_mock_vision is False)
     openai_vision_model: str = "gpt-5.5"
