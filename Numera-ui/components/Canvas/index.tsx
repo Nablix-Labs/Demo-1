@@ -34,8 +34,8 @@ const HELP_TIPS = [
 
 export default function CanvasStage() {
   const { questionText, questionNumber, items, currentTopicId, setActiveTool, setCanvasExporter } = useNumeraStore();
-  const { apiEnabled, sessionId, submitCanvasWork } = useDemoTutor();
   const showBarModel = demoFor(currentTopicId).showBarModel;
+  const tutor = useDemoTutor();
 
   const exportRef = useRef<(() => string | null) | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -57,20 +57,23 @@ export default function CanvasStage() {
     if (toastTimer.current) clearTimeout(toastTimer.current);
   }, []);
 
-  const handleCheckWork = useCallback(async () => {
+  const handleCheckWork = useCallback(() => {
     const png = exportRef.current?.();
     if (!png || items.length === 0) {
       showToast('Show your working on the canvas first, then tap Check.');
       return;
     }
-    if (apiEnabled && sessionId) {
-      const result = await submitCanvasWork();
-      showToast(result ? 'Tutor reviewed your working.' : 'Tutor could not review this yet.');
-      return;
+    // Submit for live OCR + tutor feedback when a backend session is active;
+    // otherwise acknowledge locally (mock demo).
+    if (tutor.apiEnabled && tutor.sessionId) {
+      showToast('Reading your working…');
+      void tutor.submitCanvasWork().then((res) => {
+        showToast(res ? res.tutor.tutor_message : 'Submitted — see your session trail.');
+      });
+    } else {
+      showToast('Nice work — your working has been submitted.');
     }
-    console.log('[Numera] Canvas submitted, PNG length:', png.length);
-    showToast('Nice work — your working has been submitted.');
-  }, [apiEnabled, items.length, sessionId, showToast, submitCanvasWork]);
+  }, [items.length, showToast, tutor]);
 
   return (
     <main

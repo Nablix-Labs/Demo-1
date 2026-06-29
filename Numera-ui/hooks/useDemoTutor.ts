@@ -59,18 +59,17 @@ export function useDemoTutor() {
   const start = useCallback(
     async (
       conceptId: string,
-      mode: 'VOICE' | 'TEXT',
-      initialPhase: string | null
+      mode: 'VOICE' | 'TEXT' = 'TEXT',
+      initialPhase: string | null = null
     ): Promise<SessionRecord | null> => {
       if (!apiEnabled()) return null;
-      const payload = {
-        student_id: STUDENT_ID,
-        concept_id: conceptId,
-        interaction_mode: mode,
-        ...(initialPhase === null ? {} : { initial_phase: initialPhase }),
-      };
       try {
-        const rec = await startSession(payload);
+        const rec = await startSession({
+          student_id: STUDENT_ID,
+          concept_id: conceptId,
+          interaction_mode: mode,
+          ...(initialPhase === null ? {} : { initial_phase: initialPhase }),
+        });
         clearTrail();
         setSessionId(rec.session_id);
         setQuestionText(rec.current_question);
@@ -185,29 +184,39 @@ export function useDemoTutor() {
       if (!apiEnabled() || !sessionId || !transcript.trim()) return null;
       addTrailEntry({ kind: 'answer', text: transcript });
 
+      // Console trace for backend integration debugging — shows the exact
+      // payloads/responses the frontend exchanges on a voice turn.
+      console.groupCollapsed(`%c[voice→backend] turn fired`, 'color:#7a5cc8;font-weight:bold');
+      console.log('captured transcript:', transcript, confidence != null ? `(confidence ${confidence})` : '');
+
       // Snapshot the canvas alongside the spoken turn (best-effort).
       let canvasSnapshotId: string | undefined;
       const png = canvasExporter?.();
       if (png) {
         try {
+          console.log('→ POST /canvas/submit', { session_id: sessionId, student_id: STUDENT_ID, snapshot_bytes: png.length });
           const canvasRes = await submitCanvas(sessionId, png);
           canvasSnapshotId = canvasRes.submission_id;
+          console.log('← /canvas/submit', { submission_id: canvasRes.submission_id, ocr: canvasRes.ocr, tutor: canvasRes.tutor });
           addTrailEntry({
             kind: 'canvas',
             text: canvasRes.ocr.raw_ocr_text || canvasRes.ocr.detected_equation || 'Canvas submitted.',
             meta: `OCR ${(canvasRes.ocr.confidence * 100).toFixed(0)}%`,
           });
-        } catch {
+        } catch (err) {
+          console.warn('✗ /canvas/submit failed:', err);
           /* canvas is optional for a voice turn */
         }
+      } else {
+        console.log('(no canvas content this turn)');
       }
 
       try {
-        const res = await sendInteraction({
+        const interactionReq = {
           session_id: sessionId,
           student_id: STUDENT_ID,
-          interaction_type: 'ANSWER_SUBMISSION',
-          input_source: 'VOICE',
+          interaction_type: 'ANSWER_SUBMISSION' as const,
+          input_source: 'VOICE' as const,
           voice_transcript: transcript,
           transcript_confidence: confidence,
           canvas_snapshot_id: canvasSnapshotId,
@@ -215,12 +224,18 @@ export function useDemoTutor() {
           concept_id: ctx.concept_id,
           question_id: ctx.question_id,
           hint_count: ctx.hint_count,
-        });
+        };
+        console.log('→ POST /interaction', interactionReq);
+        const res = await sendInteraction(interactionReq);
+        console.log('← /interaction', res);
+        console.groupEnd();
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message });
         speak(res.message_voice || res.message);
         return res;
       } catch (err) {
+        console.warn('✗ /interaction failed:', err);
+        console.groupEnd();
         addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Tutor unavailable.') });
         return null;
       }

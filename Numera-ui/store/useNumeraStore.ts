@@ -212,6 +212,7 @@ export interface NumeraState {
   setQuestionText: (q: string) => void;
   setQuestionNumber: (n: number) => void;
   toggleMic: () => void;
+  setMicMuted: (value: boolean) => void;
   setVoiceStatus: (s: NumeraState['voiceStatus']) => void;
   addTranscriptMessage: (msg: Omit<TranscriptMessage, 'id' | 'timestamp'>) => void;
   setTranscript: (msgs: Pick<TranscriptMessage, 'role' | 'text'>[]) => void;
@@ -269,7 +270,7 @@ export interface NumeraState {
 const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
-  | 'setQuestionText' | 'setQuestionNumber' | 'toggleMic' | 'setVoiceStatus'
+  | 'setQuestionText' | 'setQuestionNumber' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus'
   | 'addTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript'
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
   | 'setShapeKind' | 'setEraserMode'
@@ -371,6 +372,9 @@ export const useNumeraStore = create<NumeraState>()(
       micMuted: !s.micMuted,
       voiceStatus: s.micMuted ? 'listening' : 'idle',
     })),
+
+  setMicMuted: (micMuted) =>
+    set({ micMuted, voiceStatus: micMuted ? 'idle' : 'listening' }),
 
   setVoiceStatus: (voiceStatus) => set({ voiceStatus }),
 
