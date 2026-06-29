@@ -14,6 +14,7 @@ import { useNumeraStore } from '@/store/useNumeraStore';
 import { useFlowNav } from '@/lib/useFlowNav';
 import { useDemoTutor } from '@/hooks/useDemoTutor';
 import { StreamingTutorResponse, useStreamingVoiceTurn } from '@/hooks/useStreamingVoiceTurn';
+import { DEMO_CONCEPT_ID, DEMO_QUESTION_ID, DEMO_PHASE } from '@/lib/api';
 import { demoFor } from '@/lib/demoContent';
 import PhaseGate from '@/components/PhaseGate';
 import Toolbar from '@/components/Canvas/Toolbar';
@@ -40,10 +41,9 @@ export default function PracticePage() {
   const QUESTION = demo.practiceQuestion;
   const HINTS = demo.practiceHints;
 
-  // Backend context for this practice problem. concept_id is the topic; the
-  // question_id just needs to be a stable non-empty identifier for the demo.
-  const PHASE = 'GUIDED_PRACTICE';
-  const QUESTION_ID = `${currentTopicId}_PRACTICE`;
+  // Backend context — fixed demo identifiers, matching the API documentation.
+  const PHASE = DEMO_PHASE;
+  const QUESTION_ID = DEMO_QUESTION_ID;
 
   const onStudentTranscript = useCallback(
     (transcript: string, confidence?: number) => {
@@ -109,7 +109,7 @@ export default function PracticePage() {
   const requestHint = () => {
     setMode('hint');
     void tutor.hint({
-      concept_id: currentTopicId,
+      concept_id: DEMO_CONCEPT_ID,
       question_id: QUESTION_ID,
       current_phase: PHASE,
       current_hint_count: hintIndex,
