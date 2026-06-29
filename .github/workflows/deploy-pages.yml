@@ -1,17 +1,15 @@
-name: Deploy to GitHub Pages
+name: Deploy UI to GitHub Pages
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-# Allow the workflow to publish to Pages
 permissions:
   contents: read
   pages: write
   id-token: write
 
-# One in-flight deployment at a time
 concurrency:
   group: pages
   cancel-in-progress: true
@@ -19,23 +17,27 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Numera-ui
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
+          cache-dependency-path: Numera-ui/package-lock.json
       - run: npm ci
       - name: Build static export
         env:
-          GITHUB_PAGES: 'true'
+          GITHUB_PAGES: "true"
         run: npm run build
-      - name: Disable Jekyll (serve _next/*)
+      - name: Disable Jekyll
         run: touch out/.nojekyll
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: out
+          path: Numera-ui/out
 
   deploy:
     needs: build

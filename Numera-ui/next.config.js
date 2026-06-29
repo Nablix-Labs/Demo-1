@@ -4,7 +4,7 @@
 // a repo subpath (https://<org>.github.io/<repo>/). The workflow sets
 // GITHUB_PAGES=true; local dev and normal builds are unaffected.
 const isPages = process.env.GITHUB_PAGES === 'true';
-const repo = 'Numera-ui';
+const repo = 'Demo-1';
 
 const nextConfig = {
   ...(isPages
