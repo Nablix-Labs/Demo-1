@@ -21,6 +21,13 @@ class AdapterContext(BaseModel):
     session_id: str
     student_id: str
     message: str
+    question: str | None = None
+    correct_answer: str | None = None
+    current_phase: str | None = None
+    input_source: str | None = None
+    transcript_confidence: float | None = None
+    attempt_count: int | None = None
+    current_hint_level: int | None = None
 
 
 class RetrievedDocument(BaseModel):

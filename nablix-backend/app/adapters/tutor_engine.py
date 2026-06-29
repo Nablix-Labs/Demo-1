@@ -9,17 +9,21 @@ from typing import NoReturn
 
 from pydantic import ValidationError
 
+from app.ai_engine.classifier import ClassificationRequest, classify_student_response
+from app.ai_engine.schemas import TutorResponse
 from app.adapters.http_utils import JsonObject, post_json
 from app.core.config import Settings
 from app.core.exceptions import AdapterError
 from app.models.adapters import (
     AdapterContext,
+    CanvasFeedback,
     RAGResult,
     SafetyCheckResult,
     StudentModelResult,
     StudentModelEvent,
     TutorEngineRequest,
     TutorResult,
+    VisualCue,
 )
 
 
@@ -77,7 +81,27 @@ class TutorEngineServiceAdapter:
         raise error
 
     def _mock_response(self, request: TutorEngineRequest) -> TutorResult:
-        """Return realistic incorrect-answer feedback for development."""
+        """Return AI Engine feedback when context has a question, else mock data."""
+
+        context = request.context
+        if context.question is not None and context.correct_answer is not None:
+            ai_response = classify_student_response(
+                ClassificationRequest(
+                    question=context.question,
+                    correct_answer=context.correct_answer,
+                    student_input=context.message,
+                    current_phase=context.current_phase or "GUIDED_PRACTICE",
+                    input_source=context.input_source or "TEXT",
+                    transcript_confidence=context.transcript_confidence,
+                    attempt_count=context.attempt_count or 1,
+                    current_hint_level=context.current_hint_level,
+                    concept_id=None,
+                    difficulty="FOUNDATION",
+                    max_hint_results=3,
+                    exclude_content_ids=[],
+                )
+            )
+            return _tutor_result_from_ai_response(ai_response)
 
         return TutorResult(
             evaluation="INCORRECT",
@@ -112,3 +136,43 @@ class MockTutorEngineAdapter(TutorEngineServiceAdapter):
 
     def __init__(self) -> None:
         super().__init__(Settings(use_mock_tutor=True))
+
+
+def _tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:
+    return TutorResult(
+        evaluation=response.evaluation or "NO_ATTEMPT",
+        error_type=response.error_type or "UNKNOWN_ERROR",
+        intent=response.intent,
+        response_strategy=response.response_strategy,
+        tutor_message=response.tutor_message,
+        tutor_message_voice=response.tutor_message_voice_optimised,
+        voice_optimised=response.voice_optimised,
+        hint_level=response.hint_level or 0,
+        scaffold_steps_delivered=response.scaffold_steps_delivered,
+        visual_cue=VisualCue(
+            show=response.visual_cue.show,
+            cue_type=response.visual_cue.cue_type,
+            description=response.visual_cue.description,
+        ),
+        canvas_feedback=CanvasFeedback(),
+        next_phase_recommendation=response.next_phase_recommendation,
+        answer_reveal_allowed=response.answer_reveal_allowed,
+        confidence=response.confidence,
+        input_source=response.input_source,
+        transcript_confidence=response.transcript_confidence,
+        safety_check=SafetyCheckResult(
+            passed=response.safety_check.passed,
+            flag_type=response.safety_check.flag_type,
+            action_taken=response.safety_check.action_taken,
+        ),
+        student_model_events=[
+            StudentModelEvent(
+                event_type=event.event_type,
+                evaluation=event.evaluation or "NO_ATTEMPT",
+                error_type=event.error_type,
+                hint_level_used=event.hint_level_used,
+                independent_success=event.independent_success,
+            )
+            for event in response.student_model_events
+        ],
+    )
