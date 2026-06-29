@@ -2,6 +2,8 @@
 
 The first working demo draft with the Numera frontend and Nablix backend in one repo.
 
+**Live:** frontend → https://demo-1-hqh6.vercel.app · backend → https://demo-1-phi-amber.vercel.app
+
 | Folder | Stack | What it is |
 |--------|-------|------------|
 | [`nablix-backend/`](./nablix-backend) | FastAPI (Python 3.13) | REST API for sessions, tutoring, hints, canvas, and mocks. |
@@ -34,11 +36,23 @@ Open `http://127.0.0.1:3000`.
 
 ## Deploy
 
-The frontend is deployed with GitHub Pages from `Numera-ui/`.
+Both apps run on Vercel as two projects from this one repo.
 
-Deploy the backend on Koyeb from `nablix-backend/Dockerfile`, then set this
-GitHub repository variable before rerunning the Pages workflow:
+**Backend** — new Vercel project, Root Directory `nablix-backend`. Served as a
+Python serverless function via `nablix-backend/api/index.py` + `vercel.json`.
+Env vars:
 
 ```text
-NEXT_PUBLIC_API_BASE_URL=https://<your-koyeb-backend>.koyeb.app
+NABLIX_USE_MOCK_VISION=true
+NABLIX_CORS_ALLOWED_ORIGINS=["https://demo-1-hqh6.vercel.app"]
 ```
+
+**Frontend** — new Vercel project, Root Directory `Numera-ui` (Next.js
+auto-detected). Env var pointing at the backend:
+
+```text
+NEXT_PUBLIC_API_BASE_URL=https://demo-1-phi-amber.vercel.app
+```
+
+> Note: the backend keeps session state in memory, so sessions can drop on a
+> serverless cold start — fine for the demo, not for sustained load.
