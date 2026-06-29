@@ -17,6 +17,9 @@ from app.services.session_service import _get_owned_session, update_interaction_
 
 
 _PHASE_VALUES: tuple[str, ...] = get_args(Phase)
+_MOCK_CORRECT_ANSWERS_BY_QUESTION_ID: dict[str, str] = {
+    "ALG_EQ_DIAG_001": "x = 5",
+}
 
 
 async def run_tutor_pipeline(
@@ -48,6 +51,16 @@ def _student_message_from(request: InteractionRequest) -> str:
             detail="transcript_confidence is required for VOICE interactions.",
         )
     return request.voice_transcript
+
+
+def _current_hint_level_from(hint_count: int) -> int | None:
+    if hint_count <= 0:
+        return None
+    return min(hint_count, 3)
+
+
+def _correct_answer_for(question_id: str) -> str | None:
+    return _MOCK_CORRECT_ANSWERS_BY_QUESTION_ID.get(question_id)
 
 
 def _next_phase_from(request: InteractionRequest, tutor: TutorResult | None) -> Phase:
@@ -105,13 +118,20 @@ async def process_interaction(request: InteractionRequest) -> InteractionRespons
     still runs in full; its verdict fields just aren't echoed.
     """
 
-    _get_owned_session(request.session_id, request.student_id)
+    session: SessionRecord = _get_owned_session(request.session_id, request.student_id)
     student_message = _student_message_from(request)
 
     context = AdapterContext(
         session_id=request.session_id,
         student_id=request.student_id,
         message=student_message,
+        question=session.current_question,
+        correct_answer=_correct_answer_for(request.question_id),
+        current_phase=request.current_phase,
+        input_source=request.input_source,
+        transcript_confidence=request.transcript_confidence,
+        attempt_count=request.hint_count + 1,
+        current_hint_level=_current_hint_level_from(request.hint_count),
     )
     adapters = get_adapters()
     safety_check = await adapters.safety.check(context)

@@ -55,8 +55,8 @@ def test_interaction_returns_session_view() -> None:
     body = response.json()
     assert body["session_id"] == session_id
     assert body["student_id"] == "ST001"
-    assert body["message"] == "Check your arithmetic carefully."
-    assert body["message_voice"] == "Check your arithmetic carefully."
+    assert body["message"] == "Let us review the equation and try the next step carefully."
+    assert body["message_voice"] == "Let us review the equation and try the next step carefully."
     assert body["current_phase"] == "GUIDED_PRACTICE"
     assert body["voice_state"] == {
         "stream_active": False,

@@ -98,8 +98,8 @@ def test_voice_transcript_routes_through_interaction_flow() -> None:
     body = response.json()
     assert body["session_id"] == session_id
     assert body["student_id"] == "ST011"
-    assert body["message"] == "Check your arithmetic carefully."
-    assert body["message_voice"] == "Check your arithmetic carefully."
+    assert body["message"] == "Let us review the equation and try the next step carefully."
+    assert body["message_voice"] == "Let us review the equation and try the next step carefully."
     assert body["voice_state"]["stream_active"] is True
     assert body["voice_state"]["current_turn"] == "STUDENT"
     assert body["voice_state"]["last_transcript_confidence"] == 0.94
