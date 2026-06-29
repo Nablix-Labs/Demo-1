@@ -1,0 +1,114 @@
+"""Tutor-engine adapter.
+
+The tutor engine is the final decision point in the text pipeline. It receives
+student context, retrieved curriculum material, and student-model state, then
+returns the frontend-facing tutoring decision fields.
+"""
+
+from typing import NoReturn
+
+from pydantic import ValidationError
+
+from app.adapters.http_utils import JsonObject, post_json
+from app.core.config import Settings
+from app.core.exceptions import AdapterError
+from app.models.adapters import (
+    AdapterContext,
+    RAGResult,
+    SafetyCheckResult,
+    StudentModelResult,
+    StudentModelEvent,
+    TutorEngineRequest,
+    TutorResult,
+)
+
+
+class TutorEngineServiceAdapter:
+    """Produces tutor feedback through mock data or a live tutor service.
+
+    The service-facing `evaluate` method stays stable while `call`,
+    `parse_response`, and `handle_error` implement the replaceable adapter
+    pattern from submodule 6.3.
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+
+    async def evaluate(
+        self,
+        context: AdapterContext,
+        rag: RAGResult,
+        student: StudentModelResult,
+    ) -> TutorResult:
+        """Service-facing method used by interaction and hint workflows."""
+
+        request = TutorEngineRequest(context=context, rag=rag, student=student)
+        return await self.call(request)
+
+    async def call(self, request: TutorEngineRequest) -> TutorResult:
+        """Return mock tutor feedback or call the live tutor engine."""
+
+        if self._settings.use_mock_tutor:
+            return self._mock_response(request)
+
+        payload: JsonObject = request.model_dump(mode="json")
+        try:
+            response = await post_json(
+                "tutor_engine",
+                self._settings.tutor_engine_url,
+                payload,
+                self._settings.adapter_request_timeout_seconds,
+                self._settings.adapter_request_retry_count,
+            )
+            return self.parse_response(response)
+        except AdapterError as error:
+            self.handle_error(error)
+
+    def parse_response(self, response: dict[str, object]) -> TutorResult:
+        try:
+            return TutorResult.model_validate(response)
+        except ValidationError as error:
+            raise AdapterError(
+                "tutor_engine",
+                f"invalid response body={response}: {error}",
+            ) from error
+
+    def handle_error(self, error: AdapterError) -> NoReturn:
+        raise error
+
+    def _mock_response(self, request: TutorEngineRequest) -> TutorResult:
+        """Return realistic incorrect-answer feedback for development."""
+
+        return TutorResult(
+            evaluation="INCORRECT",
+            error_type="ARITHMETIC_ERROR",
+            intent="SUBMITTING_ANSWER",
+            response_strategy="GUIDED_HINT",
+            tutor_message="Check your arithmetic carefully.",
+            tutor_message_voice="Check your arithmetic carefully.",
+            voice_optimised=True,
+            hint_level=1,
+            scaffold_steps_delivered=[],
+            next_phase_recommendation="GUIDED_PRACTICE",
+            answer_reveal_allowed=False,
+            confidence=0.91,
+            input_source="TEXT",
+            transcript_confidence=None,
+            safety_check=SafetyCheckResult(passed=True),
+            student_model_events=[
+                StudentModelEvent(
+                    event_type="INCORRECT_ATTEMPT",
+                    evaluation="INCORRECT",
+                    error_type="ARITHMETIC_ERROR",
+                    hint_level_used=0,
+                    independent_success=False,
+                )
+            ],
+        )
+
+
+class MockTutorEngineAdapter(TutorEngineServiceAdapter):
+    """Compatibility wrapper for tests or imports that need a mock-only adapter."""
+
+    def __init__(self) -> None:
+        super().__init__(Settings(use_mock_tutor=True))

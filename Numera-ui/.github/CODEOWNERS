@@ -1,0 +1,19 @@
+# Code owners for Numera-ui — auto-requested for review on matching changes.
+# Order matters; the last matching pattern wins.
+
+# Default owner for everything
+*                       @Manavarya09
+
+# Frontend surfaces
+/app/                   @Manavarya09
+/components/            @Manavarya09
+
+# Shared state, hooks and API client
+/store/                 @Manavarya09
+/hooks/                 @Manavarya09
+/lib/                   @Manavarya09
+
+# Build / config / CI
+/.github/               @Manavarya09
+*.config.js             @Manavarya09
+*.config.ts             @Manavarya09

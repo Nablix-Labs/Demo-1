@@ -1,0 +1,39 @@
+name: Lint PR title
+
+# Enforces Conventional Commit format on PR titles. Because we squash-merge,
+# the PR title becomes the commit on main — so this keeps history consistent
+# with the org convention in Nablix-Labs/.github/CONTRIBUTING.md.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  lint-title:
+    name: Validate Conventional Commit title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Allowed types — keep in sync with CONTRIBUTING.md
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert
+          # Scope is optional; subject must not start with an uppercase letter
+          subjectPattern: ^(?![A-Z]).+$
+          subjectPatternError: |
+            The subject "{subject}" should start lower-case, e.g. "feat(canvas): add ruler tool".

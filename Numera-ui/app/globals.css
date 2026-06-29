@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* KaTeX font */
+@import 'katex/dist/katex.min.css';
+
+:root {
+  --ink: #1a1a1a;
+  --line: #c8c8c8;
+  --line-strong: #9a9a9a;
+  --gray-1: #f4f4f4;
+  --gray-2: #eaeaea;
+  --gray-3: #dadada;
+  --gray-text: #7a7a7a;
+  --gray-text-soft: #9a9a9a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--gray-3);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Waveform animation */
+@keyframes wave {
+  0%, 100% { height: 5px; }
+  50%       { height: 22px; }
+}
+
+/* Spinning dashed ring */
+@keyframes spin-slow {
+  to { transform: rotate(360deg); }
+}
+
+/* Pulse ring */
+@keyframes pulse-ring {
+  0%, 100% { transform: scale(1);    opacity: .85; }
+  50%       { transform: scale(1.07); opacity: .35; }
+}
+
+.animate-wave {
+  animation: wave 1s ease-in-out infinite;
+}
+
+.animate-spin-slow {
+  animation: spin-slow 14s linear infinite;
+}
+
+.animate-pulse-ring {
+  animation: pulse-ring 2.2s ease-in-out infinite;
+}
