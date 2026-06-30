@@ -32,7 +32,6 @@ export interface TopicDemo {
   label: string; // subject label, e.g. "Linear equations"
   questionNumber: number; // shown in the lesson question badge
   lessonQuestion: string; // the equation in the lesson heading
-  showBarModel: boolean; // the bar-model visual is algebra-only
   transcript: DemoTurn[]; // opening lesson exchange
   practiceQuestion: string;
   practiceHints: string[];
@@ -44,7 +43,6 @@ const ALGEBRA: TopicDemo = {
   label: 'Linear equations',
   questionNumber: 3,
   lessonQuestion: '2x + 5 = 13',
-  showBarModel: true,
   transcript: [
     { role: 'ai', text: 'What do we do first to get the x term on its own?' },
     { role: 'student', text: 'Subtract 5 from both sides?' },
@@ -128,7 +126,6 @@ const NUMBER: TopicDemo = {
   label: 'Fractions',
   questionNumber: 2,
   lessonQuestion: 'x/2 + 1/4 = 3/4',
-  showBarModel: false,
   transcript: [
     { role: 'ai', text: 'To get x on its own, what do we do with the one-quarter first?' },
     { role: 'student', text: 'Subtract a quarter from both sides?' },
@@ -211,7 +208,6 @@ const GEOMETRY: TopicDemo = {
   label: 'Angles',
   questionNumber: 1,
   lessonQuestion: 'x + 50 = 180',
-  showBarModel: false,
   transcript: [
     { role: 'ai', text: 'These two angles sit on a straight line — what must they add up to?' },
     { role: 'student', text: '180 degrees?' },

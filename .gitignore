@@ -22,3 +22,6 @@ dist/
 .claude/
 *.pem
 .vercel
+
+# graphify
+graphify-out/

@@ -29,6 +29,15 @@ import { useNumeraStore } from '@/store/useNumeraStore';
 
 const apiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
+/**
+ * True only when the student has actually drawn something. Guards against
+ * sending blank canvas snapshots to the backend (and the live OCR provider) when
+ * there's no activity. Read at call time so it doesn't re-subscribe the hook.
+ */
+function hasCanvasActivity(): boolean {
+  return useNumeraStore.getState().items.length > 0;
+}
+
 /** Speak the tutor's reply (TTS output only — never used to decide content). */
 function speak(text: string): void {
   if (typeof window === 'undefined' || !('speechSynthesis' in window) || !text) return;
@@ -117,7 +126,7 @@ export function useDemoTutor() {
   /** Export the current canvas and submit it for live OCR + tutor feedback. */
   const submitCanvasWork = useCallback(async (): Promise<CanvasSubmissionResult | null> => {
     if (!apiEnabled() || !sessionId) return null;
-    const png = canvasExporter?.();
+    const png = hasCanvasActivity() ? canvasExporter?.() : null;
     if (!png) {
       addTrailEntry({ kind: 'tutor', text: 'Nothing on the canvas to submit yet.' });
       return null;
@@ -189,9 +198,10 @@ export function useDemoTutor() {
       console.groupCollapsed(`%c[voice→backend] turn fired`, 'color:#7a5cc8;font-weight:bold');
       console.log('captured transcript:', transcript, confidence != null ? `(confidence ${confidence})` : '');
 
-      // Snapshot the canvas alongside the spoken turn (best-effort).
+      // Snapshot the canvas alongside the spoken turn — only if the student
+      // actually drew something (don't send blank canvases to the backend/OCR).
       let canvasSnapshotId: string | undefined;
-      const png = canvasExporter?.();
+      const png = hasCanvasActivity() ? canvasExporter?.() : null;
       if (png) {
         try {
           console.log('→ POST /canvas/submit', { session_id: sessionId, student_id: STUDENT_ID, snapshot_bytes: png.length });
