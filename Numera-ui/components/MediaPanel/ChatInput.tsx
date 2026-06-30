@@ -36,7 +36,7 @@ export default function ChatInput() {
   return (
     <form
       onSubmit={send}
-      className="flex items-center gap-2 px-3.5 pb-3.5 pt-2 border-t border-[#eaeaea] flex-shrink-0"
+      className="flex items-center gap-2 px-3.5 pb-3.5 pt-2 border-t border-muted-gray flex-shrink-0"
     >
       <input
         value={text}
@@ -44,13 +44,13 @@ export default function ChatInput() {
         placeholder="Type a message…"
         aria-label="Message Numera"
         maxLength={500}
-        className="flex-1 min-w-0 rounded-md border border-[#c8c8c8] bg-white px-2.5 py-1.5 text-[11.5px] text-[#1a1a1a] placeholder:text-[#9a9a9a] focus:outline-none focus:border-[#1a1a1a]"
+        className="flex-1 min-w-0 rounded-md border border-muted-gray bg-white px-2.5 py-1.5 text-[11.5px] text-ink placeholder:text-slate-blue focus:outline-none focus:border-ai-cyan"
       />
       <button
         type="submit"
         aria-label="Send message"
         disabled={!text.trim()}
-        className="flex-shrink-0 w-8 h-8 rounded-md bg-[#1a1a1a] text-white flex items-center justify-center transition-opacity disabled:opacity-40"
+        className="flex-shrink-0 w-8 h-8 rounded-md bg-ai-cyan text-ink flex items-center justify-center transition-opacity disabled:opacity-40"
       >
         <Send size={14} strokeWidth={1.8} />
       </button>

@@ -78,16 +78,16 @@ export default function CanvasStage() {
       aria-label="Canvas workspace"
       style={{
         backgroundImage:
-          'linear-gradient(#eaeaea 1px, transparent 1px), linear-gradient(90deg, #eaeaea 1px, transparent 1px)',
+          'linear-gradient(#E0E2E5 1px, transparent 1px), linear-gradient(90deg, #E0E2E5 1px, transparent 1px)',
         backgroundSize: '28px 28px',
       }}
     >
       {/* Question header */}
       <div className="absolute top-[26px] left-[34px] right-[34px] flex items-center gap-3 z-10">
-        <div className="w-[30px] h-[30px] rounded-md border border-[#9a9a9a] bg-[#f4f4f4] flex items-center justify-center text-xs font-semibold text-[#7a7a7a] flex-shrink-0">
+        <div className="w-[30px] h-[30px] rounded-md border border-muted-gray bg-reading-surface flex items-center justify-center text-xs font-semibold text-slate-blue flex-shrink-0">
           {questionNumber}
         </div>
-        <div className="text-[22px] font-semibold text-[#1a1a1a]">
+        <div className="text-[22px] font-semibold text-ink">
           Solve for{' '}
           <span className="italic font-[Cambria_Math,Georgia,serif]">x</span>:{' '}
           <span className="font-[Cambria_Math,Georgia,serif]">{questionText}</span>
@@ -105,7 +105,7 @@ export default function CanvasStage() {
       {/* Check-work feedback toast */}
       {toast && (
         <div
-          className="absolute bottom-[88px] left-1/2 -translate-x-1/2 z-30 bg-[#1a1a1a] text-white text-xs px-4 py-2.5 rounded-full flex items-center gap-2"
+          className="absolute bottom-[88px] left-1/2 -translate-x-1/2 z-30 bg-focus-navy text-white text-xs px-4 py-2.5 rounded-full flex items-center gap-2"
           style={{ boxShadow: '0 4px 16px rgba(0,0,0,0.2)' }}
           role="status"
           aria-live="polite"
@@ -122,7 +122,7 @@ export default function CanvasStage() {
         onClick={() => setActiveTool('pen')}
         title="Pen"
         aria-label="Switch to pen"
-        className="absolute bottom-[22px] left-6 w-12 h-12 rounded-full bg-[#1a1a1a] text-white flex items-center justify-center z-20"
+        className="absolute bottom-[22px] left-6 w-12 h-12 rounded-full bg-focus-navy text-white flex items-center justify-center z-20"
         style={{ boxShadow: '0 2px 10px rgba(0,0,0,0.22)' }}
       >
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
@@ -134,19 +134,19 @@ export default function CanvasStage() {
       <div className="absolute bottom-6 right-6 z-20">
         {helpOpen && (
           <div
-            className="absolute bottom-[calc(100%+10px)] right-0 w-64 bg-white border border-[#9a9a9a] rounded-xl p-3.5"
+            className="absolute bottom-[calc(100%+10px)] right-0 w-64 bg-white border border-muted-gray rounded-xl p-3.5"
             style={{ boxShadow: '0 4px 16px rgba(0,0,0,0.14)' }}
             role="dialog"
             aria-label="Canvas help"
           >
-            <div className="text-[11px] font-semibold tracking-widest uppercase text-[#9a9a9a] mb-2">
+            <div className="text-[11px] font-semibold tracking-widest uppercase text-slate-blue mb-2">
               Using the canvas
             </div>
             <ul className="flex flex-col gap-1.5">
               {HELP_TIPS.map(([name, desc]) => (
-                <li key={name} className="text-[11.5px] leading-snug text-[#1a1a1a]">
+                <li key={name} className="text-[11.5px] leading-snug text-ink">
                   <span className="font-semibold">{name}</span>
-                  <span className="text-[#7a7a7a]"> — {desc}</span>
+                  <span className="text-slate-blue"> — {desc}</span>
                 </li>
               ))}
             </ul>
@@ -176,7 +176,7 @@ function cnHelp(open: boolean) {
   return [
     'w-10 h-10 rounded-full flex items-center justify-center transition-colors border',
     open
-      ? 'bg-[#1a1a1a] text-white border-[#1a1a1a]'
-      : 'bg-[#eaeaea] text-[#7a7a7a] border-[#c8c8c8] hover:bg-[#dadada] hover:text-[#1a1a1a]',
+      ? 'bg-focus-navy text-white border-focus-navy'
+      : 'bg-reading-surface text-slate-blue border-muted-gray hover:bg-muted-gray hover:text-ink',
   ].join(' ');
 }

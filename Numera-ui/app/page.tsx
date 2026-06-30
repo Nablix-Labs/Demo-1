@@ -124,7 +124,7 @@ export default function LessonPage() {
       {/* Guided lesson → independent practice for this topic */}
       <button
         onClick={() => goStage('practice', currentTopicId)}
-        className="fixed top-4 right-4 z-40 rounded-md bg-[#1a1a1a] text-white px-4 py-2 text-[12px] font-semibold hover:opacity-80 transition-opacity"
+        className="fixed top-4 right-4 z-40 rounded-md bg-focus-navy text-white px-4 py-2 text-[12px] font-semibold hover:opacity-80 transition-opacity"
       >
         Finish lesson → Practice
       </button>

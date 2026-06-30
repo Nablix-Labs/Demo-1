@@ -13,7 +13,7 @@
 import { Layer, Text, Line, Arrow, Rect, Ellipse } from 'react-konva';
 import { useNumeraStore, type TutorElement } from '@/store/useNumeraStore';
 
-const INK = '#1a1a1a';
+const INK = '#1B2A4A'; // focus-navy — readable AI-tutor ink default
 const MATH_FONT = 'KaTeX_Main, "Cambria Math", Georgia, serif';
 
 export default function TutorLayer({ width, height }: { width: number; height: number }) {
@@ -78,7 +78,7 @@ export default function TutorLayer({ width, height }: { width: number; height: n
         );
       case 'highlight':
         return (
-          <Line key={el.id} points={px(el.points ?? [])} stroke={el.color ?? '#9a9a9a'}
+          <Line key={el.id} points={px(el.points ?? [])} stroke={el.color ?? '#FF9F1C'}
             strokeWidth={el.strokeWidth ?? 14} opacity={0.35} lineCap="round" lineJoin="round" />
         );
       default:

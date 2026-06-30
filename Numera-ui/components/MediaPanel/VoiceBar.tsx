@@ -11,9 +11,9 @@ export default function VoiceBar() {
   return (
     <div className="px-3.5 pb-3.5 flex flex-col gap-2.5">
       {/* Status */}
-      <p className="text-[11.5px] text-[#7a7a7a] text-center">
+      <p className="text-[11.5px] text-slate-blue text-center">
         Status:{' '}
-        <strong className="text-[#1a1a1a]">
+        <strong className="text-ink">
           {micMuted ? 'Muted' : voiceStatus === 'listening' ? 'Listening…' : voiceStatus === 'speaking' ? 'Speaking…' : voiceStatus === 'processing' ? 'Processing…' : 'Idle'}
         </strong>
       </p>
@@ -24,8 +24,8 @@ export default function VoiceBar() {
           <span
             key={i}
             className={cn(
-              'w-[3px] rounded-sm bg-[#9a9a9a]',
-              micMuted ? '' : 'animate-wave'
+              'w-[3px] rounded-sm',
+              micMuted ? 'bg-muted-gray' : 'bg-ai-cyan animate-wave'
             )}
             style={{
               height: micMuted ? '5px' : `${h}px`,
@@ -43,8 +43,8 @@ export default function VoiceBar() {
         className={cn(
           'w-full border rounded-md px-2.5 py-2.5 text-xs font-semibold flex items-center justify-center gap-2 transition-colors',
           micMuted
-            ? 'border-[#1a1a1a] bg-white text-[#1a1a1a]'
-            : 'border-[#1a1a1a] bg-[#1a1a1a] text-white'
+            ? 'border-muted-gray bg-white text-ink'
+            : 'border-focus-navy bg-focus-navy text-white'
         )}
       >
         {/* Mic icon (on / off) */}
