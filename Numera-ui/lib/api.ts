@@ -15,8 +15,14 @@ import axios from 'axios';
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
 
-/** No provisioning exists yet; the demo uses a fixed student. */
+/**
+ * Fixed demo identifiers — must match the backend's documented test values.
+ * The session_id itself is minted by POST /session/start and read from the response.
+ */
 export const STUDENT_ID = 'ST001';
+export const DEMO_CONCEPT_ID = 'ALG_LINEAR_ONE_STEP';
+export const DEMO_QUESTION_ID = 'ALG_EQ_DIAG_001';
+export const DEMO_PHASE = 'GUIDED_PRACTICE';
 
 export const api = axios.create({
   baseURL: BASE,
