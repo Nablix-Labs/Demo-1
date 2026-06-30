@@ -1,10 +1,4 @@
-"""RAG service adapter.
-
-The application asks for retrieved learning context with `retrieve`. The
-adapter then either returns deterministic curriculum snippets for development
-or POSTs the shared `AdapterContext` to the configured RAG service.
-"""
-
+import time
 from typing import NoReturn
 
 from pydantic import ValidationError
@@ -16,27 +10,24 @@ from app.models.adapters import AdapterContext, RAGResult, RetrievedDocument
 
 
 class RAGServiceAdapterClient:
-    """Retrieves curriculum documents from mock data or the RAG service URL."""
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
     async def retrieve(self, context: AdapterContext) -> RAGResult:
-        """Service-facing method used by the tutor pipeline."""
-
         return await self.call(context)
 
     async def call(self, request: AdapterContext) -> RAGResult:
-        """Return mock context or call the live RAG service based on settings."""
-
         if self._settings.use_mock_rag:
             return self._mock_response(request)
 
-        payload: JsonObject = request.model_dump(mode="json")
+        payload: JsonObject = self._build_retrieve_payload(request)
+        url = self._settings.rag_service_url.rstrip("/") + "/retrieve"
+
         try:
             response = await post_json(
                 "rag_service",
-                self._settings.rag_service_url,
+                url,
                 payload,
                 self._settings.adapter_request_timeout_seconds,
                 self._settings.adapter_request_retry_count,
@@ -45,10 +36,44 @@ class RAGServiceAdapterClient:
         except AdapterError as error:
             self.handle_error(error)
 
+    def _build_retrieve_payload(self, context: AdapterContext) -> JsonObject:
+        content_type = "HINT" if context.current_hint_level else "EXPLANATION"
+
+        hint_level = context.current_hint_level
+
+        return {
+            "query_id": f"{context.session_id}-{int(time.time())}",
+            "concept_id": context.concept_id or "ALG_LINEAR_ONE_STEP_ADDITION",
+            "content_type": content_type,
+            "hint_level": hint_level,
+            "error_type": None,
+            "difficulty": "FOUNDATION",
+            "input_source": context.input_source or "TEXT",
+            "max_results": 3,
+            "exclude_content_ids": [],
+        }
+
     def parse_response(self, response: dict[str, object]) -> RAGResult:
         try:
-            return RAGResult.model_validate(response)
-        except ValidationError as error:
+            results = response.get("results", [])
+
+            documents = []
+            best_score = 0.0
+            for r in results:
+                documents.append(RetrievedDocument(
+                    title=r.get("content_id", ""),
+                    content=r.get("text", ""),
+                    source=r.get("concept_id", ""),
+                ))
+                score = r.get("relevance_score", 0.0)
+                if score > best_score:
+                    best_score = score
+
+            return RAGResult(
+                documents=documents,
+                retrieval_confidence=best_score if documents else 0.0,
+            )
+        except (KeyError, TypeError, ValidationError) as error:
             raise AdapterError(
                 "rag_service",
                 f"invalid response body={response}: {error}",
@@ -58,8 +83,6 @@ class RAGServiceAdapterClient:
         raise error
 
     def _mock_response(self, request: AdapterContext) -> RAGResult:
-        """Return stable curriculum context shaped like the real service result."""
-
         return RAGResult(
             documents=[
                 RetrievedDocument(
@@ -73,7 +96,6 @@ class RAGServiceAdapterClient:
 
 
 class MockRAGServiceAdapter(RAGServiceAdapterClient):
-    """Compatibility wrapper for tests or imports that need a mock-only adapter."""
 
     def __init__(self) -> None:
         super().__init__(Settings(use_mock_rag=True))

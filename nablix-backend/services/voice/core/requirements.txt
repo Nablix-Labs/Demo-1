@@ -1,0 +1,17 @@
+# Voice module dependencies
+# Day 1: only pydantic and dotenv needed (mock adapters have no external deps)
+# Day 2+: uncomment the provider SDKs as we integrate them
+
+pydantic>=2.0
+python-dotenv>=1.0
+
+# Day 2 — STT providers (uncomment when ready)
+# deepgram-sdk>=3.0
+# faster-whisper>=1.0
+
+# Day 2 — TTS providers (uncomment when ready)
+# openai>=1.0
+
+# Day 3 — VAD and streaming (uncomment when ready)
+# silero-vad
+# websockets>=12.0

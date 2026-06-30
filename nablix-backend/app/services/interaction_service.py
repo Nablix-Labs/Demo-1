@@ -132,6 +132,7 @@ async def process_interaction(request: InteractionRequest) -> InteractionRespons
         transcript_confidence=request.transcript_confidence,
         attempt_count=request.hint_count + 1,
         current_hint_level=_current_hint_level_from(request.hint_count),
+        concept_id=request.concept_id,
     )
     adapters = get_adapters()
     safety_check = await adapters.safety.check(context)

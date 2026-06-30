@@ -28,6 +28,7 @@ class AdapterContext(BaseModel):
     transcript_confidence: float | None = None
     attempt_count: int | None = None
     current_hint_level: int | None = None
+    concept_id: str | None = None
 
 
 class RetrievedDocument(BaseModel):

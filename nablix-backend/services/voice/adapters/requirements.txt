@@ -1,0 +1,16 @@
+# AD-201: Real STT/TTS Integration
+# Install with: pip install -r requirements.txt
+
+# --- From AD-200 (still needed) ---
+pydantic>=2.0           # Data contracts (VoiceTranscriptRequest, etc.)
+python-dotenv>=1.0      # Load .env file for API keys and config
+
+# --- New for AD-201 ---
+openai>=1.0             # OpenAI API — used for both Whisper (STT) and TTS
+                        # whisper-1 for speech-to-text
+                        # tts-1 for text-to-speech
+
+# --- Future (Day 2 when Deepgram key is ready) ---
+# deepgram-sdk>=3.0     # Deepgram Nova-3 STT + Aura-2 TTS
+                        # Uncomment after: pip install deepgram-sdk
+                        # And set DEEPGRAM_API_KEY in .env
