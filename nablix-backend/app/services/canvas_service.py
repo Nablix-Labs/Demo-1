@@ -13,41 +13,13 @@ from app.models.canvas import (
     CanvasSubmitRequest,
     CanvasSubmitResponse,
 )
-from app.services.interaction_service import run_tutor_pipeline
-from app.services.session_service import record_canvas_submission
+from app.services.interaction_service import (
+    _correct_answer_for,
+    _current_hint_level_from,
+    run_tutor_pipeline,
+)
+from app.services.session_service import get_session, record_canvas_submission
 from app.services.snapshot_store import build_reference, store_snapshot
-
-
-def _tutor_message_for(ocr: VisionOCRResult) -> str:
-    """Build the message handed to the tutor pipeline from the canvas result.
-
-    Combines written math and any detected geometry into one structured
-    message. When recognition is unsure (text or a shape below threshold), a
-    caution is prefixed so the tutor confirms with the student instead of
-    grading possibly-misread canvas content.
-    """
-
-    written_math = "\n".join(ocr.detected_steps) or ocr.raw_ocr_text
-    sections: list[str] = []
-    if written_math:
-        sections.append(f"Written math:\n{written_math}")
-    if ocr.final_answer:
-        sections.append(f"Final answer: {ocr.final_answer}")
-    if ocr.detected_shapes:
-        shape_lines = [
-            f"- {shape.shape_type}, {shape.label or 'unlabeled'}, "
-            f"confidence {shape.confidence:.2f}"
-            for shape in ocr.detected_shapes
-        ]
-        sections.append("Detected shapes:\n" + "\n".join(shape_lines))
-
-    body = "\n\n".join(sections) or "(no recognizable canvas content)"
-    if ocr.needs_clarification:
-        return (
-            "Some canvas recognition is uncertain. Ask the student to confirm "
-            "before grading.\n\n" + body
-        )
-    return body
 
 
 async def submit_canvas(request: CanvasSubmitRequest) -> CanvasSubmitResponse:
@@ -60,6 +32,9 @@ async def submit_canvas(request: CanvasSubmitRequest) -> CanvasSubmitResponse:
             detail=f"Canvas snapshot exceeds the {settings.max_snapshot_bytes} byte limit.",
         )
 
+    # Load the session up front so a stale/unknown session 404s before we pay for OCR.
+    session = await get_session(request.session_id)
+
     submission_id = uuid4().hex
     snapshot_reference = build_reference(submission_id)
     store_snapshot(snapshot_reference, request.snapshot_data_url)
@@ -68,12 +43,22 @@ async def submit_canvas(request: CanvasSubmitRequest) -> CanvasSubmitResponse:
     ocr: VisionOCRResult = await get_adapters().vision.recognize(request.snapshot_data_url)
     ocr_latency_ms = (perf_counter() - ocr_started) * 1000
 
+    # The student's written answer is what the classifier grades against correct_answer.
+    student_answer = ocr.final_answer or ocr.raw_ocr_text or ""
+
     tutor_started = perf_counter()
     _, _, tutor = await run_tutor_pipeline(
         AdapterContext(
             session_id=request.session_id,
             student_id=request.student_id,
-            message=_tutor_message_for(ocr),
+            message=student_answer,
+            question=session.current_question,
+            correct_answer=_correct_answer_for(session.question_id),
+            current_phase=session.current_phase,
+            input_source="CANVAS",
+            transcript_confidence=None,
+            attempt_count=session.hint_count + 1,
+            current_hint_level=_current_hint_level_from(session.hint_count),
         )
     )
     tutor_latency_ms = (perf_counter() - tutor_started) * 1000

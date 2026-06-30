@@ -40,7 +40,16 @@ _SYSTEM_PROMPT = (
     "Do not put shape descriptions into the text fields. "
     "For a shapes-only canvas with no written math, raw_ocr_text and detected_equation may be empty. "
     "If handwriting is ambiguous, preserve the most visually likely reading and lower the confidence. "
-    "Never replace an ambiguous or wrong-looking written value with the mathematically correct value."
+    "Never replace an ambiguous or wrong-looking written value with the mathematically correct value. "
+    "Read every digit and operator by its written stroke shape ALONE. The numeric value of an "
+    "expression is irrelevant to transcription: never swap an operand for a different one that gives "
+    "the same result. For example, '9 - 4' must NOT be transcribed as '7 - 2' just because both equal 5 "
+    "— copy the digits that are actually drawn. "
+    "Commonly confused handwritten characters: 1/7, 2/4, 3/5, 5/6, 6/0, 7/9, x/×. Tell them apart by their "
+    "strokes, not by what would make the arithmetic look tidy (e.g. a 9 has a closed top loop with a tail; "
+    "a 7 has a flat top and a single diagonal). "
+    "When a character is genuinely unclear, pick the most stroke-faithful reading and set confidence below "
+    "0.75 so it is flagged — do not guess a tidier or value-preserving alternative."
 )
 
 
@@ -97,6 +106,8 @@ class OpenAIVisionOCRAdapter:
                             "text": (
                                 "Return each visible math line in detected_steps exactly as written. "
                                 "Do not use algebra to fix or complete any line. "
+                                "Read each digit by its shape, not its arithmetic — do not change an operand "
+                                "to a different value that gives the same result (e.g. 9-4 is not 7-2). "
                                 "If a line is partially ambiguous, include the best visual reading and lower confidence."
                             ),
                         },
