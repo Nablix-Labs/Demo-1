@@ -43,24 +43,24 @@ export default function PrivateCanvas() {
       aria-label="Your private canvas"
       style={{
         backgroundImage:
-          'linear-gradient(#eaeaea 1px, transparent 1px), linear-gradient(90deg, #eaeaea 1px, transparent 1px)',
+          'linear-gradient(#E0E2E5 1px, transparent 1px), linear-gradient(90deg, #E0E2E5 1px, transparent 1px)',
         backgroundSize: '28px 28px',
       }}
     >
       {/* Private label + auto-review status */}
       <div className="absolute top-[22px] left-[34px] z-10 flex items-center gap-3">
-        <span className="flex items-center gap-1.5 text-[11px] tracking-[1px] uppercase text-[#9a9a9a]">
+        <span className="flex items-center gap-1.5 text-[11px] tracking-[1px] uppercase text-slate-blue">
           <Lock size={13} strokeWidth={1.8} /> Your canvas
         </span>
         <span
           className={
             'flex items-center gap-1.5 text-[11px] rounded-full border px-2.5 py-1 ' +
             (reviewStatus === 'reviewed'
-              ? 'border-[#1a1a1a] text-[#1a1a1a]'
-              : 'border-[#c8c8c8] text-[#7a7a7a]')
+              ? 'border-focus-navy text-ink'
+              : 'border-muted-gray text-slate-blue')
           }
         >
-          <span className={'w-1.5 h-1.5 rounded-full ' + (reviewStatus === 'reviewing' ? 'bg-[#7a7a7a] animate-pulse' : 'bg-[#1a1a1a]')} />
+          <span className={'w-1.5 h-1.5 rounded-full ' + (reviewStatus === 'reviewing' ? 'bg-ai-cyan animate-pulse' : 'bg-focus-navy')} />
           {reviewLabel}
         </span>
       </div>

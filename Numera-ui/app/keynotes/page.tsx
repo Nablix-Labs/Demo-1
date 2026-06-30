@@ -43,14 +43,14 @@ export default function KeyNotesPage() {
     >
       <div className="flex flex-col gap-5 max-w-3xl">
         {KEY_NOTES.map((n) => (
-          <article key={n.id} className="rounded-xl border border-[#c8c8c8] bg-white overflow-hidden">
+          <article key={n.id} className="rounded-xl border border-muted-gray bg-white overflow-hidden">
             {/* header */}
-            <div className="flex items-start justify-between gap-4 px-6 pt-5 pb-4 border-b border-[#eaeaea]">
+            <div className="flex items-start justify-between gap-4 px-6 pt-5 pb-4 border-b border-muted-gray">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <h2 className="text-[16px] font-semibold text-[#1a1a1a]">{n.topic}</h2>
+                  <h2 className="text-[16px] font-semibold text-ink">{n.topic}</h2>
                   {n.flagged && (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-[#f4f4f4] px-2 py-0.5 text-[10px] font-semibold tracking-[0.4px] uppercase text-[#7a7a7a]">
+                    <span className="inline-flex items-center gap-1 rounded-full bg-reading-surface px-2 py-0.5 text-[10px] font-semibold tracking-[0.4px] uppercase text-slate-blue">
                       <Flag size={10} strokeWidth={2} /> Your slip today
                     </span>
                   )}
@@ -60,7 +60,7 @@ export default function KeyNotesPage() {
               <button
                 onClick={() => toggle(n)}
                 aria-label={speakingId === n.id ? 'Stop reading' : 'Read out loud'}
-                className="flex-shrink-0 inline-flex items-center gap-1.5 rounded-md border border-[#1a1a1a] px-3 py-1.5 text-[12px] font-semibold text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-colors"
+                className="flex-shrink-0 inline-flex items-center gap-1.5 rounded-md border border-focus-navy px-3 py-1.5 text-[12px] font-semibold text-ink hover:bg-focus-navy hover:text-white transition-colors"
               >
                 {speakingId === n.id ? <><Square size={13} strokeWidth={2.2} /> Stop</> : <><Volume2 size={14} strokeWidth={1.9} /> Read</>}
               </button>
@@ -73,7 +73,7 @@ export default function KeyNotesPage() {
               </Block>
 
               <Block label="Formula / rule">
-                <div className="rounded-md border border-[#9a9a9a] bg-[#f4f4f4] px-3 py-2 text-[14px] text-[#1a1a1a] font-[Cambria_Math,Georgia,serif]">
+                <div className="rounded-md border border-muted-gray bg-reading-surface px-3 py-2 text-[14px] text-ink font-[Cambria_Math,Georgia,serif]">
                   {n.formula}
                 </div>
               </Block>
@@ -82,7 +82,7 @@ export default function KeyNotesPage() {
                 <ol className="flex flex-col gap-1">
                   {n.steps.map((s, idx) => (
                     <li key={idx} className="flex gap-2 text-[13px] text-[#3a3a3a]">
-                      <span className="text-[#9a9a9a] font-semibold tabular-nums">{idx + 1}.</span>
+                      <span className="text-slate-blue font-semibold tabular-nums">{idx + 1}.</span>
                       <span>{s}</span>
                     </li>
                   ))}
@@ -94,7 +94,7 @@ export default function KeyNotesPage() {
                   <ul className="flex flex-col gap-1">
                     {n.beCareful.map((b, idx) => (
                       <li key={idx} className="flex gap-2 text-[13px] text-[#3a3a3a]">
-                        <span className="text-[#9a9a9a]">•</span><span>{b}</span>
+                        <span className="text-slate-blue">•</span><span>{b}</span>
                       </li>
                     ))}
                   </ul>
@@ -104,7 +104,7 @@ export default function KeyNotesPage() {
                   <ul className="flex flex-col gap-1">
                     {n.tips.map((t, idx) => (
                       <li key={idx} className="flex gap-2 text-[13px] text-[#3a3a3a]">
-                        <Sparkles size={13} strokeWidth={1.8} className="mt-0.5 flex-shrink-0 text-[#7a7a7a]" />
+                        <Sparkles size={13} strokeWidth={1.8} className="mt-0.5 flex-shrink-0 text-slate-blue" />
                         <span>{t}</span>
                       </li>
                     ))}
@@ -113,9 +113,9 @@ export default function KeyNotesPage() {
               </div>
 
               <Block label="Mini example">
-                <div className="rounded-md border border-[#c8c8c8] bg-white px-3 py-2.5 flex flex-col gap-0.5">
+                <div className="rounded-md border border-muted-gray bg-white px-3 py-2.5 flex flex-col gap-0.5">
                   {n.example.map((e, idx) => (
-                    <span key={idx} className="text-[14px] text-[#1a1a1a] font-[Cambria_Math,Georgia,serif]">{e}</span>
+                    <span key={idx} className="text-[14px] text-ink font-[Cambria_Math,Georgia,serif]">{e}</span>
                   ))}
                 </div>
               </Block>
@@ -127,7 +127,7 @@ export default function KeyNotesPage() {
           </article>
         ))}
 
-        <p className="text-[12px] text-[#9a9a9a] leading-relaxed px-1">
+        <p className="text-[12px] text-slate-blue leading-relaxed px-1">
           Today you learned how to solve linear equations. Before the exam, remember to move terms
           carefully, change signs correctly, expand brackets fully, and check your answer by
           substituting it back into the original equation.
@@ -140,7 +140,7 @@ export default function KeyNotesPage() {
 function Block({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <section>
-      <div className="text-[10px] font-semibold tracking-widest uppercase text-[#9a9a9a] mb-2">{label}</div>
+      <div className="text-[10px] font-semibold tracking-widest uppercase text-slate-blue mb-2">{label}</div>
       {children}
     </section>
   );

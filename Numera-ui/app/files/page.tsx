@@ -40,22 +40,22 @@ export default function FilesPage() {
           return (
             <div
               key={f.name}
-              className="flex flex-col rounded-lg border border-[#c8c8c8] bg-white overflow-hidden hover:border-[#9a9a9a] transition-colors cursor-pointer"
+              className="flex flex-col rounded-lg border border-muted-gray bg-white overflow-hidden hover:border-muted-gray transition-colors cursor-pointer"
             >
               {/* Striped thumbnail (wireframe placeholder language) */}
               <div
-                className="h-28 flex items-center justify-center border-b border-[#eaeaea]"
+                className="h-28 flex items-center justify-center border-b border-muted-gray"
                 style={{
                   backgroundImage:
                     'repeating-linear-gradient(45deg,#ededed,#ededed 9px,#f7f7f7 9px,#f7f7f7 18px)',
                 }}
               >
-                <Icon size={26} strokeWidth={1.4} className="text-[#9a9a9a]" />
+                <Icon size={26} strokeWidth={1.4} className="text-slate-blue" />
               </div>
               <div className="flex items-start justify-between gap-2 p-4">
                 <div className="min-w-0">
-                  <div className="text-[13px] font-semibold text-[#1a1a1a] truncate">{f.name}</div>
-                  <div className="text-[11px] text-[#7a7a7a] mt-0.5">{f.meta}</div>
+                  <div className="text-[13px] font-semibold text-ink truncate">{f.name}</div>
+                  <div className="text-[11px] text-slate-blue mt-0.5">{f.meta}</div>
                 </div>
                 <Chip>{KIND_LABEL[f.kind]}</Chip>
               </div>

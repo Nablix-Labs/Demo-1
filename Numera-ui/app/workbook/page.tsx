@@ -30,22 +30,22 @@ export default function WorkbookPage() {
       title="Workbook"
       subtitle="Your topics and subtopics — matched to your school year."
       action={
-        <Link href="/diagnostic" className="inline-flex items-center gap-1.5 rounded-md border border-[#9a9a9a] bg-white px-3.5 py-2 text-[12px] font-semibold text-[#1a1a1a] hover:bg-[#f4f4f4] transition-colors">
+        <Link href="/diagnostic" className="inline-flex items-center gap-1.5 rounded-md border border-muted-gray bg-white px-3.5 py-2 text-[12px] font-semibold text-ink hover:bg-reading-surface transition-colors">
           <ClipboardCheck size={15} strokeWidth={1.8} /> Take diagnostic
         </Link>
       }
     >
       {/* Age → Key Stage. Content is shown by age, not free choice. */}
-      <div className="flex items-center justify-between gap-4 mb-5 rounded-lg border border-[#c8c8c8] bg-[#f9f9f9] px-5 py-3.5">
+      <div className="flex items-center justify-between gap-4 mb-5 rounded-lg border border-muted-gray bg-reading-surface px-5 py-3.5">
         <div className="flex items-center gap-2.5">
-          <label htmlFor="student-age" className="text-[11px] font-semibold tracking-widest uppercase text-[#9a9a9a]">
+          <label htmlFor="student-age" className="text-[11px] font-semibold tracking-widest uppercase text-slate-blue">
             Age
           </label>
           <select
             id="student-age"
             value={age}
             onChange={(e) => setAge(Number(e.target.value))}
-            className="rounded-md border border-[#9a9a9a] bg-white px-3 py-1.5 text-[13px] font-semibold text-[#1a1a1a]"
+            className="rounded-md border border-muted-gray bg-white px-3 py-1.5 text-[13px] font-semibold text-ink"
           >
             {Array.from({ length: 8 }, (_, i) => 11 + i).map((a) => (
               <option key={a} value={a}>{a}</option>
@@ -53,8 +53,8 @@ export default function WorkbookPage() {
           </select>
         </div>
         <div className="text-right">
-          <div className="text-[13px] font-semibold text-[#1a1a1a]">{stage.label}</div>
-          <div className="text-[11px] text-[#7a7a7a]">{stage.ages}</div>
+          <div className="text-[13px] font-semibold text-ink">{stage.label}</div>
+          <div className="text-[11px] text-slate-blue">{stage.ages}</div>
         </div>
       </div>
 
@@ -64,7 +64,7 @@ export default function WorkbookPage() {
           title={`No topics for ${stage.label} yet`}
           body="We haven't added content for your school year here yet. Try another age, or retake the diagnostic to re-check your level."
           action={
-            <Link href="/diagnostic" className="inline-flex items-center gap-1.5 rounded-md bg-[#1a1a1a] text-white px-4 py-2.5 text-[12.5px] font-semibold hover:opacity-80 transition-opacity">
+            <Link href="/diagnostic" className="inline-flex items-center gap-1.5 rounded-md bg-focus-navy text-white px-4 py-2.5 text-[12.5px] font-semibold hover:opacity-80 transition-opacity">
               <ClipboardCheck size={15} strokeWidth={1.8} /> Retake diagnostic
             </Link>
           }
@@ -78,15 +78,15 @@ export default function WorkbookPage() {
             <Link
               key={t.id}
               href={`/workbook/${t.id}`}
-              className="flex flex-col rounded-lg border border-[#c8c8c8] bg-white p-5 hover:border-[#9a9a9a] transition-colors"
+              className="flex flex-col rounded-lg border border-muted-gray bg-white p-5 hover:border-muted-gray transition-colors"
             >
               <div className="flex items-start gap-3">
-                <span className="flex-shrink-0 w-10 h-10 rounded-lg border border-[#c8c8c8] bg-[#f4f4f4] flex items-center justify-center">
+                <span className="flex-shrink-0 w-10 h-10 rounded-lg border border-muted-gray bg-reading-surface flex items-center justify-center">
                   <Folder size={18} strokeWidth={1.6} />
                 </span>
                 <div className="min-w-0">
-                  <h2 className="text-[15px] font-semibold text-[#1a1a1a]">{t.title}</h2>
-                  <p className="text-[11.5px] text-[#7a7a7a] mt-0.5">{t.blurb}</p>
+                  <h2 className="text-[15px] font-semibold text-ink">{t.title}</h2>
+                  <p className="text-[11.5px] text-slate-blue mt-0.5">{t.blurb}</p>
                 </div>
               </div>
 
@@ -95,7 +95,7 @@ export default function WorkbookPage() {
               </div>
 
               <div className="mt-4">
-                <div className="flex items-center justify-between text-[11px] text-[#7a7a7a] mb-1.5">
+                <div className="flex items-center justify-between text-[11px] text-slate-blue mb-1.5">
                   <span>{subs.length} subtopics · {lessons.length} lessons</span>
                   <span>{pct}%</span>
                 </div>

@@ -89,17 +89,17 @@ export default function OrientationClient({ topicId }: { topicId: string }) {
 
   return (
     <main className="flex-1 min-w-0 flex flex-col bg-white" aria-label="Concept orientation">
-      <header className="flex items-center justify-between gap-4 px-8 py-6 border-b border-[#c8c8c8] flex-shrink-0">
+      <header className="flex items-center justify-between gap-4 px-8 py-6 border-b border-muted-gray flex-shrink-0">
         <div className="flex items-center gap-2.5">
-          <span className="w-9 h-9 rounded-lg bg-[#1a1a1a] text-white flex items-center justify-center">
+          <span className="w-9 h-9 rounded-lg bg-focus-navy text-white flex items-center justify-center">
             <Compass size={17} strokeWidth={1.8} />
           </span>
           <div>
-            <div className="text-[10px] tracking-widest uppercase text-[#9a9a9a]">Orientation · concept video</div>
-            <h1 className="text-[16px] font-semibold text-[#1a1a1a] leading-tight">{topic.title}</h1>
+            <div className="text-[10px] tracking-widest uppercase text-slate-blue">Orientation · concept video</div>
+            <h1 className="text-[16px] font-semibold text-ink leading-tight">{topic.title}</h1>
           </div>
         </div>
-        <Link href={`/workbook/${topic.id}`} className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-[#7a7a7a] hover:text-[#1a1a1a] transition-colors">
+        <Link href={`/workbook/${topic.id}`} className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-slate-blue hover:text-ink transition-colors">
           <ChevronLeft size={15} strokeWidth={1.8} /> Topic
         </Link>
       </header>
@@ -109,10 +109,10 @@ export default function OrientationClient({ topicId }: { topicId: string }) {
           {/* ── Loading: skeleton shimmer ─────────────────────────────── */}
           {status === 'loading' && (
             <div aria-busy="true">
-              <div className="relative aspect-video w-full overflow-hidden rounded-xl border border-[#c8c8c8]">
+              <div className="relative aspect-video w-full overflow-hidden rounded-xl border border-muted-gray">
                 <Skeleton className="absolute inset-0 rounded-none" />
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <Skeleton className="w-14 h-14 rounded-full bg-[#dadada]" />
+                  <Skeleton className="w-14 h-14 rounded-full bg-muted-gray" />
                 </div>
               </div>
               <Skeleton className="w-3/4 h-4 mt-5" />
@@ -125,9 +125,9 @@ export default function OrientationClient({ topicId }: { topicId: string }) {
           {status === 'ready' && video && (
             <div>
               <div
-                className="relative aspect-video w-full overflow-hidden rounded-xl border border-[#1a1a1a] bg-[#1a1a1a]"
+                className="relative aspect-video w-full overflow-hidden rounded-xl border border-focus-navy bg-focus-navy"
                 style={{
-                  backgroundImage: 'radial-gradient(circle at 30% 25%, #2c2c2c, #111 70%)',
+                  backgroundImage: 'radial-gradient(circle at 30% 25%, #1B2A4A, #0F1830 70%)',
                 }}
               >
                 {/* faux frame grid */}
@@ -151,7 +151,7 @@ export default function OrientationClient({ topicId }: { topicId: string }) {
                   aria-label={playing ? 'Pause' : 'Play'}
                   className="absolute inset-0 flex items-center justify-center group"
                 >
-                  <span className="w-16 h-16 rounded-full bg-white text-[#1a1a1a] flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform">
+                  <span className="w-16 h-16 rounded-full bg-white text-ink flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform">
                     {playing ? <Pause size={26} strokeWidth={2} /> : <Play size={26} strokeWidth={2} className="ml-1" />}
                   </span>
                 </button>
@@ -168,7 +168,7 @@ export default function OrientationClient({ topicId }: { topicId: string }) {
               <p className="text-[13.5px] text-[#5a5a5a] leading-relaxed mt-5">{video.summary}</p>
 
               {watched && (
-                <div className="mt-3 inline-flex items-center gap-1.5 text-[12px] font-semibold text-[#1a1a1a]">
+                <div className="mt-3 inline-flex items-center gap-1.5 text-[12px] font-semibold text-ink">
                   <Check size={14} strokeWidth={2.4} /> Watched
                 </div>
               )}
@@ -177,12 +177,12 @@ export default function OrientationClient({ topicId }: { topicId: string }) {
 
           {/* ── Empty: no video for this topic yet ────────────────────── */}
           {status === 'empty' && (
-            <div className="flex flex-col items-center justify-center text-center rounded-xl border border-dashed border-[#c8c8c8] bg-[#f9f9f9] aspect-video w-full">
-              <span className="w-12 h-12 rounded-xl border border-[#c8c8c8] bg-white text-[#9a9a9a] flex items-center justify-center mb-3">
+            <div className="flex flex-col items-center justify-center text-center rounded-xl border border-dashed border-muted-gray bg-reading-surface aspect-video w-full">
+              <span className="w-12 h-12 rounded-xl border border-muted-gray bg-white text-slate-blue flex items-center justify-center mb-3">
                 <Film size={20} strokeWidth={1.8} />
               </span>
-              <h3 className="text-[15px] font-semibold text-[#1a1a1a]">Orientation video coming soon</h3>
-              <p className="text-[12.5px] text-[#7a7a7a] mt-1.5 max-w-sm leading-relaxed">
+              <h3 className="text-[15px] font-semibold text-ink">Orientation video coming soon</h3>
+              <p className="text-[12.5px] text-slate-blue mt-1.5 max-w-sm leading-relaxed">
                 We haven&apos;t recorded the concept video for {topic.title} yet — you can head straight into the guided lesson.
               </p>
             </div>
@@ -190,17 +190,17 @@ export default function OrientationClient({ topicId }: { topicId: string }) {
 
           {/* ── Error: load failed ────────────────────────────────────── */}
           {status === 'error' && (
-            <div className="flex flex-col items-center justify-center text-center rounded-xl border border-[#c8c8c8] bg-white aspect-video w-full">
-              <span className="w-12 h-12 rounded-xl border border-[#c8c8c8] bg-[#f4f4f4] text-[#9a9a9a] flex items-center justify-center mb-3">
+            <div className="flex flex-col items-center justify-center text-center rounded-xl border border-muted-gray bg-white aspect-video w-full">
+              <span className="w-12 h-12 rounded-xl border border-muted-gray bg-reading-surface text-slate-blue flex items-center justify-center mb-3">
                 <AlertTriangle size={20} strokeWidth={1.8} />
               </span>
-              <h3 className="text-[15px] font-semibold text-[#1a1a1a]">Couldn&apos;t load the video</h3>
-              <p className="text-[12.5px] text-[#7a7a7a] mt-1.5 max-w-sm leading-relaxed">
+              <h3 className="text-[15px] font-semibold text-ink">Couldn&apos;t load the video</h3>
+              <p className="text-[12.5px] text-slate-blue mt-1.5 max-w-sm leading-relaxed">
                 Something went wrong reaching the lesson server. Check your connection and try again.
               </p>
               <button
                 onClick={load}
-                className="mt-5 inline-flex items-center gap-1.5 rounded-md border border-[#1a1a1a] px-4 py-2.5 text-[12.5px] font-semibold text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-colors"
+                className="mt-5 inline-flex items-center gap-1.5 rounded-md border border-focus-navy px-4 py-2.5 text-[12.5px] font-semibold text-ink hover:bg-focus-navy hover:text-white transition-colors"
               >
                 <RotateCw size={14} strokeWidth={1.9} /> Try again
               </button>
@@ -212,14 +212,14 @@ export default function OrientationClient({ topicId }: { topicId: string }) {
             <div className="flex items-center justify-between mt-7">
               <button
                 onClick={finish}
-                className="text-[12px] font-semibold text-[#7a7a7a] hover:text-[#1a1a1a] transition-colors"
+                className="text-[12px] font-semibold text-slate-blue hover:text-ink transition-colors"
               >
                 Skip video
               </button>
               <button
                 onClick={finish}
                 disabled={status === 'error'}
-                className="inline-flex items-center justify-center gap-2 rounded-md bg-[#1a1a1a] text-white px-5 py-2.5 text-[13px] font-semibold hover:opacity-80 disabled:opacity-30 transition-opacity"
+                className="inline-flex items-center justify-center gap-2 rounded-md bg-focus-navy text-white px-5 py-2.5 text-[13px] font-semibold hover:opacity-80 disabled:opacity-30 transition-opacity"
               >
                 Continue to guided lesson <ArrowRight size={16} strokeWidth={2} />
               </button>

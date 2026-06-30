@@ -42,7 +42,7 @@ export default function TopicClient({ topicId }: { topicId: string }) {
       action={
         <Link
           href="/workbook"
-          className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-[#7a7a7a] hover:text-[#1a1a1a] transition-colors"
+          className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-slate-blue hover:text-ink transition-colors"
         >
           <ChevronLeft size={15} strokeWidth={1.8} /> Workbook
         </Link>
@@ -55,7 +55,7 @@ export default function TopicClient({ topicId }: { topicId: string }) {
             title="Nothing at your level here yet"
             body={`${topic.title} has no subtopics for your school year right now. Pick another topic from your workbook.`}
             action={
-              <Link href="/workbook" className="inline-flex items-center gap-1.5 rounded-md bg-[#1a1a1a] text-white px-4 py-2.5 text-[12.5px] font-semibold hover:opacity-80 transition-opacity">
+              <Link href="/workbook" className="inline-flex items-center gap-1.5 rounded-md bg-focus-navy text-white px-4 py-2.5 text-[12.5px] font-semibold hover:opacity-80 transition-opacity">
                 <ChevronLeft size={15} strokeWidth={1.8} /> Back to workbook
               </Link>
             }
@@ -64,17 +64,17 @@ export default function TopicClient({ topicId }: { topicId: string }) {
         {subtopics.map((sub) => (
           <section key={sub.id}>
             <div className="flex items-center gap-2 mb-2.5">
-              <span className="text-[11px] font-semibold tracking-widest uppercase text-[#9a9a9a]">
+              <span className="text-[11px] font-semibold tracking-widest uppercase text-slate-blue">
                 {sub.title}
               </span>
               <Chip>{sub.keyStage}</Chip>
             </div>
-            <div className="rounded-lg border border-[#c8c8c8] divide-y divide-[#eaeaea] overflow-hidden">
+            <div className="rounded-lg border border-muted-gray divide-y divide-muted-gray overflow-hidden">
               {sub.lessons.map((l) => {
                 const status = effectiveStatus(l, completed);
                 const done = status === 'mastered';
                 return (
-                  <div key={l.id} className="flex items-center gap-4 px-5 py-3.5 hover:bg-[#f9f9f9] transition-colors">
+                  <div key={l.id} className="flex items-center gap-4 px-5 py-3.5 hover:bg-reading-surface transition-colors">
                     {/* status toggle — mark learned / unlearned */}
                     <button
                       onClick={() => toggleLessonLearned(l.id)}
@@ -84,21 +84,21 @@ export default function TopicClient({ topicId }: { topicId: string }) {
                       className={
                         'flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center border transition-colors ' +
                         (done
-                          ? 'bg-[#1a1a1a] border-[#1a1a1a] text-white'
-                          : 'border-[#9a9a9a] text-transparent hover:border-[#1a1a1a]')
+                          ? 'bg-focus-navy border-focus-navy text-white'
+                          : 'border-muted-gray text-transparent hover:border-focus-navy')
                       }
                     >
                       <Check size={13} strokeWidth={2.4} />
                     </button>
                     <div className="min-w-0 flex-1">
-                      <div className={'text-[13.5px] ' + (done ? 'text-[#7a7a7a]' : 'text-[#1a1a1a] font-medium')}>
+                      <div className={'text-[13.5px] ' + (done ? 'text-slate-blue' : 'text-ink font-medium')}>
                         {l.title}
                       </div>
                     </div>
                     {status === 'in-progress' && <Chip>In progress</Chip>}
                     <Link
                       href={linkFor(status, l.id)}
-                      className="flex-shrink-0 inline-flex items-center justify-center rounded-md border border-[#1a1a1a] text-[#1a1a1a] text-[12px] font-semibold px-3.5 py-1.5 hover:bg-[#1a1a1a] hover:text-white transition-colors"
+                      className="flex-shrink-0 inline-flex items-center justify-center rounded-md border border-focus-navy text-ink text-[12px] font-semibold px-3.5 py-1.5 hover:bg-focus-navy hover:text-white transition-colors"
                     >
                       {ACTION[status]}
                     </Link>
