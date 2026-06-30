@@ -9,9 +9,9 @@ class Settings(BaseSettings):
 
     #Service URL's
     tutor_engine_url: str = "http://localhost:8001"
-    rag_service_url: str = "http://localhost:8002" #aaditya
+    rag_service_url: str = "http://localhost:8002" #aditya
     student_model_url: str = "http://localhost:8003" #tamil
-    voice_service_url: str = "http://localhost:8004" #chiru+aaditya
+    voice_service_url: str = "http://localhost:8004" #chiru+aditya
     safety_service_url: str = "http://localhost:8004" #manjusha
     cors_allowed_origins: list[str] = [
         "http://localhost:3000",
