@@ -1,0 +1,353 @@
+import os
+import sys
+import json
+import time
+import asyncio
+import ssl
+import certifi
+import logging
+import base64
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+
+import websockets
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "adapters"))
+
+import config as voice_config
+
+from adapter import get_tts_adapter, register_tts_adapter
+from contracts import VoiceStatus, FallbackMode
+
+if voice_config.OPENAI_API_KEY:
+    import openai_tts_adapter
+
+import importlib.util
+
+_kb_ingestion_dir = os.path.join(os.path.dirname(__file__), "..", "..", "rag")
+_kb_config_path = os.path.abspath(os.path.join(_kb_ingestion_dir, "config.py"))
+_spec = importlib.util.spec_from_file_location("kb_config", _kb_config_path)
+kb_config = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(kb_config)
+
+sys.path.insert(0, os.path.abspath(_kb_ingestion_dir))
+from retrieval import RetrievalRequest, retrieve, response_to_dict
+from openai import OpenAI
+from qdrant_client import QdrantClient
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("streaming")
+
+openai_client = OpenAI(api_key=kb_config.OPENAI_API_KEY)
+
+if kb_config.QDRANT_URL and kb_config.QDRANT_API_KEY:
+    logger.info(f"Connecting to Qdrant Cloud at: {kb_config.QDRANT_URL}")
+    qdrant_client = QdrantClient(
+        url=kb_config.QDRANT_URL,
+        api_key=kb_config.QDRANT_API_KEY,
+    )
+else:
+    qdrant_path = os.path.join(
+        os.path.dirname(__file__), "..", "..", "rag", "qdrant_data"
+    )
+    logger.info(f"Using local Qdrant at: {qdrant_path}")
+    qdrant_client = QdrantClient(path=os.path.abspath(qdrant_path))
+
+DEEPGRAM_WS_URL = "wss://api.deepgram.com/v1/listen"
+DEEPGRAM_API_KEY = voice_config.DEEPGRAM_API_KEY
+
+MATH_NORMALIZATIONS = {
+    "five over six": "5/6",
+    "x equals five": "x = 5",
+    "x equals six": "x = 6",
+    "x equals four": "x = 4",
+    "x equals seven": "x = 7",
+    "x equals three": "x = 3",
+    "two thirds plus one fourth": "2/3 + 1/4",
+    "x squared plus three": "x^2 + 3",
+}
+
+def normalize_math(transcript: str) -> str | None:
+    lower = transcript.lower().strip().rstrip(".")
+    return MATH_NORMALIZATIONS.get(lower)
+
+app = FastAPI(
+    title="Nablix Math Tutor - Voice Streaming Server",
+    version="1.0.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "service": "voice-streaming"}
+
+@app.websocket("/voice/stream")
+async def voice_stream(ws: WebSocket, session_id: str = "default"):
+    await ws.accept()
+    logger.info(f"[{session_id}] WebSocket connected")
+
+    problem_context = None
+    language = "en"
+    deepgram_ws = None
+    final_transcript = ""
+    final_confidence = 0.0
+    receiving_audio = False
+
+    deepgram_receiver_task = None
+
+    async def forward_deepgram_results(dg_ws):
+        nonlocal final_transcript, final_confidence
+
+        try:
+            async for msg in dg_ws:
+                data = json.loads(msg)
+
+                if data.get("type") == "Results":
+                    channel = data.get("channel", {})
+                    alternatives = channel.get("alternatives", [])
+
+                    if not alternatives:
+                        continue
+
+                    best = alternatives[0]
+                    transcript = best.get("transcript", "").strip()
+                    confidence = best.get("confidence", 0.0)
+                    is_final = data.get("is_final", False)
+
+                    if not transcript:
+                        continue
+
+                    if is_final:
+                        if final_transcript:
+                            final_transcript += " " + transcript
+                        else:
+                            final_transcript = transcript
+                        final_confidence = confidence
+
+                    await ws.send_json({
+                        "type": "partial_transcript" if not is_final else "final_transcript",
+                        "text": transcript,
+                        "confidence": round(confidence, 4),
+                        "is_final": is_final,
+                    })
+
+                    logger.info(
+                        f"[{session_id}] {'FINAL' if is_final else 'partial'}: "
+                        f"'{transcript}' (conf={confidence:.4f})"
+                    )
+
+        except websockets.exceptions.ConnectionClosed:
+            logger.info(f"[{session_id}] Deepgram connection closed")
+        except Exception as e:
+            logger.error(f"[{session_id}] Deepgram receiver error: {e}")
+
+    try:
+        while True:
+            message = await ws.receive()
+
+            if "text" in message:
+                data = json.loads(message["text"])
+                msg_type = data.get("type", "")
+
+                if msg_type == "start":
+                    problem_context = data.get("problem_context")
+                    language = data.get("language", "en")
+                    final_transcript = ""
+                    final_confidence = 0.0
+                    receiving_audio = True
+
+                    params = (
+                        f"?model=nova-3"
+                        f"&language={language}"
+                        f"&smart_format=true"
+                        f"&punctuate=true"
+                        f"&interim_results=true"
+                        f"&utterance_end_ms=1500"
+                        f"&encoding=linear16"
+                        f"&sample_rate=16000"
+                        f"&channels=1"
+                    )
+
+                    dg_url = DEEPGRAM_WS_URL + params
+                    extra_headers = {
+                        "Authorization": f"Token {DEEPGRAM_API_KEY}"
+                    }
+
+                    logger.info(f"[{session_id}] Connecting to Deepgram streaming...")
+
+                    ssl_context = ssl.create_default_context(cafile=certifi.where())
+
+                    deepgram_ws = await websockets.connect(
+                        dg_url,
+                        additional_headers=extra_headers,
+                        ssl=ssl_context,
+                    )
+
+                    logger.info(f"[{session_id}] Deepgram connected. Streaming started.")
+
+                    deepgram_receiver_task = asyncio.create_task(
+                        forward_deepgram_results(deepgram_ws)
+                    )
+
+                    await ws.send_json({
+                        "type": "status",
+                        "message": "streaming_started",
+                    })
+
+                elif msg_type == "stop":
+                    receiving_audio = False
+                    logger.info(f"[{session_id}] Stop received. Finalizing...")
+
+                    if deepgram_ws:
+                        try:
+                            await deepgram_ws.send(json.dumps({"type": "CloseStream"}))
+                        except Exception:
+                            pass
+
+                        await asyncio.sleep(1.0)
+
+                        if deepgram_receiver_task:
+                            deepgram_receiver_task.cancel()
+                            try:
+                                await deepgram_receiver_task
+                            except asyncio.CancelledError:
+                                pass
+
+                        try:
+                            await deepgram_ws.close()
+                        except Exception:
+                            pass
+                        deepgram_ws = None
+
+                    if final_transcript:
+                        logger.info(f"[{session_id}] Processing: '{final_transcript}'")
+                        await process_and_respond(
+                            ws, session_id, final_transcript,
+                            final_confidence, problem_context
+                        )
+                    else:
+                        await ws.send_json({
+                            "type": "error",
+                            "message": "No speech detected. Please try again.",
+                            "fallback_mode": "REPEAT",
+                        })
+
+            elif "bytes" in message:
+                if receiving_audio and deepgram_ws:
+                    try:
+                        await deepgram_ws.send(message["bytes"])
+                    except Exception as e:
+                        logger.error(f"[{session_id}] Failed to forward audio: {e}")
+
+    except WebSocketDisconnect:
+        logger.info(f"[{session_id}] Client disconnected")
+    except Exception as e:
+        logger.error(f"[{session_id}] Error: {e}")
+    finally:
+        if deepgram_receiver_task and not deepgram_receiver_task.done():
+            deepgram_receiver_task.cancel()
+        if deepgram_ws:
+            try:
+                await deepgram_ws.close()
+            except Exception:
+                pass
+        logger.info(f"[{session_id}] Session ended")
+
+async def process_and_respond(
+    ws: WebSocket,
+    session_id: str,
+    transcript: str,
+    confidence: float,
+    problem_context: str | None,
+):
+    pipeline_start = time.time()
+
+    normalized = normalize_math(transcript)
+    if normalized:
+        logger.info(f"[{session_id}] Normalized: '{transcript}' → '{normalized}'")
+
+    retrieval_result = None
+    tutor_text = f"I heard you say: {transcript}. Let me think about that."
+    tutor_voice_text = tutor_text
+
+    try:
+        request = RetrievalRequest(
+            query_id=f"stream-{session_id}-{int(time.time())}",
+            concept_id="ALG_LINEAR_ONE_STEP_ADDITION",
+            content_type="HINT",
+            hint_level=1,
+            difficulty="FOUNDATION",
+            input_source="VOICE",
+            max_results=1,
+        )
+
+        response = retrieve(request, qdrant_client, openai_client)
+        result_dict = response_to_dict(response)
+
+        if result_dict["results"]:
+            best = result_dict["results"][0]
+            tutor_text = best["text"]
+            tutor_voice_text = best.get("voice_text") or tutor_text
+            logger.info(f"[{session_id}] Retrieved: {tutor_text[:60]}...")
+        else:
+            logger.info(f"[{session_id}] No retrieval results, using fallback")
+
+    except Exception as e:
+        logger.error(f"[{session_id}] Retrieval failed: {e}. Using fallback response.")
+
+    audio_base64 = None
+    tts_latency = None
+
+    try:
+        tts_adapter = get_tts_adapter(voice_config.DEFAULT_TTS_PROVIDER)
+        tts_start = time.time()
+
+        tts_result = await tts_adapter.generate_speech(
+            text=tutor_voice_text,
+            voice=voice_config.TTS_VOICE,
+            audio_format="mp3",
+        )
+
+        tts_latency = int((time.time() - tts_start) * 1000)
+
+        audio_base64 = base64.b64encode(tts_result.audio_data).decode("utf-8")
+        logger.info(f"[{session_id}] TTS generated: {tts_latency}ms")
+
+    except Exception as e:
+        logger.error(f"[{session_id}] TTS failed: {e}. Sending text-only response.")
+
+    total_ms = int((time.time() - pipeline_start) * 1000)
+
+    await ws.send_json({
+        "type": "tutor_response",
+        "transcript": transcript,
+        "normalized_expression": normalized,
+        "confidence": round(confidence, 4),
+        "text": tutor_text,
+        "voice_text": tutor_voice_text,
+        "audio_base64": audio_base64,
+        "needs_clarification": confidence < voice_config.CONFIDENCE_THRESHOLD,
+        "tts_latency_ms": tts_latency,
+        "total_pipeline_ms": total_ms,
+    })
+
+    logger.info(f"[{session_id}] Pipeline complete: {total_ms}ms total")
+
+if __name__ == "__main__":
+    import uvicorn
+
+    port = int(os.getenv("VOICE_PORT", "8004"))
+    logger.info(f"Starting voice streaming server on port {port}")
+    uvicorn.run(app, host="0.0.0.0", port=port)

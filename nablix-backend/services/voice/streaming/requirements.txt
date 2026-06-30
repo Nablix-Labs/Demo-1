@@ -1,0 +1,9 @@
+# AD-202 — Real-Time Voice Streaming
+fastapi>=0.100
+uvicorn>=0.20
+websockets>=11.0
+httpx>=0.24
+openai>=1.0
+pydantic>=2.0
+python-dotenv>=1.0
+qdrant-client>=1.7
