@@ -134,6 +134,33 @@ def test_interaction_voice_normalizes_spoken_correct_answer() -> None:
     assert body["message_voice"] == "Correct. Nice work explaining your answer."
 
 
+def test_interaction_voice_accepts_answer_intro_phrases() -> None:
+    cases = [
+        "I think the answer is five",
+        "It might be five",
+    ]
+
+    for index, transcript in enumerate(cases, start=15):
+        session_id = _start_session(f"ST{index:03d}", mode="VOICE")
+
+        response = client.post(
+            "/interaction",
+            json=_interaction_body(
+                session_id,
+                f"ST{index:03d}",
+                input_source="VOICE",
+                text_input=None,
+                voice_transcript=transcript,
+                transcript_confidence=0.88,
+            ),
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["message"] == "Correct. Nice work explaining your answer."
+        assert body["message_voice"] == "Correct. Nice work explaining your answer."
+
+
 def test_interaction_safety_failure_short_circuits_pipeline() -> None:
     session_id = _start_session("ST003")
 

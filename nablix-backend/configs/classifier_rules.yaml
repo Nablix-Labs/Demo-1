@@ -36,6 +36,8 @@ answer_patterns:
     - x =
     - x=
     - x equals
+    - answer is
+    - might be
   no_attempt:
     - i do not know
     - i don't know
