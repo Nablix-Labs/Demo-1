@@ -56,7 +56,7 @@ export default function ConsentPage() {
   const canActivate = allMandatory && disclosure;
 
   const activate = () => {
-    acceptConsents([...checked]);
+    acceptConsents(Array.from(checked));
     acknowledgeDisclosure();
     activateAccount();
     router.push('/diagnostic');
