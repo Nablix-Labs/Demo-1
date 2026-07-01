@@ -195,5 +195,9 @@ def _with_retrieved_content(result: TutorResult, rag: RAGResult) -> TutorResult:
     """
     if not rag.documents or result.response_strategy not in _CONTENT_STRATEGIES:
         return result
-    content = rag.documents[0].content
+    top_document = rag.documents[0]
+    if top_document.source == "mock_curriculum":
+        return result
+
+    content = top_document.content
     return result.model_copy(update={"tutor_message": content, "tutor_message_voice": content})
