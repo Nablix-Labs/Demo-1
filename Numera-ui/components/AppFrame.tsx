@@ -12,10 +12,11 @@ import { useEffect, type ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
 import ToolRail from './ToolRail';
 import MediaPanel from './MediaPanel';
+import AuthGate from './auth/AuthGate';
 import { useNumeraStore } from '@/store/useNumeraStore';
 
 // Routes that render on their own, without the tool rail or media panel.
-const FOCUS_ROUTES = ['/onboard', '/diagnostic', '/orientation', '/complete'];
+const FOCUS_ROUTES = ['/onboard', '/diagnostic', '/orientation', '/complete', '/consent', '/login', '/restricted'];
 
 export default function AppFrame({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -40,7 +41,7 @@ export default function AppFrame({ children }: { children: ReactNode }) {
   const isLesson = pathname === '/';
 
   return (
-    <>
+    <AuthGate>
       <ToolRail />
       <div className="flex-1 flex min-w-0">
         {!isLesson ? (
@@ -57,6 +58,6 @@ export default function AppFrame({ children }: { children: ReactNode }) {
           </>
         )}
       </div>
-    </>
+    </AuthGate>
   );
 }
