@@ -5,6 +5,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? '';
 const STUDENT_ID = 'ST001';
 const TARGET_SAMPLE_RATE = 16000;
+const NO_SPEECH_TIMEOUT_MS = 10000;
+const MIN_TURN_MS = 2500;
 
 export interface StreamingTutorResponse {
   type: 'tutor_response';
@@ -82,6 +84,8 @@ export function useStreamingVoiceTurn({
   const activeRef = useRef(false);
   const stopSentRef = useRef(false);
   const lastVoiceTsRef = useRef(0);
+  const audioStartedTsRef = useRef(0);
+  const hadSpeechRef = useRef(false);
   const transcriptSentRef = useRef(false);
   const tutorResponseHandledRef = useRef(false);
   const finalTranscriptRef = useRef('');
@@ -138,6 +142,7 @@ export function useStreamingVoiceTurn({
     tutorResponseHandledRef.current = false;
     finalTranscriptRef.current = '';
     finalConfidenceRef.current = undefined;
+    hadSpeechRef.current = false;
 
     ws.onopen = async () => {
       ws.send(JSON.stringify({ type: 'start', language: 'en' }));
@@ -155,7 +160,8 @@ export function useStreamingVoiceTurn({
       activeRef.current = true;
       speakingRef.current = false;
       setActive(true);
-      lastVoiceTsRef.current = performance.now();
+      audioStartedTsRef.current = performance.now();
+      lastVoiceTsRef.current = audioStartedTsRef.current;
 
       processor.onaudioprocess = (event) => {
         if (!activeRef.current || ws.readyState !== WebSocket.OPEN) return;
@@ -165,14 +171,20 @@ export function useStreamingVoiceTurn({
         for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
         const rms = Math.sqrt(sum / input.length);
         const now = performance.now();
+        const turnAgeMs = now - audioStartedTsRef.current;
 
         if (rms > energyThreshold) {
+          hadSpeechRef.current = true;
           lastVoiceTsRef.current = now;
           if (!speakingRef.current) {
             speakingRef.current = true;
             setSpeaking(true);
           }
-        } else if (now - lastVoiceTsRef.current > silenceMs) {
+        }
+        const shouldStop =
+          (turnAgeMs >= MIN_TURN_MS && hadSpeechRef.current && now - lastVoiceTsRef.current > silenceMs) ||
+          (turnAgeMs >= NO_SPEECH_TIMEOUT_MS && !hadSpeechRef.current);
+        if (shouldStop) {
           stopInput(true, false);
           return;
         }
