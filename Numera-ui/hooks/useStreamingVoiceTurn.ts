@@ -91,6 +91,9 @@ export function useStreamingVoiceTurn({
   const finalTranscriptRef = useRef('');
   const finalConfidenceRef = useRef<number | undefined>(undefined);
   const speakingRef = useRef(false);
+  const reArmRef = useRef(false);
+  const reArmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const startRef = useRef<(() => Promise<void>) | null>(null);
   const onStudentTranscriptRef = useRef(onStudentTranscript);
   const onTutorResponseRef = useRef(onTutorResponse);
   const onErrorRef = useRef(onError);
@@ -128,6 +131,11 @@ export function useStreamingVoiceTurn({
   }, []);
 
   const stop = useCallback(() => {
+    reArmRef.current = false;
+    if (reArmTimerRef.current) {
+      clearTimeout(reArmTimerRef.current);
+      reArmTimerRef.current = null;
+    }
     stopInput(true, true);
   }, [stopInput]);
 
@@ -143,6 +151,7 @@ export function useStreamingVoiceTurn({
     finalTranscriptRef.current = '';
     finalConfidenceRef.current = undefined;
     hadSpeechRef.current = false;
+    reArmRef.current = false;
 
     ws.onopen = async () => {
       ws.send(JSON.stringify({ type: 'start', language: 'en' }));
@@ -217,6 +226,7 @@ export function useStreamingVoiceTurn({
           onStudentTranscriptRef.current(transcript, response.confidence || finalConfidenceRef.current);
         }
         onTutorResponseRef.current(response);
+        reArmRef.current = true; // completed turn → reopen the mic for the next one
         ws.close(1000, 'turn complete');
       }
 
@@ -234,6 +244,18 @@ export function useStreamingVoiceTurn({
     ws.onclose = () => {
       stopInput(false, false);
       wsRef.current = null;
+      // Only a completed turn re-arms; errors/manual stop leave reArmRef false,
+      // so a dead socket (e.g. a WS host that can't hold the connection) never
+      // loops reconnects.
+      if (reArmRef.current) {
+        reArmRef.current = false;
+        // ponytail: fixed 700ms gap lets the tutor's TTS start before the mic
+        // reopens — crude echo guard; proper fix is gating capture while
+        // audio_base64 is playing.
+        reArmTimerRef.current = setTimeout(() => {
+          void startRef.current?.();
+        }, 700);
+      }
     };
   }, [
     supported,
@@ -243,6 +265,10 @@ export function useStreamingVoiceTurn({
     silenceMs,
     stopInput,
   ]);
+
+  useEffect(() => {
+    startRef.current = start;
+  }, [start]);
 
   useEffect(() => stop, [stop]);
 
