@@ -8,6 +8,7 @@ export default function VoiceBar() {
   const { micMuted, voiceStatus, toggleMic } = useNumeraStore();
   const levels = useMicLevel((s) => s.levels);
   const active = useMicLevel((s) => s.active);
+  const caption = useMicLevel((s) => s.caption);
 
   // The bar is "live" (reacting to real input) only while capturing + unmuted.
   const live = active && !micMuted;
@@ -39,6 +40,22 @@ export default function VoiceBar() {
           );
         })}
       </div>
+
+      {/* Live caption — what Numera is hearing (helps confirm the mic is working) */}
+      {live && (
+        <div
+          className="min-h-[34px] rounded-md bg-reading-surface border border-muted-gray px-2.5 py-1.5 flex items-center justify-center text-center"
+          aria-live="polite"
+        >
+          {caption ? (
+            <p className="text-[11.5px] text-ink leading-snug">
+              <span className="text-ai-cyan font-semibold">“</span>{caption}<span className="text-ai-cyan font-semibold">”</span>
+            </p>
+          ) : (
+            <p className="text-[11px] text-slate-blue italic">Listening — start speaking…</p>
+          )}
+        </div>
+      )}
 
       {/* Mute toggle */}
       <button

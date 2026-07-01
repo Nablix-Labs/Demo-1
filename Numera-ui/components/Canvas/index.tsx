@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useDemoTutor } from '@/hooks/useDemoTutor';
+import { gridBackground, GRID_OPTIONS } from '@/lib/canvasGrid';
 import Toolbar from './Toolbar';
 import TeachBack from './TeachBack';
 
@@ -31,11 +32,12 @@ const HELP_TIPS = [
 ];
 
 export default function CanvasStage() {
-  const { questionText, questionNumber, items, setActiveTool, setCanvasExporter } = useNumeraStore();
+  const { questionText, questionNumber, items, setActiveTool, setCanvasExporter, canvasGrid, setCanvasGrid } = useNumeraStore();
   const tutor = useDemoTutor();
 
   const exportRef = useRef<(() => string | null) | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [gridOpen, setGridOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -76,11 +78,7 @@ export default function CanvasStage() {
     <main
       className="flex-1 relative min-w-0 bg-white overflow-hidden"
       aria-label="Canvas workspace"
-      style={{
-        backgroundImage:
-          'linear-gradient(#E0E2E5 1px, transparent 1px), linear-gradient(90deg, #E0E2E5 1px, transparent 1px)',
-        backgroundSize: '28px 28px',
-      }}
+      style={gridBackground(canvasGrid)}
     >
       {/* Question header */}
       <div className="absolute top-[26px] left-[34px] right-[34px] flex items-center gap-3 z-10">
@@ -130,8 +128,64 @@ export default function CanvasStage() {
         </svg>
       </button>
 
-      {/* Help FAB + popover */}
-      <div className="absolute bottom-6 right-6 z-20">
+      {/* Paper-style + Help FABs */}
+      <div className="absolute bottom-6 right-6 z-20 flex items-center gap-2.5">
+        {/* Paper / grid style picker */}
+        <div className="relative">
+          {gridOpen && (
+            <div
+              className="absolute bottom-[calc(100%+10px)] right-0 w-[236px] bg-white border border-muted-gray rounded-xl p-3"
+              style={{ boxShadow: '0 4px 16px rgba(0,0,0,0.14)' }}
+              role="dialog"
+              aria-label="Canvas paper style"
+            >
+              <div className="text-[11px] font-semibold tracking-widest uppercase text-slate-blue mb-2.5">
+                Paper style
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {GRID_OPTIONS.map((opt) => {
+                  const active = canvasGrid === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      onClick={() => { setCanvasGrid(opt.id); setGridOpen(false); }}
+                      aria-pressed={active}
+                      title={opt.label}
+                      className="flex flex-col items-center gap-1 group"
+                    >
+                      <span
+                        className={
+                          'w-full h-11 rounded-md bg-white transition-colors ' +
+                          (active
+                            ? 'ring-2 ring-focus-navy border border-focus-navy'
+                            : 'border border-muted-gray group-hover:border-slate-blue')
+                        }
+                        style={gridBackground(opt.id)}
+                      />
+                      <span className={'text-[10px] font-medium ' + (active ? 'text-ink' : 'text-slate-blue')}>
+                        {opt.label}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          <button
+            onClick={() => { setGridOpen((o) => !o); setHelpOpen(false); }}
+            title="Paper style"
+            aria-label="Canvas paper style"
+            aria-expanded={gridOpen}
+            className={cnFab(gridOpen)}
+          >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16M4 15h16M10 4v16M15 4v16"/>
+            </svg>
+          </button>
+        </div>
+
+        {/* Help FAB + popover */}
+        <div className="relative">
         {helpOpen && (
           <div
             className="absolute bottom-[calc(100%+10px)] right-0 w-64 bg-white border border-muted-gray rounded-xl p-3.5"
@@ -153,16 +207,17 @@ export default function CanvasStage() {
           </div>
         )}
         <button
-          onClick={() => setHelpOpen((o) => !o)}
+          onClick={() => { setHelpOpen((o) => !o); setGridOpen(false); }}
           title="Help"
           aria-label="Help"
           aria-expanded={helpOpen}
-          className={cnHelp(helpOpen)}
+          className={cnFab(helpOpen)}
         >
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="9"/><path d="M9.4 9.3 a2.6 2.6 0 1 1 3.3 2.5 c-0.8 0.3 -0.8 1 -0.8 1.7"/><circle cx="12" cy="16.6" r="0.7" fill="currentColor" stroke="none"/>
           </svg>
         </button>
+        </div>
       </div>
 
       {/* Floating toolbar — self-positioning & draggable within the canvas */}
@@ -171,8 +226,8 @@ export default function CanvasStage() {
   );
 }
 
-/** Help FAB styling — dark when open, muted when closed. */
-function cnHelp(open: boolean) {
+/** Corner FAB styling — dark when open, muted when closed. */
+function cnFab(open: boolean) {
   return [
     'w-10 h-10 rounded-full flex items-center justify-center transition-colors border',
     open

@@ -99,6 +99,7 @@ export function useVoiceTurn({
     transcriptRef.current = '';
     hadSpeechRef.current = false;
     setSpeaking(false);
+    useMicLevel.getState().setCaption(''); // turn ended — clear the live caption
     if (text) onTurnEndRef.current(text, confidenceRef.current);
   }, []);
 
@@ -152,13 +153,18 @@ export function useVoiceTurn({
       recognition.interimResults = true;
       recognition.lang = 'en-US';
       recognition.onresult = (e) => {
+        let interim = '';
         for (let i = e.resultIndex; i < e.results.length; i++) {
           const result = e.results[i];
           if (result.isFinal) {
             transcriptRef.current += result[0].transcript;
             confidenceRef.current = result[0].confidence;
+          } else {
+            interim += result[0].transcript;
           }
         }
+        // Live caption: what we've heard this turn so far + the in-progress words.
+        useMicLevel.getState().setCaption((transcriptRef.current + interim).trim());
       };
       recognition.onend = () => {
         // Web Speech stops itself periodically; keep it alive while we're active.

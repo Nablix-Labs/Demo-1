@@ -24,6 +24,7 @@ export type SessionState =
 export type DrawingTool = 'pen' | 'pencil' | 'highlighter' | 'eraser' | 'shape' | 'ruler';
 export type ShapeKind = 'rect' | 'circle' | 'triangle';
 export type EraserMode = 'stroke' | 'object';
+export type CanvasGrid = 'plain' | 'dots' | 'grid-sm' | 'grid' | 'grid-lg' | 'lines';
 
 export type InputMode = 'voice' | 'text' | 'canvas';
 
@@ -169,6 +170,7 @@ export interface NumeraState {
   toolbarPos: { x: number; y: number } | null; // null = default docked position
   toolbarCollapsed: boolean;          // collapsed to a small bubble
   toolbarOrientation: 'horizontal' | 'vertical'; // rotates when docked at a side
+  canvasGrid: CanvasGrid;             // paper style behind the drawing surface
 
   // Runtime: canvas PNG exporter, registered by the canvas for PDF notes
   canvasExporter: (() => string | null) | null;
@@ -239,6 +241,7 @@ export interface NumeraState {
   setToolbarPos: (pos: { x: number; y: number } | null) => void;
   toggleToolbarCollapsed: () => void;
   setToolbarOrientation: (o: 'horizontal' | 'vertical') => void;
+  setCanvasGrid: (g: CanvasGrid) => void;
   setCanvasExporter: (fn: (() => string | null) | null) => void;
   startGroupSession: () => void;
   endGroupSession: () => void;
@@ -277,7 +280,7 @@ const initial: Omit<
   | 'setStrokeColor' | 'setStrokeWidth' | 'addItem' | 'removeItem' | 'undo' | 'redo'
   | 'clearCanvas' | 'applyCanvasDraw' | 'clearTutorMarks'
   | 'setInputMode' | 'setTextInput' | 'setPanelSide' | 'togglePanelSide'
-  | 'toggleTranscript' | 'setToolbarPos' | 'toggleToolbarCollapsed' | 'setToolbarOrientation'
+  | 'toggleTranscript' | 'setToolbarPos' | 'toggleToolbarCollapsed' | 'setToolbarOrientation' | 'setCanvasGrid'
   | 'setCanvasExporter' | 'startGroupSession' | 'endGroupSession'
   | 'upsertParticipant' | 'removeParticipant' | 'setParticipantCursor'
   | 'addRemoteItem' | 'toggleLessonLearned' | 'setPracticeDone' | 'setStudentAge' | 'setStudentName'
@@ -331,6 +334,7 @@ const initial: Omit<
   toolbarPos: null,
   toolbarCollapsed: false,
   toolbarOrientation: 'horizontal',
+  canvasGrid: 'grid',
   canvasExporter: null,
   sessionMode: 'solo',
   participants: [],
@@ -482,6 +486,7 @@ export const useNumeraStore = create<NumeraState>()(
   setToolbarPos: (toolbarPos) => set({ toolbarPos }),
   toggleToolbarCollapsed: () => set((s) => ({ toolbarCollapsed: !s.toolbarCollapsed })),
   setToolbarOrientation: (toolbarOrientation) => set({ toolbarOrientation }),
+  setCanvasGrid: (canvasGrid) => set({ canvasGrid }),
   setCanvasExporter: (canvasExporter) => set({ canvasExporter }),
 
   startGroupSession: () => set({ sessionMode: 'group' }),
@@ -576,6 +581,7 @@ export const useNumeraStore = create<NumeraState>()(
         toolbarPos: s.toolbarPos,
         toolbarCollapsed: s.toolbarCollapsed,
         toolbarOrientation: s.toolbarOrientation,
+        canvasGrid: s.canvasGrid,
         shapeKind: s.shapeKind,
         eraserMode: s.eraserMode,
         completedLessons: s.completedLessons,
