@@ -6,6 +6,12 @@ from collections.abc import Sequence
 from pydantic import Field
 
 from app.ai_engine.classifier_config import ClassifierRulesConfig, load_classifier_rules
+from app.ai_engine.openai_client import (
+    OpenAIAIEngineClient,
+    OpenAIAnswerEvaluation,
+    OpenAIErrorDiagnosis,
+    OpenAITutorMessage,
+)
 from app.ai_engine.schemas import (
     CanvasFeedback,
     ErrorType,
@@ -23,6 +29,9 @@ from app.ai_engine.schemas import (
     TutorResponse,
     VisualCue,
 )
+from app.core.config import Settings, get_settings
+from app.core.exceptions import AdapterError
+from app.core.logger import logger
 
 
 class ClassificationRequest(StrictSchema):
@@ -42,6 +51,8 @@ class ClassificationRequest(StrictSchema):
 
 def classify_student_response(request: ClassificationRequest) -> TutorResponse:
     rules: ClassifierRulesConfig = load_classifier_rules()
+    settings: Settings = get_settings()
+    openai_client: OpenAIAIEngineClient | None = build_openai_ai_engine_client(settings)
     safety_check: SafetyCheck = check_student_message_safety(request.student_input, rules)
     intent: IntentType = detect_student_intent(request.student_input, rules)
 
@@ -57,10 +68,29 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
             hint_level=None,
             answer_reveal_allowed=False,
             confidence=rules.confidence.safety_response,
+            tutor_message_override=None,
+            voice_message_override=None,
         )
 
     evaluation: EvaluationCategory | None = evaluate_answer_attempt(request, intent, rules)
+    openai_evaluation: OpenAIAnswerEvaluation | None = evaluate_answer_with_openai(
+        request=request,
+        intent=intent,
+        rules=rules,
+        openai_client=openai_client,
+    )
+    if openai_evaluation is not None:
+        evaluation = openai_evaluation.evaluation
+
     error_type: ErrorType | None = classify_student_error(request, evaluation, rules)
+    openai_error: OpenAIErrorDiagnosis | None = diagnose_error_with_openai(
+        request=request,
+        evaluation=evaluation,
+        openai_client=openai_client,
+    )
+    if openai_error is not None:
+        error_type = openai_error.error_type
+
     response_strategy: ResponseStrategy = select_response_strategy(
         intent=intent,
         evaluation=evaluation,
@@ -73,6 +103,15 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
         current_hint_level=request.current_hint_level,
         attempt_count=request.attempt_count,
     )
+    openai_message: OpenAITutorMessage | None = build_tutor_message_with_openai(
+        request=request,
+        intent=intent,
+        evaluation=evaluation,
+        error_type=error_type,
+        response_strategy=response_strategy,
+        hint_level=hint_level,
+        openai_client=openai_client,
+    )
     return build_tutor_response(
         request=request,
         rules=rules,
@@ -84,7 +123,107 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
         hint_level=hint_level,
         answer_reveal_allowed=False,
         confidence=rules.confidence.standard_response,
+        tutor_message_override=openai_message.tutor_message if openai_message is not None else None,
+        voice_message_override=(
+            openai_message.tutor_message_voice_optimised if openai_message is not None else None
+        ),
     )
+
+
+def build_openai_ai_engine_client(settings: Settings) -> OpenAIAIEngineClient | None:
+    if settings.use_openai_ai_engine is False:
+        return None
+    if settings.openai_api_key == "":
+        return None
+    return OpenAIAIEngineClient(
+        api_key=settings.openai_api_key,
+        model=settings.openai_ai_engine_model,
+        timeout_seconds=settings.openai_request_timeout_seconds,
+    )
+
+
+def evaluate_answer_with_openai(
+    request: ClassificationRequest,
+    intent: IntentType,
+    rules: ClassifierRulesConfig,
+    openai_client: OpenAIAIEngineClient | None,
+) -> OpenAIAnswerEvaluation | None:
+    if openai_client is None:
+        return None
+    if intent != "SUBMITTING_ANSWER":
+        return None
+    if request.input_source == "VOICE" and is_low_confidence(request.transcript_confidence, rules):
+        return None
+    if normalize_text(request.student_input) == "":
+        return None
+
+    try:
+        return openai_client.evaluate_answer(
+            question=request.question,
+            correct_answer=request.correct_answer,
+            student_input=request.student_input,
+        )
+    except AdapterError as error:
+        logger.warning(
+            "openai_ai_engine_fallback",
+            extra={"step": "answer_evaluation", "detail": error.message},
+        )
+        return None
+
+
+def diagnose_error_with_openai(
+    request: ClassificationRequest,
+    evaluation: EvaluationCategory | None,
+    openai_client: OpenAIAIEngineClient | None,
+) -> OpenAIErrorDiagnosis | None:
+    if openai_client is None:
+        return None
+    if evaluation not in {"INCORRECT", "PARTIALLY_CORRECT"}:
+        return None
+
+    try:
+        return openai_client.diagnose_error(
+            question=request.question,
+            correct_answer=request.correct_answer,
+            student_input=request.student_input,
+        )
+    except AdapterError as error:
+        logger.warning(
+            "openai_ai_engine_fallback",
+            extra={"step": "error_diagnosis", "detail": error.message},
+        )
+        return None
+
+
+def build_tutor_message_with_openai(
+    request: ClassificationRequest,
+    intent: IntentType,
+    evaluation: EvaluationCategory | None,
+    error_type: ErrorType | None,
+    response_strategy: ResponseStrategy,
+    hint_level: HintLevel | None,
+    openai_client: OpenAIAIEngineClient | None,
+) -> OpenAITutorMessage | None:
+    if openai_client is None:
+        return None
+    if intent in {"REQUESTING_ANSWER", "ATTEMPTING_OVERRIDE"}:
+        return None
+
+    try:
+        return openai_client.build_tutor_message(
+            question=request.question,
+            student_input=request.student_input,
+            evaluation=evaluation,
+            error_type=error_type,
+            response_strategy=response_strategy,
+            hint_level=hint_level,
+        )
+    except AdapterError as error:
+        logger.warning(
+            "openai_ai_engine_fallback",
+            extra={"step": "tutor_message", "detail": error.message},
+        )
+        return None
 
 
 def check_student_message_safety(student_input: str, rules: ClassifierRulesConfig) -> SafetyCheck:
@@ -253,8 +392,12 @@ def build_tutor_response(
     hint_level: HintLevel | None,
     answer_reveal_allowed: bool,
     confidence: float,
+    tutor_message_override: str | None,
+    voice_message_override: str | None,
 ) -> TutorResponse:
-    tutor_message: str = build_tutor_message(intent, evaluation, error_type, response_strategy, rules)
+    fallback_message: str = build_tutor_message(intent, evaluation, error_type, response_strategy, rules)
+    tutor_message: str = tutor_message_override if tutor_message_override is not None else fallback_message
+    voice_message: str = voice_message_override if voice_message_override is not None else tutor_message
     event: StudentModelEvent = build_student_model_event(evaluation, error_type, hint_level)
 
     response: TutorResponse = TutorResponse(
@@ -263,7 +406,7 @@ def build_tutor_response(
         intent=intent,
         response_strategy=response_strategy,
         tutor_message=tutor_message,
-        tutor_message_voice_optimised=tutor_message,
+        tutor_message_voice_optimised=voice_message,
         voice_optimised=True,
         hint_level=hint_level,
         scaffold_steps_delivered=[],
