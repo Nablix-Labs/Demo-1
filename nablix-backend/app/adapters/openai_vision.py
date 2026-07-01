@@ -32,6 +32,8 @@ _SYSTEM_PROMPT = (
     '"latex" (LaTeX for the written math, or null if not applicable), '
     '"detected_shapes" (a list of geometry figures drawn on the canvas; [] if none), '
     '"confidence" (a float from 0.0 to 1.0 estimating how sure you are). '
+    "If a final answer is visible but the written steps do not show how that answer was obtained, "
+    "keep the transcription verbatim and lower confidence below 0.75 so the app can ask the student to explain their reasoning. "
     "Each detected_shapes item has: shape_type, label (or null), description, "
     "properties (visible cues such as parallel, perpendicular, right_angle, equal_sides, radius), "
     "and confidence (0.0 to 1.0). "
@@ -71,6 +73,14 @@ def _raw_text_for(payload: _OpenAIOCRPayload) -> str:
     if payload.raw_ocr_text:
         return payload.raw_ocr_text
     return "\n".join(payload.detected_steps)
+
+
+def _needs_reason_for_final_answer(payload: _OpenAIOCRPayload) -> bool:
+    if payload.final_answer is None or len(payload.final_answer.strip()) == 0:
+        return False
+
+    visible_steps = [step for step in payload.detected_steps if step.strip()]
+    return len(visible_steps) < 3
 
 
 class OpenAIVisionOCRAdapter:
@@ -142,8 +152,10 @@ class OpenAIVisionOCRAdapter:
                 f"unparseable response: {error}; body={response.text}",
             ) from error
 
-        needs_clarification = payload.confidence < self._min_confidence or any(
-            shape.confidence < self._min_confidence for shape in payload.detected_shapes
+        needs_clarification = (
+            payload.confidence < self._min_confidence
+            or any(shape.confidence < self._min_confidence for shape in payload.detected_shapes)
+            or _needs_reason_for_final_answer(payload)
         )
         return VisionOCRResult(
             raw_ocr_text=_raw_text_for(payload),
