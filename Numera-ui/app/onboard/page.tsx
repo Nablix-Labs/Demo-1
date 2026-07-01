@@ -17,6 +17,7 @@ import { ArrowRight, Mail, KeyRound, ShieldCheck } from 'lucide-react';
 import AuthShell from '@/components/auth/AuthShell';
 import { useAuthStore, type SsoProvider, type AuthMethod } from '@/store/useAuthStore';
 import { useNumeraStore } from '@/store/useNumeraStore';
+import { SSO_LOGO } from '@/components/auth/SsoLogos';
 
 const SSO: { id: SsoProvider; label: string }[] = [
   { id: 'google', label: 'Google' },
@@ -89,18 +90,19 @@ export default function OnboardPage() {
 
           {/* SSO */}
           <div className="grid grid-cols-2 gap-2.5 mt-6">
-            {SSO.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => chooseSso(p.id)}
-                className="flex items-center justify-center gap-2 rounded-btn border border-muted-gray bg-white px-4 py-3 text-[13px] font-semibold text-ink hover:bg-reading-surface hover:border-slate-blue transition-colors"
-              >
-                <span className="w-5 h-5 rounded-md bg-focus-navy text-white text-[11px] font-bold flex items-center justify-center">
-                  {p.label[0]}
-                </span>
-                {p.label}
-              </button>
-            ))}
+            {SSO.map((p) => {
+              const Logo = SSO_LOGO[p.id];
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => chooseSso(p.id)}
+                  className="flex items-center justify-center gap-2 rounded-btn border border-muted-gray bg-white px-4 py-3 text-[13px] font-semibold text-ink hover:bg-reading-surface hover:border-slate-blue hover:shadow-sm transition-all"
+                >
+                  <Logo size={17} />
+                  {p.label}
+                </button>
+              );
+            })}
           </div>
 
           <div className="flex items-center gap-3 my-5">
