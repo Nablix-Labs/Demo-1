@@ -15,6 +15,7 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import { useGLTF } from '@react-three/drei';
 import { Suspense, useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
+import { useMicLevel } from '@/store/useMicLevel';
 
 const MODEL_URL = '/models/tutor.glb';
 
@@ -36,7 +37,7 @@ function indexMorphs(scene: THREE.Object3D): MorphMap {
   return map;
 }
 
-function Avatar({ speaking, onReady }: { speaking: boolean; onReady?: () => void }) {
+function Avatar({ onReady }: { onReady?: () => void }) {
   const { scene } = useGLTF(MODEL_URL);
   const group = useRef<THREE.Group>(null);
   const jaw = useRef(0);
@@ -68,15 +69,19 @@ function Avatar({ speaking, onReady }: { speaking: boolean; onReady?: () => void
     const k = Math.min(1, dt * 18); // frame-rate-independent smoothing
     const t = state.clock.elapsedTime;
 
-    // Mouth: layered sines while speaking → natural-looking talk motion.
+    // Mouth: driven by Numera's live TTS (read imperatively — no re-render).
+    // Each spoken-word boundary opens the mouth (decaying), with a light flutter
+    // between words so the lips keep moving through the whole utterance.
+    const { aiSpeaking, lastBoundary } = useMicLevel.getState();
     let level = 0;
-    if (speaking) {
-      const a = 0.5 + 0.5 * Math.sin(t * 9.0);
-      const b = 0.6 + 0.4 * Math.sin(t * 13.3 + 1.1);
-      level = Math.min(1, a * b);
+    if (aiSpeaking) {
+      const sinceWord = (performance.now() - lastBoundary) / 1000;
+      const wordEnv = Math.exp(-Math.max(0, sinceWord) * 7);
+      const flutter = 0.35 + 0.35 * Math.sin(t * 20);
+      level = Math.min(1, 0.4 * flutter + 0.7 * wordEnv);
     }
     jaw.current += (level - jaw.current) * k;
-    setMorph('jawOpen', jaw.current * 0.6);
+    setMorph('jawOpen', jaw.current * 0.62);
     setMorph('viseme_aa', jaw.current * 0.4);
 
     // Periodic blink.
@@ -108,7 +113,7 @@ function Avatar({ speaking, onReady }: { speaking: boolean; onReady?: () => void
   );
 }
 
-export default function Avatar3d({ speaking, onReady }: { speaking: boolean; onReady?: () => void }) {
+export default function Avatar3d({ onReady }: { onReady?: () => void }) {
   return (
     <Canvas
       gl={{ alpha: true, antialias: true }}
@@ -122,7 +127,7 @@ export default function Avatar3d({ speaking, onReady }: { speaking: boolean; onR
       {/* Numera cyan rim light */}
       <directionalLight position={[0, 1, -2]} intensity={0.7} color="#00B4D8" />
       <Suspense fallback={null}>
-        <Avatar speaking={speaking} onReady={onReady} />
+        <Avatar onReady={onReady} />
       </Suspense>
     </Canvas>
   );

@@ -8,9 +8,8 @@
  * orb stays. The avatar's mouth moves while Numera is speaking (voiceStatus).
  */
 
-import { Component, useState, type ReactNode } from 'react';
+import { Component, useCallback, useState, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
-import { useNumeraStore } from '@/store/useNumeraStore';
 
 const Avatar3d = dynamic(() => import('./Avatar3d'), { ssr: false });
 
@@ -40,11 +39,11 @@ const RobotIcon = ({ size }: { size: number }) => (
 );
 
 export default function TutorTile() {
-  const voiceStatus = useNumeraStore((s) => s.voiceStatus);
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
-  const speaking = voiceStatus === 'speaking';
   const showOrb = !ready || failed;
+  const handleReady = useCallback(() => setReady(true), []);
+  const handleError = useCallback(() => setFailed(true), []);
 
   return (
     <div
@@ -71,8 +70,8 @@ export default function TutorTile() {
       {/* Live 3D avatar */}
       {!failed && (
         <div className={'absolute inset-0 transition-opacity duration-500 ' + (ready ? 'opacity-100' : 'opacity-0')}>
-          <AvatarBoundary onError={() => setFailed(true)}>
-            <Avatar3d speaking={speaking} onReady={() => setReady(true)} />
+          <AvatarBoundary onError={handleError}>
+            <Avatar3d onReady={handleReady} />
           </AvatarBoundary>
         </div>
       )}

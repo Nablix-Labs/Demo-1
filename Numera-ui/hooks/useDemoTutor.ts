@@ -26,6 +26,7 @@ import {
   type HintResponse,
 } from '@/lib/api';
 import { useNumeraStore } from '@/store/useNumeraStore';
+import { useMicLevel } from '@/store/useMicLevel';
 
 const apiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
@@ -38,11 +39,19 @@ function hasCanvasActivity(): boolean {
   return useNumeraStore.getState().items.length > 0;
 }
 
-/** Speak the tutor's reply (TTS output only — never used to decide content). */
+/** Speak the tutor's reply (TTS output only — never used to decide content).
+ *  Drives the 3D avatar's mouth via useMicLevel: onstart/onboundary open it in
+ *  sync with the spoken words, onend/onerror close it. */
 function speak(text: string): void {
   if (typeof window === 'undefined' || !('speechSynthesis' in window) || !text) return;
+  const mic = useMicLevel.getState();
   const utterance = new SpeechSynthesisUtterance(text);
+  utterance.onstart = () => useMicLevel.getState().setAiSpeaking(true);
+  utterance.onboundary = () => useMicLevel.getState().markBoundary();
+  utterance.onend = () => useMicLevel.getState().setAiSpeaking(false);
+  utterance.onerror = () => useMicLevel.getState().setAiSpeaking(false);
   window.speechSynthesis.cancel();
+  mic.setAiSpeaking(false); // reset before the new utterance starts
   window.speechSynthesis.speak(utterance);
 }
 
