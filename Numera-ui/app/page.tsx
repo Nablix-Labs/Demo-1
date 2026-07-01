@@ -85,6 +85,7 @@ export default function LessonPage() {
     onTutorResponse,
     onError: onVoiceError,
   });
+  const { start: startVoice, stop: stopVoice, supported: voiceSupported } = voice;
 
   // Start a backend session on lesson entry and let it drive the displayed
   // question/number/opening message. Mic starts muted so capture is opt-in.
@@ -112,10 +113,10 @@ export default function LessonPage() {
   // Mic button drives real voice capture: unmuted → listen + fire turns on
   // silence; muted → stop.
   useEffect(() => {
-    if (!apiEnabled || !sessionId || !voice.supported) return;
-    if (!micMuted) void voice.start();
-    else voice.stop();
-  }, [apiEnabled, sessionId, micMuted, voice]);
+    if (!apiEnabled || !sessionId || !voiceSupported) return;
+    if (!micMuted) void startVoice();
+    else stopVoice();
+  }, [apiEnabled, sessionId, micMuted, voiceSupported, startVoice, stopVoice]);
 
   return (
     <>

@@ -86,9 +86,20 @@ export function useStreamingVoiceTurn({
   const tutorResponseHandledRef = useRef(false);
   const finalTranscriptRef = useRef('');
   const finalConfidenceRef = useRef<number | undefined>(undefined);
+  const speakingRef = useRef(false);
+  const onStudentTranscriptRef = useRef(onStudentTranscript);
+  const onTutorResponseRef = useRef(onTutorResponse);
+  const onErrorRef = useRef(onError);
+
+  useEffect(() => {
+    onStudentTranscriptRef.current = onStudentTranscript;
+    onTutorResponseRef.current = onTutorResponse;
+    onErrorRef.current = onError;
+  }, [onStudentTranscript, onTutorResponse, onError]);
 
   const stopInput = useCallback((sendStop: boolean, closeSocket: boolean) => {
     activeRef.current = false;
+    speakingRef.current = false;
     setActive(false);
     setSpeaking(false);
 
@@ -117,7 +128,7 @@ export function useStreamingVoiceTurn({
   }, [stopInput]);
 
   const start = useCallback(async () => {
-    if (!supported || activeRef.current || !sessionId) return;
+    if (!supported || activeRef.current || !sessionId || wsRef.current !== null) return;
 
     const ws = new WebSocket(`${WS_URL}?session_id=${encodeURIComponent(sessionId)}&student_id=${encodeURIComponent(studentId)}`);
     ws.binaryType = 'arraybuffer';
@@ -142,6 +153,7 @@ export function useStreamingVoiceTurn({
       sourceRef.current = source;
       processorRef.current = processor;
       activeRef.current = true;
+      speakingRef.current = false;
       setActive(true);
       lastVoiceTsRef.current = performance.now();
 
@@ -156,7 +168,10 @@ export function useStreamingVoiceTurn({
 
         if (rms > energyThreshold) {
           lastVoiceTsRef.current = now;
-          if (!speaking) setSpeaking(true);
+          if (!speakingRef.current) {
+            speakingRef.current = true;
+            setSpeaking(true);
+          }
         } else if (now - lastVoiceTsRef.current > silenceMs) {
           stopInput(true, false);
           return;
@@ -187,20 +202,20 @@ export function useStreamingVoiceTurn({
         const transcript = response.transcript || finalTranscriptRef.current;
         if (!transcriptSentRef.current && transcript) {
           transcriptSentRef.current = true;
-          onStudentTranscript(transcript, response.confidence || finalConfidenceRef.current);
+          onStudentTranscriptRef.current(transcript, response.confidence || finalConfidenceRef.current);
         }
-        onTutorResponse(response);
+        onTutorResponseRef.current(response);
         ws.close(1000, 'turn complete');
       }
 
       if (message.type === 'error') {
-        onError?.(String(message.message ?? 'Voice streaming failed.'));
-        ws.close(1011, 'voice error');
+        onErrorRef.current?.(String(message.message ?? 'Voice streaming failed.'));
+        ws.close(4000, 'voice error');
       }
     };
 
     ws.onerror = () => {
-      onError?.('Voice WebSocket failed.');
+      onErrorRef.current?.('Voice WebSocket failed.');
       stopInput(false, true);
     };
 
@@ -212,13 +227,9 @@ export function useStreamingVoiceTurn({
     supported,
     sessionId,
     studentId,
-    speaking,
     energyThreshold,
     silenceMs,
     stopInput,
-    onStudentTranscript,
-    onTutorResponse,
-    onError,
   ]);
 
   useEffect(() => stop, [stop]);
