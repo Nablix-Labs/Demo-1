@@ -1,13 +1,22 @@
 'use client';
 
+import { useEffect, useRef } from 'react';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { cn } from '@/lib/cn';
 
 export default function Transcript() {
   const transcript = useNumeraStore((s) => s.transcript);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Keep the newest message in view as the conversation grows (incl. partials).
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [transcript]);
 
   return (
     <div
+      ref={scrollRef}
       className="flex-1 min-h-0 overflow-y-auto mx-3.5 mb-3.5 border-t border-dashed border-muted-gray pt-3 flex flex-col gap-2.5"
       aria-live="polite"
       aria-label="Conversation transcript"

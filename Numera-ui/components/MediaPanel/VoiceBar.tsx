@@ -1,12 +1,16 @@
 'use client';
 
 import { useNumeraStore } from '@/store/useNumeraStore';
+import { useMicLevel, MIC_BARS } from '@/store/useMicLevel';
 import { cn } from '@/lib/cn';
-
-const WAVE_HEIGHTS = [12, 20, 8, 24, 14, 22, 10, 18, 22, 9, 16, 20];
 
 export default function VoiceBar() {
   const { micMuted, voiceStatus, toggleMic } = useNumeraStore();
+  const levels = useMicLevel((s) => s.levels);
+  const active = useMicLevel((s) => s.active);
+
+  // The bar is "live" (reacting to real input) only while capturing + unmuted.
+  const live = active && !micMuted;
 
   return (
     <div className="px-3.5 pb-3.5 flex flex-col gap-2.5">
@@ -18,22 +22,22 @@ export default function VoiceBar() {
         </strong>
       </p>
 
-      {/* Waveform */}
+      {/* Live input level — reflects how much mic signal is being detected */}
       <div className="flex items-center justify-center gap-[3px] h-[26px]" aria-hidden="true">
-        {WAVE_HEIGHTS.map((h, i) => (
-          <span
-            key={i}
-            className={cn(
-              'w-[3px] rounded-sm',
-              micMuted ? 'bg-muted-gray' : 'bg-ai-cyan animate-wave'
-            )}
-            style={{
-              height: micMuted ? '5px' : `${h}px`,
-              animationDelay: `${(i * 0.08).toFixed(2)}s`,
-              animationDuration: `${0.7 + (i % 5) * 0.12}s`,
-            }}
-          />
-        ))}
+        {Array.from({ length: MIC_BARS }).map((_, i) => {
+          const lvl = live ? levels[i] ?? 0 : 0;
+          const height = 3 + lvl * 23; // 3px (silent) … 26px (loud)
+          return (
+            <span
+              key={i}
+              className={cn(
+                'w-[3px] rounded-sm transition-[height,background-color] duration-75 ease-out',
+                live ? 'bg-ai-cyan' : 'bg-muted-gray'
+              )}
+              style={{ height: `${height}px` }}
+            />
+          );
+        })}
       </div>
 
       {/* Mute toggle */}
