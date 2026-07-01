@@ -7,7 +7,9 @@ import ssl
 import certifi
 import logging
 import base64
+from datetime import datetime, timezone
 
+import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -18,24 +20,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "adapters"))
 
 import config as voice_config
 
-from adapter import get_tts_adapter, register_tts_adapter
-from contracts import VoiceStatus, FallbackMode
+from adapter import get_tts_adapter
+
+import mock_adapter
 
 if voice_config.OPENAI_API_KEY:
     import openai_tts_adapter
-
-import importlib.util
-
-_kb_ingestion_dir = os.path.join(os.path.dirname(__file__), "..", "..", "rag")
-_kb_config_path = os.path.abspath(os.path.join(_kb_ingestion_dir, "config.py"))
-_spec = importlib.util.spec_from_file_location("kb_config", _kb_config_path)
-kb_config = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(kb_config)
-
-sys.path.insert(0, os.path.abspath(_kb_ingestion_dir))
-from retrieval import RetrievalRequest, retrieve, response_to_dict
-from openai import OpenAI
-from qdrant_client import QdrantClient
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,23 +34,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("streaming")
 
-openai_client = OpenAI(api_key=kb_config.OPENAI_API_KEY)
-
-if kb_config.QDRANT_URL and kb_config.QDRANT_API_KEY:
-    logger.info(f"Connecting to Qdrant Cloud at: {kb_config.QDRANT_URL}")
-    qdrant_client = QdrantClient(
-        url=kb_config.QDRANT_URL,
-        api_key=kb_config.QDRANT_API_KEY,
-    )
-else:
-    qdrant_path = os.path.join(
-        os.path.dirname(__file__), "..", "..", "rag", "qdrant_data"
-    )
-    logger.info(f"Using local Qdrant at: {qdrant_path}")
-    qdrant_client = QdrantClient(path=os.path.abspath(qdrant_path))
-
 DEEPGRAM_WS_URL = "wss://api.deepgram.com/v1/listen"
 DEEPGRAM_API_KEY = voice_config.DEEPGRAM_API_KEY
+MAIN_BACKEND_URL = os.getenv("NABLIX_MAIN_BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
 
 MATH_NORMALIZATIONS = {
     "five over six": "5/6",
@@ -76,6 +52,31 @@ MATH_NORMALIZATIONS = {
 def normalize_math(transcript: str) -> str | None:
     lower = transcript.lower().strip().rstrip(".")
     return MATH_NORMALIZATIONS.get(lower)
+
+
+async def evaluate_voice_transcript(
+    session_id: str,
+    student_id: str,
+    transcript: str,
+    confidence: float,
+    audio_duration_seconds: float,
+) -> dict[str, object]:
+    payload = {
+        "session_id": session_id,
+        "student_id": student_id,
+        "transcript": transcript,
+        "confidence": confidence,
+        "audio_duration_seconds": audio_duration_seconds,
+        "turn": "STUDENT",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    url = f"{MAIN_BACKEND_URL}/voice/transcript"
+    logger.info(f"[{session_id}] POST {url}")
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.post(url, json=payload)
+    if response.status_code != 200:
+        raise RuntimeError(f"status={response.status_code} body={response.text}")
+    return response.json()
 
 app = FastAPI(
     title="Nablix Math Tutor - Voice Streaming Server",
@@ -94,16 +95,16 @@ def health():
     return {"status": "ok", "service": "voice-streaming"}
 
 @app.websocket("/voice/stream")
-async def voice_stream(ws: WebSocket, session_id: str = "default"):
+async def voice_stream(ws: WebSocket, session_id: str = "default", student_id: str = "ST001"):
     await ws.accept()
     logger.info(f"[{session_id}] WebSocket connected")
 
-    problem_context = None
     language = "en"
     deepgram_ws = None
     final_transcript = ""
     final_confidence = 0.0
     receiving_audio = False
+    audio_started_at = 0.0
 
     deepgram_receiver_task = None
 
@@ -162,11 +163,11 @@ async def voice_stream(ws: WebSocket, session_id: str = "default"):
                 msg_type = data.get("type", "")
 
                 if msg_type == "start":
-                    problem_context = data.get("problem_context")
                     language = data.get("language", "en")
                     final_transcript = ""
                     final_confidence = 0.0
                     receiving_audio = True
+                    audio_started_at = time.time()
 
                     params = (
                         f"?model=nova-3"
@@ -233,9 +234,10 @@ async def voice_stream(ws: WebSocket, session_id: str = "default"):
 
                     if final_transcript:
                         logger.info(f"[{session_id}] Processing: '{final_transcript}'")
+                        audio_duration_seconds = max(time.time() - audio_started_at, 0.001)
                         await process_and_respond(
-                            ws, session_id, final_transcript,
-                            final_confidence, problem_context
+                            ws, session_id, student_id, final_transcript,
+                            final_confidence, audio_duration_seconds
                         )
                     else:
                         await ws.send_json({
@@ -268,9 +270,10 @@ async def voice_stream(ws: WebSocket, session_id: str = "default"):
 async def process_and_respond(
     ws: WebSocket,
     session_id: str,
+    student_id: str,
     transcript: str,
     confidence: float,
-    problem_context: str | None,
+    audio_duration_seconds: float,
 ):
     pipeline_start = time.time()
 
@@ -278,34 +281,25 @@ async def process_and_respond(
     if normalized:
         logger.info(f"[{session_id}] Normalized: '{transcript}' → '{normalized}'")
 
-    retrieval_result = None
-    tutor_text = f"I heard you say: {transcript}. Let me think about that."
-    tutor_voice_text = tutor_text
-
     try:
-        request = RetrievalRequest(
-            query_id=f"stream-{session_id}-{int(time.time())}",
-            concept_id="ALG_LINEAR_ONE_STEP_ADDITION",
-            content_type="HINT",
-            hint_level=1,
-            difficulty="FOUNDATION",
-            input_source="VOICE",
-            max_results=1,
+        tutor_response = await evaluate_voice_transcript(
+            session_id,
+            student_id,
+            transcript,
+            confidence,
+            audio_duration_seconds,
         )
-
-        response = retrieve(request, qdrant_client, openai_client)
-        result_dict = response_to_dict(response)
-
-        if result_dict["results"]:
-            best = result_dict["results"][0]
-            tutor_text = best["text"]
-            tutor_voice_text = best.get("voice_text") or tutor_text
-            logger.info(f"[{session_id}] Retrieved: {tutor_text[:60]}...")
-        else:
-            logger.info(f"[{session_id}] No retrieval results, using fallback")
-
     except Exception as e:
-        logger.error(f"[{session_id}] Retrieval failed: {e}. Using fallback response.")
+        logger.error(f"[{session_id}] Main backend tutor call failed: {e}")
+        await ws.send_json({
+            "type": "error",
+            "message": "Tutor unavailable. Please try again.",
+            "fallback_mode": "TEXT",
+        })
+        return
+
+    tutor_text = str(tutor_response.get("message") or "")
+    tutor_voice_text = str(tutor_response.get("message_voice") or tutor_text)
 
     audio_base64 = None
     tts_latency = None
@@ -322,7 +316,10 @@ async def process_and_respond(
 
         tts_latency = int((time.time() - tts_start) * 1000)
 
-        audio_base64 = base64.b64encode(tts_result.audio_data).decode("utf-8")
+        audio_data = tts_result.audio_data
+        if isinstance(audio_data, str):
+            audio_data = audio_data.encode("utf-8")
+        audio_base64 = base64.b64encode(audio_data).decode("utf-8")
         logger.info(f"[{session_id}] TTS generated: {tts_latency}ms")
 
     except Exception as e:

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 
 from openai import OpenAI
 from qdrant_client import QdrantClient
-from qdrant_client.models import Filter, FieldCondition, MatchValue
+from qdrant_client.models import Filter, FieldCondition, MatchValue, Condition
 
 import config
 
@@ -50,7 +50,7 @@ class RetrievalResponse:
     query_metadata: dict
 
 def build_filters(request: RetrievalRequest) -> Filter:
-    must_conditions = [
+    must_conditions: list[Condition] = [
         FieldCondition(key="approval_status", match=MatchValue(value="APPROVED")),
         FieldCondition(key="concept_id", match=MatchValue(value=request.concept_id)),
         FieldCondition(key="content_type", match=MatchValue(value=request.content_type)),
@@ -124,6 +124,8 @@ def retrieve(
     results = []
     for hit in search_response.points:
         payload = hit.payload
+        if payload is None:  # skip hits with no payload — nothing to return
+            continue
         content_id = payload.get("content_id", "")
 
         if content_id in request.exclude_content_ids:

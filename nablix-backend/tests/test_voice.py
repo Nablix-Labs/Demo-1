@@ -106,6 +106,28 @@ def test_voice_transcript_routes_through_interaction_flow() -> None:
     assert body["interaction_mode"] == "VOICE"
 
 
+def test_voice_transcript_normalizes_spoken_correct_answer() -> None:
+    session_id = _start_session("ST013")
+
+    response = client.post(
+        "/voice/transcript",
+        json={
+            "session_id": session_id,
+            "student_id": "ST013",
+            "transcript": "x equals five",
+            "confidence": 0.94,
+            "audio_duration_seconds": 3.2,
+            "turn": "STUDENT",
+            "timestamp": "2026-06-10T10:00:00Z",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["message"] == "Correct. Nice work explaining your answer."
+    assert body["message_voice"] == "Correct. Nice work explaining your answer."
+
+
 def test_voice_transcript_rejects_invalid_confidence() -> None:
     session_id = _start_session("ST012")
 

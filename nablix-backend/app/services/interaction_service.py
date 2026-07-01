@@ -1,4 +1,5 @@
-from typing import get_args
+import re
+from typing import cast, get_args
 
 from fastapi import HTTPException
 
@@ -13,12 +14,26 @@ from app.models.adapters import (
 from app.models.fields import Phase
 from app.models.interaction import InteractionRequest, InteractionResponse
 from app.models.session import SessionRecord
-from app.services.session_service import _get_owned_session, update_interaction_state
+from app.services.session_service import (
+    _get_owned_session,
+    correct_answer_for,
+    update_interaction_state,
+)
 
 
 _PHASE_VALUES: tuple[str, ...] = get_args(Phase)
-_MOCK_CORRECT_ANSWERS_BY_QUESTION_ID: dict[str, str] = {
-    "ALG_EQ_DIAG_001": "x = 5",
+_SPOKEN_DIGITS: dict[str, str] = {
+    "zero": "0",
+    "one": "1",
+    "two": "2",
+    "three": "3",
+    "four": "4",
+    "five": "5",
+    "six": "6",
+    "seven": "7",
+    "eight": "8",
+    "nine": "9",
+    "ten": "10",
 }
 
 
@@ -50,7 +65,17 @@ def _student_message_from(request: InteractionRequest) -> str:
             status_code=422,
             detail="transcript_confidence is required for VOICE interactions.",
         )
-    return request.voice_transcript
+    return _normalize_voice_transcript(request.voice_transcript)
+
+
+def _normalize_voice_transcript(transcript: str) -> str:
+    normalized = " ".join(transcript.split())
+    for word, digit in _SPOKEN_DIGITS.items():
+        normalized = re.sub(rf"\b{word}\b", digit, normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bis\s+equals?\s+to\b", "=", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bequals?\b", "=", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\s*=\s*", " = ", normalized)
+    return " ".join(normalized.split())
 
 
 def _current_hint_level_from(hint_count: int) -> int | None:
@@ -59,14 +84,10 @@ def _current_hint_level_from(hint_count: int) -> int | None:
     return min(hint_count, 3)
 
 
-def _correct_answer_for(question_id: str) -> str | None:
-    return _MOCK_CORRECT_ANSWERS_BY_QUESTION_ID.get(question_id)
-
-
 def _next_phase_from(request: InteractionRequest, tutor: TutorResult | None) -> Phase:
     recommendation = tutor.next_phase_recommendation if tutor is not None else None
     if recommendation in _PHASE_VALUES:
-        return recommendation
+        return cast(Phase, recommendation)
     return request.current_phase
 
 
@@ -126,7 +147,7 @@ async def process_interaction(request: InteractionRequest) -> InteractionRespons
         student_id=request.student_id,
         message=student_message,
         question=session.current_question,
-        correct_answer=_correct_answer_for(request.question_id),
+        correct_answer=correct_answer_for(request.question_id),
         current_phase=request.current_phase,
         input_source=request.input_source,
         transcript_confidence=request.transcript_confidence,

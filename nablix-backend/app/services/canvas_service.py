@@ -14,11 +14,14 @@ from app.models.canvas import (
     CanvasSubmitResponse,
 )
 from app.services.interaction_service import (
-    _correct_answer_for,
     _current_hint_level_from,
     run_tutor_pipeline,
 )
-from app.services.session_service import get_session, record_canvas_submission
+from app.services.session_service import (
+    correct_answer_for,
+    get_session,
+    record_canvas_submission,
+)
 from app.services.snapshot_store import build_reference, store_snapshot
 
 
@@ -53,7 +56,7 @@ async def submit_canvas(request: CanvasSubmitRequest) -> CanvasSubmitResponse:
             student_id=request.student_id,
             message=student_answer,
             question=session.current_question,
-            correct_answer=_correct_answer_for(session.question_id),
+            correct_answer=correct_answer_for(session.question_id),
             current_phase=session.current_phase,
             input_source="CANVAS",
             transcript_confidence=None,

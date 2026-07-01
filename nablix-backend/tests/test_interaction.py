@@ -113,6 +113,27 @@ def test_interaction_voice_updates_transcript_confidence() -> None:
     assert response.json()["voice_state"]["last_transcript_confidence"] == 0.78
 
 
+def test_interaction_voice_normalizes_spoken_correct_answer() -> None:
+    session_id = _start_session("ST014", mode="VOICE")
+
+    response = client.post(
+        "/interaction",
+        json=_interaction_body(
+            session_id,
+            "ST014",
+            input_source="VOICE",
+            text_input=None,
+            voice_transcript="x is equal to 5",
+            transcript_confidence=0.88,
+        ),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["message"] == "Correct. Nice work explaining your answer."
+    assert body["message_voice"] == "Correct. Nice work explaining your answer."
+
+
 def test_interaction_safety_failure_short_circuits_pipeline() -> None:
     session_id = _start_session("ST003")
 

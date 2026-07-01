@@ -37,14 +37,30 @@ def _session_not_found(session_id: str) -> HTTPException:
     )
 
 
-def _mock_diagnostic_question(concept_id: str) -> tuple[str, str, int]:
-    """Mock the first diagnostic question.
+# Single source of truth for demo questions: question_id -> (question, answer, number).
+# Adding one here feeds both the prompt (start_session) and grading (correct_answer_for),
+# so the two can't drift. Replace with a real question bank when one exists.
+_DEMO_QUESTIONS: dict[str, tuple[str, str, int]] = {
+    "ALG_EQ_DIAG_001": ("Solve for x: x + 4 = 9", "x = 5", 1),
+}
+_DEFAULT_QUESTION_ID = "ALG_EQ_DIAG_001"
 
-    Placeholder for Aditya's POST /diagnostic/question. Returns
-    (current_question, question_id, question_number).
+
+def correct_answer_for(question_id: str) -> str | None:
+    """Return the expected answer for a question_id, or None if unknown."""
+
+    entry = _DEMO_QUESTIONS.get(question_id)
+    return entry[1] if entry else None
+
+
+def _mock_diagnostic_question(concept_id: str) -> tuple[str, str, int]:
+    """Return the first diagnostic question as (question, question_id, number).
+
+    Placeholder for Aditya's POST /diagnostic/question.
     """
 
-    return ("Solve for x: x + 4 = 9", "ALG_EQ_DIAG_001", 1)
+    question, _answer, number = _DEMO_QUESTIONS[_DEFAULT_QUESTION_ID]
+    return (question, _DEFAULT_QUESTION_ID, number)
 
 
 def _diagnostic_start_message(question: str) -> str:
