@@ -11,6 +11,8 @@
   "dependencies": {
     "@radix-ui/react-separator": "^1.1.0",
     "@radix-ui/react-tooltip": "^1.1.2",
+    "@react-three/drei": "^9.122.0",
+    "@react-three/fiber": "^8.18.0",
     "axios": "^1.7.2",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
@@ -24,6 +26,7 @@
     "react-katex": "^3.0.1",
     "react-konva": "^18.2.10",
     "tailwind-merge": "^2.4.0",
+    "three": "^0.169.0",
     "zustand": "^4.5.4"
   },
   "devDependencies": {
@@ -31,11 +34,15 @@
     "@types/node": "^20.14.9",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
+    "@types/three": "^0.169.0",
     "autoprefixer": "^10.4.19",
     "eslint": "^8.57.0",
     "eslint-config-next": "14.2.5",
     "postcss": "^8.4.39",
     "tailwindcss": "^3.4.6",
     "typescript": "^5.5.3"
+  },
+  "optionalDependencies": {
+    "@next/swc-darwin-arm64": "^14.2.5"
   }
 }
