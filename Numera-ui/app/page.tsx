@@ -16,7 +16,6 @@ import { useFlowNav } from '@/lib/useFlowNav';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useDemoTutor } from '@/hooks/useDemoTutor';
 import { StreamingTutorResponse, useStreamingVoiceTurn } from '@/hooks/useStreamingVoiceTurn';
-import { playTutorAudio } from '@/lib/playTutorAudio';
 import { DEMO_CONCEPT_ID, DEMO_PHASE } from '@/lib/api';
 import { demoFor } from '@/lib/demoContent';
 
@@ -69,7 +68,6 @@ export default function LessonPage() {
     (response: StreamingTutorResponse) => {
       addTranscriptMessage({ role: 'ai', text: response.text });
       addTrailEntry({ kind: 'tutor', text: response.text });
-      playTutorAudio(response.audio_base64, response.voice_text || response.text);
     },
     [addTranscriptMessage, addTrailEntry]
   );
