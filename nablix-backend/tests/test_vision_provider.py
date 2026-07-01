@@ -112,6 +112,30 @@ def test_openai_adapter_falls_back_to_joined_steps_for_raw_text(monkeypatch) -> 
     assert result.detected_steps == ["2x + 5 = 13", "2x = 8", "x = 4"]
 
 
+def test_openai_adapter_marks_unsupported_final_answer_for_clarification(monkeypatch) -> None:
+    content = (
+        '{"confidence": 0.95, "detected_steps": ["x + 4 = 9", "x = 5"], '
+        '"final_answer": "x = 5"}'
+    )
+    _patch_openai_post(monkeypatch, _FakeResponse(200, {"choices": [{"message": {"content": content}}]}))
+
+    result = asyncio.run(_adapter().recognize(DATA_URL))
+
+    assert result.needs_clarification is True
+
+
+def test_openai_adapter_accepts_final_answer_with_visible_steps(monkeypatch) -> None:
+    content = (
+        '{"confidence": 0.95, "detected_steps": ["x + 4 = 9", "x = 9 - 4", "x = 5"], '
+        '"final_answer": "x = 5"}'
+    )
+    _patch_openai_post(monkeypatch, _FakeResponse(200, {"choices": [{"message": {"content": content}}]}))
+
+    result = asyncio.run(_adapter().recognize(DATA_URL))
+
+    assert result.needs_clarification is False
+
+
 def _shape_response(text_confidence: float, shape_confidence: float, raw_ocr_text: str = "") -> _FakeResponse:
     content = (
         '{"raw_ocr_text": "%s", "confidence": %s, "detected_shapes": '

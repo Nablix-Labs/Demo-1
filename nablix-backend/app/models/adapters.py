@@ -146,7 +146,8 @@ class VisionOCRResult(BaseModel):
     (`raw_ocr_text`, `detected_equation`, `detected_steps`, `final_answer`,
     `confidence`, `needs_clarification`). `needs_clarification` is set when the
     text confidence or any shape confidence falls below the configured
-    threshold, so callers never treat an uncertain reading as certain.
+    threshold, or when the visible work does not explain how the final answer
+    was obtained, so callers never treat an uncertain reading as certain.
 
     The second block carries extra canvas-understanding fields beyond the task
     plan: LaTeX, drawn geometry (`detected_shapes`), `confidence_source` (OpenAI

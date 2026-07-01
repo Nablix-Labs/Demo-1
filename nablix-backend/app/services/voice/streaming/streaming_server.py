@@ -157,6 +157,8 @@ async def voice_stream(ws: WebSocket, session_id: str = "default", student_id: s
     try:
         while True:
             message = await ws.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
 
             if "text" in message:
                 data = json.loads(message["text"])

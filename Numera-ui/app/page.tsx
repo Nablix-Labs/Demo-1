@@ -15,8 +15,9 @@ import ContinuityCheck from '@/components/ContinuityCheck';
 import { useFlowNav } from '@/lib/useFlowNav';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useDemoTutor } from '@/hooks/useDemoTutor';
-import { useVoiceTurn } from '@/hooks/useVoiceTurn';
-import { DEMO_CONCEPT_ID, DEMO_QUESTION_ID, DEMO_PHASE } from '@/lib/api';
+import { StreamingTutorResponse, useStreamingVoiceTurn } from '@/hooks/useStreamingVoiceTurn';
+import { playTutorAudio } from '@/lib/playTutorAudio';
+import { DEMO_CONCEPT_ID, DEMO_PHASE } from '@/lib/api';
 import { demoFor } from '@/lib/demoContent';
 
 export default function LessonPage() {
@@ -26,10 +27,12 @@ export default function LessonPage() {
   const setTranscript = useNumeraStore((s) => s.setTranscript);
   const micMuted = useNumeraStore((s) => s.micMuted);
   const setMicMuted = useNumeraStore((s) => s.setMicMuted);
+  const addTranscriptMessage = useNumeraStore((s) => s.addTranscriptMessage);
+  const addTrailEntry = useNumeraStore((s) => s.addTrailEntry);
 
   // ── Live backend wiring (no-op unless NEXT_PUBLIC_API_BASE_URL is set) ──
   const tutor = useDemoTutor();
-  const { submitVoiceTurn, start: startSession, apiEnabled, sessionId } = tutor;
+  const { start: startSession, apiEnabled, sessionId } = tutor;
 
   // Wait for the persisted store to rehydrate before writing lesson content —
   // writing earlier would persist default state over the saved placement.
@@ -49,22 +52,39 @@ export default function LessonPage() {
     setTranscript(demo.transcript);
   }, [hydrated, apiEnabled, currentTopicId, setQuestionText, setQuestionNumber, setTranscript]);
 
-  const onTurnEnd = useCallback(
+  const onStudentTranscript = useCallback(
     (transcript: string, confidence?: number) => {
-      void submitVoiceTurn(
-        transcript,
-        {
-          concept_id: DEMO_CONCEPT_ID,
-          question_id: DEMO_QUESTION_ID,
-          current_phase: DEMO_PHASE,
-          hint_count: 0,
-        },
-        confidence
-      );
+      if (!transcript.trim()) return;
+      addTranscriptMessage({ role: 'student', text: transcript });
+      addTrailEntry({
+        kind: 'answer',
+        text: transcript,
+        meta: confidence == null ? undefined : `STT ${(confidence * 100).toFixed(0)}%`,
+      });
     },
-    [submitVoiceTurn]
+    [addTranscriptMessage, addTrailEntry]
   );
-  const voice = useVoiceTurn({ onTurnEnd });
+
+  const onTutorResponse = useCallback(
+    (response: StreamingTutorResponse) => {
+      addTranscriptMessage({ role: 'ai', text: response.text });
+      addTrailEntry({ kind: 'tutor', text: response.text });
+      playTutorAudio(response.audio_base64, response.voice_text || response.text);
+    },
+    [addTranscriptMessage, addTrailEntry]
+  );
+
+  const onVoiceError = useCallback(
+    (message: string) => addTrailEntry({ kind: 'tutor', text: message }),
+    [addTrailEntry]
+  );
+
+  const voice = useStreamingVoiceTurn({
+    sessionId,
+    onStudentTranscript,
+    onTutorResponse,
+    onError: onVoiceError,
+  });
 
   // Start a backend session on lesson entry and let it drive the displayed
   // question/number/opening message. Mic starts muted so capture is opt-in.
