@@ -13,7 +13,7 @@ DEFAULT_STT_PROVIDER = os.getenv("VOICE_STT_PROVIDER", "mock")
 DEFAULT_TTS_PROVIDER = os.getenv("VOICE_TTS_PROVIDER", "mock")
 
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("NABLIX_OPENAI_API_KEY", "")
 
 STT_LANGUAGE = os.getenv("VOICE_STT_LANGUAGE", "en")
 STT_SAMPLE_RATE = int(os.getenv("VOICE_STT_SAMPLE_RATE", "16000"))
