@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 import AppFrame from '@/components/AppFrame';
 import FlowControls from '@/components/FlowControls';
+import { SpeedInsights } from '@vercel/speed-insights/next';
 
 export const metadata: Metadata = {
   title: 'Numera — AI Math Tutor',
@@ -25,6 +26,7 @@ export default function RootLayout({
         </div>
         {/* Demo Director — drives the adaptive loop by hand (remove for prod) */}
         <FlowControls />
+        <SpeedInsights />
       </body>
     </html>
   );
