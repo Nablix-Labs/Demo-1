@@ -44,6 +44,7 @@ _DEMO_QUESTIONS: dict[str, tuple[str, str, int]] = {
     "ALG_EQ_DIAG_001": ("Solve for x: x + 4 = 9", "x = 5", 1),
 }
 _DEFAULT_QUESTION_ID = "ALG_EQ_DIAG_001"
+_DEMO_STUDENT_ID = "ST001"
 
 
 def correct_answer_for(question_id: str) -> str | None:
@@ -77,8 +78,35 @@ def _get_owned_session(session_id: str, student_id: str) -> SessionRecord:
     """Return the session owned by the student or raise a standard 404."""
 
     session: SessionRecord | None = _sessions.get(session_id)
+    if session is None and student_id == _DEMO_STUDENT_ID:
+        session = _recover_demo_session(session_id, student_id)
     if session is None or session.student_id != student_id:
         raise _session_not_found(session_id)
+    return session
+
+
+def _recover_demo_session(session_id: str, student_id: str) -> SessionRecord:
+    """Rebuild the fixed demo session after Vercel drops in-memory state."""
+
+    question, question_id, question_number = _mock_diagnostic_question("ALG_LINEAR_ONE_STEP")
+    # ponytail: demo-only stateless recovery; replace _sessions with real storage for multi-user deploys.
+    session = SessionRecord(
+        session_id=session_id,
+        student_id=student_id,
+        concept_id="ALG_LINEAR_ONE_STEP",
+        interaction_mode="VOICE",
+        current_phase="GUIDED_PRACTICE",
+        current_question=question,
+        question_id=question_id,
+        question_number=question_number,
+        ui_state="GUIDED_PRACTICE",
+        hint_count=0,
+        status="started",
+        mode="mock" if get_settings().use_mock_tutor else "live",
+        message=_diagnostic_start_message(question),
+        show_hint_button=True,
+    )
+    _sessions[session_id] = session
     return session
 
 

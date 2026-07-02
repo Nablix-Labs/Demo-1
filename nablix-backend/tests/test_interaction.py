@@ -1,5 +1,8 @@
+import asyncio
+
 from fastapi.testclient import TestClient
 
+from app.adapters.rag_service import MockRAGServiceAdapter
 from app.models.adapters import (
     AdapterContext,
     CanvasFeedback,
@@ -273,3 +276,36 @@ def test_interaction_updates_phase_visual_scaffold_and_student_model_events(monk
     assert body["scaffold_steps"] == ["Divide both sides by 2."]
     assert len(student_model.events) == 1
     assert student_model.events[0].event_type == "PARTIAL_ATTEMPT"
+
+
+def _hint_ctx(message: str) -> AdapterContext:
+    return AdapterContext(
+        session_id="SESSION001",
+        student_id="ST001",
+        message=message,
+        question="Solve for x: x + 4 = 9",
+        correct_answer="x = 5",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        concept_id="ALG_LINEAR_ONE_STEP",
+        attempt_count=1,
+        current_hint_level=None,
+    )
+
+
+def test_retrieval_gated_on_guided_hint() -> None:
+    # RAG only runs after classification, and only for GUIDED_HINT: documents are
+    # present iff that's the chosen strategy.
+    for message in ("x = 5", "x = 6", "banana"):
+        rag, _, tutor = asyncio.run(interaction_service.run_tutor_pipeline(_hint_ctx(message)))
+        assert bool(rag.documents) == (tutor.response_strategy == "GUIDED_HINT")
+
+
+def test_build_retrieve_payload_uses_classified_fields() -> None:
+    payload = MockRAGServiceAdapter()._build_retrieve_payload(
+        _hint_ctx("x = 6"), error_type="ARITHMETIC_ERROR", hint_level=2
+    )
+    assert payload["content_type"] == "HINT"
+    assert payload["error_type"] == "ARITHMETIC_ERROR"
+    assert payload["hint_level"] == 2
+    assert payload["input_source"] == "TEXT"

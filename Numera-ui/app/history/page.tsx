@@ -25,20 +25,20 @@ export default function HistoryPage() {
       subtitle="A record of your past tutoring sessions."
     >
       <SessionTrail />
-      <div className="rounded-lg border border-[#c8c8c8] divide-y divide-[#eaeaea] overflow-hidden">
+      <div className="rounded-lg border border-muted-gray divide-y divide-muted-gray overflow-hidden">
         {SESSIONS.map((s, i) => {
           const pct = Math.round((s.correct / s.questions) * 100);
           return (
-            <div key={i} className="flex items-center gap-5 px-5 py-4 hover:bg-[#f9f9f9] transition-colors">
-              <div className="flex-shrink-0 w-16 text-[12px] font-semibold text-[#7a7a7a]">{s.date}</div>
+            <div key={i} className="flex items-center gap-5 px-5 py-4 hover:bg-reading-surface transition-colors">
+              <div className="flex-shrink-0 w-16 text-[12px] font-semibold text-slate-blue">{s.date}</div>
               <div className="min-w-0 flex-1">
-                <div className="text-[14px] font-semibold text-[#1a1a1a]">{s.topic}</div>
-                <div className="text-[11.5px] text-[#9a9a9a] mt-0.5">
+                <div className="text-[14px] font-semibold text-ink">{s.topic}</div>
+                <div className="text-[11.5px] text-slate-blue mt-0.5">
                   {s.duration} · {s.questions} questions
                 </div>
               </div>
               <div className="flex-shrink-0 w-32 hidden sm:block">
-                <div className="flex items-center justify-between text-[11px] text-[#7a7a7a] mb-1">
+                <div className="flex items-center justify-between text-[11px] text-slate-blue mb-1">
                   <span>{s.correct}/{s.questions}</span>
                   <span>{pct}%</span>
                 </div>
@@ -46,7 +46,7 @@ export default function HistoryPage() {
               </div>
               <Link
                 href="/"
-                className="flex-shrink-0 text-[12px] font-semibold text-[#1a1a1a] underline-offset-4 hover:underline"
+                className="flex-shrink-0 text-[12px] font-semibold text-ink underline-offset-4 hover:underline"
               >
                 Open
               </Link>

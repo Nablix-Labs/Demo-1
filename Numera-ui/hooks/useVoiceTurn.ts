@@ -17,6 +17,7 @@
  * hook change; callers keep using `onTurnEnd` unchanged.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useMicLevel, MIC_BARS } from '@/store/useMicLevel';
 
 // ── Minimal Web Speech typings (not in the standard DOM lib) ──────────────────
 interface SpeechRecognitionAlternativeLike {
@@ -58,14 +59,17 @@ interface UseVoiceTurnOptions {
   onTurnEnd: (transcript: string, confidence?: number) => void;
   /** Silence gap (ms) that counts as "student stopped". Generous so we don't cut kids off. */
   silenceMs?: number;
-  /** RMS energy above this counts as speech. */
+  /** RMS energy (post-gain) above this counts as speech. Lower = more sensitive. */
   energyThreshold?: number;
+  /** Input gain applied before detection so normal (not loud) speech registers. */
+  micGain?: number;
 }
 
 export function useVoiceTurn({
   onTurnEnd,
   silenceMs = 1300,
-  energyThreshold = 0.015,
+  energyThreshold = 0.009,
+  micGain = 2.4,
 }: UseVoiceTurnOptions) {
   const [active, setActive] = useState(false);
   const [speaking, setSpeaking] = useState(false);
@@ -95,6 +99,7 @@ export function useVoiceTurn({
     transcriptRef.current = '';
     hadSpeechRef.current = false;
     setSpeaking(false);
+    useMicLevel.getState().setCaption(''); // turn ended — clear the live caption
     if (text) onTurnEndRef.current(text, confidenceRef.current);
   }, []);
 
@@ -112,22 +117,33 @@ export function useVoiceTurn({
     audioCtxRef.current = null;
     transcriptRef.current = '';
     hadSpeechRef.current = false;
+    useMicLevel.getState().setActive(false);
   }, []);
 
   const start = useCallback(async () => {
     if (activeRef.current || !supported) return;
 
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
     streamRef.current = stream;
 
     const Ctx = window.AudioContext ?? (window as SpeechWindow).webkitAudioContext!;
     const audioCtx = new Ctx();
     audioCtxRef.current = audioCtx;
     const source = audioCtx.createMediaStreamSource(stream);
+    // Boost the signal before detection so normal-volume speech clears the bar.
+    const gain = audioCtx.createGain();
+    gain.gain.value = micGain;
     const analyser = audioCtx.createAnalyser();
     analyser.fftSize = 2048;
-    source.connect(analyser);
+    analyser.smoothingTimeConstant = 0.75;
+    source.connect(gain);
+    gain.connect(analyser);
     const buf = new Float32Array(analyser.fftSize);
+    const freq = new Uint8Array(analyser.frequencyBinCount);
+    useMicLevel.getState().setActive(true);
+    let lastLevelPush = 0;
 
     // Transcript engine (STT only).
     const RecognitionCtor = getRecognitionCtor();
@@ -137,13 +153,18 @@ export function useVoiceTurn({
       recognition.interimResults = true;
       recognition.lang = 'en-US';
       recognition.onresult = (e) => {
+        let interim = '';
         for (let i = e.resultIndex; i < e.results.length; i++) {
           const result = e.results[i];
           if (result.isFinal) {
             transcriptRef.current += result[0].transcript;
             confidenceRef.current = result[0].confidence;
+          } else {
+            interim += result[0].transcript;
           }
         }
+        // Live caption: what we've heard this turn so far + the in-progress words.
+        useMicLevel.getState().setCaption((transcriptRef.current + interim).trim());
       };
       recognition.onend = () => {
         // Web Speech stops itself periodically; keep it alive while we're active.
@@ -172,6 +193,23 @@ export function useVoiceTurn({
       const rms = Math.sqrt(sum / buf.length);
       const now = performance.now();
 
+      // Drive the listening bar from real input (throttled ~30fps).
+      if (now - lastLevelPush > 33) {
+        lastLevelPush = now;
+        analyser.getByteFrequencyData(freq);
+        const maxBin = Math.min(freq.length, 220); // speech energy ≈ up to ~2.4kHz
+        const per = maxBin / MIC_BARS;
+        const levels = new Array(MIC_BARS);
+        for (let b = 0; b < MIC_BARS; b++) {
+          const start = Math.floor(b * per);
+          const end = Math.max(start + 1, Math.floor((b + 1) * per));
+          let s = 0;
+          for (let i = start; i < end; i++) s += freq[i];
+          levels[b] = Math.min(1, (s / (end - start) / 255) * 1.6);
+        }
+        useMicLevel.getState().setLevels(levels);
+      }
+
       if (rms > energyThreshold) {
         hadSpeechRef.current = true;
         lastVoiceTsRef.current = now;
@@ -182,7 +220,7 @@ export function useVoiceTurn({
       rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
-  }, [supported, energyThreshold, silenceMs, speaking, commitTurn]);
+  }, [supported, energyThreshold, micGain, silenceMs, speaking, commitTurn]);
 
   // Clean up on unmount.
   useEffect(() => stop, [stop]);

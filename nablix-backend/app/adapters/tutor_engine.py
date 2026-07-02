@@ -101,8 +101,7 @@ class TutorEngineServiceAdapter:
                     exclude_content_ids=[],
                 )
             )
-            result = _tutor_result_from_ai_response(ai_response)
-            return _with_retrieved_content(result, request.rag)
+            return _tutor_result_from_ai_response(ai_response)
 
         return TutorResult(
             evaluation="INCORRECT",
@@ -184,14 +183,11 @@ def _tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:
 _CONTENT_STRATEGIES = {"GUIDED_HINT", "SCAFFOLD", "PROVIDE_WORKED_EXAMPLE"}
 
 
-def _with_retrieved_content(result: TutorResult, rag: RAGResult) -> TutorResult:
+def apply_retrieved_content(result: TutorResult, rag: RAGResult) -> TutorResult:
     """Use the top retrieved document as the tutor message for content-bearing
     strategies. No documents or a non-content strategy → leave the classifier's
-    message untouched.
-
-    ponytail: retrieval currently runs with the incoming hint level (before the
-    classifier picks the next one); tighten by retrieving after classification if
-    hint targeting drifts.
+    message untouched. Called by run_tutor_pipeline after classification, so the
+    retrieval already used the classifier's chosen hint level.
     """
     if not rag.documents or result.response_strategy not in _CONTENT_STRATEGIES:
         return result

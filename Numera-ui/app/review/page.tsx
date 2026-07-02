@@ -92,26 +92,26 @@ export default function ReviewPage() {
               title={`Worksheet ${idx + 1}`}
               className={cn(
                 'h-1.5 flex-1 rounded-full transition-colors',
-                idx === i ? 'bg-[#1a1a1a]' : idx < i ? 'bg-[#9a9a9a]' : 'bg-[#eaeaea]'
+                idx === i ? 'bg-focus-navy' : idx < i ? 'bg-slate-blue' : 'bg-reading-surface'
               )}
             />
           ))}
           <button
             onClick={() => goto(total)}
             title="Summary"
-            className={cn('h-1.5 w-1.5 rounded-full transition-colors', done ? 'bg-[#1a1a1a]' : 'bg-[#eaeaea]')}
+            className={cn('h-1.5 w-1.5 rounded-full transition-colors', done ? 'bg-focus-navy' : 'bg-reading-surface')}
           />
         </div>
 
         {!done ? (
           <>
             <div className="flex items-center justify-between">
-              <div className="text-[11px] font-semibold tracking-widest uppercase text-[#9a9a9a]">
+              <div className="text-[11px] font-semibold tracking-widest uppercase text-slate-blue">
                 Worksheet {i + 1} of {total}
               </div>
               <button
                 onClick={() => setShowMarks((v) => !v)}
-                className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-[#7a7a7a] hover:text-[#1a1a1a] transition-colors"
+                className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-slate-blue hover:text-ink transition-colors"
               >
                 {showMarks ? <><EyeOff size={14} strokeWidth={1.8} /> Hide tutor marks</> : <><Eye size={14} strokeWidth={1.8} /> Show tutor marks</>}
               </button>
@@ -119,7 +119,7 @@ export default function ReviewPage() {
 
             {/* Paper — student layer with tutor overlay */}
             <div
-              className="relative rounded-lg border border-[#c8c8c8] bg-white px-6 py-6 overflow-hidden"
+              className="relative rounded-lg border border-muted-gray bg-white px-6 py-6 overflow-hidden"
               style={{
                 backgroundImage:
                   'linear-gradient(#eef0f2 1px, transparent 1px), linear-gradient(90deg, #eef0f2 1px, transparent 1px)',
@@ -128,7 +128,7 @@ export default function ReviewPage() {
             >
               <div className="mb-4 inline-flex items-center gap-2">
                 <Chip tone="outline">Question {i + 1}</Chip>
-                <span className="text-[17px] text-[#1a1a1a] font-[Cambria_Math,Georgia,serif]">{ws.question}</span>
+                <span className="text-[17px] text-ink font-[Cambria_Math,Georgia,serif]">{ws.question}</span>
               </div>
 
               {/* Student working */}
@@ -142,7 +142,7 @@ export default function ReviewPage() {
                     </span>
                     {/* student ink (unchanged) — optionally circled by tutor */}
                     <span
-                      className="text-[17px] text-[#1a1a1a] font-[Cambria_Math,Georgia,serif] px-1.5 py-0.5 transition-all"
+                      className="text-[17px] text-ink font-[Cambria_Math,Georgia,serif] px-1.5 py-0.5 transition-all"
                       style={showMarks && ln.circle ? { boxShadow: `0 0 0 2px ${INK}`, borderRadius: '45% 48% 46% 50%' } : undefined}
                     >
                       {ln.text}
@@ -170,17 +170,17 @@ export default function ReviewPage() {
             </div>
 
             {/* Tutor voice */}
-            <div className="rounded-lg border border-[#c8c8c8] bg-[#f9f9f9] px-5 py-4">
+            <div className="rounded-lg border border-muted-gray bg-reading-surface px-5 py-4">
               <div className="flex items-center justify-between gap-3 mb-2">
-                <span className="text-[10px] tracking-widest uppercase text-[#9a9a9a]">Tutor</span>
+                <span className="text-[10px] tracking-widest uppercase text-slate-blue">Tutor</span>
                 <button
                   onClick={() => play(`ws-${i}`, ws.voice)}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-[#1a1a1a] px-3 py-1.5 text-[12px] font-semibold text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-colors"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-focus-navy px-3 py-1.5 text-[12px] font-semibold text-ink hover:bg-focus-navy hover:text-white transition-colors"
                 >
                   {speakingId === `ws-${i}` ? <><Square size={13} strokeWidth={2.2} /> Stop</> : <><Volume2 size={14} strokeWidth={1.9} /> Read out loud</>}
                 </button>
               </div>
-              <p className="text-[13.5px] text-[#1a1a1a] leading-relaxed">{ws.voice}</p>
+              <p className="text-[13.5px] text-ink leading-relaxed">{ws.voice}</p>
             </div>
 
             {/* Navigation */}
@@ -188,13 +188,13 @@ export default function ReviewPage() {
               <button
                 onClick={() => goto(Math.max(0, i - 1))}
                 disabled={i === 0}
-                className="inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-[#7a7a7a] hover:text-[#1a1a1a] disabled:opacity-30 disabled:hover:text-[#7a7a7a] transition-colors"
+                className="inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-slate-blue hover:text-ink disabled:opacity-30 disabled:hover:text-slate-blue transition-colors"
               >
                 <ChevronLeft size={15} strokeWidth={1.8} /> Previous
               </button>
               <button
                 onClick={() => goto(i + 1)}
-                className="inline-flex items-center gap-1.5 rounded-md bg-[#1a1a1a] text-white px-5 py-2.5 text-[13px] font-semibold hover:opacity-80 transition-opacity"
+                className="inline-flex items-center gap-1.5 rounded-md bg-focus-navy text-white px-5 py-2.5 text-[13px] font-semibold hover:opacity-80 transition-opacity"
               >
                 {i + 1 < total ? <>Next worksheet <ChevronRight size={15} strokeWidth={1.8} /></> : <>Finish & summary <ChevronRight size={15} strokeWidth={1.8} /></>}
               </button>
@@ -203,64 +203,64 @@ export default function ReviewPage() {
         ) : (
           /* Final spoken summary */
           <div className="flex flex-col gap-6">
-            <div className="rounded-lg border border-[#1a1a1a] bg-[#f4f4f4] px-6 py-5">
+            <div className="rounded-lg border border-focus-navy bg-reading-surface px-6 py-5">
               <div className="flex items-center justify-between gap-3 mb-2">
-                <div className="text-[10px] tracking-widest uppercase text-[#9a9a9a]">Final feedback · {score} of {total} correct</div>
+                <div className="text-[10px] tracking-widest uppercase text-slate-blue">Final feedback · {score} of {total} correct</div>
                 <button
                   onClick={() => play('summary', SUMMARY)}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-[#1a1a1a] px-3 py-1.5 text-[12px] font-semibold text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-colors"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-focus-navy px-3 py-1.5 text-[12px] font-semibold text-ink hover:bg-focus-navy hover:text-white transition-colors"
                 >
                   {speakingId === 'summary' ? <><Square size={13} strokeWidth={2.2} /> Stop</> : <><Volume2 size={14} strokeWidth={1.9} /> Read out loud</>}
                 </button>
               </div>
-              <p className="text-[14px] text-[#1a1a1a] leading-relaxed">{SUMMARY}</p>
+              <p className="text-[14px] text-ink leading-relaxed">{SUMMARY}</p>
             </div>
 
             {/* Per-worksheet recap */}
-            <div className="rounded-lg border border-[#c8c8c8] divide-y divide-[#eaeaea] overflow-hidden">
+            <div className="rounded-lg border border-muted-gray divide-y divide-muted-gray overflow-hidden">
               {WORKSHEETS.map((w, idx) => (
                 <button
                   key={idx}
                   onClick={() => goto(idx)}
-                  className="w-full flex items-center gap-4 px-5 py-3.5 text-left hover:bg-[#f9f9f9] transition-colors"
+                  className="w-full flex items-center gap-4 px-5 py-3.5 text-left hover:bg-reading-surface transition-colors"
                 >
-                  <span className={cn('flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center', w.correct ? 'bg-[#1a1a1a] text-white' : 'border border-[#9a9a9a] text-[#7a7a7a]')}>
+                  <span className={cn('flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center', w.correct ? 'bg-focus-navy text-white' : 'border border-muted-gray text-slate-blue')}>
                     {w.correct ? <Check size={13} strokeWidth={2.4} /> : <X size={13} strokeWidth={2.4} />}
                   </span>
-                  <span className="text-[15px] text-[#1a1a1a] font-[Cambria_Math,Georgia,serif] flex-1">{w.question}</span>
-                  <ChevronRight size={15} strokeWidth={1.8} className="text-[#9a9a9a]" />
+                  <span className="text-[15px] text-ink font-[Cambria_Math,Georgia,serif] flex-1">{w.question}</span>
+                  <ChevronRight size={15} strokeWidth={1.8} className="text-slate-blue" />
                 </button>
               ))}
             </div>
 
             <button
               onClick={() => goto(total - 1)}
-              className="inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-[#7a7a7a] hover:text-[#1a1a1a] transition-colors"
+              className="inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-slate-blue hover:text-ink transition-colors"
             >
               <ChevronLeft size={15} strokeWidth={1.8} /> Back to worksheets
             </button>
 
             {/* Decision point — where the tutor routes the student next. */}
-            <div className="mt-6 rounded-lg border border-[#c8c8c8] bg-[#f4f4f4] p-4">
-              <div className="text-[10px] tracking-widest uppercase text-[#9a9a9a] mb-3">What happens next</div>
+            <div className="mt-6 rounded-lg border border-muted-gray bg-reading-surface p-4">
+              <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-3">What happens next</div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                 <button
                   onClick={() => decideReview('foundation_weak')}
-                  className="rounded-md border border-[#c8c8c8] bg-white px-3 py-3 text-left hover:border-[#1a1a1a] transition-colors"
+                  className="rounded-md border border-muted-gray bg-white px-3 py-3 text-left hover:border-focus-navy transition-colors"
                 >
-                  <div className="text-[13px] font-semibold text-[#1a1a1a]">Foundation weak</div>
-                  <div className="text-[11.5px] text-[#7a7a7a] mt-0.5">Recap the concept — back to orientation.</div>
+                  <div className="text-[13px] font-semibold text-ink">Foundation weak</div>
+                  <div className="text-[11.5px] text-slate-blue mt-0.5">Recap the concept — back to orientation.</div>
                 </button>
                 <button
                   onClick={() => decideReview('cant_solve')}
-                  className="rounded-md border border-[#c8c8c8] bg-white px-3 py-3 text-left hover:border-[#1a1a1a] transition-colors"
+                  className="rounded-md border border-muted-gray bg-white px-3 py-3 text-left hover:border-focus-navy transition-colors"
                 >
-                  <div className="text-[13px] font-semibold text-[#1a1a1a]">Can&apos;t solve yet</div>
-                  <div className="text-[11.5px] text-[#7a7a7a] mt-0.5">Knows it, needs help applying — back to guided.</div>
+                  <div className="text-[13px] font-semibold text-ink">Can&apos;t solve yet</div>
+                  <div className="text-[11.5px] text-slate-blue mt-0.5">Knows it, needs help applying — back to guided.</div>
                 </button>
                 <button
                   onClick={() => decideReview('pass')}
-                  className="rounded-md border border-[#1a1a1a] bg-[#1a1a1a] px-3 py-3 text-left text-white hover:opacity-80 transition-opacity"
+                  className="rounded-md border border-focus-navy bg-focus-navy px-3 py-3 text-left text-white hover:opacity-80 transition-opacity"
                 >
                   <div className="text-[13px] font-semibold">Mastered</div>
                   <div className="text-[11.5px] text-white/70 mt-0.5">On to the next topic.</div>

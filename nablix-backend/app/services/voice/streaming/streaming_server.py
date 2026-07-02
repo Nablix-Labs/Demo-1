@@ -84,6 +84,49 @@ async def evaluate_voice_transcript(
         raise RuntimeError(f"status={response.status_code} body={response.text}")
     return response.json()
 
+
+async def submit_canvas_work(
+    session_id: str,
+    student_id: str,
+    snapshot_data_url: str,
+    transcript: str,
+    confidence: float,
+) -> dict[str, object]:
+    payload = {
+        "session_id": session_id,
+        "student_id": student_id,
+        "snapshot_data_url": snapshot_data_url,
+        "transcript": transcript or None,
+        "transcript_confidence": confidence,
+    }
+    url = f"{MAIN_BACKEND_URL}/canvas/submit"
+    logger.info(f"[{session_id}] POST {url}")
+    async with httpx.AsyncClient(timeout=40.0) as client:
+        response = await client.post(url, json=payload)
+    if response.status_code != 200:
+        raise RuntimeError(f"status={response.status_code} body={response.text}")
+    return response.json()
+
+
+async def synthesize_speech(text: str) -> str | None:
+    """Configured TTS (OpenAI when keyed) → base64 mp3, or None on empty/failure."""
+    if not text:
+        return None
+    try:
+        tts_adapter = get_tts_adapter(voice_config.DEFAULT_TTS_PROVIDER)
+        result = await tts_adapter.generate_speech(
+            text=text,
+            voice=voice_config.TTS_VOICE,
+            audio_format="mp3",
+        )
+        audio_data = result.audio_data
+        if isinstance(audio_data, str):
+            audio_data = audio_data.encode("utf-8")
+        return base64.b64encode(audio_data).decode("utf-8")
+    except Exception as e:
+        logger.error(f"TTS failed: {e}")
+        return None
+
 app = FastAPI(
     title="Nablix Math Tutor - Voice Streaming Server",
     version="1.0.0",
@@ -242,6 +285,7 @@ async def voice_stream(ws: WebSocket, session_id: str = "default", student_id: s
 
                 elif msg_type == "stop":
                     receiving_audio = False
+                    canvas_snapshot = data.get("canvas_snapshot")
                     logger.info(f"[{session_id}] Stop received. Finalizing...")
 
                     if deepgram_ws:
@@ -274,12 +318,14 @@ async def voice_stream(ws: WebSocket, session_id: str = "default", student_id: s
                             pass
                         deepgram_ws = None
 
+                    # Require real speech: canvas rides a turn only when there's a
+                    # transcript, so a silent unmuted mic doesn't loop-submit the canvas.
                     if final_transcript:
                         logger.info(f"[{session_id}] Processing: '{final_transcript}'")
                         audio_duration_seconds = max(time.time() - audio_started_at, 0.001)
                         await process_and_respond(
                             ws, session_id, student_id, final_transcript,
-                            final_confidence, audio_duration_seconds
+                            final_confidence, audio_duration_seconds, canvas_snapshot
                         )
                     else:
                         await ws.send_json({
@@ -316,6 +362,7 @@ async def process_and_respond(
     transcript: str,
     confidence: float,
     audio_duration_seconds: float,
+    canvas_snapshot: str | None = None,
 ):
     pipeline_start = time.time()
 
@@ -367,9 +414,6 @@ async def process_and_respond(
             audio_data = audio_data.encode("utf-8")
         audio_base64 = base64.b64encode(audio_data).decode("utf-8")
         logger.info(f"[{session_id}] TTS generated: {tts_latency}ms")
-
-    except Exception as e:
-        logger.error(f"[{session_id}] TTS failed: {e}. Sending text-only response.")
 
     total_ms = int((time.time() - pipeline_start) * 1000)
 

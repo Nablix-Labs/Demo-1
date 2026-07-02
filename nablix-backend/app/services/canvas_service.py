@@ -19,7 +19,7 @@ from app.services.interaction_service import (
 )
 from app.services.session_service import (
     correct_answer_for,
-    get_session,
+    _get_owned_session,
     record_canvas_submission,
 )
 from app.services.snapshot_store import build_reference, store_snapshot
@@ -36,7 +36,7 @@ async def submit_canvas(request: CanvasSubmitRequest) -> CanvasSubmitResponse:
         )
 
     # Load the session up front so a stale/unknown session 404s before we pay for OCR.
-    session = await get_session(request.session_id)
+    session = _get_owned_session(request.session_id, request.student_id)
 
     submission_id = uuid4().hex
     snapshot_reference = build_reference(submission_id)
@@ -49,19 +49,24 @@ async def submit_canvas(request: CanvasSubmitRequest) -> CanvasSubmitResponse:
     # The student's written answer is what the classifier grades against correct_answer.
     student_answer = ocr.final_answer or ocr.raw_ocr_text or ""
 
+    # ponytail: plain concat of written answer + spoken transcript into one graded
+    # message. Refine here if the classifier needs them weighted separately.
+    message = " ".join(p for p in [student_answer, request.transcript] if p) or student_answer
+
     tutor_started = perf_counter()
     _, _, tutor = await run_tutor_pipeline(
         AdapterContext(
             session_id=request.session_id,
             student_id=request.student_id,
-            message=student_answer,
+            message=message,
             question=session.current_question,
             correct_answer=correct_answer_for(session.question_id),
             current_phase=session.current_phase,
             input_source="CANVAS",
-            transcript_confidence=None,
+            transcript_confidence=request.transcript_confidence,
             attempt_count=session.hint_count + 1,
             current_hint_level=_current_hint_level_from(session.hint_count),
+            concept_id=session.concept_id,
         )
     )
     tutor_latency_ms = (perf_counter() - tutor_started) * 1000

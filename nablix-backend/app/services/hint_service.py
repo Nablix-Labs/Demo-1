@@ -5,8 +5,8 @@ from app.models.adapters import AdapterContext, StudentModelEvent
 from app.models.fields import Phase
 from app.models.hint import HintRequest, HintResponse
 from app.models.session import SessionRecord
-from app.services.interaction_service import run_tutor_pipeline
-from app.services.session_service import _get_owned_session, increment_hint_count
+from app.services.interaction_service import _current_hint_level_from, run_tutor_pipeline
+from app.services.session_service import _get_owned_session, correct_answer_for, increment_hint_count
 
 
 _HINT_PHASES: frozenset[Phase] = frozenset(("GUIDED_PRACTICE", "INDEPENDENT_PRACTICE"))
@@ -52,12 +52,19 @@ async def process_hint(request: HintRequest) -> HintResponse:
     _validate_hint_phase(request.current_phase, session.current_phase)
     _validate_hint_count(request.current_hint_count, session.hint_count)
 
+    next_hint_level: int = session.hint_count + 1
     context = AdapterContext(
         session_id=request.session_id,
         student_id=request.student_id,
         message=f"Hint request for {request.question_id} ({request.concept_id}).",
+        question=session.current_question,
+        correct_answer=correct_answer_for(request.question_id),
+        current_phase=request.current_phase,
+        input_source="TEXT",
+        attempt_count=next_hint_level,
+        current_hint_level=_current_hint_level_from(session.hint_count),
+        concept_id=request.concept_id,
     )
-    next_hint_level: int = session.hint_count + 1
     _, _, tutor = await run_tutor_pipeline(context)
     adapters = get_adapters()
     await adapters.student_model.update_from_event(

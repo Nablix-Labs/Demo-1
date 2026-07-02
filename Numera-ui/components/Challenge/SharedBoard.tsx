@@ -30,9 +30,9 @@ export default function SharedBoard() {
   const chatUnlocked = completedLessons.length > 0 && practiceCompleted;
 
   return (
-    <aside className="flex-shrink-0 w-[320px] border-l border-[#c8c8c8] bg-white flex flex-col min-h-0" aria-label="Shared board and chat">
+    <aside className="flex-shrink-0 w-[320px] border-l border-muted-gray bg-white flex flex-col min-h-0" aria-label="Shared board and chat">
       {/* Tabs */}
-      <div className="flex items-stretch border-b border-[#c8c8c8] flex-shrink-0">
+      <div className="flex items-stretch border-b border-muted-gray flex-shrink-0">
         <TabBtn active={tab === 'board'} onClick={() => setTab('board')} icon={<Radio size={15} strokeWidth={1.8} />} label="Board" />
         <TabBtn active={tab === 'chat'} onClick={() => setTab('chat')} icon={<MessagesSquare size={15} strokeWidth={1.8} />} label="Chat" locked={!chatUnlocked} />
       </div>
@@ -54,7 +54,7 @@ function TabBtn({ active, onClick, icon, label, locked }: { active: boolean; onC
       onClick={onClick}
       className={cn(
         'flex-1 flex items-center justify-center gap-1.5 py-3 text-[12px] font-semibold transition-colors border-b-2',
-        active ? 'border-[#1a1a1a] text-[#1a1a1a]' : 'border-transparent text-[#9a9a9a] hover:text-[#1a1a1a]'
+        active ? 'border-focus-navy text-ink' : 'border-transparent text-slate-blue hover:text-ink'
       )}
     >
       {icon} {label} {locked && <Lock size={11} strokeWidth={2} />}
@@ -65,38 +65,38 @@ function TabBtn({ active, onClick, icon, label, locked }: { active: boolean; onC
 function BoardContent({ commentary, spotlight }: { commentary: ReturnType<typeof useNumeraStore.getState>['commentary']; spotlight: ReturnType<typeof useNumeraStore.getState>['spotlight'] }) {
   return (
     <>
-      <div className="flex items-center gap-2 px-5 py-3 border-b border-[#eaeaea] flex-shrink-0">
-        <span className="text-[10px] tracking-widest uppercase text-[#9a9a9a]">AI-led shared board</span>
+      <div className="flex items-center gap-2 px-5 py-3 border-b border-muted-gray flex-shrink-0">
+        <span className="text-[10px] tracking-widest uppercase text-slate-blue">AI-led shared board</span>
       </div>
       {spotlight && (
-        <div className="px-5 py-4 border-b border-[#eaeaea]">
-          <div className="text-[10px] tracking-widest uppercase text-[#9a9a9a] mb-2">On the board</div>
-          <div className={cn('rounded-lg border p-3.5', spotlight.kind === 'good' && 'border-[#1a1a1a] bg-[#f4f4f4]', spotlight.kind === 'mistake' && 'border-dashed border-[#9a9a9a] bg-white', spotlight.kind === 'solution' && 'border-[#1a1a1a] bg-white')}>
+        <div className="px-5 py-4 border-b border-muted-gray">
+          <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-2">On the board</div>
+          <div className={cn('rounded-lg border p-3.5', spotlight.kind === 'good' && 'border-focus-navy bg-reading-surface', spotlight.kind === 'mistake' && 'border-dashed border-muted-gray bg-white', spotlight.kind === 'solution' && 'border-focus-navy bg-white')}>
             <div className="flex items-center gap-2 mb-1.5">
-              {spotlight.kind === 'good' && <Check size={15} strokeWidth={2} className="text-[#1a1a1a]" />}
-              {spotlight.kind === 'mistake' && <AlertCircle size={15} strokeWidth={1.8} className="text-[#7a7a7a]" />}
-              {spotlight.kind === 'solution' && <Sparkles size={15} strokeWidth={1.8} className="text-[#1a1a1a]" />}
-              <span className="text-[11px] font-semibold tracking-wide uppercase text-[#7a7a7a]">
+              {spotlight.kind === 'good' && <Check size={15} strokeWidth={2} className="text-ink" />}
+              {spotlight.kind === 'mistake' && <AlertCircle size={15} strokeWidth={1.8} className="text-slate-blue" />}
+              {spotlight.kind === 'solution' && <Sparkles size={15} strokeWidth={1.8} className="text-ink" />}
+              <span className="text-[11px] font-semibold tracking-wide uppercase text-slate-blue">
                 {spotlight.kind === 'good' ? 'Good work' : spotlight.kind === 'mistake' ? 'Learning moment' : 'Solution step'}
                 {spotlight.studentName ? ` · ${spotlight.studentName}` : spotlight.kind === 'mistake' ? ' · anonymous' : ''}
               </span>
             </div>
-            <p className="text-[12.5px] text-[#1a1a1a] leading-snug">{spotlight.caption}</p>
+            <p className="text-[12.5px] text-ink leading-snug">{spotlight.caption}</p>
           </div>
         </div>
       )}
       <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4">
-        <div className="text-[10px] tracking-widest uppercase text-[#9a9a9a] mb-3">Live commentary</div>
+        <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-3">Live commentary</div>
         {commentary.length === 0 ? (
-          <p className="text-[12px] text-[#9a9a9a]">The tutor will comment as the group works…</p>
+          <p className="text-[12px] text-slate-blue">The tutor will comment as the group works…</p>
         ) : (
           <div className="flex flex-col gap-2.5">
             {commentary.map((c) => (
               <div key={c.id} className="flex items-start gap-2.5">
-                <span className="flex-shrink-0 mt-0.5 w-1.5 h-1.5 rounded-full bg-[#1a1a1a]" />
-                <p className="text-[12.5px] text-[#1a1a1a] leading-snug">
+                <span className="flex-shrink-0 mt-0.5 w-1.5 h-1.5 rounded-full bg-focus-navy" />
+                <p className="text-[12.5px] text-ink leading-snug">
                   {c.text}
-                  {c.tone === 'hint' && <span className="ml-1 text-[10px] tracking-wide uppercase text-[#9a9a9a]">hint</span>}
+                  {c.tone === 'hint' && <span className="ml-1 text-[10px] tracking-wide uppercase text-slate-blue">hint</span>}
                 </p>
               </div>
             ))}
@@ -113,7 +113,7 @@ function ChatContent() {
   const send = () => {
     const t = text.trim();
     if (!t) return;
-    setMessages((m) => [...m, { id: crypto.randomUUID(), author: 'You', color: '#1a1a1a', text: t, you: true }]);
+    setMessages((m) => [...m, { id: crypto.randomUUID(), author: 'You', color: '#4169E1', text: t, you: true }]);
     setText('');
   };
   return (
@@ -122,22 +122,22 @@ function ChatContent() {
         {messages.map((m) => (
           <div key={m.id} className={cn('flex flex-col', m.you && 'items-end')}>
             <span className="text-[10px] font-semibold mb-0.5" style={{ color: m.color }}>{m.author}</span>
-            <span className={cn('inline-block max-w-[85%] rounded-lg px-3 py-1.5 text-[12.5px]', m.you ? 'bg-[#1a1a1a] text-white' : 'bg-[#f4f4f4] text-[#1a1a1a]')}>
+            <span className={cn('inline-block max-w-[85%] rounded-lg px-3 py-1.5 text-[12.5px]', m.you ? 'bg-focus-navy text-white' : 'bg-reading-surface text-ink')}>
               {m.text}
             </span>
           </div>
         ))}
       </div>
-      <div className="flex-shrink-0 border-t border-[#eaeaea] p-3 flex items-center gap-2">
+      <div className="flex-shrink-0 border-t border-muted-gray p-3 flex items-center gap-2">
         <input
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && send()}
           placeholder="Message the group…"
           aria-label="Group chat message"
-          className="flex-1 rounded-full border border-[#9a9a9a] px-3.5 py-2 text-[12.5px] outline-none"
+          className="flex-1 rounded-full border border-muted-gray px-3.5 py-2 text-[12.5px] outline-none"
         />
-        <button onClick={send} disabled={!text.trim()} aria-label="Send" className={cn('w-8 h-8 rounded-full flex items-center justify-center', text.trim() ? 'bg-[#1a1a1a] text-white' : 'bg-[#eaeaea] text-[#9a9a9a]')}>
+        <button onClick={send} disabled={!text.trim()} aria-label="Send" className={cn('w-8 h-8 rounded-full flex items-center justify-center', text.trim() ? 'bg-focus-navy text-white' : 'bg-reading-surface text-slate-blue')}>
           <ArrowUp size={15} strokeWidth={2} />
         </button>
       </div>
@@ -148,11 +148,11 @@ function ChatContent() {
 function LockedChat() {
   return (
     <div className="flex-1 flex flex-col items-center justify-center text-center px-8">
-      <div className="w-10 h-10 rounded-full bg-[#f4f4f4] border border-[#c8c8c8] flex items-center justify-center mb-3">
-        <Lock size={17} strokeWidth={1.8} className="text-[#7a7a7a]" />
+      <div className="w-10 h-10 rounded-full bg-reading-surface border border-muted-gray flex items-center justify-center mb-3">
+        <Lock size={17} strokeWidth={1.8} className="text-slate-blue" />
       </div>
-      <div className="text-[13px] font-semibold text-[#1a1a1a]">Group chat is locked</div>
-      <p className="text-[12px] text-[#7a7a7a] mt-1.5 leading-snug">
+      <div className="text-[13px] font-semibold text-ink">Group chat is locked</div>
+      <p className="text-[12px] text-slate-blue mt-1.5 leading-snug">
         Finish a guided lesson and an independent practice to unlock chatting with your group.
       </p>
     </div>

@@ -4,6 +4,7 @@ from typing import cast, get_args
 from fastapi import HTTPException
 
 from app.adapters.provider import get_adapters
+from app.adapters.tutor_engine import apply_retrieved_content
 from app.models.adapters import (
     AdapterContext,
     RAGResult,
@@ -21,6 +22,7 @@ from app.services.session_service import (
 )
 
 
+_EMPTY_RAG = RAGResult(documents=[], retrieval_confidence=0.0)
 _PHASE_VALUES: tuple[str, ...] = get_args(Phase)
 _SPOKEN_DIGITS: dict[str, str] = {
     "zero": "0",
@@ -43,9 +45,17 @@ async def run_tutor_pipeline(
     """Run the shared RAG, student-model, and tutor-engine adapter sequence."""
 
     adapters = get_adapters()
-    rag = await adapters.rag.retrieve(context)
+    # Classify first: error_type / response_strategy / chosen hint_level are tutor
+    # outputs, so RAG can only target the right hint after evaluation.
     student = await adapters.student_model.assess(context)
-    tutor = await adapters.tutor.evaluate(context, rag, student)
+    tutor = await adapters.tutor.evaluate(context, _EMPTY_RAG, student)
+
+    rag = _EMPTY_RAG
+    if tutor.response_strategy == "GUIDED_HINT":
+        rag = await adapters.rag.retrieve(
+            context, error_type=tutor.error_type, hint_level=tutor.hint_level
+        )
+        tutor = apply_retrieved_content(tutor, rag)
     return rag, student, tutor
 
 

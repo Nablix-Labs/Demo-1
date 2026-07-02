@@ -20,11 +20,11 @@ const LABELS: Record<TrailKind, string> = {
 };
 
 const ACCENT: Record<TrailKind, string> = {
-  question: '#1a1a1a',
-  answer: '#3b6cb0',
-  canvas: '#7a5cc8',
-  tutor: '#1a1a1a',
-  hint: '#b07a1a',
+  question: '#1B2A4A', // focus-navy
+  answer: '#4169E1', // learning-blue (student)
+  canvas: '#008B8B', // dark-cyan (OCR / working)
+  tutor: '#00B4D8', // ai-cyan (AI)
+  hint: '#FF9F1C', // highlight-amber
 };
 
 export default function SessionTrail() {
@@ -33,10 +33,10 @@ export default function SessionTrail() {
 
   return (
     <section className="mb-8">
-      <h2 className="text-[13px] font-semibold tracking-wide uppercase text-[#7a7a7a] mb-3">
+      <h2 className="text-[13px] font-semibold tracking-wide uppercase text-slate-blue mb-3">
         Current session
       </h2>
-      <ol className="rounded-lg border border-[#c8c8c8] divide-y divide-[#eaeaea] overflow-hidden">
+      <ol className="rounded-lg border border-muted-gray divide-y divide-muted-gray overflow-hidden">
         {trail.map((e) => (
           <li key={e.id} className="flex items-start gap-4 px-5 py-3">
             <span
@@ -46,18 +46,18 @@ export default function SessionTrail() {
             />
             <div className="min-w-0 flex-1">
               <div className="flex items-baseline gap-2">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-[#9a9a9a]">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-blue">
                   {LABELS[e.kind]}
                 </span>
                 {e.meta && (
-                  <span className="text-[11px] text-[#b0b0b0]">{e.meta}</span>
+                  <span className="text-[11px] text-slate-blue/70">{e.meta}</span>
                 )}
               </div>
-              <p className="text-[13.5px] text-[#1a1a1a] leading-snug mt-0.5 break-words">
+              <p className="text-[13.5px] text-ink leading-snug mt-0.5 break-words">
                 {e.text}
               </p>
             </div>
-            <time className="flex-shrink-0 text-[11px] text-[#b0b0b0] tabular-nums">
+            <time className="flex-shrink-0 text-[11px] text-slate-blue/70 tabular-nums">
               {new Date(e.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </time>
           </li>

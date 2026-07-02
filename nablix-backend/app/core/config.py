@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     use_mock_vision: bool = True
 
     #Vision OCR (used when use_mock_vision is False)
-    openai_vision_model: str = "gpt-5.5"
+    openai_vision_model: str = "gpt-5.4-mini"
     use_openai_ai_engine: bool = False
     openai_ai_engine_model: str = "gpt-4o-mini"
     openai_request_timeout_seconds: int = 20

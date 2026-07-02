@@ -78,10 +78,10 @@ export default function Toolbar({ onCheckWork }: ToolbarProps) {
   const canUndo = items.length > 0;
   const canRedo = undone.length > 0;
 
-  const Sep = () => <div className={cn('bg-[#c8c8c8]', vertical ? 'h-[1.5px] w-[22px] my-0.5' : 'w-[1.5px] h-[22px] mx-0.5')} />;
+  const Sep = () => <div className={cn('bg-muted-gray', vertical ? 'h-[1.5px] w-[22px] my-0.5' : 'w-[1.5px] h-[22px] mx-0.5')} />;
   const btn = (active: boolean) =>
     cn('w-9 h-9 rounded-full flex items-center justify-center transition-colors flex-shrink-0',
-      active ? 'bg-[#1a1a1a] text-white' : 'bg-transparent text-[#1a1a1a] hover:bg-[#f4f4f4]');
+      active ? 'bg-focus-navy text-white' : 'bg-transparent text-ink hover:bg-reading-surface');
   // Popovers open away from the bar: to the side when vertical, upward when horizontal.
   const popPos = vertical ? 'left-[calc(100%+10px)] top-0' : 'bottom-[calc(100%+10px)] left-1/2 -translate-x-1/2';
 
@@ -97,7 +97,7 @@ export default function Toolbar({ onCheckWork }: ToolbarProps) {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       className={cn(
-        'absolute z-20 flex items-center gap-[5px] bg-white border border-[#9a9a9a] rounded-[24px] px-[9px] py-[6px] select-none',
+        'absolute z-20 flex items-center gap-[5px] bg-white border border-muted-gray rounded-[24px] px-[9px] py-[6px] select-none',
         vertical ? 'flex-col' : 'flex-row',
         !positioned && 'bottom-5 left-1/2 -translate-x-1/2'
       )}
@@ -109,13 +109,13 @@ export default function Toolbar({ onCheckWork }: ToolbarProps) {
       <button
         onPointerDown={onHandleDown}
         title="Drag to move" aria-label="Move toolbar"
-        className="flex items-center justify-center w-5 h-9 text-[#9a9a9a] hover:text-[#1a1a1a] cursor-grab active:cursor-grabbing touch-none flex-shrink-0"
+        className="flex items-center justify-center w-5 h-9 text-slate-blue hover:text-ink cursor-grab active:cursor-grabbing touch-none flex-shrink-0"
       >
         {vertical ? <GripHorizontal size={16} strokeWidth={1.6} /> : <GripVertical size={16} strokeWidth={1.6} />}
       </button>
 
       {toolbarCollapsed ? (
-        <button onClick={toggleToolbarCollapsed} title="Expand toolbar" aria-label="Expand toolbar" className="w-9 h-9 rounded-full bg-[#1a1a1a] text-white flex items-center justify-center">
+        <button onClick={toggleToolbarCollapsed} title="Expand toolbar" aria-label="Expand toolbar" className="w-9 h-9 rounded-full bg-focus-navy text-white flex items-center justify-center">
           <ActiveToolIcon size={18} strokeWidth={1.7} />
         </button>
       ) : (
@@ -140,7 +140,7 @@ export default function Toolbar({ onCheckWork }: ToolbarProps) {
               <Popover pos={popPos}>
                 <MenuItem active={eraserMode === 'stroke'} icon={<Brush size={15} strokeWidth={1.7} />} label="Erase (rub)" onClick={() => { setEraserMode('stroke'); setMenu(null); }} />
                 <MenuItem active={eraserMode === 'object'} icon={<MousePointerClick size={15} strokeWidth={1.7} />} label="Delete object" onClick={() => { setEraserMode('object'); setMenu(null); }} />
-                <div className="h-[1px] bg-[#eaeaea] my-1" />
+                <div className="h-[1px] bg-muted-gray my-1" />
                 <MenuItem icon={<Trash2 size={15} strokeWidth={1.7} />} label="Clear all" onClick={() => { clearCanvas(); setMenu(null); }} />
               </Popover>
             )}
@@ -158,7 +158,7 @@ export default function Toolbar({ onCheckWork }: ToolbarProps) {
                   {SHAPES.map(({ kind, Icon, label }) => (
                     <button key={kind} title={label} aria-label={label} aria-pressed={shapeKind === kind}
                       onClick={() => { setShapeKind(kind); setMenu(null); }}
-                      className={cn('w-9 h-9 rounded-lg flex items-center justify-center transition-colors', shapeKind === kind ? 'bg-[#1a1a1a] text-white' : 'bg-[#f4f4f4] text-[#1a1a1a] hover:bg-[#eaeaea]')}>
+                      className={cn('w-9 h-9 rounded-lg flex items-center justify-center transition-colors', shapeKind === kind ? 'bg-focus-navy text-white' : 'bg-reading-surface text-ink hover:bg-muted-gray')}>
                       <Icon size={18} strokeWidth={1.7} />
                     </button>
                   ))}
@@ -174,11 +174,11 @@ export default function Toolbar({ onCheckWork }: ToolbarProps) {
           <Sep />
 
           <button onClick={undo} disabled={!canUndo} title="Undo (Cmd/Ctrl+Z)" aria-label="Undo"
-            className={cn('w-9 h-9 rounded-full flex items-center justify-center text-[#1a1a1a] transition-colors flex-shrink-0', canUndo ? 'hover:bg-[#f4f4f4]' : 'opacity-30 cursor-not-allowed')}>
+            className={cn('w-9 h-9 rounded-full flex items-center justify-center text-ink transition-colors flex-shrink-0', canUndo ? 'hover:bg-reading-surface' : 'opacity-30 cursor-not-allowed')}>
             <Undo2 size={18} strokeWidth={1.7} />
           </button>
           <button onClick={redo} disabled={!canRedo} title="Redo (Cmd/Ctrl+Shift+Z)" aria-label="Redo"
-            className={cn('w-9 h-9 rounded-full flex items-center justify-center text-[#1a1a1a] transition-colors flex-shrink-0', canRedo ? 'hover:bg-[#f4f4f4]' : 'opacity-30 cursor-not-allowed')}>
+            className={cn('w-9 h-9 rounded-full flex items-center justify-center text-ink transition-colors flex-shrink-0', canRedo ? 'hover:bg-reading-surface' : 'opacity-30 cursor-not-allowed')}>
             <Redo2 size={18} strokeWidth={1.7} />
           </button>
 
@@ -188,25 +188,25 @@ export default function Toolbar({ onCheckWork }: ToolbarProps) {
           <div className="relative flex-shrink-0">
             <button title="Colour & thickness" aria-label="Colour and thickness" aria-expanded={menu === 'color'}
               onClick={() => setMenu(menu === 'color' ? null : 'color')}
-              className="w-9 h-9 rounded-full flex items-center justify-center hover:bg-[#f4f4f4] transition-colors">
-              <span className="w-[18px] h-[18px] rounded-full" style={{ background: strokeColor, border: '2px solid #fff', boxShadow: '0 0 0 1.5px #9a9a9a' }} />
+              className="w-9 h-9 rounded-full flex items-center justify-center hover:bg-reading-surface transition-colors">
+              <span className="w-[18px] h-[18px] rounded-full" style={{ background: strokeColor, border: '2px solid #fff', boxShadow: '0 0 0 1.5px #E0E2E5' }} />
             </button>
             {menu === 'color' && (
               <Popover pos={popPos}>
                 <div className="w-[200px]">
                   {/* Preset swatches + full colour-wheel picker */}
-                  <div className="text-[10px] tracking-widest uppercase text-[#9a9a9a] mb-2">Colour</div>
+                  <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-2">Colour</div>
                   <div className="flex items-center gap-2 flex-wrap">
                     {COLORS.map((c) => (
                       <button key={c} onClick={() => setStrokeColor(c)} aria-label={`Colour ${c}`} aria-pressed={strokeColor === c}
-                        className={cn('w-6 h-6 rounded-full transition-transform', strokeColor === c ? 'scale-110 ring-2 ring-offset-2 ring-[#1a1a1a]' : 'hover:scale-105')}
-                        style={{ background: c, boxShadow: '0 0 0 1.5px #9a9a9a' }} />
+                        className={cn('w-6 h-6 rounded-full transition-transform', strokeColor === c ? 'scale-110 ring-2 ring-offset-2 ring-focus-navy' : 'hover:scale-105')}
+                        style={{ background: c, boxShadow: '0 0 0 1.5px #E0E2E5' }} />
                     ))}
                     {/* Native colour wheel / picker */}
                     <label
                       className="relative w-6 h-6 rounded-full cursor-pointer overflow-hidden"
                       title="Custom colour"
-                      style={{ boxShadow: '0 0 0 1.5px #9a9a9a', background: 'conic-gradient(red, yellow, lime, aqua, blue, magenta, red)' }}
+                      style={{ boxShadow: '0 0 0 1.5px #E0E2E5', background: 'conic-gradient(red, yellow, lime, aqua, blue, magenta, red)' }}
                     >
                       <input
                         type="color"
@@ -218,20 +218,20 @@ export default function Toolbar({ onCheckWork }: ToolbarProps) {
                     </label>
                   </div>
 
-                  <div className="h-[1px] bg-[#eaeaea] my-3" />
+                  <div className="h-[1px] bg-muted-gray my-3" />
 
                   {/* Size slider with live preview */}
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-[10px] tracking-widest uppercase text-[#9a9a9a]">Size</span>
-                    <span className="text-[11px] font-semibold text-[#1a1a1a]">{strokeWidth}px</span>
+                    <span className="text-[10px] tracking-widest uppercase text-slate-blue">Size</span>
+                    <span className="text-[11px] font-semibold text-ink">{strokeWidth}px</span>
                   </div>
                   <div className="flex items-center gap-2.5">
-                    <span className="rounded-full bg-[#1a1a1a] flex-shrink-0" style={{ width: Math.min(strokeWidth, 20) + 2, height: Math.min(strokeWidth, 20) + 2 }} />
+                    <span className="rounded-full bg-focus-navy flex-shrink-0" style={{ width: Math.min(strokeWidth, 20) + 2, height: Math.min(strokeWidth, 20) + 2 }} />
                     <input
                       type="range" min={1} max={30} value={strokeWidth}
                       onChange={(e) => setStrokeWidth(Number(e.target.value))}
                       aria-label="Stroke size"
-                      className="flex-1 accent-[#1a1a1a]"
+                      className="flex-1 accent-focus-navy"
                     />
                   </div>
                 </div>
@@ -241,7 +241,7 @@ export default function Toolbar({ onCheckWork }: ToolbarProps) {
 
           {/* Check */}
           <button onClick={onCheckWork} aria-label="Check my work"
-            className={cn('bg-[#1a1a1a] text-white rounded-[20px] text-xs font-semibold flex items-center justify-center gap-[6px] hover:opacity-80 transition-opacity flex-shrink-0',
+            className={cn('bg-highlight-amber text-ink rounded-[20px] text-xs font-semibold flex items-center justify-center gap-[6px] hover:brightness-95 transition-all flex-shrink-0',
               vertical ? 'w-9 h-9 rounded-full' : 'ml-1 px-4 py-[9px]')}>
             <CheckCircle2 size={16} strokeWidth={1.8} />
             {!vertical && 'Check'}
@@ -249,7 +249,7 @@ export default function Toolbar({ onCheckWork }: ToolbarProps) {
 
           {/* Collapse */}
           <button onClick={toggleToolbarCollapsed} title="Collapse toolbar" aria-label="Collapse toolbar"
-            className="w-7 h-9 flex items-center justify-center text-[#9a9a9a] hover:text-[#1a1a1a] transition-colors flex-shrink-0">
+            className="w-7 h-9 flex items-center justify-center text-slate-blue hover:text-ink transition-colors flex-shrink-0">
             <ChevronDown size={16} strokeWidth={1.8} className={vertical ? '-rotate-90' : ''} />
           </button>
         </>
@@ -260,7 +260,7 @@ export default function Toolbar({ onCheckWork }: ToolbarProps) {
 
 function Popover({ pos, children }: { pos: string; children: React.ReactNode }) {
   return (
-    <div className={cn('absolute z-30 bg-white border border-[#9a9a9a] rounded-xl p-3', pos)} style={{ boxShadow: '0 4px 16px rgba(0,0,0,0.14)' }} role="menu">
+    <div className={cn('absolute z-30 bg-white border border-muted-gray rounded-xl p-3', pos)} style={{ boxShadow: '0 4px 16px rgba(0,0,0,0.14)' }} role="menu">
       {children}
     </div>
   );
@@ -269,7 +269,7 @@ function Popover({ pos, children }: { pos: string; children: React.ReactNode }) 
 function MenuItem({ active, icon, label, onClick }: { active?: boolean; icon: React.ReactNode; label: string; onClick: () => void }) {
   return (
     <button onClick={onClick} aria-pressed={active}
-      className={cn('w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-[12.5px] whitespace-nowrap transition-colors', active ? 'bg-[#1a1a1a] text-white' : 'text-[#1a1a1a] hover:bg-[#f4f4f4]')}>
+      className={cn('w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-[12.5px] whitespace-nowrap transition-colors', active ? 'bg-focus-navy text-white' : 'text-ink hover:bg-reading-surface')}>
       {icon} {label}
     </button>
   );

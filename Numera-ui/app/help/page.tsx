@@ -45,10 +45,10 @@ export default function HelpPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 max-w-5xl">
         {/* FAQ */}
         <div className="lg:col-span-2">
-          <div className="text-[11px] font-semibold tracking-widest uppercase text-[#9a9a9a] mb-3">
+          <div className="text-[11px] font-semibold tracking-widest uppercase text-slate-blue mb-3">
             Frequently asked
           </div>
-          <div className="rounded-lg border border-[#c8c8c8] divide-y divide-[#eaeaea] overflow-hidden">
+          <div className="rounded-lg border border-muted-gray divide-y divide-muted-gray overflow-hidden">
             {FAQS.map((f, i) => {
               const isOpen = open === i;
               return (
@@ -56,17 +56,17 @@ export default function HelpPage() {
                   <button
                     onClick={() => setOpen(isOpen ? null : i)}
                     aria-expanded={isOpen}
-                    className="w-full flex items-center justify-between gap-4 px-5 py-4 text-left hover:bg-[#f9f9f9] transition-colors"
+                    className="w-full flex items-center justify-between gap-4 px-5 py-4 text-left hover:bg-reading-surface transition-colors"
                   >
-                    <span className="text-[13.5px] font-semibold text-[#1a1a1a]">{f.q}</span>
+                    <span className="text-[13.5px] font-semibold text-ink">{f.q}</span>
                     <ChevronDown
                       size={18}
                       strokeWidth={1.6}
-                      className={cn('flex-shrink-0 text-[#7a7a7a] transition-transform', isOpen && 'rotate-180')}
+                      className={cn('flex-shrink-0 text-slate-blue transition-transform', isOpen && 'rotate-180')}
                     />
                   </button>
                   {isOpen && (
-                    <p className="px-5 pb-4 -mt-1 text-[12.5px] text-[#7a7a7a] leading-relaxed">
+                    <p className="px-5 pb-4 -mt-1 text-[12.5px] text-slate-blue leading-relaxed">
                       {f.a}
                     </p>
                   )}
@@ -78,7 +78,7 @@ export default function HelpPage() {
 
         {/* Contact */}
         <div>
-          <div className="text-[11px] font-semibold tracking-widest uppercase text-[#9a9a9a] mb-3">
+          <div className="text-[11px] font-semibold tracking-widest uppercase text-slate-blue mb-3">
             Get in touch
           </div>
           <div className="flex flex-col gap-2.5">
@@ -87,14 +87,14 @@ export default function HelpPage() {
               return (
                 <button
                   key={c.title}
-                  className="flex items-center gap-3.5 rounded-lg border border-[#c8c8c8] bg-white px-4 py-3.5 text-left hover:border-[#9a9a9a] transition-colors"
+                  className="flex items-center gap-3.5 rounded-lg border border-muted-gray bg-white px-4 py-3.5 text-left hover:border-muted-gray transition-colors"
                 >
                   <IconBadge>
                     <Icon size={18} strokeWidth={1.5} />
                   </IconBadge>
                   <div>
-                    <div className="text-[13px] font-semibold text-[#1a1a1a]">{c.title}</div>
-                    <div className="text-[11.5px] text-[#7a7a7a] mt-0.5">{c.detail}</div>
+                    <div className="text-[13px] font-semibold text-ink">{c.title}</div>
+                    <div className="text-[11.5px] text-slate-blue mt-0.5">{c.detail}</div>
                   </div>
                 </button>
               );

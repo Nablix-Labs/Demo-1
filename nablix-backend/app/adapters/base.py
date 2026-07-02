@@ -34,10 +34,22 @@ from app.models.adapters import (
 class RAGServiceAdapter(Protocol):
     """Retrieves curriculum context relevant to the current student turn."""
 
-    async def call(self, request: AdapterContext) -> RAGResult: ...
+    async def call(
+        self,
+        request: AdapterContext,
+        *,
+        error_type: str | None,
+        hint_level: int | None,
+    ) -> RAGResult: ...
     def parse_response(self, response: dict[str, object]) -> RAGResult: ...
     def handle_error(self, error: AdapterError) -> NoReturn: ...
-    async def retrieve(self, context: AdapterContext) -> RAGResult: ...
+    async def retrieve(
+        self,
+        context: AdapterContext,
+        *,
+        error_type: str | None,
+        hint_level: int | None,
+    ) -> RAGResult: ...
 
 
 class StudentModelAdapter(Protocol):

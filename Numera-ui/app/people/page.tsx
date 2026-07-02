@@ -22,21 +22,21 @@ export default function PeoplePage() {
       title="People"
       subtitle="Tutors, classmates and guardians connected to your account."
     >
-      <div className="rounded-lg border border-[#c8c8c8] divide-y divide-[#eaeaea] overflow-hidden">
+      <div className="rounded-lg border border-muted-gray divide-y divide-muted-gray overflow-hidden">
         {PEOPLE.map((p) => (
-          <div key={p.name} className="flex items-center gap-4 px-5 py-4 hover:bg-[#f9f9f9] transition-colors">
+          <div key={p.name} className="flex items-center gap-4 px-5 py-4 hover:bg-reading-surface transition-colors">
             <div className="relative">
               <Avatar name={p.name} />
               <span
                 className={`absolute -right-0.5 -bottom-0.5 w-3 h-3 rounded-full border-2 border-white ${
-                  p.online ? 'bg-[#1a1a1a]' : 'bg-[#c8c8c8]'
+                  p.online ? 'bg-success-sage' : 'bg-muted-gray'
                 }`}
                 aria-label={p.online ? 'Online' : 'Offline'}
               />
             </div>
             <div className="min-w-0 flex-1">
-              <div className="text-[14px] font-semibold text-[#1a1a1a]">{p.name}</div>
-              <div className="text-[12px] text-[#7a7a7a] truncate">{p.detail}</div>
+              <div className="text-[14px] font-semibold text-ink">{p.name}</div>
+              <div className="text-[12px] text-slate-blue truncate">{p.detail}</div>
             </div>
             <Chip tone={p.role === 'Tutor' ? 'solid' : 'outline'}>{p.role}</Chip>
           </div>

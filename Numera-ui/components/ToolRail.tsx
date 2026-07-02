@@ -39,8 +39,8 @@ function RailLink({
       className={cn(
         'w-[38px] h-[38px] rounded-lg flex items-center justify-center transition-colors flex-shrink-0',
         active
-          ? 'bg-white text-[#1a1a1a]'
-          : 'bg-transparent text-[#cfcfcf] hover:bg-[#2c2c2c] hover:text-white'
+          ? 'bg-white text-focus-navy'
+          : 'bg-transparent text-white/55 hover:bg-white/10 hover:text-white'
       )}
     >
       <Icon size={18} strokeWidth={1.6} />
@@ -55,7 +55,7 @@ export default function ToolRail() {
 
   return (
     <nav
-      className="flex flex-col items-center flex-shrink-0 w-14 bg-[#1a1a1a] py-3.5 gap-1"
+      className="flex flex-col items-center flex-shrink-0 w-14 bg-focus-navy py-3.5 gap-1"
       aria-label="Tool rail"
     >
       {/* Brand mark */}
@@ -63,7 +63,7 @@ export default function ToolRail() {
         href="/"
         title="Numera"
         aria-label="Numera home"
-        className="w-[34px] h-[34px] rounded-lg border border-white text-white flex items-center justify-center font-bold text-base mb-2 flex-shrink-0"
+        className="w-[34px] h-[34px] rounded-lg bg-ai-cyan text-white flex items-center justify-center font-bold text-base mb-2 flex-shrink-0"
       >
         N
       </Link>
