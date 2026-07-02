@@ -38,6 +38,14 @@ DEEPGRAM_WS_URL = "wss://api.deepgram.com/v1/listen"
 DEEPGRAM_API_KEY = voice_config.DEEPGRAM_API_KEY
 MAIN_BACKEND_URL = os.getenv("NABLIX_MAIN_BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
 
+# Reuse a single HTTP client for all backend calls instead of creating
+# a new connection per request.  TCP handshake + TLS negotiation on a
+# fresh client adds ~100-200ms each time.
+_backend_http_client = httpx.AsyncClient(
+    base_url=MAIN_BACKEND_URL,
+    timeout=15.0,
+)
+
 MATH_NORMALIZATIONS = {
     "five over six": "5/6",
     "x equals five": "x = 5",
@@ -70,10 +78,8 @@ async def evaluate_voice_transcript(
         "turn": "STUDENT",
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
-    url = f"{MAIN_BACKEND_URL}/voice/transcript"
-    logger.info(f"[{session_id}] POST {url}")
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        response = await client.post(url, json=payload)
+    logger.info(f"[{session_id}] POST /voice/transcript")
+    response = await _backend_http_client.post("/voice/transcript", json=payload)
     if response.status_code != 200:
         raise RuntimeError(f"status={response.status_code} body={response.text}")
     return response.json()
@@ -90,6 +96,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.on_event("startup")
+async def warm_tts_connection():
+    """Pre-warm the TTS adapter on server startup.
+
+    The first TTS call is always slower because it needs to establish
+    a new HTTPS connection to OpenAI (~300-500ms overhead).  By making
+    a tiny dummy call at startup, the connection pool is warm and
+    ready when the first real student request arrives.
+    """
+    try:
+        tts_adapter = get_tts_adapter(voice_config.DEFAULT_TTS_PROVIDER)
+        await tts_adapter.generate_speech(text=".", voice=voice_config.TTS_VOICE, audio_format="mp3")
+        logger.info("TTS connection pre-warmed successfully")
+    except Exception as e:
+        logger.warning(f"TTS pre-warm failed (non-fatal): {e}")
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "voice-streaming"}
@@ -103,13 +126,14 @@ async def voice_stream(ws: WebSocket, session_id: str = "default", student_id: s
     deepgram_ws = None
     final_transcript = ""
     final_confidence = 0.0
+    final_segment_count = 0
     receiving_audio = False
     audio_started_at = 0.0
 
     deepgram_receiver_task = None
 
     async def forward_deepgram_results(dg_ws):
-        nonlocal final_transcript, final_confidence
+        nonlocal final_transcript, final_confidence, final_segment_count
 
         try:
             async for msg in dg_ws:
@@ -135,7 +159,13 @@ async def voice_stream(ws: WebSocket, session_id: str = "default", student_id: s
                             final_transcript += " " + transcript
                         else:
                             final_transcript = transcript
-                        final_confidence = confidence
+                        # Track a running average confidence across all
+                        # final segments instead of just keeping the last
+                        final_segment_count += 1
+                        final_confidence = (
+                            (final_confidence * (final_segment_count - 1) + confidence)
+                            / final_segment_count
+                        )
 
                     await ws.send_json({
                         "type": "partial_transcript" if not is_final else "final_transcript",
@@ -168,6 +198,7 @@ async def voice_stream(ws: WebSocket, session_id: str = "default", student_id: s
                     language = data.get("language", "en")
                     final_transcript = ""
                     final_confidence = 0.0
+                    final_segment_count = 0
                     receiving_audio = True
                     audio_started_at = time.time()
 
@@ -219,14 +250,23 @@ async def voice_stream(ws: WebSocket, session_id: str = "default", student_id: s
                         except Exception:
                             pass
 
-                        await asyncio.sleep(1.0)
-
+                        # Wait for Deepgram to finish processing remaining
+                        # audio.  After CloseStream, Deepgram sends pending
+                        # finals then closes the WebSocket.  Typically takes
+                        # under 1 second; we allow up to 3 seconds.
                         if deepgram_receiver_task:
-                            deepgram_receiver_task.cancel()
+                            dg_wait_start = time.time()
                             try:
-                                await deepgram_receiver_task
-                            except asyncio.CancelledError:
-                                pass
+                                await asyncio.wait_for(deepgram_receiver_task, timeout=3.0)
+                            except asyncio.TimeoutError:
+                                logger.warning(f"[{session_id}] Deepgram receiver timed out after 3s, proceeding with partial transcript")
+                                deepgram_receiver_task.cancel()
+                                try:
+                                    await deepgram_receiver_task
+                                except asyncio.CancelledError:
+                                    pass
+                            dg_wait_ms = int((time.time() - dg_wait_start) * 1000)
+                            logger.info(f"[{session_id}] Deepgram finalization took {dg_wait_ms}ms")
 
                         try:
                             await deepgram_ws.close()
@@ -284,6 +324,7 @@ async def process_and_respond(
         logger.info(f"[{session_id}] Normalized: '{transcript}' → '{normalized}'")
 
     try:
+        tutor_start = time.time()
         tutor_response = await evaluate_voice_transcript(
             session_id,
             student_id,
@@ -291,6 +332,8 @@ async def process_and_respond(
             confidence,
             audio_duration_seconds,
         )
+        tutor_ms = int((time.time() - tutor_start) * 1000)
+        logger.info(f"[{session_id}] Backend tutor call took {tutor_ms}ms")
     except Exception as e:
         logger.error(f"[{session_id}] Main backend tutor call failed: {e}")
         await ws.send_json({
@@ -303,6 +346,7 @@ async def process_and_respond(
     tutor_text = str(tutor_response.get("message") or "")
     tutor_voice_text = str(tutor_response.get("message_voice") or tutor_text)
 
+    # ---- Generate TTS audio ----
     audio_base64 = None
     tts_latency = None
 
@@ -329,6 +373,9 @@ async def process_and_respond(
 
     total_ms = int((time.time() - pipeline_start) * 1000)
 
+    # Send everything in one message — the frontend closes the
+    # WebSocket after receiving tutor_response, so a follow-up
+    # tutor_audio message would never be delivered.
     await ws.send_json({
         "type": "tutor_response",
         "transcript": transcript,

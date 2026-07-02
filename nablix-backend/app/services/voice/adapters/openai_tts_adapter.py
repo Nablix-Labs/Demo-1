@@ -4,12 +4,20 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
 
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 from adapter import TTSAdapter, SpeechResult, register_tts_adapter
 import config as voice_config
 
 class OpenAITTSAdapter(TTSAdapter):
+    """OpenAI TTS adapter using the async client.
+
+    The original code used the synchronous OpenAI client inside an
+    async method, which blocks the entire event loop while waiting
+    for the API response (typically 1-3 seconds).  Switching to
+    AsyncOpenAI lets other tasks (like sending WebSocket messages)
+    run while TTS generates.
+    """
 
     def __init__(
         self,
@@ -22,7 +30,7 @@ class OpenAITTSAdapter(TTSAdapter):
             raise ValueError(
                 "OpenAI API key not found. Set OPENAI_API_KEY in your .env file."
             )
-        self.client = OpenAI(api_key=self.api_key)
+        self.client = AsyncOpenAI(api_key=self.api_key)
         self.model = model
         self.default_voice = default_voice
 
@@ -42,7 +50,7 @@ class OpenAITTSAdapter(TTSAdapter):
             elif audio_format == "mp3":
                 openai_format = "mp3"
 
-            response = self.client.audio.speech.create(
+            response = await self.client.audio.speech.create(
                 model=self.model,
                 voice=selected_voice,
                 input=text,
