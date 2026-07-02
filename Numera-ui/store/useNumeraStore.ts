@@ -383,12 +383,14 @@ export const useNumeraStore = create<NumeraState>()(
   setVoiceStatus: (voiceStatus) => set({ voiceStatus }),
 
   addTranscriptMessage: (msg) =>
-    set((s) => ({
-      transcript: [
-        ...s.transcript,
-        { ...msg, id: crypto.randomUUID(), timestamp: Date.now() },
-      ],
-    })),
+    set((s) => {
+      const last = s.transcript[s.transcript.length - 1];
+      const message = { ...msg, id: crypto.randomUUID(), timestamp: Date.now() };
+      if (last?.partial && last.role === msg.role) {
+        return { transcript: [...s.transcript.slice(0, -1), message] };
+      }
+      return { transcript: [...s.transcript, message] };
+    }),
 
   setTranscript: (msgs) =>
     set({

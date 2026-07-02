@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { playTutorAudio } from '@/lib/playTutorAudio';
+import { useNumeraStore } from '@/store/useNumeraStore';
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? '';
 const STUDENT_ID = 'ST001';
@@ -73,6 +74,7 @@ export function useStreamingVoiceTurn({
 }: UseStreamingVoiceTurnOptions) {
   const [active, setActive] = useState(false);
   const [speaking, setSpeaking] = useState(false);
+  const updatePartialTranscript = useNumeraStore((s) => s.updatePartialTranscript);
   const supported =
     typeof window !== 'undefined' &&
     Boolean(WS_URL) &&
@@ -209,10 +211,19 @@ export function useStreamingVoiceTurn({
       if (typeof event.data !== 'string') return;
       const message = JSON.parse(event.data) as Record<string, unknown>;
 
+      if (message.type === 'partial_transcript') {
+        const text = String(message.text ?? '').trim();
+        if (text && !transcriptSentRef.current) updatePartialTranscript(text);
+      }
+
       if (message.type === 'final_transcript') {
         const text = String(message.text ?? '').trim();
         if (text) finalTranscriptRef.current = text;
         finalConfidenceRef.current = Number(message.confidence ?? 0);
+        if (!transcriptSentRef.current && text) {
+          transcriptSentRef.current = true;
+          onStudentTranscriptRef.current(text, finalConfidenceRef.current);
+        }
       }
 
       if (message.type === 'tutor_response') {
@@ -259,6 +270,7 @@ export function useStreamingVoiceTurn({
     energyThreshold,
     silenceMs,
     stopInput,
+    updatePartialTranscript,
   ]);
 
   useEffect(() => {
