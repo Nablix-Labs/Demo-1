@@ -44,6 +44,14 @@ def test_canvas_submit_returns_mock_ocr_result() -> None:
     assert body["snapshot_reference"] == f"canvas/{body['submission_id']}.png"
     assert body["ocr"]["detected_equation"] == "x + 4 = 9"
     assert body["ocr"]["detected_steps"] == ["x + 4 = 9", "x = 9 - 4", "x = 5"]
+    assert body["ocr"]["detected_regions"][0] == {
+        "text": "x + 4 = 9",
+        "x": 0.12,
+        "y": 0.18,
+        "w": 0.36,
+        "h": 0.08,
+        "confidence": 0.96,
+    }
     assert body["ocr"]["final_answer"] == "x = 5"
     assert body["ocr"]["raw_ocr_text"] == "x + 4 = 9, x = 9 - 4, x = 5"
     assert body["ocr"]["confidence"] == 0.95

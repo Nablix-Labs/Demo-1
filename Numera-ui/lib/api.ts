@@ -196,6 +196,14 @@ export interface OcrResult {
   raw_ocr_text: string;
   detected_equation: string;
   detected_steps: string[];
+  detected_regions: Array<{
+    text: string;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    confidence: number;
+  }>;
   final_answer: string;
   confidence: number;
   needs_clarification: boolean;

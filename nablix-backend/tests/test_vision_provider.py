@@ -112,6 +112,19 @@ def test_openai_adapter_falls_back_to_joined_steps_for_raw_text(monkeypatch) -> 
     assert result.detected_steps == ["2x + 5 = 13", "2x = 8", "x = 4"]
 
 
+def test_openai_adapter_maps_detected_regions(monkeypatch) -> None:
+    content = (
+        '{"confidence": 0.9, "detected_steps": ["x + 4 = 9"], '
+        '"detected_regions": [{"text": "x + 4 = 9", "x": 0.1, "y": 0.2, "w": 0.3, "h": 0.08, "confidence": 0.91}]}'
+    )
+    _patch_openai_post(monkeypatch, _FakeResponse(200, {"choices": [{"message": {"content": content}}]}))
+
+    result = asyncio.run(_adapter().recognize(DATA_URL))
+
+    assert result.detected_regions[0].text == "x + 4 = 9"
+    assert result.detected_regions[0].x == 0.1
+
+
 def test_openai_adapter_marks_unsupported_final_answer_for_clarification(monkeypatch) -> None:
     content = (
         '{"confidence": 0.95, "detected_steps": ["x + 4 = 9", "x = 5"], '

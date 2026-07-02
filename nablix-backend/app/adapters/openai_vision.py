@@ -10,10 +10,10 @@ normalization step maps OpenAI's JSON payload into the provider-neutral
 """
 
 import httpx
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from app.core.exceptions import AdapterError
-from app.models.adapters import DetectedShape, VisionOCRResult
+from app.models.adapters import DetectedShape, OCRTextRegion, VisionOCRResult
 
 _OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
 
@@ -28,6 +28,7 @@ _SYSTEM_PROMPT = (
     '"raw_ocr_text" (the full transcription as one string, exactly as written), '
     '"detected_equation" (the main/starting equation the student is working on, as written, or "" if none), '
     '"detected_steps" (a list of strings, one per visible line/step exactly as written), '
+    '"detected_regions" (a list of text-line regions; [] if none), '
     '"final_answer" (the student\'s final written answer line such as "x = 5", or null if they wrote none; never compute it yourself), '
     '"latex" (LaTeX for the written math, or null if not applicable), '
     '"detected_shapes" (a list of geometry figures drawn on the canvas; [] if none), '
@@ -41,6 +42,9 @@ _SYSTEM_PROMPT = (
     "(e.g. the Pythagorean theorem) unless the image clearly shows it. "
     "Do not put shape descriptions into the text fields. "
     "For a shapes-only canvas with no written math, raw_ocr_text and detected_equation may be empty. "
+    "Each detected_regions item has: text, x, y, w, h, confidence. "
+    "x, y, w, and h are normalized 0.0 to 1.0 relative to the full image, where x/y are the top-left corner. "
+    "Use one region per visible math line or text fragment. "
     "If handwriting is ambiguous, preserve the most visually likely reading and lower the confidence. "
     "Never replace an ambiguous or wrong-looking written value with the mathematically correct value. "
     "Read every digit and operator by its written stroke shape ALONE. The numeric value of an "
@@ -60,11 +64,12 @@ class _OpenAIOCRPayload(BaseModel):
 
     raw_ocr_text: str = ""
     detected_equation: str = ""
-    detected_steps: list[str] = []
+    detected_steps: list[str] = Field(default_factory=list)
+    detected_regions: list[OCRTextRegion] = Field(default_factory=list)
     final_answer: str | None = None
     confidence: float
     latex: str | None = None
-    detected_shapes: list[DetectedShape] = []
+    detected_shapes: list[DetectedShape] = Field(default_factory=list)
 
 
 def _raw_text_for(payload: _OpenAIOCRPayload) -> str:
@@ -161,6 +166,7 @@ class OpenAIVisionOCRAdapter:
             raw_ocr_text=_raw_text_for(payload),
             detected_equation=payload.detected_equation,
             detected_steps=payload.detected_steps,
+            detected_regions=payload.detected_regions,
             final_answer=payload.final_answer,
             confidence=payload.confidence,
             needs_clarification=needs_clarification,

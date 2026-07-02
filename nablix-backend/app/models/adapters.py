@@ -135,7 +135,18 @@ class DetectedShape(BaseModel):
     shape_type: str
     label: str | None = None
     description: str
-    properties: list[str] = []
+    properties: list[str] = Field(default_factory=list)
+    confidence: float
+
+
+class OCRTextRegion(BaseModel):
+    """One OCR text line with its normalized canvas bounding box."""
+
+    text: str
+    x: float = Field(ge=0.0, le=1.0)
+    y: float = Field(ge=0.0, le=1.0)
+    w: float = Field(ge=0.0, le=1.0)
+    h: float = Field(ge=0.0, le=1.0)
     confidence: float
 
 
@@ -159,6 +170,7 @@ class VisionOCRResult(BaseModel):
     raw_ocr_text: str
     detected_equation: str = ""
     detected_steps: list[str] = []
+    detected_regions: list[OCRTextRegion] = Field(default_factory=list)
     final_answer: str | None = None
     confidence: float
     needs_clarification: bool = False

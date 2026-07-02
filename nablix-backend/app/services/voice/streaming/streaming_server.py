@@ -414,6 +414,8 @@ async def process_and_respond(
             audio_data = audio_data.encode("utf-8")
         audio_base64 = base64.b64encode(audio_data).decode("utf-8")
         logger.info(f"[{session_id}] TTS generated: {tts_latency}ms")
+    except Exception as error:
+        logger.error(f"[{session_id}] TTS generation failed: {error}")
 
     total_ms = int((time.time() - pipeline_start) * 1000)
 
