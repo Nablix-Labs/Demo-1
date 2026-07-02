@@ -8,10 +8,10 @@ class Settings(BaseSettings):
     debug: bool = False #Why false?
 
     #Service URL's
-    tutor_engine_url: str = "http://localhost:8001"
-    rag_service_url: str = "http://localhost:8002" #aditya
+    tutor_engine_url: str = "http://localhost:8001" #sanya
+    rag_service_url: str = "http://localhost:8002" #aaditya
     student_model_url: str = "http://localhost:8003" #tamil
-    voice_service_url: str = "http://localhost:8004" #chiru+aditya
+    voice_service_url: str = "http://localhost:8004" #chiru+aaditya
     safety_service_url: str = "http://localhost:8004" #manjusha
     cors_allowed_origins: list[str] = [
         "http://localhost:3000",
@@ -33,9 +33,7 @@ class Settings(BaseSettings):
     use_mock_vision: bool = True
 
     #Vision OCR (used when use_mock_vision is False)
-    openai_vision_model: str = "gpt-5.4-mini"
-    use_openai_ai_engine: bool = False
-    openai_ai_engine_model: str = "gpt-4o-mini"
+    openai_vision_model: str = "gpt-5.5"
     openai_request_timeout_seconds: int = 20
     adapter_request_timeout_seconds: int = 20
     adapter_request_retry_count: int = 2

@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
 from app.main import app
+from app.services import session_service
 from app.services.snapshot_store import get_snapshot
 
 client = TestClient(app)
@@ -54,6 +55,24 @@ def test_canvas_submit_returns_mock_ocr_result() -> None:
     assert {"ocr_latency_ms", "tutor_latency_ms"} <= body["latency"].keys()
 
 
+def test_canvas_submit_accepts_optional_transcript() -> None:
+    session_id = _start_session("ST010")
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST010",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+            "transcript": "x equals five",
+            "transcript_confidence": 0.9,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["tutor"]["tutor_message"]
+
+
 def test_canvas_submit_stores_ocr_without_serializing_snapshot() -> None:
     session_id = _start_session("ST002")
 
@@ -82,6 +101,23 @@ def test_canvas_submit_stores_ocr_without_serializing_snapshot() -> None:
     reference = body["canvas_submissions"][0]["snapshot_reference"]
     assert reference == f"canvas/{submit_response.json()['submission_id']}.png"
     assert get_snapshot(reference) == VALID_SNAPSHOT_DATA_URL
+
+
+def test_canvas_submit_recovers_demo_session_after_memory_loss() -> None:
+    session_id = _start_session("ST001")
+    session_service._sessions.clear()
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST001",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["session_id"] == session_id
 
 
 def test_canvas_submit_rejects_malformed_snapshot() -> None:

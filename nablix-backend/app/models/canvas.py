@@ -13,6 +13,10 @@ class CanvasSubmitRequest(BaseModel):
     session_id: SessionId
     student_id: StudentId
     snapshot_data_url: SnapshotDataUrl
+    # Optional spoken transcript to grade alongside the canvas (VAD turn). Omitted by
+    # the Check button, which stays canvas-only.
+    transcript: str | None = None
+    transcript_confidence: float | None = None
 
 
 class CanvasLatency(BaseModel):

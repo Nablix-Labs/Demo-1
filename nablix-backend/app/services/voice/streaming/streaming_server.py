@@ -78,6 +78,29 @@ async def evaluate_voice_transcript(
         raise RuntimeError(f"status={response.status_code} body={response.text}")
     return response.json()
 
+
+async def submit_canvas_work(
+    session_id: str,
+    student_id: str,
+    snapshot_data_url: str,
+    transcript: str,
+    confidence: float,
+) -> dict[str, object]:
+    payload = {
+        "session_id": session_id,
+        "student_id": student_id,
+        "snapshot_data_url": snapshot_data_url,
+        "transcript": transcript or None,
+        "transcript_confidence": confidence,
+    }
+    url = f"{MAIN_BACKEND_URL}/canvas/submit"
+    logger.info(f"[{session_id}] POST {url}")
+    async with httpx.AsyncClient(timeout=40.0) as client:
+        response = await client.post(url, json=payload)
+    if response.status_code != 200:
+        raise RuntimeError(f"status={response.status_code} body={response.text}")
+    return response.json()
+
 app = FastAPI(
     title="Nablix Math Tutor - Voice Streaming Server",
     version="1.0.0",
@@ -211,6 +234,7 @@ async def voice_stream(ws: WebSocket, session_id: str = "default", student_id: s
 
                 elif msg_type == "stop":
                     receiving_audio = False
+                    canvas_snapshot = data.get("canvas_snapshot")
                     logger.info(f"[{session_id}] Stop received. Finalizing...")
 
                     if deepgram_ws:
@@ -234,12 +258,12 @@ async def voice_stream(ws: WebSocket, session_id: str = "default", student_id: s
                             pass
                         deepgram_ws = None
 
-                    if final_transcript:
+                    if final_transcript or canvas_snapshot:
                         logger.info(f"[{session_id}] Processing: '{final_transcript}'")
                         audio_duration_seconds = max(time.time() - audio_started_at, 0.001)
                         await process_and_respond(
                             ws, session_id, student_id, final_transcript,
-                            final_confidence, audio_duration_seconds
+                            final_confidence, audio_duration_seconds, canvas_snapshot
                         )
                     else:
                         await ws.send_json({
@@ -276,6 +300,7 @@ async def process_and_respond(
     transcript: str,
     confidence: float,
     audio_duration_seconds: float,
+    canvas_snapshot: str | None = None,
 ):
     pipeline_start = time.time()
 
@@ -284,13 +309,25 @@ async def process_and_respond(
         logger.info(f"[{session_id}] Normalized: '{transcript}' → '{normalized}'")
 
     try:
-        tutor_response = await evaluate_voice_transcript(
-            session_id,
-            student_id,
-            transcript,
-            confidence,
-            audio_duration_seconds,
-        )
+        if canvas_snapshot:
+            # Grade the written work together with what the student said.
+            canvas_response = await submit_canvas_work(
+                session_id, student_id, canvas_snapshot, transcript, confidence,
+            )
+            tutor = canvas_response.get("tutor")
+            tutor = tutor if isinstance(tutor, dict) else {}
+            tutor_text = str(tutor.get("tutor_message") or "")
+            tutor_voice_text = str(tutor.get("tutor_message_voice") or tutor_text)
+        else:
+            tutor_response = await evaluate_voice_transcript(
+                session_id,
+                student_id,
+                transcript,
+                confidence,
+                audio_duration_seconds,
+            )
+            tutor_text = str(tutor_response.get("message") or "")
+            tutor_voice_text = str(tutor_response.get("message_voice") or tutor_text)
     except Exception as e:
         logger.error(f"[{session_id}] Main backend tutor call failed: {e}")
         await ws.send_json({
@@ -299,9 +336,6 @@ async def process_and_respond(
             "fallback_mode": "TEXT",
         })
         return
-
-    tutor_text = str(tutor_response.get("message") or "")
-    tutor_voice_text = str(tutor_response.get("message_voice") or tutor_text)
 
     audio_base64 = None
     tts_latency = None
