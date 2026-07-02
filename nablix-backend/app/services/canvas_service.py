@@ -66,6 +66,7 @@ async def submit_canvas(request: CanvasSubmitRequest) -> CanvasSubmitResponse:
             transcript_confidence=request.transcript_confidence,
             attempt_count=session.hint_count + 1,
             current_hint_level=_current_hint_level_from(session.hint_count),
+            concept_id=session.concept_id,
         )
     )
     tutor_latency_ms = (perf_counter() - tutor_started) * 1000
