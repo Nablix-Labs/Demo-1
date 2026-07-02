@@ -101,6 +101,26 @@ async def submit_canvas_work(
         raise RuntimeError(f"status={response.status_code} body={response.text}")
     return response.json()
 
+
+async def synthesize_speech(text: str) -> str | None:
+    """Configured TTS (OpenAI when keyed) → base64 mp3, or None on empty/failure."""
+    if not text:
+        return None
+    try:
+        tts_adapter = get_tts_adapter(voice_config.DEFAULT_TTS_PROVIDER)
+        result = await tts_adapter.generate_speech(
+            text=text,
+            voice=voice_config.TTS_VOICE,
+            audio_format="mp3",
+        )
+        audio_data = result.audio_data
+        if isinstance(audio_data, str):
+            audio_data = audio_data.encode("utf-8")
+        return base64.b64encode(audio_data).decode("utf-8")
+    except Exception as e:
+        logger.error(f"TTS failed: {e}")
+        return None
+
 app = FastAPI(
     title="Nablix Math Tutor - Voice Streaming Server",
     version="1.0.0",
@@ -258,7 +278,9 @@ async def voice_stream(ws: WebSocket, session_id: str = "default", student_id: s
                             pass
                         deepgram_ws = None
 
-                    if final_transcript or canvas_snapshot:
+                    # Require real speech: canvas rides a turn only when there's a
+                    # transcript, so a silent unmuted mic doesn't loop-submit the canvas.
+                    if final_transcript:
                         logger.info(f"[{session_id}] Processing: '{final_transcript}'")
                         audio_duration_seconds = max(time.time() - audio_started_at, 0.001)
                         await process_and_respond(
@@ -337,29 +359,11 @@ async def process_and_respond(
         })
         return
 
-    audio_base64 = None
-    tts_latency = None
-
-    try:
-        tts_adapter = get_tts_adapter(voice_config.DEFAULT_TTS_PROVIDER)
-        tts_start = time.time()
-
-        tts_result = await tts_adapter.generate_speech(
-            text=tutor_voice_text,
-            voice=voice_config.TTS_VOICE,
-            audio_format="mp3",
-        )
-
-        tts_latency = int((time.time() - tts_start) * 1000)
-
-        audio_data = tts_result.audio_data
-        if isinstance(audio_data, str):
-            audio_data = audio_data.encode("utf-8")
-        audio_base64 = base64.b64encode(audio_data).decode("utf-8")
+    tts_start = time.time()
+    audio_base64 = await synthesize_speech(tutor_voice_text)
+    tts_latency = int((time.time() - tts_start) * 1000) if audio_base64 else None
+    if audio_base64:
         logger.info(f"[{session_id}] TTS generated: {tts_latency}ms")
-
-    except Exception as e:
-        logger.error(f"[{session_id}] TTS failed: {e}. Sending text-only response.")
 
     total_ms = int((time.time() - pipeline_start) * 1000)
 

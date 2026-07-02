@@ -14,6 +14,12 @@ class VoiceRequest(BaseModel):
     audio_reference: NonEmptyText
 
 
+class VoiceTTSRequest(BaseModel):
+    """Text to synthesize into tutor speech (e.g. for the Canvas Check button)."""
+
+    text: NonEmptyText
+
+
 class VoiceResponse(BaseModel):
     """Transcription result returned to the caller."""
 
