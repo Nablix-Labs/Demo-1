@@ -16,6 +16,7 @@ import { useCallback } from 'react';
 import {
   startSession,
   submitCanvas,
+  synthesizeTutorAudio,
   sendInteraction,
   requestHint,
   endSession,
@@ -27,6 +28,7 @@ import {
 } from '@/lib/api';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useMicLevel } from '@/store/useMicLevel';
+import { playTutorAudio } from '@/lib/playTutorAudio';
 
 const apiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
@@ -155,6 +157,8 @@ export function useDemoTutor() {
         text: res.tutor.tutor_message,
         meta: res.tutor.evaluation,
       });
+      const voiceText = res.tutor.tutor_message_voice || res.tutor.tutor_message;
+      playTutorAudio(await synthesizeTutorAudio(voiceText), voiceText);
       return res;
     } catch (err) {
       addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Could not read the canvas.') });

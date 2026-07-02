@@ -94,6 +94,7 @@ export function useStreamingVoiceTurn({
   const hadSpeechRef = useRef(false);
   const transcriptSentRef = useRef(false);
   const tutorResponseHandledRef = useRef(false);
+  const wsErroredRef = useRef(false); // transport error — don't auto-reopen into a storm
   const finalTranscriptRef = useRef('');
   const finalConfidenceRef = useRef<number | undefined>(undefined);
   const speakingRef = useRef(false);
@@ -116,7 +117,9 @@ export function useStreamingVoiceTurn({
     setSpeaking(false);
 
     if (sendStop && !stopSentRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'stop' }));
+      const s = useNumeraStore.getState();
+      const png = s.items.length > 0 ? s.canvasExporter?.() : null;
+      wsRef.current.send(JSON.stringify(png ? { type: 'stop', canvas_snapshot: png } : { type: 'stop' }));
       stopSentRef.current = true;
     }
 
@@ -150,6 +153,7 @@ export function useStreamingVoiceTurn({
     stopSentRef.current = false;
     transcriptSentRef.current = false;
     tutorResponseHandledRef.current = false;
+    wsErroredRef.current = false;
     finalTranscriptRef.current = '';
     finalConfidenceRef.current = undefined;
     hadSpeechRef.current = false;
@@ -249,12 +253,17 @@ export function useStreamingVoiceTurn({
       }
 
       if (message.type === 'error') {
-        onErrorRef.current?.(String(message.message ?? 'Voice streaming failed.'));
+        // "No speech detected" (REPEAT) is expected while idling unmuted — onclose
+        // reopens silently, so don't spam the trail. Surface real errors.
+        if (String(message.fallback_mode ?? '') !== 'REPEAT') {
+          onErrorRef.current?.(String(message.message ?? 'Voice streaming failed.'));
+        }
         ws.close(4000, 'voice error');
       }
     };
 
     ws.onerror = () => {
+      wsErroredRef.current = true;
       onErrorRef.current?.('Voice WebSocket failed.');
       stopInput(false, true);
     };
@@ -262,6 +271,14 @@ export function useStreamingVoiceTurn({
     ws.onclose = () => {
       stopInput(false, false);
       wsRef.current = null;
+      // Auto-reopen so the student can just keep talking without touching the UI.
+      // Skip when a tutor_response is closing us (its audio onDone re-arms) or on a
+      // transport error (don't reconnect-storm a dead server).
+      if (enabledRef.current && !tutorResponseHandledRef.current && !wsErroredRef.current) {
+        setTimeout(() => {
+          if (enabledRef.current && !wsRef.current) void startRef.current?.();
+        }, REARM_DELAY_MS);
+      }
     };
   }, [
     supported,

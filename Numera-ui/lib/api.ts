@@ -26,7 +26,7 @@ export const DEMO_PHASE = 'GUIDED_PRACTICE';
 
 export const api = axios.create({
   baseURL: BASE,
-  timeout: 10_000,
+  timeout: 30_000,
   headers: { 'Content-Type': 'application/json' },
 });
 
@@ -210,6 +210,7 @@ export interface TutorResult {
   error_type: string;
   response_strategy: string;
   tutor_message: string;
+  tutor_message_voice: string;
   hint_level: number;
   answer_reveal_allowed: boolean;
 }
@@ -301,4 +302,15 @@ export interface VoiceTranscriptPayload {
 export async function sendVoiceTranscript(payload: VoiceTranscriptPayload) {
   const res = await api.post<InteractionResponse>('/voice/transcript', payload);
   return res.data;
+}
+
+/** POST /voice/tts — server-side (OpenAI) TTS. Returns base64 mp3, or null on failure. */
+export async function synthesizeTutorAudio(text: string): Promise<string | null> {
+  if (!text) return null;
+  try {
+    const res = await api.post<{ audio_base64: string | null }>('/voice/tts', { text });
+    return res.data.audio_base64;
+  } catch {
+    return null;
+  }
 }
