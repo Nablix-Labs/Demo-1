@@ -13,6 +13,7 @@ from app.models.canvas import (
     CanvasSubmitRequest,
     CanvasSubmitResponse,
 )
+from app.services.canvas_annotations import assign_step_ids, plan_canvas_draw
 from app.services.interaction_service import (
     _current_hint_level_from,
     run_tutor_pipeline,
@@ -44,6 +45,8 @@ async def submit_canvas(request: CanvasSubmitRequest) -> CanvasSubmitResponse:
 
     ocr_started = perf_counter()
     ocr: VisionOCRResult = await get_adapters().vision.recognize(request.snapshot_data_url)
+    canvas_regions = assign_step_ids(ocr.detected_regions)
+    ocr = ocr.model_copy(update={"detected_regions": canvas_regions})
     ocr_latency_ms = (perf_counter() - ocr_started) * 1000
 
     # The student's written answer is what the classifier grades against correct_answer.
@@ -67,9 +70,11 @@ async def submit_canvas(request: CanvasSubmitRequest) -> CanvasSubmitResponse:
             attempt_count=session.hint_count + 1,
             current_hint_level=_current_hint_level_from(session.hint_count),
             concept_id=session.concept_id,
+            canvas_regions=canvas_regions,
         )
     )
     tutor_latency_ms = (perf_counter() - tutor_started) * 1000
+    canvas_draw = plan_canvas_draw(tutor, canvas_regions)
 
     latency = CanvasLatency(
         ocr_latency_ms=ocr_latency_ms,
@@ -95,4 +100,5 @@ async def submit_canvas(request: CanvasSubmitRequest) -> CanvasSubmitResponse:
         ocr=ocr,
         tutor=tutor,
         latency=latency,
+        canvas_draw=canvas_draw,
     )

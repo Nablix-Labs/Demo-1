@@ -125,3 +125,4 @@ class CanvasSubmitResponse(BaseModel):
     ocr: VisionOCRResult
     tutor: TutorResult
     latency: CanvasLatency
+    canvas_draw: list[CanvasDrawPayload] = Field(default_factory=list)

@@ -45,6 +45,7 @@ def test_canvas_submit_returns_mock_ocr_result() -> None:
     assert body["ocr"]["detected_equation"] == "x + 4 = 9"
     assert body["ocr"]["detected_steps"] == ["x + 4 = 9", "x = 9 - 4", "x = 5"]
     assert body["ocr"]["detected_regions"][0] == {
+        "step_id": "step-1",
         "text": "x + 4 = 9",
         "x": 0.12,
         "y": 0.18,
@@ -59,6 +60,7 @@ def test_canvas_submit_returns_mock_ocr_result() -> None:
     assert body["ocr"]["provider"] == "mock"
     assert body["ocr"]["detected_shapes"] == []
     assert body["tutor"]["tutor_message"]
+    assert body["canvas_draw"] == []
     assert body["latency"]["total_latency_ms"] >= 0
     assert {"ocr_latency_ms", "tutor_latency_ms"} <= body["latency"].keys()
 

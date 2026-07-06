@@ -29,6 +29,7 @@ class AdapterContext(BaseModel):
     attempt_count: int | None = None
     current_hint_level: int | None = None
     concept_id: str | None = None
+    canvas_regions: list["OCRTextRegion"] = Field(default_factory=list)
 
 
 class RetrievedDocument(BaseModel):
@@ -97,6 +98,22 @@ class CanvasFeedback(BaseModel):
     highlight_instruction: HighlightInstruction | None = None
 
 
+class TutorMistakeClassification(BaseModel):
+    status: Literal["mistake_found", "no_mistake", "uncertain"]
+    mistake_step_id: str | None = None
+    target_text: str | None = None
+    target_span: tuple[int, int] | None = None
+    replacement_text: str | None = None
+    confidence: float
+
+
+class AnnotationIntent(BaseModel):
+    kind: Literal["circle_target", "write_correction", "draw_arrow"]
+    target_step_id: str
+    text: str | None = None
+    placement: Literal["right", "below"] | None = None
+
+
 class TutorResult(BaseModel):
     evaluation: str
     error_type: str
@@ -109,6 +126,8 @@ class TutorResult(BaseModel):
     scaffold_steps_delivered: list[str] = Field(default_factory=list)
     visual_cue: VisualCue = Field(default_factory=VisualCue)
     canvas_feedback: CanvasFeedback = Field(default_factory=CanvasFeedback)
+    mistake_classification: TutorMistakeClassification | None = None
+    annotation_intents: list[AnnotationIntent] = Field(default_factory=list)
     next_phase_recommendation: str | None = None
     answer_reveal_allowed: bool
     confidence: float
@@ -142,6 +161,7 @@ class DetectedShape(BaseModel):
 class OCRTextRegion(BaseModel):
     """One OCR text line with its normalized canvas bounding box."""
 
+    step_id: str | None = None
     text: str
     x: float = Field(ge=0.0, le=1.0)
     y: float = Field(ge=0.0, le=1.0)
