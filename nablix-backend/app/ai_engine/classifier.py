@@ -485,6 +485,18 @@ def classify_canvas_mistake(
             replacement_text=None,
             confidence=rules.confidence.standard_response,
         )
+    expected_answer: str | None = extract_variable_answer(request.correct_answer)
+    if expected_answer is not None:
+        for index, region in enumerate(request.canvas_regions):
+            mistake: CanvasMistakeClassification | None = classify_wrong_variable_answer_step(
+                region=region,
+                fallback_step_id=f"step-{index + 1}",
+                expected_answer=expected_answer,
+                confidence=rules.confidence.standard_response,
+            )
+            if mistake is not None:
+                return mistake
+
     if evaluation == "CORRECT":
         return CanvasMistakeClassification(
             status="no_mistake",
@@ -538,6 +550,40 @@ def extract_addition_inverse_operand(question: str) -> str | None:
     if match is None:
         return None
     return normalize_number_text(match.group(1))
+
+
+def extract_variable_answer(answer: str) -> str | None:
+    pattern: str = r"\bx\s*=\s*(-?\d+(?:\.\d+)?)\b"
+    match: re.Match[str] | None = re.search(pattern, answer, flags=re.IGNORECASE)
+    if match is None:
+        return None
+    return normalize_number_text(match.group(1))
+
+
+def classify_wrong_variable_answer_step(
+    region: CanvasTextRegion,
+    fallback_step_id: str,
+    expected_answer: str,
+    confidence: float,
+) -> CanvasMistakeClassification | None:
+    pattern: str = r"^\s*x\s*=\s*(-?\d+(?:\.\d+)?)\s*$"
+    match: re.Match[str] | None = re.search(pattern, region.text, flags=re.IGNORECASE)
+    if match is None:
+        return None
+
+    actual_answer: str = normalize_number_text(match.group(1))
+    if actual_answer == expected_answer:
+        return None
+
+    target_span_tuple: tuple[int, int] = match.span(1)
+    return CanvasMistakeClassification(
+        status="mistake_found",
+        mistake_step_id=region.step_id if region.step_id is not None else fallback_step_id,
+        target_text=region.text[target_span_tuple[0] : target_span_tuple[1]],
+        target_span=[target_span_tuple[0], target_span_tuple[1]],
+        replacement_text=expected_answer,
+        confidence=confidence,
+    )
 
 
 def classify_inverse_operand_mistake(

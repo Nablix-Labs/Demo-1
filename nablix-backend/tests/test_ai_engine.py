@@ -285,6 +285,33 @@ def test_ai_engine_returns_no_canvas_mistake_for_correct_work() -> None:
     assert response.annotation_intents == []
 
 
+def test_ai_engine_marks_wrong_intermediate_answer_even_when_final_answer_is_correct() -> None:
+    response = classify_student_response(
+        ClassificationRequest(
+            question="x + 4 = 9",
+            correct_answer="x = 5",
+            student_input="x + 4 - 4 = 9 - 4\nx = 6\nx = 5",
+            current_phase="GUIDED_PRACTICE",
+            input_source="CANVAS",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+            canvas_regions=[
+                _canvas_region("step-1", "x + 4 - 4 = 9 - 4", 0.95),
+                _canvas_region("step-2", "x = 6", 0.95),
+                _canvas_region("step-3", "x = 5", 0.95),
+            ],
+        )
+    )
+
+    assert response.mistake_classification is not None
+    assert response.mistake_classification.status == "mistake_found"
+    assert response.mistake_classification.mistake_step_id == "step-2"
+    assert response.mistake_classification.target_text == "6"
+    assert response.mistake_classification.replacement_text == "5"
+    assert response.annotation_intents[1].text == "x = 5"
+
+
 def test_ai_engine_returns_uncertain_canvas_mistake_for_ambiguous_ocr() -> None:
     response = classify_student_response(
         ClassificationRequest(
