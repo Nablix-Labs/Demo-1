@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 import logging
 from uuid import uuid4
 
@@ -41,7 +41,7 @@ app.include_router(voice.router, prefix="/voice", tags=["Voice"])
 
 
 def _utc_timestamp() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _request_id(request: Request) -> str:
