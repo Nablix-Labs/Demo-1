@@ -22,7 +22,10 @@ DATA_URL = "data:image/png;base64,aGVsbG8="
 def _settings(**overrides) -> Settings:
     base = {
         "use_mock_vision": False,
+        "ocr_provider": "openai",
         "openai_api_key": "sk-test",
+        "mathpix_app_id": "",
+        "mathpix_app_key": "",
         "min_ocr_confidence_threshold": 0.75,
     }
     base.update(overrides)
@@ -280,6 +283,42 @@ def test_mathpix_adapter_maps_line_data_regions(monkeypatch) -> None:
     assert result.detected_regions[0].w == 0.4
     assert result.detected_regions[0].h == 0.1
     assert result.detected_regions[0].confidence == 0.93
+
+
+def test_mathpix_adapter_splits_array_output_into_step_regions(monkeypatch) -> None:
+    response = _FakeResponse(
+        200,
+        {
+            "text": "\\( \\begin{array}{l}x=9-5 \\\\ x=4\\end{array} \\)",
+            "latex_styled": "\\begin{array}{l}\nx=9-5 \\\\\nx=4\n\\end{array}",
+            "confidence": 1.0,
+            "image_width": 1000,
+            "image_height": 500,
+            "line_data": [
+                {
+                    "text": "\\( \\begin{array}{l}x=9-5 \\\\ x=4\\end{array} \\)",
+                    "cnt": [[100, 50], [500, 50], [500, 250], [100, 250]],
+                    "confidence": 1.0,
+                    "conversion_output": True,
+                },
+            ],
+        },
+    )
+    _patch_mathpix_post(monkeypatch, response)
+
+    result = asyncio.run(_mathpix_adapter().recognize(DATA_URL))
+
+    assert result.raw_ocr_text == "x=9-5\nx=4"
+    assert result.detected_steps == ["x=9-5", "x=4"]
+    assert result.detected_equation == "x=9-5"
+    assert result.final_answer == "x=4"
+    assert len(result.detected_regions) == 2
+    assert result.detected_regions[0].text == "x=9-5"
+    assert result.detected_regions[0].y == 0.1
+    assert result.detected_regions[0].h == 0.2
+    assert result.detected_regions[1].text == "x=4"
+    assert result.detected_regions[1].y == pytest.approx(0.3)
+    assert result.detected_regions[1].h == 0.2
 
 
 def test_mathpix_adapter_marks_missing_confidence_for_review(monkeypatch) -> None:

@@ -77,11 +77,13 @@ class MathpixVisionOCRAdapter:
                 f"error={payload.error} error_info={payload.error_info}",
             )
 
-        regions = _regions_for(payload)
+        steps = _steps_for(payload)
+        regions = _regions_for(payload, steps)
         detected_steps = [region.text for region in regions]
+        raw_text = "\n".join(detected_steps) if detected_steps else payload.text
         confidence = _confidence_for(payload)
         return VisionOCRResult(
-            raw_ocr_text=payload.text,
+            raw_ocr_text=raw_text,
             detected_equation=detected_steps[0] if detected_steps else payload.text,
             detected_steps=detected_steps,
             detected_regions=regions,
@@ -95,7 +97,21 @@ class MathpixVisionOCRAdapter:
         )
 
 
-def _regions_for(payload: _MathpixOCRPayload) -> list[OCRTextRegion]:
+def _steps_for(payload: _MathpixOCRPayload) -> list[str]:
+    source = payload.latex_styled or payload.text
+    begin = "\\begin{array}{l}"
+    end = "\\end{array}"
+    if begin in source and end in source:
+        content = source.split(begin, 1)[1].split(end, 1)[0]
+        return [_clean_math_text(step) for step in content.split("\\\\") if _clean_math_text(step)]
+
+    usable_lines = [line for line in payload.line_data if _has_text_and_contour(line)]
+    if usable_lines:
+        return [_clean_math_text(line.text or "") for line in usable_lines]
+    return [_clean_math_text(payload.text)] if payload.text else []
+
+
+def _regions_for(payload: _MathpixOCRPayload, steps: list[str]) -> list[OCRTextRegion]:
     if payload.image_width is None or payload.image_height is None:
         if payload.line_data:
             raise AdapterError("mathpix_vision", "line_data returned without image_width/image_height")
@@ -104,7 +120,12 @@ def _regions_for(payload: _MathpixOCRPayload) -> list[OCRTextRegion]:
         raise AdapterError("mathpix_vision", "image_width/image_height must be positive")
 
     usable_lines = [line for line in payload.line_data if _has_text_and_contour(line)]
-    return [_region_for(line, payload.image_width, payload.image_height) for line in usable_lines]
+    regions = [_region_for(line, payload.image_width, payload.image_height) for line in usable_lines]
+    if len(regions) == 1 and len(steps) > 1:
+        return _split_region_by_steps(regions[0], steps)
+    if len(regions) == len(steps):
+        return [region.model_copy(update={"text": step}) for region, step in zip(regions, steps)]
+    return regions
 
 
 def _has_text_and_contour(line: _MathpixLineData) -> bool:
@@ -114,6 +135,10 @@ def _has_text_and_contour(line: _MathpixLineData) -> bool:
         and len(line.text.strip()) > 0
         and len(line.cnt) > 0
     )
+
+
+def _clean_math_text(text: str) -> str:
+    return text.replace("\\(", "").replace("\\)", "").strip()
 
 
 def _region_for(line: _MathpixLineData, image_width: int, image_height: int) -> OCRTextRegion:
@@ -135,6 +160,16 @@ def _region_for(line: _MathpixLineData, image_width: int, image_height: int) -> 
         h=_unit((max_y - min_y) / image_height),
         confidence=confidence,
     )
+
+
+def _split_region_by_steps(region: OCRTextRegion, steps: list[str]) -> list[OCRTextRegion]:
+    # ponytail: Mathpix image OCR can return one array box for several rows.
+    # Split evenly for now; replace with frontend ink row boxes when precision matters.
+    step_height = region.h / len(steps)
+    return [
+        region.model_copy(update={"text": step, "y": _unit(region.y + index * step_height), "h": step_height})
+        for index, step in enumerate(steps)
+    ]
 
 
 def _confidence_for(payload: _MathpixOCRPayload) -> float:
