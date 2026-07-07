@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -33,7 +34,10 @@ class Settings(BaseSettings):
     use_mock_vision: bool = True
 
     #Vision OCR (used when use_mock_vision is False)
+    ocr_provider: Literal["openai", "mathpix"] = "openai"
     openai_vision_model: str = "gpt-5.4-mini"
+    mathpix_app_id: str = ""
+    mathpix_app_key: str = ""
     use_openai_ai_engine: bool = False
     openai_ai_engine_model: str = "gpt-4o-mini"
     openai_request_timeout_seconds: int = 20

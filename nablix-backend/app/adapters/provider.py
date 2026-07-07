@@ -20,6 +20,7 @@ from app.adapters.base import (
     VisionOCRAdapter,
     VoiceServiceAdapter,
 )
+from app.adapters.mathpix_vision import MathpixVisionOCRAdapter
 from app.adapters.openai_vision import OpenAIVisionOCRAdapter
 from app.adapters.rag_service import RAGServiceAdapterClient
 from app.adapters.safety_service import MockSafetyServiceAdapter
@@ -43,10 +44,23 @@ class AdapterSet:
 
 
 def _build_vision_adapter(settings: Settings) -> VisionOCRAdapter:
-    """Build the one adapter that already has a live provider implementation."""
+    """Build the configured OCR adapter."""
 
     if settings.use_mock_vision:
         return MockVisionOCRAdapter()
+
+    if settings.ocr_provider == "mathpix":
+        if not settings.mathpix_app_id or not settings.mathpix_app_key:
+            raise RuntimeError(
+                "Vision OCR is live with Mathpix but "
+                "NABLIX_MATHPIX_APP_ID and NABLIX_MATHPIX_APP_KEY are not set."
+            )
+        return MathpixVisionOCRAdapter(
+            app_id=settings.mathpix_app_id,
+            app_key=settings.mathpix_app_key,
+            timeout_seconds=settings.adapter_request_timeout_seconds,
+            min_confidence=settings.min_ocr_confidence_threshold,
+        )
 
     if not settings.openai_api_key:
         raise RuntimeError(
