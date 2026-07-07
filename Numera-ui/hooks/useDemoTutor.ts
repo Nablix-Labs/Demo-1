@@ -66,6 +66,47 @@ function errorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
 }
 
+function logCanvasGeometryTrace(res: CanvasSubmissionResult): void {
+  if (process.env.NODE_ENV === 'production') return;
+
+  const regions = res.ocr.detected_regions.map((region) => ({
+    step_id: region.step_id ?? '',
+    text: region.text,
+    x: region.x,
+    y: region.y,
+    w: region.w,
+    h: region.h,
+    center_x: region.x + region.w / 2,
+    center_y: region.y + region.h / 2,
+    confidence: region.confidence,
+  }));
+  const drawElements = (res.canvas_draw ?? []).flatMap((payload) =>
+    payload.elements.map((element) => ({
+      actionId: payload.actionId ?? '',
+      kind: element.kind,
+      id: element.id ?? '',
+      x: element.x ?? '',
+      y: element.y ?? '',
+      w: element.w ?? '',
+      h: element.h ?? '',
+      from: element.from?.join(',') ?? '',
+      to: element.to?.join(',') ?? '',
+      text: element.text ?? element.tex ?? '',
+    }))
+  );
+
+  console.groupCollapsed('[canvas-geometry] OCR regions -> canvas_draw');
+  console.log({
+    submission_id: res.submission_id,
+    provider: res.ocr.provider,
+    confidence_source: res.ocr.confidence_source,
+  });
+  console.table(regions);
+  console.table(drawElements);
+  console.log({ ocr: res.ocr, canvas_draw: res.canvas_draw ?? [] });
+  console.groupEnd();
+}
+
 export function useDemoTutor() {
   const sessionId = useNumeraStore((s) => s.sessionId);
   const setSessionId = useNumeraStore((s) => s.setSessionId);
@@ -144,6 +185,7 @@ export function useDemoTutor() {
     }
     try {
       const res = await submitCanvas(sessionId, png);
+      logCanvasGeometryTrace(res);
       addTrailEntry({
         kind: 'canvas',
         text: res.ocr.raw_ocr_text || res.ocr.detected_equation || 'Canvas submitted.',
@@ -224,6 +266,7 @@ export function useDemoTutor() {
           console.log('→ POST /canvas/submit', { session_id: sessionId, student_id: STUDENT_ID, snapshot_bytes: png.length });
           const canvasRes = await submitCanvas(sessionId, png);
           canvasSnapshotId = canvasRes.submission_id;
+          logCanvasGeometryTrace(canvasRes);
           console.log('← /canvas/submit', { submission_id: canvasRes.submission_id, ocr: canvasRes.ocr, tutor: canvasRes.tutor });
           addTrailEntry({
             kind: 'canvas',

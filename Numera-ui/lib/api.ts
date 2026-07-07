@@ -198,6 +198,7 @@ export interface OcrResult {
   detected_equation: string;
   detected_steps: string[];
   detected_regions: Array<{
+    step_id?: string;
     text: string;
     x: number;
     y: number;
