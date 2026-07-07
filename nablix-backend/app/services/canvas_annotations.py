@@ -10,7 +10,6 @@ from app.models.canvas import CanvasDrawPayload, TutorElement
 Box = tuple[float, float, float, float]
 Point = tuple[float, float]
 
-_DRAW_CONFIDENCE_THRESHOLD = 0.75
 _TARGET_COLOR = "#E05A47"
 _CORRECTION_COLOR = "#175CD3"
 
@@ -36,7 +35,11 @@ def plan_canvas_draw(tutor: TutorResult, regions: list[OCRTextRegion]) -> list[C
     if target_region is None:
         return []
 
-    target_box = _target_box_for(classification, target_region)
+    # ponytail: whole-line marks only. Model-estimated OCR boxes can't support
+    # glyph-level precision; reinstate span interpolation only with an OCR
+    # provider that returns native geometry (Mathpix / Google Vision).
+    # target_span stays in the DTO contract for that upgrade.
+    target_box = _line_box(target_region)
     elements = _elements_for(classification, tutor.annotation_intents, target_box)
     if not elements:
         return []
@@ -57,51 +60,6 @@ def _region_for(step_id: str | None, regions: list[OCRTextRegion]) -> OCRTextReg
         if region.step_id == step_id:
             return region
     return None
-
-
-def _target_box_for(classification: TutorMistakeClassification, region: OCRTextRegion) -> Box:
-    if _has_valid_span(classification, region):
-        return _span_box(classification, region)
-    return _line_box(region)
-
-
-def _has_valid_span(classification: TutorMistakeClassification, region: OCRTextRegion) -> bool:
-    if classification.confidence < _DRAW_CONFIDENCE_THRESHOLD:
-        return False
-    if classification.target_span is None or classification.target_text is None:
-        return False
-
-    start, end = classification.target_span
-    if start < 0 or end <= start or end > len(region.text):
-        return False
-    return region.text[start:end] == classification.target_text
-
-
-def _span_box(classification: TutorMistakeClassification, region: OCRTextRegion) -> Box:
-    if classification.target_span is None:
-        return _line_box(region)
-
-    start, end = classification.target_span
-    text_length = len(region.text)
-    if text_length == 0:
-        return _line_box(region)
-
-    raw_x = region.x + region.w * start / text_length
-    raw_w = region.w * (end - start) / text_length
-    pad_x = max(raw_w * 0.6, 0.012)
-    x = _clamp(raw_x - pad_x, region.x, region.x + region.w)
-    right = _clamp(raw_x + raw_w + pad_x, region.x, region.x + region.w)
-    w = right - x
-    minimum_w = min(region.w, 0.035)
-    if w < minimum_w:
-        center_x = _clamp(
-            raw_x + raw_w / 2,
-            region.x + minimum_w / 2,
-            region.x + region.w - minimum_w / 2,
-        )
-        x = center_x - minimum_w / 2
-        w = minimum_w
-    return (x, region.y, w, region.h)
 
 
 def _line_box(region: OCRTextRegion) -> Box:
@@ -129,7 +87,12 @@ def _elements_for(
             if correction_text:
                 elements.append(_correction_element(correction_text, correction_center, index))
         if intent.kind == "draw_arrow":
-            elements.append(_arrow_element(_center_of(target_box), correction_center, index))
+            # Edge-to-edge, not centre-to-centre: starting inside the circle and
+            # ending on top of the correction text buries the arrowhead in the "=".
+            x, y, w, h = target_box
+            start = (_clamp(x + w + 0.005, 0.0, 1.0), _clamp(y + h / 2, 0.0, 1.0))
+            end = (_clamp(correction_center[0] - 0.055, 0.0, 1.0), correction_center[1])
+            elements.append(_arrow_element(start, end, index))
     return elements
 
 

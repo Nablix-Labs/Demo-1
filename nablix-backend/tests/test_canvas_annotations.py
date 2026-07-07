@@ -60,7 +60,7 @@ def _ellipse_from(elements: list[TutorElement]) -> TutorElement:
     return ellipse
 
 
-def test_canvas_planner_uses_valid_target_span() -> None:
+def test_canvas_planner_circles_the_whole_wrong_line() -> None:
     regions = assign_step_ids([_region()])
     tutor = _tutor_result(
         TutorMistakeClassification(
@@ -80,34 +80,15 @@ def test_canvas_planner_uses_valid_target_span() -> None:
     elements = payloads[0].elements
     ellipse = _ellipse_from(elements)
     line = regions[0]
-    assert ellipse.w < line.w
-    assert ellipse.x - ellipse.w / 2 >= line.x
-    assert ellipse.x + ellipse.w / 2 <= line.x + line.w + 1e-12
+    # Marks are line-level: the ellipse is the OCR line box, span is ignored.
+    assert ellipse.w == line.w
+    assert ellipse.x == line.x + line.w / 2
+    assert ellipse.y == line.y + line.h / 2
     assert any(element.kind == "math" and element.text == "x = 9 - 4" for element in elements)
     assert any(element.kind == "arrow" for element in elements)
 
 
-def test_canvas_planner_uses_whole_line_when_target_text_mismatches_span() -> None:
-    regions = assign_step_ids([_region()])
-    tutor = _tutor_result(
-        TutorMistakeClassification(
-            status="mistake_found",
-            mistake_step_id="step-1",
-            target_text="4",
-            target_span=(8, 9),
-            replacement_text="4",
-            confidence=0.86,
-        ),
-        _intents(),
-    )
-
-    payloads = plan_canvas_draw(tutor, regions)
-
-    ellipse = _ellipse_from(payloads[0].elements)
-    assert ellipse.w == regions[0].w
-
-
-def test_canvas_planner_uses_whole_line_when_confidence_is_low() -> None:
+def test_canvas_planner_emits_circle_only_when_no_correction_intent() -> None:
     regions = assign_step_ids([_region()])
     tutor = _tutor_result(
         TutorMistakeClassification(
@@ -115,13 +96,12 @@ def test_canvas_planner_uses_whole_line_when_confidence_is_low() -> None:
             mistake_step_id="step-1",
             target_text="5",
             target_span=(8, 9),
-            replacement_text="4",
-            confidence=0.74,
+            replacement_text=None,
+            confidence=0.86,
         ),
-        _intents(),
+        [AnnotationIntent(kind="circle_target", target_step_id="step-1")],
     )
 
     payloads = plan_canvas_draw(tutor, regions)
 
-    ellipse = _ellipse_from(payloads[0].elements)
-    assert ellipse.w == regions[0].w
+    assert [element.kind for element in payloads[0].elements] == ["ellipse"]

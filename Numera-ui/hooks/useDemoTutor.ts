@@ -157,6 +157,10 @@ export function useDemoTutor() {
         text: res.tutor.tutor_message,
         meta: res.tutor.evaluation,
       });
+      // Render tutor marks from the Check path, same as the voice path does.
+      for (const payload of res.canvas_draw ?? []) {
+        useNumeraStore.getState().applyCanvasDraw(payload);
+      }
       const voiceText = res.tutor.tutor_message_voice || res.tutor.tutor_message;
       playTutorAudio(await synthesizeTutorAudio(voiceText), voiceText);
       return res;

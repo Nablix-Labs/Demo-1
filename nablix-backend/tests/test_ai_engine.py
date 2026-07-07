@@ -309,6 +309,11 @@ def test_ai_engine_marks_wrong_intermediate_answer_even_when_final_answer_is_cor
     assert response.mistake_classification.mistake_step_id == "step-2"
     assert response.mistake_classification.target_text == "6"
     assert response.mistake_classification.replacement_text == "5"
+    assert [intent.kind for intent in response.annotation_intents] == [
+        "circle_target",
+        "write_correction",
+        "draw_arrow",
+    ]
     assert response.annotation_intents[1].text == "x = 5"
 
 

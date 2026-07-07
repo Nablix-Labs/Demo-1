@@ -485,6 +485,20 @@ def classify_canvas_mistake(
             replacement_text=None,
             confidence=rules.confidence.standard_response,
         )
+    # Root cause outranks symptom: a wrong inverse operand explains the wrong
+    # final answer that follows from it, so scan for it first.
+    inverse_operand: str | None = extract_addition_inverse_operand(request.question)
+    if evaluation in {"INCORRECT", "PARTIALLY_CORRECT"} and inverse_operand is not None:
+        for index, region in enumerate(request.canvas_regions):
+            mistake: CanvasMistakeClassification | None = classify_inverse_operand_mistake(
+                region=region,
+                fallback_step_id=f"step-{index + 1}",
+                expected_operand=inverse_operand,
+                confidence=rules.confidence.standard_response,
+            )
+            if mistake is not None:
+                return mistake
+
     expected_answer: str | None = extract_variable_answer(request.correct_answer)
     if expected_answer is not None:
         for index, region in enumerate(request.canvas_regions):
@@ -509,7 +523,6 @@ def classify_canvas_mistake(
     if evaluation not in {"INCORRECT", "PARTIALLY_CORRECT"}:
         return None
 
-    inverse_operand: str | None = extract_addition_inverse_operand(request.question)
     if inverse_operand is None:
         return CanvasMistakeClassification(
             status="uncertain",
@@ -519,16 +532,6 @@ def classify_canvas_mistake(
             replacement_text=None,
             confidence=rules.confidence.standard_response,
         )
-
-    for index, region in enumerate(request.canvas_regions):
-        mistake: CanvasMistakeClassification | None = classify_inverse_operand_mistake(
-            region=region,
-            fallback_step_id=f"step-{index + 1}",
-            expected_operand=inverse_operand,
-            confidence=rules.confidence.standard_response,
-        )
-        if mistake is not None:
-            return mistake
 
     return CanvasMistakeClassification(
         status="uncertain",
@@ -560,14 +563,24 @@ def extract_variable_answer(answer: str) -> str | None:
     return normalize_number_text(match.group(1))
 
 
+# Handwritten OCR often mangles the variable glyph ("x" → "K", ")(") and may use
+# unicode minus. Normalise dashes (length-preserving, so spans stay valid) and
+# anchor matches on the "=" instead of trusting the variable character.
+_DASH_TRANSLATION = str.maketrans({"−": "-", "–": "-", "—": "-"})
+
+
+def _normalized_region_text(region: CanvasTextRegion) -> str:
+    return region.text.translate(_DASH_TRANSLATION)
+
+
 def classify_wrong_variable_answer_step(
     region: CanvasTextRegion,
     fallback_step_id: str,
     expected_answer: str,
     confidence: float,
 ) -> CanvasMistakeClassification | None:
-    pattern: str = r"^\s*x\s*=\s*(-?\d+(?:\.\d+)?)\s*$"
-    match: re.Match[str] | None = re.search(pattern, region.text, flags=re.IGNORECASE)
+    pattern: str = r"^\s*\S{0,2}\s*=\s*(-?\d+(?:\.\d+)?)\s*$"
+    match: re.Match[str] | None = re.search(pattern, _normalized_region_text(region), flags=re.IGNORECASE)
     if match is None:
         return None
 
@@ -592,8 +605,8 @@ def classify_inverse_operand_mistake(
     expected_operand: str,
     confidence: float,
 ) -> CanvasMistakeClassification | None:
-    pattern: str = r"\bx\s*=\s*-?\d+(?:\.\d+)?\s*-\s*(-?\d+(?:\.\d+)?)\b"
-    match: re.Match[str] | None = re.search(pattern, region.text, flags=re.IGNORECASE)
+    pattern: str = r"=\s*-?\d+(?:\.\d+)?\s*-\s*(-?\d+(?:\.\d+)?)\b"
+    match: re.Match[str] | None = re.search(pattern, _normalized_region_text(region), flags=re.IGNORECASE)
     if match is None:
         return None
 
@@ -643,14 +656,15 @@ def build_canvas_annotation_intents(
                 placement="right",
             )
         )
-    intents.append(
-        CanvasAnnotationIntent(
-            kind="draw_arrow",
-            target_step_id=mistake_classification.mistake_step_id,
-            text=None,
-            placement=None,
+        # Arrow only makes sense pointing at a written correction.
+        intents.append(
+            CanvasAnnotationIntent(
+                kind="draw_arrow",
+                target_step_id=mistake_classification.mistake_step_id,
+                text=None,
+                placement=None,
+            )
         )
-    )
     return intents
 
 

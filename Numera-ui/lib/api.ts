@@ -12,6 +12,7 @@
  *    `session_id` from /session/start and reuse it for the whole run.
  */
 import axios from 'axios';
+import type { CanvasDrawPayload } from '@/store/useNumeraStore';
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
 
@@ -238,6 +239,7 @@ export interface CanvasSubmissionResult {
   ocr: OcrResult;
   tutor: TutorResult;
   latency: CanvasLatency;
+  canvas_draw?: CanvasDrawPayload[];
 }
 
 const PNG_DATA_URL_PREFIX = 'data:image/png;base64,';
