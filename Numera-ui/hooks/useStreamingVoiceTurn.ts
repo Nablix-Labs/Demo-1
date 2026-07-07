@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { playTutorAudio } from '@/lib/playTutorAudio';
-import { useNumeraStore } from '@/store/useNumeraStore';
+import { useNumeraStore, type CanvasDrawPayload } from '@/store/useNumeraStore';
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? '';
 const STUDENT_ID = 'ST001';
@@ -21,6 +21,7 @@ export interface StreamingTutorResponse {
   needs_clarification: boolean;
   tts_latency_ms: number | null;
   total_pipeline_ms: number;
+  canvas_draw: CanvasDrawPayload[];
 }
 
 interface UseStreamingVoiceTurnOptions {
@@ -239,6 +240,9 @@ export function useStreamingVoiceTurn({
         if (!transcriptSentRef.current && transcript) {
           transcriptSentRef.current = true;
           onStudentTranscriptRef.current(transcript, response.confidence || finalConfidenceRef.current);
+        }
+        for (const payload of response.canvas_draw) {
+          useNumeraStore.getState().applyCanvasDraw(payload);
         }
         onTutorResponseRef.current(response);
         ws.close(1000, 'turn complete');
