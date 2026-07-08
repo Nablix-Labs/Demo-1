@@ -27,6 +27,9 @@ import mock_adapter
 if voice_config.OPENAI_API_KEY:
     import openai_tts_adapter
 
+if voice_config.DEEPGRAM_API_KEY:
+    import deepgram_tts_adapter
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
