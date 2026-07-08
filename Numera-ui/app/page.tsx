@@ -52,7 +52,7 @@ export default function LessonPage() {
   // Real-time channel for tutor canvas_draw (+ transcript/state/streamed audio).
   // No-ops unless NEXT_PUBLIC_WS_URL is set, so it's safe to mount before the WS
   // backend exists.
-  const { sendAudioChunk } = useWebSocket(sessionId ?? null);
+  const { sendAudioChunk, sendControl } = useWebSocket(sessionId ?? null);
 
   // Wait for the persisted store to rehydrate before writing lesson content —
   // writing earlier would persist default state over the saved placement.
@@ -113,6 +113,8 @@ export default function LessonPage() {
   // Mic button drives real voice capture: unmuted → listen; muted → stop. In
   // 'rest' transport the browser detects turns + fires REST; in 'server' transport
   // we stream mic audio to the voice server and it drives the turn over the WS.
+  // The voice server auto-connects to Deepgram on first audio and auto-responds
+  // when it detects 1.5s silence (UtteranceEnd) -- no start/stop needed.
   const capture = VOICE_TRANSPORT === 'server' ? voiceStream : voice;
   useEffect(() => {
     if (!apiEnabled || !sessionId || !capture.supported) return;

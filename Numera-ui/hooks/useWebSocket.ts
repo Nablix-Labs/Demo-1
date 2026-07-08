@@ -93,6 +93,14 @@ export function useWebSocket(sessionId: string | null) {
             tutorAudioStream.finishStream(msg.total_chunks as number, msg.error as string | undefined);
             break;
 
+          // Voice server status/error — informational, no UI action needed.
+          case 'status':
+            console.log('[WS] status:', msg.message);
+            break;
+          case 'error':
+            console.error('[WS] server error:', msg.message);
+            break;
+
           default:
             console.warn('[WS] unknown message type:', msg.type);
         }
@@ -142,5 +150,12 @@ export function useWebSocket(sessionId: string | null) {
     []
   );
 
-  return { sendAudioChunk, sendTextMessage, sendCanvasSubmission };
+  /** Send a control message (start/stop) to the voice server. */
+  const sendControl = useCallback((type: string, extra?: Record<string, unknown>) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type, ...extra }));
+    }
+  }, []);
+
+  return { sendAudioChunk, sendTextMessage, sendCanvasSubmission, sendControl };
 }
