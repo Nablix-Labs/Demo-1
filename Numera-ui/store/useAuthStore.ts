@@ -57,6 +57,20 @@ export const CONSENT_PURPOSES: {
 
 export const MANDATORY_PURPOSES = CONSENT_PURPOSES.filter((p) => p.mandatory).map((p) => p.id);
 
+// Purposes whose withdrawal blocks the whole account (§7 "mandatory consent
+// withdrawn → restrict access"). voice_processing / canvas_processing are
+// feature-level (§10): required to USE that feature, but their withdrawal just
+// disables the feature, not the account.
+export const ACCOUNT_BLOCKING_PURPOSES: ConsentPurpose[] = [
+  'account_creation',
+  'ai_tutor_usage',
+  'learning_analytics',
+  'safety_monitoring',
+];
+
+// Feature consents gated per-feature in the UI (§10 / §14 messages).
+export const FEATURE_PURPOSES: ConsentPurpose[] = ['voice_processing', 'canvas_processing'];
+
 export const SAFETY_DISCLOSURE_VERSION = 'v1.0';
 
 interface ConsentRecord {
@@ -85,13 +99,14 @@ interface AuthState {
   authMethod: AuthMethod | null;
   ssoProvider: SsoProvider | null;
   email: string;
+  phone: string;
   student: StudentProfile;
   guardian: Guardian;
   consents: Record<ConsentPurpose, ConsentRecord>;
   disclosureAck: { acknowledged: boolean; version: string; at: string | null };
 
   // Registration
-  startRegistration: (method: AuthMethod, opts?: { email?: string; ssoProvider?: SsoProvider }) => void;
+  startRegistration: (method: AuthMethod, opts?: { email?: string; phone?: string; ssoProvider?: SsoProvider }) => void;
   setStudentProfile: (p: Partial<StudentProfile>) => void;
   setGuardian: (g: Partial<Guardian>) => void;
   verifyGuardian: () => void; // mock OTP/SSO success
@@ -100,6 +115,7 @@ interface AuthState {
   acceptConsents: (accepted: ConsentPurpose[]) => void;
   acknowledgeDisclosure: () => void;
   withdrawConsent: (purpose: ConsentPurpose) => void;
+  grantConsent: (purpose: ConsentPurpose) => void; // (re-)grant a single consent
 
   // Lifecycle
   activateAccount: () => void;
@@ -120,6 +136,7 @@ const initial = {
   authMethod: null as AuthMethod | null,
   ssoProvider: null as SsoProvider | null,
   email: '',
+  phone: '',
   student: { name: '', ageBand: '', gradeBand: '', preferredMode: 'balanced' as const },
   guardian: { name: '', relationship: 'Parent', email: '', phone: '', verified: false },
   consents: emptyConsents(),
@@ -136,6 +153,7 @@ export const useAuthStore = create<AuthState>()(
           authMethod: method,
           ssoProvider: opts.ssoProvider ?? null,
           email: opts.email ?? '',
+          phone: opts.phone ?? '',
           role: 'student',
           accountStatus: 'consent_pending',
         }),
@@ -162,8 +180,20 @@ export const useAuthStore = create<AuthState>()(
       withdrawConsent: (purpose) =>
         set((s) => {
           const consents = { ...s.consents, [purpose]: { acceptedAt: s.consents[purpose].acceptedAt, withdrawnAt: new Date().toISOString() } };
-          const mandatoryBroken = MANDATORY_PURPOSES.some((p) => !consents[p].acceptedAt || consents[p].withdrawnAt);
-          return { consents, accountStatus: mandatoryBroken ? 'consent_withdrawn' : s.accountStatus };
+          // Only an account-blocking consent locks the whole account; voice/canvas
+          // withdrawal keeps the account active and just gates that feature.
+          const accountBroken = ACCOUNT_BLOCKING_PURPOSES.some((p) => !consents[p].acceptedAt || consents[p].withdrawnAt);
+          return { consents, accountStatus: accountBroken ? 'consent_withdrawn' : s.accountStatus };
+        }),
+
+      grantConsent: (purpose) =>
+        set((s) => {
+          const consents = { ...s.consents, [purpose]: { acceptedAt: new Date().toISOString(), withdrawnAt: null } };
+          // If re-granting restored all account-blocking consents, un-restrict.
+          const accountOk = ACCOUNT_BLOCKING_PURPOSES.every((p) => consents[p].acceptedAt && !consents[p].withdrawnAt);
+          const accountStatus =
+            s.accountStatus === 'consent_withdrawn' && accountOk ? 'active' : s.accountStatus;
+          return { consents, accountStatus };
         }),
 
       activateAccount: () => set({ accountStatus: 'active' }),
@@ -181,9 +211,14 @@ export const useAuthStore = create<AuthState>()(
 
 // ─── RBAC / access decision (§13) ──────────────────────────────────────────────
 
-/** True when every mandatory consent is accepted and not withdrawn. */
+/** True when every mandatory consent is accepted and not withdrawn (onboarding gate). */
 export function hasMandatoryConsents(consents: Record<ConsentPurpose, ConsentRecord>): boolean {
   return MANDATORY_PURPOSES.every((p) => consents[p].acceptedAt && !consents[p].withdrawnAt);
+}
+
+/** True when every account-blocking consent is active (drives account access). */
+export function hasAccountConsents(consents: Record<ConsentPurpose, ConsentRecord>): boolean {
+  return ACCOUNT_BLOCKING_PURPOSES.every((p) => consents[p].acceptedAt && !consents[p].withdrawnAt);
 }
 
 /** Is a single consent purpose currently active? */
@@ -205,7 +240,7 @@ export function accessDecision(s: Pick<AuthState, 'accountStatus' | 'role' | 'co
   if (s.accountStatus === 'suspended' || s.accountStatus === 'locked' || s.accountStatus === 'deleted')
     return { allowed: false, reason: s.accountStatus, redirect: '/restricted' };
   if (s.accountStatus === 'consent_withdrawn') return { allowed: false, reason: 'consent_withdrawn', redirect: '/restricted' };
-  if (s.accountStatus !== 'active' || !hasMandatoryConsents(s.consents))
+  if (s.accountStatus !== 'active' || !hasAccountConsents(s.consents))
     return { allowed: false, reason: 'consent_pending', redirect: '/restricted' };
   return { allowed: true };
 }

@@ -40,6 +40,7 @@ interface SpeechRecognitionLike {
   stop: () => void;
   onresult: ((e: SpeechRecognitionEventLike) => void) | null;
   onend: (() => void) | null;
+  onerror: ((e: { error?: string }) => void) | null;
 }
 type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
 
@@ -95,7 +96,14 @@ export function useVoiceTurn({
   const lastVoiceTsRef = useRef(0);
 
   const commitTurn = useCallback(() => {
-    const text = transcriptRef.current.trim();
+    // The VAD (audio energy) and Web Speech API are two independent async
+    // engines. If the student's last phrase hasn't been finalized by Speech
+    // API yet when silence triggers this commit, transcriptRef is missing
+    // those trailing words even though the mic captured them. `caption`
+    // tracks finalized + in-flight interim text, so it's the fuller value.
+    const finalized = transcriptRef.current.trim();
+    const withInterim = useMicLevel.getState().caption.trim();
+    const text = withInterim.length > finalized.length ? withInterim : finalized;
     transcriptRef.current = '';
     hadSpeechRef.current = false;
     setSpeaking(false);
@@ -140,6 +148,14 @@ export function useVoiceTurn({
     analyser.smoothingTimeConstant = 0.75;
     source.connect(gain);
     gain.connect(analyser);
+    // Some browsers only pull audio through nodes reachable from `destination`
+    // (unreachable branches can silently stop updating). Route through a
+    // silent node so the analyser keeps receiving data without playing the
+    // mic back to the student.
+    const silentSink = audioCtx.createGain();
+    silentSink.gain.value = 0;
+    analyser.connect(silentSink);
+    silentSink.connect(audioCtx.destination);
     const buf = new Float32Array(analyser.fftSize);
     const freq = new Uint8Array(analyser.frequencyBinCount);
     useMicLevel.getState().setActive(true);
@@ -173,6 +189,20 @@ export function useVoiceTurn({
             recognition.start();
           } catch {
             /* already starting */
+          }
+        }
+      };
+      // Some browsers (esp. non-Chromium) fire an error and never call onend,
+      // which would otherwise leave recognition dead with no restart — the
+      // "mic just stops" symptom. Restart the same way onend does, except for
+      // errors where retrying can't help (permission denied).
+      recognition.onerror = (e) => {
+        if (e.error === 'not-allowed' || e.error === 'service-not-allowed') return;
+        if (activeRef.current) {
+          try {
+            recognition.start();
+          } catch {
+            /* already starting, or onend will restart it */
           }
         }
       };

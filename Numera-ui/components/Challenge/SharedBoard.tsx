@@ -11,6 +11,7 @@ import { useState } from 'react';
 import { Check, AlertCircle, Sparkles, Radio, MessagesSquare, Lock, ArrowUp } from 'lucide-react';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { cn } from '@/lib/cn';
+import { uid } from '@/lib/uid';
 
 interface ChatMsg { id: string; author: string; color: string; text: string; you?: boolean }
 
@@ -113,7 +114,7 @@ function ChatContent() {
   const send = () => {
     const t = text.trim();
     if (!t) return;
-    setMessages((m) => [...m, { id: crypto.randomUUID(), author: 'You', color: '#4169E1', text: t, you: true }]);
+    setMessages((m) => [...m, { id: uid(), author: 'You', color: '#4169E1', text: t, you: true }]);
     setText('');
   };
   return (

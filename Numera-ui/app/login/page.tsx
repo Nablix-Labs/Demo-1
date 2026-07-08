@@ -12,7 +12,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, Mail, Check } from 'lucide-react';
+import { ArrowRight, Mail, Phone, Check } from 'lucide-react';
 import { useAuthStore, accessDecision, type SsoProvider } from '@/store/useAuthStore';
 import { SSO_LOGO } from '@/components/auth/SsoLogos';
 
@@ -32,7 +32,9 @@ const HIGHLIGHTS = [
 export default function LoginPage() {
   const router = useRouter();
   const [hydrated, setHydrated] = useState(false);
+  const [loginMode, setLoginMode] = useState<'email' | 'phone'>('email');
   const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
 
   useEffect(() => {
@@ -126,37 +128,78 @@ export default function LoginPage() {
 
           <div className="flex items-center gap-3 my-5">
             <span className="h-px flex-1 bg-muted-gray" />
-            <span className="text-[11px] uppercase tracking-widest text-slate-blue">or with email</span>
+            <span className="text-[11px] uppercase tracking-widest text-slate-blue">or with email / phone</span>
             <span className="h-px flex-1 bg-muted-gray" />
           </div>
 
-          <label className="block text-[12px] font-semibold text-ink">
-            Email
-            <div className="mt-1.5 flex items-center gap-2 rounded-btn border border-muted-gray bg-white px-3 focus-within:border-ai-cyan focus-within:ring-2 focus-within:ring-ai-cyan/15 transition-all">
-              <Mail size={16} className="text-slate-blue flex-shrink-0" />
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
-                className="flex-1 min-w-0 bg-transparent py-2.5 text-[14px] text-ink placeholder:text-slate-blue focus:outline-none"
-              />
-            </div>
-          </label>
+          {/* Email vs phone-OTP login */}
+          <div className="grid grid-cols-2 gap-1 rounded-btn bg-reading-surface p-1 mb-3">
+            {([
+              { id: 'email', label: 'Email', Icon: Mail },
+              { id: 'phone', label: 'Phone OTP', Icon: Phone },
+            ] as const).map(({ id, label, Icon }) => (
+              <button
+                key={id}
+                onClick={() => setLoginMode(id)}
+                className={
+                  'flex items-center justify-center gap-1.5 rounded-[10px] py-2 text-[12px] font-semibold transition-colors ' +
+                  (loginMode === id ? 'bg-white text-ink shadow-sm' : 'text-slate-blue hover:text-ink')
+                }
+              >
+                <Icon size={13} />
+                {label}
+              </button>
+            ))}
+          </div>
 
-          <label className="block text-[12px] font-semibold text-ink mt-3">
-            <span className="flex items-center justify-between">
-              Password
-              <button type="button" className="text-[11px] font-medium text-learning-blue hover:underline">Forgot?</button>
-            </span>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-              className="mt-1.5 w-full rounded-btn border border-muted-gray bg-white px-3.5 py-2.5 text-[14px] text-ink placeholder:text-muted-gray focus:border-ai-cyan focus:ring-2 focus:ring-ai-cyan/15 focus:outline-none transition-all"
-            />
-          </label>
+          {loginMode === 'phone' ? (
+            <>
+              <label className="block text-[12px] font-semibold text-ink">
+                Phone
+                <div className="mt-1.5 flex items-center gap-2 rounded-btn border border-muted-gray bg-white px-3 focus-within:border-ai-cyan focus-within:ring-2 focus-within:ring-ai-cyan/15 transition-all">
+                  <Phone size={16} className="text-slate-blue flex-shrink-0" />
+                  <input
+                    type="tel"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="+44 7700 900000"
+                    className="flex-1 min-w-0 bg-transparent py-2.5 text-[14px] text-ink placeholder:text-slate-blue focus:outline-none"
+                  />
+                </div>
+              </label>
+              <p className="text-[11px] text-slate-blue mt-1.5">We&rsquo;ll text a one-time code to sign you in.</p>
+            </>
+          ) : (
+            <>
+              <label className="block text-[12px] font-semibold text-ink">
+                Email
+                <div className="mt-1.5 flex items-center gap-2 rounded-btn border border-muted-gray bg-white px-3 focus-within:border-ai-cyan focus-within:ring-2 focus-within:ring-ai-cyan/15 transition-all">
+                  <Mail size={16} className="text-slate-blue flex-shrink-0" />
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    className="flex-1 min-w-0 bg-transparent py-2.5 text-[14px] text-ink placeholder:text-slate-blue focus:outline-none"
+                  />
+                </div>
+              </label>
+
+              <label className="block text-[12px] font-semibold text-ink mt-3">
+                <span className="flex items-center justify-between">
+                  Password
+                  <button type="button" className="text-[11px] font-medium text-learning-blue hover:underline">Forgot?</button>
+                </span>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="mt-1.5 w-full rounded-btn border border-muted-gray bg-white px-3.5 py-2.5 text-[14px] text-ink placeholder:text-muted-gray focus:border-ai-cyan focus:ring-2 focus:ring-ai-cyan/15 focus:outline-none transition-all"
+                />
+              </label>
+            </>
+          )}
 
           <button onClick={proceed} disabled={!hydrated} className="btn btn-primary w-full mt-5">
             Log in <ArrowRight size={16} />

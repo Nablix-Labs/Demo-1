@@ -3,6 +3,7 @@
  * Standard use for authentication buttons (Google/Microsoft/Apple brand guidelines).
  * "School ID" has no single brand, so it uses a Numera-navy graduation mark.
  */
+import type { JSX } from 'react';
 import type { SsoProvider } from '@/store/useAuthStore';
 
 export function GoogleLogo({ size = 18 }: { size?: number }) {

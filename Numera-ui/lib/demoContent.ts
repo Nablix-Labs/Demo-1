@@ -8,6 +8,8 @@
  * bar-model stay consistent across subjects.
  */
 
+import type { ConceptArtName } from '@/components/ConceptArt';
+
 export interface DemoLine {
   text: string;
   mark?: 'tick' | 'cross';
@@ -32,17 +34,31 @@ export interface TopicDemo {
   label: string; // subject label, e.g. "Linear equations"
   questionNumber: number; // shown in the lesson question badge
   lessonQuestion: string; // the equation in the lesson heading
+  showBarModel: boolean; // the bar-model visual is algebra-only
   transcript: DemoTurn[]; // opening lesson exchange
   practiceQuestion: string;
   practiceHints: string[];
   reviewSummary: string;
   worksheets: DemoWorksheet[];
+  /** Supporting picture shown as a visual cue during guided practice. */
+  visualCue: { art: ConceptArtName; caption: string };
 }
+
+/**
+ * Concept-orientation media shown before the workbook. One of three modes the
+ * tutor can open a topic with (Manjusha's ask): a short video, a single
+ * picture, or a "micro-content" card of illustrated key points.
+ */
+export type OrientationMedia =
+  | { kind: 'video'; title: string; duration: string; summary: string }
+  | { kind: 'image'; title: string; summary: string; art: ConceptArtName; caption: string }
+  | { kind: 'micro'; title: string; summary: string; art: ConceptArtName; points: string[] };
 
 const ALGEBRA: TopicDemo = {
   label: 'Linear equations',
   questionNumber: 3,
   lessonQuestion: '2x + 5 = 13',
+  showBarModel: true,
   transcript: [
     { role: 'ai', text: 'What do we do first to get the x term on its own?' },
     { role: 'student', text: 'Subtract 5 from both sides?' },
@@ -120,12 +136,17 @@ const ALGEBRA: TopicDemo = {
         'Solved confidently. You moved the seven across correctly and divided by two. x equals eight is right.',
     },
   ],
+  visualCue: {
+    art: 'balance',
+    caption: 'Think of the equation as a balance — whatever you do to one side, do to the other.',
+  },
 };
 
 const NUMBER: TopicDemo = {
   label: 'Fractions',
   questionNumber: 2,
   lessonQuestion: 'x/2 + 1/4 = 3/4',
+  showBarModel: false,
   transcript: [
     { role: 'ai', text: 'To get x on its own, what do we do with the one-quarter first?' },
     { role: 'student', text: 'Subtract a quarter from both sides?' },
@@ -202,12 +223,17 @@ const NUMBER: TopicDemo = {
         'Solved confidently. You matched the denominators, then multiplied by four. x equals three is right.',
     },
   ],
+  visualCue: {
+    art: 'fractionBar',
+    caption: 'Match the denominators first — here 3 of 4 equal parts make three-quarters.',
+  },
 };
 
 const GEOMETRY: TopicDemo = {
   label: 'Angles',
   questionNumber: 1,
   lessonQuestion: 'x + 50 = 180',
+  showBarModel: false,
   transcript: [
     { role: 'ai', text: 'These two angles sit on a straight line — what must they add up to?' },
     { role: 'student', text: '180 degrees?' },
@@ -281,6 +307,10 @@ const GEOMETRY: TopicDemo = {
         'Solved confidently. Three equal angles on a straight line, so you divided 180 by three. x equals 60 degrees is right.',
     },
   ],
+  visualCue: {
+    art: 'anglePair',
+    caption: 'Angles on a straight line add up to 180° — subtract the known angle to find x.',
+  },
 };
 
 export const DEMO_CONTENT: Record<string, TopicDemo> = {
@@ -292,3 +322,50 @@ export const DEMO_CONTENT: Record<string, TopicDemo> = {
 /** Content for a topic, falling back to algebra so the lesson is never blank. */
 export const demoFor = (topicId: string): TopicDemo =>
   DEMO_CONTENT[topicId] ?? ALGEBRA;
+
+/**
+ * Per-topic orientation media — deliberately one of each mode so all three are
+ * demonstrable: algebra → micro-content, number → picture, geometry → video.
+ * `statistics` is intentionally absent so the "coming soon" empty state shows.
+ */
+export const ORIENTATION_MEDIA: Record<string, OrientationMedia> = {
+  algebra: {
+    kind: 'micro',
+    title: 'Solving linear equations',
+    summary: 'The one idea to hold onto before you start practising.',
+    art: 'balance',
+    points: [
+      'An equation is a balance: both sides are equal.',
+      'Undo operations one step at a time (±, then ×÷).',
+      'Whatever you do to one side, do to the other.',
+    ],
+  },
+  number: {
+    kind: 'image',
+    title: 'Working with fractions',
+    summary: 'A fraction is parts of a whole — match the denominators before adding or subtracting.',
+    art: 'fractionBar',
+    caption: 'Three of four equal parts shaded = 3⁄4.',
+  },
+  geometry: {
+    kind: 'video',
+    title: 'Angle rules',
+    duration: '4:30',
+    summary: 'Angles measure turn; the rules on lines and in shapes let you find the missing one.',
+  },
+  statistics: {
+    kind: 'micro',
+    title: 'Reading a bar chart',
+    summary: 'Bar charts show how often each value comes up — read the heights to compare.',
+    art: 'barChart',
+    points: [
+      "Each bar's height is the frequency — how many times a value occurs.",
+      'Compare heights to see which values are common or rare.',
+      'The tallest bar is the mode: the most frequent value.',
+    ],
+  },
+};
+
+/** Orientation media for a topic, or null when none exists yet (→ empty state). */
+export const orientationFor = (topicId: string): OrientationMedia | null =>
+  ORIENTATION_MEDIA[topicId] ?? null;

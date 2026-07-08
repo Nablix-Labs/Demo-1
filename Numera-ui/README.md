@@ -58,6 +58,16 @@ numera/
 
 See `.env.local.example`.
 
+## Self-Hosted Deploy (Azure VM + nginx)
+
+Static export served by nginx under `/app/`, calling the backend at `/api/` (nginx proxies `/api/` to the backend process). Because this is a static export, `NEXT_PUBLIC_*` vars are baked in at build time — always build with:
+
+```bash
+npm run build:selfhost
+```
+
+Then copy the generated `out/` directory to the path nginx serves `/app/` from, and reload nginx. Don't use the plain `npm run build` for this target — it won't set `NEXT_PUBLIC_API_BASE_URL`/`EXPORT_BASE_PATH` and API calls will silently 404.
+
 ---
 
 *Nablix · Confidential · Numera v0.1*

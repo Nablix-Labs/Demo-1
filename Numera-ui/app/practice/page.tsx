@@ -13,7 +13,7 @@ import { Eye, EyeOff, Lightbulb, Check, ArrowRight } from 'lucide-react';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useFlowNav } from '@/lib/useFlowNav';
 import { useDemoTutor } from '@/hooks/useDemoTutor';
-import { StreamingTutorResponse, useStreamingVoiceTurn } from '@/hooks/useStreamingVoiceTurn';
+import { useVoiceTurn } from '@/hooks/useVoiceTurn';
 import { DEMO_CONCEPT_ID, DEMO_QUESTION_ID, DEMO_PHASE } from '@/lib/api';
 import { demoFor } from '@/lib/demoContent';
 import PhaseGate from '@/components/PhaseGate';
@@ -27,13 +27,10 @@ type AIMode = 'observing' | 'hint' | 'quiet';
 export default function PracticePage() {
   const items = useNumeraStore((s) => s.items);
   const setCanvasExporter = useNumeraStore((s) => s.setCanvasExporter);
-  const setFullCanvasExporter = useNumeraStore((s) => s.setFullCanvasExporter);
   const practiceCompleted = useNumeraStore((s) => s.practiceCompleted);
   const setPracticeDone = useNumeraStore((s) => s.setPracticeDone);
   const completePhase = useNumeraStore((s) => s.completePhase);
   const currentTopicId = useNumeraStore((s) => s.currentTopicId);
-  const addTranscriptMessage = useNumeraStore((s) => s.addTranscriptMessage);
-  const addTrailEntry = useNumeraStore((s) => s.addTrailEntry);
   const { goStage } = useFlowNav();
   const tutor = useDemoTutor();
 
@@ -46,38 +43,19 @@ export default function PracticePage() {
   const PHASE = DEMO_PHASE;
   const QUESTION_ID = DEMO_QUESTION_ID;
 
-  const onStudentTranscript = useCallback(
+  // Hands-free voice: on turn-end, fire the transcript + canvas to the backend.
+  const { submitVoiceTurn } = tutor;
+  const onTurnEnd = useCallback(
     (transcript: string, confidence?: number) => {
-      if (!transcript.trim()) return;
-      addTranscriptMessage({ role: 'student', text: transcript });
-      addTrailEntry({
-        kind: 'answer',
-        text: transcript,
-        meta: confidence == null ? undefined : `STT ${(confidence * 100).toFixed(0)}%`,
-      });
+      void submitVoiceTurn(
+        transcript,
+        { concept_id: DEMO_CONCEPT_ID, question_id: QUESTION_ID, current_phase: PHASE, hint_count: 0 },
+        confidence
+      );
     },
-    [addTranscriptMessage, addTrailEntry]
+    [submitVoiceTurn, QUESTION_ID, PHASE]
   );
-
-  const onTutorResponse = useCallback(
-    (response: StreamingTutorResponse) => {
-      addTranscriptMessage({ role: 'ai', text: response.text });
-      addTrailEntry({ kind: 'tutor', text: response.text });
-    },
-    [addTranscriptMessage, addTrailEntry]
-  );
-
-  const onVoiceError = useCallback(
-    (message: string) => addTrailEntry({ kind: 'tutor', text: message }),
-    [addTrailEntry]
-  );
-
-  const voice = useStreamingVoiceTurn({
-    sessionId: tutor.sessionId,
-    onStudentTranscript,
-    onTutorResponse,
-    onError: onVoiceError,
-  });
+  const voice = useVoiceTurn({ onTurnEnd });
 
   const [mode, setMode] = useState<AIMode>('observing');
   const [hintIndex, setHintIndex] = useState(0);
@@ -91,14 +69,10 @@ export default function PracticePage() {
     setCanvasExporter(fn);
   }, [setCanvasExporter]);
 
-  const handleFullExportReady = useCallback((fn: () => string | null) => {
-    setFullCanvasExporter(fn);
-  }, [setFullCanvasExporter]);
-
   // Start a backend session once on entry (no-op unless an API base URL is set).
   useEffect(() => {
     if (tutor.apiEnabled && !tutor.sessionId) {
-      void tutor.start(currentTopicId, 'VOICE', PHASE);
+      void tutor.start(DEMO_CONCEPT_ID, 'TEXT');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -168,7 +142,7 @@ export default function PracticePage() {
         }}
       >
         <div className="absolute inset-0 z-[1]">
-          <DrawingCanvas onExportReady={handleExportReady} onFullExportReady={handleFullExportReady} />
+          <DrawingCanvas onExportReady={handleExportReady} />
         </div>
 
         {/* Hint card — only when the observer offers one */}

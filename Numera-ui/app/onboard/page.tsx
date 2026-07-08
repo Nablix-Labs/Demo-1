@@ -13,7 +13,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, Mail, KeyRound, ShieldCheck } from 'lucide-react';
+import { ArrowRight, Mail, Phone, KeyRound, ShieldCheck } from 'lucide-react';
 import AuthShell from '@/components/auth/AuthShell';
 import { useAuthStore, type SsoProvider, type AuthMethod } from '@/store/useAuthStore';
 import { useNumeraStore } from '@/store/useNumeraStore';
@@ -47,8 +47,9 @@ export default function OnboardPage() {
   const [step, setStep] = useState<1 | 2>(1);
 
   // Step 1 — auth method
-  const [emailMethod, setEmailMethod] = useState<'email_otp' | 'password'>('email_otp');
+  const [authMode, setAuthMode] = useState<'email_otp' | 'phone_otp' | 'password'>('email_otp');
   const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
 
   // Step 2 — student profile
@@ -63,13 +64,17 @@ export default function OnboardPage() {
   };
 
   const continueEmail = () => {
-    const method: AuthMethod = emailMethod;
-    startRegistration(method, { email: email.trim() });
+    const method: AuthMethod = authMode;
+    startRegistration(method, { email: email.trim(), phone: phone.trim() });
     setStep(2);
   };
 
   const emailValid = /.+@.+\..+/.test(email.trim());
-  const step1Ready = emailValid && (emailMethod === 'email_otp' || password.length >= 6);
+  const phoneValid = phone.replace(/\D/g, '').length >= 7;
+  const step1Ready =
+    authMode === 'phone_otp'
+      ? phoneValid
+      : emailValid && (authMode === 'email_otp' || password.length >= 6);
 
   const finish = () => {
     const age = AGE_BANDS.find((a) => a.band === ageBand)?.age ?? 15;
@@ -107,42 +112,62 @@ export default function OnboardPage() {
 
           <div className="flex items-center gap-3 my-5">
             <span className="h-px flex-1 bg-muted-gray" />
-            <span className="text-[11px] uppercase tracking-widest text-slate-blue">or with email</span>
+            <span className="text-[11px] uppercase tracking-widest text-slate-blue">or with email / phone</span>
             <span className="h-px flex-1 bg-muted-gray" />
           </div>
 
-          <label className="block text-[12px] font-semibold text-ink">
-            Email
-            <div className="mt-1.5 flex items-center gap-2 rounded-btn border border-muted-gray bg-white px-3 focus-within:border-ai-cyan transition-colors">
-              <Mail size={16} className="text-slate-blue flex-shrink-0" />
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
-                className="flex-1 min-w-0 bg-transparent py-2.5 text-[14px] text-ink placeholder:text-slate-blue focus:outline-none"
-              />
-            </div>
-          </label>
-
-          {/* OTP vs password */}
-          <div className="mt-3 grid grid-cols-2 gap-1 rounded-btn bg-reading-surface p-1">
-            {(['email_otp', 'password'] as const).map((m) => (
+          {/* Method: email OTP · phone OTP · password */}
+          <div className="grid grid-cols-3 gap-1 rounded-btn bg-reading-surface p-1">
+            {([
+              { id: 'email_otp', label: 'Email OTP', Icon: ShieldCheck },
+              { id: 'phone_otp', label: 'Phone OTP', Icon: Phone },
+              { id: 'password', label: 'Password', Icon: KeyRound },
+            ] as const).map(({ id, label, Icon }) => (
               <button
-                key={m}
-                onClick={() => setEmailMethod(m)}
+                key={id}
+                onClick={() => setAuthMode(id)}
                 className={
                   'flex items-center justify-center gap-1.5 rounded-[10px] py-2 text-[12px] font-semibold transition-colors ' +
-                  (emailMethod === m ? 'bg-white text-ink shadow-sm' : 'text-slate-blue hover:text-ink')
+                  (authMode === id ? 'bg-white text-ink shadow-sm' : 'text-slate-blue hover:text-ink')
                 }
               >
-                {m === 'email_otp' ? <ShieldCheck size={14} /> : <KeyRound size={14} />}
-                {m === 'email_otp' ? 'Email OTP' : 'Password'}
+                <Icon size={13} />
+                {label}
               </button>
             ))}
           </div>
 
-          {emailMethod === 'password' && (
+          {authMode === 'phone_otp' ? (
+            <label className="block mt-3 text-[12px] font-semibold text-ink">
+              Phone
+              <div className="mt-1.5 flex items-center gap-2 rounded-btn border border-muted-gray bg-white px-3 focus-within:border-ai-cyan transition-colors">
+                <Phone size={16} className="text-slate-blue flex-shrink-0" />
+                <input
+                  type="tel"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="+44 7700 900000"
+                  className="flex-1 min-w-0 bg-transparent py-2.5 text-[14px] text-ink placeholder:text-slate-blue focus:outline-none"
+                />
+              </div>
+            </label>
+          ) : (
+            <label className="block mt-3 text-[12px] font-semibold text-ink">
+              Email
+              <div className="mt-1.5 flex items-center gap-2 rounded-btn border border-muted-gray bg-white px-3 focus-within:border-ai-cyan transition-colors">
+                <Mail size={16} className="text-slate-blue flex-shrink-0" />
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  className="flex-1 min-w-0 bg-transparent py-2.5 text-[14px] text-ink placeholder:text-slate-blue focus:outline-none"
+                />
+              </div>
+            </label>
+          )}
+
+          {authMode === 'password' && (
             <input
               type="password"
               value={password}

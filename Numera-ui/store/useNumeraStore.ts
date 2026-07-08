@@ -10,6 +10,8 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import type { LearningPhase } from '@/lib/phases';
 import type { FlowStage } from '@/lib/flow';
 import { TOPICS } from '@/lib/topics';
+import { DEMO_CONCEPT_ID, DEMO_QUESTION_ID } from '@/lib/api';
+import { uid } from '@/lib/uid';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -70,6 +72,11 @@ export interface CanvasDrawPayload {
   mode?: 'append' | 'replace';
   elements: Array<Omit<TutorElement, 'id'> & { id?: string }>;
 }
+
+// Idempotency for tutor draw commands: a command may be re-delivered (e.g. on a
+// WebSocket reconnect). We drop any actionId we've already applied. Module-level
+// (not React state) since it's plumbing, not UI.
+const seenDrawActionIds = new Set<string>();
 
 export interface TranscriptMessage {
   id: string;
@@ -140,9 +147,18 @@ export interface NumeraState {
   questionText: string;
   questionNumber: number;
 
+  // Active question the tutor session runs on. Sent as concept_id/question_id;
+  // changing it restarts the session so the backend serves that equation.
+  activeConceptId: string;
+  activeQuestionId: string;
+
   // Voice
   micMuted: boolean;
   voiceStatus: 'idle' | 'listening' | 'speaking' | 'processing';
+
+  // Guided-practice visual cue — a supporting picture shown on the canvas.
+  // Backend-driven via the session's `show_visual_cue` flag; session-scoped.
+  visualCueVisible: boolean;
 
   // Transcript
   transcript: TranscriptMessage[];
@@ -166,15 +182,16 @@ export interface NumeraState {
 
   // UI preferences (guided-learning layout)
   panelSide: 'left' | 'right';        // assistant panel side relative to canvas
+  panelCollapsed: boolean;            // panel collapsed to a thin edge tab, giving canvas the width back
   transcriptVisible: boolean;         // transcript can be hidden
   toolbarPos: { x: number; y: number } | null; // null = default docked position
   toolbarCollapsed: boolean;          // collapsed to a small bubble
   toolbarOrientation: 'horizontal' | 'vertical'; // rotates when docked at a side
+  micButtonPos: { x: number; y: number } | null; // draggable mic button; null = default (bottom-centre)
   canvasGrid: CanvasGrid;             // paper style behind the drawing surface
 
-  // Runtime: canvas PNG exporters, registered by the canvas
+  // Runtime: canvas PNG exporter, registered by the canvas for PDF notes
   canvasExporter: (() => string | null) | null;
-  fullCanvasExporter: (() => string | null) | null;
 
   // Group / live session (collaboration)
   sessionMode: 'solo' | 'group';
@@ -214,9 +231,12 @@ export interface NumeraState {
   setTotalSlides: (n: number) => void;
   setQuestionText: (q: string) => void;
   setQuestionNumber: (n: number) => void;
+  setActiveEquation: (conceptId: string, questionId: string, label?: string) => void;
   toggleMic: () => void;
   setMicMuted: (value: boolean) => void;
   setVoiceStatus: (s: NumeraState['voiceStatus']) => void;
+  setVisualCueVisible: (v: boolean) => void;
+  toggleVisualCue: () => void;
   addTranscriptMessage: (msg: Omit<TranscriptMessage, 'id' | 'timestamp'>) => void;
   setTranscript: (msgs: Pick<TranscriptMessage, 'role' | 'text'>[]) => void;
   updatePartialTranscript: (text: string) => void;
@@ -232,20 +252,20 @@ export interface NumeraState {
   undo: () => void;
   redo: () => void;
   clearCanvas: () => void;
-  clearStudentWork: () => void;
   applyCanvasDraw: (payload: CanvasDrawPayload) => void;
   clearTutorMarks: () => void;
   setInputMode: (m: InputMode) => void;
   setTextInput: (v: string) => void;
   setPanelSide: (s: 'left' | 'right') => void;
   togglePanelSide: () => void;
+  togglePanelCollapsed: () => void;
   toggleTranscript: () => void;
   setToolbarPos: (pos: { x: number; y: number } | null) => void;
   toggleToolbarCollapsed: () => void;
   setToolbarOrientation: (o: 'horizontal' | 'vertical') => void;
+  setMicButtonPos: (pos: { x: number; y: number } | null) => void;
   setCanvasGrid: (g: CanvasGrid) => void;
   setCanvasExporter: (fn: (() => string | null) | null) => void;
-  setFullCanvasExporter: (fn: (() => string | null) | null) => void;
   startGroupSession: () => void;
   endGroupSession: () => void;
   upsertParticipant: (p: Participant) => void;
@@ -276,15 +296,16 @@ export interface NumeraState {
 const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
-  | 'setQuestionText' | 'setQuestionNumber' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus'
+  | 'setQuestionText' | 'setQuestionNumber' | 'setActiveEquation' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus'
+  | 'setVisualCueVisible' | 'toggleVisualCue'
   | 'addTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript'
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
   | 'setShapeKind' | 'setEraserMode'
   | 'setStrokeColor' | 'setStrokeWidth' | 'addItem' | 'removeItem' | 'undo' | 'redo'
-  | 'clearCanvas' | 'clearStudentWork' | 'applyCanvasDraw' | 'clearTutorMarks'
-  | 'setInputMode' | 'setTextInput' | 'setPanelSide' | 'togglePanelSide'
-  | 'toggleTranscript' | 'setToolbarPos' | 'toggleToolbarCollapsed' | 'setToolbarOrientation' | 'setCanvasGrid'
-  | 'setCanvasExporter' | 'setFullCanvasExporter' | 'startGroupSession' | 'endGroupSession'
+  | 'clearCanvas' | 'applyCanvasDraw' | 'clearTutorMarks'
+  | 'setInputMode' | 'setTextInput' | 'setPanelSide' | 'togglePanelSide' | 'togglePanelCollapsed'
+  | 'toggleTranscript' | 'setToolbarPos' | 'toggleToolbarCollapsed' | 'setToolbarOrientation' | 'setMicButtonPos' | 'setCanvasGrid'
+  | 'setCanvasExporter' | 'startGroupSession' | 'endGroupSession'
   | 'upsertParticipant' | 'removeParticipant' | 'setParticipantCursor'
   | 'addRemoteItem' | 'toggleLessonLearned' | 'setPracticeDone' | 'setStudentAge' | 'setStudentName'
   | 'completePhase'
@@ -299,8 +320,11 @@ const initial: Omit<
   totalSlides: 9,
   questionText: '2x + 5 = 13',
   questionNumber: 3,
+  activeConceptId: DEMO_CONCEPT_ID,
+  activeQuestionId: DEMO_QUESTION_ID,
   micMuted: false,
   voiceStatus: 'listening',
+  visualCueVisible: false,
   transcript: [
     {
       id: '1',
@@ -333,13 +357,14 @@ const initial: Omit<
   inputMode: 'voice',
   textInput: '',
   panelSide: 'left',
+  panelCollapsed: false,
   transcriptVisible: true,
   toolbarPos: null,
   toolbarCollapsed: false,
   toolbarOrientation: 'horizontal',
+  micButtonPos: null,
   canvasGrid: 'grid',
   canvasExporter: null,
-  fullCanvasExporter: null,
   sessionMode: 'solo',
   participants: [],
   remoteItems: [],
@@ -375,6 +400,17 @@ export const useNumeraStore = create<NumeraState>()(
   setQuestionText: (questionText) => set({ questionText }),
   setQuestionNumber: (questionNumber) => set({ questionNumber }),
 
+  // Switch the question the session runs on. Clearing sessionId makes the lesson
+  // page start a fresh backend session for this concept/question; label gives
+  // immediate feedback (and is the displayed equation when there's no backend).
+  setActiveEquation: (activeConceptId, activeQuestionId, label) =>
+    set({
+      activeConceptId,
+      activeQuestionId,
+      sessionId: null,
+      ...(label ? { questionText: label } : {}),
+    }),
+
   toggleMic: () =>
     set((s) => ({
       micMuted: !s.micMuted,
@@ -385,16 +421,16 @@ export const useNumeraStore = create<NumeraState>()(
     set({ micMuted, voiceStatus: micMuted ? 'idle' : 'listening' }),
 
   setVoiceStatus: (voiceStatus) => set({ voiceStatus }),
+  setVisualCueVisible: (visualCueVisible) => set({ visualCueVisible }),
+  toggleVisualCue: () => set((s) => ({ visualCueVisible: !s.visualCueVisible })),
 
   addTranscriptMessage: (msg) =>
-    set((s) => {
-      const last = s.transcript[s.transcript.length - 1];
-      const message = { ...msg, id: crypto.randomUUID(), timestamp: Date.now() };
-      if (last?.partial && last.role === msg.role) {
-        return { transcript: [...s.transcript.slice(0, -1), message] };
-      }
-      return { transcript: [...s.transcript, message] };
-    }),
+    set((s) => ({
+      transcript: [
+        ...s.transcript,
+        { ...msg, id: uid(), timestamp: Date.now() },
+      ],
+    })),
 
   setTranscript: (msgs) =>
     set({
@@ -421,7 +457,7 @@ export const useNumeraStore = create<NumeraState>()(
         transcript: [
           ...s.transcript,
           {
-            id: crypto.randomUUID(),
+            id: uid(),
             role: 'student',
             text,
             partial: true,
@@ -435,7 +471,7 @@ export const useNumeraStore = create<NumeraState>()(
     set((s) => ({
       interactionTrail: [
         ...s.interactionTrail,
-        { ...entry, id: crypto.randomUUID(), timestamp: Date.now() },
+        { ...entry, id: uid(), timestamp: Date.now() },
       ],
     })),
 
@@ -467,14 +503,20 @@ export const useNumeraStore = create<NumeraState>()(
       return { items: [...s.items, last], undone: s.undone.slice(0, -1) };
     }),
 
-  clearCanvas: () => set({ items: [], undone: [], tutorElements: [] }),
-  clearStudentWork: () => set({ items: [], undone: [] }),
+  clearCanvas: () => set({ items: [], undone: [] }),
 
   applyCanvasDraw: (payload) =>
     set((s) => {
+      // A new "replace" resets the layer and the idempotency window.
+      if (payload.mode === 'replace') seenDrawActionIds.clear();
+      // Drop a duplicate command (re-delivered on reconnect).
+      if (payload.actionId) {
+        if (seenDrawActionIds.has(payload.actionId)) return {};
+        seenDrawActionIds.add(payload.actionId);
+      }
       const incoming: TutorElement[] = payload.elements.map((el) => ({
         ...el,
-        id: el.id ?? crypto.randomUUID(),
+        id: el.id ?? uid(),
       }));
       return {
         tutorElements:
@@ -482,20 +524,24 @@ export const useNumeraStore = create<NumeraState>()(
       };
     }),
 
-  clearTutorMarks: () => set({ tutorElements: [] }),
+  clearTutorMarks: () => {
+    seenDrawActionIds.clear();
+    set({ tutorElements: [] });
+  },
 
   setInputMode: (inputMode) => set({ inputMode }),
   setTextInput: (textInput) => set({ textInput }),
 
   setPanelSide: (panelSide) => set({ panelSide }),
   togglePanelSide: () => set((s) => ({ panelSide: s.panelSide === 'left' ? 'right' : 'left' })),
+  togglePanelCollapsed: () => set((s) => ({ panelCollapsed: !s.panelCollapsed })),
   toggleTranscript: () => set((s) => ({ transcriptVisible: !s.transcriptVisible })),
   setToolbarPos: (toolbarPos) => set({ toolbarPos }),
   toggleToolbarCollapsed: () => set((s) => ({ toolbarCollapsed: !s.toolbarCollapsed })),
   setToolbarOrientation: (toolbarOrientation) => set({ toolbarOrientation }),
+  setMicButtonPos: (micButtonPos) => set({ micButtonPos }),
   setCanvasGrid: (canvasGrid) => set({ canvasGrid }),
   setCanvasExporter: (canvasExporter) => set({ canvasExporter }),
-  setFullCanvasExporter: (fullCanvasExporter) => set({ fullCanvasExporter }),
 
   startGroupSession: () => set({ sessionMode: 'group' }),
   endGroupSession: () => set({ sessionMode: 'solo', participants: [], remoteItems: [] }),
@@ -569,7 +615,7 @@ export const useNumeraStore = create<NumeraState>()(
     set((s) => ({
       commentary: [
         ...s.commentary,
-        { ...c, id: crypto.randomUUID(), timestamp: Date.now() },
+        { ...c, id: uid(), timestamp: Date.now() },
       ].slice(-8), // keep the feed short
     })),
   setSpotlight: (spotlight) => set({ spotlight }),
@@ -585,10 +631,12 @@ export const useNumeraStore = create<NumeraState>()(
       // session/canvas/transcript state, which is backend-driven & ephemeral.
       partialize: (s) => ({
         panelSide: s.panelSide,
+        panelCollapsed: s.panelCollapsed,
         transcriptVisible: s.transcriptVisible,
         toolbarPos: s.toolbarPos,
         toolbarCollapsed: s.toolbarCollapsed,
         toolbarOrientation: s.toolbarOrientation,
+        micButtonPos: s.micButtonPos,
         canvasGrid: s.canvasGrid,
         shapeKind: s.shapeKind,
         eraserMode: s.eraserMode,

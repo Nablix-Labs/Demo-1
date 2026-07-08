@@ -18,16 +18,16 @@ import { useRef, useState, useCallback, useEffect } from 'react';
 import { Stage, Layer, Line, Rect, Ellipse, Group, Text } from 'react-konva';
 import type Konva from 'konva';
 import { useNumeraStore, type DrawnItem } from '@/store/useNumeraStore';
+import { uid } from '@/lib/uid';
 import TutorLayer from './TutorLayer';
+import TutorMathOverlay from './TutorMathOverlay';
 
 interface DrawingCanvasProps {
   onExportReady?: (exportFn: () => string | null) => void;
-  onFullExportReady?: (exportFn: () => string | null) => void;
 }
 
-export default function DrawingCanvas({ onExportReady, onFullExportReady }: DrawingCanvasProps) {
+export default function DrawingCanvas({ onExportReady }: DrawingCanvasProps) {
   const stageRef = useRef<Konva.Stage>(null);
-  const studentLayerRef = useRef<Konva.Layer>(null);
   const isDrawing = useRef(false);
   const startPos = useRef<{ x: number; y: number } | null>(null);
 
@@ -64,14 +64,10 @@ export default function DrawingCanvas({ onExportReady, onFullExportReady }: Draw
   // ── Expose exportPNG to parent ───────────────────────────────────────────────
   useEffect(() => {
     onExportReady?.(() => {
-      if (!studentLayerRef.current) return null;
-      return studentLayerRef.current.toDataURL({ mimeType: 'image/png', pixelRatio: 2 });
-    });
-    onFullExportReady?.(() => {
       if (!stageRef.current) return null;
       return stageRef.current.toDataURL({ mimeType: 'image/png', pixelRatio: 2 });
     });
-  }, [onExportReady, onFullExportReady]);
+  }, [onExportReady]);
 
   // ── Pointer handlers ─────────────────────────────────────────────────────────
   const handleDown = useCallback(
@@ -82,7 +78,7 @@ export default function DrawingCanvas({ onExportReady, onFullExportReady }: Draw
       if (!pos) return;
       isDrawing.current = true;
       startPos.current = { x: pos.x, y: pos.y };
-      const id = crypto.randomUUID();
+      const id = uid();
 
       if (activeTool === 'pen' || activeTool === 'pencil' || activeTool === 'highlighter' || activeTool === 'eraser') {
         const isEraser = activeTool === 'eraser';
@@ -251,7 +247,7 @@ export default function DrawingCanvas({ onExportReady, onFullExportReady }: Draw
     : 'copy';
 
   return (
-    <div ref={containerRef} className="w-full h-full" aria-label="Drawing canvas">
+    <div ref={containerRef} className="w-full h-full relative" aria-label="Drawing canvas">
       <Stage
         ref={stageRef}
         width={containerSize.width}
@@ -264,7 +260,7 @@ export default function DrawingCanvas({ onExportReady, onFullExportReady }: Draw
         onTouchEnd={handleUp}
         style={{ cursor }}
       >
-        <Layer ref={studentLayerRef}>
+        <Layer>
           {remoteItems.map((it) => renderItem(it))}
           {items.map((it) => renderItem(it, true))}
           {draft && renderItem(draft)}
@@ -272,6 +268,8 @@ export default function DrawingCanvas({ onExportReady, onFullExportReady }: Draw
         {/* AI-tutor marks — separate, non-erasable layer above the student's */}
         <TutorLayer width={containerSize.width} height={containerSize.height} />
       </Stage>
+      {/* Tutor maths as real KaTeX, overlaid on the same coordinate space */}
+      <TutorMathOverlay width={containerSize.width} height={containerSize.height} />
     </div>
   );
 }

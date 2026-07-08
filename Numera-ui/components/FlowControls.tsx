@@ -18,6 +18,7 @@ import { useNumeraStore } from '@/store/useNumeraStore';
 import { TOPICS, topicIndex, topicById } from '@/lib/topics';
 import { useFlowNav } from '@/lib/useFlowNav';
 import type { FlowStage } from '@/lib/flow';
+import EquationPicker from './EquationPicker';
 
 const STAGE_LABEL: Record<FlowStage, string> = {
   'topic-diagnostic': 'Topic diagnostic',
@@ -47,6 +48,26 @@ export default function FlowControls() {
   }, []);
 
   const reset = useNumeraStore((s) => s.reset);
+  const applyCanvasDraw = useNumeraStore((s) => s.applyCanvasDraw);
+  const clearTutorMarks = useNumeraStore((s) => s.clearTutorMarks);
+  const visualCueVisible = useNumeraStore((s) => s.visualCueVisible);
+  const toggleVisualCue = useNumeraStore((s) => s.toggleVisualCue);
+
+  // Demo: fire a sample tutor drawing (mirrors the backend contract) so the
+  // canvas write-along can be shown before the backend produces draw commands.
+  const demoTutorDraw = () =>
+    applyCanvasDraw({
+      author: 'tutor',
+      mode: 'replace',
+      actionId: `demo-${Date.now()}`,
+      elements: [
+        { kind: 'ellipse', x: 0.42, y: 0.48, w: 0.16, h: 0.1, color: '#F77F00', strokeWidth: 3 },
+        { kind: 'arrow', from: [0.51, 0.48], to: [0.61, 0.48], color: '#00B4D8', strokeWidth: 2 },
+        { kind: 'math', x: 0.68, y: 0.48, tex: '2x = 8', size: 28, color: '#1B2A4A' },
+        { kind: 'math', x: 0.68, y: 0.6, tex: 'x = \\frac{8}{2} = 4', size: 24, color: '#1B2A4A' },
+      ],
+    });
+
   const {
     entryTopicId,
     currentTopicId,
@@ -78,7 +99,7 @@ export default function FlowControls() {
   const placed = entryTopicId !== null;
 
   return (
-    <div className="fixed bottom-0 inset-x-0 z-50 border-t border-muted-gray bg-reading-surface/95 backdrop-blur">
+    <div className="lg-glass fixed bottom-0 inset-x-0 z-50 rounded-none border-t border-white/25">
       <div className="w-full px-4 py-2 flex items-center gap-4 flex-wrap text-[12px] text-ink">
         {/* HUD */}
         <div className="flex items-center gap-2">
@@ -141,6 +162,15 @@ export default function FlowControls() {
         )}
 
         <div className="ml-auto flex items-center gap-3">
+          <EquationPicker />
+          <Btn onClick={demoTutorDraw}>Tutor draws</Btn>
+          <Btn onClick={toggleVisualCue}>{visualCueVisible ? 'Hide cue' : 'Visual cue'}</Btn>
+          <button
+            onClick={clearTutorMarks}
+            className="text-[11px] text-slate-blue hover:text-ink underline underline-offset-2"
+          >
+            Clear marks
+          </button>
           <button
             onClick={() => {
               reset();
