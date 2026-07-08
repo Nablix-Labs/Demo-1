@@ -7,10 +7,11 @@ export function generateStaticParams() {
   return CURRICULUM.map((t) => ({ topic: t.id }));
 }
 
-export default function Page({ params }: { params: { topic: string } }) {
+export default async function Page({ params }: { params: Promise<{ topic: string }> }) {
+  const { topic } = await params;
   return (
     <PhaseGate phase="orientation">
-      <OrientationClient topicId={params.topic} />
+      <OrientationClient topicId={topic} />
     </PhaseGate>
   );
 }

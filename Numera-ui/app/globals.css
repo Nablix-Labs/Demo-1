@@ -74,6 +74,61 @@ body {
   animation: pulse-ring 2.2s ease-in-out infinite;
 }
 
+/* ── Liquid Glass (app-wide chrome) ───────────────────────────────────────
+   A vivid ambient backdrop for the glass to lens, plus two glass "materials".
+   Everything is centralised here so the whole look can be tuned or removed in
+   one place. Apply .lg-glass / .lg-glass-dark to a surface (drop its bg-* first).*/
+.lg-root { background: #0b1020; }
+
+.lg-ambient {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(1100px 760px at 12% 16%, rgba(65,105,225,0.55), transparent 60%),
+    radial-gradient(980px 680px at 88% 10%, rgba(0,180,216,0.42), transparent 55%),
+    radial-gradient(1040px 820px at 82% 88%, rgba(123,92,200,0.46), transparent 60%),
+    radial-gradient(900px 720px at 20% 94%, rgba(0,139,139,0.40), transparent 60%),
+    #0b1020;
+}
+/* slow drift so the glass feels alive ("liquid") */
+.lg-ambient::after {
+  content: '';
+  position: absolute;
+  inset: -12%;
+  background:
+    radial-gradient(760px 620px at 30% 40%, rgba(65,105,225,0.30), transparent 60%),
+    radial-gradient(680px 560px at 70% 60%, rgba(0,180,216,0.24), transparent 60%);
+  animation: lg-drift 26s ease-in-out infinite alternate;
+}
+@keyframes lg-drift {
+  from { transform: translate3d(-3%, -2%, 0) scale(1.05); }
+  to   { transform: translate3d(4%, 3%, 0) scale(1.12); }
+}
+
+/* Light glass — keeps dark (ink) text readable. */
+.lg-glass {
+  background: rgba(255, 255, 255, 0.6);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  backdrop-filter: blur(22px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  box-shadow:
+    0 10px 34px rgba(11, 16, 32, 0.26),
+    inset 0 1px 0 rgba(255, 255, 255, 0.65),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.25);
+}
+/* Dark glass — for the rail + dark accents; light content on top. */
+.lg-glass-dark {
+  background: rgba(18, 27, 51, 0.55);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  backdrop-filter: blur(22px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow:
+    0 10px 34px rgba(11, 16, 32, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
 /* ── Brand primitives ─────────────────────────────────────────────
    Token-based buttons per Brand Guidelines §05.
    Min tap target 44px · radius 12–16px · clear keyboard focus ring.

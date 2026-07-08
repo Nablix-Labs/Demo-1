@@ -9,29 +9,50 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import dynamic from 'next/dynamic';
 import SlideDots from '@/components/SlideDots';
 import CanvasStage from '@/components/Canvas';
 import ContinuityCheck from '@/components/ContinuityCheck';
+import FloatingMicButton from '@/components/FloatingMicButton';
+import VisualCue from '@/components/VisualCue';
 import { useFlowNav } from '@/lib/useFlowNav';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useDemoTutor } from '@/hooks/useDemoTutor';
-import { StreamingTutorResponse, useStreamingVoiceTurn } from '@/hooks/useStreamingVoiceTurn';
-import { DEMO_CONCEPT_ID, DEMO_PHASE } from '@/lib/api';
+import { useVoiceTurn } from '@/hooks/useVoiceTurn';
+import { useVoiceStream } from '@/hooks/useVoiceStream';
+import { useWebSocket } from '@/hooks/useWebSocket';
+import { DEMO_PHASE } from '@/lib/api';
 import { demoFor } from '@/lib/demoContent';
+
+// Voice turn transport. 'rest' (default): browser STT (useVoiceTurn) → REST +
+// browser TTS. 'server': stream mic audio to the :8004 voice server, which does
+// STT (Deepgram) + tutor + streamed TTS, all over the WS (see useVoiceStream /
+// useWebSocket). Flip to 'server' once the voice server is validated end to end.
+const VOICE_TRANSPORT = process.env.NEXT_PUBLIC_VOICE_TRANSPORT === 'server' ? 'server' : 'rest';
+
+// Real refraction glass (liquid-glass-react) — browser-only shader, so it's
+// loaded client-side to keep the static export happy.
+const LiquidGlass = dynamic(() => import('liquid-glass-react'), { ssr: false });
 
 export default function LessonPage() {
   const { goStage, currentTopicId } = useFlowNav();
   const setQuestionText = useNumeraStore((s) => s.setQuestionText);
   const setQuestionNumber = useNumeraStore((s) => s.setQuestionNumber);
   const setTranscript = useNumeraStore((s) => s.setTranscript);
+  const clearTutorMarks = useNumeraStore((s) => s.clearTutorMarks);
   const micMuted = useNumeraStore((s) => s.micMuted);
   const setMicMuted = useNumeraStore((s) => s.setMicMuted);
-  const addTranscriptMessage = useNumeraStore((s) => s.addTranscriptMessage);
-  const addTrailEntry = useNumeraStore((s) => s.addTrailEntry);
+  const activeConceptId = useNumeraStore((s) => s.activeConceptId);
+  const activeQuestionId = useNumeraStore((s) => s.activeQuestionId);
 
   // ── Live backend wiring (no-op unless NEXT_PUBLIC_API_BASE_URL is set) ──
   const tutor = useDemoTutor();
-  const { start: startSession, apiEnabled, sessionId } = tutor;
+  const { submitVoiceTurn, start: startSession, apiEnabled, sessionId } = tutor;
+
+  // Real-time channel for tutor canvas_draw (+ transcript/state/streamed audio).
+  // No-ops unless NEXT_PUBLIC_WS_URL is set, so it's safe to mount before the WS
+  // backend exists.
+  const { sendAudioChunk } = useWebSocket(sessionId ?? null);
 
   // Wait for the persisted store to rehydrate before writing lesson content —
   // writing earlier would persist default state over the saved placement.
@@ -42,92 +63,88 @@ export default function LessonPage() {
   }, []);
 
   // Mock-mode content: load the placed topic's demo lesson. With a real backend
-  // the session response drives the question/transcript instead.
+  // the session response drives the question/transcript instead (see below).
   useEffect(() => {
     if (!hydrated || apiEnabled) return;
     const demo = demoFor(currentTopicId);
     setQuestionText(demo.lessonQuestion);
     setQuestionNumber(demo.questionNumber);
     setTranscript(demo.transcript);
-  }, [hydrated, apiEnabled, currentTopicId, setQuestionText, setQuestionNumber, setTranscript]);
+    clearTutorMarks(); // a new question starts with a clean tutor layer
+  }, [hydrated, apiEnabled, currentTopicId, setQuestionText, setQuestionNumber, setTranscript, clearTutorMarks]);
 
-  const onStudentTranscript = useCallback(
+  const onTurnEnd = useCallback(
     (transcript: string, confidence?: number) => {
-      if (!transcript.trim()) return;
-      addTranscriptMessage({ role: 'student', text: transcript });
-      addTrailEntry({
-        kind: 'answer',
-        text: transcript,
-        meta: confidence == null ? undefined : `STT ${(confidence * 100).toFixed(0)}%`,
-      });
+      void submitVoiceTurn(
+        transcript,
+        {
+          concept_id: activeConceptId,
+          question_id: activeQuestionId,
+          current_phase: DEMO_PHASE,
+          hint_count: 0,
+        },
+        confidence
+      );
     },
-    [addTranscriptMessage, addTrailEntry]
+    [submitVoiceTurn, activeConceptId, activeQuestionId]
   );
-
-  const onTutorResponse = useCallback(
-    (response: StreamingTutorResponse) => {
-      addTranscriptMessage({ role: 'ai', text: response.text });
-      addTrailEntry({ kind: 'tutor', text: response.text });
-    },
-    [addTranscriptMessage, addTrailEntry]
-  );
-
-  const onVoiceError = useCallback(
-    (message: string) => addTrailEntry({ kind: 'tutor', text: message }),
-    [addTrailEntry]
-  );
-
-  const voice = useStreamingVoiceTurn({
-    sessionId,
-    onStudentTranscript,
-    onTutorResponse,
-    onError: onVoiceError,
-  });
-  const { start: startVoice, stop: stopVoice, supported: voiceSupported } = voice;
+  const voice = useVoiceTurn({ onTurnEnd });
+  // Server transport: stream raw mic audio to the voice server instead of doing
+  // browser STT + REST. The server drives transcript/tutor_response/audio over WS.
+  const voiceStream = useVoiceStream({ onAudio: sendAudioChunk });
 
   // Start a backend session on lesson entry and let it drive the displayed
   // question/number/opening message. Mic starts muted so capture is opt-in.
   useEffect(() => {
     if (!hydrated || !apiEnabled || sessionId) return;
     setMicMuted(true);
-    void startSession(DEMO_CONCEPT_ID, 'VOICE', DEMO_PHASE).then((rec) => {
+    void startSession(activeConceptId, 'VOICE').then((rec) => {
       if (!rec) return;
       // CanvasStage renders the "Solve for x:" prefix itself, so strip it.
       setQuestionText(rec.current_question.replace(/^solve for\s*x\s*:?\s*/i, '').trim());
       setQuestionNumber(rec.question_number);
       setTranscript([{ role: 'ai', text: rec.message }]);
+      clearTutorMarks();
+      // Backend decides whether a supporting picture should be shown.
+      useNumeraStore.getState().setVisualCueVisible(rec.show_visual_cue);
     });
-  }, [
-    hydrated,
-    apiEnabled,
-    sessionId,
-    startSession,
-    setMicMuted,
-    setQuestionText,
-    setQuestionNumber,
-    setTranscript,
-  ]);
+  }, [hydrated, apiEnabled, sessionId, activeConceptId, startSession, setMicMuted, setQuestionText, setQuestionNumber, setTranscript, clearTutorMarks]);
 
-  // Mic button drives real voice capture: unmuted → listen + fire turns on
-  // silence; muted → stop.
+  // Mic button drives real voice capture: unmuted → listen; muted → stop. In
+  // 'rest' transport the browser detects turns + fires REST; in 'server' transport
+  // we stream mic audio to the voice server and it drives the turn over the WS.
+  const capture = VOICE_TRANSPORT === 'server' ? voiceStream : voice;
   useEffect(() => {
-    if (!apiEnabled || !sessionId || !voiceSupported) return;
-    if (!micMuted) void startVoice();
-    else stopVoice();
-  }, [apiEnabled, sessionId, micMuted, voiceSupported, startVoice, stopVoice]);
+    if (!apiEnabled || !sessionId || !capture.supported) return;
+    if (!micMuted) void capture.start();
+    else capture.stop();
+  }, [apiEnabled, sessionId, micMuted, capture]);
 
   return (
     <>
       <SlideDots />
       <CanvasStage />
       <ContinuityCheck />
-      {/* Guided lesson → independent practice for this topic */}
-      <button
-        onClick={() => goStage('practice', currentTopicId)}
-        className="fixed top-4 right-4 z-40 rounded-md bg-focus-navy text-white px-4 py-2 text-[12px] font-semibold hover:opacity-80 transition-opacity"
-      >
-        Finish lesson → Practice
-      </button>
+      <FloatingMicButton />
+      <VisualCue />
+      {/* Guided lesson → independent practice — real liquid-glass (refracts the
+          canvas grid behind it, reacts to the cursor). */}
+      <div className="fixed top-4 right-4 z-40">
+        <LiquidGlass
+          cornerRadius={100}
+          padding="9px 18px"
+          displacementScale={62}
+          blurAmount={0.06}
+          saturation={135}
+          aberrationIntensity={2}
+          elasticity={0.28}
+          mode="standard"
+          onClick={() => goStage('practice', currentTopicId)}
+          className="cursor-pointer"
+        >
+          <span className="text-ink text-[12px] font-semibold whitespace-nowrap">Finish lesson → Practice</span>
+        </LiquidGlass>
+      </div>
     </>
   );
 }

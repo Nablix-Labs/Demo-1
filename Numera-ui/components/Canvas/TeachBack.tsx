@@ -21,8 +21,7 @@ export default function TeachBack() {
       {!open ? (
         <button
           onClick={() => setOpen(true)}
-          className="flex items-center gap-1.5 rounded-full border border-muted-gray bg-white px-3 py-1.5 text-[12px] font-semibold text-ink hover:bg-reading-surface transition-colors"
-          style={{ boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}
+          className="lg-glass flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-semibold text-ink transition-colors"
         >
           <GraduationCap size={15} strokeWidth={1.8} /> Explain it back
         </button>

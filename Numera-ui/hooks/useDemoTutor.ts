@@ -16,7 +16,6 @@ import { useCallback } from 'react';
 import {
   startSession,
   submitCanvas,
-  synthesizeTutorAudio,
   sendInteraction,
   requestHint,
   endSession,
@@ -27,8 +26,7 @@ import {
   type HintResponse,
 } from '@/lib/api';
 import { useNumeraStore } from '@/store/useNumeraStore';
-import { useMicLevel } from '@/store/useMicLevel';
-import { playTutorAudio } from '@/lib/playTutorAudio';
+import { speakTutor } from '@/lib/tts';
 
 const apiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
@@ -41,20 +39,13 @@ function hasCanvasActivity(): boolean {
   return useNumeraStore.getState().items.length > 0;
 }
 
-/** Speak the tutor's reply (TTS output only — never used to decide content).
- *  Drives the 3D avatar's mouth via useMicLevel: onstart/onboundary open it in
- *  sync with the spoken words, onend/onerror close it. */
-function speak(text: string): void {
-  if (typeof window === 'undefined' || !('speechSynthesis' in window) || !text) return;
-  const mic = useMicLevel.getState();
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.onstart = () => useMicLevel.getState().setAiSpeaking(true);
-  utterance.onboundary = () => useMicLevel.getState().markBoundary();
-  utterance.onend = () => useMicLevel.getState().setAiSpeaking(false);
-  utterance.onerror = () => useMicLevel.getState().setAiSpeaking(false);
-  window.speechSynthesis.cancel();
-  mic.setAiSpeaking(false); // reset before the new utterance starts
-  window.speechSynthesis.speak(utterance);
+/** Apply the backend's visual-cue instruction from an interaction response.
+ *  Prefers the richer `visual_cue.show`, falling back to the flat
+ *  `show_visual_cue`. No-ops when neither is present so a response that omits the
+ *  field never hides an already-shown cue. */
+function applyVisualCue(res: InteractionResponse): void {
+  const show = res.visual_cue?.show ?? res.show_visual_cue;
+  if (typeof show === 'boolean') useNumeraStore.getState().setVisualCueVisible(show);
 }
 
 /** Pull a human-readable message out of a normalised API error, if present. */
@@ -64,47 +55,6 @@ function errorMessage(err: unknown, fallback: string): string {
     if (data?.message) return data.message;
   }
   return err instanceof Error ? err.message : fallback;
-}
-
-function logCanvasGeometryTrace(res: CanvasSubmissionResult): void {
-  if (process.env.NODE_ENV === 'production') return;
-
-  const regions = res.ocr.detected_regions.map((region) => ({
-    step_id: region.step_id ?? '',
-    text: region.text,
-    x: region.x,
-    y: region.y,
-    w: region.w,
-    h: region.h,
-    center_x: region.x + region.w / 2,
-    center_y: region.y + region.h / 2,
-    confidence: region.confidence,
-  }));
-  const drawElements = (res.canvas_draw ?? []).flatMap((payload) =>
-    payload.elements.map((element) => ({
-      actionId: payload.actionId ?? '',
-      kind: element.kind,
-      id: element.id ?? '',
-      x: element.x ?? '',
-      y: element.y ?? '',
-      w: element.w ?? '',
-      h: element.h ?? '',
-      from: element.from?.join(',') ?? '',
-      to: element.to?.join(',') ?? '',
-      text: element.text ?? element.tex ?? '',
-    }))
-  );
-
-  console.groupCollapsed('[canvas-geometry] OCR regions -> canvas_draw');
-  console.log({
-    submission_id: res.submission_id,
-    provider: res.ocr.provider,
-    confidence_source: res.ocr.confidence_source,
-  });
-  console.table(regions);
-  console.table(drawElements);
-  console.log({ ocr: res.ocr, canvas_draw: res.canvas_draw ?? [] });
-  console.groupEnd();
 }
 
 export function useDemoTutor() {
@@ -120,8 +70,7 @@ export function useDemoTutor() {
   const start = useCallback(
     async (
       conceptId: string,
-      mode: 'VOICE' | 'TEXT' = 'TEXT',
-      initialPhase: string | null = null
+      mode: 'VOICE' | 'TEXT' = 'TEXT'
     ): Promise<SessionRecord | null> => {
       if (!apiEnabled()) return null;
       try {
@@ -129,7 +78,6 @@ export function useDemoTutor() {
           student_id: STUDENT_ID,
           concept_id: conceptId,
           interaction_mode: mode,
-          ...(initialPhase === null ? {} : { initial_phase: initialPhase }),
         });
         clearTrail();
         setSessionId(rec.session_id);
@@ -166,6 +114,9 @@ export function useDemoTutor() {
         });
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message });
+        if (res.canvas_draw) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
+        applyVisualCue(res); // backend may ask to show/hide the supporting visual
+        speakTutor(res.message); // voice the reply — same verbatim text shown in chat
         return res;
       } catch (err) {
         addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Tutor unavailable.') });
@@ -185,7 +136,6 @@ export function useDemoTutor() {
     }
     try {
       const res = await submitCanvas(sessionId, png);
-      logCanvasGeometryTrace(res);
       addTrailEntry({
         kind: 'canvas',
         text: res.ocr.raw_ocr_text || res.ocr.detected_equation || 'Canvas submitted.',
@@ -199,13 +149,8 @@ export function useDemoTutor() {
         text: res.tutor.tutor_message,
         meta: res.tutor.evaluation,
       });
-      // Render tutor marks from the Check path, same as the voice path does.
-      useNumeraStore.getState().clearTutorMarks();
-      for (const payload of res.canvas_draw ?? []) {
-        useNumeraStore.getState().applyCanvasDraw(payload);
-      }
-      const voiceText = res.tutor.tutor_message_voice || res.tutor.tutor_message;
-      playTutorAudio(await synthesizeTutorAudio(voiceText), voiceText);
+      if (res.canvas_draw) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
+      speakTutor(res.tutor.tutor_message); // voice the reply — same verbatim text shown in chat
       return res;
     } catch (err) {
       addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Could not read the canvas.') });
@@ -230,6 +175,7 @@ export function useDemoTutor() {
         });
         addTranscriptMessage({ role: 'ai', text: res.hint });
         addTrailEntry({ kind: 'hint', text: res.hint, meta: `Hint ${res.hint_level}` });
+        speakTutor(res.hint); // voice the hint — same verbatim text shown in chat
         return res;
       } catch (err) {
         addTrailEntry({ kind: 'hint', text: errorMessage(err, 'No hint available.') });
@@ -252,6 +198,11 @@ export function useDemoTutor() {
     ): Promise<InteractionResponse | null> => {
       if (!apiEnabled() || !sessionId || !transcript.trim()) return null;
       addTrailEntry({ kind: 'answer', text: transcript });
+      // Show the student's complete spoken turn in the chat. The live caption is
+      // ephemeral (cleared on commit), so without this the words the student
+      // said — including the trailing 1–2 recovered by the commit-time caption
+      // fallback in useVoiceTurn — never appear in the visible transcript.
+      addTranscriptMessage({ role: 'student', text: transcript });
 
       // Console trace for backend integration debugging — shows the exact
       // payloads/responses the frontend exchanges on a voice turn.
@@ -267,17 +218,12 @@ export function useDemoTutor() {
           console.log('→ POST /canvas/submit', { session_id: sessionId, student_id: STUDENT_ID, snapshot_bytes: png.length });
           const canvasRes = await submitCanvas(sessionId, png);
           canvasSnapshotId = canvasRes.submission_id;
-          logCanvasGeometryTrace(canvasRes);
           console.log('← /canvas/submit', { submission_id: canvasRes.submission_id, ocr: canvasRes.ocr, tutor: canvasRes.tutor });
           addTrailEntry({
             kind: 'canvas',
             text: canvasRes.ocr.raw_ocr_text || canvasRes.ocr.detected_equation || 'Canvas submitted.',
             meta: `OCR ${(canvasRes.ocr.confidence * 100).toFixed(0)}%`,
           });
-          useNumeraStore.getState().clearTutorMarks();
-          for (const payload of canvasRes.canvas_draw ?? []) {
-            useNumeraStore.getState().applyCanvasDraw(payload);
-          }
         } catch (err) {
           console.warn('✗ /canvas/submit failed:', err);
           /* canvas is optional for a voice turn */
@@ -306,7 +252,13 @@ export function useDemoTutor() {
         console.groupEnd();
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message });
-        speak(res.message_voice || res.message);
+        if (res.canvas_draw) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
+        applyVisualCue(res); // backend may ask to show/hide the supporting visual
+        // Speak exactly what's shown in the chat. The backend's message_voice can
+        // carry the same meaning in different words ("we are close" vs "you're
+        // almost there"), which is confusing when read + heard together — so the
+        // spoken audio must match the on-screen text verbatim.
+        speakTutor(res.message);
         return res;
       } catch (err) {
         console.warn('✗ /interaction failed:', err);

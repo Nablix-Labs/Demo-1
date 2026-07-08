@@ -19,12 +19,8 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
-    if (useAuthStore.persist.hasHydrated()) {
-      setHydrated(true);
-      return;
-    }
     void useAuthStore.persist.rehydrate();
-    return useAuthStore.persist.onFinishHydration(() => setHydrated(true));
+    setHydrated(true);
   }, []);
 
   const state = useAuthStore();

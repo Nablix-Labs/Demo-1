@@ -15,11 +15,14 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="h-screen overflow-hidden bg-white font-sans text-ink">
+      <body className="h-screen overflow-hidden lg-root font-sans text-ink">
+        {/* Liquid Glass — vivid ambient backdrop the chrome lenses over. */}
+        <div className="lg-ambient" aria-hidden="true" />
         {/* App shell — the tool rail and media panel persist across every route.
-            Full-bleed: fills the viewport edge-to-edge (no centred gutter). */}
+            Full-bleed: fills the viewport edge-to-edge (no centred gutter).
+            Sits above the ambient layer. */}
         <div
-          className="h-screen flex bg-white w-full"
+          className="relative z-10 h-screen flex w-full"
           aria-label="Numera AI Math Tutor"
         >
           <AppFrame>{children}</AppFrame>

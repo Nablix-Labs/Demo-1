@@ -2,13 +2,18 @@
 
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useMicLevel, MIC_BARS } from '@/store/useMicLevel';
+import { useAuthStore, isConsentActive } from '@/store/useAuthStore';
 import { cn } from '@/lib/cn';
 
 export default function VoiceBar() {
-  const { micMuted, voiceStatus, toggleMic } = useNumeraStore();
+  const { micMuted, voiceStatus } = useNumeraStore();
   const levels = useMicLevel((s) => s.levels);
   const active = useMicLevel((s) => s.active);
   const caption = useMicLevel((s) => s.caption);
+  const consents = useAuthStore((s) => s.consents);
+
+  // Voice is a consented feature (§10): only available with voice_processing consent.
+  const voiceAllowed = isConsentActive(consents, 'voice_processing');
 
   // The bar is "live" (reacting to real input) only while capturing + unmuted.
   const live = active && !micMuted;
@@ -19,9 +24,20 @@ export default function VoiceBar() {
       <p className="text-[11.5px] text-slate-blue text-center">
         Status:{' '}
         <strong className="text-ink">
-          {micMuted ? 'Muted' : voiceStatus === 'listening' ? 'Listening…' : voiceStatus === 'speaking' ? 'Speaking…' : voiceStatus === 'processing' ? 'Processing…' : 'Idle'}
+          {!voiceAllowed ? 'Unavailable' : micMuted ? 'Muted' : voiceStatus === 'listening' ? 'Listening…' : voiceStatus === 'speaking' ? 'Speaking…' : voiceStatus === 'processing' ? 'Processing…' : 'Idle'}
         </strong>
       </p>
+
+      {!voiceAllowed ? (
+        /* §14: voice consent missing */
+        <div className="rounded-md bg-reading-surface border border-muted-gray px-3 py-2.5 text-center">
+          <p className="text-[11.5px] text-ink font-medium">Voice mode is not available</p>
+          <p className="text-[11px] text-slate-blue mt-0.5 leading-snug">
+            Voice consent is required. You can continue with text below.
+          </p>
+        </div>
+      ) : (
+      <>
 
       {/* Live input level — reflects how much mic signal is being detected */}
       <div className="flex items-center justify-center gap-[3px] h-[26px]" aria-hidden="true">
@@ -57,37 +73,13 @@ export default function VoiceBar() {
         </div>
       )}
 
-      {/* Mute toggle */}
-      <button
-        onClick={toggleMic}
-        aria-label={micMuted ? 'Unmute microphone' : 'Mute microphone'}
-        className={cn(
-          'w-full border rounded-md px-2.5 py-2.5 text-xs font-semibold flex items-center justify-center gap-2 transition-colors',
-          micMuted
-            ? 'border-muted-gray bg-white text-ink'
-            : 'border-focus-navy bg-focus-navy text-white'
-        )}
-      >
-        {/* Mic icon (on / off) */}
-        {micMuted ? (
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <rect x="9" y="3" width="6" height="9" rx="3"/>
-            <path d="M5 11 a7 7 0 0 0 11.5 5.5"/>
-            <path d="M19 11 a7 7 0 0 0 -0.3 -2"/>
-            <line x1="12" y1="18" x2="12" y2="21"/>
-            <line x1="9" y1="21" x2="15" y2="21"/>
-            <line x1="4" y1="4" x2="20" y2="20"/>
-          </svg>
-        ) : (
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <rect x="9" y="3" width="6" height="11" rx="3"/>
-            <path d="M5 11 a7 7 0 0 0 14 0"/>
-            <line x1="12" y1="18" x2="12" y2="21"/>
-            <line x1="9" y1="21" x2="15" y2="21"/>
-          </svg>
-        )}
-        <span>{micMuted ? 'Muted — tap to unmute' : 'Tap to mute'}</span>
-      </button>
+      {/* Mute toggle lives in FloatingMicButton (bottom-center, always visible
+          regardless of panel side/collapse) — see components/FloatingMicButton.tsx */}
+      <p className="text-[10.5px] text-slate-blue text-center italic">
+        {micMuted ? 'Muted — tap the mic button below to unmute' : 'Tap the mic button below to mute'}
+      </p>
+      </>
+      )}
     </div>
   );
 }

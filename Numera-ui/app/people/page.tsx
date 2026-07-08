@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import PageShell, { Chip, Avatar } from '@/components/PageShell';
 
 interface Person {
@@ -38,6 +39,14 @@ export default function PeoplePage() {
               <div className="text-[14px] font-semibold text-ink">{p.name}</div>
               <div className="text-[12px] text-slate-blue truncate">{p.detail}</div>
             </div>
+            {p.role === 'Parent' && (
+              <Link
+                href="/consent/manage"
+                className="text-[12px] font-semibold text-learning-blue hover:underline whitespace-nowrap"
+              >
+                Manage consent
+              </Link>
+            )}
             <Chip tone={p.role === 'Tutor' ? 'solid' : 'outline'}>{p.role}</Chip>
           </div>
         ))}

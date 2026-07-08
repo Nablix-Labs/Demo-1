@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { Folder, ClipboardCheck } from 'lucide-react';
 import PageShell, { ProgressBar, Chip, EmptyState } from '@/components/PageShell';
+import FolderArt from '@/components/FolderArt';
 import PhaseGate from '@/components/PhaseGate';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import {
@@ -78,23 +79,22 @@ export default function WorkbookPage() {
             <Link
               key={t.id}
               href={`/workbook/${t.id}`}
-              className="flex flex-col rounded-lg border border-muted-gray bg-white p-5 hover:border-muted-gray transition-colors"
+              className="group flex flex-col rounded-xl border border-muted-gray bg-white p-4 hover:border-slate-blue/40 hover:shadow-[0_8px_24px_rgba(27,42,74,0.08)] transition-all"
             >
-              <div className="flex items-start gap-3">
-                <span className="flex-shrink-0 w-10 h-10 rounded-lg border border-muted-gray bg-reading-surface flex items-center justify-center">
-                  <Folder size={18} strokeWidth={1.6} />
-                </span>
-                <div className="min-w-0">
-                  <h2 className="text-[15px] font-semibold text-ink">{t.title}</h2>
-                  <p className="text-[11.5px] text-slate-blue mt-0.5">{t.blurb}</p>
-                </div>
+              {/* Folder illustration */}
+              <div className="rounded-lg bg-reading-surface/70 px-4 pt-3 flex items-end justify-center">
+                <FolderArt className="w-[74%] h-auto -mb-1 transition-transform duration-300 group-hover:-translate-y-1" />
               </div>
 
-              <div className="flex flex-wrap gap-1.5 mt-3">
+              <div className="mt-3 flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <h2 className="text-[15px] font-semibold text-ink truncate">{t.title}</h2>
+                  <p className="text-[11.5px] text-slate-blue mt-0.5 line-clamp-1">{t.blurb}</p>
+                </div>
                 <Chip>{ks}</Chip>
               </div>
 
-              <div className="mt-4">
+              <div className="mt-3.5">
                 <div className="flex items-center justify-between text-[11px] text-slate-blue mb-1.5">
                   <span>{subs.length} subtopics · {lessons.length} lessons</span>
                   <span>{pct}%</span>

@@ -31,7 +31,7 @@ const VIEWS: Partial<Record<AccountStatus, View>> = {
     Icon: ShieldAlert, tone: 'orange',
     title: 'Access restricted',
     message: 'Access is restricted because required consent has been withdrawn.',
-    cta: { label: 'Review consent', href: '/consent' },
+    cta: { label: 'Review consent', href: '/consent/manage' },
   },
   suspended: {
     Icon: Ban, tone: 'orange',

@@ -55,7 +55,7 @@ export default function ToolRail() {
 
   return (
     <nav
-      className="flex flex-col items-center flex-shrink-0 w-14 bg-focus-navy py-3.5 gap-1"
+      className="lg-glass-dark flex flex-col items-center flex-shrink-0 w-14 py-3.5 gap-1 m-2 rounded-2xl"
       aria-label="Tool rail"
     >
       {/* Brand mark */}

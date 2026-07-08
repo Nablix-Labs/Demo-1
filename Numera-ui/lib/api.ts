@@ -17,8 +17,9 @@ import type { CanvasDrawPayload } from '@/store/useNumeraStore';
 const BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
 
 /**
- * Fixed demo identifiers — must match the backend's documented test values.
- * The session_id itself is minted by POST /session/start and read from the response.
+ * Fixed demo identifiers — must match the backend's documented test values
+ * ("Fixed values used across all test cases"). The session_id itself is NOT
+ * fixed here; it's minted by POST /session/start and read from the response.
  */
 export const STUDENT_ID = 'ST001';
 export const DEMO_CONCEPT_ID = 'ALG_LINEAR_ONE_STEP';
@@ -27,7 +28,7 @@ export const DEMO_PHASE = 'GUIDED_PRACTICE';
 
 export const api = axios.create({
   baseURL: BASE,
-  timeout: 30_000,
+  timeout: 10_000,
   headers: { 'Content-Type': 'application/json' },
 });
 
@@ -85,8 +86,9 @@ export interface SessionRecord {
   canvas_state: CanvasState;
   ui_state: string;
   message: string;
-  // UI flags — these live ONLY on the session record (start / read), not on
-  // /interaction responses. Stash them client-side after /session/start.
+  // UI flags on the session record (start / read). Stash them client-side after
+  // /session/start. Note: the backend also echoes show_visual_cue / visual_cue on
+  // /interaction responses (see InteractionResponse), so those update per turn.
   show_canvas: boolean;
   show_hint_button: boolean;
   show_visual_cue: boolean;
@@ -105,7 +107,6 @@ export interface StartSessionPayload {
   student_id: string;
   concept_id: string;
   interaction_mode: InteractionMode;
-  initial_phase?: string;
 }
 
 /** POST /session/start */
@@ -150,6 +151,15 @@ export interface InteractionPayload {
   hint_count: number;
 }
 
+/** Supporting picture the backend asks the frontend to show (e.g. an equation
+ *  block). `show` drives visibility; `cue_type` (e.g. 'EQUATION_BLOCK') can pick
+ *  which visual to render. Matches the backend VisualCue model. */
+export interface VisualCue {
+  show: boolean;
+  cue_type: string | null;
+  description: string | null;
+}
+
 export interface InteractionResponse {
   session_id: string;
   student_id: string;
@@ -160,6 +170,12 @@ export interface InteractionResponse {
   message_voice: string;
   hint_count: number;
   phase_indicator: string;
+  /** Optional tutor drawing to render on the canvas alongside this reply. */
+  canvas_draw?: CanvasDrawPayload;
+  /** Whether to show the supporting visual cue after this turn. The backend also
+   *  sends the richer `visual_cue` object; prefer that when present. */
+  show_visual_cue?: boolean;
+  visual_cue?: VisualCue | null;
 }
 
 /** POST /interaction — core tutoring call. Requires a started, owned session. */
@@ -197,15 +213,6 @@ export interface OcrResult {
   raw_ocr_text: string;
   detected_equation: string;
   detected_steps: string[];
-  detected_regions: Array<{
-    step_id?: string;
-    text: string;
-    x: number;
-    y: number;
-    w: number;
-    h: number;
-    confidence: number;
-  }>;
   final_answer: string;
   confidence: number;
   needs_clarification: boolean;
@@ -220,7 +227,6 @@ export interface TutorResult {
   error_type: string;
   response_strategy: string;
   tutor_message: string;
-  tutor_message_voice: string;
   hint_level: number;
   answer_reveal_allowed: boolean;
 }
@@ -240,7 +246,8 @@ export interface CanvasSubmissionResult {
   ocr: OcrResult;
   tutor: TutorResult;
   latency: CanvasLatency;
-  canvas_draw?: CanvasDrawPayload[];
+  /** Optional tutor drawing (e.g. mark up the student's working). */
+  canvas_draw?: CanvasDrawPayload;
 }
 
 const PNG_DATA_URL_PREFIX = 'data:image/png;base64,';
@@ -313,15 +320,4 @@ export interface VoiceTranscriptPayload {
 export async function sendVoiceTranscript(payload: VoiceTranscriptPayload) {
   const res = await api.post<InteractionResponse>('/voice/transcript', payload);
   return res.data;
-}
-
-/** POST /voice/tts — server-side (OpenAI) TTS. Returns base64 mp3, or null on failure. */
-export async function synthesizeTutorAudio(text: string): Promise<string | null> {
-  if (!text) return null;
-  try {
-    const res = await api.post<{ audio_base64: string | null }>('/voice/tts', { text });
-    return res.data.audio_base64;
-  } catch {
-    return null;
-  }
 }

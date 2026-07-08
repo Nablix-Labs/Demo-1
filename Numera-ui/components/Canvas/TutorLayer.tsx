@@ -14,7 +14,6 @@ import { Layer, Text, Line, Arrow, Rect, Ellipse } from 'react-konva';
 import { useNumeraStore, type TutorElement } from '@/store/useNumeraStore';
 
 const INK = '#1B2A4A'; // focus-navy — readable AI-tutor ink default
-const MATH_FONT = 'KaTeX_Main, "Cambria Math", Georgia, serif';
 
 export default function TutorLayer({ width, height }: { width: number; height: number }) {
   const tutorElements = useNumeraStore((s) => s.tutorElements);
@@ -27,10 +26,12 @@ export default function TutorLayer({ width, height }: { width: number; height: n
     const sw = el.strokeWidth ?? 2;
 
     switch (el.kind) {
-      case 'text':
-      case 'math': {
-        const content = el.kind === 'math' ? (el.tex ?? el.text ?? '') : (el.text ?? '');
-        const fontSize = el.size ?? (el.kind === 'math' ? 24 : 14);
+      // `math` is rendered as real KaTeX by TutorMathOverlay (HTML), not here.
+      case 'math':
+        return null;
+      case 'text': {
+        const content = el.text ?? '';
+        const fontSize = el.size ?? 14;
         // Centre on (x, y): estimate width from glyph count.
         const estW = content.length * fontSize * 0.55;
         return (
@@ -40,8 +41,7 @@ export default function TutorLayer({ width, height }: { width: number; height: n
             y={(el.y ?? 0.5) * height}
             text={content}
             fontSize={fontSize}
-            fontFamily={el.kind === 'math' ? MATH_FONT : 'Helvetica, Arial, sans-serif'}
-            fontStyle={el.kind === 'math' ? 'italic' : 'normal'}
+            fontFamily={'Helvetica, Arial, sans-serif'}
             fill={color}
             offsetX={estW / 2}
             offsetY={fontSize / 2}

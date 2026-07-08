@@ -5,7 +5,6 @@
  *
  * Layout (matches wireframe):
  *   • Question pinned top-left
- *   • Bar model visual centred (backend-controlled in production)
  *   • react-konva drawing surface fills the canvas area
  *   • Floating pill toolbar at bottom-centre
  *   • Pen FAB bottom-left, Help FAB bottom-right
@@ -14,6 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useNumeraStore } from '@/store/useNumeraStore';
+import { useAuthStore, isConsentActive } from '@/store/useAuthStore';
 import { useDemoTutor } from '@/hooks/useDemoTutor';
 import { gridBackground, GRID_OPTIONS } from '@/lib/canvasGrid';
 import Toolbar from './Toolbar';
@@ -32,7 +32,9 @@ const HELP_TIPS = [
 ];
 
 export default function CanvasStage() {
-  const { questionText, questionNumber, items, setActiveTool, setCanvasExporter, setFullCanvasExporter, canvasGrid, setCanvasGrid } = useNumeraStore();
+  const { questionText, questionNumber, items, setCanvasExporter, canvasGrid, setCanvasGrid } = useNumeraStore();
+  const canvasConsents = useAuthStore((s) => s.consents);
+  const canvasAllowed = isConsentActive(canvasConsents, 'canvas_processing');
   const tutor = useDemoTutor();
 
   const exportRef = useRef<(() => string | null) | null>(null);
@@ -43,12 +45,8 @@ export default function CanvasStage() {
 
   const handleExportReady = useCallback((fn: () => string | null) => {
     exportRef.current = fn;
-    setCanvasExporter(fn);
+    setCanvasExporter(fn); // expose to the panel menu for "Save as PDF"
   }, [setCanvasExporter]);
-
-  const handleFullExportReady = useCallback((fn: () => string | null) => {
-    setFullCanvasExporter(fn);
-  }, [setFullCanvasExporter]);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -61,6 +59,10 @@ export default function CanvasStage() {
   }, []);
 
   const handleCheckWork = useCallback(() => {
+    if (!canvasAllowed) {
+      showToast('Canvas processing is not available until the required consent is completed.');
+      return;
+    }
     const png = exportRef.current?.();
     if (!png || items.length === 0) {
       showToast('Show your working on the canvas first, then tap Check.');
@@ -76,7 +78,7 @@ export default function CanvasStage() {
     } else {
       showToast('Nice work — your working has been submitted.');
     }
-  }, [items.length, showToast, tutor]);
+  }, [canvasAllowed, items.length, showToast, tutor]);
 
   return (
     <main
@@ -96,9 +98,16 @@ export default function CanvasStage() {
         </div>
       </div>
 
-      {/* Drawing canvas (fills entire stage, above visuals) */}
+      {/* §14: canvas consent missing */}
+      {!canvasAllowed && (
+        <div className="absolute top-[70px] left-[34px] right-[34px] z-10 rounded-md bg-action-orange/10 border border-action-orange/30 px-3.5 py-2 text-[12px] text-ink">
+          Canvas processing is not available until the required consent is completed.
+        </div>
+      )}
+
+      {/* Drawing canvas (fills entire stage) */}
       <div className="absolute inset-0 z-[1]">
-        <DrawingCanvas onExportReady={handleExportReady} onFullExportReady={handleFullExportReady} />
+        <DrawingCanvas onExportReady={handleExportReady} />
       </div>
 
       {/* Teaching-back prompt */}
@@ -118,19 +127,6 @@ export default function CanvasStage() {
           {toast}
         </div>
       )}
-
-      {/* Corner FABs */}
-      <button
-        onClick={() => setActiveTool('pen')}
-        title="Pen"
-        aria-label="Switch to pen"
-        className="absolute bottom-[22px] left-6 w-12 h-12 rounded-full bg-focus-navy text-white flex items-center justify-center z-20"
-        style={{ boxShadow: '0 2px 10px rgba(0,0,0,0.22)' }}
-      >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M5 19 l1 -4 l9 -9 l3 3 l-9 9 l-4 1 z"/><line x1="13.5" y1="6.5" x2="16.5" y2="9.5"/>
-        </svg>
-      </button>
 
       {/* Paper-style + Help FABs */}
       <div className="absolute bottom-6 right-6 z-20 flex items-center gap-2.5">
@@ -230,12 +226,10 @@ export default function CanvasStage() {
   );
 }
 
-/** Corner FAB styling — dark when open, muted when closed. */
+/** Corner FAB styling — dark glass when open, light glass when closed. */
 function cnFab(open: boolean) {
   return [
-    'w-10 h-10 rounded-full flex items-center justify-center transition-colors border',
-    open
-      ? 'bg-focus-navy text-white border-focus-navy'
-      : 'bg-reading-surface text-slate-blue border-muted-gray hover:bg-muted-gray hover:text-ink',
+    'w-10 h-10 rounded-full flex items-center justify-center transition-colors',
+    open ? 'lg-glass-dark text-white' : 'lg-glass text-slate-blue hover:text-ink',
   ].join(' ');
 }

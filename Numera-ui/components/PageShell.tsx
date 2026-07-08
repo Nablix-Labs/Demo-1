@@ -19,8 +19,8 @@ export default function PageShell({
   children: ReactNode;
 }) {
   return (
-    <main className="flex-1 min-w-0 flex flex-col bg-white" aria-label={title}>
-      <header className="flex items-end justify-between gap-4 px-8 py-6 border-b border-muted-gray flex-shrink-0">
+    <main className="lg-glass flex-1 min-w-0 flex flex-col rounded-2xl m-2 overflow-hidden" aria-label={title}>
+      <header className="flex items-end justify-between gap-4 px-8 py-6 border-b border-white/40 flex-shrink-0">
         <div>
           <h1 className="text-[22px] font-semibold text-ink leading-tight">{title}</h1>
           {subtitle && <p className="text-[12px] text-slate-blue mt-1">{subtitle}</p>}

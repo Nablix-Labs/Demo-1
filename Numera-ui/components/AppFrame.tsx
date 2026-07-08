@@ -12,6 +12,7 @@ import { useEffect, type ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
 import ToolRail from './ToolRail';
 import MediaPanel from './MediaPanel';
+import AuthGate from './auth/AuthGate';
 import { useNumeraStore } from '@/store/useNumeraStore';
 
 // Routes that render on their own, without the tool rail or media panel.
@@ -39,10 +40,13 @@ export default function AppFrame({ children }: { children: ReactNode }) {
   // route keeps the tool rail for navigation but renders content full-width.
   const isLesson = pathname === '/';
 
-  if (isLesson) {
-    return (
+  return (
+    <AuthGate>
+      <ToolRail />
       <div className="flex-1 flex min-w-0">
-        {panelSide === 'left' ? (
+        {!isLesson ? (
+          children
+        ) : panelSide === 'left' ? (
           <>
             <MediaPanel />
             {children}
@@ -54,15 +58,6 @@ export default function AppFrame({ children }: { children: ReactNode }) {
           </>
         )}
       </div>
-    );
-  }
-
-  return (
-    <>
-      <ToolRail />
-      <div className="flex-1 flex min-w-0">
-        {children}
-      </div>
-    </>
+    </AuthGate>
   );
 }
