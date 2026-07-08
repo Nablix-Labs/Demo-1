@@ -8,3 +8,5 @@ _pycache_/
 *.egg-info/
 docs
 .claude
+.vercel
+.env*
