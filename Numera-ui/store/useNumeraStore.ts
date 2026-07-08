@@ -24,6 +24,7 @@ export type SessionState =
 export type DrawingTool = 'pen' | 'pencil' | 'highlighter' | 'eraser' | 'shape' | 'ruler';
 export type ShapeKind = 'rect' | 'circle' | 'triangle';
 export type EraserMode = 'stroke' | 'object';
+export type CanvasGrid = 'plain' | 'dots' | 'grid-sm' | 'grid' | 'grid-lg' | 'lines';
 
 export type InputMode = 'voice' | 'text' | 'canvas';
 
@@ -169,9 +170,11 @@ export interface NumeraState {
   toolbarPos: { x: number; y: number } | null; // null = default docked position
   toolbarCollapsed: boolean;          // collapsed to a small bubble
   toolbarOrientation: 'horizontal' | 'vertical'; // rotates when docked at a side
+  canvasGrid: CanvasGrid;             // paper style behind the drawing surface
 
-  // Runtime: canvas PNG exporter, registered by the canvas for PDF notes
+  // Runtime: canvas PNG exporters, registered by the canvas
   canvasExporter: (() => string | null) | null;
+  fullCanvasExporter: (() => string | null) | null;
 
   // Group / live session (collaboration)
   sessionMode: 'solo' | 'group';
@@ -229,6 +232,7 @@ export interface NumeraState {
   undo: () => void;
   redo: () => void;
   clearCanvas: () => void;
+  clearStudentWork: () => void;
   applyCanvasDraw: (payload: CanvasDrawPayload) => void;
   clearTutorMarks: () => void;
   setInputMode: (m: InputMode) => void;
@@ -239,7 +243,9 @@ export interface NumeraState {
   setToolbarPos: (pos: { x: number; y: number } | null) => void;
   toggleToolbarCollapsed: () => void;
   setToolbarOrientation: (o: 'horizontal' | 'vertical') => void;
+  setCanvasGrid: (g: CanvasGrid) => void;
   setCanvasExporter: (fn: (() => string | null) | null) => void;
+  setFullCanvasExporter: (fn: (() => string | null) | null) => void;
   startGroupSession: () => void;
   endGroupSession: () => void;
   upsertParticipant: (p: Participant) => void;
@@ -275,10 +281,10 @@ const initial: Omit<
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
   | 'setShapeKind' | 'setEraserMode'
   | 'setStrokeColor' | 'setStrokeWidth' | 'addItem' | 'removeItem' | 'undo' | 'redo'
-  | 'clearCanvas' | 'applyCanvasDraw' | 'clearTutorMarks'
+  | 'clearCanvas' | 'clearStudentWork' | 'applyCanvasDraw' | 'clearTutorMarks'
   | 'setInputMode' | 'setTextInput' | 'setPanelSide' | 'togglePanelSide'
-  | 'toggleTranscript' | 'setToolbarPos' | 'toggleToolbarCollapsed' | 'setToolbarOrientation'
-  | 'setCanvasExporter' | 'startGroupSession' | 'endGroupSession'
+  | 'toggleTranscript' | 'setToolbarPos' | 'toggleToolbarCollapsed' | 'setToolbarOrientation' | 'setCanvasGrid'
+  | 'setCanvasExporter' | 'setFullCanvasExporter' | 'startGroupSession' | 'endGroupSession'
   | 'upsertParticipant' | 'removeParticipant' | 'setParticipantCursor'
   | 'addRemoteItem' | 'toggleLessonLearned' | 'setPracticeDone' | 'setStudentAge' | 'setStudentName'
   | 'completePhase'
@@ -331,7 +337,9 @@ const initial: Omit<
   toolbarPos: null,
   toolbarCollapsed: false,
   toolbarOrientation: 'horizontal',
+  canvasGrid: 'grid',
   canvasExporter: null,
+  fullCanvasExporter: null,
   sessionMode: 'solo',
   participants: [],
   remoteItems: [],
@@ -379,12 +387,14 @@ export const useNumeraStore = create<NumeraState>()(
   setVoiceStatus: (voiceStatus) => set({ voiceStatus }),
 
   addTranscriptMessage: (msg) =>
-    set((s) => ({
-      transcript: [
-        ...s.transcript,
-        { ...msg, id: crypto.randomUUID(), timestamp: Date.now() },
-      ],
-    })),
+    set((s) => {
+      const last = s.transcript[s.transcript.length - 1];
+      const message = { ...msg, id: crypto.randomUUID(), timestamp: Date.now() };
+      if (last?.partial && last.role === msg.role) {
+        return { transcript: [...s.transcript.slice(0, -1), message] };
+      }
+      return { transcript: [...s.transcript, message] };
+    }),
 
   setTranscript: (msgs) =>
     set({
@@ -457,7 +467,8 @@ export const useNumeraStore = create<NumeraState>()(
       return { items: [...s.items, last], undone: s.undone.slice(0, -1) };
     }),
 
-  clearCanvas: () => set({ items: [], undone: [] }),
+  clearCanvas: () => set({ items: [], undone: [], tutorElements: [] }),
+  clearStudentWork: () => set({ items: [], undone: [] }),
 
   applyCanvasDraw: (payload) =>
     set((s) => {
@@ -482,7 +493,9 @@ export const useNumeraStore = create<NumeraState>()(
   setToolbarPos: (toolbarPos) => set({ toolbarPos }),
   toggleToolbarCollapsed: () => set((s) => ({ toolbarCollapsed: !s.toolbarCollapsed })),
   setToolbarOrientation: (toolbarOrientation) => set({ toolbarOrientation }),
+  setCanvasGrid: (canvasGrid) => set({ canvasGrid }),
   setCanvasExporter: (canvasExporter) => set({ canvasExporter }),
+  setFullCanvasExporter: (fullCanvasExporter) => set({ fullCanvasExporter }),
 
   startGroupSession: () => set({ sessionMode: 'group' }),
   endGroupSession: () => set({ sessionMode: 'solo', participants: [], remoteItems: [] }),
@@ -576,6 +589,7 @@ export const useNumeraStore = create<NumeraState>()(
         toolbarPos: s.toolbarPos,
         toolbarCollapsed: s.toolbarCollapsed,
         toolbarOrientation: s.toolbarOrientation,
+        canvasGrid: s.canvasGrid,
         shapeKind: s.shapeKind,
         eraserMode: s.eraserMode,
         completedLessons: s.completedLessons,

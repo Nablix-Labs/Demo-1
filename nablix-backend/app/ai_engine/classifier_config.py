@@ -6,7 +6,7 @@ from pathlib import Path
 import yaml
 from pydantic import Field
 
-from app.ai_engine.schemas import IntentType, LearningPhase, StrictSchema
+from app.ai_engine.schemas import ErrorType, IntentType, LearningPhase, ResponseStrategy, StrictSchema, VisualCueType
 
 
 CONFIG_PATH: Path = Path("configs/classifier_rules.yaml")
@@ -70,6 +70,17 @@ class StrategyRulesConfig(StrictSchema):
     worked_example_min_attempt_count: int = Field(ge=1)
 
 
+class VisualCueRuleConfig(StrictSchema):
+    cue_type: VisualCueType
+    description: str
+
+
+class VisualCueRulesConfig(StrictSchema):
+    enabled_response_strategies: list[ResponseStrategy]
+    enabled_phases: list[LearningPhase]
+    cues: dict[ErrorType, VisualCueRuleConfig]
+
+
 class AnswerRevealGuardrailConfig(StrictSchema):
     direct_request_phrases: list[str]
     override_phrases: list[str]
@@ -108,6 +119,7 @@ class ClassifierRulesConfig(StrictSchema):
     error_patterns: ErrorPatternsConfig
     diagnostic_cases: DiagnosticCasesConfig
     strategy_rules: StrategyRulesConfig
+    visual_cue_rules: VisualCueRulesConfig
     answer_reveal_guardrail: AnswerRevealGuardrailConfig
     messages: MessageConfig
 

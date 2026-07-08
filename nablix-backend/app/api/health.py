@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter
@@ -21,6 +21,6 @@ async def health_check() -> HealthResponse:
         status="healthy",
         app=settings.app_name,
         version=settings.app_version,
-        timestamp=datetime.now(UTC).isoformat(),
+        timestamp=datetime.now(timezone.utc).isoformat(),
         mode=mode,
     )

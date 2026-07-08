@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
 from app.main import app
+from app.services import session_service
 from app.services.snapshot_store import get_snapshot
 
 client = TestClient(app)
@@ -43,6 +44,15 @@ def test_canvas_submit_returns_mock_ocr_result() -> None:
     assert body["snapshot_reference"] == f"canvas/{body['submission_id']}.png"
     assert body["ocr"]["detected_equation"] == "x + 4 = 9"
     assert body["ocr"]["detected_steps"] == ["x + 4 = 9", "x = 9 - 4", "x = 5"]
+    assert body["ocr"]["detected_regions"][0] == {
+        "step_id": "step-1",
+        "text": "x + 4 = 9",
+        "x": 0.12,
+        "y": 0.18,
+        "w": 0.36,
+        "h": 0.08,
+        "confidence": 0.96,
+    }
     assert body["ocr"]["final_answer"] == "x = 5"
     assert body["ocr"]["raw_ocr_text"] == "x + 4 = 9, x = 9 - 4, x = 5"
     assert body["ocr"]["confidence"] == 0.95
@@ -50,8 +60,27 @@ def test_canvas_submit_returns_mock_ocr_result() -> None:
     assert body["ocr"]["provider"] == "mock"
     assert body["ocr"]["detected_shapes"] == []
     assert body["tutor"]["tutor_message"]
+    assert body["canvas_draw"] == []
     assert body["latency"]["total_latency_ms"] >= 0
     assert {"ocr_latency_ms", "tutor_latency_ms"} <= body["latency"].keys()
+
+
+def test_canvas_submit_accepts_optional_transcript() -> None:
+    session_id = _start_session("ST010")
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST010",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+            "transcript": "x equals five",
+            "transcript_confidence": 0.9,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["tutor"]["tutor_message"]
 
 
 def test_canvas_submit_stores_ocr_without_serializing_snapshot() -> None:
@@ -82,6 +111,23 @@ def test_canvas_submit_stores_ocr_without_serializing_snapshot() -> None:
     reference = body["canvas_submissions"][0]["snapshot_reference"]
     assert reference == f"canvas/{submit_response.json()['submission_id']}.png"
     assert get_snapshot(reference) == VALID_SNAPSHOT_DATA_URL
+
+
+def test_canvas_submit_recovers_demo_session_after_memory_loss() -> None:
+    session_id = _start_session("ST001")
+    session_service._sessions.clear()
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST001",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["session_id"] == session_id
 
 
 def test_canvas_submit_rejects_malformed_snapshot() -> None:

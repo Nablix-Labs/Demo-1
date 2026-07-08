@@ -87,6 +87,9 @@ CanvasStepEvaluation = Literal["CORRECT", "INCORRECT"]
 HighlightType = Literal["ERROR"]
 HighlightColour = Literal["RED"]
 HintLevel = Literal[1, 2, 3]
+MistakeStatus = Literal["mistake_found", "no_mistake", "uncertain"]
+AnnotationIntentKind = Literal["circle_target", "write_correction", "draw_arrow"]
+AnnotationPlacement = Literal["right", "below"]
 
 
 class StrictSchema(BaseModel):
@@ -116,6 +119,32 @@ class CanvasFeedback(StrictSchema):
     has_feedback: StrictBool
     step_feedback: list[CanvasStepFeedback]
     highlight_instruction: HighlightInstruction | None
+
+
+class CanvasTextRegion(StrictSchema):
+    step_id: str | None
+    text: str
+    x: float = Field(ge=0.0, le=1.0)
+    y: float = Field(ge=0.0, le=1.0)
+    w: float = Field(ge=0.0, le=1.0)
+    h: float = Field(ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class CanvasMistakeClassification(StrictSchema):
+    status: MistakeStatus
+    mistake_step_id: str | None
+    target_text: str | None
+    target_span: list[int] | None
+    replacement_text: str | None
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class CanvasAnnotationIntent(StrictSchema):
+    kind: AnnotationIntentKind
+    target_step_id: str
+    text: str | None
+    placement: AnnotationPlacement | None
 
 
 class SafetyCheck(StrictSchema):
@@ -150,6 +179,8 @@ class TutorResponse(StrictSchema):
     scaffold_steps_delivered: list[str]
     visual_cue: VisualCue
     canvas_feedback: CanvasFeedback
+    mistake_classification: CanvasMistakeClassification | None
+    annotation_intents: list[CanvasAnnotationIntent]
     next_phase_recommendation: LearningPhase
     answer_reveal_allowed: StrictBool
     confidence: float = Field(ge=0.0, le=1.0)

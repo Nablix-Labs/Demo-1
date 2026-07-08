@@ -1,40 +1,61 @@
 'use client';
 
 import { useNumeraStore } from '@/store/useNumeraStore';
+import { useMicLevel, MIC_BARS } from '@/store/useMicLevel';
 import { cn } from '@/lib/cn';
-
-const WAVE_HEIGHTS = [12, 20, 8, 24, 14, 22, 10, 18, 22, 9, 16, 20];
 
 export default function VoiceBar() {
   const { micMuted, voiceStatus, toggleMic } = useNumeraStore();
+  const levels = useMicLevel((s) => s.levels);
+  const active = useMicLevel((s) => s.active);
+  const caption = useMicLevel((s) => s.caption);
+
+  // The bar is "live" (reacting to real input) only while capturing + unmuted.
+  const live = active && !micMuted;
 
   return (
     <div className="px-3.5 pb-3.5 flex flex-col gap-2.5">
       {/* Status */}
-      <p className="text-[11.5px] text-[#7a7a7a] text-center">
+      <p className="text-[11.5px] text-slate-blue text-center">
         Status:{' '}
-        <strong className="text-[#1a1a1a]">
+        <strong className="text-ink">
           {micMuted ? 'Muted' : voiceStatus === 'listening' ? 'Listening…' : voiceStatus === 'speaking' ? 'Speaking…' : voiceStatus === 'processing' ? 'Processing…' : 'Idle'}
         </strong>
       </p>
 
-      {/* Waveform */}
+      {/* Live input level — reflects how much mic signal is being detected */}
       <div className="flex items-center justify-center gap-[3px] h-[26px]" aria-hidden="true">
-        {WAVE_HEIGHTS.map((h, i) => (
-          <span
-            key={i}
-            className={cn(
-              'w-[3px] rounded-sm bg-[#9a9a9a]',
-              micMuted ? '' : 'animate-wave'
-            )}
-            style={{
-              height: micMuted ? '5px' : `${h}px`,
-              animationDelay: `${(i * 0.08).toFixed(2)}s`,
-              animationDuration: `${0.7 + (i % 5) * 0.12}s`,
-            }}
-          />
-        ))}
+        {Array.from({ length: MIC_BARS }).map((_, i) => {
+          const lvl = live ? levels[i] ?? 0 : 0;
+          const height = 3 + lvl * 23; // 3px (silent) … 26px (loud)
+          return (
+            <span
+              key={i}
+              className={cn(
+                'w-[3px] rounded-sm transition-[height,background-color] duration-75 ease-out',
+                live ? 'bg-ai-cyan' : 'bg-muted-gray'
+              )}
+              style={{ height: `${height}px` }}
+            />
+          );
+        })}
       </div>
+
+      {/* Live caption — what Numera is hearing (helps confirm the mic is working) */}
+      {live && (
+        <div
+          className="min-h-[34px] rounded-md bg-reading-surface border border-muted-gray px-2.5 py-1.5 flex items-center justify-center text-center"
+          aria-live="polite"
+        >
+          {caption ? (
+            <p className="text-[11.5px] text-ink leading-snug">
+              <span className="text-ai-cyan font-semibold">“</span>{caption}<span className="text-ai-cyan font-semibold">”</span>
+            </p>
+          ) : (
+            <p className="text-[11px] text-slate-blue italic">Listening — start speaking…</p>
+          )}
+        </div>
+      )}
 
       {/* Mute toggle */}
       <button
@@ -43,8 +64,8 @@ export default function VoiceBar() {
         className={cn(
           'w-full border rounded-md px-2.5 py-2.5 text-xs font-semibold flex items-center justify-center gap-2 transition-colors',
           micMuted
-            ? 'border-[#1a1a1a] bg-white text-[#1a1a1a]'
-            : 'border-[#1a1a1a] bg-[#1a1a1a] text-white'
+            ? 'border-muted-gray bg-white text-ink'
+            : 'border-focus-navy bg-focus-navy text-white'
         )}
       >
         {/* Mic icon (on / off) */}

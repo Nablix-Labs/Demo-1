@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { playTutorAudio } from '@/lib/playTutorAudio';
+import { useNumeraStore, type CanvasDrawPayload } from '@/store/useNumeraStore';
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? '';
 const STUDENT_ID = 'ST001';
@@ -20,6 +21,7 @@ export interface StreamingTutorResponse {
   needs_clarification: boolean;
   tts_latency_ms: number | null;
   total_pipeline_ms: number;
+  canvas_draw: CanvasDrawPayload[];
 }
 
 interface UseStreamingVoiceTurnOptions {
@@ -73,6 +75,7 @@ export function useStreamingVoiceTurn({
 }: UseStreamingVoiceTurnOptions) {
   const [active, setActive] = useState(false);
   const [speaking, setSpeaking] = useState(false);
+  const updatePartialTranscript = useNumeraStore((s) => s.updatePartialTranscript);
   const supported =
     typeof window !== 'undefined' &&
     Boolean(WS_URL) &&
@@ -92,6 +95,7 @@ export function useStreamingVoiceTurn({
   const hadSpeechRef = useRef(false);
   const transcriptSentRef = useRef(false);
   const tutorResponseHandledRef = useRef(false);
+  const wsErroredRef = useRef(false); // transport error — don't auto-reopen into a storm
   const finalTranscriptRef = useRef('');
   const finalConfidenceRef = useRef<number | undefined>(undefined);
   const speakingRef = useRef(false);
@@ -114,7 +118,9 @@ export function useStreamingVoiceTurn({
     setSpeaking(false);
 
     if (sendStop && !stopSentRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'stop' }));
+      const s = useNumeraStore.getState();
+      const png = s.items.length > 0 ? s.canvasExporter?.() : null;
+      wsRef.current.send(JSON.stringify(png ? { type: 'stop', canvas_snapshot: png } : { type: 'stop' }));
       stopSentRef.current = true;
     }
 
@@ -148,6 +154,7 @@ export function useStreamingVoiceTurn({
     stopSentRef.current = false;
     transcriptSentRef.current = false;
     tutorResponseHandledRef.current = false;
+    wsErroredRef.current = false;
     finalTranscriptRef.current = '';
     finalConfidenceRef.current = undefined;
     hadSpeechRef.current = false;
@@ -209,10 +216,19 @@ export function useStreamingVoiceTurn({
       if (typeof event.data !== 'string') return;
       const message = JSON.parse(event.data) as Record<string, unknown>;
 
+      if (message.type === 'partial_transcript') {
+        const text = String(message.text ?? '').trim();
+        if (text && !transcriptSentRef.current) updatePartialTranscript(text);
+      }
+
       if (message.type === 'final_transcript') {
         const text = String(message.text ?? '').trim();
         if (text) finalTranscriptRef.current = text;
         finalConfidenceRef.current = Number(message.confidence ?? 0);
+        if (!transcriptSentRef.current && text) {
+          transcriptSentRef.current = true;
+          onStudentTranscriptRef.current(text, finalConfidenceRef.current);
+        }
       }
 
       if (message.type === 'tutor_response') {
@@ -224,6 +240,10 @@ export function useStreamingVoiceTurn({
         if (!transcriptSentRef.current && transcript) {
           transcriptSentRef.current = true;
           onStudentTranscriptRef.current(transcript, response.confidence || finalConfidenceRef.current);
+        }
+        useNumeraStore.getState().clearTutorMarks();
+        for (const payload of response.canvas_draw) {
+          useNumeraStore.getState().applyCanvasDraw(payload);
         }
         onTutorResponseRef.current(response);
         ws.close(1000, 'turn complete');
@@ -238,12 +258,17 @@ export function useStreamingVoiceTurn({
       }
 
       if (message.type === 'error') {
-        onErrorRef.current?.(String(message.message ?? 'Voice streaming failed.'));
+        // "No speech detected" (REPEAT) is expected while idling unmuted — onclose
+        // reopens silently, so don't spam the trail. Surface real errors.
+        if (String(message.fallback_mode ?? '') !== 'REPEAT') {
+          onErrorRef.current?.(String(message.message ?? 'Voice streaming failed.'));
+        }
         ws.close(4000, 'voice error');
       }
     };
 
     ws.onerror = () => {
+      wsErroredRef.current = true;
       onErrorRef.current?.('Voice WebSocket failed.');
       stopInput(false, true);
     };
@@ -251,6 +276,14 @@ export function useStreamingVoiceTurn({
     ws.onclose = () => {
       stopInput(false, false);
       wsRef.current = null;
+      // Auto-reopen so the student can just keep talking without touching the UI.
+      // Skip when a tutor_response is closing us (its audio onDone re-arms) or on a
+      // transport error (don't reconnect-storm a dead server).
+      if (enabledRef.current && !tutorResponseHandledRef.current && !wsErroredRef.current) {
+        setTimeout(() => {
+          if (enabledRef.current && !wsRef.current) void startRef.current?.();
+        }, REARM_DELAY_MS);
+      }
     };
   }, [
     supported,
@@ -259,6 +292,7 @@ export function useStreamingVoiceTurn({
     energyThreshold,
     silenceMs,
     stopInput,
+    updatePartialTranscript,
   ]);
 
   useEffect(() => {

@@ -33,7 +33,7 @@ class StudentModelServiceAdapter:
         if self._settings.use_mock_student_model:
             return self._mock_response()
 
-        payload: JsonObject = request.model_dump(mode="json")
+        payload: JsonObject = request.model_dump(mode="json", exclude={"canvas_regions"})
         try:
             response = await post_json(
                 "student_model",

@@ -15,7 +15,7 @@ import MediaPanel from './MediaPanel';
 import { useNumeraStore } from '@/store/useNumeraStore';
 
 // Routes that render on their own, without the tool rail or media panel.
-const FOCUS_ROUTES = ['/onboard', '/diagnostic', '/orientation', '/complete'];
+const FOCUS_ROUTES = ['/onboard', '/diagnostic', '/orientation', '/complete', '/consent', '/login', '/restricted'];
 
 export default function AppFrame({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -39,13 +39,10 @@ export default function AppFrame({ children }: { children: ReactNode }) {
   // route keeps the tool rail for navigation but renders content full-width.
   const isLesson = pathname === '/';
 
-  return (
-    <>
-      <ToolRail />
+  if (isLesson) {
+    return (
       <div className="flex-1 flex min-w-0">
-        {!isLesson ? (
-          children
-        ) : panelSide === 'left' ? (
+        {panelSide === 'left' ? (
           <>
             <MediaPanel />
             {children}
@@ -56,6 +53,15 @@ export default function AppFrame({ children }: { children: ReactNode }) {
             <MediaPanel />
           </>
         )}
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <ToolRail />
+      <div className="flex-1 flex min-w-0">
+        {children}
       </div>
     </>
   );

@@ -7,13 +7,14 @@ from app.models.voice import (
     VoiceSessionStartRequest,
     VoiceSessionStartResponse,
     VoiceTranscriptRequest,
+    VoiceTTSRequest,
 )
 from app.services.voice_service import (
     process_voice,
     process_voice_transcript,
     start_voice_session,
 )
-from app.services.voice.streaming.streaming_server import voice_stream
+from app.services.voice.streaming.streaming_server import synthesize_speech, voice_stream
 
 router = APIRouter()
 
@@ -35,6 +36,11 @@ async def voice_transcript_endpoint(
     request: VoiceTranscriptRequest,
 ) -> InteractionResponse:
     return await process_voice_transcript(request)
+
+
+@router.post("/tts")
+async def voice_tts_endpoint(request: VoiceTTSRequest) -> dict[str, str | None]:
+    return {"audio_base64": await synthesize_speech(request.text)}
 
 
 @router.websocket("/stream")

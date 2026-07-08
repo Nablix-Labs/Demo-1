@@ -16,6 +16,7 @@ import { useCallback } from 'react';
 import {
   startSession,
   submitCanvas,
+  synthesizeTutorAudio,
   sendInteraction,
   requestHint,
   endSession,
@@ -26,6 +27,8 @@ import {
   type HintResponse,
 } from '@/lib/api';
 import { useNumeraStore } from '@/store/useNumeraStore';
+import { useMicLevel } from '@/store/useMicLevel';
+import { playTutorAudio } from '@/lib/playTutorAudio';
 
 const apiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
@@ -38,11 +41,19 @@ function hasCanvasActivity(): boolean {
   return useNumeraStore.getState().items.length > 0;
 }
 
-/** Speak the tutor's reply (TTS output only — never used to decide content). */
+/** Speak the tutor's reply (TTS output only — never used to decide content).
+ *  Drives the 3D avatar's mouth via useMicLevel: onstart/onboundary open it in
+ *  sync with the spoken words, onend/onerror close it. */
 function speak(text: string): void {
   if (typeof window === 'undefined' || !('speechSynthesis' in window) || !text) return;
+  const mic = useMicLevel.getState();
   const utterance = new SpeechSynthesisUtterance(text);
+  utterance.onstart = () => useMicLevel.getState().setAiSpeaking(true);
+  utterance.onboundary = () => useMicLevel.getState().markBoundary();
+  utterance.onend = () => useMicLevel.getState().setAiSpeaking(false);
+  utterance.onerror = () => useMicLevel.getState().setAiSpeaking(false);
   window.speechSynthesis.cancel();
+  mic.setAiSpeaking(false); // reset before the new utterance starts
   window.speechSynthesis.speak(utterance);
 }
 
@@ -53,6 +64,47 @@ function errorMessage(err: unknown, fallback: string): string {
     if (data?.message) return data.message;
   }
   return err instanceof Error ? err.message : fallback;
+}
+
+function logCanvasGeometryTrace(res: CanvasSubmissionResult): void {
+  if (process.env.NODE_ENV === 'production') return;
+
+  const regions = res.ocr.detected_regions.map((region) => ({
+    step_id: region.step_id ?? '',
+    text: region.text,
+    x: region.x,
+    y: region.y,
+    w: region.w,
+    h: region.h,
+    center_x: region.x + region.w / 2,
+    center_y: region.y + region.h / 2,
+    confidence: region.confidence,
+  }));
+  const drawElements = (res.canvas_draw ?? []).flatMap((payload) =>
+    payload.elements.map((element) => ({
+      actionId: payload.actionId ?? '',
+      kind: element.kind,
+      id: element.id ?? '',
+      x: element.x ?? '',
+      y: element.y ?? '',
+      w: element.w ?? '',
+      h: element.h ?? '',
+      from: element.from?.join(',') ?? '',
+      to: element.to?.join(',') ?? '',
+      text: element.text ?? element.tex ?? '',
+    }))
+  );
+
+  console.groupCollapsed('[canvas-geometry] OCR regions -> canvas_draw');
+  console.log({
+    submission_id: res.submission_id,
+    provider: res.ocr.provider,
+    confidence_source: res.ocr.confidence_source,
+  });
+  console.table(regions);
+  console.table(drawElements);
+  console.log({ ocr: res.ocr, canvas_draw: res.canvas_draw ?? [] });
+  console.groupEnd();
 }
 
 export function useDemoTutor() {
@@ -133,6 +185,7 @@ export function useDemoTutor() {
     }
     try {
       const res = await submitCanvas(sessionId, png);
+      logCanvasGeometryTrace(res);
       addTrailEntry({
         kind: 'canvas',
         text: res.ocr.raw_ocr_text || res.ocr.detected_equation || 'Canvas submitted.',
@@ -146,6 +199,13 @@ export function useDemoTutor() {
         text: res.tutor.tutor_message,
         meta: res.tutor.evaluation,
       });
+      // Render tutor marks from the Check path, same as the voice path does.
+      useNumeraStore.getState().clearTutorMarks();
+      for (const payload of res.canvas_draw ?? []) {
+        useNumeraStore.getState().applyCanvasDraw(payload);
+      }
+      const voiceText = res.tutor.tutor_message_voice || res.tutor.tutor_message;
+      playTutorAudio(await synthesizeTutorAudio(voiceText), voiceText);
       return res;
     } catch (err) {
       addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Could not read the canvas.') });
@@ -207,12 +267,17 @@ export function useDemoTutor() {
           console.log('→ POST /canvas/submit', { session_id: sessionId, student_id: STUDENT_ID, snapshot_bytes: png.length });
           const canvasRes = await submitCanvas(sessionId, png);
           canvasSnapshotId = canvasRes.submission_id;
+          logCanvasGeometryTrace(canvasRes);
           console.log('← /canvas/submit', { submission_id: canvasRes.submission_id, ocr: canvasRes.ocr, tutor: canvasRes.tutor });
           addTrailEntry({
             kind: 'canvas',
             text: canvasRes.ocr.raw_ocr_text || canvasRes.ocr.detected_equation || 'Canvas submitted.',
             meta: `OCR ${(canvasRes.ocr.confidence * 100).toFixed(0)}%`,
           });
+          useNumeraStore.getState().clearTutorMarks();
+          for (const payload of canvasRes.canvas_draw ?? []) {
+            useNumeraStore.getState().applyCanvasDraw(payload);
+          }
         } catch (err) {
           console.warn('✗ /canvas/submit failed:', err);
           /* canvas is optional for a voice turn */

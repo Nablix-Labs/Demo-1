@@ -6,14 +6,19 @@
 @import 'katex/dist/katex.min.css';
 
 :root {
-  --ink: #1a1a1a;
-  --line: #c8c8c8;
-  --line-strong: #9a9a9a;
-  --gray-1: #f4f4f4;
-  --gray-2: #eaeaea;
-  --gray-3: #dadada;
-  --gray-text: #7a7a7a;
-  --gray-text-soft: #9a9a9a;
+  /* Numera brand palette — fixed meanings, never decoration alone */
+  --focus-navy: #1b2a4a;
+  --learning-blue: #4169e1;
+  --slate-blue: #4a6984;
+  --ai-cyan: #00b4d8;
+  --dark-cyan: #008b8b;
+  --highlight-amber: #ff9f1c;
+  --action-orange: #f77f00;
+  --success-sage: #8a9a86;
+  --ink: #2b2d42;
+  --reading-surface: #f4f6f9;
+  --off-white: #fafafa;
+  --muted-gray: #e0e2e5;
 }
 
 * {
@@ -33,7 +38,7 @@ body {
   width: 6px;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--gray-3);
+  background: var(--muted-gray);
   border-radius: 4px;
 }
 ::-webkit-scrollbar-track {
@@ -67,4 +72,48 @@ body {
 
 .animate-pulse-ring {
   animation: pulse-ring 2.2s ease-in-out infinite;
+}
+
+/* ── Brand primitives ─────────────────────────────────────────────
+   Token-based buttons per Brand Guidelines §05.
+   Min tap target 44px · radius 12–16px · clear keyboard focus ring.
+   Accent buttons use dark ink labels to hold ≥4.5:1 contrast.        */
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 min-h-[44px]
+           px-5 py-3 rounded-btn text-base font-semibold
+           transition-all duration-150
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2
+           disabled:cursor-not-allowed disabled:bg-muted-gray disabled:text-ink/50
+           disabled:translate-y-0;
+  }
+  /* Primary CTA — Start / Continue / Submit */
+  .btn-primary {
+    @apply bg-highlight-amber text-ink
+           hover:brightness-95 hover:-translate-y-px focus-visible:ring-highlight-amber;
+  }
+  /* Strong CTA — major action only */
+  .btn-action {
+    @apply bg-action-orange text-white
+           hover:brightness-95 hover:-translate-y-px focus-visible:ring-action-orange;
+  }
+  /* AI action — Ask AI / Explain Again */
+  .btn-ai {
+    @apply bg-ai-cyan text-ink
+           hover:brightness-95 hover:-translate-y-px focus-visible:ring-ai-cyan;
+  }
+  /* Success — Completed */
+  .btn-success {
+    @apply bg-success-sage text-ink
+           hover:brightness-95 focus-visible:ring-success-sage;
+  }
+  /* Secondary — Back / Review */
+  .btn-secondary {
+    @apply bg-reading-surface text-ink border border-muted-gray
+           hover:bg-muted-gray/40 focus-visible:ring-slate-blue;
+  }
+  /* Explanation / reading card */
+  .card {
+    @apply bg-white rounded-card border border-muted-gray p-5;
+  }
 }

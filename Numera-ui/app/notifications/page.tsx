@@ -32,7 +32,7 @@ export default function NotificationsPage() {
               key={n.title}
               className={cn(
                 'flex items-start gap-4 rounded-lg border bg-white px-5 py-4 transition-colors',
-                n.unread ? 'border-[#c8c8c8] border-l-[3px] border-l-[#1a1a1a]' : 'border-[#eaeaea]'
+                n.unread ? 'border-muted-gray border-l-[3px] border-l-ai-cyan' : 'border-muted-gray'
               )}
             >
               <IconBadge>
@@ -40,12 +40,12 @@ export default function NotificationsPage() {
               </IconBadge>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="text-[13px] font-semibold text-[#1a1a1a]">{n.title}</span>
-                  {n.unread && <span className="w-1.5 h-1.5 rounded-full bg-[#1a1a1a]" />}
+                  <span className="text-[13px] font-semibold text-ink">{n.title}</span>
+                  {n.unread && <span className="w-1.5 h-1.5 rounded-full bg-focus-navy" />}
                 </div>
-                <p className="text-[12.5px] text-[#7a7a7a] mt-0.5 leading-snug">{n.body}</p>
+                <p className="text-[12.5px] text-slate-blue mt-0.5 leading-snug">{n.body}</p>
               </div>
-              <span className="flex-shrink-0 text-[11px] text-[#9a9a9a] whitespace-nowrap">{n.when}</span>
+              <span className="flex-shrink-0 text-[11px] text-slate-blue whitespace-nowrap">{n.when}</span>
             </div>
           );
         })}

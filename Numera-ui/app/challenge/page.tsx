@@ -50,20 +50,20 @@ export default function ChallengePage() {
     return (
       <main className="flex-1 min-w-0 flex items-center justify-center bg-white p-8" aria-label="Group challenge">
         <div className="w-[420px] max-w-full text-center">
-          <div className="w-12 h-12 mx-auto rounded-xl bg-[#1a1a1a] text-white flex items-center justify-center mb-4">
+          <div className="w-12 h-12 mx-auto rounded-xl bg-focus-navy text-white flex items-center justify-center mb-4">
             <Users size={22} strokeWidth={1.8} />
           </div>
-          <h1 className="text-[22px] font-semibold text-[#1a1a1a]">Group Challenge</h1>
-          <p className="text-[13px] text-[#7a7a7a] mt-2 leading-relaxed">
+          <h1 className="text-[22px] font-semibold text-ink">Group Challenge</h1>
+          <p className="text-[13px] text-slate-blue mt-2 leading-relaxed">
             Solve together. Everyone works on their own private canvas while one shared AI tutor watches,
             spotlights great thinking, and coaches each of you.
           </p>
-          <div className="mt-5 rounded-lg border border-[#c8c8c8] bg-[#f4f4f4] px-4 py-3 text-[15px] font-[Cambria_Math,Georgia,serif] text-[#1a1a1a]">
+          <div className="mt-5 rounded-lg border border-muted-gray bg-reading-surface px-4 py-3 text-[15px] font-[Cambria_Math,Georgia,serif] text-ink">
             Solve: {challengeProblem}
           </div>
           <button
             onClick={() => startChallenge(challengeProblem)}
-            className="mt-5 w-full rounded-md bg-[#1a1a1a] text-white px-4 py-3 text-[13px] font-semibold hover:opacity-80 transition-opacity"
+            className="mt-5 w-full rounded-md bg-focus-navy text-white px-4 py-3 text-[13px] font-semibold hover:opacity-80 transition-opacity"
           >
             Start group challenge
           </button>
@@ -76,10 +76,10 @@ export default function ChallengePage() {
   return (
     <div className="flex-1 min-w-0 flex flex-col bg-white" aria-label="Group challenge room">
       {/* Header */}
-      <header className="flex items-center gap-4 px-6 py-3.5 border-b border-[#c8c8c8] flex-shrink-0">
+      <header className="flex items-center gap-4 px-6 py-3.5 border-b border-muted-gray flex-shrink-0">
         <div className="min-w-0">
-          <div className="text-[10px] tracking-widest uppercase text-[#9a9a9a]">Group challenge</div>
-          <div className="text-[16px] font-semibold text-[#1a1a1a] font-[Cambria_Math,Georgia,serif]">
+          <div className="text-[10px] tracking-widest uppercase text-slate-blue">Group challenge</div>
+          <div className="text-[16px] font-semibold text-ink font-[Cambria_Math,Georgia,serif]">
             Solve {challengeProblem}
           </div>
         </div>
@@ -87,7 +87,7 @@ export default function ChallengePage() {
         <div className="ml-auto flex items-center gap-3">
           {/* Presence */}
           <div className="flex items-center -space-x-2">
-            <span className="w-7 h-7 rounded-full border-2 border-white bg-[#1a1a1a] text-white flex items-center justify-center text-[10px] font-semibold" title="You">You</span>
+            <span className="w-7 h-7 rounded-full border-2 border-white bg-focus-navy text-white flex items-center justify-center text-[10px] font-semibold" title="You">You</span>
             {participants.map((p) => (
               <span key={p.id} title={p.name} className="w-7 h-7 rounded-full border-2 border-white flex items-center justify-center text-[10px] font-semibold text-white" style={{ background: p.color }}>
                 {initials(p.name)}
@@ -98,18 +98,18 @@ export default function ChallengePage() {
           <button
             onClick={() => setTeacherView((v) => !v)}
             title={teacherView ? 'Switch to your canvas' : 'Teacher view — see all canvases'}
-            className="flex items-center gap-1.5 rounded-full border border-[#9a9a9a] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#1a1a1a] hover:bg-[#f4f4f4] transition-colors"
+            className="flex items-center gap-1.5 rounded-full border border-muted-gray bg-white px-3 py-1.5 text-[12px] font-semibold text-ink hover:bg-reading-surface transition-colors"
           >
             {teacherView
               ? <><User size={14} strokeWidth={1.8} /> My canvas</>
               : <><LayoutGrid size={14} strokeWidth={1.8} /> Teacher view</>}
           </button>
           {/* Copy invite */}
-          <button onClick={copy} className="flex items-center gap-1.5 rounded-full border border-[#9a9a9a] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#1a1a1a] hover:bg-[#f4f4f4] transition-colors">
+          <button onClick={copy} className="flex items-center gap-1.5 rounded-full border border-muted-gray bg-white px-3 py-1.5 text-[12px] font-semibold text-ink hover:bg-reading-surface transition-colors">
             {copied ? <><Check size={14} strokeWidth={2} /> Copied</> : <><Copy size={14} strokeWidth={1.8} /> Invite</>}
           </button>
           {/* Leave */}
-          <button onClick={() => endChallenge()} className="flex items-center gap-1.5 rounded-full border border-[#c8c8c8] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#7a7a7a] hover:text-[#1a1a1a] hover:border-[#9a9a9a] transition-colors">
+          <button onClick={() => endChallenge()} className="flex items-center gap-1.5 rounded-full border border-muted-gray bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-blue hover:text-ink hover:border-muted-gray transition-colors">
             <LogOut size={14} strokeWidth={1.8} /> Leave
           </button>
         </div>
@@ -123,7 +123,7 @@ export default function ChallengePage() {
         {/* Private feedback — only this student sees it */}
         {privateFeedback && (
           <div
-            className="absolute bottom-5 left-6 z-30 max-w-sm flex items-start gap-3 bg-[#1a1a1a] text-white rounded-xl px-4 py-3"
+            className="absolute bottom-5 left-6 z-30 max-w-sm flex items-start gap-3 bg-focus-navy text-white rounded-xl px-4 py-3"
             style={{ boxShadow: '0 6px 20px rgba(0,0,0,0.25)' }}
             role="status"
           >

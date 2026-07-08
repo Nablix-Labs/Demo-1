@@ -2,18 +2,16 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from pydantic import Field
 
 from app.ai_engine.classifier_config import ClassifierRulesConfig, load_classifier_rules
-from app.ai_engine.openai_client import (
-    OpenAIAIEngineClient,
-    OpenAIAnswerEvaluation,
-    OpenAIErrorDiagnosis,
-    OpenAITutorMessage,
-)
 from app.ai_engine.schemas import (
+    CanvasAnnotationIntent,
     CanvasFeedback,
+    CanvasMistakeClassification,
+    CanvasTextRegion,
     ErrorType,
     EvaluationCategory,
     GuardrailCheck,
@@ -33,6 +31,14 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import AdapterError
 from app.core.logger import logger
 
+if TYPE_CHECKING:
+    from app.ai_engine.openai_client import (
+        OpenAIAIEngineClient,
+        OpenAIAnswerEvaluation,
+        OpenAIErrorDiagnosis,
+        OpenAITutorMessage,
+    )
+
 
 class ClassificationRequest(StrictSchema):
     question: str
@@ -47,6 +53,7 @@ class ClassificationRequest(StrictSchema):
     difficulty: str = "FOUNDATION"
     max_hint_results: int = Field(default=3, ge=1)
     exclude_content_ids: list[str] = Field(default_factory=list)
+    canvas_regions: list[CanvasTextRegion] = Field(default_factory=list)
 
 
 def classify_student_response(request: ClassificationRequest) -> TutorResponse:
@@ -135,6 +142,8 @@ def build_openai_ai_engine_client(settings: Settings) -> OpenAIAIEngineClient | 
         return None
     if settings.openai_api_key == "":
         return None
+    from app.ai_engine.openai_client import OpenAIAIEngineClient
+
     return OpenAIAIEngineClient(
         api_key=settings.openai_api_key,
         model=settings.openai_ai_engine_model,
@@ -151,6 +160,8 @@ def evaluate_answer_with_openai(
     if openai_client is None:
         return None
     if intent != "SUBMITTING_ANSWER":
+        return None
+    if request.input_source == "CANVAS":
         return None
     if request.input_source == "VOICE" and is_low_confidence(request.transcript_confidence, rules):
         return None
@@ -177,6 +188,8 @@ def diagnose_error_with_openai(
     openai_client: OpenAIAIEngineClient | None,
 ) -> OpenAIErrorDiagnosis | None:
     if openai_client is None:
+        return None
+    if request.input_source == "CANVAS":
         return None
     if evaluation not in {"INCORRECT", "PARTIALLY_CORRECT"}:
         return None
@@ -207,6 +220,8 @@ def build_tutor_message_with_openai(
     if openai_client is None:
         return None
     if intent in {"REQUESTING_ANSWER", "ATTEMPTING_OVERRIDE"}:
+        return None
+    if request.input_source == "CANVAS":
         return None
 
     try:
@@ -399,6 +414,22 @@ def build_tutor_response(
     tutor_message: str = tutor_message_override if tutor_message_override is not None else fallback_message
     voice_message: str = voice_message_override if voice_message_override is not None else tutor_message
     event: StudentModelEvent = build_student_model_event(evaluation, error_type, hint_level)
+    visual_cue: VisualCue = select_visual_cue(
+        error_type=error_type,
+        response_strategy=response_strategy,
+        current_phase=request.current_phase,
+        rules=rules,
+    )
+    mistake_classification: CanvasMistakeClassification | None = classify_canvas_mistake(
+        request=request,
+        intent=intent,
+        evaluation=evaluation,
+        rules=rules,
+    )
+    annotation_intents: list[CanvasAnnotationIntent] = build_canvas_annotation_intents(
+        mistake_classification=mistake_classification,
+        canvas_regions=request.canvas_regions,
+    )
 
     response: TutorResponse = TutorResponse(
         evaluation=evaluation,
@@ -410,8 +441,10 @@ def build_tutor_response(
         voice_optimised=True,
         hint_level=hint_level,
         scaffold_steps_delivered=[],
-        visual_cue=VisualCue(show=False, cue_type=None, description=None),
+        visual_cue=visual_cue,
         canvas_feedback=CanvasFeedback(has_feedback=False, step_feedback=[], highlight_instruction=None),
+        mistake_classification=mistake_classification,
+        annotation_intents=annotation_intents,
         next_phase_recommendation=request.current_phase,
         answer_reveal_allowed=answer_reveal_allowed,
         confidence=confidence,
@@ -422,6 +455,269 @@ def build_tutor_response(
         student_model_events=[event],
     )
     return apply_answer_reveal_guardrail(response, request.correct_answer, rules)
+
+
+def classify_canvas_mistake(
+    request: ClassificationRequest,
+    intent: IntentType,
+    evaluation: EvaluationCategory | None,
+    rules: ClassifierRulesConfig,
+) -> CanvasMistakeClassification | None:
+    if request.input_source != "CANVAS":
+        return None
+    if len(request.canvas_regions) == 0:
+        return CanvasMistakeClassification(
+            status="uncertain",
+            mistake_step_id=None,
+            target_text=None,
+            target_span=None,
+            replacement_text=None,
+            confidence=rules.confidence.standard_response,
+        )
+    if intent in {"REQUESTING_ANSWER", "ATTEMPTING_OVERRIDE", "OFF_TOPIC", "REQUESTING_HINT", "ASKING_QUESTION"}:
+        return None
+    if has_uncertain_canvas_text(request.canvas_regions):
+        return CanvasMistakeClassification(
+            status="uncertain",
+            mistake_step_id=None,
+            target_text=None,
+            target_span=None,
+            replacement_text=None,
+            confidence=rules.confidence.standard_response,
+        )
+    # Root cause outranks symptom: a wrong inverse operand explains the wrong
+    # final answer that follows from it, so scan for it first.
+    inverse_operand: str | None = extract_addition_inverse_operand(request.question)
+    if evaluation in {"INCORRECT", "PARTIALLY_CORRECT"} and inverse_operand is not None:
+        for index, region in enumerate(request.canvas_regions):
+            mistake: CanvasMistakeClassification | None = classify_inverse_operand_mistake(
+                region=region,
+                fallback_step_id=f"step-{index + 1}",
+                expected_operand=inverse_operand,
+                confidence=rules.confidence.standard_response,
+            )
+            if mistake is not None:
+                return mistake
+
+    expected_answer: str | None = extract_variable_answer(request.correct_answer)
+    if expected_answer is not None:
+        for index, region in enumerate(request.canvas_regions):
+            mistake: CanvasMistakeClassification | None = classify_wrong_variable_answer_step(
+                region=region,
+                fallback_step_id=f"step-{index + 1}",
+                expected_answer=expected_answer,
+                confidence=rules.confidence.standard_response,
+            )
+            if mistake is not None:
+                return mistake
+
+    if evaluation == "CORRECT":
+        return CanvasMistakeClassification(
+            status="no_mistake",
+            mistake_step_id=None,
+            target_text=None,
+            target_span=None,
+            replacement_text=None,
+            confidence=rules.confidence.standard_response,
+        )
+    if evaluation not in {"INCORRECT", "PARTIALLY_CORRECT"}:
+        return None
+
+    if inverse_operand is None:
+        return CanvasMistakeClassification(
+            status="uncertain",
+            mistake_step_id=None,
+            target_text=None,
+            target_span=None,
+            replacement_text=None,
+            confidence=rules.confidence.standard_response,
+        )
+
+    return CanvasMistakeClassification(
+        status="uncertain",
+        mistake_step_id=None,
+        target_text=None,
+        target_span=None,
+        replacement_text=None,
+        confidence=rules.confidence.standard_response,
+    )
+
+
+def has_uncertain_canvas_text(canvas_regions: list[CanvasTextRegion]) -> bool:
+    return any(region.confidence < 0.75 or "?" in region.text for region in canvas_regions)
+
+
+def extract_addition_inverse_operand(question: str) -> str | None:
+    pattern: str = r"\bx\s*\+\s*(-?\d+(?:\.\d+)?)\s*=\s*-?\d+(?:\.\d+)?"
+    match: re.Match[str] | None = re.search(pattern, question, flags=re.IGNORECASE)
+    if match is None:
+        return None
+    return normalize_number_text(match.group(1))
+
+
+def extract_variable_answer(answer: str) -> str | None:
+    pattern: str = r"\bx\s*=\s*(-?\d+(?:\.\d+)?)\b"
+    match: re.Match[str] | None = re.search(pattern, answer, flags=re.IGNORECASE)
+    if match is None:
+        return None
+    return normalize_number_text(match.group(1))
+
+
+# Handwritten OCR often mangles the variable glyph ("x" → "K", ")(") and may use
+# unicode minus. Normalise dashes (length-preserving, so spans stay valid) and
+# anchor matches on the "=" instead of trusting the variable character.
+_DASH_TRANSLATION = str.maketrans({"−": "-", "–": "-", "—": "-"})
+
+
+def _normalized_region_text(region: CanvasTextRegion) -> str:
+    return region.text.translate(_DASH_TRANSLATION)
+
+
+def classify_wrong_variable_answer_step(
+    region: CanvasTextRegion,
+    fallback_step_id: str,
+    expected_answer: str,
+    confidence: float,
+) -> CanvasMistakeClassification | None:
+    pattern: str = r"^\s*\S{0,2}\s*=\s*(-?\d+(?:\.\d+)?)\s*$"
+    match: re.Match[str] | None = re.search(pattern, _normalized_region_text(region), flags=re.IGNORECASE)
+    if match is None:
+        return None
+
+    actual_answer: str = normalize_number_text(match.group(1))
+    if actual_answer == expected_answer:
+        return None
+
+    target_span_tuple: tuple[int, int] = match.span(1)
+    return CanvasMistakeClassification(
+        status="mistake_found",
+        mistake_step_id=region.step_id if region.step_id is not None else fallback_step_id,
+        target_text=region.text[target_span_tuple[0] : target_span_tuple[1]],
+        target_span=[target_span_tuple[0], target_span_tuple[1]],
+        replacement_text=expected_answer,
+        confidence=confidence,
+    )
+
+
+def classify_inverse_operand_mistake(
+    region: CanvasTextRegion,
+    fallback_step_id: str,
+    expected_operand: str,
+    confidence: float,
+) -> CanvasMistakeClassification | None:
+    pattern: str = r"=\s*-?\d+(?:\.\d+)?\s*([+-])\s*(-?\d+(?:\.\d+)?)\b"
+    match: re.Match[str] | None = re.search(pattern, _normalized_region_text(region), flags=re.IGNORECASE)
+    if match is None:
+        return None
+
+    operator: str = match.group(1)
+    actual_operand: str = normalize_number_text(match.group(2))
+    if operator == "-" and actual_operand == expected_operand:
+        return None
+
+    if operator == "-":
+        # Right operation, wrong operand ("x = 9 - 5"): replace just the operand.
+        start, end = match.span(2)
+        replacement_text: str = expected_operand
+    else:
+        # Wrong inverse operation ("x = 9 + 6"): replace the whole "+ 6" span.
+        start, end = match.start(1), match.end(2)
+        replacement_text = f"-{expected_operand}"
+
+    return CanvasMistakeClassification(
+        status="mistake_found",
+        mistake_step_id=region.step_id if region.step_id is not None else fallback_step_id,
+        target_text=region.text[start:end],
+        target_span=[start, end],
+        replacement_text=replacement_text,
+        confidence=confidence,
+    )
+
+
+def build_canvas_annotation_intents(
+    mistake_classification: CanvasMistakeClassification | None,
+    canvas_regions: list[CanvasTextRegion],
+) -> list[CanvasAnnotationIntent]:
+    if mistake_classification is None or mistake_classification.status != "mistake_found":
+        return []
+    if mistake_classification.mistake_step_id is None:
+        return []
+
+    correction_text: str | None = build_canvas_correction_text(
+        mistake_classification=mistake_classification,
+        canvas_regions=canvas_regions,
+    )
+    intents: list[CanvasAnnotationIntent] = [
+        CanvasAnnotationIntent(
+            kind="circle_target",
+            target_step_id=mistake_classification.mistake_step_id,
+            text=None,
+            placement=None,
+        )
+    ]
+    if correction_text is not None:
+        intents.append(
+            CanvasAnnotationIntent(
+                kind="write_correction",
+                target_step_id=mistake_classification.mistake_step_id,
+                text=correction_text,
+                placement="right",
+            )
+        )
+        # Arrow only makes sense pointing at a written correction.
+        intents.append(
+            CanvasAnnotationIntent(
+                kind="draw_arrow",
+                target_step_id=mistake_classification.mistake_step_id,
+                text=None,
+                placement=None,
+            )
+        )
+    return intents
+
+
+def build_canvas_correction_text(
+    mistake_classification: CanvasMistakeClassification,
+    canvas_regions: list[CanvasTextRegion],
+) -> str | None:
+    if mistake_classification.target_span is None or mistake_classification.replacement_text is None:
+        return None
+    region: CanvasTextRegion | None = find_canvas_region(canvas_regions, mistake_classification.mistake_step_id)
+    if region is None:
+        return None
+
+    start, end = mistake_classification.target_span
+    if start < 0 or end > len(region.text) or start >= end:
+        return None
+    return f"{region.text[:start]}{mistake_classification.replacement_text}{region.text[end:]}"
+
+
+def find_canvas_region(canvas_regions: list[CanvasTextRegion], step_id: str | None) -> CanvasTextRegion | None:
+    if step_id is None:
+        return None
+    for region in canvas_regions:
+        if region.step_id == step_id:
+            return region
+    return None
+
+
+def select_visual_cue(
+    error_type: ErrorType | None,
+    response_strategy: ResponseStrategy,
+    current_phase: LearningPhase,
+    rules: ClassifierRulesConfig,
+) -> VisualCue:
+    if error_type is None:
+        return VisualCue(show=False, cue_type=None, description=None)
+    if response_strategy not in rules.visual_cue_rules.enabled_response_strategies:
+        return VisualCue(show=False, cue_type=None, description=None)
+    if current_phase not in rules.visual_cue_rules.enabled_phases:
+        return VisualCue(show=False, cue_type=None, description=None)
+    if error_type not in rules.visual_cue_rules.cues:
+        return VisualCue(show=False, cue_type=None, description=None)
+
+    cue_rule = rules.visual_cue_rules.cues[error_type]
+    return VisualCue(show=True, cue_type=cue_rule.cue_type, description=cue_rule.description)
 
 
 def apply_answer_reveal_guardrail(
@@ -622,3 +918,8 @@ def format_number_for_matching(value: float) -> str:
     if value.is_integer():
         return str(int(value))
     return str(value)
+
+
+def normalize_number_text(value: str) -> str:
+    number: float = float(value)
+    return format_number_for_matching(number)

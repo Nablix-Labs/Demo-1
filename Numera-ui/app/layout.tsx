@@ -15,10 +15,11 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="h-screen overflow-hidden bg-[#e2e2e2] font-sans">
-        {/* App shell — the tool rail and media panel persist across every route */}
+      <body className="h-screen overflow-hidden bg-white font-sans text-ink">
+        {/* App shell — the tool rail and media panel persist across every route.
+            Full-bleed: fills the viewport edge-to-edge (no centred gutter). */}
         <div
-          className="h-screen flex bg-white max-w-[1500px] mx-auto border-x border-[#c8c8c8]"
+          className="h-screen flex bg-white w-full"
           aria-label="Numera AI Math Tutor"
         >
           <AppFrame>{children}</AppFrame>

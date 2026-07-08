@@ -20,10 +20,10 @@ export default function PageShell({
 }) {
   return (
     <main className="flex-1 min-w-0 flex flex-col bg-white" aria-label={title}>
-      <header className="flex items-end justify-between gap-4 px-8 py-6 border-b border-[#c8c8c8] flex-shrink-0">
+      <header className="flex items-end justify-between gap-4 px-8 py-6 border-b border-muted-gray flex-shrink-0">
         <div>
-          <h1 className="text-[22px] font-semibold text-[#1a1a1a] leading-tight">{title}</h1>
-          {subtitle && <p className="text-[12px] text-[#7a7a7a] mt-1">{subtitle}</p>}
+          <h1 className="text-[22px] font-semibold text-ink leading-tight">{title}</h1>
+          {subtitle && <p className="text-[12px] text-slate-blue mt-1">{subtitle}</p>}
         </div>
         {action}
       </header>
@@ -44,9 +44,9 @@ export function Chip({
     <span
       className={cn(
         'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] tracking-[0.4px] uppercase',
-        tone === 'solid' && 'bg-[#1a1a1a] text-white',
-        tone === 'outline' && 'border border-[#9a9a9a] text-[#7a7a7a]',
-        tone === 'muted' && 'bg-[#f4f4f4] text-[#7a7a7a]'
+        tone === 'solid' && 'bg-focus-navy text-white',
+        tone === 'outline' && 'border border-muted-gray text-slate-blue',
+        tone === 'muted' && 'bg-reading-surface text-slate-blue'
       )}
     >
       {children}
@@ -58,15 +58,15 @@ export function Chip({
 export function ProgressBar({ value }: { value: number }) {
   const pct = Math.max(0, Math.min(100, value));
   return (
-    <div className="h-1.5 w-full rounded-full bg-[#eaeaea] overflow-hidden">
-      <div className="h-full rounded-full bg-[#1a1a1a]" style={{ width: `${pct}%` }} />
+    <div className="h-1.5 w-full rounded-full bg-muted-gray overflow-hidden">
+      <div className="h-full rounded-full bg-learning-blue" style={{ width: `${pct}%` }} />
     </div>
   );
 }
 
 /** Shimmering grey placeholder block for loading states. */
 export function Skeleton({ className }: { className?: string }) {
-  return <div className={cn('animate-pulse rounded-md bg-[#eaeaea]', className)} />;
+  return <div className={cn('animate-pulse rounded-md bg-muted-gray', className)} />;
 }
 
 /** Centered empty/placeholder panel for "nothing here yet" states. */
@@ -82,14 +82,14 @@ export function EmptyState({
   action?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center text-center rounded-lg border border-dashed border-[#c8c8c8] bg-[#f9f9f9] px-8 py-14">
+    <div className="flex flex-col items-center justify-center text-center rounded-lg border border-dashed border-muted-gray bg-reading-surface px-8 py-14">
       {icon && (
-        <span className="w-11 h-11 rounded-xl border border-[#c8c8c8] bg-white text-[#9a9a9a] flex items-center justify-center mb-3">
+        <span className="w-11 h-11 rounded-xl border border-muted-gray bg-white text-slate-blue flex items-center justify-center mb-3">
           {icon}
         </span>
       )}
-      <h3 className="text-[15px] font-semibold text-[#1a1a1a]">{title}</h3>
-      {body && <p className="text-[12.5px] text-[#7a7a7a] mt-1.5 max-w-sm leading-relaxed">{body}</p>}
+      <h3 className="text-[15px] font-semibold text-ink">{title}</h3>
+      {body && <p className="text-[12.5px] text-slate-blue mt-1.5 max-w-sm leading-relaxed">{body}</p>}
       {action && <div className="mt-5">{action}</div>}
     </div>
   );
@@ -98,7 +98,7 @@ export function EmptyState({
 /** Square icon tile used in list rows. */
 export function IconBadge({ children }: { children: ReactNode }) {
   return (
-    <span className="flex-shrink-0 w-10 h-10 rounded-lg border border-[#c8c8c8] bg-[#f4f4f4] text-[#1a1a1a] flex items-center justify-center">
+    <span className="flex-shrink-0 w-10 h-10 rounded-lg border border-muted-gray bg-reading-surface text-ink flex items-center justify-center">
       {children}
     </span>
   );
@@ -113,7 +113,7 @@ export function Avatar({ name }: { name: string }) {
     .join('')
     .toUpperCase();
   return (
-    <span className="flex-shrink-0 w-10 h-10 rounded-full border border-[#c8c8c8] bg-white text-[#1a1a1a] flex items-center justify-center text-[12px] font-semibold tracking-[0.5px]">
+    <span className="flex-shrink-0 w-10 h-10 rounded-full border border-muted-gray bg-white text-ink flex items-center justify-center text-[12px] font-semibold tracking-[0.5px]">
       {initials}
     </span>
   );

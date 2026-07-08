@@ -92,6 +92,28 @@ strategy_rules:
   independent_practice_phase: INDEPENDENT_PRACTICE
   scaffold_min_attempt_count: 3
   worked_example_min_attempt_count: 4
+visual_cue_rules:
+  enabled_response_strategies:
+    - GUIDED_HINT
+    - SCAFFOLD
+    - PROVIDE_WORKED_EXAMPLE
+    - PROVIDE_VISUAL_CUE
+  enabled_phases:
+    - GUIDED_PRACTICE
+    - REVIEW
+  cues:
+    OPPOSITE_OPERATION_ERROR:
+      cue_type: EQUATION_BLOCK
+      description: Show the left and right sides of the equation separately, then highlight the inverse operation needed on both sides.
+    PROCEDURAL_ERROR:
+      cue_type: HIGHLIGHTED_STEP
+      description: Highlight the first step where the operation order should be corrected.
+    SIGN_ERROR:
+      cue_type: HIGHLIGHTED_STEP
+      description: Highlight the negative sign or changed sign that needs attention.
+    CONCEPTUAL_MISUNDERSTANDING:
+      cue_type: CONCEPT_CARD
+      description: Show a short reminder that a number next to x means multiplication and needs the inverse operation.
 answer_reveal_guardrail:
   direct_request_phrases:
     - give me the answer

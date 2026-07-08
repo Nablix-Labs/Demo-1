@@ -58,7 +58,7 @@ def test_hint_request_returns_tutor_hint() -> None:
     assert body["session_id"] == session_id
     assert body["student_id"] == "ST101"
     assert body["hint_level"] == 1
-    assert body["hint"] == "Check your arithmetic carefully."
+    assert body["hint"] == "Here is a hint: think about the operation being used on x."
     assert body["response_strategy"] == "GUIDED_HINT"
     assert body["answer_reveal_allowed"] is False
 

@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from functools import lru_cache
 
 @dataclass
 class TranscriptionResult:
@@ -30,10 +31,6 @@ class STTAdapter(ABC):
         pass
 
     @abstractmethod
-    async def is_available(self) -> bool:
-        pass
-
-    @abstractmethod
     def get_provider_name(self) -> str:
         pass
 
@@ -49,10 +46,6 @@ class TTSAdapter(ABC):
         pass
 
     @abstractmethod
-    async def is_available(self) -> bool:
-        pass
-
-    @abstractmethod
     def get_provider_name(self) -> str:
         pass
 
@@ -65,6 +58,9 @@ def register_stt_adapter(name: str, adapter_class: type[STTAdapter]):
 def register_tts_adapter(name: str, adapter_class: type[TTSAdapter]):
     _tts_adapters[name] = adapter_class
 
+# Adapters (and their HTTP clients) are reused across requests; building one
+# per call costs a fresh TCP+TLS handshake and defeats startup pre-warming.
+@lru_cache(maxsize=None)
 def get_stt_adapter(name: str) -> STTAdapter:
     if name not in _stt_adapters:
         available = list(_stt_adapters.keys())
@@ -73,6 +69,7 @@ def get_stt_adapter(name: str) -> STTAdapter:
         )
     return _stt_adapters[name]()
 
+@lru_cache(maxsize=None)
 def get_tts_adapter(name: str) -> TTSAdapter:
     if name not in _tts_adapters:
         available = list(_tts_adapters.keys())

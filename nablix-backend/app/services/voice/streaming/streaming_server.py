@@ -87,6 +87,70 @@ async def evaluate_voice_transcript(
         raise RuntimeError(f"status={response.status_code} body={response.text}")
     return response.json()
 
+
+async def submit_canvas_work(
+    session_id: str,
+    student_id: str,
+    snapshot_data_url: str,
+    transcript: str,
+    confidence: float,
+) -> dict[str, object]:
+    payload = {
+        "session_id": session_id,
+        "student_id": student_id,
+        "snapshot_data_url": snapshot_data_url,
+        "transcript": transcript or None,
+        "transcript_confidence": confidence,
+    }
+    logger.info(f"[{session_id}] POST {MAIN_BACKEND_URL}/canvas/submit")
+    response = await _backend_http_client.post("/canvas/submit", json=payload, timeout=40.0)
+    if response.status_code != 200:
+        raise RuntimeError(f"status={response.status_code} body={response.text}")
+    return response.json()
+
+
+def _tutor_response_from_canvas(result: dict[str, object]) -> dict[str, object]:
+    tutor = result.get("tutor")
+    if not isinstance(tutor, dict):
+        raise RuntimeError("canvas response missing tutor object")
+
+    tutor_message = tutor.get("tutor_message")
+    if not isinstance(tutor_message, str) or tutor_message == "":
+        raise RuntimeError("canvas tutor response missing tutor_message")
+
+    tutor_message_voice = tutor.get("tutor_message_voice")
+    return {
+        "message": tutor_message,
+        "message_voice": tutor_message_voice if isinstance(tutor_message_voice, str) else tutor_message,
+    }
+
+
+def _canvas_draw_from(result: dict[str, object]) -> list[object]:
+    canvas_draw = result.get("canvas_draw")
+    if not isinstance(canvas_draw, list):
+        raise RuntimeError("canvas response missing canvas_draw list")
+    return canvas_draw
+
+
+async def synthesize_speech(text: str) -> str | None:
+    """Configured TTS (OpenAI when keyed) → base64 mp3, or None on empty/failure."""
+    if not text:
+        return None
+    try:
+        tts_adapter = get_tts_adapter(voice_config.DEFAULT_TTS_PROVIDER)
+        result = await tts_adapter.generate_speech(
+            text=text,
+            voice=voice_config.TTS_VOICE,
+            audio_format="mp3",
+        )
+        audio_data = result.audio_data
+        if isinstance(audio_data, str):
+            audio_data = audio_data.encode("utf-8")
+        return base64.b64encode(audio_data).decode("utf-8")
+    except Exception as e:
+        logger.error(f"TTS failed: {e}")
+        return None
+
 app = FastAPI(
     title="Nablix Math Tutor - Voice Streaming Server",
     version="1.0.0",
@@ -245,6 +309,7 @@ async def voice_stream(ws: WebSocket, session_id: str = "default", student_id: s
 
                 elif msg_type == "stop":
                     receiving_audio = False
+                    canvas_snapshot = data.get("canvas_snapshot")
                     logger.info(f"[{session_id}] Stop received. Finalizing...")
 
                     if deepgram_ws:
@@ -277,12 +342,14 @@ async def voice_stream(ws: WebSocket, session_id: str = "default", student_id: s
                             pass
                         deepgram_ws = None
 
+                    # Require real speech: canvas rides a turn only when there's a
+                    # transcript, so a silent unmuted mic doesn't loop-submit the canvas.
                     if final_transcript:
                         logger.info(f"[{session_id}] Processing: '{final_transcript}'")
                         audio_duration_seconds = max(time.time() - audio_started_at, 0.001)
                         await process_and_respond(
                             ws, session_id, student_id, final_transcript,
-                            final_confidence, audio_duration_seconds
+                            final_confidence, audio_duration_seconds, canvas_snapshot
                         )
                     else:
                         await ws.send_json({
@@ -319,6 +386,7 @@ async def process_and_respond(
     transcript: str,
     confidence: float,
     audio_duration_seconds: float,
+    canvas_snapshot: str | None = None,
 ):
     pipeline_start = time.time()
 
@@ -328,13 +396,25 @@ async def process_and_respond(
 
     try:
         tutor_start = time.time()
-        tutor_response = await evaluate_voice_transcript(
-            session_id,
-            student_id,
-            transcript,
-            confidence,
-            audio_duration_seconds,
-        )
+        canvas_draw: list[object] = []
+        if canvas_snapshot:
+            canvas_response = await submit_canvas_work(
+                session_id,
+                student_id,
+                canvas_snapshot,
+                transcript,
+                confidence,
+            )
+            tutor_response = _tutor_response_from_canvas(canvas_response)
+            canvas_draw = _canvas_draw_from(canvas_response)
+        else:
+            tutor_response = await evaluate_voice_transcript(
+                session_id,
+                student_id,
+                transcript,
+                confidence,
+                audio_duration_seconds,
+            )
         tutor_ms = int((time.time() - tutor_start) * 1000)
         logger.info(f"[{session_id}] Backend tutor call took {tutor_ms}ms")
     except Exception as e:
@@ -370,9 +450,8 @@ async def process_and_respond(
             audio_data = audio_data.encode("utf-8")
         audio_base64 = base64.b64encode(audio_data).decode("utf-8")
         logger.info(f"[{session_id}] TTS generated: {tts_latency}ms")
-
-    except Exception as e:
-        logger.error(f"[{session_id}] TTS failed: {e}. Sending text-only response.")
+    except Exception as error:
+        logger.error(f"[{session_id}] TTS generation failed: {error}")
 
     total_ms = int((time.time() - pipeline_start) * 1000)
 
@@ -390,6 +469,7 @@ async def process_and_respond(
         "needs_clarification": confidence < voice_config.CONFIDENCE_THRESHOLD,
         "tts_latency_ms": tts_latency,
         "total_pipeline_ms": total_ms,
+        "canvas_draw": canvas_draw,
     })
 
     logger.info(f"[{session_id}] Pipeline complete: {total_ms}ms total")

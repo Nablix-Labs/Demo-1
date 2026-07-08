@@ -14,14 +14,26 @@ class RAGServiceAdapterClient:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
-    async def retrieve(self, context: AdapterContext) -> RAGResult:
-        return await self.call(context)
+    async def retrieve(
+        self,
+        context: AdapterContext,
+        *,
+        error_type: str | None,
+        hint_level: int | None,
+    ) -> RAGResult:
+        return await self.call(context, error_type=error_type, hint_level=hint_level)
 
-    async def call(self, request: AdapterContext) -> RAGResult:
+    async def call(
+        self,
+        request: AdapterContext,
+        *,
+        error_type: str | None,
+        hint_level: int | None,
+    ) -> RAGResult:
         if self._settings.use_mock_rag:
             return self._mock_response(request)
 
-        payload: JsonObject = self._build_retrieve_payload(request)
+        payload: JsonObject = self._build_retrieve_payload(request, error_type, hint_level)
         url = self._settings.rag_service_url.rstrip("/") + "/retrieve"
 
         try:
@@ -36,17 +48,20 @@ class RAGServiceAdapterClient:
         except AdapterError as error:
             self.handle_error(error)
 
-    def _build_retrieve_payload(self, context: AdapterContext) -> JsonObject:
-        content_type = "HINT" if context.current_hint_level else "EXPLANATION"
-
-        hint_level = context.current_hint_level
-
+    def _build_retrieve_payload(
+        self,
+        context: AdapterContext,
+        error_type: str | None,
+        hint_level: int | None,
+    ) -> JsonObject:
+        # Only reached for GUIDED_HINT (gated in run_tutor_pipeline), so the target
+        # content is always a hint at the classifier's chosen level.
         return {
             "query_id": f"{context.session_id}-{int(time.time())}",
             "concept_id": context.concept_id or "ALG_LINEAR_ONE_STEP_ADDITION",
-            "content_type": content_type,
+            "content_type": "HINT",
             "hint_level": hint_level,
-            "error_type": None,
+            "error_type": error_type,
             "difficulty": "FOUNDATION",
             "input_source": context.input_source or "TEXT",
             "max_results": 3,

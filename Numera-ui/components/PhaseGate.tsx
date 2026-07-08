@@ -57,16 +57,16 @@ export default function PhaseGate({
   return (
     <main className="flex-1 min-w-0 flex items-center justify-center bg-white p-8" aria-label={`${here.label} locked`}>
       <div className="w-[460px] max-w-full text-center">
-        <div className="w-12 h-12 mx-auto rounded-xl border border-[#c8c8c8] bg-[#f4f4f4] text-[#9a9a9a] flex items-center justify-center mb-4">
+        <div className="w-12 h-12 mx-auto rounded-xl border border-muted-gray bg-reading-surface text-slate-blue flex items-center justify-center mb-4">
           <Lock size={20} strokeWidth={1.8} />
         </div>
-        <div className="text-[10px] tracking-widest uppercase text-[#9a9a9a] mb-1">{here.label} locked</div>
-        <h1 className="text-[22px] font-semibold text-[#1a1a1a]">Finish {next.label.toLowerCase()} first</h1>
-        <p className="text-[13px] text-[#7a7a7a] mt-2 leading-relaxed">{next.blurb}</p>
+        <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-1">{here.label} locked</div>
+        <h1 className="text-[22px] font-semibold text-ink">Finish {next.label.toLowerCase()} first</h1>
+        <p className="text-[13px] text-slate-blue mt-2 leading-relaxed">{next.blurb}</p>
 
         <Link
           href={next.href}
-          className="mt-5 w-full inline-flex items-center justify-center gap-2 rounded-md bg-[#1a1a1a] text-white px-4 py-3 text-[13px] font-semibold hover:opacity-80 transition-opacity"
+          className="mt-5 w-full inline-flex items-center justify-center gap-2 rounded-md bg-focus-navy text-white px-4 py-3 text-[13px] font-semibold hover:opacity-80 transition-opacity"
         >
           {next.cta} <ArrowRight size={16} strokeWidth={2} />
         </Link>
@@ -74,7 +74,7 @@ export default function PhaseGate({
         {/* Bypass the funnel during development. */}
         <button
           onClick={() => missing.forEach(completePhase)}
-          className="mt-3 w-full rounded-md border border-[#c8c8c8] bg-white px-4 py-2.5 text-[12px] font-semibold text-[#7a7a7a] hover:text-[#1a1a1a] hover:border-[#9a9a9a] transition-colors"
+          className="mt-3 w-full rounded-md border border-muted-gray bg-white px-4 py-2.5 text-[12px] font-semibold text-slate-blue hover:text-ink hover:border-slate-blue transition-colors"
         >
           Continue anyway
         </button>

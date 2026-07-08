@@ -16,12 +16,14 @@ from app.core.config import Settings
 from app.core.exceptions import AdapterError
 from app.models.adapters import (
     AdapterContext,
+    AnnotationIntent,
     CanvasFeedback,
     RAGResult,
     SafetyCheckResult,
     StudentModelResult,
     StudentModelEvent,
     TutorEngineRequest,
+    TutorMistakeClassification,
     TutorResult,
     VisualCue,
 )
@@ -95,14 +97,14 @@ class TutorEngineServiceAdapter:
                     transcript_confidence=context.transcript_confidence,
                     attempt_count=context.attempt_count or 1,
                     current_hint_level=context.current_hint_level,
-                    concept_id=None,
+                    concept_id=context.concept_id,
                     difficulty="FOUNDATION",
                     max_hint_results=3,
                     exclude_content_ids=[],
+                    canvas_regions=[region.model_dump() for region in context.canvas_regions],
                 )
             )
-            result = _tutor_result_from_ai_response(ai_response)
-            return _with_retrieved_content(result, request.rag)
+            return _tutor_result_from_ai_response(ai_response)
 
         return TutorResult(
             evaluation="INCORRECT",
@@ -156,6 +158,34 @@ def _tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:
             description=response.visual_cue.description,
         ),
         canvas_feedback=CanvasFeedback(),
+        mistake_classification=(
+            TutorMistakeClassification(
+                status=response.mistake_classification.status,
+                mistake_step_id=response.mistake_classification.mistake_step_id,
+                target_text=response.mistake_classification.target_text,
+                target_span=(
+                    (
+                        response.mistake_classification.target_span[0],
+                        response.mistake_classification.target_span[1],
+                    )
+                    if response.mistake_classification.target_span is not None
+                    else None
+                ),
+                replacement_text=response.mistake_classification.replacement_text,
+                confidence=response.mistake_classification.confidence,
+            )
+            if response.mistake_classification is not None
+            else None
+        ),
+        annotation_intents=[
+            AnnotationIntent(
+                kind=intent.kind,
+                target_step_id=intent.target_step_id,
+                text=intent.text,
+                placement=intent.placement,
+            )
+            for intent in response.annotation_intents
+        ],
         next_phase_recommendation=response.next_phase_recommendation,
         answer_reveal_allowed=response.answer_reveal_allowed,
         confidence=response.confidence,
@@ -184,14 +214,11 @@ def _tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:
 _CONTENT_STRATEGIES = {"GUIDED_HINT", "SCAFFOLD", "PROVIDE_WORKED_EXAMPLE"}
 
 
-def _with_retrieved_content(result: TutorResult, rag: RAGResult) -> TutorResult:
+def apply_retrieved_content(result: TutorResult, rag: RAGResult) -> TutorResult:
     """Use the top retrieved document as the tutor message for content-bearing
     strategies. No documents or a non-content strategy → leave the classifier's
-    message untouched.
-
-    ponytail: retrieval currently runs with the incoming hint level (before the
-    classifier picks the next one); tighten by retrieving after classification if
-    hint targeting drifts.
+    message untouched. Called by run_tutor_pipeline after classification, so the
+    retrieval already used the classifier's chosen hint level.
     """
     if not rag.documents or result.response_strategy not in _CONTENT_STRATEGIES:
         return result

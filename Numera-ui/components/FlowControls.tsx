@@ -66,7 +66,7 @@ export default function FlowControls() {
       <button
         onClick={() => setOpen(true)}
         title="Show demo controls (Shift+D)"
-        className="fixed bottom-3 right-3 z-50 rounded-full border border-[#c8c8c8] bg-white/95 backdrop-blur px-3 py-1.5 text-[10px] font-semibold tracking-widest uppercase text-[#9a9a9a] hover:text-[#1a1a1a] hover:border-[#9a9a9a] transition-colors"
+        className="fixed bottom-3 right-3 z-50 rounded-full border border-muted-gray bg-white/95 backdrop-blur px-3 py-1.5 text-[10px] font-semibold tracking-widest uppercase text-slate-blue hover:text-ink hover:border-slate-blue transition-colors"
       >
         Demo
       </button>
@@ -78,18 +78,18 @@ export default function FlowControls() {
   const placed = entryTopicId !== null;
 
   return (
-    <div className="fixed bottom-0 inset-x-0 z-50 border-t border-[#c8c8c8] bg-[#f4f4f4]/95 backdrop-blur">
-      <div className="mx-auto max-w-[1500px] px-4 py-2 flex items-center gap-4 flex-wrap text-[12px] text-[#1a1a1a]">
+    <div className="fixed bottom-0 inset-x-0 z-50 border-t border-muted-gray bg-reading-surface/95 backdrop-blur">
+      <div className="w-full px-4 py-2 flex items-center gap-4 flex-wrap text-[12px] text-ink">
         {/* HUD */}
         <div className="flex items-center gap-2">
-          <span className="text-[10px] font-semibold tracking-widest uppercase text-[#9a9a9a] border border-[#c8c8c8] rounded px-1.5 py-0.5">
+          <span className="text-[10px] font-semibold tracking-widest uppercase text-slate-blue border border-muted-gray rounded px-1.5 py-0.5">
             Demo
           </span>
           <span className="font-semibold">
             {placed ? `Topic ${idx + 1}/${TOPICS.length}: ${topic?.name}` : 'Not placed'}
           </span>
-          <span className="text-[#7a7a7a]">·</span>
-          <span className="text-[#7a7a7a]">{STAGE_LABEL[flowStage]}</span>
+          <span className="text-slate-blue">·</span>
+          <span className="text-slate-blue">{STAGE_LABEL[flowStage]}</span>
           {/* mastery dots */}
           <span className="flex items-center gap-1 ml-1">
             {TOPICS.map((t) => (
@@ -99,22 +99,22 @@ export default function FlowControls() {
                 className={
                   'w-2.5 h-2.5 rounded-sm border ' +
                   (masteryByTopic[t.id]
-                    ? 'bg-[#1a1a1a] border-[#1a1a1a]'
+                    ? 'bg-success-sage border-success-sage'
                     : t.id === currentTopicId
-                    ? 'bg-white border-[#1a1a1a]'
-                    : 'bg-white border-[#c8c8c8]')
+                    ? 'bg-white border-focus-navy'
+                    : 'bg-white border-muted-gray')
                 }
               />
             ))}
           </span>
         </div>
 
-        <div className="h-4 w-px bg-[#c8c8c8]" />
+        <div className="h-4 w-px bg-muted-gray" />
 
         {/* Stage-specific controls */}
         {!placed ? (
           <div className="flex items-center gap-2">
-            <span className="text-[#7a7a7a]">Place student (mock diagnostic):</span>
+            <span className="text-slate-blue">Place student (mock diagnostic):</span>
             {TOPICS.map((t) => (
               <Btn key={t.id} onClick={() => place(t.id)}>
                 {t.name}
@@ -123,13 +123,13 @@ export default function FlowControls() {
           </div>
         ) : flowStage === 'topic-diagnostic' ? (
           <div className="flex items-center gap-2">
-            <span className="text-[#7a7a7a]">Diagnostic result:</span>
+            <span className="text-slate-blue">Diagnostic result:</span>
             <Btn onClick={() => decideDiagnostic(true)}>Knows concept (skip orientation)</Btn>
             <Btn onClick={() => decideDiagnostic(false)}>Needs orientation</Btn>
           </div>
         ) : flowStage === 'review' ? (
           <div className="flex items-center gap-2">
-            <span className="text-[#7a7a7a]">Decision:</span>
+            <span className="text-slate-blue">Decision:</span>
             <Btn onClick={() => decideReview('cant_solve')}>Can&apos;t solve → guided</Btn>
             <Btn onClick={() => decideReview('foundation_weak')}>Foundation weak → orientation</Btn>
             <Btn solid onClick={() => decideReview('pass')}>Pass → next topic</Btn>
@@ -146,14 +146,14 @@ export default function FlowControls() {
               reset();
               router.push('/onboard');
             }}
-            className="text-[11px] text-[#9a9a9a] hover:text-[#1a1a1a] underline underline-offset-2"
+            className="text-[11px] text-slate-blue hover:text-ink underline underline-offset-2"
           >
             Reset demo
           </button>
           <button
             onClick={() => setOpen(false)}
             title="Hide demo controls (Shift+D)"
-            className="rounded border border-[#c8c8c8] px-1.5 py-0.5 text-[11px] font-semibold text-[#9a9a9a] hover:text-[#1a1a1a] hover:border-[#9a9a9a] transition-colors"
+            className="rounded border border-muted-gray px-1.5 py-0.5 text-[11px] font-semibold text-slate-blue hover:text-ink hover:border-slate-blue transition-colors"
           >
             Hide
           </button>
@@ -178,8 +178,8 @@ function Btn({
       className={
         'rounded-md px-2.5 py-1 text-[12px] font-semibold transition-colors ' +
         (solid
-          ? 'bg-[#1a1a1a] text-white hover:opacity-80'
-          : 'border border-[#c8c8c8] bg-white text-[#1a1a1a] hover:border-[#9a9a9a]')
+          ? 'bg-focus-navy text-white hover:opacity-80'
+          : 'border border-muted-gray bg-white text-ink hover:border-slate-blue')
       }
     >
       {children}

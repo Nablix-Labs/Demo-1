@@ -76,9 +76,6 @@ class MockSTTAdapter(STTAdapter):
             provider="mock_stt",
         )
 
-    async def is_available(self) -> bool:
-        return True
-
     def get_provider_name(self) -> str:
         return "mock_stt"
 
@@ -109,9 +106,6 @@ class MockTTSAdapter(TTSAdapter):
             latency_ms=elapsed_ms,
             provider="mock_tts",
         )
-
-    async def is_available(self) -> bool:
-        return True
 
     def get_provider_name(self) -> str:
         return "mock_tts"

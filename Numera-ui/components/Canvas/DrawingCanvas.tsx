@@ -22,10 +22,12 @@ import TutorLayer from './TutorLayer';
 
 interface DrawingCanvasProps {
   onExportReady?: (exportFn: () => string | null) => void;
+  onFullExportReady?: (exportFn: () => string | null) => void;
 }
 
-export default function DrawingCanvas({ onExportReady }: DrawingCanvasProps) {
+export default function DrawingCanvas({ onExportReady, onFullExportReady }: DrawingCanvasProps) {
   const stageRef = useRef<Konva.Stage>(null);
+  const studentLayerRef = useRef<Konva.Layer>(null);
   const isDrawing = useRef(false);
   const startPos = useRef<{ x: number; y: number } | null>(null);
 
@@ -62,10 +64,14 @@ export default function DrawingCanvas({ onExportReady }: DrawingCanvasProps) {
   // ── Expose exportPNG to parent ───────────────────────────────────────────────
   useEffect(() => {
     onExportReady?.(() => {
+      if (!studentLayerRef.current) return null;
+      return studentLayerRef.current.toDataURL({ mimeType: 'image/png', pixelRatio: 2 });
+    });
+    onFullExportReady?.(() => {
       if (!stageRef.current) return null;
       return stageRef.current.toDataURL({ mimeType: 'image/png', pixelRatio: 2 });
     });
-  }, [onExportReady]);
+  }, [onExportReady, onFullExportReady]);
 
   // ── Pointer handlers ─────────────────────────────────────────────────────────
   const handleDown = useCallback(
@@ -258,7 +264,7 @@ export default function DrawingCanvas({ onExportReady }: DrawingCanvasProps) {
         onTouchEnd={handleUp}
         style={{ cursor }}
       >
-        <Layer>
+        <Layer ref={studentLayerRef}>
           {remoteItems.map((it) => renderItem(it))}
           {items.map((it) => renderItem(it, true))}
           {draft && renderItem(draft)}

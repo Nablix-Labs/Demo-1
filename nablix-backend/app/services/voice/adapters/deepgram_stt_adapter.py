@@ -110,17 +110,6 @@ class DeepgramSTTAdapter(STTAdapter):
                 f"Response: {result}"
             ) from e
 
-    async def is_available(self) -> bool:
-        try:
-            response = await self.http_client.get(
-                "https://api.deepgram.com/v1/projects",
-                headers={"Authorization": f"Token {self.api_key}"},
-                timeout=5.0,
-            )
-            return response.status_code == 200
-        except Exception:
-            return False
-
     def get_provider_name(self) -> str:
         return "deepgram_nova3"
 

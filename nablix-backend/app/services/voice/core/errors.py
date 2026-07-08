@@ -58,24 +58,6 @@ class STTProviderError(VoiceError):
         super().__init__(msg, fallback_mode="TEXT")
         self.provider = provider
 
-class TTSProviderError(VoiceError):
-
-    def __init__(self, provider: str, detail: str = ""):
-        msg = f"Text-to-speech provider '{provider}' failed"
-        if detail:
-            msg += f": {detail}"
-        super().__init__(msg, fallback_mode="NONE")
-        self.provider = provider
-
-class MathNormalizationError(VoiceError):
-
-    def __init__(self, transcript: str):
-        super().__init__(
-            f"I wasn't sure how to interpret the math in '{transcript}'. "
-            f"Could you say it differently or type it?",
-            fallback_mode="REPEAT",
-        )
-
 def validate_voice_request(session_id: str | None, audio_data, audio_format: str):
     if not session_id or not session_id.strip():
         raise MissingSessionError(session_id)

@@ -12,6 +12,7 @@
  *    `session_id` from /session/start and reuse it for the whole run.
  */
 import axios from 'axios';
+import type { CanvasDrawPayload } from '@/store/useNumeraStore';
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
 
@@ -26,7 +27,7 @@ export const DEMO_PHASE = 'GUIDED_PRACTICE';
 
 export const api = axios.create({
   baseURL: BASE,
-  timeout: 10_000,
+  timeout: 30_000,
   headers: { 'Content-Type': 'application/json' },
 });
 
@@ -196,6 +197,15 @@ export interface OcrResult {
   raw_ocr_text: string;
   detected_equation: string;
   detected_steps: string[];
+  detected_regions: Array<{
+    step_id?: string;
+    text: string;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    confidence: number;
+  }>;
   final_answer: string;
   confidence: number;
   needs_clarification: boolean;
@@ -210,6 +220,7 @@ export interface TutorResult {
   error_type: string;
   response_strategy: string;
   tutor_message: string;
+  tutor_message_voice: string;
   hint_level: number;
   answer_reveal_allowed: boolean;
 }
@@ -229,6 +240,7 @@ export interface CanvasSubmissionResult {
   ocr: OcrResult;
   tutor: TutorResult;
   latency: CanvasLatency;
+  canvas_draw?: CanvasDrawPayload[];
 }
 
 const PNG_DATA_URL_PREFIX = 'data:image/png;base64,';
@@ -301,4 +313,15 @@ export interface VoiceTranscriptPayload {
 export async function sendVoiceTranscript(payload: VoiceTranscriptPayload) {
   const res = await api.post<InteractionResponse>('/voice/transcript', payload);
   return res.data;
+}
+
+/** POST /voice/tts — server-side (OpenAI) TTS. Returns base64 mp3, or null on failure. */
+export async function synthesizeTutorAudio(text: string): Promise<string | null> {
+  if (!text) return null;
+  try {
+    const res = await api.post<{ audio_base64: string | null }>('/voice/tts', { text });
+    return res.data.audio_base64;
+  } catch {
+    return null;
+  }
 }

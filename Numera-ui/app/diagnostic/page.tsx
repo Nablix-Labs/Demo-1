@@ -69,14 +69,14 @@ export default function DiagnosticPage() {
       <div className="w-[460px] max-w-full">
         {step === 'intro' && (
           <div className="text-center">
-            <div className="w-12 h-12 mx-auto rounded-xl bg-[#1a1a1a] text-white flex items-center justify-center mb-4">
+            <div className="w-12 h-12 mx-auto rounded-xl bg-focus-navy text-white flex items-center justify-center mb-4">
               <ClipboardCheck size={22} strokeWidth={1.8} />
             </div>
-            <h1 className="text-[22px] font-semibold text-[#1a1a1a]">{studentName ? `Nice to meet you, ${studentName}` : 'Quick diagnostic'}</h1>
-            <p className="text-[13px] text-[#7a7a7a] mt-2 leading-relaxed">
+            <h1 className="text-[22px] font-semibold text-ink">{studentName ? `Nice to meet you, ${studentName}` : 'Quick diagnostic'}</h1>
+            <p className="text-[13px] text-slate-blue mt-2 leading-relaxed">
               A one-time check so Numera knows your level and picks the right first topic. You only take this once — no pressure.
             </p>
-            <button onClick={() => setStep('orientation')} className="mt-5 w-full rounded-md bg-[#1a1a1a] text-white px-4 py-3 text-[13px] font-semibold hover:opacity-80 transition-opacity">
+            <button onClick={() => setStep('orientation')} className="mt-5 w-full rounded-md bg-focus-navy text-white px-4 py-3 text-[13px] font-semibold hover:opacity-80 transition-opacity">
               Begin
             </button>
           </div>
@@ -84,20 +84,20 @@ export default function DiagnosticPage() {
 
         {step === 'orientation' && (
           <div>
-            <div className="text-[10px] tracking-widest uppercase text-[#9a9a9a] mb-2">Getting to know you</div>
-            <h2 className="text-[20px] font-semibold text-[#1a1a1a] mb-5">{ORIENTATION[oi].q}</h2>
+            <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-2">Getting to know you</div>
+            <h2 className="text-[20px] font-semibold text-ink mb-5">{ORIENTATION[oi].q}</h2>
             <div className="flex flex-col gap-2.5">
               {ORIENTATION[oi].options.map((opt) => (
                 <button
                   key={opt}
                   onClick={answerOrientation}
-                  className="rounded-lg border border-[#c8c8c8] hover:border-[#9a9a9a] px-4 py-3 text-left text-[14px] transition-colors"
+                  className="rounded-lg border border-muted-gray hover:border-muted-gray px-4 py-3 text-left text-[14px] transition-colors"
                 >
                   {opt}
                 </button>
               ))}
             </div>
-            <p className="mt-4 text-[11.5px] text-[#9a9a9a]">No right answer — this just helps Numera coach you the way you like.</p>
+            <p className="mt-4 text-[11.5px] text-slate-blue">No right answer — this just helps Numera coach you the way you like.</p>
           </div>
         )}
 
@@ -106,11 +106,11 @@ export default function DiagnosticPage() {
             {/* progress */}
             <div className="flex items-center gap-1.5 mb-6">
               {QUESTIONS.map((_, idx) => (
-                <span key={idx} className={cn('h-1.5 flex-1 rounded-full', idx <= i ? 'bg-[#1a1a1a]' : 'bg-[#eaeaea]')} />
+                <span key={idx} className={cn('h-1.5 flex-1 rounded-full', idx <= i ? 'bg-focus-navy' : 'bg-reading-surface')} />
               ))}
             </div>
-            <div className="text-[10px] tracking-widest uppercase text-[#9a9a9a] mb-2">Question {i + 1} of {QUESTIONS.length}</div>
-            <h2 className="text-[20px] font-semibold text-[#1a1a1a] font-[Cambria_Math,Georgia,serif] mb-5">{QUESTIONS[i].prompt}</h2>
+            <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-2">Question {i + 1} of {QUESTIONS.length}</div>
+            <h2 className="text-[20px] font-semibold text-ink font-[Cambria_Math,Georgia,serif] mb-5">{QUESTIONS[i].prompt}</h2>
             <div className="flex flex-col gap-2.5">
               {QUESTIONS[i].options.map((opt, idx) => (
                 <button
@@ -118,7 +118,7 @@ export default function DiagnosticPage() {
                   onClick={() => picked === null && answer(idx)}
                   className={cn(
                     'flex items-center justify-between rounded-lg border px-4 py-3 text-left text-[14px] transition-colors font-[Cambria_Math,Georgia,serif]',
-                    picked === idx ? 'border-[#1a1a1a] bg-[#f4f4f4]' : 'border-[#c8c8c8] hover:border-[#9a9a9a]'
+                    picked === idx ? 'border-focus-navy bg-reading-surface' : 'border-muted-gray hover:border-muted-gray'
                   )}
                 >
                   {opt}
@@ -131,16 +131,16 @@ export default function DiagnosticPage() {
 
         {step === 'result' && (
           <div className="text-center">
-            <div className="w-12 h-12 mx-auto rounded-xl bg-[#1a1a1a] text-white flex items-center justify-center mb-4">
+            <div className="w-12 h-12 mx-auto rounded-xl bg-focus-navy text-white flex items-center justify-center mb-4">
               <Check size={22} strokeWidth={2} />
             </div>
-            <h1 className="text-[22px] font-semibold text-[#1a1a1a]">You&apos;re all set</h1>
-            <p className="text-[13px] text-[#7a7a7a] mt-2">{placement.note}</p>
-            <div className="mt-5 rounded-lg border border-[#1a1a1a] bg-[#f4f4f4] px-5 py-4 text-left">
-              <div className="text-[10px] tracking-widest uppercase text-[#9a9a9a] mb-1">We&apos;ll start you at</div>
-              <div className="text-[16px] font-semibold text-[#1a1a1a]">{placement.topic} <span className="text-[#7a7a7a] font-normal">· {placement.ks}</span></div>
+            <h1 className="text-[22px] font-semibold text-ink">You&apos;re all set</h1>
+            <p className="text-[13px] text-slate-blue mt-2">{placement.note}</p>
+            <div className="mt-5 rounded-lg border border-focus-navy bg-reading-surface px-5 py-4 text-left">
+              <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-1">We&apos;ll start you at</div>
+              <div className="text-[16px] font-semibold text-ink">{placement.topic} <span className="text-slate-blue font-normal">· {placement.ks}</span></div>
             </div>
-            <button onClick={() => placeAtTopic(placement.id)} className="mt-5 w-full inline-flex items-center justify-center gap-2 rounded-md bg-[#1a1a1a] text-white px-4 py-3 text-[13px] font-semibold hover:opacity-80 transition-opacity">
+            <button onClick={() => placeAtTopic(placement.id)} className="mt-5 w-full inline-flex items-center justify-center gap-2 rounded-md bg-focus-navy text-white px-4 py-3 text-[13px] font-semibold hover:opacity-80 transition-opacity">
               Begin orientation <ArrowRight size={16} strokeWidth={2} />
             </button>
           </div>
