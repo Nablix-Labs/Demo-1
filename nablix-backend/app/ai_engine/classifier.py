@@ -605,23 +605,31 @@ def classify_inverse_operand_mistake(
     expected_operand: str,
     confidence: float,
 ) -> CanvasMistakeClassification | None:
-    pattern: str = r"=\s*-?\d+(?:\.\d+)?\s*-\s*(-?\d+(?:\.\d+)?)\b"
+    pattern: str = r"=\s*-?\d+(?:\.\d+)?\s*([+-])\s*(-?\d+(?:\.\d+)?)\b"
     match: re.Match[str] | None = re.search(pattern, _normalized_region_text(region), flags=re.IGNORECASE)
     if match is None:
         return None
 
-    actual_operand: str = normalize_number_text(match.group(1))
-    if actual_operand == expected_operand:
+    operator: str = match.group(1)
+    actual_operand: str = normalize_number_text(match.group(2))
+    if operator == "-" and actual_operand == expected_operand:
         return None
 
-    target_span_tuple: tuple[int, int] = match.span(1)
-    target_span: list[int] = [target_span_tuple[0], target_span_tuple[1]]
+    if operator == "-":
+        # Right operation, wrong operand ("x = 9 - 5"): replace just the operand.
+        start, end = match.span(2)
+        replacement_text: str = expected_operand
+    else:
+        # Wrong inverse operation ("x = 9 + 6"): replace the whole "+ 6" span.
+        start, end = match.start(1), match.end(2)
+        replacement_text = f"-{expected_operand}"
+
     return CanvasMistakeClassification(
         status="mistake_found",
         mistake_step_id=region.step_id if region.step_id is not None else fallback_step_id,
-        target_text=region.text[target_span_tuple[0] : target_span_tuple[1]],
-        target_span=target_span,
-        replacement_text=expected_operand,
+        target_text=region.text[start:end],
+        target_span=[start, end],
+        replacement_text=replacement_text,
         confidence=confidence,
     )
 

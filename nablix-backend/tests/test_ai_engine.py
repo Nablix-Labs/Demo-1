@@ -261,6 +261,32 @@ def test_ai_engine_returns_canvas_mistake_for_wrong_inverse_operand() -> None:
     assert response.annotation_intents[1].text == "x = 9 - 4"
 
 
+def test_ai_engine_marks_wrong_inverse_operation_as_root_mistake() -> None:
+    response = classify_student_response(
+        ClassificationRequest(
+            question="x + 4 = 9",
+            correct_answer="x = 5",
+            student_input="x=9+6\nx=3",
+            current_phase="GUIDED_PRACTICE",
+            input_source="CANVAS",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+            canvas_regions=[
+                _canvas_region("step-1", "x=9+6", 0.95),
+                _canvas_region("step-2", "x=3", 0.95),
+            ],
+        )
+    )
+
+    assert response.mistake_classification is not None
+    assert response.mistake_classification.status == "mistake_found"
+    assert response.mistake_classification.mistake_step_id == "step-1"
+    assert response.mistake_classification.target_text == "+6"
+    assert response.mistake_classification.replacement_text == "-4"
+    assert response.annotation_intents[1].text == "x=9-4"
+
+
 def test_ai_engine_returns_no_canvas_mistake_for_correct_work() -> None:
     response = classify_student_response(
         ClassificationRequest(
