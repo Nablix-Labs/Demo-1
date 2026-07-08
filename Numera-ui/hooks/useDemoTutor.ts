@@ -200,6 +200,7 @@ export function useDemoTutor() {
         meta: res.tutor.evaluation,
       });
       // Render tutor marks from the Check path, same as the voice path does.
+      useNumeraStore.getState().clearTutorMarks();
       for (const payload of res.canvas_draw ?? []) {
         useNumeraStore.getState().applyCanvasDraw(payload);
       }
@@ -273,6 +274,10 @@ export function useDemoTutor() {
             text: canvasRes.ocr.raw_ocr_text || canvasRes.ocr.detected_equation || 'Canvas submitted.',
             meta: `OCR ${(canvasRes.ocr.confidence * 100).toFixed(0)}%`,
           });
+          useNumeraStore.getState().clearTutorMarks();
+          for (const payload of canvasRes.canvas_draw ?? []) {
+            useNumeraStore.getState().applyCanvasDraw(payload);
+          }
         } catch (err) {
           console.warn('✗ /canvas/submit failed:', err);
           /* canvas is optional for a voice turn */

@@ -32,7 +32,7 @@ const HELP_TIPS = [
 ];
 
 export default function CanvasStage() {
-  const { questionText, questionNumber, items, setActiveTool, setCanvasExporter, canvasGrid, setCanvasGrid } = useNumeraStore();
+  const { questionText, questionNumber, items, setActiveTool, setCanvasExporter, setFullCanvasExporter, canvasGrid, setCanvasGrid } = useNumeraStore();
   const tutor = useDemoTutor();
 
   const exportRef = useRef<(() => string | null) | null>(null);
@@ -43,8 +43,12 @@ export default function CanvasStage() {
 
   const handleExportReady = useCallback((fn: () => string | null) => {
     exportRef.current = fn;
-    setCanvasExporter(fn); // expose to the panel menu for "Save as PDF"
+    setCanvasExporter(fn);
   }, [setCanvasExporter]);
+
+  const handleFullExportReady = useCallback((fn: () => string | null) => {
+    setFullCanvasExporter(fn);
+  }, [setFullCanvasExporter]);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -94,7 +98,7 @@ export default function CanvasStage() {
 
       {/* Drawing canvas (fills entire stage, above visuals) */}
       <div className="absolute inset-0 z-[1]">
-        <DrawingCanvas onExportReady={handleExportReady} />
+        <DrawingCanvas onExportReady={handleExportReady} onFullExportReady={handleFullExportReady} />
       </div>
 
       {/* Teaching-back prompt */}

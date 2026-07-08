@@ -172,8 +172,9 @@ export interface NumeraState {
   toolbarOrientation: 'horizontal' | 'vertical'; // rotates when docked at a side
   canvasGrid: CanvasGrid;             // paper style behind the drawing surface
 
-  // Runtime: canvas PNG exporter, registered by the canvas for PDF notes
+  // Runtime: canvas PNG exporters, registered by the canvas
   canvasExporter: (() => string | null) | null;
+  fullCanvasExporter: (() => string | null) | null;
 
   // Group / live session (collaboration)
   sessionMode: 'solo' | 'group';
@@ -231,6 +232,7 @@ export interface NumeraState {
   undo: () => void;
   redo: () => void;
   clearCanvas: () => void;
+  clearStudentWork: () => void;
   applyCanvasDraw: (payload: CanvasDrawPayload) => void;
   clearTutorMarks: () => void;
   setInputMode: (m: InputMode) => void;
@@ -243,6 +245,7 @@ export interface NumeraState {
   setToolbarOrientation: (o: 'horizontal' | 'vertical') => void;
   setCanvasGrid: (g: CanvasGrid) => void;
   setCanvasExporter: (fn: (() => string | null) | null) => void;
+  setFullCanvasExporter: (fn: (() => string | null) | null) => void;
   startGroupSession: () => void;
   endGroupSession: () => void;
   upsertParticipant: (p: Participant) => void;
@@ -278,10 +281,10 @@ const initial: Omit<
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
   | 'setShapeKind' | 'setEraserMode'
   | 'setStrokeColor' | 'setStrokeWidth' | 'addItem' | 'removeItem' | 'undo' | 'redo'
-  | 'clearCanvas' | 'applyCanvasDraw' | 'clearTutorMarks'
+  | 'clearCanvas' | 'clearStudentWork' | 'applyCanvasDraw' | 'clearTutorMarks'
   | 'setInputMode' | 'setTextInput' | 'setPanelSide' | 'togglePanelSide'
   | 'toggleTranscript' | 'setToolbarPos' | 'toggleToolbarCollapsed' | 'setToolbarOrientation' | 'setCanvasGrid'
-  | 'setCanvasExporter' | 'startGroupSession' | 'endGroupSession'
+  | 'setCanvasExporter' | 'setFullCanvasExporter' | 'startGroupSession' | 'endGroupSession'
   | 'upsertParticipant' | 'removeParticipant' | 'setParticipantCursor'
   | 'addRemoteItem' | 'toggleLessonLearned' | 'setPracticeDone' | 'setStudentAge' | 'setStudentName'
   | 'completePhase'
@@ -336,6 +339,7 @@ const initial: Omit<
   toolbarOrientation: 'horizontal',
   canvasGrid: 'grid',
   canvasExporter: null,
+  fullCanvasExporter: null,
   sessionMode: 'solo',
   participants: [],
   remoteItems: [],
@@ -463,7 +467,8 @@ export const useNumeraStore = create<NumeraState>()(
       return { items: [...s.items, last], undone: s.undone.slice(0, -1) };
     }),
 
-  clearCanvas: () => set({ items: [], undone: [] }),
+  clearCanvas: () => set({ items: [], undone: [], tutorElements: [] }),
+  clearStudentWork: () => set({ items: [], undone: [] }),
 
   applyCanvasDraw: (payload) =>
     set((s) => {
@@ -490,6 +495,7 @@ export const useNumeraStore = create<NumeraState>()(
   setToolbarOrientation: (toolbarOrientation) => set({ toolbarOrientation }),
   setCanvasGrid: (canvasGrid) => set({ canvasGrid }),
   setCanvasExporter: (canvasExporter) => set({ canvasExporter }),
+  setFullCanvasExporter: (fullCanvasExporter) => set({ fullCanvasExporter }),
 
   startGroupSession: () => set({ sessionMode: 'group' }),
   endGroupSession: () => set({ sessionMode: 'solo', participants: [], remoteItems: [] }),

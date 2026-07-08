@@ -241,6 +241,7 @@ export function useStreamingVoiceTurn({
           transcriptSentRef.current = true;
           onStudentTranscriptRef.current(transcript, response.confidence || finalConfidenceRef.current);
         }
+        useNumeraStore.getState().clearTutorMarks();
         for (const payload of response.canvas_draw) {
           useNumeraStore.getState().applyCanvasDraw(payload);
         }

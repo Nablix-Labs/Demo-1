@@ -27,6 +27,7 @@ type AIMode = 'observing' | 'hint' | 'quiet';
 export default function PracticePage() {
   const items = useNumeraStore((s) => s.items);
   const setCanvasExporter = useNumeraStore((s) => s.setCanvasExporter);
+  const setFullCanvasExporter = useNumeraStore((s) => s.setFullCanvasExporter);
   const practiceCompleted = useNumeraStore((s) => s.practiceCompleted);
   const setPracticeDone = useNumeraStore((s) => s.setPracticeDone);
   const completePhase = useNumeraStore((s) => s.completePhase);
@@ -89,6 +90,10 @@ export default function PracticePage() {
   const handleExportReady = useCallback((fn: () => string | null) => {
     setCanvasExporter(fn);
   }, [setCanvasExporter]);
+
+  const handleFullExportReady = useCallback((fn: () => string | null) => {
+    setFullCanvasExporter(fn);
+  }, [setFullCanvasExporter]);
 
   // Start a backend session once on entry (no-op unless an API base URL is set).
   useEffect(() => {
@@ -163,7 +168,7 @@ export default function PracticePage() {
         }}
       >
         <div className="absolute inset-0 z-[1]">
-          <DrawingCanvas onExportReady={handleExportReady} />
+          <DrawingCanvas onExportReady={handleExportReady} onFullExportReady={handleFullExportReady} />
         </div>
 
         {/* Hint card — only when the observer offers one */}

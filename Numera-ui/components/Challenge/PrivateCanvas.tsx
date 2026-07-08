@@ -19,12 +19,17 @@ export default function PrivateCanvas() {
   const reviewStatus = useNumeraStore((s) => s.reviewStatus);
   const setReviewStatus = useNumeraStore((s) => s.setReviewStatus);
   const setCanvasExporter = useNumeraStore((s) => s.setCanvasExporter);
+  const setFullCanvasExporter = useNumeraStore((s) => s.setFullCanvasExporter);
   const exportRef = useRef<(() => string | null) | null>(null);
 
   const handleExportReady = useCallback((fn: () => string | null) => {
     exportRef.current = fn;
     setCanvasExporter(fn);
   }, [setCanvasExporter]);
+
+  const handleFullExportReady = useCallback((fn: () => string | null) => {
+    setFullCanvasExporter(fn);
+  }, [setFullCanvasExporter]);
 
   // Auto-review: after a stroke, mark "reviewing", then "reviewed" on a 3s pause
   useEffect(() => {
@@ -66,7 +71,7 @@ export default function PrivateCanvas() {
       </div>
 
       <div className="absolute inset-0 z-[1]">
-        <DrawingCanvas onExportReady={handleExportReady} />
+        <DrawingCanvas onExportReady={handleExportReady} onFullExportReady={handleFullExportReady} />
       </div>
 
       {/* Manual review still available via Check (auto-review is primary) */}
