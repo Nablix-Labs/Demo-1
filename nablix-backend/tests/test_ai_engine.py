@@ -128,6 +128,26 @@ def test_ai_engine_returns_visual_cue_for_opposite_operation_error() -> None:
     assert body["visual_cue"]["description"] is not None
 
 
+def test_ai_engine_returns_visual_cue_for_general_addition_opposite_operation_error() -> None:
+    response = client.post(
+        "/ai-engine/classify",
+        json={
+            "question_context": "x + 4 = 9",
+            "expected_answer": "x = 5",
+            "student_input": "x = 13",
+            "phase": "GUIDED_PRACTICE",
+            "input_source": "TEXT",
+            "attempt_count": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["error_type"] == "OPPOSITE_OPERATION_ERROR"
+    assert body["visual_cue"]["show"] is True
+    assert body["visual_cue"]["cue_type"] == "EQUATION_BLOCK"
+
+
 def test_ai_engine_does_not_return_visual_cue_for_correct_answer() -> None:
     response = client.post(
         "/ai-engine/classify",

@@ -328,6 +328,8 @@ def classify_student_error(
         and student_value == rules.diagnostic_cases.opposite_operation_error.student_value
     ):
         return "OPPOSITE_OPERATION_ERROR"
+    if is_addition_opposite_operation_error(request, student_value, correct_value):
+        return "OPPOSITE_OPERATION_ERROR"
     if (
         normalized_question == normalize_text(rules.diagnostic_cases.conceptual_misunderstanding.question)
         and student_value == rules.diagnostic_cases.conceptual_misunderstanding.student_value
@@ -883,6 +885,29 @@ def is_correct_answer(request: ClassificationRequest, rules: ClassifierRulesConf
 
 def has_visible_correct_method(normalized_input: str, rules: ClassifierRulesConfig) -> bool:
     return contains_any(normalized_input, rules.answer_patterns.correct_method)
+
+
+def is_addition_opposite_operation_error(
+    request: ClassificationRequest,
+    student_value: float | None,
+    correct_value: float | None,
+) -> bool:
+    if student_value is None or correct_value is None:
+        return False
+
+    match: re.Match[str] | None = re.search(
+        r"\bx\s*\+\s*(-?\d+(?:\.\d+)?)\s*=\s*(-?\d+(?:\.\d+)?)\b",
+        request.question,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return False
+
+    added_value: float = float(match.group(1))
+    right_side: float = float(match.group(2))
+    expected_correct_value: float = right_side - added_value
+    expected_wrong_value: float = right_side + added_value
+    return correct_value == expected_correct_value and student_value == expected_wrong_value
 
 
 def extract_last_number(value: str) -> float | None:
