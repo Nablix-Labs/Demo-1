@@ -80,13 +80,6 @@ class OpenAITTSAdapter(TTSAdapter):
             elapsed_ms = int((time.time() - start) * 1000)
             raise RuntimeError(f"OpenAI TTS failed: {e}") from e
 
-    async def is_available(self) -> bool:
-        try:
-            self.client.models.list()
-            return True
-        except Exception:
-            return False
-
     def get_provider_name(self) -> str:
         return f"openai_{self.model}"
 

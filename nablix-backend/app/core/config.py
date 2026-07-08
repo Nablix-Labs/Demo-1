@@ -6,7 +6,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "Nablix AI Math Tutor API"
     app_version: str = "1.0.0"
-    debug: bool = False #Why false?
 
     #Service URL's
     tutor_engine_url: str = "http://localhost:8001"
@@ -22,8 +21,6 @@ class Settings(BaseSettings):
 
     #API Keys
     openai_api_key: str = ""
-    gemini_api_key: str = ""
-    anthropic_api_key: str = ""
     vision_api_key: str = ""
 
     #Mock flags - True during sprint
@@ -53,7 +50,6 @@ class Settings(BaseSettings):
     #ID format patterns(SIMPLE REGEX FOR PATTERN MATCHING)
     student_id_pattern: str = r"^ST\d{3}$"
     session_id_pattern: str = r"^SESSION\d{3}$"
-    mock_session_id: str = "SESSION001"
 
     model_config = SettingsConfigDict(
         env_file=".env",

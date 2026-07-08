@@ -54,7 +54,7 @@ def correct_answer_for(question_id: str) -> str | None:
     return entry[1] if entry else None
 
 
-def _mock_diagnostic_question(concept_id: str) -> tuple[str, str, int]:
+def _mock_diagnostic_question() -> tuple[str, str, int]:
     """Return the first diagnostic question as (question, question_id, number).
 
     Placeholder for Aditya's POST /diagnostic/question.
@@ -88,7 +88,7 @@ def _get_owned_session(session_id: str, student_id: str) -> SessionRecord:
 def _recover_demo_session(session_id: str, student_id: str) -> SessionRecord:
     """Rebuild the fixed demo session after Vercel drops in-memory state."""
 
-    question, question_id, question_number = _mock_diagnostic_question("ALG_LINEAR_ONE_STEP")
+    question, question_id, question_number = _mock_diagnostic_question()
     # ponytail: demo-only stateless recovery; replace _sessions with real storage for multi-user deploys.
     session = SessionRecord(
         session_id=session_id,
@@ -115,7 +115,7 @@ async def start_session(request: SessionStartRequest) -> SessionRecord:
 
     settings = get_settings()
     mode: Literal["mock", "live"] = "mock" if settings.use_mock_tutor else "live"
-    question, question_id, question_number = _mock_diagnostic_question(request.concept_id)
+    question, question_id, question_number = _mock_diagnostic_question()
     initial_phase: Phase = request.initial_phase if request.initial_phase is not None else "DIAGNOSTIC"
     session: SessionRecord = SessionRecord(
         session_id=_build_session_id(),

@@ -17,7 +17,6 @@ from errors import (
     EmptyTranscriptError,
     LowConfidenceError,
     STTProviderError,
-    TTSProviderError,
     validate_voice_request,
 )
 import config

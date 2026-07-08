@@ -1,11 +1,10 @@
 import os
 import sys
 import time
-import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
 
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 from adapter import STTAdapter, TranscriptionResult, register_stt_adapter
 import config as voice_config
@@ -18,7 +17,7 @@ class OpenAISTTAdapter(STTAdapter):
             raise ValueError(
                 "OpenAI API key not found. Set OPENAI_API_KEY in your .env file."
             )
-        self.client = OpenAI(api_key=self.api_key)
+        self.client = AsyncOpenAI(api_key=self.api_key)
         self.model = "whisper-1"
 
     async def transcribe_audio(
@@ -33,27 +32,19 @@ class OpenAISTTAdapter(STTAdapter):
         try:
             if isinstance(audio_data, str) and os.path.isfile(audio_data):
                 with open(audio_data, "rb") as audio_file:
-                    response = self.client.audio.transcriptions.create(
+                    response = await self.client.audio.transcriptions.create(
                         model=self.model,
                         file=audio_file,
                         language=language,
                         response_format="verbose_json",
                     )
             elif isinstance(audio_data, bytes):
-                suffix = f".{audio_format}"
-                tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-                try:
-                    tmp.write(audio_data)
-                    tmp.close()
-                    with open(tmp.name, "rb") as audio_file:
-                        response = self.client.audio.transcriptions.create(
-                            model=self.model,
-                            file=audio_file,
-                            language=language,
-                            response_format="verbose_json",
-                        )
-                finally:
-                    os.unlink(tmp.name)
+                response = await self.client.audio.transcriptions.create(
+                    model=self.model,
+                    file=(f"audio.{audio_format}", audio_data),
+                    language=language,
+                    response_format="verbose_json",
+                )
             else:
                 raise ValueError(
                     f"audio_data must be a file path or bytes, got {type(audio_data)}"
@@ -90,13 +81,6 @@ class OpenAISTTAdapter(STTAdapter):
             pass
 
         return 0.85
-
-    async def is_available(self) -> bool:
-        try:
-            self.client.models.list()
-            return True
-        except Exception:
-            return False
 
     def get_provider_name(self) -> str:
         return "openai_whisper"

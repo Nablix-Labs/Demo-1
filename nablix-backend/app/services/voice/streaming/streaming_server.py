@@ -99,10 +99,8 @@ async def submit_canvas_work(
         "transcript": transcript or None,
         "transcript_confidence": confidence,
     }
-    url = f"{MAIN_BACKEND_URL}/canvas/submit"
-    logger.info(f"[{session_id}] POST {url}")
-    async with httpx.AsyncClient(timeout=40.0) as client:
-        response = await client.post(url, json=payload)
+    logger.info(f"[{session_id}] POST {MAIN_BACKEND_URL}/canvas/submit")
+    response = await _backend_http_client.post("/canvas/submit", json=payload, timeout=40.0)
     if response.status_code != 200:
         raise RuntimeError(f"status={response.status_code} body={response.text}")
     return response.json()

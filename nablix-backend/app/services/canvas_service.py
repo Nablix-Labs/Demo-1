@@ -54,7 +54,7 @@ async def submit_canvas(request: CanvasSubmitRequest) -> CanvasSubmitResponse:
 
     # ponytail: plain concat of written answer + spoken transcript into one graded
     # message. Refine here if the classifier needs them weighted separately.
-    message = " ".join(p for p in [student_answer, request.transcript] if p) or student_answer
+    message = " ".join(p for p in [student_answer, request.transcript] if p)
 
     tutor_started = perf_counter()
     _, _, tutor = await run_tutor_pipeline(

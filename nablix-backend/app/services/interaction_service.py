@@ -94,8 +94,8 @@ def _current_hint_level_from(hint_count: int) -> int | None:
     return min(hint_count, 3)
 
 
-def _next_phase_from(request: InteractionRequest, tutor: TutorResult | None) -> Phase:
-    recommendation = tutor.next_phase_recommendation if tutor is not None else None
+def _next_phase_from(request: InteractionRequest, tutor: TutorResult) -> Phase:
+    recommendation = tutor.next_phase_recommendation
     if recommendation in _PHASE_VALUES:
         return cast(Phase, recommendation)
     return request.current_phase

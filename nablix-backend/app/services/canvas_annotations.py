@@ -153,10 +153,5 @@ def _arrow_element(start: Point, end: Point, index: int) -> TutorElement:
     )
 
 
-def _center_of(box: Box) -> Point:
-    x, y, w, h = box
-    return (_clamp(x + w / 2, 0.0, 1.0), _clamp(y + h / 2, 0.0, 1.0))
-
-
 def _clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(value, upper))

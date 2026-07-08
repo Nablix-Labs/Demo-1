@@ -28,9 +28,6 @@ class DeepgramTTSAdapter(TTSAdapter):
             "Add your Deepgram API key and complete the implementation."
         )
 
-    async def is_available(self) -> bool:
-        return False
-
     def get_provider_name(self) -> str:
         return "deepgram_aura2"
 
