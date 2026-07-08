@@ -84,6 +84,21 @@ def test_interaction_returns_session_view() -> None:
     assert body["session_summary"] is None
 
 
+def test_interaction_returns_visual_cue_for_addition_opposite_operation_error() -> None:
+    session_id = _start_session("ST001")
+
+    response = client.post(
+        "/interaction",
+        json=_interaction_body(session_id, "ST001", text_input="x = 13"),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["show_visual_cue"] is True
+    assert body["visual_cue"]["show"] is True
+    assert body["visual_cue"]["cue_type"] == "EQUATION_BLOCK"
+
+
 def test_interaction_rejects_malformed_session_id() -> None:
     response = client.post("/interaction", json=_interaction_body("bad", "ST001"))
 

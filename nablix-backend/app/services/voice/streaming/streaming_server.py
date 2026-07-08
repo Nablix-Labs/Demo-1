@@ -38,13 +38,20 @@ DEEPGRAM_WS_URL = "wss://api.deepgram.com/v1/listen"
 DEEPGRAM_API_KEY = voice_config.DEEPGRAM_API_KEY
 MAIN_BACKEND_URL = os.getenv("NABLIX_MAIN_BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
 
-# Reuse a single HTTP client for all backend calls instead of creating
-# a new connection per request.  TCP handshake + TLS negotiation on a
-# fresh client adds ~100-200ms each time.
-_backend_http_client = httpx.AsyncClient(
-    base_url=MAIN_BACKEND_URL,
-    timeout=15.0,
-)
+# Reuse one backend client, but create it lazily so importing app.main does not
+# initialize the voice streaming HTTP stack.
+_backend_http_client: httpx.AsyncClient | None = None
+
+
+def get_backend_http_client() -> httpx.AsyncClient:
+    global _backend_http_client
+
+    if _backend_http_client is None:
+        _backend_http_client = httpx.AsyncClient(
+            base_url=MAIN_BACKEND_URL,
+            timeout=15.0,
+        )
+    return _backend_http_client
 
 MATH_NORMALIZATIONS = {
     "five over six": "5/6",
@@ -79,7 +86,7 @@ async def evaluate_voice_transcript(
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     logger.info(f"[{session_id}] POST /voice/transcript")
-    response = await _backend_http_client.post("/voice/transcript", json=payload)
+    response = await get_backend_http_client().post("/voice/transcript", json=payload)
     if response.status_code != 200:
         raise RuntimeError(f"status={response.status_code} body={response.text}")
     return response.json()

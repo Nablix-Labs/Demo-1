@@ -4,8 +4,6 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
 
-from openai import AsyncOpenAI
-
 from adapter import TTSAdapter, SpeechResult, register_tts_adapter
 import config as voice_config
 
@@ -30,6 +28,8 @@ class OpenAITTSAdapter(TTSAdapter):
             raise ValueError(
                 "OpenAI API key not found. Set OPENAI_API_KEY in your .env file."
             )
+        from openai import AsyncOpenAI
+
         self.client = AsyncOpenAI(api_key=self.api_key)
         self.model = model
         self.default_voice = default_voice
