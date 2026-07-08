@@ -89,13 +89,14 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
     if openai_evaluation is not None:
         evaluation = openai_evaluation.evaluation
 
-    error_type: ErrorType | None = classify_student_error(request, evaluation, rules)
+    deterministic_error_type: ErrorType | None = classify_student_error(request, evaluation, rules)
+    error_type: ErrorType | None = deterministic_error_type
     openai_error: OpenAIErrorDiagnosis | None = diagnose_error_with_openai(
         request=request,
         evaluation=evaluation,
         openai_client=openai_client,
     )
-    if openai_error is not None:
+    if openai_error is not None and deterministic_error_type in {None, "UNKNOWN_ERROR", "ARITHMETIC_ERROR"}:
         error_type = openai_error.error_type
 
     response_strategy: ResponseStrategy = select_response_strategy(
