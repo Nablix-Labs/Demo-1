@@ -192,7 +192,8 @@ def health():
     return {"status": "ok", "service": "voice-streaming"}
 
 @app.websocket("/voice/stream")
-async def voice_stream(ws: WebSocket, session_id: str = "default", student_id: str = "ST001"):
+async def voice_stream(ws: WebSocket, session: str = "default", student_id: str = "ST001"):
+    session_id = session  # frontend sends ?session=, not ?session_id=
     await ws.accept()
     logger.info(f"[{session_id}] WebSocket connected")
 
@@ -203,11 +204,12 @@ async def voice_stream(ws: WebSocket, session_id: str = "default", student_id: s
     final_segment_count = 0
     receiving_audio = False
     audio_started_at = 0.0
+    turn_already_processed = False  # True when UtteranceEnd auto-triggered a response
 
     deepgram_receiver_task = None
 
     async def forward_deepgram_results(dg_ws):
-        nonlocal final_transcript, final_confidence, final_segment_count
+        nonlocal final_transcript, final_confidence, final_segment_count, audio_started_at, turn_already_processed
 
         try:
             async for msg in dg_ws:
@@ -242,16 +244,45 @@ async def voice_stream(ws: WebSocket, session_id: str = "default", student_id: s
                         )
 
                     await ws.send_json({
-                        "type": "partial_transcript" if not is_final else "final_transcript",
+                        "type": "transcript_partial" if not is_final else "transcript_final",
                         "text": transcript,
                         "confidence": round(confidence, 4),
                         "is_final": is_final,
+                        "role": "student",
                     })
 
                     logger.info(
                         f"[{session_id}] {'FINAL' if is_final else 'partial'}: "
                         f"'{transcript}' (conf={confidence:.4f})"
                     )
+
+                elif data.get("type") == "UtteranceEnd":
+                    # Deepgram detected 1.5s silence after speech.
+                    # Auto-trigger tutor response without requiring mic mute.
+                    if final_transcript:
+                        logger.info(
+                            f"[{session_id}] UtteranceEnd - auto-processing: "
+                            f"'{final_transcript}'"
+                        )
+                        transcript_to_process = final_transcript
+                        confidence_to_process = final_confidence
+                        duration = max(time.time() - audio_started_at, 0.001)
+
+                        # Reset for potential next utterance in same session
+                        final_transcript = ""
+                        final_confidence = 0.0
+                        final_segment_count = 0
+                        audio_started_at = time.time()
+                        turn_already_processed = True
+
+                        try:
+                            await process_and_respond(
+                                ws, session_id, student_id,
+                                transcript_to_process, confidence_to_process,
+                                duration, None,
+                            )
+                        except Exception as e:
+                            logger.error(f"[{session_id}] Auto-process failed: {e}")
 
         except websockets.exceptions.ConnectionClosed:
             logger.info(f"[{session_id}] Deepgram connection closed")
@@ -269,12 +300,29 @@ async def voice_stream(ws: WebSocket, session_id: str = "default", student_id: s
                 msg_type = data.get("type", "")
 
                 if msg_type == "start":
+                    # Explicit start (optional -- audio_chunk auto-connects too).
+                    # Clean up any existing Deepgram connection first to avoid
+                    # duplicate connections from React re-renders.
+                    if deepgram_ws:
+                        try:
+                            await deepgram_ws.close()
+                        except Exception:
+                            pass
+                        deepgram_ws = None
+                    if deepgram_receiver_task and not deepgram_receiver_task.done():
+                        deepgram_receiver_task.cancel()
+                        try:
+                            await deepgram_receiver_task
+                        except (asyncio.CancelledError, Exception):
+                            pass
+
                     language = data.get("language", "en")
                     final_transcript = ""
                     final_confidence = 0.0
                     final_segment_count = 0
                     receiving_audio = True
                     audio_started_at = time.time()
+                    turn_already_processed = False
 
                     params = (
                         f"?model=nova-3"
@@ -325,16 +373,12 @@ async def voice_stream(ws: WebSocket, session_id: str = "default", student_id: s
                         except Exception:
                             pass
 
-                        # Wait for Deepgram to finish processing remaining
-                        # audio.  After CloseStream, Deepgram sends pending
-                        # finals then closes the WebSocket.  Typically takes
-                        # under 1 second; we allow up to 3 seconds.
                         if deepgram_receiver_task:
                             dg_wait_start = time.time()
                             try:
-                                await asyncio.wait_for(deepgram_receiver_task, timeout=3.0)
+                                await asyncio.wait_for(deepgram_receiver_task, timeout=10.0)
                             except asyncio.TimeoutError:
-                                logger.warning(f"[{session_id}] Deepgram receiver timed out after 3s, proceeding with partial transcript")
+                                logger.warning(f"[{session_id}] Deepgram receiver timed out")
                                 deepgram_receiver_task.cancel()
                                 try:
                                     await deepgram_receiver_task
@@ -349,21 +393,81 @@ async def voice_stream(ws: WebSocket, session_id: str = "default", student_id: s
                             pass
                         deepgram_ws = None
 
-                    # Require real speech: canvas rides a turn only when there's a
-                    # transcript, so a silent unmuted mic doesn't loop-submit the canvas.
                     if final_transcript:
-                        logger.info(f"[{session_id}] Processing: '{final_transcript}'")
+                        logger.info(f"[{session_id}] Processing on stop: '{final_transcript}'")
                         audio_duration_seconds = max(time.time() - audio_started_at, 0.001)
                         await process_and_respond(
                             ws, session_id, student_id, final_transcript,
                             final_confidence, audio_duration_seconds, canvas_snapshot
                         )
-                    else:
-                        await ws.send_json({
-                            "type": "error",
-                            "message": "No speech detected. Please try again.",
-                            "fallback_mode": "REPEAT",
-                        })
+                    elif not turn_already_processed:
+                        logger.info(f"[{session_id}] Stop: no speech detected")
+
+                elif msg_type == "audio_chunk":
+                    # Frontend sends base64-encoded PCM audio as JSON.
+                    # Auto-connect to Deepgram on the first chunk -- no
+                    # explicit "start" message needed.
+                    audio_b64 = data.get("data", "")
+                    if not audio_b64:
+                        continue
+
+                    # Auto-connect to Deepgram if not already connected
+                    if deepgram_ws is None:
+                        logger.info(f"[{session_id}] Auto-connecting to Deepgram (first audio chunk)...")
+
+                        # Clean up stale receiver task if any
+                        if deepgram_receiver_task and not deepgram_receiver_task.done():
+                            deepgram_receiver_task.cancel()
+                            try:
+                                await deepgram_receiver_task
+                            except (asyncio.CancelledError, Exception):
+                                pass
+
+                        final_transcript = ""
+                        final_confidence = 0.0
+                        final_segment_count = 0
+                        turn_already_processed = False
+                        receiving_audio = True
+                        audio_started_at = time.time()
+
+                        params = (
+                            f"?model=nova-3"
+                            f"&language={language}"
+                            f"&smart_format=true"
+                            f"&punctuate=true"
+                            f"&interim_results=true"
+                            f"&utterance_end_ms=1500"
+                            f"&encoding=linear16"
+                            f"&sample_rate=16000"
+                            f"&channels=1"
+                        )
+                        dg_url = DEEPGRAM_WS_URL + params
+                        extra_headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}"}
+                        ssl_context = ssl.create_default_context(cafile=certifi.where())
+
+                        try:
+                            deepgram_ws = await websockets.connect(
+                                dg_url,
+                                additional_headers=extra_headers,
+                                ssl=ssl_context,
+                            )
+                            deepgram_receiver_task = asyncio.create_task(
+                                forward_deepgram_results(deepgram_ws)
+                            )
+                            logger.info(f"[{session_id}] Deepgram auto-connected.")
+                        except Exception as e:
+                            logger.error(f"[{session_id}] Deepgram auto-connect failed: {e}")
+                            deepgram_ws = None
+                            continue
+
+                    # Forward decoded audio to Deepgram
+                    try:
+                        audio_bytes = base64.b64decode(audio_b64)
+                        await deepgram_ws.send(audio_bytes)
+                    except Exception as e:
+                        logger.error(f"[{session_id}] Failed to forward audio_chunk: {e}")
+                        # Connection may have died, reset so next chunk reconnects
+                        deepgram_ws = None
 
             elif "bytes" in message:
                 if receiving_audio and deepgram_ws:
