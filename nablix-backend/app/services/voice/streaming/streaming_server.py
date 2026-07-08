@@ -392,7 +392,7 @@ async def process_and_respond(
 
     normalized = normalize_math(transcript)
     if normalized:
-        logger.info(f"[{session_id}] Normalized: '{transcript}' → '{normalized}'")
+        logger.info(f"[{session_id}] Normalized: '{transcript}' -> '{normalized}'")
 
     try:
         tutor_start = time.time()
@@ -429,35 +429,11 @@ async def process_and_respond(
     tutor_text = str(tutor_response.get("message") or "")
     tutor_voice_text = str(tutor_response.get("message_voice") or tutor_text)
 
-    # ---- Generate TTS audio ----
-    audio_base64 = None
-    tts_latency = None
+    # ---- Step 1: Send text response IMMEDIATELY ----
+    # The frontend can display the text while audio streams in.
+    # NOTE: audio_base64 is NOT included here anymore.
+    text_sent_ms = int((time.time() - pipeline_start) * 1000)
 
-    try:
-        tts_adapter = get_tts_adapter(voice_config.DEFAULT_TTS_PROVIDER)
-        tts_start = time.time()
-
-        tts_result = await tts_adapter.generate_speech(
-            text=tutor_voice_text,
-            voice=voice_config.TTS_VOICE,
-            audio_format="mp3",
-        )
-
-        tts_latency = int((time.time() - tts_start) * 1000)
-
-        audio_data = tts_result.audio_data
-        if isinstance(audio_data, str):
-            audio_data = audio_data.encode("utf-8")
-        audio_base64 = base64.b64encode(audio_data).decode("utf-8")
-        logger.info(f"[{session_id}] TTS generated: {tts_latency}ms")
-    except Exception as error:
-        logger.error(f"[{session_id}] TTS generation failed: {error}")
-
-    total_ms = int((time.time() - pipeline_start) * 1000)
-
-    # Send everything in one message — the frontend closes the
-    # WebSocket after receiving tutor_response, so a follow-up
-    # tutor_audio message would never be delivered.
     await ws.send_json({
         "type": "tutor_response",
         "transcript": transcript,
@@ -465,13 +441,123 @@ async def process_and_respond(
         "confidence": round(confidence, 4),
         "text": tutor_text,
         "voice_text": tutor_voice_text,
-        "audio_base64": audio_base64,
         "needs_clarification": confidence < voice_config.CONFIDENCE_THRESHOLD,
-        "tts_latency_ms": tts_latency,
-        "total_pipeline_ms": total_ms,
+        "text_latency_ms": text_sent_ms,
         "canvas_draw": canvas_draw,
     })
 
+    logger.info(f"[{session_id}] Text sent to frontend: {text_sent_ms}ms")
+
+    # ---- Step 2: Stream TTS audio in chunks ----
+    # Instead of waiting for the full audio file (2-3 seconds),
+    # we send chunks as OpenAI generates them.  The frontend can
+    # start playback after receiving the first chunk (~300-500ms).
+    tts_adapter = get_tts_adapter(voice_config.DEFAULT_TTS_PROVIDER)
+    supports_streaming = hasattr(tts_adapter, "generate_speech_stream")
+
+    if supports_streaming and tutor_voice_text:
+        # -- Streaming path (OpenAI) --
+        tts_start = time.time()
+        chunk_index = 0
+
+        try:
+            async for chunk in tts_adapter.generate_speech_stream(
+                text=tutor_voice_text,
+                voice=voice_config.TTS_VOICE,
+                audio_format="mp3",
+            ):
+                chunk_b64 = base64.b64encode(chunk).decode("utf-8")
+
+                await ws.send_json({
+                    "type": "tutor_audio_chunk",
+                    "chunk": chunk_b64,
+                    "chunk_index": chunk_index,
+                })
+
+                if chunk_index == 0:
+                    first_chunk_ms = int((time.time() - tts_start) * 1000)
+                    logger.info(
+                        f"[{session_id}] First audio chunk sent: {first_chunk_ms}ms"
+                    )
+
+                chunk_index += 1
+
+            tts_latency = int((time.time() - tts_start) * 1000)
+
+            # Step 3: Tell frontend that audio is done
+            await ws.send_json({
+                "type": "tutor_audio_end",
+                "total_chunks": chunk_index,
+                "tts_latency_ms": tts_latency,
+            })
+
+            logger.info(
+                f"[{session_id}] Audio streaming done: "
+                f"{chunk_index} chunks in {tts_latency}ms"
+            )
+
+        except Exception as e:
+            logger.error(f"[{session_id}] Streaming TTS failed: {e}")
+            # Tell frontend audio won't be coming
+            await ws.send_json({
+                "type": "tutor_audio_end",
+                "total_chunks": 0,
+                "tts_latency_ms": 0,
+                "error": str(e),
+            })
+
+    elif tutor_voice_text:
+        # -- Fallback: non-streaming path (mock, deepgram, etc.) --
+        # Generate full audio and send it as a single chunk.
+        try:
+            tts_start = time.time()
+
+            tts_result = await tts_adapter.generate_speech(
+                text=tutor_voice_text,
+                voice=voice_config.TTS_VOICE,
+                audio_format="mp3",
+            )
+
+            tts_latency = int((time.time() - tts_start) * 1000)
+
+            audio_data = tts_result.audio_data
+            if isinstance(audio_data, str):
+                audio_data = audio_data.encode("utf-8")
+            audio_b64 = base64.b64encode(audio_data).decode("utf-8")
+
+            # Send as single chunk so frontend uses same handling
+            await ws.send_json({
+                "type": "tutor_audio_chunk",
+                "chunk": audio_b64,
+                "chunk_index": 0,
+            })
+
+            await ws.send_json({
+                "type": "tutor_audio_end",
+                "total_chunks": 1,
+                "tts_latency_ms": tts_latency,
+            })
+
+            logger.info(f"[{session_id}] TTS (non-streaming): {tts_latency}ms")
+
+        except Exception as e:
+            logger.error(f"[{session_id}] TTS fallback failed: {e}")
+            await ws.send_json({
+                "type": "tutor_audio_end",
+                "total_chunks": 0,
+                "tts_latency_ms": 0,
+                "error": str(e),
+            })
+
+    else:
+        # No voice text to synthesize
+        await ws.send_json({
+            "type": "tutor_audio_end",
+            "total_chunks": 0,
+            "tts_latency_ms": 0,
+        })
+
+    total_ms = int((time.time() - pipeline_start) * 1000)
     logger.info(f"[{session_id}] Pipeline complete: {total_ms}ms total")
 
 if __name__ == "__main__":
