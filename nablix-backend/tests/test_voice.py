@@ -146,3 +146,10 @@ def test_voice_transcript_rejects_invalid_confidence() -> None:
 
     assert response.status_code == 422
     assert response.json()["field"] == "confidence"
+
+
+def test_voice_stream_websocket_accepts_connection() -> None:
+    with client.websocket_connect(
+        "/voice/stream?session_id=SESSION001&student_id=ST001"
+    ) as websocket:
+        websocket.close()
