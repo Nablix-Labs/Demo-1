@@ -49,4 +49,4 @@ async def voice_stream_endpoint(
     session_id: str = "default",
     student_id: str = "ST001",
 ) -> None:
-    await voice_stream(websocket, session_id=session_id, student_id=student_id)
+    await voice_stream(websocket, session=session_id, student_id=student_id)

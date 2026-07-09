@@ -246,8 +246,9 @@ export interface CanvasSubmissionResult {
   ocr: OcrResult;
   tutor: TutorResult;
   latency: CanvasLatency;
-  /** Optional tutor drawing (e.g. mark up the student's working). */
-  canvas_draw?: CanvasDrawPayload;
+  /** Tutor drawing actions (e.g. mark up the student's working). The backend
+   *  sends a LIST of draw actions here, unlike the WS path (one per message). */
+  canvas_draw?: CanvasDrawPayload[];
 }
 
 const PNG_DATA_URL_PREFIX = 'data:image/png;base64,';

@@ -21,10 +21,6 @@ class AdapterError(HTTPException):
         super().__init__(status_code=503)
         self.message = "Service Temporarily Unavailable"
         self.field = None
-        logger.error(
-            "adapter_error",
-            extra={
-                "adapter_name": adapter_name,
-                "detail": detail,
-            },
-        )
+        # Detail must be in the message itself: `extra` fields are not
+        # rendered by the console formatter, which made failures invisible.
+        logger.error(f"adapter_error adapter={adapter_name} detail={detail}")

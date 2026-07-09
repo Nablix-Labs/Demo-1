@@ -24,8 +24,7 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { tutorAudioStream } from '@/lib/tts';
-
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? '';
+import { buildVoiceStreamUrl, voiceStreamingEnabled } from '@/lib/runtimeConfig';
 
 export function useWebSocket(sessionId: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
@@ -38,9 +37,9 @@ export function useWebSocket(sessionId: string | null) {
   } = useNumeraStore();
 
   const connect = useCallback(() => {
-    if (!sessionId || !WS_URL) return;
+    if (!sessionId || !voiceStreamingEnabled) return;
 
-    const ws = new WebSocket(`${WS_URL}?session=${sessionId}`);
+    const ws = new WebSocket(buildVoiceStreamUrl(sessionId));
     wsRef.current = ws;
 
     ws.onopen = () => {
