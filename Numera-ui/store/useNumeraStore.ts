@@ -252,7 +252,7 @@ export interface NumeraState {
   undo: () => void;
   redo: () => void;
   clearCanvas: () => void;
-  applyCanvasDraw: (payload: CanvasDrawPayload) => void;
+  applyCanvasDraw: (payload: CanvasDrawPayload | CanvasDrawPayload[]) => void;
   clearTutorMarks: () => void;
   setInputMode: (m: InputMode) => void;
   setTextInput: (v: string) => void;
@@ -507,21 +507,28 @@ export const useNumeraStore = create<NumeraState>()(
 
   applyCanvasDraw: (payload) =>
     set((s) => {
-      // A new "replace" resets the layer and the idempotency window.
-      if (payload.mode === 'replace') seenDrawActionIds.clear();
-      // Drop a duplicate command (re-delivered on reconnect).
-      if (payload.actionId) {
-        if (seenDrawActionIds.has(payload.actionId)) return {};
-        seenDrawActionIds.add(payload.actionId);
+      // The WS path delivers one action per message; REST responses deliver a
+      // list of actions. Accept both here so no caller has to care.
+      const actions = Array.isArray(payload) ? payload : [payload];
+      let tutorElements = s.tutorElements;
+      for (const action of actions) {
+        // A new "replace" resets the layer and the idempotency window.
+        if (action.mode === 'replace') {
+          seenDrawActionIds.clear();
+          tutorElements = [];
+        }
+        // Drop a duplicate command (re-delivered on reconnect).
+        if (action.actionId) {
+          if (seenDrawActionIds.has(action.actionId)) continue;
+          seenDrawActionIds.add(action.actionId);
+        }
+        const incoming: TutorElement[] = (action.elements ?? []).map((el) => ({
+          ...el,
+          id: el.id ?? uid(),
+        }));
+        tutorElements = [...tutorElements, ...incoming];
       }
-      const incoming: TutorElement[] = payload.elements.map((el) => ({
-        ...el,
-        id: el.id ?? uid(),
-      }));
-      return {
-        tutorElements:
-          payload.mode === 'replace' ? incoming : [...s.tutorElements, ...incoming],
-      };
+      return { tutorElements };
     }),
 
   clearTutorMarks: () => {
