@@ -9,7 +9,6 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import dynamic from 'next/dynamic';
 import SlideDots from '@/components/SlideDots';
 import CanvasStage from '@/components/Canvas';
 import ContinuityCheck from '@/components/ContinuityCheck';
@@ -29,10 +28,6 @@ import { demoFor } from '@/lib/demoContent';
 // STT (Deepgram) + tutor + streamed TTS, all over the WS (see useVoiceStream /
 // useWebSocket). Flip to 'server' once the voice server is validated end to end.
 const VOICE_TRANSPORT = process.env.NEXT_PUBLIC_VOICE_TRANSPORT === 'server' ? 'server' : 'rest';
-
-// Real refraction glass (liquid-glass-react) — browser-only shader, so it's
-// loaded client-side to keep the static export happy.
-const LiquidGlass = dynamic(() => import('liquid-glass-react'), { ssr: false });
 
 export default function LessonPage() {
   const { goStage, currentTopicId } = useFlowNav();
@@ -129,24 +124,16 @@ export default function LessonPage() {
       <ContinuityCheck />
       <FloatingMicButton />
       <VisualCue />
-      {/* Guided lesson → independent practice — real liquid-glass (refracts the
-          canvas grid behind it, reacts to the cursor). */}
-      <div className="fixed top-4 right-4 z-40">
-        <LiquidGlass
-          cornerRadius={100}
-          padding="9px 18px"
-          displacementScale={62}
-          blurAmount={0.06}
-          saturation={135}
-          aberrationIntensity={2}
-          elasticity={0.28}
-          mode="standard"
-          onClick={() => goStage('practice', currentTopicId)}
-          className="cursor-pointer"
-        >
-          <span className="text-ink text-[12px] font-semibold whitespace-nowrap">Finish lesson → Practice</span>
-        </LiquidGlass>
-      </div>
+      {/* Guided lesson → independent practice. Top-right, to the left of the
+          "Explain it back" chrome; the visual-cue card sits below (top-[84px]).
+          A CSS glass pill — not the WebGL liquid-glass component, whose oversized
+          region blocked the canvas and the cue card. */}
+      <button
+        onClick={() => goStage('practice', currentTopicId)}
+        className="lg-glass fixed top-4 right-44 z-40 rounded-full px-5 py-2.5 text-ink text-[12px] font-semibold whitespace-nowrap cursor-pointer hover:brightness-[1.03] transition"
+      >
+        Finish lesson → Practice
+      </button>
     </>
   );
 }

@@ -39,9 +39,9 @@ export default function VisualCue() {
 
   return (
     <aside
-      // Top-left corner: keeps clear of the "Finish lesson → Practice" button,
-      // which is pinned top-right (they used to collide in that corner).
-      className="lg-glass fixed top-4 left-4 z-30 w-72 rounded-card overflow-hidden transition-all duration-300"
+      // Right side (matches the design mockup: canvas left, cue right). Sits
+      // below the "Explain it back" chrome so it stacks under it, not over it.
+      className="lg-glass fixed top-[84px] right-4 z-30 w-72 rounded-card overflow-hidden transition-all duration-300"
       style={{
         opacity: shown ? 1 : 0,
         transform: shown ? 'translateY(0)' : 'translateY(-6px)',
