@@ -44,8 +44,15 @@ function hasCanvasActivity(): boolean {
  *  `show_visual_cue`. No-ops when neither is present so a response that omits the
  *  field never hides an already-shown cue. */
 function applyVisualCue(res: InteractionResponse): void {
-  const show = res.visual_cue?.show ?? res.show_visual_cue;
-  if (typeof show === 'boolean') useNumeraStore.getState().setVisualCueVisible(show);
+  const cue = res.visual_cue;
+  const show = cue?.show ?? res.show_visual_cue;
+  if (typeof show === 'boolean') {
+    useNumeraStore.getState().setVisualCue({
+      show,
+      cueType: cue?.cue_type ?? null,
+      description: cue?.description ?? null,
+    });
+  }
 }
 
 /** Pull a human-readable message out of a normalised API error, if present. */

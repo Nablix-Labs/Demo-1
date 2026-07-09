@@ -156,9 +156,12 @@ export interface NumeraState {
   micMuted: boolean;
   voiceStatus: 'idle' | 'listening' | 'speaking' | 'processing';
 
-  // Guided-practice visual cue — a supporting picture shown on the canvas.
-  // Backend-driven via the session's `show_visual_cue` flag; session-scoped.
+  // Visual cue card — supporting guidance shown when the AI Engine flags a
+  // mistake. `visualCueType` is the backend cue_type (picks which card renders);
+  // `visualCueDescription` is the backend's instructional text. Session-scoped.
   visualCueVisible: boolean;
+  visualCueType: string | null;
+  visualCueDescription: string | null;
 
   // Transcript
   transcript: TranscriptMessage[];
@@ -236,6 +239,7 @@ export interface NumeraState {
   setMicMuted: (value: boolean) => void;
   setVoiceStatus: (s: NumeraState['voiceStatus']) => void;
   setVisualCueVisible: (v: boolean) => void;
+  setVisualCue: (cue: { show: boolean; cueType?: string | null; description?: string | null }) => void;
   toggleVisualCue: () => void;
   addTranscriptMessage: (msg: Omit<TranscriptMessage, 'id' | 'timestamp'>) => void;
   setTranscript: (msgs: Pick<TranscriptMessage, 'role' | 'text'>[]) => void;
@@ -297,7 +301,7 @@ const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
   | 'setQuestionText' | 'setQuestionNumber' | 'setActiveEquation' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus'
-  | 'setVisualCueVisible' | 'toggleVisualCue'
+  | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue'
   | 'addTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript'
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
   | 'setShapeKind' | 'setEraserMode'
@@ -325,6 +329,8 @@ const initial: Omit<
   micMuted: false,
   voiceStatus: 'listening',
   visualCueVisible: false,
+  visualCueType: null,
+  visualCueDescription: null,
   transcript: [
     {
       id: '1',
@@ -422,6 +428,8 @@ export const useNumeraStore = create<NumeraState>()(
 
   setVoiceStatus: (voiceStatus) => set({ voiceStatus }),
   setVisualCueVisible: (visualCueVisible) => set({ visualCueVisible }),
+  setVisualCue: ({ show, cueType = null, description = null }) =>
+    set({ visualCueVisible: show, visualCueType: cueType, visualCueDescription: description }),
   toggleVisualCue: () => set((s) => ({ visualCueVisible: !s.visualCueVisible })),
 
   addTranscriptMessage: (msg) =>
