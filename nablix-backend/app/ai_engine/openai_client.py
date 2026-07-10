@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Collection
 
 import httpx
 from pydantic import Field, ValidationError
 
-from app.ai_engine.schemas import ErrorType, EvaluationCategory, StrictSchema
+from app.ai_engine.prompt_registry import (
+    Trigger,
+    build_openai_tutor_messages,
+    build_openai_tutor_prompt_metadata,
+    sha256_text,
+)
+from app.ai_engine.schemas import ErrorType, EvaluationCategory, LearningPhase, StrictSchema
 from app.core.exceptions import AdapterError
 
 
@@ -30,35 +37,31 @@ class OpenAITutorMessage(StrictSchema):
 
 
 class OpenAIAIEngineClient:
-    def __init__(self, api_key: str, model: str, timeout_seconds: int) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        timeout_seconds: int,
+        prompt_cache_key_enabled: bool,
+    ) -> None:
         self._api_key = api_key
         self._model = model
         self._timeout_seconds = timeout_seconds
+        self._prompt_cache_key_enabled = prompt_cache_key_enabled
 
     def evaluate_answer(
         self,
         question: str,
         correct_answer: str,
         student_input: str,
+        phase: LearningPhase,
     ) -> OpenAIAnswerEvaluation:
         schema = OpenAIAnswerEvaluation.model_json_schema()
         content = self._request_json(
             name="answer_evaluation",
             schema=schema,
-            system_prompt=(
-                "You are the answer evaluation component inside the AI Tutor Response Engine. "
-                "Your only job is to classify the student's algebra answer. Do not generate "
-                "a tutor message. Do not diagnose the error type. Do not reveal the correct "
-                "answer to the student. Use only one evaluation value: CORRECT, "
-                "PARTIALLY_CORRECT, INCORRECT, UNCLEAR, NO_ATTEMPT, or IRRELEVANT. "
-                "Choose CORRECT when the final answer and shown method are correct. "
-                "Choose PARTIALLY_CORRECT when at least one correct method step is visible "
-                "but execution is wrong or incomplete. Choose INCORRECT when the answer is "
-                "mathematically wrong and no correct step is visible. Choose UNCLEAR when "
-                "the input is ambiguous. Choose NO_ATTEMPT when no math answer is provided. "
-                "Choose IRRELEVANT when the response is off topic. If unclear, choose "
-                "UNCLEAR and do not guess. Output JSON only, no markdown, no extra text."
-            ),
+            phase=phase,
+            active_triggers=[],
             user_payload={
                 "question": question,
                 "correct_answer": correct_answer,
@@ -72,26 +75,14 @@ class OpenAIAIEngineClient:
         question: str,
         correct_answer: str,
         student_input: str,
+        phase: LearningPhase,
     ) -> OpenAIErrorDiagnosis:
         schema = OpenAIErrorDiagnosis.model_json_schema()
         content = self._request_json(
             name="error_diagnosis",
             schema=schema,
-            system_prompt=(
-                "You are the error diagnosis component inside the AI Tutor Response Engine. "
-                "Your only job is to classify the main student error and give a short "
-                "diagnostic description for downstream response strategy selection. Do not "
-                "generate a student-facing tutor message. Do not reveal the final answer as "
-                "advice to the student. Use only approved error_type values: "
-                "ARITHMETIC_ERROR, SIGN_ERROR, OPPOSITE_OPERATION_ERROR, "
-                "CONCEPTUAL_MISUNDERSTANDING, PROCEDURAL_ERROR, NOTATION_ISSUE, "
-                "INSUFFICIENT_INFORMATION, UNKNOWN_ERROR. If the value is correct but the "
-                "format is wrong, use NOTATION_ISSUE. If there is too little information to "
-                "diagnose, use INSUFFICIENT_INFORMATION. If a specific approved type fits, "
-                "do not use UNKNOWN_ERROR. Keep error_description short and factual. Do not "
-                "include hidden reasoning or chain-of-thought. Output JSON only, no markdown, "
-                "no extra text."
-            ),
+            phase=phase,
+            active_triggers=[],
             user_payload={
                 "question": question,
                 "correct_answer": correct_answer,
@@ -108,24 +99,14 @@ class OpenAIAIEngineClient:
         error_type: ErrorType | None,
         response_strategy: str,
         hint_level: int | None,
+        phase: LearningPhase,
     ) -> OpenAITutorMessage:
         schema = OpenAITutorMessage.model_json_schema()
         content = self._request_json(
             name="tutor_message",
             schema=schema,
-            system_prompt=(
-                "You are the tutor message component inside the AI Tutor Response Engine. "
-                "Write one short student-facing message for ages 11-14 and one natural "
-                "voice-optimised version. Follow the response strategy exactly. Do not give "
-                "the final answer. Do not complete all solution steps. Do not include hidden "
-                "reasoning or chain-of-thought. If evaluation is CORRECT and response_strategy "
-                "is CONFIRM_CORRECT, only confirm that the student's answer or method is "
-                "correct. Do not ask the student to solve the same question again. Do not ask "
-                "what x equals. If response_strategy is GUIDED_HINT, give a hint based on "
-                "hint_level without calculating the final answer. If response_strategy is "
-                "CLARIFY, ask for clarification or redirect safely. Keep voice wording short "
-                "and easy to say aloud. Output JSON only, no markdown, no extra text."
-            ),
+            phase=phase,
+            active_triggers=[],
             user_payload={
                 "question": question,
                 "student_input": student_input,
@@ -141,15 +122,27 @@ class OpenAIAIEngineClient:
         self,
         name: str,
         schema: dict[str, object],
-        system_prompt: str,
+        phase: LearningPhase,
+        active_triggers: Collection[Trigger | str],
         user_payload: dict[str, object],
     ) -> dict[str, object]:
+        request_payload = {"component": name, **user_payload}
+        request_content = json.dumps(
+            request_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        messages = build_openai_tutor_messages(
+            phase=phase,
+            active_triggers=active_triggers,
+            session_context=request_payload,
+            conversation_history=[],
+            current_user_input=request_content,
+        )
         request_body = {
             "model": self._model,
-            "input": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(user_payload)},
-            ],
+            "input": messages,
             "text": {
                 "format": {
                     "type": "json_schema",
@@ -159,6 +152,16 @@ class OpenAIAIEngineClient:
                 }
             },
         }
+        if self._prompt_cache_key_enabled:
+            metadata = build_openai_tutor_prompt_metadata(
+                phase=phase,
+                active_triggers=active_triggers,
+                session_context=request_payload,
+            )
+            canonical_trigger_hash = sha256_text(",".join(metadata.canonical_triggers))
+            request_body["prompt_cache_key"] = (
+                f"ai_tutor:{metadata.prompt_version}:{phase}:{canonical_trigger_hash}"
+            )
 
         try:
             with httpx.Client(timeout=self._timeout_seconds) as http_client:

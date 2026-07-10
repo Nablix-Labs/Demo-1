@@ -1,9 +1,12 @@
+import json
+
 from fastapi.testclient import TestClient
 import pytest
 
 from app.adapters.tutor_engine import TutorEngineServiceAdapter
 from app.ai_engine import openai_client
 from app.ai_engine.classifier import ClassificationRequest, classify_student_response
+from app.ai_engine.prompt_registry import build_openai_tutor_messages, load_prompt_registry, serialize_session_context
 from app.ai_engine.schemas import CanvasTextRegion
 from app.core.config import Settings, get_settings
 from app.main import app
@@ -55,6 +58,7 @@ class _FakeOpenAIResponse:
 
 
 def test_ai_engine_can_use_openai_when_feature_flag_is_enabled(monkeypatch) -> None:
+    request_bodies = []
     responses = [
         _FakeOpenAIResponse('{"evaluation": "PARTIALLY_CORRECT", "confidence": 0.88}'),
         _FakeOpenAIResponse(
@@ -77,6 +81,7 @@ def test_ai_engine_can_use_openai_when_feature_flag_is_enabled(monkeypatch) -> N
             return False
 
         def post(self, *args, **kwargs) -> _FakeOpenAIResponse:
+            request_bodies.append(kwargs["json"])
             return responses.pop(0)
 
     monkeypatch.setenv("NABLIX_USE_OPENAI_AI_ENGINE", "true")
@@ -105,6 +110,91 @@ def test_ai_engine_can_use_openai_when_feature_flag_is_enabled(monkeypatch) -> N
     assert body["tutor_message"] == "Check the inverse operation first."
     assert body["answer_reveal_allowed"] is False
     assert body["guardrail_check"]["passed"] is True
+    assert len(request_bodies) == 3
+
+    registry = load_prompt_registry()
+    for request_body in request_bodies:
+        messages = request_body["input"]
+        assert messages[0] == {"role": "system", "content": registry.layer_1_core}
+        assert messages[1]["role"] == "system"
+        assert "PHASE 2" in messages[1]["content"]
+        assert messages[2]["role"] == "system"
+        assert messages[2]["content"].startswith("<SESSION_CONTEXT>\n")
+        assert messages[-1]["role"] == "user"
+        assert messages[-1]["content"] not in messages[0]["content"]
+        assert messages[-1]["content"] not in messages[1]["content"]
+        assert request_body["text"]["format"]["type"] == "json_schema"
+        assert request_body["text"]["format"]["strict"] is True
+        assert "schema" in request_body["text"]["format"]
+        assert "prompt_cache_key" not in request_body
+        assert "cache_control" not in json.dumps(request_body)
+
+
+def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> None:
+    request_bodies = []
+
+    class _FakeOpenAIClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self) -> "_FakeOpenAIClient":
+            return self
+
+        def __exit__(self, *exc) -> bool:
+            return False
+
+        def post(self, *args, **kwargs) -> _FakeOpenAIResponse:
+            request_bodies.append(kwargs["json"])
+            return _FakeOpenAIResponse('{"evaluation": "INCORRECT", "confidence": 0.91}')
+
+    monkeypatch.setattr(openai_client.httpx, "Client", _FakeOpenAIClient)
+
+    disabled_client = openai_client.OpenAIAIEngineClient(
+        api_key="sk-test",
+        model="gpt-test",
+        timeout_seconds=1,
+        prompt_cache_key_enabled=False,
+    )
+    disabled_client.evaluate_answer(
+        question="Solve for x: x + 4 = 9",
+        correct_answer="x = 5",
+        student_input="x = 13",
+        phase="GUIDED_PRACTICE",
+    )
+
+    enabled_client = openai_client.OpenAIAIEngineClient(
+        api_key="sk-test",
+        model="gpt-test",
+        timeout_seconds=1,
+        prompt_cache_key_enabled=True,
+    )
+    enabled_client.evaluate_answer(
+        question="Solve for x: x + 4 = 9",
+        correct_answer="x = 5",
+        student_input="x = 13",
+        phase="GUIDED_PRACTICE",
+    )
+
+    assert "prompt_cache_key" not in request_bodies[0]
+    assert request_bodies[1]["prompt_cache_key"].startswith("ai_tutor:1.0.0:GUIDED_PRACTICE:")
+    assert "cache_control" not in json.dumps(request_bodies[1])
+
+
+def test_openai_prompt_builder_keeps_history_and_current_input_dynamic() -> None:
+    messages = build_openai_tutor_messages(
+        phase="GUIDED_PRACTICE",
+        active_triggers=[],
+        session_context={"attempt_count": 1},
+        conversation_history=[{"role": "assistant", "content": "Try the inverse operation."}],
+        current_user_input="x = 13",
+    )
+
+    assert messages[2] == {
+        "role": "system",
+        "content": serialize_session_context({"attempt_count": 1}),
+    }
+    assert messages[-2] == {"role": "assistant", "content": "Try the inverse operation."}
+    assert messages[-1] == {"role": "user", "content": "x = 13"}
 
 
 def test_ai_engine_returns_visual_cue_for_opposite_operation_error() -> None:
