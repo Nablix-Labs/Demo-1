@@ -117,9 +117,6 @@ export function useWebSocket(sessionId: string | null) {
       }
     };
 
-    ws.onerror = (err) => {
-      console.error('[WS] error', err);
-    };
   }, [sessionId, addTranscriptMessage, updatePartialTranscript, setSessionState, setVoiceStatus, applyCanvasDraw]);
 
   useEffect(() => {
