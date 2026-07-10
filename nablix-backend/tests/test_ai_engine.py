@@ -6,7 +6,12 @@ import pytest
 from app.adapters.tutor_engine import TutorEngineServiceAdapter
 from app.ai_engine import openai_client
 from app.ai_engine.classifier import ClassificationRequest, classify_student_response
-from app.ai_engine.prompt_registry import build_openai_tutor_messages, load_prompt_registry, serialize_session_context
+from app.ai_engine.prompt_registry import (
+    build_openai_tutor_messages,
+    build_openai_tutor_prompt_metadata,
+    load_prompt_registry,
+    serialize_session_context,
+)
 from app.ai_engine.schemas import CanvasTextRegion
 from app.core.config import Settings, get_settings
 from app.main import app
@@ -195,6 +200,86 @@ def test_openai_prompt_builder_keeps_history_and_current_input_dynamic() -> None
     }
     assert messages[-2] == {"role": "assistant", "content": "Try the inverse operation."}
     assert messages[-1] == {"role": "user", "content": "x = 13"}
+
+
+def test_openai_cached_tokens_are_parsed_when_present() -> None:
+    metrics = openai_client.extract_openai_usage_metrics(
+        {
+            "usage": {
+                "prompt_tokens": 1200,
+                "completion_tokens": 40,
+                "total_tokens": 1240,
+                "prompt_tokens_details": {"cached_tokens": 768},
+            }
+        }
+    )
+
+    assert metrics.cached_tokens == 768
+    assert metrics.input_tokens == 1200
+    assert metrics.output_tokens == 40
+    assert metrics.total_tokens == 1240
+
+
+def test_openai_cached_tokens_default_safely_when_missing() -> None:
+    metrics = openai_client.extract_openai_usage_metrics({"usage": {}})
+
+    assert metrics.cached_tokens == 0
+    assert metrics.input_tokens is None
+    assert metrics.output_tokens is None
+    assert metrics.total_tokens is None
+
+
+def test_openai_prompt_usage_log_metadata_does_not_include_raw_current_user_input() -> None:
+    raw_input = "x = 13 raw current user input"
+    prompt_metadata = build_openai_tutor_prompt_metadata(
+        phase="GUIDED_PRACTICE",
+        active_triggers=[],
+        session_context={"current_user_input": raw_input},
+    )
+    log_metadata = openai_client.build_openai_prompt_usage_log_metadata(
+        model="gpt-test",
+        phase="GUIDED_PRACTICE",
+        prompt_metadata=prompt_metadata,
+        response_payload={"usage": {"prompt_tokens_details": {"cached_tokens": 12}}},
+        request_payload={"current_user_input": raw_input, "session_id": "SESSION001"},
+        latency_ms=15.25,
+    )
+
+    assert raw_input not in json.dumps(log_metadata)
+    assert log_metadata["session_id"] == "SESSION001"
+    assert log_metadata["cached_tokens"] == 12
+
+
+def test_openai_prompt_usage_log_metadata_does_not_include_raw_ocr_or_rag_fields() -> None:
+    raw_ocr = "raw OCR content x + 4 + 4 = 9 + 4"
+    raw_rag = "full retrieved lesson content"
+    prompt_metadata = build_openai_tutor_prompt_metadata(
+        phase="GUIDED_PRACTICE",
+        active_triggers=[],
+        session_context={"ocr_output": raw_ocr, "rag_content": raw_rag},
+    )
+    log_metadata = openai_client.build_openai_prompt_usage_log_metadata(
+        model="gpt-test",
+        phase="GUIDED_PRACTICE",
+        prompt_metadata=prompt_metadata,
+        response_payload={
+            "id": "resp_123",
+            "usage": {
+                "input_tokens": 900,
+                "output_tokens": 80,
+                "total_tokens": 980,
+                "input_tokens_details": {"cached_tokens": 512},
+            },
+        },
+        request_payload={"ocr_output": raw_ocr, "rag_content": raw_rag},
+        latency_ms=21.5,
+    )
+
+    serialized_log = json.dumps(log_metadata)
+    assert raw_ocr not in serialized_log
+    assert raw_rag not in serialized_log
+    assert log_metadata["request_id"] == "resp_123"
+    assert log_metadata["cached_tokens"] == 512
 
 
 def test_ai_engine_returns_visual_cue_for_opposite_operation_error() -> None:
