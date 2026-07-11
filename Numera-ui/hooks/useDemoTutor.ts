@@ -64,6 +64,11 @@ function errorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
 }
 
+// Shown in the chat when a tutor call fails (e.g. backend 5xx), so a failure is
+// visible to the student instead of the chat silently freezing.
+const TUTOR_UNAVAILABLE = "Sorry — I couldn't reach the tutor just now. Please try again in a moment.";
+const HINT_UNAVAILABLE = "Sorry — I couldn't fetch a hint right now. Please try again in a moment.";
+
 export function useDemoTutor() {
   const sessionId = useNumeraStore((s) => s.sessionId);
   const setSessionId = useNumeraStore((s) => s.setSessionId);
@@ -126,6 +131,7 @@ export function useDemoTutor() {
         speakTutor(res.message); // voice the reply — same verbatim text shown in chat
         return res;
       } catch (err) {
+        addTranscriptMessage({ role: 'ai', text: TUTOR_UNAVAILABLE }); // surface the failure in the chat
         addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Tutor unavailable.') });
         return null;
       }
@@ -160,6 +166,7 @@ export function useDemoTutor() {
       speakTutor(res.tutor.tutor_message); // voice the reply — same verbatim text shown in chat
       return res;
     } catch (err) {
+      addTranscriptMessage({ role: 'ai', text: TUTOR_UNAVAILABLE }); // surface the failure in the chat
       addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Could not read the canvas.') });
       return null;
     }
@@ -185,6 +192,7 @@ export function useDemoTutor() {
         speakTutor(res.hint); // voice the hint — same verbatim text shown in chat
         return res;
       } catch (err) {
+        addTranscriptMessage({ role: 'ai', text: HINT_UNAVAILABLE }); // surface the failure in the chat
         addTrailEntry({ kind: 'hint', text: errorMessage(err, 'No hint available.') });
         return null;
       }
@@ -270,6 +278,7 @@ export function useDemoTutor() {
       } catch (err) {
         console.warn('✗ /interaction failed:', err);
         console.groupEnd();
+        addTranscriptMessage({ role: 'ai', text: TUTOR_UNAVAILABLE }); // surface the failure in the chat
         addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Tutor unavailable.') });
         return null;
       }
