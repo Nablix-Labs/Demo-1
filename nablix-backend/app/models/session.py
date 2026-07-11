@@ -72,5 +72,5 @@ class SessionRecord(BaseModel):
     hint_count: int
     # Functional fields the guide omits but the backend needs.
     status: Literal["started", "ended"]
-    mode: Literal["mock", "live"]
+    mode: Literal["inprocess"] = "inprocess"
     canvas_submissions: list[CanvasSubmissionRecord] = Field(default_factory=list)

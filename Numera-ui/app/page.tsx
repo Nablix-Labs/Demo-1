@@ -28,6 +28,11 @@ import { demoFor } from '@/lib/demoContent';
 // STT (Deepgram) + tutor + streamed TTS, all over the WS (see useVoiceStream /
 // useWebSocket). Flip to 'server' once the voice server is validated end to end.
 const VOICE_TRANSPORT = process.env.NEXT_PUBLIC_VOICE_TRANSPORT === 'server' ? 'server' : 'rest';
+if (typeof window !== 'undefined' && !process.env.NEXT_PUBLIC_VOICE_TRANSPORT) {
+  console.warn(
+    "[voice] NEXT_PUBLIC_VOICE_TRANSPORT is unset — falling back to 'rest' (browser STT). Set it to 'server' for the streaming pipeline."
+  );
+}
 
 export default function LessonPage() {
   const { goStage, currentTopicId } = useFlowNav();

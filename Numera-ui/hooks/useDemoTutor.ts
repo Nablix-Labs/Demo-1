@@ -126,7 +126,7 @@ export function useDemoTutor() {
         });
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message });
-        if (res.canvas_draw) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
+        if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
         applyVisualCue(res); // backend may ask to show/hide the supporting visual
         speakTutor(res.message); // voice the reply — same verbatim text shown in chat
         return res;
@@ -162,7 +162,7 @@ export function useDemoTutor() {
         text: res.tutor.tutor_message,
         meta: res.tutor.evaluation,
       });
-      if (res.canvas_draw) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
+      if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
       speakTutor(res.tutor.tutor_message); // voice the reply — same verbatim text shown in chat
       return res;
     } catch (err) {
@@ -234,6 +234,7 @@ export function useDemoTutor() {
           const canvasRes = await submitCanvas(sessionId, png);
           canvasSnapshotId = canvasRes.submission_id;
           console.log('← /canvas/submit', { submission_id: canvasRes.submission_id, ocr: canvasRes.ocr, tutor: canvasRes.tutor });
+          if (canvasRes.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(canvasRes.canvas_draw);
           addTrailEntry({
             kind: 'canvas',
             text: canvasRes.ocr.raw_ocr_text || canvasRes.ocr.detected_equation || 'Canvas submitted.',
@@ -267,7 +268,7 @@ export function useDemoTutor() {
         console.groupEnd();
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message });
-        if (res.canvas_draw) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
+        if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
         applyVisualCue(res); // backend may ask to show/hide the supporting visual
         // Speak exactly what's shown in the chat. The backend's message_voice can
         // carry the same meaning in different words ("we are close" vs "you're

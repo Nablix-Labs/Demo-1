@@ -408,8 +408,8 @@ def test_ai_engine_does_not_annotate_canvas_for_direct_answer_request() -> None:
 
 
 def test_tutor_adapter_maps_canvas_mistake_to_backend_result() -> None:
-    adapter = TutorEngineServiceAdapter(Settings(use_mock_tutor=True, use_openai_ai_engine=False))
-    result = adapter._mock_response(
+    adapter = TutorEngineServiceAdapter(Settings(use_openai_ai_engine=False))
+    result = adapter._respond(
         TutorEngineRequest(
             context=AdapterContext(
                 session_id="SESSION001",

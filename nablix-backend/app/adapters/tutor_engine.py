@@ -5,19 +5,22 @@ student context, retrieved curriculum material, and student-model state, then
 returns the frontend-facing tutoring decision fields.
 """
 
-from typing import NoReturn
-
-from pydantic import ValidationError
+from typing import cast
 
 from app.ai_engine.classifier import ClassificationRequest, classify_student_response
-from app.ai_engine.schemas import TutorResponse
-from app.adapters.http_utils import JsonObject, post_json
+from app.ai_engine.schemas import (
+    CanvasTextRegion,
+    HintLevel,
+    InputSource,
+    LearningPhase,
+    TutorResponse,
+)
 from app.core.config import Settings
-from app.core.exceptions import AdapterError
 from app.models.adapters import (
     AdapterContext,
     AnnotationIntent,
     CanvasFeedback,
+    OCRTextRegion,
     RAGResult,
     SafetyCheckResult,
     StudentModelResult,
@@ -29,12 +32,33 @@ from app.models.adapters import (
 )
 
 
-class TutorEngineServiceAdapter:
-    """Produces tutor feedback through mock data or a live tutor service.
+def _coerce_learning_phase(value: str | None) -> LearningPhase:
+    if value in {"DIAGNOSTIC", "CONCEPT_ORIENTATION", "GUIDED_PRACTICE", "INDEPENDENT_PRACTICE", "REVIEW"}:
+        return cast(LearningPhase, value)
+    return "GUIDED_PRACTICE"
 
-    The service-facing `evaluate` method stays stable while `call`,
-    `parse_response`, and `handle_error` implement the replaceable adapter
-    pattern from submodule 6.3.
+
+def _coerce_input_source(value: str | None) -> InputSource:
+    if value in {"TEXT", "VOICE", "CANVAS"}:
+        return cast(InputSource, value)
+    return "TEXT"
+
+
+def _coerce_hint_level(value: int | None) -> HintLevel | None:
+    if value in {1, 2, 3}:
+        return cast(HintLevel, value)
+    return None
+
+
+def _coerce_canvas_regions(regions: list[OCRTextRegion]) -> list[CanvasTextRegion]:
+    return [CanvasTextRegion(**region.model_dump()) for region in regions]
+
+
+class TutorEngineServiceAdapter:
+    """Produces tutor feedback via the in-process AI Engine.
+
+    A remote tutor-engine service was once planned behind a `use_mock_tutor`
+    flag but never built; the in-process engine is the only implementation.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -52,38 +76,10 @@ class TutorEngineServiceAdapter:
         return await self.call(request)
 
     async def call(self, request: TutorEngineRequest) -> TutorResult:
-        """Return mock tutor feedback or call the live tutor engine."""
+        return self._respond(request)
 
-        if self._settings.use_mock_tutor:
-            return self._mock_response(request)
-
-        payload: JsonObject = request.model_dump(mode="json")
-        try:
-            response = await post_json(
-                "tutor_engine",
-                self._settings.tutor_engine_url,
-                payload,
-                self._settings.adapter_request_timeout_seconds,
-                self._settings.adapter_request_retry_count,
-            )
-            return self.parse_response(response)
-        except AdapterError as error:
-            self.handle_error(error)
-
-    def parse_response(self, response: dict[str, object]) -> TutorResult:
-        try:
-            return TutorResult.model_validate(response)
-        except ValidationError as error:
-            raise AdapterError(
-                "tutor_engine",
-                f"invalid response body={response}: {error}",
-            ) from error
-
-    def handle_error(self, error: AdapterError) -> NoReturn:
-        raise error
-
-    def _mock_response(self, request: TutorEngineRequest) -> TutorResult:
-        """Return AI Engine feedback when context has a question, else mock data."""
+    def _respond(self, request: TutorEngineRequest) -> TutorResult:
+        """Return AI Engine feedback when context has a question, else canned data."""
 
         context = request.context
         if context.question is not None and context.correct_answer is not None:
@@ -92,16 +88,16 @@ class TutorEngineServiceAdapter:
                     question=context.question,
                     correct_answer=context.correct_answer,
                     student_input=context.message,
-                    current_phase=context.current_phase or "GUIDED_PRACTICE",
-                    input_source=context.input_source or "TEXT",
+                    current_phase=_coerce_learning_phase(context.current_phase),
+                    input_source=_coerce_input_source(context.input_source),
                     transcript_confidence=context.transcript_confidence,
                     attempt_count=context.attempt_count or 1,
-                    current_hint_level=context.current_hint_level,
+                    current_hint_level=_coerce_hint_level(context.current_hint_level),
                     concept_id=context.concept_id,
                     difficulty="FOUNDATION",
                     max_hint_results=3,
                     exclude_content_ids=[],
-                    canvas_regions=[region.model_dump() for region in context.canvas_regions],
+                    canvas_regions=_coerce_canvas_regions(context.canvas_regions),
                 )
             )
             return _tutor_result_from_ai_response(ai_response)
@@ -138,7 +134,7 @@ class MockTutorEngineAdapter(TutorEngineServiceAdapter):
     """Compatibility wrapper for tests or imports that need a mock-only adapter."""
 
     def __init__(self) -> None:
-        super().__init__(Settings(use_mock_tutor=True))
+        super().__init__(Settings())
 
 
 def _tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:

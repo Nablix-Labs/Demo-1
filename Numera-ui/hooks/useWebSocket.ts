@@ -81,6 +81,8 @@ export function useWebSocket(sessionId: string | null) {
           // Keep the socket OPEN — the audio chunks follow this message.
           case 'tutor_response':
             addTranscriptMessage({ role: 'ai', text: msg.text as string });
+            if (Array.isArray(msg.canvas_draw) && msg.canvas_draw.length > 0)
+              applyCanvasDraw(msg.canvas_draw as Parameters<typeof applyCanvasDraw>[0]);
             tutorAudioStream.begin(); // reset the player; chunks are coming next
             break;
 

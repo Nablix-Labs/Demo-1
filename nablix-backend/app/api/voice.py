@@ -46,7 +46,10 @@ async def voice_tts_endpoint(request: VoiceTTSRequest) -> dict[str, str | None]:
 @router.websocket("/stream")
 async def voice_stream_endpoint(
     websocket: WebSocket,
-    session_id: str = "default",
+    session: str = "default",
+    session_id: str | None = None,
     student_id: str = "ST001",
 ) -> None:
-    await voice_stream(websocket, session=session_id, student_id=student_id)
+    # Frontends have sent both ?session= and ?session_id= at different points;
+    # accept either so a client/server version skew can't silently drop the ID.
+    await voice_stream(websocket, session=session_id or session, student_id=student_id)

@@ -1,8 +1,5 @@
-from typing import Literal
-
 from fastapi import HTTPException
 
-from app.core.config import get_settings
 from app.models.adapters import VisionOCRResult
 from app.models.canvas import CanvasSubmissionRecord
 from app.models.fields import Phase
@@ -102,7 +99,6 @@ def _recover_demo_session(session_id: str, student_id: str) -> SessionRecord:
         ui_state="GUIDED_PRACTICE",
         hint_count=0,
         status="started",
-        mode="mock" if get_settings().use_mock_tutor else "live",
         message=_diagnostic_start_message(question),
         show_hint_button=True,
     )
@@ -113,8 +109,6 @@ def _recover_demo_session(session_id: str, student_id: str) -> SessionRecord:
 async def start_session(request: SessionStartRequest) -> SessionRecord:
     """Create and store the mock session response used before real persistence exists."""
 
-    settings = get_settings()
-    mode: Literal["mock", "live"] = "mock" if settings.use_mock_tutor else "live"
     question, question_id, question_number = _mock_diagnostic_question()
     initial_phase: Phase = request.initial_phase if request.initial_phase is not None else "DIAGNOSTIC"
     session: SessionRecord = SessionRecord(
@@ -129,7 +123,6 @@ async def start_session(request: SessionStartRequest) -> SessionRecord:
         ui_state=initial_phase,
         hint_count=0,
         status="started",
-        mode=mode,
         message=_diagnostic_start_message(question),
         show_hint_button=initial_phase in ("GUIDED_PRACTICE", "INDEPENDENT_PRACTICE"),
     )

@@ -8,7 +8,6 @@ class Settings(BaseSettings):
     app_version: str = "1.0.0"
 
     #Service URL's
-    tutor_engine_url: str = "http://localhost:8001"
     rag_service_url: str = "http://localhost:8002" #aditya
     student_model_url: str = "http://localhost:8003" #tamil
     voice_service_url: str = "http://localhost:8004" #chiru+aditya
@@ -24,7 +23,7 @@ class Settings(BaseSettings):
     vision_api_key: str = ""
 
     #Mock flags - True during sprint
-    use_mock_tutor: bool = True
+    # (the tutor has no flag: it always runs the in-process AI Engine)
     use_mock_rag: bool = True
     use_mock_student_model: bool = True
     use_mock_voice: bool = True
