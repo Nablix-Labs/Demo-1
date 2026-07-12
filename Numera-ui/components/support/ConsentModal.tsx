@@ -17,28 +17,29 @@ interface ConsentModalProps {
 export default function ConsentModal({ label, onConfirm, onCancel }: ConsentModalProps) {
   return (
     <div
-      className="fixed inset-0 z-[90] flex items-center justify-center bg-ink/30"
+      className="lg-scrim lg-anim-fade fixed inset-0 z-[90] flex items-center justify-center"
       role="dialog"
       aria-modal="true"
       aria-label="Confirm support action"
     >
-      <div
-        className="w-[340px] max-w-[calc(100vw-32px)] bg-white rounded-xl border border-muted-gray p-5"
-        style={{ boxShadow: '0 8px 32px rgba(0,0,0,0.22)' }}
-      >
-        <div className="flex items-center gap-2.5">
-          <span className="w-9 h-9 rounded-full bg-learning-blue/10 text-learning-blue flex items-center justify-center flex-shrink-0">
-            <ShieldQuestion size={18} strokeWidth={1.8} />
+      <div className="lg-sheet lg-anim-pop w-[350px] max-w-[calc(100vw-32px)] rounded-[24px] p-5">
+        <div className="flex items-center gap-3">
+          <span className="lg-lens w-10 h-10 rounded-full flex items-center justify-center text-white flex-shrink-0">
+            <ShieldQuestion size={19} strokeWidth={1.9} aria-hidden="true" />
           </span>
           <p className="text-[13.5px] text-ink leading-snug">
             I can <span className="font-semibold">{label}</span> — continue?
           </p>
         </div>
         <div className="flex gap-2.5 mt-4">
-          <button onClick={onConfirm} className="btn btn-primary flex-1 !py-2 text-[12.5px]">
+          <button onClick={onConfirm} className="btn btn-primary flex-1 !py-2 !rounded-full text-[12.5px]">
             Yes, go ahead
           </button>
-          <button onClick={onCancel} className="btn btn-secondary flex-1 !py-2 text-[12.5px]">
+          <button
+            onClick={onCancel}
+            className="lg-chip flex-1 rounded-full py-2 text-[12.5px] font-semibold text-ink/80 hover:text-ink
+                       focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-learning-blue/50"
+          >
             No, cancel
           </button>
         </div>

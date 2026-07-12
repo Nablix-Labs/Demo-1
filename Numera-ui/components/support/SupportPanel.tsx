@@ -9,10 +9,13 @@
  * an instruction, an element to spotlight, and/or an allow-listed safe action.
  * Actions with risk ≥ medium go through the ConsentModal, and "resolved" is
  * only reported after the action's verify() passes.
+ *
+ * Visual: the elevated liquid-glass tier (lg-sheet + friends, see globals.css)
+ * headed by the assist lens with its breathing aura.
  */
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { Send, Mic, MicOff, X, LifeBuoy } from 'lucide-react';
 import { useSupportStore } from '@/store/useSupportStore';
 import { useVoiceTurn } from '@/hooks/useVoiceTurn';
@@ -32,6 +35,7 @@ const GREETING =
 
 export default function SupportPanel() {
   const router = useRouter();
+  const pathname = usePathname();
   const open = useSupportStore((s) => s.open);
   const messages = useSupportStore((s) => s.messages);
   const instruction = useSupportStore((s) => s.instruction);
@@ -241,61 +245,79 @@ export default function SupportPanel() {
   if (!open) return null;
 
   const chip =
-    'rounded-full border border-muted-gray bg-white px-2.5 py-1 text-[10.5px] font-semibold text-slate-blue hover:text-ink hover:border-slate-blue transition-colors disabled:opacity-40';
+    'lg-chip rounded-full px-3 py-1.5 text-[10.5px] font-semibold text-ink/80 hover:text-ink disabled:opacity-40 ' +
+    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-learning-blue/50';
 
   return (
     <>
       <aside
-        className="lg-glass fixed top-2 bottom-14 right-2 z-[70] w-[300px] rounded-2xl flex flex-col overflow-hidden"
+        className="lg-sheet lg-anim-sheet fixed top-2 bottom-14 right-2 z-[70] w-[312px] rounded-[26px] flex flex-col overflow-hidden"
         aria-label="Nablix Assist support panel"
       >
-        {/* Header */}
-        <div className="flex items-center justify-between px-3.5 py-3 border-b border-muted-gray flex-shrink-0">
-          <div className="flex items-center gap-2">
-            <span className="w-7 h-7 rounded-lg bg-learning-blue text-white flex items-center justify-center flex-shrink-0">
-              <LifeBuoy size={15} strokeWidth={1.8} />
+        {/* Header — the assist identity */}
+        <div className="flex items-center justify-between pl-3.5 pr-3 py-3 border-b border-white/45 flex-shrink-0">
+          <div className="flex items-center gap-2.5">
+            <span className="lg-lens lg-aura w-9 h-9 rounded-full flex items-center justify-center text-white flex-shrink-0">
+              <LifeBuoy size={17} strokeWidth={1.9} aria-hidden="true" />
             </span>
             <div className="leading-none">
-              <div className="text-[13px] font-semibold text-ink">Nablix Assist</div>
-              <div className="text-[8.5px] text-slate-blue tracking-[1.5px] uppercase mt-0.5">
-                Support · lesson paused
+              <div className="text-[13.5px] font-semibold text-ink tracking-[0.2px]">Nablix Assist</div>
+              <div className="mt-1 flex items-center gap-1.5 text-[9px] text-slate-blue tracking-[1.2px] uppercase">
+                <span className="w-1.5 h-1.5 rounded-full bg-highlight-amber inline-block" aria-hidden="true" />
+                {/* Only claim the lesson is paused where a lesson actually runs */}
+                {pathname === '/' ? 'Lesson paused' : 'Here to help'}
               </div>
             </div>
           </div>
           <button
             onClick={close}
             aria-label="Exit support"
-            className="w-6 h-6 rounded-md flex items-center justify-center text-slate-blue hover:bg-reading-surface hover:text-ink transition-colors"
+            className="lg-chip w-7 h-7 rounded-full flex items-center justify-center text-slate-blue hover:text-ink
+                       focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-learning-blue/50"
           >
-            <X size={15} strokeWidth={1.8} />
+            <X size={14} strokeWidth={2} />
           </button>
         </div>
 
         {/* Support chat (separate from the lesson transcript) */}
-        <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto px-3 py-3 flex flex-col gap-2">
+        <div
+          ref={listRef}
+          className="lg-scroll flex-1 min-h-0 overflow-y-auto px-3 py-3.5 flex flex-col gap-2"
+        >
           {messages.map((m) => (
             <div
               key={m.id}
               className={cn(
-                'max-w-[85%] rounded-xl px-3 py-2 text-[11.5px] leading-snug',
+                'lg-anim-rise max-w-[86%] px-3.5 py-2.5 text-[11.5px] leading-[1.45]',
                 m.role === 'assist'
-                  ? 'self-start bg-white border border-muted-gray text-ink'
-                  : 'self-end bg-learning-blue text-white',
+                  ? 'lg-bubble self-start text-ink rounded-2xl rounded-bl-lg'
+                  : 'lg-bubble-user self-end text-white rounded-2xl rounded-br-lg',
               )}
             >
               {m.text}
             </div>
           ))}
           {busy && (
-            <div className="self-start text-[10.5px] text-slate-blue italic px-1" role="status">
-              Nablix Assist is thinking…
+            <div
+              className="lg-bubble lg-anim-rise self-start rounded-2xl rounded-bl-lg px-3.5 py-2.5 flex items-center gap-1"
+              role="status"
+              aria-label="Nablix Assist is thinking"
+            >
+              {[0, 1, 2].map((i) => (
+                <span
+                  key={i}
+                  className="w-1.5 h-1.5 rounded-full bg-slate-blue/70 animate-bounce"
+                  style={{ animationDelay: `${i * 140}ms`, animationDuration: '900ms' }}
+                  aria-hidden="true"
+                />
+              ))}
             </div>
           )}
         </div>
 
         {/* Step controls for the current instruction */}
         {instruction && !busy && (
-          <div className="px-3 pb-2 flex flex-wrap gap-1.5 flex-shrink-0">
+          <div className="lg-anim-rise px-3 pb-2 flex flex-wrap gap-1.5 flex-shrink-0">
             <button className={chip} onClick={confirmWorked}>✓ That worked</button>
             <button className={chip} onClick={rejectWorked}>✗ Didn&rsquo;t work</button>
             {instruction.highlight_support_id && (
@@ -317,8 +339,8 @@ export default function SupportPanel() {
 
         {/* Microphone picker (SELECT_INPUT_DEVICE) */}
         {devicePickerOpen && (
-          <div className="mx-3 mb-2 rounded-md bg-white border border-muted-gray p-2 flex-shrink-0">
-            <div className="text-[10px] font-semibold tracking-widest uppercase text-slate-blue mb-1.5 px-1">
+          <div className="lg-bubble lg-anim-rise mx-3 mb-2 rounded-2xl p-2.5 flex-shrink-0">
+            <div className="text-[9.5px] font-semibold tracking-[1.2px] uppercase text-slate-blue mb-1.5 px-1">
               Pick a microphone
             </div>
             {devices.length === 0 ? (
@@ -326,16 +348,17 @@ export default function SupportPanel() {
                 No microphones found. Check one is plugged in and allowed.
               </p>
             ) : (
-              <div className="flex flex-col gap-1 max-h-32 overflow-y-auto">
+              <div className="lg-scroll flex flex-col gap-1 max-h-32 overflow-y-auto">
                 {devices.map((d) => (
                   <button
                     key={d.device_id}
                     onClick={() => pickDevice(d)}
                     className={cn(
-                      'text-left rounded-md px-2 py-1.5 text-[11.5px] transition-colors',
+                      'text-left rounded-xl px-2.5 py-1.5 text-[11.5px] transition-colors',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-learning-blue/50',
                       d.device_id === getPreferredMicId()
-                        ? 'bg-learning-blue/10 text-learning-blue font-semibold'
-                        : 'text-ink hover:bg-reading-surface',
+                        ? 'bg-learning-blue/15 text-learning-blue font-semibold'
+                        : 'text-ink hover:bg-white/70',
                     )}
                   >
                     {d.label}
@@ -345,7 +368,8 @@ export default function SupportPanel() {
             )}
             <button
               onClick={() => setDevicePickerOpen(false)}
-              className="mt-1.5 px-1 text-[10.5px] font-medium text-slate-blue hover:text-ink hover:underline"
+              className="mt-1.5 px-1 text-[10.5px] font-medium text-slate-blue hover:text-ink hover:underline
+                         focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-learning-blue/50 rounded"
             >
               Cancel
             </button>
@@ -354,14 +378,17 @@ export default function SupportPanel() {
 
         {/* Voice status while listening */}
         {voice.active && (
-          <div className="mx-3 mb-2 rounded-md bg-reading-surface border border-muted-gray px-2.5 py-1.5 text-center flex-shrink-0" aria-live="polite">
+          <div
+            className="lg-field lg-anim-rise mx-3 mb-2 rounded-2xl px-3 py-2 text-center flex-shrink-0"
+            aria-live="polite"
+          >
             <p className="text-[11px] text-ink leading-snug">
               {caption || <span className="text-slate-blue italic">Listening — describe the problem…</span>}
             </p>
           </div>
         )}
         {textOnly && (
-          <p className="mx-3 mb-1.5 text-[10px] text-slate-blue italic flex-shrink-0">
+          <p className="mx-4 mb-1.5 text-[10px] text-slate-blue italic flex-shrink-0">
             Mic looks unavailable — type below instead.
           </p>
         )}
@@ -369,7 +396,7 @@ export default function SupportPanel() {
         {/* Input row — text always available; voice unless the mic IS the issue */}
         <form
           onSubmit={sendText}
-          className="flex items-center gap-2 px-3 pb-3 pt-2 border-t border-muted-gray flex-shrink-0"
+          className="flex items-center gap-2 px-3 pb-2.5 pt-2.5 border-t border-white/45 flex-shrink-0"
         >
           <input
             value={text}
@@ -377,7 +404,7 @@ export default function SupportPanel() {
             placeholder="Describe the problem…"
             aria-label="Describe the problem"
             maxLength={500}
-            className="flex-1 min-w-0 rounded-md border border-muted-gray bg-white px-2.5 py-1.5 text-[11.5px] text-ink placeholder:text-slate-blue focus:outline-none focus:border-learning-blue"
+            className="lg-field flex-1 min-w-0 rounded-full px-3.5 py-2 text-[11.5px] text-ink placeholder:text-slate-blue/80"
           />
           {!textOnly && voice.supported && (
             <button
@@ -385,35 +412,45 @@ export default function SupportPanel() {
               onClick={() => (voice.active ? voice.stop() : void voice.start())}
               aria-label={voice.active ? 'Stop voice input' : 'Describe the problem by voice'}
               className={cn(
-                'flex-shrink-0 w-8 h-8 rounded-md flex items-center justify-center transition-colors',
-                voice.active ? 'bg-action-orange text-white' : 'bg-reading-surface text-slate-blue hover:text-ink',
+                'flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center transition-all duration-150',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-learning-blue/50',
+                voice.active
+                  ? 'bg-action-orange text-white shadow-[0_4px_12px_rgba(247,127,0,0.4)]'
+                  : 'lg-chip text-slate-blue hover:text-ink',
               )}
             >
-              {voice.active ? <Mic size={14} strokeWidth={1.8} /> : <MicOff size={14} strokeWidth={1.8} />}
+              {voice.active ? <Mic size={15} strokeWidth={1.9} /> : <MicOff size={15} strokeWidth={1.9} />}
             </button>
           )}
           <button
             type="submit"
             aria-label="Send to Nablix Assist"
             disabled={!text.trim() || busy}
-            className="flex-shrink-0 w-8 h-8 rounded-md bg-learning-blue text-white flex items-center justify-center transition-opacity disabled:opacity-40"
+            className="lg-lens flex-shrink-0 w-9 h-9 rounded-full text-white flex items-center justify-center
+                       transition-all duration-150 hover:brightness-110 active:scale-95
+                       disabled:opacity-40 disabled:hover:brightness-100
+                       focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-learning-blue/50 focus-visible:ring-offset-1"
           >
-            <Send size={14} strokeWidth={1.8} />
+            <Send size={14} strokeWidth={2} />
           </button>
         </form>
 
         {/* Footer — leave support (restores the exact pre-support state) */}
-        <div className="flex items-center justify-between px-3 pb-3 flex-shrink-0">
+        <div className="flex items-center justify-between pl-4 pr-3 pb-3 flex-shrink-0">
           <button
             onClick={escalate}
             disabled={busy}
-            className="text-[10.5px] font-medium text-slate-blue hover:text-ink hover:underline transition-colors disabled:opacity-40"
+            className="text-[10.5px] font-medium text-slate-blue hover:text-ink hover:underline transition-colors disabled:opacity-40
+                       focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-learning-blue/50 rounded"
           >
             Contact support
           </button>
           <button
             onClick={close}
-            className="rounded-full bg-focus-navy text-white px-3.5 py-1.5 text-[11px] font-semibold hover:brightness-110 transition"
+            className="rounded-full bg-focus-navy text-white px-4 py-1.5 text-[11px] font-semibold
+                       shadow-[0_4px_14px_rgba(27,42,74,0.35),inset_0_1px_0_rgba(255,255,255,0.18)]
+                       transition-all duration-150 hover:brightness-[1.15] active:scale-[0.97]
+                       focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-navy/60 focus-visible:ring-offset-1"
           >
             Return to lesson
           </button>
