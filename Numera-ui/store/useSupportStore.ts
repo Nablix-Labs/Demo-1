@@ -49,6 +49,10 @@ interface SupportState {
   textOnly: boolean;
   /** Microphone picker shown by the SELECT_INPUT_DEVICE action. */
   devicePickerOpen: boolean;
+  /** Escalation form (screenshot consent, note, reference id). */
+  escalationOpen: boolean;
+  /** Screen share with a support agent is live (drives the persistent banner). */
+  remoteAssistActive: boolean;
 
   snapshot: TutorSnapshot | null;
 
@@ -60,6 +64,8 @@ interface SupportState {
   setBusy: (busy: boolean) => void;
   setTextOnly: (textOnly: boolean) => void;
   setDevicePickerOpen: (devicePickerOpen: boolean) => void;
+  setEscalationOpen: (escalationOpen: boolean) => void;
+  setRemoteAssistActive: (remoteAssistActive: boolean) => void;
 }
 
 export const useSupportStore = create<SupportState>((set, get) => ({
@@ -70,6 +76,8 @@ export const useSupportStore = create<SupportState>((set, get) => ({
   busy: false,
   textOnly: false,
   devicePickerOpen: false,
+  escalationOpen: false,
+  remoteAssistActive: false,
   snapshot: null,
 
   // Pause the tutor without touching its state beyond the mic: snapshot the
@@ -94,7 +102,9 @@ export const useSupportStore = create<SupportState>((set, get) => ({
       n.setMicMuted(snapshot.micMuted);
       n.setVoiceStatus(snapshot.voiceStatus);
     }
-    set({ open: false, snapshot: null, pendingAction: null, busy: false, devicePickerOpen: false });
+    // remoteAssistActive is deliberately NOT cleared: an active screen share
+    // (and its banner) outlives the panel until the student stops it.
+    set({ open: false, snapshot: null, pendingAction: null, busy: false, devicePickerOpen: false, escalationOpen: false });
   },
 
   addMessage: (msg) =>
@@ -105,4 +115,6 @@ export const useSupportStore = create<SupportState>((set, get) => ({
   setBusy: (busy) => set({ busy }),
   setTextOnly: (textOnly) => set({ textOnly }),
   setDevicePickerOpen: (devicePickerOpen) => set({ devicePickerOpen }),
+  setEscalationOpen: (escalationOpen) => set({ escalationOpen }),
+  setRemoteAssistActive: (remoteAssistActive) => set({ remoteAssistActive }),
 }));

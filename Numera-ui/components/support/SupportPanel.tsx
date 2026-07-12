@@ -18,12 +18,13 @@ import { useSupportStore } from '@/store/useSupportStore';
 import { useVoiceTurn } from '@/hooks/useVoiceTurn';
 import { useMicLevel } from '@/store/useMicLevel';
 import { getSupportContext } from '@/lib/support/supportContext';
-import { requestSupportInstruction, reportActionResult, escalateToSupport } from '@/lib/support/assistApi';
+import { requestSupportInstruction, reportActionResult } from '@/lib/support/assistApi';
 import { highlightBySupportId, clearHighlight } from '@/lib/support/highlight';
 import { getSafeAction, type SafeAction } from '@/lib/support/supportActions';
 import { listInputDevices, type InputDevice } from '@/lib/support/diagnostics';
 import { getPreferredMicId, setPreferredMicId } from '@/lib/support/micPreference';
 import ConsentModal from './ConsentModal';
+import EscalationPanel from './EscalationPanel';
 import { cn } from '@/lib/cn';
 
 const GREETING =
@@ -39,6 +40,7 @@ export default function SupportPanel() {
   const textOnly = useSupportStore((s) => s.textOnly);
   const devicePickerOpen = useSupportStore((s) => s.devicePickerOpen);
   const setDevicePickerOpen = useSupportStore((s) => s.setDevicePickerOpen);
+  const setEscalationOpen = useSupportStore((s) => s.setEscalationOpen);
   const closeSupport = useSupportStore((s) => s.closeSupport);
   const addMessage = useSupportStore((s) => s.addMessage);
   const setInstruction = useSupportStore((s) => s.setInstruction);
@@ -219,20 +221,9 @@ export default function SupportPanel() {
     });
   };
 
-  const escalate = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const context = await getSupportContext();
-      const { reference_id } = await escalateToSupport(context, lastIssueRef.current);
-      setInstruction(null);
-      addMessage({
-        role: 'assist',
-        text: `I've flagged this for the Nablix support team with your issue and screen details. Your reference is ${reference_id}.`,
-      });
-    } finally {
-      setBusy(false);
-    }
+  const escalate = () => {
+    setInstruction(null);
+    setEscalationOpen(true);
   };
 
   const onConsentConfirm = () => {
@@ -319,7 +310,7 @@ export default function SupportPanel() {
               </>
             )}
             {instruction.escalate && (
-              <button className={chip} onClick={() => void escalate()}>Contact support</button>
+              <button className={chip} onClick={escalate}>Contact support</button>
             )}
           </div>
         )}
@@ -414,7 +405,7 @@ export default function SupportPanel() {
         {/* Footer — leave support (restores the exact pre-support state) */}
         <div className="flex items-center justify-between px-3 pb-3 flex-shrink-0">
           <button
-            onClick={() => void escalate()}
+            onClick={escalate}
             disabled={busy}
             className="text-[10.5px] font-medium text-slate-blue hover:text-ink hover:underline transition-colors disabled:opacity-40"
           >
@@ -436,6 +427,8 @@ export default function SupportPanel() {
           onCancel={onConsentCancel}
         />
       )}
+
+      <EscalationPanel issue={lastIssueRef.current} />
     </>
   );
 }

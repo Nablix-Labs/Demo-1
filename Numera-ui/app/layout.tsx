@@ -4,6 +4,7 @@ import AppFrame from '@/components/AppFrame';
 import FlowControls from '@/components/FlowControls';
 import NeedHelpButton from '@/components/support/NeedHelpButton';
 import SupportPanel from '@/components/support/SupportPanel';
+import RemoteAssistBanner from '@/components/support/RemoteAssistBanner';
 
 export const metadata: Metadata = {
   title: 'Numera — AI Math Tutor',
@@ -34,6 +35,7 @@ export default function RootLayout({
         {/* Nablix Assist — in-app support, reachable from every route */}
         <NeedHelpButton />
         <SupportPanel />
+        <RemoteAssistBanner />
       </body>
     </html>
   );

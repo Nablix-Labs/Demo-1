@@ -8,8 +8,13 @@
  *   POST /support/instruction  { context: SupportContext, issue: string }
  *     → SupportInstructionResponse
  *   POST /support/action-result  ActionResultReport   (fire-and-forget)
- *   POST /support/escalate  { context, note } → { reference_id }
+ *   POST /support/escalate  EscalationPayload → { reference_id }
+ *   POST /support/screenshot  { screenshot_data_url } → { screenshot_reference }
+ *     (server OCRs it; the client never stores the image)
  *   POST /auth/resend-verification  → 200 on success
+ *   WS   /support/remote-assist  — RemoteAssistSignal both ways for WebRTC
+ *     signaling; agent→user commands are AgentCommandEnvelope (allow-listed
+ *     action ids only, see lib/support/remoteAssist.ts)
  *
  * Swap each stub body for the real call once the endpoints exist; callers
  * only depend on these function signatures. The stub answers with simple
@@ -17,6 +22,7 @@
  */
 
 import type { SupportContext } from '@/lib/support/supportContext';
+import type { SupportDiagnostics } from '@/lib/support/diagnostics';
 
 export interface SupportInstructionResponse {
   instruction_text: string;
@@ -159,12 +165,39 @@ export async function reportActionResult(report: ActionResultReport): Promise<vo
   console.log('[nablix-assist] action result', report);
 }
 
+export interface EscalationPayload {
+  issue: string;
+  note: string;
+  context: SupportContext;
+  diagnostics: SupportDiagnostics;
+  /** From uploadSupportScreenshot — only present with the student's consent. */
+  screenshot_reference?: string;
+}
+
 /** Escalate to a human; returns the support reference id to show the student. */
 export async function escalateToSupport(
-  context: SupportContext,
-  note: string,
+  payload: EscalationPayload,
 ): Promise<{ reference_id: string }> {
   await delay(300);
-  console.log('[nablix-assist] escalation', { context, note });
+  console.log('[nablix-assist] escalation', payload);
   return { reference_id: `NBX-${Date.now().toString(36).toUpperCase().slice(-6)}` };
+}
+
+/**
+ * Hand a consented, masked screenshot to the support backend (which OCRs it).
+ * The data URL is not kept client-side after this resolves.
+ */
+export async function uploadSupportScreenshot(
+  screenshotDataUrl: string,
+): Promise<{ screenshot_reference: string }> {
+  await delay(300);
+  console.log('[nablix-assist] screenshot upload', { bytes: screenshotDataUrl.length });
+  return { screenshot_reference: `SHOT-${Date.now().toString(36).toUpperCase().slice(-6)}` };
+}
+
+/** WebRTC signaling envelope for remote assist — shape agreed with the BE team. */
+export interface RemoteAssistSignal {
+  type: 'offer' | 'answer' | 'ice';
+  support_session_id: string;
+  payload: unknown; // SDP or ICE candidate, opaque to this layer
 }
