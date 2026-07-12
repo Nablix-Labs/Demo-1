@@ -9,6 +9,7 @@
  *     → SupportInstructionResponse
  *   POST /support/action-result  ActionResultReport   (fire-and-forget)
  *   POST /support/escalate  { context, note } → { reference_id }
+ *   POST /auth/resend-verification  → 200 on success
  *
  * Swap each stub body for the real call once the endpoints exist; callers
  * only depend on these function signatures. The stub answers with simple
@@ -50,7 +51,14 @@ export async function requestSupportInstruction(
     };
   }
 
-  if (/\bmic|microphone|hear|audio|sound|voice\b/.test(q)) {
+  if (/wrong (mic|microphone)|different (mic|microphone)|(pick|choose|select|switch).*(mic|microphone|input)/.test(q)) {
+    return {
+      instruction_text: "Let's pick the right microphone from the ones your browser can see.",
+      action_id: 'SELECT_INPUT_DEVICE',
+    };
+  }
+
+  if (/\bmic|microphone|hear|audio|sound\b/.test(q)) {
     if (context.mic_permission === 'denied') {
       return {
         instruction_text:
@@ -59,8 +67,31 @@ export async function requestSupportInstruction(
     }
     return {
       instruction_text:
-        "Let's check the mic. Tap the round mic button so it turns orange (unmuted), then say something — the bars in the panel should move.",
-      highlight_support_id: 'mic-toggle',
+        "Let's run a quick mic test — I'll listen for a couple of seconds while you say something.",
+      action_id: 'START_MICROPHONE_TEST',
+      requires_confirmation: true,
+    };
+  }
+
+  if (/\bvoice\b.*(stop|drop|disconnect|cut|quiet|silent)|tutor (stopped|went quiet)/.test(q)) {
+    return {
+      instruction_text: 'The voice link may have dropped. I can restart it.',
+      action_id: 'RECONNECT_TUTOR_VOICE',
+      requires_confirmation: true,
+    };
+  }
+
+  if (/\b(resume|unpause|paused|continue the lesson)\b/.test(q)) {
+    return {
+      instruction_text: "I'll resume the tutor session for you.",
+      action_id: 'RESUME_TUTOR_SESSION',
+    };
+  }
+
+  if (/\b(go|take me|went) back\b|previous step|last step/.test(q)) {
+    return {
+      instruction_text: "I'll take you back to the previous sign-up step.",
+      action_id: 'OPEN_PREVIOUS_ONBOARDING_STEP',
     };
   }
 
@@ -94,10 +125,17 @@ export async function requestSupportInstruction(
   }
 
   if (/\bemail|verification|code|otp\b/.test(q)) {
+    if (context.screen_id.startsWith('/consent')) {
+      return {
+        instruction_text:
+          "If the code hasn't arrived, check your spam folder — or tap Resend code to get a new one.",
+        highlight_support_id: 'resend-verification',
+      };
+    }
     return {
-      instruction_text:
-        "If the code hasn't arrived, check your spam folder — or tap Resend code to get a new one.",
-      highlight_support_id: 'resend-verification',
+      instruction_text: 'I can send you a fresh verification email.',
+      action_id: 'RESEND_VERIFICATION_EMAIL',
+      requires_confirmation: true,
     };
   }
 
@@ -106,6 +144,13 @@ export async function requestSupportInstruction(
       "I'm not sure I can fix that one myself. Can you describe it differently — or I can pass this to the support team.",
     escalate: true,
   };
+}
+
+/** Ask the backend to resend the guardian verification email. */
+export async function resendVerificationEmail(): Promise<void> {
+  await delay(300);
+  // Stub: resolves = sent. The real call will surface failures as a rejection.
+  console.log('[nablix-assist] resend verification email');
 }
 
 /** Report the structured outcome of a safe action (fire-and-forget). */

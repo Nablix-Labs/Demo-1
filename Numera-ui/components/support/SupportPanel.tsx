@@ -21,6 +21,8 @@ import { getSupportContext } from '@/lib/support/supportContext';
 import { requestSupportInstruction, reportActionResult, escalateToSupport } from '@/lib/support/assistApi';
 import { highlightBySupportId, clearHighlight } from '@/lib/support/highlight';
 import { getSafeAction, type SafeAction } from '@/lib/support/supportActions';
+import { listInputDevices, type InputDevice } from '@/lib/support/diagnostics';
+import { getPreferredMicId, setPreferredMicId } from '@/lib/support/micPreference';
 import ConsentModal from './ConsentModal';
 import { cn } from '@/lib/cn';
 
@@ -35,6 +37,8 @@ export default function SupportPanel() {
   const pendingAction = useSupportStore((s) => s.pendingAction);
   const busy = useSupportStore((s) => s.busy);
   const textOnly = useSupportStore((s) => s.textOnly);
+  const devicePickerOpen = useSupportStore((s) => s.devicePickerOpen);
+  const setDevicePickerOpen = useSupportStore((s) => s.setDevicePickerOpen);
   const closeSupport = useSupportStore((s) => s.closeSupport);
   const addMessage = useSupportStore((s) => s.addMessage);
   const setInstruction = useSupportStore((s) => s.setInstruction);
@@ -43,6 +47,7 @@ export default function SupportPanel() {
   const setTextOnly = useSupportStore((s) => s.setTextOnly);
 
   const [text, setText] = useState('');
+  const [devices, setDevices] = useState<InputDevice[]>([]);
   const listRef = useRef<HTMLDivElement>(null);
   const lastIssueRef = useRef('');
 
@@ -61,11 +66,12 @@ export default function SupportPanel() {
           verification_status: ok ? 'verified' : 'failed',
           context,
         });
+        const detail = action.describeResult?.();
         addMessage({
           role: 'assist',
           text: ok
-            ? `Done — I've ${action.completedLabel}. Did that fix it?`
-            : `I tried to ${action.label} but couldn't confirm it worked. Tap "Contact support" below and a human will take over.`,
+            ? `Done — I've ${action.completedLabel}.${detail ? ` ${detail}` : ''} Did that fix it?`
+            : `I tried to ${action.label} but couldn't confirm it worked.${detail ? ` ${detail}` : ''} Tap "Contact support" below and a human will take over.`,
         });
       } finally {
         setBusy(false);
@@ -146,6 +152,29 @@ export default function SupportPanel() {
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [messages, open]);
+
+  // Load the microphone list when the SELECT_INPUT_DEVICE picker opens.
+  useEffect(() => {
+    if (devicePickerOpen) void listInputDevices().then(setDevices);
+  }, [devicePickerOpen]);
+
+  const pickDevice = (device: InputDevice) => {
+    setDevicePickerOpen(false);
+    // Until mic permission is granted the browser hides device ids, so there's
+    // nothing to switch to yet.
+    if (!device.device_id) {
+      addMessage({
+        role: 'assist',
+        text: 'The browser hides microphone details until it has mic permission. Allow the microphone (or run the mic test) first, then ask me to switch again.',
+      });
+      return;
+    }
+    setPreferredMicId(device.device_id);
+    addMessage({
+      role: 'assist',
+      text: `Switched to "${device.label}". It will be used the next time the mic starts — try speaking to the tutor.`,
+    });
+  };
 
   const close = () => {
     stopVoice();
@@ -292,6 +321,43 @@ export default function SupportPanel() {
             {instruction.escalate && (
               <button className={chip} onClick={() => void escalate()}>Contact support</button>
             )}
+          </div>
+        )}
+
+        {/* Microphone picker (SELECT_INPUT_DEVICE) */}
+        {devicePickerOpen && (
+          <div className="mx-3 mb-2 rounded-md bg-white border border-muted-gray p-2 flex-shrink-0">
+            <div className="text-[10px] font-semibold tracking-widest uppercase text-slate-blue mb-1.5 px-1">
+              Pick a microphone
+            </div>
+            {devices.length === 0 ? (
+              <p className="text-[11px] text-slate-blue px-1 pb-1">
+                No microphones found. Check one is plugged in and allowed.
+              </p>
+            ) : (
+              <div className="flex flex-col gap-1 max-h-32 overflow-y-auto">
+                {devices.map((d) => (
+                  <button
+                    key={d.device_id}
+                    onClick={() => pickDevice(d)}
+                    className={cn(
+                      'text-left rounded-md px-2 py-1.5 text-[11.5px] transition-colors',
+                      d.device_id === getPreferredMicId()
+                        ? 'bg-learning-blue/10 text-learning-blue font-semibold'
+                        : 'text-ink hover:bg-reading-surface',
+                    )}
+                  >
+                    {d.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            <button
+              onClick={() => setDevicePickerOpen(false)}
+              className="mt-1.5 px-1 text-[10.5px] font-medium text-slate-blue hover:text-ink hover:underline"
+            >
+              Cancel
+            </button>
           </div>
         )}
 

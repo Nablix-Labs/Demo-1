@@ -47,6 +47,8 @@ interface SupportState {
   busy: boolean;
   /** Text input is forced open when the issue is the mic itself. */
   textOnly: boolean;
+  /** Microphone picker shown by the SELECT_INPUT_DEVICE action. */
+  devicePickerOpen: boolean;
 
   snapshot: TutorSnapshot | null;
 
@@ -57,6 +59,7 @@ interface SupportState {
   setPendingAction: (pendingAction: PendingAction | null) => void;
   setBusy: (busy: boolean) => void;
   setTextOnly: (textOnly: boolean) => void;
+  setDevicePickerOpen: (devicePickerOpen: boolean) => void;
 }
 
 export const useSupportStore = create<SupportState>((set, get) => ({
@@ -66,6 +69,7 @@ export const useSupportStore = create<SupportState>((set, get) => ({
   pendingAction: null,
   busy: false,
   textOnly: false,
+  devicePickerOpen: false,
   snapshot: null,
 
   // Pause the tutor without touching its state beyond the mic: snapshot the
@@ -90,7 +94,7 @@ export const useSupportStore = create<SupportState>((set, get) => ({
       n.setMicMuted(snapshot.micMuted);
       n.setVoiceStatus(snapshot.voiceStatus);
     }
-    set({ open: false, snapshot: null, pendingAction: null, busy: false });
+    set({ open: false, snapshot: null, pendingAction: null, busy: false, devicePickerOpen: false });
   },
 
   addMessage: (msg) =>
@@ -100,4 +104,5 @@ export const useSupportStore = create<SupportState>((set, get) => ({
   setPendingAction: (pendingAction) => set({ pendingAction }),
   setBusy: (busy) => set({ busy }),
   setTextOnly: (textOnly) => set({ textOnly }),
+  setDevicePickerOpen: (devicePickerOpen) => set({ devicePickerOpen }),
 }));

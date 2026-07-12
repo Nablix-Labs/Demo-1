@@ -11,7 +11,7 @@
  * existing greeting + Key Stage logic.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, Mail, Phone, KeyRound, ShieldCheck } from 'lucide-react';
 import AuthShell from '@/components/auth/AuthShell';
@@ -45,6 +45,14 @@ export default function OnboardPage() {
   const setStudentAge = useNumeraStore((s) => s.setStudentAge);
 
   const [step, setStep] = useState<1 | 2>(1);
+
+  // Nablix Assist's OPEN_PREVIOUS_ONBOARDING_STEP action asks this page to go
+  // back a step (component state it can't reach directly).
+  useEffect(() => {
+    const back = () => setStep(1);
+    window.addEventListener('nablix:onboard-back', back);
+    return () => window.removeEventListener('nablix:onboard-back', back);
+  }, []);
 
   // Step 1 — auth method
   const [authMode, setAuthMode] = useState<'email_otp' | 'phone_otp' | 'password'>('email_otp');
