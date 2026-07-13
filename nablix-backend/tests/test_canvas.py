@@ -1,8 +1,20 @@
+import pytest
 from fastapi.testclient import TestClient
 
+from app.adapters.student_model import StudentModelServiceAdapter
+from app.adapters.tutor_engine import TutorEngineServiceAdapter
+from app.adapters.vision_ocr import MockVisionOCRAdapter
 from app.core.config import get_settings
 from app.main import app
-from app.services import session_service
+from app.models.adapters import (
+    AdapterContext,
+    RAGResult,
+    StudentModelEvent,
+    StudentModelResult,
+    TutorResult,
+    VisionOCRResult,
+)
+from app.services import canvas_service, session_service
 from app.services.snapshot_store import get_snapshot
 
 client = TestClient(app)
@@ -63,6 +75,109 @@ def test_canvas_submit_returns_mock_ocr_result() -> None:
     assert body["canvas_draw"] == []
     assert body["latency"]["total_latency_ms"] >= 0
     assert {"ocr_latency_ms", "tutor_latency_ms"} <= body["latency"].keys()
+
+
+def test_canvas_submit_sends_full_ocr_context_and_forwards_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_contexts: list[AdapterContext] = []
+    captured_events: list[StudentModelEvent] = []
+    original_evaluate = TutorEngineServiceAdapter.evaluate
+
+    async def capture_evaluate(
+        adapter: TutorEngineServiceAdapter,
+        context: AdapterContext,
+        rag: RAGResult,
+        student: StudentModelResult,
+    ) -> TutorResult:
+        captured_contexts.append(context)
+        return await original_evaluate(adapter, context, rag, student)
+
+    async def capture_event(
+        adapter: StudentModelServiceAdapter,
+        event: StudentModelEvent,
+    ) -> StudentModelResult:
+        captured_events.append(event)
+        return StudentModelResult(
+            student_state="NEEDS_GUIDANCE",
+            confidence=0.82,
+            mastery_level="DEVELOPING",
+            recommended_support="STEP_BY_STEP_HINT",
+        )
+
+    monkeypatch.setattr(TutorEngineServiceAdapter, "evaluate", capture_evaluate)
+    monkeypatch.setattr(StudentModelServiceAdapter, "update_from_event", capture_event)
+    session_id = _start_session("ST011")
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST011",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+        },
+    )
+
+    assert response.status_code == 200
+    assert len(captured_contexts) == 1
+    context = captured_contexts[0]
+    assert context.question == "Solve for x: x + 4 = 9"
+    assert context.correct_answer == "x = 5"
+    assert context.current_phase == "DIAGNOSTIC"
+    assert context.attempt_count == 1
+    assert context.detected_equation == "x + 4 = 9"
+    assert context.detected_steps == ["x + 4 = 9", "x = 9 - 4", "x = 5"]
+    assert context.ocr_confidence == 0.95
+    assert [region.step_id for region in context.canvas_regions] == [
+        "step-1",
+        "step-2",
+        "step-3",
+    ]
+    assert len(captured_events) == 1
+    assert client.get(f"/session/{session_id}").json()["attempt_count"] == 1
+
+
+def test_canvas_submit_stops_before_tutor_when_ocr_needs_clarification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def low_confidence_ocr(
+        adapter: MockVisionOCRAdapter,
+        snapshot_data_url: str,
+    ) -> VisionOCRResult:
+        return VisionOCRResult(
+            raw_ocr_text="x + ? = 9",
+            detected_equation="x + ? = 9",
+            detected_steps=["x + ? = 9"],
+            confidence=0.5,
+            needs_clarification=True,
+        )
+
+    async def unexpected_tutor_call(
+        context: AdapterContext,
+    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
+        raise AssertionError(f"Tutor Engine received low-confidence OCR: {context}")
+
+    monkeypatch.setattr(MockVisionOCRAdapter, "recognize", low_confidence_ocr)
+    monkeypatch.setattr(canvas_service, "run_tutor_pipeline", unexpected_tutor_call)
+    session_id = _start_session("ST012")
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST012",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["tutor"]["evaluation"] == "UNCLEAR"
+    assert body["tutor"]["response_strategy"] == "CLARIFY"
+    assert body["canvas_draw"] == []
+    stored_session = client.get(f"/session/{session_id}").json()
+    assert stored_session["attempt_count"] == 0
+    assert stored_session["canvas_submissions"][0]["tutor"]["evaluation"] == "UNCLEAR"
 
 
 def test_canvas_submit_accepts_optional_transcript() -> None:

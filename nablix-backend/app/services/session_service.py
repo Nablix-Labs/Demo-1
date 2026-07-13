@@ -236,8 +236,9 @@ async def record_canvas_submission(
     session_id: str,
     student_id: str,
     record: CanvasSubmissionRecord,
+    attempt_count: int,
 ) -> SessionRecord:
-    """Append a canvas OCR record to an active mock session."""
+    """Append a reviewed canvas submission and persist its attempt count."""
 
     session: SessionRecord = _get_owned_session(session_id, student_id)
     if session.status == "ended":
@@ -247,7 +248,10 @@ async def record_canvas_submission(
         )
 
     updated_session: SessionRecord = session.model_copy(
-        update={"canvas_submissions": [*session.canvas_submissions, record]}
+        update={
+            "canvas_submissions": [*session.canvas_submissions, record],
+            "attempt_count": attempt_count,
+        }
     )
     # This read-modify-write is safe only while the mock backend uses one worker.
     _sessions[session_id] = updated_session
