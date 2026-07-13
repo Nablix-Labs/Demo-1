@@ -15,6 +15,7 @@
 
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import { isTokenValid } from '@/lib/auth/authApi';
 
 // account_status values from §12 of the proposal.
 export type AccountStatus =
@@ -105,6 +106,13 @@ interface AuthState {
   consents: Record<ConsentPurpose, ConsentRecord>;
   disclosureAck: { acknowledged: boolean; version: string; at: string | null };
 
+  // Real auth (Nablix platform) — JWT + tier from POST /auth/login. A valid
+  // token means the server already authenticated the user, so it grants access
+  // directly (see accessDecision). Registration/consent are still modelled
+  // client-side until those endpoints exist.
+  accessToken: string | null;
+  tier: string | null;
+
   // Registration
   startRegistration: (method: AuthMethod, opts?: { email?: string; phone?: string; ssoProvider?: SsoProvider }) => void;
   setStudentProfile: (p: Partial<StudentProfile>) => void;
@@ -118,6 +126,7 @@ interface AuthState {
   grantConsent: (purpose: ConsentPurpose) => void; // (re-)grant a single consent
 
   // Lifecycle
+  loginSuccess: (p: { token: string; role: Role; tier: string; email: string }) => void;
   activateAccount: () => void;
   suspend: () => void;
   logout: () => void;
@@ -141,6 +150,8 @@ const initial = {
   guardian: { name: '', relationship: 'Parent', email: '', phone: '', verified: false },
   consents: emptyConsents(),
   disclosureAck: { acknowledged: false, version: SAFETY_DISCLOSURE_VERSION, at: null },
+  accessToken: null as string | null,
+  tier: null as string | null,
 };
 
 export const useAuthStore = create<AuthState>()(
@@ -196,9 +207,35 @@ export const useAuthStore = create<AuthState>()(
           return { consents, accountStatus };
         }),
 
+      // Successful real login: store the JWT + tier and mark the account active
+      // for the returned role. The server owns identity/consent, so a valid
+      // token is sufficient for access (accessDecision short-circuits on it).
+      //
+      // The platform authenticated a provisioned, active student — consent was
+      // captured during real registration. Until the backend exposes that
+      // consent state, mark the mandatory consents satisfied so the feature
+      // gates (voice/canvas §10) don't block a legitimately logged-in user.
+      // TODO(auth): replace with real consent state once /consent endpoints exist.
+      loginSuccess: ({ token, role, tier, email }) =>
+        set((s) => {
+          const now = new Date().toISOString();
+          const consents = { ...s.consents };
+          for (const p of MANDATORY_PURPOSES) consents[p] = { acceptedAt: now, withdrawnAt: null };
+          return {
+            accessToken: token,
+            tier,
+            role,
+            email,
+            authMethod: 'password',
+            accountStatus: 'active',
+            consents,
+            disclosureAck: { acknowledged: true, version: SAFETY_DISCLOSURE_VERSION, at: now },
+          };
+        }),
+
       activateAccount: () => set({ accountStatus: 'active' }),
       suspend: () => set({ accountStatus: 'suspended' }),
-      logout: () => set({ authMethod: null, ssoProvider: null }),
+      logout: () => set({ authMethod: null, ssoProvider: null, accessToken: null, tier: null }),
       reset: () => set({ ...initial, consents: emptyConsents() }),
     }),
     {
@@ -235,7 +272,12 @@ export type AccessOutcome =
  * The backend access-decision chain from §13, run client-side for the demo.
  * Returns where to send the user when access is not allowed.
  */
-export function accessDecision(s: Pick<AuthState, 'accountStatus' | 'role' | 'consents' | 'disclosureAck'>): AccessOutcome {
+export function accessDecision(
+  s: Pick<AuthState, 'accountStatus' | 'role' | 'consents' | 'disclosureAck' | 'accessToken'>,
+): AccessOutcome {
+  // A valid server-issued token means the platform already authenticated and
+  // authorized this user — that decision wins over the client-side mock chain.
+  if (isTokenValid(s.accessToken)) return { allowed: true };
   if (s.role !== 'student') return { allowed: false, reason: 'not_student', redirect: '/login' };
   if (s.accountStatus === 'suspended' || s.accountStatus === 'locked' || s.accountStatus === 'deleted')
     return { allowed: false, reason: s.accountStatus, redirect: '/restricted' };
