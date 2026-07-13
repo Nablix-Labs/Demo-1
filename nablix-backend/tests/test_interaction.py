@@ -15,7 +15,7 @@ from app.models.adapters import (
     VisualCue,
 )
 from app.main import app
-from app.services import interaction_service
+from app.services import interaction_service, session_service
 
 client = TestClient(app)
 
@@ -110,6 +110,27 @@ def test_interaction_returns_404_for_unknown_session() -> None:
     response = client.post("/interaction", json=_interaction_body("SESSION777", "ST404"))
 
     assert response.status_code == 404
+
+
+def test_demo_interaction_recovers_phase_and_hint_count_after_cold_start() -> None:
+    session_id = _start_session("ST001")
+    session_service._sessions.pop(session_id)
+
+    response = client.post(
+        "/interaction",
+        json=_interaction_body(
+            session_id,
+            "ST001",
+            current_phase="REVIEW",
+            hint_count=2,
+            text_input="x = 6",
+        ),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["current_phase"] == "REVIEW"
+    assert body["hint_count"] == 2
 
 
 def test_interaction_voice_updates_transcript_confidence() -> None:

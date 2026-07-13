@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services import session_service
 
 client = TestClient(app)
 
@@ -76,6 +77,19 @@ def test_hint_level_uses_stored_count_plus_one() -> None:
     assert first_response.json()["hint_level"] == 1
     assert second_response.status_code == 200
     assert second_response.json()["hint_level"] == 2
+
+
+def test_demo_hint_recovers_request_count_after_cold_start() -> None:
+    session_id = _start_guided_session("ST001")
+    session_service._sessions.pop(session_id)
+
+    response = client.post(
+        "/hint/request",
+        json=_hint_body(session_id, "ST001", current_hint_count=1),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["hint_level"] == 2
 
 
 def test_hint_request_rejects_stale_hint_count() -> None:
