@@ -1,10 +1,10 @@
 import re
-from typing import cast, get_args
 
 from fastapi import HTTPException
 
 from app.adapters.provider import get_adapters
 from app.adapters.tutor_engine import apply_retrieved_content
+from app.core.exceptions import QuestionFetchError
 from app.models.adapters import (
     AdapterContext,
     RAGResult,
@@ -15,15 +15,21 @@ from app.models.adapters import (
 from app.models.fields import Phase
 from app.models.interaction import InteractionRequest, InteractionResponse
 from app.models.session import SessionRecord
+from app.services.phase_transition import (
+    DEFAULT_TRANSITION_MESSAGE,
+    PHASE_COUNTER_RESETS,
+    TRANSITION_MESSAGES,
+    resolve_transition,
+)
 from app.services.session_service import (
     _get_owned_session,
     correct_answer_for,
+    get_next_question,
     update_interaction_state,
 )
 
 
 _EMPTY_RAG = RAGResult(documents=[], retrieval_confidence=0.0)
-_PHASE_VALUES: tuple[str, ...] = get_args(Phase)
 _SPOKEN_DIGITS: dict[str, str] = {
     "zero": "0",
     "one": "1",
@@ -94,13 +100,6 @@ def _current_hint_level_from(hint_count: int) -> int | None:
     return min(hint_count, 3)
 
 
-def _next_phase_from(request: InteractionRequest, tutor: TutorResult) -> Phase:
-    recommendation = tutor.next_phase_recommendation
-    if recommendation in _PHASE_VALUES:
-        return cast(Phase, recommendation)
-    return request.current_phase
-
-
 def _next_hint_count_from(request: InteractionRequest) -> int:
     if request.interaction_type == "HINT_REQUEST":
         return request.hint_count + 1
@@ -115,11 +114,27 @@ def _response_from(
     visual_cue: VisualCue | None,
     scaffold_steps: list[str],
     session_summary: str | None,
+    previous_phase: Phase | None = None,
 ) -> InteractionResponse:
+    # previous_phase is only passed on the turn a 6.7 transition executed;
+    # message and voice are the same hardcoded string per spec.
+    transition_message = (
+        TRANSITION_MESSAGES.get(
+            (previous_phase, session.current_phase), DEFAULT_TRANSITION_MESSAGE
+        )
+        if previous_phase is not None
+        else None
+    )
     return InteractionResponse(
         session_id=request.session_id,
         student_id=request.student_id,
+        phase_changed=previous_phase is not None,
+        previous_phase=previous_phase,
+        phase_transition_message=transition_message,
+        phase_transition_voice=transition_message,
         current_phase=session.current_phase,
+        question_id=session.question_id,
+        attempt_count=session.attempt_count,
         current_question=session.current_question,
         interaction_mode=session.interaction_mode,
         voice_state=session.voice_state,
@@ -157,7 +172,9 @@ async def process_interaction(request: InteractionRequest) -> InteractionRespons
         student_id=request.student_id,
         message=student_message,
         question=session.current_question,
-        correct_answer=correct_answer_for(request.question_id),
+        # Grade against the session's question: after a 6.7 transition swaps
+        # the question, the request's id from the frontend may be stale.
+        correct_answer=correct_answer_for(session.question_id),
         current_phase=request.current_phase,
         input_source=request.input_source,
         transcript_confidence=request.transcript_confidence,
@@ -192,14 +209,35 @@ async def process_interaction(request: InteractionRequest) -> InteractionRespons
             None,
         )
 
-    _, _, tutor = await run_tutor_pipeline(context)
+    _, student, tutor = await run_tutor_pipeline(context)
     tutor = tutor.model_copy(update={"safety_check": safety_check})
     for event in tutor.student_model_events:
         await adapters.student_model.update_from_event(event)
 
     visual_cue = tutor.visual_cue if tutor.visual_cue.show else None
     scaffold_steps = tutor.scaffold_steps_delivered
-    next_phase = _next_phase_from(request, tutor)
+
+    # Chirudeva 6.7: execute Tamil's recommended phase transition.
+    # ponytail: tutor fallback until real Tamil emits Contract 4; delete the `or` when it lands.
+    recommended = student.recommended_entry_phase or tutor.next_phase_recommendation
+    new_phase = resolve_transition(session.current_phase, recommended)
+
+    transition_updates: dict[str, object] | None = None
+    if new_phase is not None:
+        # Fetch before committing any state: an Aditya failure raises here,
+        # so the session (and its phase) is never touched — rollback for free.
+        fetched = get_next_question(session.concept_id, new_phase, session.question_id)
+        if fetched is None:
+            raise QuestionFetchError(session.concept_id, new_phase)
+        question_text, _correct_answer, question_id = fetched
+        transition_updates = {
+            "previous_phase": session.current_phase,
+            "current_question": question_text,
+            "question_id": question_id,
+            **PHASE_COUNTER_RESETS.get(new_phase, {}),
+        }
+
+    next_phase = new_phase if new_phase is not None else session.current_phase
     updated_session = update_interaction_state(
         request.session_id,
         request.student_id,
@@ -212,6 +250,7 @@ async def process_interaction(request: InteractionRequest) -> InteractionRespons
         tutor.visual_cue.show,
         len(scaffold_steps) > 0,
         scaffold_steps,
+        transition_updates=transition_updates,
     )
 
     return _response_from(
@@ -222,4 +261,5 @@ async def process_interaction(request: InteractionRequest) -> InteractionRespons
         visual_cue,
         scaffold_steps,
         None,
+        previous_phase=session.current_phase if new_phase is not None else None,
     )

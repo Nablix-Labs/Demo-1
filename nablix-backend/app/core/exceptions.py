@@ -15,6 +15,17 @@ class SessionNotFoundError(HTTPException):
         self.message = f"Session with ID {session_id} not found."
         self.field = "session_id"
 
+#for failed next-question fetches on a phase transition (Chirudeva 6.7).
+class QuestionFetchError(HTTPException):
+    def __init__(self, concept_id: str, phase: str):
+        super().__init__(
+            status_code=503,
+            detail="Could not load the next question. Please try again.",
+        )
+        self.error_code = "QUESTION_FETCH_FAILED"
+        logger.error(f"question_fetch_failed concept={concept_id} phase={phase}")
+
+
 #for internal server errors, using 503 error. Not commonly used.
 class AdapterError(HTTPException):
     def __init__(self,adapter_name:str, detail:str):

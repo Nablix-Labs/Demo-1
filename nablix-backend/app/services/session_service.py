@@ -10,6 +10,7 @@ from app.models.session import (
     SessionStartRequest,
     VoiceState,
 )
+from app.services.phase_transition import UI_STATE_FLAGS
 
 
 _sessions: dict[str, SessionRecord] = {}
@@ -39,9 +40,22 @@ def _session_not_found(session_id: str) -> HTTPException:
 # so the two can't drift. Replace with a real question bank when one exists.
 _DEMO_QUESTIONS: dict[str, tuple[str, str, int]] = {
     "ALG_EQ_DIAG_001": ("Solve for x: x + 4 = 9", "x = 5", 1),
+    "ALG_EQ_CO_001": ("Solve for x: x - 3 = 7", "x = 10", 1),
+    "ALG_EQ_GP_001": ("Solve for x: x + 6 = 10", "x = 4", 1),
+    "ALG_EQ_IP_001": ("Solve for x: 3x + 2 = 11", "x = 3", 1),
+    "ALG_EQ_REV_001": ("Solve for x: x / 2 = 8", "x = 16", 1),
 }
 _DEFAULT_QUESTION_ID = "ALG_EQ_DIAG_001"
 _DEMO_STUDENT_ID = "ST001"
+
+# Aditya stub data: (concept_id, phase) -> question_id into _DEMO_QUESTIONS.
+_PHASE_QUESTION_IDS: dict[tuple[str, Phase], str] = {
+    ("ALG_LINEAR_ONE_STEP", "DIAGNOSTIC"): "ALG_EQ_DIAG_001",
+    ("ALG_LINEAR_ONE_STEP", "CONCEPT_ORIENTATION"): "ALG_EQ_CO_001",
+    ("ALG_LINEAR_ONE_STEP", "GUIDED_PRACTICE"): "ALG_EQ_GP_001",
+    ("ALG_LINEAR_ONE_STEP", "INDEPENDENT_PRACTICE"): "ALG_EQ_IP_001",
+    ("ALG_LINEAR_ONE_STEP", "REVIEW"): "ALG_EQ_REV_001",
+}
 
 
 def correct_answer_for(question_id: str) -> str | None:
@@ -59,6 +73,28 @@ def _mock_diagnostic_question() -> tuple[str, str, int]:
 
     question, _answer, number = _DEMO_QUESTIONS[_DEFAULT_QUESTION_ID]
     return (question, _DEFAULT_QUESTION_ID, number)
+
+
+def get_next_question(
+    concept_id: str,
+    phase: Phase,
+    previous_question_id: str | None = None,
+    difficulty: str = "FOUNDATION",
+) -> tuple[str, str, str] | None:
+    """Aditya stub: return (question_text, correct_answer, question_id).
+
+    Placeholder for Aditya's POST /question/next. Returns None when Aditya
+    has nothing for the concept/phase — the caller must fail loudly, never
+    continue silently.
+    # ponytail: previous_question_id/difficulty accepted per contract but
+    # ignored (one question per phase); honor them when a real bank exists.
+    """
+
+    question_id = _PHASE_QUESTION_IDS.get((concept_id, phase))
+    if question_id is None:
+        return None
+    question, answer, _number = _DEMO_QUESTIONS[question_id]
+    return (question, answer, question_id)
 
 
 def _diagnostic_start_message(question: str) -> str:
@@ -100,7 +136,7 @@ def _recover_demo_session(session_id: str, student_id: str) -> SessionRecord:
         hint_count=0,
         status="started",
         message=_diagnostic_start_message(question),
-        show_hint_button=True,
+        show_hint_button=UI_STATE_FLAGS["GUIDED_PRACTICE"]["show_hint_button"],
     )
     _sessions[session_id] = session
     return session
@@ -124,7 +160,7 @@ async def start_session(request: SessionStartRequest) -> SessionRecord:
         hint_count=0,
         status="started",
         message=_diagnostic_start_message(question),
-        show_hint_button=initial_phase in ("GUIDED_PRACTICE", "INDEPENDENT_PRACTICE"),
+        show_hint_button=UI_STATE_FLAGS[initial_phase]["show_hint_button"],
     )
     _sessions[session.session_id] = session
     return session
@@ -220,8 +256,13 @@ def update_interaction_state(
     show_visual_cue: bool,
     show_scaffold_panel: bool,
     scaffold_steps: list[str],
+    transition_updates: dict[str, object] | None = None,
 ) -> SessionRecord:
-    """Update frontend-facing session state after one interaction turn."""
+    """Update frontend-facing session state after one interaction turn.
+
+    transition_updates is the 6.7 phase-transition overlay (previous_phase,
+    new question, counter resets); it is merged last so it wins.
+    """
 
     session: SessionRecord = _get_owned_session(session_id, student_id)
     voice_state: VoiceState = session.voice_state.model_copy(
@@ -240,10 +281,13 @@ def update_interaction_state(
             "hint_count": hint_count,
             "voice_state": voice_state,
             "canvas_state": canvas_state,
-            "show_hint_button": current_phase in ("GUIDED_PRACTICE", "INDEPENDENT_PRACTICE"),
+            # Phase-driven flags first; the tutor's per-turn cue/scaffold
+            # outputs then override their always-False map entries.
+            **UI_STATE_FLAGS[current_phase],
             "show_visual_cue": show_visual_cue,
             "show_scaffold_panel": show_scaffold_panel,
             "scaffold_steps": scaffold_steps,
+            **(transition_updates or {}),
         }
     )
     _sessions[session_id] = updated_session

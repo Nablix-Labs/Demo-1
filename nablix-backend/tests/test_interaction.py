@@ -20,15 +20,14 @@ from app.services import interaction_service
 client = TestClient(app)
 
 
-def _start_session(student_id: str, mode: str = "TEXT") -> str:
-    response = client.post(
-        "/session/start",
-        json={
-            "student_id": student_id,
-            "concept_id": "ALG_LINEAR_ONE_STEP",
-            "interaction_mode": mode,
-        },
-    )
+def _start_session(student_id: str, mode: str = "TEXT", **overrides) -> str:
+    body = {
+        "student_id": student_id,
+        "concept_id": "ALG_LINEAR_ONE_STEP",
+        "interaction_mode": mode,
+    }
+    body.update(overrides)
+    response = client.post("/session/start", json=body)
     assert response.status_code == 200
     return response.json()["session_id"]
 
@@ -203,8 +202,9 @@ class _FakeRAGAdapter:
 
 
 class _FakeStudentModelAdapter:
-    def __init__(self) -> None:
+    def __init__(self, recommended_entry_phase: str | None = None) -> None:
         self.events: list[StudentModelEvent] = []
+        self.recommended_entry_phase = recommended_entry_phase
 
     async def assess(self, context: AdapterContext) -> StudentModelResult:
         return StudentModelResult(
@@ -212,6 +212,7 @@ class _FakeStudentModelAdapter:
             confidence=0.9,
             mastery_level="DEVELOPING",
             recommended_support="LOW_HINT",
+            recommended_entry_phase=self.recommended_entry_phase,
         )
 
     async def update_from_event(self, event: StudentModelEvent) -> StudentModelResult:
@@ -225,6 +226,9 @@ class _FakeStudentModelAdapter:
 
 
 class _FakeTutorAdapter:
+    def __init__(self, next_phase_recommendation: str | None = "GUIDED_PRACTICE") -> None:
+        self.next_phase_recommendation = next_phase_recommendation
+
     async def evaluate(
         self,
         context: AdapterContext,
@@ -243,7 +247,7 @@ class _FakeTutorAdapter:
             scaffold_steps_delivered=["Divide both sides by 2."],
             visual_cue=VisualCue(show=True, cue_type="EQUATION_BALANCE", description="Show both sides."),
             canvas_feedback=CanvasFeedback(),
-            next_phase_recommendation="REVIEW",
+            next_phase_recommendation=self.next_phase_recommendation,
             answer_reveal_allowed=False,
             confidence=0.91,
             input_source="TEXT",
@@ -267,30 +271,155 @@ class _FakeSafetyAdapter:
 
 
 class _FakeAdapters:
-    def __init__(self, student_model: _FakeStudentModelAdapter) -> None:
+    def __init__(
+        self,
+        student_model: _FakeStudentModelAdapter,
+        tutor: _FakeTutorAdapter | None = None,
+    ) -> None:
         self.rag = _FakeRAGAdapter()
         self.student_model = student_model
-        self.tutor = _FakeTutorAdapter()
+        self.tutor = tutor if tutor is not None else _FakeTutorAdapter()
         self.safety = _FakeSafetyAdapter()
 
 
+def _fake_pipeline(
+    monkeypatch,
+    student_phase: str | None = None,
+    tutor_phase: str | None = None,
+) -> _FakeStudentModelAdapter:
+    """Patch the adapter bundle so Tamil/tutor phase recommendations are controlled."""
+
+    student_model = _FakeStudentModelAdapter(recommended_entry_phase=student_phase)
+    adapters = _FakeAdapters(
+        student_model, _FakeTutorAdapter(next_phase_recommendation=tutor_phase)
+    )
+    monkeypatch.setattr(interaction_service, "get_adapters", lambda: adapters)
+    return student_model
+
+
 def test_interaction_updates_phase_visual_scaffold_and_student_model_events(monkeypatch) -> None:
+    # Tamil is silent, so the tutor-fallback recommendation (GUIDED_PRACTICE)
+    # drives a valid DIAGNOSTIC -> GUIDED_PRACTICE transition; the tutor's
+    # per-turn cue/scaffold outputs must survive the transition UI flags.
     session_id = _start_session("ST004")
-    student_model = _FakeStudentModelAdapter()
-    monkeypatch.setattr(interaction_service, "get_adapters", lambda: _FakeAdapters(student_model))
+    student_model = _fake_pipeline(monkeypatch, tutor_phase="GUIDED_PRACTICE")
 
     response = client.post("/interaction", json=_interaction_body(session_id, "ST004"))
 
     assert response.status_code == 200
     body = response.json()
-    assert body["current_phase"] == "REVIEW"
-    assert body["ui_state"] == "REVIEW"
+    assert body["phase_changed"] is True
+    assert body["current_phase"] == "GUIDED_PRACTICE"
+    assert body["ui_state"] == "GUIDED_PRACTICE"
     assert body["show_visual_cue"] is True
     assert body["visual_cue"]["cue_type"] == "EQUATION_BALANCE"
     assert body["show_scaffold_panel"] is True
     assert body["scaffold_steps"] == ["Divide both sides by 2."]
     assert len(student_model.events) == 1
     assert student_model.events[0].event_type == "PARTIAL_ATTEMPT"
+
+
+def test_transition_normal_advance(monkeypatch) -> None:
+    # Spec case: Tamil recommends a valid next phase -> full transition response.
+    session_id = _start_session("ST020")
+    _fake_pipeline(monkeypatch, student_phase="GUIDED_PRACTICE")
+
+    response = client.post("/interaction", json=_interaction_body(session_id, "ST020"))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["phase_changed"] is True
+    assert body["previous_phase"] == "DIAGNOSTIC"
+    assert body["current_phase"] == "GUIDED_PRACTICE"
+    assert body["phase_transition_message"] == (
+        "You are solid on the basics. Let us go straight into some practice problems."
+    )
+    assert body["phase_transition_voice"] == body["phase_transition_message"]
+    assert body["question_id"] == "ALG_EQ_GP_001"
+    assert body["current_question"] == "Solve for x: x + 6 = 10"
+    assert body["show_hint_button"] is True
+    assert body["attempt_count"] == 0
+
+
+def test_transition_not_fired_when_phase_matches(monkeypatch) -> None:
+    # Spec cases "no transition" and "first session start": recommending the
+    # phase the session is already in changes nothing.
+    session_id = _start_session("ST021")
+    _fake_pipeline(monkeypatch, student_phase="DIAGNOSTIC")
+
+    response = client.post("/interaction", json=_interaction_body(session_id, "ST021"))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["phase_changed"] is False
+    assert body["previous_phase"] is None
+    assert body["phase_transition_message"] is None
+    assert body["current_phase"] == "DIAGNOSTIC"
+    assert body["question_id"] == "ALG_EQ_DIAG_001"
+
+
+def test_transition_step_back_resets_guided_counters(monkeypatch) -> None:
+    # Spec case: INDEPENDENT_PRACTICE -> GUIDED_PRACTICE is a valid step back.
+    session_id = _start_session("ST022", initial_phase="INDEPENDENT_PRACTICE")
+    _fake_pipeline(monkeypatch, student_phase="GUIDED_PRACTICE")
+
+    response = client.post("/interaction", json=_interaction_body(session_id, "ST022"))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["phase_changed"] is True
+    assert body["previous_phase"] == "INDEPENDENT_PRACTICE"
+    assert body["phase_transition_message"] == "Let us work through this part together."
+    assert body["attempt_count"] == 0
+
+
+def test_transition_blocked_when_invalid_or_unknown(monkeypatch) -> None:
+    # Spec cases: invalid transitions and unrecognised phases are logged and
+    # ignored, never executed.
+    for recommended in ("INDEPENDENT_PRACTICE", "MASTERY"):
+        session_id = _start_session("ST023")
+        _fake_pipeline(monkeypatch, student_phase=recommended)
+
+        response = client.post("/interaction", json=_interaction_body(session_id, "ST023"))
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["phase_changed"] is False
+        assert body["current_phase"] == "DIAGNOSTIC"
+
+
+def test_transition_skipped_on_null_recommendation(monkeypatch) -> None:
+    # Spec case: Tamil returns null (and no tutor fallback) -> stay put.
+    session_id = _start_session("ST024")
+    _fake_pipeline(monkeypatch)
+
+    response = client.post("/interaction", json=_interaction_body(session_id, "ST024"))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["phase_changed"] is False
+    assert body["current_phase"] == "DIAGNOSTIC"
+
+
+def test_transition_rolls_back_when_question_fetch_fails(monkeypatch) -> None:
+    # Spec case: Aditya has no question for the concept -> error response and
+    # the session phase is left untouched.
+    session_id = _start_session("ST025", concept_id="UNKNOWN_CONCEPT")
+    _fake_pipeline(monkeypatch, student_phase="GUIDED_PRACTICE")
+
+    response = client.post(
+        "/interaction",
+        json=_interaction_body(session_id, "ST025", concept_id="UNKNOWN_CONCEPT"),
+    )
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["error_code"] == "QUESTION_FETCH_FAILED"
+    assert body["message"] == "Could not load the next question. Please try again."
+
+    stored = client.get(f"/session/{session_id}").json()
+    assert stored["current_phase"] == "DIAGNOSTIC"
+    assert stored["question_id"] == "ALG_EQ_DIAG_001"
 
 
 def _hint_ctx(message: str) -> AdapterContext:

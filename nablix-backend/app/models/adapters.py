@@ -50,6 +50,8 @@ class StudentModelResult(BaseModel):
     confidence: float
     mastery_level: str
     recommended_support: str
+    # Contract 4 phase recommendation; the in-process stub leaves it None.
+    recommended_entry_phase: str | None = None
 
 
 class TutorEngineRequest(BaseModel):

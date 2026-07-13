@@ -159,7 +159,10 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
-    return _error_response(request, exc.status_code, "HTTP_ERROR", str(exc.detail))
+    # Typed exceptions (e.g. QuestionFetchError) carry their own error_code.
+    return _error_response(
+        request, exc.status_code, getattr(exc, "error_code", "HTTP_ERROR"), str(exc.detail)
+    )
 
 
 @app.exception_handler(Exception)
