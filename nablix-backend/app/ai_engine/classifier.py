@@ -149,6 +149,7 @@ def build_openai_ai_engine_client(settings: Settings) -> OpenAIAIEngineClient | 
         api_key=settings.openai_api_key,
         model=settings.openai_ai_engine_model,
         timeout_seconds=settings.openai_request_timeout_seconds,
+        prompt_cache_key_enabled=settings.openai_prompt_cache_key_enabled,
     )
 
 
@@ -174,6 +175,7 @@ def evaluate_answer_with_openai(
             question=request.question,
             correct_answer=request.correct_answer,
             student_input=request.student_input,
+            phase=request.current_phase,
         )
     except AdapterError as error:
         logger.warning(
@@ -200,6 +202,7 @@ def diagnose_error_with_openai(
             question=request.question,
             correct_answer=request.correct_answer,
             student_input=request.student_input,
+            phase=request.current_phase,
         )
     except AdapterError as error:
         logger.warning(
@@ -233,6 +236,7 @@ def build_tutor_message_with_openai(
             error_type=error_type,
             response_strategy=response_strategy,
             hint_level=hint_level,
+            phase=request.current_phase,
         )
     except AdapterError as error:
         logger.warning(

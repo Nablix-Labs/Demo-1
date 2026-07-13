@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     use_openai_ai_engine: bool = False
     openai_ai_engine_model: str = "gpt-4o-mini"
     openai_request_timeout_seconds: int = 20
+    openai_prompt_cache_key_enabled: bool = False
     adapter_request_timeout_seconds: int = 20
     adapter_request_retry_count: int = 2
 

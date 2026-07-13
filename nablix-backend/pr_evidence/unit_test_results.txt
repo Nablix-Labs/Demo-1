@@ -1,0 +1,11 @@
+Command:
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONDONTWRITEBYTECODE=1 ../../../.venv-tests/bin/python -m pytest tests -q
+
+Result:
+131 passed, 2 warnings in 0.61s
+
+Warning note:
+The two warnings are FastAPI on_event deprecation warnings and are unrelated to prompt integrity or OpenAI prompt caching.
+
+Repository-wide collection note:
+Running pytest without the tests/ scope also collects app/services/rag/sanya_guardrail/test_classifier.py. That pre-existing file fails collection because it imports the nonexistent app.classifier module.
