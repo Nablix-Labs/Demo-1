@@ -28,10 +28,68 @@ VALID_PHASES: tuple[str, ...] = (
 )
 
 
+# Part 14 Test 1: Layer 1 Immutability
+def test_layer_1_is_immutable_across_many_dynamic_requests() -> None:
+    registry = load_prompt_registry()
+    original_layer_1 = registry.layer_1_core
+    original_hash = sha256_text(original_layer_1)
+
+    for index in range(100):
+        build_openai_tutor_messages(
+            phase="GUIDED_PRACTICE" if index % 2 == 0 else "REVIEW",
+            active_triggers=[],
+            session_context={
+                "student_id": f"ST{index}",
+                "session_id": f"SESSION{index}",
+                "current_question": f"Solve for x: x + {index} = 9",
+                "ocr_output": f"x = {index}",
+                "rag_content": f"hint {index}",
+            },
+            conversation_history=[],
+            current_user_input=f"x = {index}",
+        )
+
+        assert load_prompt_registry().layer_1_core == original_layer_1
+        assert sha256_text(load_prompt_registry().layer_1_core) == original_hash
+
+
 def test_manifest_validation_passes_with_correct_hash() -> None:
     validate_prompt_manifest()
 
 
+def test_prompt_registry_is_loaded_once_and_reused() -> None:
+    assert load_prompt_registry() is load_prompt_registry()
+
+
+def test_prompt_registry_mappings_are_immutable() -> None:
+    registry = load_prompt_registry()
+
+    with pytest.raises(TypeError):
+        registry.phases["GUIDED_PRACTICE"] = "changed"  # type: ignore[index]
+
+
+# Part 14 Test 3: Approved Prompt Version Update
+def test_approved_prompt_version_update_passes_validation(tmp_path: Path) -> None:
+    registry = load_prompt_registry()
+    new_layer_1 = registry.layer_1_core + "\nApproved update.\n"
+    new_hash = sha256_text(new_layer_1)
+
+    registry_path = _write_registry(tmp_path, new_layer_1, new_hash)
+    manifest_path = registry_path / "prompt_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "prompt_version": "1.0.1",
+                "layer_1_sha256": new_hash,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    validate_prompt_manifest_at(registry_path)
+
+
+# Part 14 Test 2: Unapproved Layer 1 Change
 def test_manifest_validation_fails_when_layer_1_changes_by_one_character(tmp_path: Path) -> None:
     registry = load_prompt_registry()
     registry_path = _write_registry(tmp_path, registry.layer_1_core + "x", registry.manifest.layer_1_sha256)
@@ -40,6 +98,7 @@ def test_manifest_validation_fails_when_layer_1_changes_by_one_character(tmp_pat
         validate_prompt_manifest_at(registry_path)
 
 
+# Part 14 Test 13: Line Ending Stability
 def test_crlf_and_lf_normalize_to_same_hash() -> None:
     lf_text = "Line one\nLine two\n"
     crlf_text = "Line one\r\nLine two\r\n"
@@ -47,6 +106,7 @@ def test_crlf_and_lf_normalize_to_same_hash() -> None:
     assert sha256_text(normalize_prompt_text(lf_text)) == sha256_text(normalize_prompt_text(crlf_text))
 
 
+# Part 14 Test 4: Exactly One Phase
 @pytest.mark.parametrize("phase", VALID_PHASES)
 def test_each_valid_phase_returns_exactly_one_prompt_block(phase: str) -> None:
     registry = load_prompt_registry()
@@ -54,21 +114,25 @@ def test_each_valid_phase_returns_exactly_one_prompt_block(phase: str) -> None:
     assert get_phase_block(phase) == registry.phases[phase]
 
 
+# Part 14 Test 4: Exactly One Phase
 def test_missing_phase_fails() -> None:
     with pytest.raises(ValueError, match="LearningPhase is required"):
         get_phase_block(None)  # type: ignore[arg-type]
 
 
+# Part 14 Test 4: Exactly One Phase
 def test_unknown_phase_fails() -> None:
     with pytest.raises(ValueError, match="Unknown LearningPhase"):
         get_phase_block("UNKNOWN_PHASE")  # type: ignore[arg-type]
 
 
+# Part 14 Test 4: Exactly One Phase
 def test_invalid_string_phase_fails() -> None:
     with pytest.raises(ValueError, match="Unknown LearningPhase"):
         get_phase_block("guided_practice")  # type: ignore[arg-type]
 
 
+# Part 14 Test 5: Trigger Order Determinism
 def test_same_triggers_in_different_orders_produce_identical_protocol_blocks() -> None:
     first_order = [
         Trigger.PARENT_IN_ROOM,
@@ -84,6 +148,7 @@ def test_same_triggers_in_different_orders_produce_identical_protocol_blocks() -
     assert build_protocol_blocks(first_order) == build_protocol_blocks(second_order)
 
 
+# Part 14 Test 6: Trigger Deduplication
 def test_duplicate_triggers_appear_once() -> None:
     registry = load_prompt_registry()
     blocks = build_protocol_blocks(
@@ -96,15 +161,18 @@ def test_duplicate_triggers_appear_once() -> None:
     assert blocks == [registry.protocols["DISTRESS"]]
 
 
+# Part 14 Test 12: Unknown Trigger
 def test_unknown_trigger_fails() -> None:
     with pytest.raises(ValueError, match="Unknown Trigger"):
         build_protocol_blocks(["UNKNOWN_TRIGGER"])
 
 
+# Part 14 Test 7: No Active Trigger
 def test_empty_trigger_list_returns_no_protocol_blocks() -> None:
     assert build_protocol_blocks([]) == []
 
 
+# Part 14 Tests 8 and 10: Stable Phase Session / Trigger Transition
 def test_same_phase_and_same_triggers_produce_identical_semi_static_text_and_hash() -> None:
     first = build_semi_static_block(
         "GUIDED_PRACTICE",
@@ -119,6 +187,7 @@ def test_same_phase_and_same_triggers_produce_identical_semi_static_text_and_has
     assert sha256_text(first) == sha256_text(second)
 
 
+# Part 14 Test 5: Trigger Order Determinism
 def test_trigger_order_does_not_affect_semi_static_text_or_hash() -> None:
     first = build_semi_static_block(
         "GUIDED_PRACTICE",
@@ -133,6 +202,7 @@ def test_trigger_order_does_not_affect_semi_static_text_or_hash() -> None:
     assert sha256_text(first) == sha256_text(second)
 
 
+# Part 14 Test 6: Trigger Deduplication
 def test_duplicate_triggers_do_not_affect_semi_static_text_or_hash() -> None:
     with_duplicates = build_semi_static_block(
         "GUIDED_PRACTICE",
@@ -144,6 +214,7 @@ def test_duplicate_triggers_do_not_affect_semi_static_text_or_hash() -> None:
     assert sha256_text(with_duplicates) == sha256_text(without_duplicates)
 
 
+# Part 14 Test 9: Phase Transition
 def test_phase_change_changes_semi_static_hash() -> None:
     guided = build_semi_static_block("GUIDED_PRACTICE", [Trigger.DISTRESS])
     review = build_semi_static_block("REVIEW", [Trigger.DISTRESS])
@@ -151,6 +222,7 @@ def test_phase_change_changes_semi_static_hash() -> None:
     assert sha256_text(guided) != sha256_text(review)
 
 
+# Part 14 Test 10: Trigger Transition
 def test_trigger_change_changes_semi_static_hash() -> None:
     distress = build_semi_static_block("GUIDED_PRACTICE", [Trigger.DISTRESS])
     voice = build_semi_static_block("GUIDED_PRACTICE", [Trigger.VOICE_AMBIGUITY])
@@ -158,6 +230,7 @@ def test_trigger_change_changes_semi_static_hash() -> None:
     assert sha256_text(distress) != sha256_text(voice)
 
 
+# Part 14 Test 7: No Active Trigger
 def test_layer_1_is_not_included_in_semi_static_block() -> None:
     registry = load_prompt_registry()
     semi_static = build_semi_static_block("GUIDED_PRACTICE", [])
@@ -198,6 +271,7 @@ def test_session_context_output_contains_valid_json_inside_tags() -> None:
     assert json_text == '{"attempt_count":1,"current_phase":"GUIDED_PRACTICE"}'
 
 
+# Part 14 Tests 8 and 11: Stable Phase Session / Runtime Leakage Protection
 def test_dynamic_context_changes_do_not_change_layer_1_hash() -> None:
     registry = load_prompt_registry()
     layer_1_hash = sha256_text(registry.layer_1_core)
@@ -220,6 +294,7 @@ def test_dynamic_context_changes_do_not_change_layer_1_hash() -> None:
     assert sha256_text(registry.layer_1_core) == layer_1_hash
 
 
+# Part 14 Test 8: Stable Phase Session
 def test_dynamic_context_changes_do_not_change_semi_static_hash() -> None:
     semi_static = build_semi_static_block("GUIDED_PRACTICE", [Trigger.DISTRESS])
     semi_static_hash = sha256_text(semi_static)
@@ -288,6 +363,7 @@ def test_openai_tutor_messages_place_semi_static_block_second() -> None:
     assert messages[1] == {"role": "system", "content": semi_static}
 
 
+# Part 14 Test 9: Phase Transition
 def test_openai_tutor_messages_place_session_context_after_semi_static_block() -> None:
     context = {"attempt_count": 1, "current_phase": "GUIDED_PRACTICE"}
     messages = build_openai_tutor_messages(
@@ -313,6 +389,7 @@ def test_openai_tutor_messages_place_user_input_last() -> None:
     assert messages[-1] == {"role": "user", "content": "x = 13"}
 
 
+# Part 14 Test 11: Runtime Leakage Protection
 def test_user_input_is_not_inside_stable_prefix() -> None:
     messages = build_openai_tutor_messages(
         "GUIDED_PRACTICE",
@@ -327,6 +404,7 @@ def test_user_input_is_not_inside_stable_prefix() -> None:
     assert "x = 13" not in stable_prefix
 
 
+# Part 14 Test 11: Runtime Leakage Protection
 def test_session_context_is_not_inside_layer_1_or_semi_static_block() -> None:
     messages = build_openai_tutor_messages(
         "GUIDED_PRACTICE",
@@ -371,3 +449,9 @@ def _write_registry(tmp_path: Path, layer_1_core: str, layer_1_sha256: str) -> P
         encoding="utf-8",
     )
     return registry_path
+
+
+# Part 14 Test 12: Unknown Trigger
+def test_unknown_trigger_rejects_prompt_build() -> None:
+    with pytest.raises(ValueError, match="Unknown Trigger"):
+        build_protocol_blocks(["UNKNOWN_TRIGGER"])

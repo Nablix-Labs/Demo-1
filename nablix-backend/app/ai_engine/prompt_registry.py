@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import hashlib
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from enum import Enum
+from functools import lru_cache
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -70,8 +72,8 @@ class PromptManifest:
 class PromptRegistry:
     prompt_version: str
     layer_1_core: str
-    phases: dict[str, str]
-    protocols: dict[str, str]
+    phases: Mapping[str, str]
+    protocols: Mapping[str, str]
     manifest: PromptManifest
 
 
@@ -86,20 +88,24 @@ class OpenAITutorPromptMetadata:
     canonical_triggers: list[str]
 
 
+@lru_cache(maxsize=1)
 def load_prompt_registry() -> PromptRegistry:
     return load_prompt_registry_from_path(_default_registry_path())
 
 
 def load_prompt_registry_from_path(registry_path: Path) -> PromptRegistry:
     manifest = _load_manifest(registry_path / "prompt_manifest.json")
-
-    return PromptRegistry(
+    registry = PromptRegistry(
         prompt_version=manifest.prompt_version,
         layer_1_core=_read_prompt_file(registry_path / "layer_1_core.txt"),
-        phases=_load_named_prompts(registry_path / "phases", PHASE_PROMPT_FILES),
-        protocols=_load_named_prompts(registry_path / "protocols", PROTOCOL_PROMPT_FILES),
+        phases=MappingProxyType(_load_named_prompts(registry_path / "phases", PHASE_PROMPT_FILES)),
+        protocols=MappingProxyType(
+            _load_named_prompts(registry_path / "protocols", PROTOCOL_PROMPT_FILES)
+        ),
         manifest=manifest,
     )
+    _validate_layer_1_hash(registry.layer_1_core, manifest)
+    return registry
 
 
 def validate_prompt_manifest() -> None:
@@ -109,8 +115,11 @@ def validate_prompt_manifest() -> None:
 def validate_prompt_manifest_at(registry_path: Path) -> None:
     manifest = _load_manifest(registry_path / "prompt_manifest.json")
     layer_1_core = _read_prompt_file(registry_path / "layer_1_core.txt")
-    actual_hash = sha256_text(layer_1_core)
+    _validate_layer_1_hash(layer_1_core, manifest)
 
+
+def _validate_layer_1_hash(layer_1_core: str, manifest: PromptManifest) -> None:
+    actual_hash = sha256_text(layer_1_core)
     if actual_hash != manifest.layer_1_sha256:
         raise ValueError(
             "Layer 1 prompt hash mismatch: "

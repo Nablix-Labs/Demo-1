@@ -43,6 +43,7 @@ class OpenAITutorMessage(StrictSchema):
 @dataclass(frozen=True)
 class OpenAIUsageMetrics:
     cached_tokens: int
+    cache_write_tokens: int
     input_tokens: int | None
     output_tokens: int | None
     total_tokens: int | None
@@ -170,10 +171,14 @@ class OpenAIAIEngineClient:
             },
         }
         if self._prompt_cache_key_enabled:
-            canonical_trigger_hash = sha256_text(",".join(prompt_metadata.canonical_triggers))
-            request_body["prompt_cache_key"] = (
-                f"ai_tutor:{prompt_metadata.prompt_version}:{phase}:{canonical_trigger_hash}"
+            cache_state = ":".join(
+                [
+                    prompt_metadata.prompt_version,
+                    phase,
+                    ",".join(prompt_metadata.canonical_triggers),
+                ]
             )
+            request_body["prompt_cache_key"] = sha256_text(cache_state)
 
         try:
             with httpx.Client(timeout=self._timeout_seconds) as http_client:
@@ -197,7 +202,6 @@ class OpenAIAIEngineClient:
                 phase=phase,
                 prompt_metadata=prompt_metadata,
                 response_payload=response_payload,
-                request_payload=request_payload,
                 latency_ms=latency_ms,
             )
             return json.loads(_extract_response_text(response_payload))
@@ -207,11 +211,23 @@ class OpenAIAIEngineClient:
 
 def extract_openai_usage_metrics(payload: object) -> OpenAIUsageMetrics:
     if not isinstance(payload, dict):
-        return OpenAIUsageMetrics(cached_tokens=0, input_tokens=None, output_tokens=None, total_tokens=None)
+        return OpenAIUsageMetrics(
+            cached_tokens=0,
+            cache_write_tokens=0,
+            input_tokens=None,
+            output_tokens=None,
+            total_tokens=None,
+        )
 
     usage = payload.get("usage")
     if not isinstance(usage, dict):
-        return OpenAIUsageMetrics(cached_tokens=0, input_tokens=None, output_tokens=None, total_tokens=None)
+        return OpenAIUsageMetrics(
+            cached_tokens=0,
+            cache_write_tokens=0,
+            input_tokens=None,
+            output_tokens=None,
+            total_tokens=None,
+        )
 
     token_details = usage.get("prompt_tokens_details")
     if not isinstance(token_details, dict):
@@ -221,6 +237,7 @@ def extract_openai_usage_metrics(payload: object) -> OpenAIUsageMetrics:
 
     return OpenAIUsageMetrics(
         cached_tokens=_optional_int(token_details.get("cached_tokens")) or 0,
+        cache_write_tokens=_optional_int(token_details.get("cache_write_tokens")) or 0,
         input_tokens=_optional_int(usage.get("input_tokens")) or _optional_int(usage.get("prompt_tokens")),
         output_tokens=_optional_int(usage.get("output_tokens")) or _optional_int(usage.get("completion_tokens")),
         total_tokens=_optional_int(usage.get("total_tokens")),
@@ -232,26 +249,25 @@ def build_openai_prompt_usage_log_metadata(
     phase: LearningPhase,
     prompt_metadata: OpenAITutorPromptMetadata,
     response_payload: object,
-    request_payload: dict[str, object],
     latency_ms: float,
 ) -> dict[str, object]:
     usage = extract_openai_usage_metrics(response_payload)
     request_id = response_payload.get("id") if isinstance(response_payload, dict) else None
-    session_id = request_payload.get("session_id")
 
     return {
         "request_id": request_id if isinstance(request_id, str) else None,
-        "session_id": session_id if isinstance(session_id, str) else None,
+        "provider": "openai",
         "model": model,
         "prompt_version": prompt_metadata.prompt_version,
         "phase": phase,
         "canonical_triggers": prompt_metadata.canonical_triggers,
-        "layer1_hash": prompt_metadata.layer1_hash,
-        "semi_static_hash": prompt_metadata.semi_static_hash,
+        "diagnostic_layer1_sha256": prompt_metadata.layer1_hash,
+        "diagnostic_semi_static_sha256": prompt_metadata.semi_static_hash,
         "layer1_character_count": prompt_metadata.layer1_character_count,
         "semi_static_character_count": prompt_metadata.semi_static_character_count,
         "session_context_character_count": prompt_metadata.session_context_character_count,
         "cached_tokens": usage.cached_tokens,
+        "cache_write_tokens": usage.cache_write_tokens,
         "input_tokens": usage.input_tokens,
         "output_tokens": usage.output_tokens,
         "total_tokens": usage.total_tokens,
@@ -264,7 +280,6 @@ def _log_openai_prompt_usage(
     phase: LearningPhase,
     prompt_metadata: OpenAITutorPromptMetadata,
     response_payload: object,
-    request_payload: dict[str, object],
     latency_ms: float,
 ) -> None:
     logger.info(
@@ -274,7 +289,6 @@ def _log_openai_prompt_usage(
             phase=phase,
             prompt_metadata=prompt_metadata,
             response_payload=response_payload,
-            request_payload=request_payload,
             latency_ms=latency_ms,
         ),
     )

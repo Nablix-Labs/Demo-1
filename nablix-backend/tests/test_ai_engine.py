@@ -1,4 +1,5 @@
 import json
+import logging
 
 from fastapi.testclient import TestClient
 import pytest
@@ -14,7 +15,8 @@ from app.ai_engine.prompt_registry import (
 )
 from app.ai_engine.schemas import CanvasTextRegion
 from app.core.config import Settings, get_settings
-from app.main import app
+from app.core.logger import StructuredJsonFormatter
+from app.main import app, prompt_registry as startup_prompt_registry
 from app.models.adapters import AdapterContext, OCRTextRegion, RAGResult, StudentModelResult, TutorEngineRequest
 
 
@@ -50,6 +52,10 @@ def test_ai_engine_classify_returns_valid_tutor_response() -> None:
     assert body["answer_reveal_allowed"] is False
     assert body["safety_check"]["passed"] is True
     assert body["guardrail_check"]["passed"] is True
+
+
+def test_startup_uses_validated_cached_prompt_registry() -> None:
+    assert startup_prompt_registry is load_prompt_registry()
 
 
 class _FakeOpenAIResponse:
@@ -92,6 +98,7 @@ def test_ai_engine_can_use_openai_when_feature_flag_is_enabled(monkeypatch) -> N
     monkeypatch.setenv("NABLIX_USE_OPENAI_AI_ENGINE", "true")
     monkeypatch.setenv("NABLIX_OPENAI_API_KEY", "sk-test")
     monkeypatch.setenv("NABLIX_OPENAI_AI_ENGINE_MODEL", "gpt-test")
+    monkeypatch.setenv("NABLIX_OPENAI_PROMPT_CACHE_KEY_ENABLED", "false")
     monkeypatch.setattr(openai_client.httpx, "Client", _FakeOpenAIClient)
     get_settings.cache_clear()
 
@@ -181,7 +188,8 @@ def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> 
     )
 
     assert "prompt_cache_key" not in request_bodies[0]
-    assert request_bodies[1]["prompt_cache_key"].startswith("ai_tutor:1.0.0:GUIDED_PRACTICE:")
+    assert len(request_bodies[1]["prompt_cache_key"]) == 64
+    assert request_bodies[1]["prompt_cache_key"].isalnum()
     assert "cache_control" not in json.dumps(request_bodies[1])
 
 
@@ -215,6 +223,7 @@ def test_openai_cached_tokens_are_parsed_when_present() -> None:
     )
 
     assert metrics.cached_tokens == 768
+    assert metrics.cache_write_tokens == 0
     assert metrics.input_tokens == 1200
     assert metrics.output_tokens == 40
     assert metrics.total_tokens == 1240
@@ -224,6 +233,7 @@ def test_openai_cached_tokens_default_safely_when_missing() -> None:
     metrics = openai_client.extract_openai_usage_metrics({"usage": {}})
 
     assert metrics.cached_tokens == 0
+    assert metrics.cache_write_tokens == 0
     assert metrics.input_tokens is None
     assert metrics.output_tokens is None
     assert metrics.total_tokens is None
@@ -241,12 +251,11 @@ def test_openai_prompt_usage_log_metadata_does_not_include_raw_current_user_inpu
         phase="GUIDED_PRACTICE",
         prompt_metadata=prompt_metadata,
         response_payload={"usage": {"prompt_tokens_details": {"cached_tokens": 12}}},
-        request_payload={"current_user_input": raw_input, "session_id": "SESSION001"},
         latency_ms=15.25,
     )
 
     assert raw_input not in json.dumps(log_metadata)
-    assert log_metadata["session_id"] == "SESSION001"
+    assert "session_id" not in log_metadata
     assert log_metadata["cached_tokens"] == 12
 
 
@@ -271,7 +280,6 @@ def test_openai_prompt_usage_log_metadata_does_not_include_raw_ocr_or_rag_fields
                 "input_tokens_details": {"cached_tokens": 512},
             },
         },
-        request_payload={"ocr_output": raw_ocr, "rag_content": raw_rag},
         latency_ms=21.5,
     )
 
@@ -280,6 +288,28 @@ def test_openai_prompt_usage_log_metadata_does_not_include_raw_ocr_or_rag_fields
     assert raw_rag not in serialized_log
     assert log_metadata["request_id"] == "resp_123"
     assert log_metadata["cached_tokens"] == 512
+
+
+def test_structured_log_formatter_outputs_cache_metadata() -> None:
+    record = logging.LogRecord(
+        name="nablix_backend",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="openai_prompt_cache_usage",
+        args=(),
+        exc_info=None,
+    )
+    record.provider = "openai"
+    record.cached_tokens = 512
+    record.diagnostic_layer1_sha256 = "abc123"
+
+    payload = json.loads(StructuredJsonFormatter().format(record))
+
+    assert payload["event"] == "openai_prompt_cache_usage"
+    assert payload["provider"] == "openai"
+    assert payload["cached_tokens"] == 512
+    assert payload["diagnostic_layer1_sha256"] == "abc123"
 
 
 def test_ai_engine_returns_visual_cue_for_opposite_operation_error() -> None:
