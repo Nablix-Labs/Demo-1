@@ -16,7 +16,7 @@ from app.models.fields import Phase
 from app.models.interaction import InteractionRequest, InteractionResponse
 from app.models.session import SessionRecord
 from app.services.session_service import (
-    _get_owned_session,
+    _get_owned_session_for_turn,
     correct_answer_for,
     update_interaction_state,
 )
@@ -149,7 +149,12 @@ async def process_interaction(request: InteractionRequest) -> InteractionRespons
     still runs in full; its verdict fields just aren't echoed.
     """
 
-    session: SessionRecord = _get_owned_session(request.session_id, request.student_id)
+    session: SessionRecord = _get_owned_session_for_turn(
+        request.session_id,
+        request.student_id,
+        request.current_phase,
+        request.hint_count,
+    )
     student_message = _student_message_from(request)
 
     context = AdapterContext(

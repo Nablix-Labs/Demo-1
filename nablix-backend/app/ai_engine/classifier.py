@@ -223,6 +223,8 @@ def build_tutor_message_with_openai(
 ) -> OpenAITutorMessage | None:
     if openai_client is None:
         return None
+    if evaluation == "CORRECT":
+        return None
     if intent in {"REQUESTING_ANSWER", "ATTEMPTING_OVERRIDE"}:
         return None
     if request.input_source == "CANVAS":

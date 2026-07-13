@@ -28,7 +28,7 @@ export const DEMO_PHASE = 'GUIDED_PRACTICE';
 
 export const api = axios.create({
   baseURL: BASE,
-  timeout: 10_000,
+  timeout: 30_000,
   headers: { 'Content-Type': 'application/json' },
 });
 

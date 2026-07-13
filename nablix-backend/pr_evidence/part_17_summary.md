@@ -12,7 +12,7 @@
 
 ## Validation results
 
-- Backend `tests/` suite: `131 passed, 2 warnings in 0.61s`.
+- Backend `tests/` suite: `134 passed, 2 warnings in 0.50s`.
 - The warnings are FastAPI `on_event` deprecation warnings and are unrelated to prompt integrity or caching.
 - Approved Layer 1 SHA-256: `bd08e7a10ea9067cbf793a63822a0fc61b880ff0cbdfeb56e40b1f54da2c216d`.
 - No files under `prompts/ai_tutor/` were changed by this implementation.

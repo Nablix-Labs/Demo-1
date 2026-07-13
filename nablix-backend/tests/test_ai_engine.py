@@ -142,6 +142,50 @@ def test_ai_engine_can_use_openai_when_feature_flag_is_enabled(monkeypatch) -> N
         assert "cache_control" not in json.dumps(request_body)
 
 
+def test_correct_openai_feedback_uses_generic_confirmation(monkeypatch) -> None:
+    responses = [_FakeOpenAIResponse('{"evaluation": "CORRECT", "confidence": 0.99}')]
+    request_bodies = []
+
+    class _CorrectAnswerOpenAIClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self) -> "_CorrectAnswerOpenAIClient":
+            return self
+
+        def __exit__(self, *exc) -> bool:
+            return False
+
+        def post(self, *args, **kwargs) -> _FakeOpenAIResponse:
+            request_bodies.append(kwargs["json"])
+            return responses.pop(0)
+
+    monkeypatch.setenv("NABLIX_USE_OPENAI_AI_ENGINE", "true")
+    monkeypatch.setenv("NABLIX_OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("NABLIX_OPENAI_PROMPT_CACHE_KEY_ENABLED", "false")
+    monkeypatch.setattr(openai_client.httpx, "Client", _CorrectAnswerOpenAIClient)
+    get_settings.cache_clear()
+
+    response = client.post(
+        "/ai-engine/classify",
+        json={
+            "question_context": "x + 4 = 9",
+            "expected_answer": "x = 5",
+            "student_input": "x = 5",
+            "phase": "GUIDED_PRACTICE",
+            "input_source": "TEXT",
+            "attempt_count": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["evaluation"] == "CORRECT"
+    assert body["tutor_message"] == "Correct. Nice work explaining your answer."
+    assert body["guardrail_check"]["passed"] is True
+    assert len(request_bodies) == 1
+
+
 def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> None:
     request_bodies = []
 

@@ -74,15 +74,36 @@ def _diagnostic_start_message(question: str) -> str:
 def _get_owned_session(session_id: str, student_id: str) -> SessionRecord:
     """Return the session owned by the student or raise a standard 404."""
 
+    return _get_owned_session_for_turn(
+        session_id,
+        student_id,
+        "GUIDED_PRACTICE",
+        0,
+    )
+
+
+def _get_owned_session_for_turn(
+    session_id: str,
+    student_id: str,
+    current_phase: Phase,
+    hint_count: int,
+) -> SessionRecord:
+    """Recover request-carried demo state when Vercel starts a new instance."""
+
     session: SessionRecord | None = _sessions.get(session_id)
     if session is None and student_id == _DEMO_STUDENT_ID:
-        session = _recover_demo_session(session_id, student_id)
+        session = _recover_demo_session(session_id, student_id, current_phase, hint_count)
     if session is None or session.student_id != student_id:
         raise _session_not_found(session_id)
     return session
 
 
-def _recover_demo_session(session_id: str, student_id: str) -> SessionRecord:
+def _recover_demo_session(
+    session_id: str,
+    student_id: str,
+    current_phase: Phase,
+    hint_count: int,
+) -> SessionRecord:
     """Rebuild the fixed demo session after Vercel drops in-memory state."""
 
     question, question_id, question_number = _mock_diagnostic_question()
@@ -92,15 +113,15 @@ def _recover_demo_session(session_id: str, student_id: str) -> SessionRecord:
         student_id=student_id,
         concept_id="ALG_LINEAR_ONE_STEP",
         interaction_mode="VOICE",
-        current_phase="GUIDED_PRACTICE",
+        current_phase=current_phase,
         current_question=question,
         question_id=question_id,
         question_number=question_number,
-        ui_state="GUIDED_PRACTICE",
-        hint_count=0,
+        ui_state=current_phase,
+        hint_count=hint_count,
         status="started",
         message=_diagnostic_start_message(question),
-        show_hint_button=True,
+        show_hint_button=current_phase in ("GUIDED_PRACTICE", "INDEPENDENT_PRACTICE"),
     )
     _sessions[session_id] = session
     return session

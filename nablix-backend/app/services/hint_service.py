@@ -6,7 +6,11 @@ from app.models.fields import Phase
 from app.models.hint import HintRequest, HintResponse
 from app.models.session import SessionRecord
 from app.services.interaction_service import _current_hint_level_from, run_tutor_pipeline
-from app.services.session_service import _get_owned_session, correct_answer_for, increment_hint_count
+from app.services.session_service import (
+    _get_owned_session_for_turn,
+    correct_answer_for,
+    increment_hint_count,
+)
 
 
 _HINT_PHASES: frozenset[Phase] = frozenset(("GUIDED_PRACTICE", "INDEPENDENT_PRACTICE"))
@@ -48,7 +52,12 @@ async def process_hint(request: HintRequest) -> HintResponse:
     comes from the tutor pipeline; the session's stored hint count is bumped.
     """
 
-    session: SessionRecord = _get_owned_session(request.session_id, request.student_id)
+    session: SessionRecord = _get_owned_session_for_turn(
+        request.session_id,
+        request.student_id,
+        request.current_phase,
+        request.current_hint_count,
+    )
     _validate_hint_phase(request.current_phase, session.current_phase)
     _validate_hint_count(request.current_hint_count, session.hint_count)
 
