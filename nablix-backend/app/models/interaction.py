@@ -1,6 +1,6 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from app.models.adapters import VisualCue
+from app.models.adapters import ConversationMessage, VisualCue
 from app.models.fields import (
     BoundedText,
     ConceptId,
@@ -30,6 +30,9 @@ class InteractionRequest(BaseModel):
     concept_id: ConceptId
     question_id: QuestionId
     hint_count: int
+    attempt_count: int | None = Field(default=None, ge=0)
+    question_completed: bool | None = None
+    conversation_history: list[ConversationMessage] = Field(default_factory=list)
     timestamp: str | None = None
 
 
@@ -55,5 +58,7 @@ class InteractionResponse(BaseModel):
     allow_text_input: bool
     allow_voice_input: bool
     hint_count: int
+    attempt_count: int
+    question_completed: bool
     phase_indicator: Phase
     session_summary: str | None

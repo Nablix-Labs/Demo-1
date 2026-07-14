@@ -30,6 +30,12 @@ class AdapterContext(BaseModel):
     current_hint_level: int | None = None
     concept_id: str | None = None
     canvas_regions: list["OCRTextRegion"] = Field(default_factory=list)
+    conversation_history: list["ConversationMessage"] = Field(default_factory=list)
+
+
+class ConversationMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
 
 
 class RetrievedDocument(BaseModel):

@@ -173,6 +173,120 @@ def test_interaction_voice_normalizes_spoken_correct_answer() -> None:
     assert body["message_voice"] == "Correct. Nice work explaining your answer."
 
 
+def test_interaction_voice_normalizes_equal_to_variant() -> None:
+    session_id = _start_session("ST020", mode="VOICE")
+
+    response = client.post(
+        "/interaction",
+        json=_interaction_body(
+            session_id,
+            "ST020",
+            input_source="VOICE",
+            text_input=None,
+            voice_transcript="x equal to five",
+            transcript_confidence=0.94,
+        ),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["message"] == "Correct. Nice work explaining your answer."
+    assert body["question_completed"] is True
+    assert body["attempt_count"] == 1
+
+
+def test_acknowledgement_after_correct_answer_does_not_restart_question() -> None:
+    session_id = _start_session("ST021", mode="VOICE")
+    correct_response = client.post(
+        "/interaction",
+        json=_interaction_body(
+            session_id,
+            "ST021",
+            input_source="VOICE",
+            text_input=None,
+            voice_transcript="x equals five",
+            transcript_confidence=0.94,
+        ),
+    )
+    assert correct_response.status_code == 200
+    assert correct_response.json()["question_completed"] is True
+
+    acknowledgement_response = client.post(
+        "/interaction",
+        json=_interaction_body(
+            session_id,
+            "ST021",
+            input_source="VOICE",
+            text_input=None,
+            voice_transcript="Okay.",
+            transcript_confidence=0.94,
+        ),
+    )
+
+    assert acknowledgement_response.status_code == 200
+    body = acknowledgement_response.json()
+    assert body["message"] == (
+        "You are welcome. This question is complete, so let us continue to the next question."
+    )
+    assert body["question_completed"] is True
+    assert body["attempt_count"] == 1
+
+
+def test_orchestration_progress_restores_completed_question_after_cold_start() -> None:
+    session_id = _start_session("ST001", mode="VOICE")
+    session_service._sessions.pop(session_id)
+
+    response = client.post(
+        "/interaction",
+        json=_interaction_body(
+            session_id,
+            "ST001",
+            input_source="VOICE",
+            text_input=None,
+            voice_transcript="okay",
+            transcript_confidence=0.94,
+            attempt_count=2,
+            question_completed=True,
+            conversation_history=[
+                {"role": "user", "content": "x equals five"},
+                {"role": "assistant", "content": "Correct. Nice work explaining your answer."},
+            ],
+        ),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["question_completed"] is True
+    assert body["attempt_count"] == 2
+    assert "next question" in body["message"].lower()
+
+
+def test_repeated_attempts_receive_progressively_different_explanations() -> None:
+    session_id = _start_session("ST022")
+
+    first_response = client.post(
+        "/interaction",
+        json=_interaction_body(session_id, "ST022", text_input="x = 13"),
+    )
+    second_response = client.post(
+        "/interaction",
+        json=_interaction_body(session_id, "ST022", text_input="x = 13"),
+    )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    first_body = first_response.json()
+    second_body = second_response.json()
+    assert first_body["attempt_count"] == 1
+    assert second_body["attempt_count"] == 2
+    assert first_body["message"] == "Think about the opposite operation needed to isolate x."
+    assert second_body["message"] == (
+        "Getting x by itself means removing the operation beside it by doing the inverse operation on both sides."
+    )
+    assert first_body["message"] != second_body["message"]
+    assert len(session_service._sessions[session_id].conversation_history) == 4
+
+
 def test_interaction_voice_accepts_answer_intro_phrases() -> None:
     cases = [
         "I think the answer is five",

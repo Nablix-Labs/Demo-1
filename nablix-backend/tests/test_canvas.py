@@ -17,6 +17,7 @@ def _start_session(student_id: str) -> str:
             "student_id": student_id,
             "concept_id": "ALG_LINEAR_ONE_STEP",
             "interaction_mode": "TEXT",
+            "initial_phase": "GUIDED_PRACTICE",
         },
     )
     assert response.status_code == 200
@@ -60,6 +61,10 @@ def test_canvas_submit_returns_mock_ocr_result() -> None:
     assert body["ocr"]["provider"] == "mock"
     assert body["ocr"]["detected_shapes"] == []
     assert body["tutor"]["tutor_message"]
+    assert body["tutor"]["canvas_feedback"]["has_feedback"] is True
+    assert [
+        step["evaluation"] for step in body["tutor"]["canvas_feedback"]["step_feedback"]
+    ] == ["CORRECT", "CORRECT", "CORRECT"]
     assert body["canvas_draw"] == []
     assert body["latency"]["total_latency_ms"] >= 0
     assert {"ocr_latency_ms", "tutor_latency_ms"} <= body["latency"].keys()

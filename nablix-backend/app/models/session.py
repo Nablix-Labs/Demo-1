@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.models.adapters import VisionOCRResult
+from app.models.adapters import ConversationMessage, VisionOCRResult
 from app.models.canvas import CanvasSubmissionRecord
 from app.models.fields import (
     ConceptId,
@@ -70,6 +70,9 @@ class SessionRecord(BaseModel):
     allow_text_input: bool = True
     allow_voice_input: bool = True
     hint_count: int
+    attempt_count: int = 0
+    question_completed: bool = False
+    conversation_history: list[ConversationMessage] = Field(default_factory=list)
     # Functional fields the guide omits but the backend needs.
     status: Literal["started", "ended"]
     mode: Literal["mock", "live"]
