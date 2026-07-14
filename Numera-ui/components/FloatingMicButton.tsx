@@ -90,6 +90,7 @@ export default function FloatingMicButton() {
       onPointerUp={onPointerUp}
       onClick={onClick}
       aria-label={micMuted ? 'Unmute microphone' : 'Mute microphone'}
+      data-support-id="mic-toggle"
       className={cn(
         'fixed z-[55] w-14 h-14 rounded-full flex items-center justify-center transition-colors',
         'touch-none cursor-grab active:cursor-grabbing',

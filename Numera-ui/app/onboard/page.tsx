@@ -11,7 +11,7 @@
  * existing greeting + Key Stage logic.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, Mail, Phone, KeyRound, ShieldCheck } from 'lucide-react';
 import AuthShell from '@/components/auth/AuthShell';
@@ -45,6 +45,14 @@ export default function OnboardPage() {
   const setStudentAge = useNumeraStore((s) => s.setStudentAge);
 
   const [step, setStep] = useState<1 | 2>(1);
+
+  // Nablix Assist's OPEN_PREVIOUS_ONBOARDING_STEP action asks this page to go
+  // back a step (component state it can't reach directly).
+  useEffect(() => {
+    const back = () => setStep(1);
+    window.addEventListener('nablix:onboard-back', back);
+    return () => window.removeEventListener('nablix:onboard-back', back);
+  }, []);
 
   // Step 1 — auth method
   const [authMode, setAuthMode] = useState<'email_otp' | 'phone_otp' | 'password'>('email_otp');
@@ -144,6 +152,7 @@ export default function OnboardPage() {
                 <Phone size={16} className="text-slate-blue flex-shrink-0" />
                 <input
                   type="tel"
+                  data-support-id="registration-phone"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
                   placeholder="+44 7700 900000"
@@ -158,6 +167,7 @@ export default function OnboardPage() {
                 <Mail size={16} className="text-slate-blue flex-shrink-0" />
                 <input
                   type="email"
+                  data-support-id="registration-email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="you@example.com"
@@ -170,6 +180,7 @@ export default function OnboardPage() {
           {authMode === 'password' && (
             <input
               type="password"
+              data-support-id="registration-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Create a password (min 6 chars)"
@@ -177,7 +188,7 @@ export default function OnboardPage() {
             />
           )}
 
-          <button onClick={continueEmail} disabled={!step1Ready} className="btn btn-primary w-full mt-5">
+          <button onClick={continueEmail} disabled={!step1Ready} data-support-id="registration-continue" className="btn btn-primary w-full mt-5">
             Continue <ArrowRight size={16} />
           </button>
 
@@ -198,6 +209,7 @@ export default function OnboardPage() {
           <label className="block mt-6 text-[12px] font-semibold text-ink">
             Student name
             <input
+              data-support-id="registration-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="First name"
@@ -209,6 +221,7 @@ export default function OnboardPage() {
             <label className="block text-[12px] font-semibold text-ink">
               Age band
               <select
+                data-support-id="curriculum-selector"
                 value={ageBand}
                 onChange={(e) => setAgeBand(e.target.value)}
                 className="mt-1.5 w-full rounded-btn border border-muted-gray bg-white px-3 py-2.5 text-[14px] text-ink focus:border-ai-cyan focus:outline-none transition-colors"
@@ -219,6 +232,7 @@ export default function OnboardPage() {
             <label className="block text-[12px] font-semibold text-ink">
               Year group
               <select
+                data-support-id="grade-selector"
                 value={grade}
                 onChange={(e) => setGrade(e.target.value)}
                 className="mt-1.5 w-full rounded-btn border border-muted-gray bg-white px-3 py-2.5 text-[14px] text-ink focus:border-ai-cyan focus:outline-none transition-colors"
@@ -246,10 +260,10 @@ export default function OnboardPage() {
             </div>
           </div>
 
-          <button onClick={finish} disabled={name.trim().length === 0} className="btn btn-primary w-full mt-6">
+          <button onClick={finish} disabled={name.trim().length === 0} data-support-id="registration-continue" className="btn btn-primary w-full mt-6">
             Continue to guardian consent <ArrowRight size={16} />
           </button>
-          <button onClick={() => setStep(1)} className="btn btn-secondary w-full mt-2.5">
+          <button onClick={() => setStep(1)} data-support-id="registration-back" className="btn btn-secondary w-full mt-2.5">
             Back
           </button>
         </>
