@@ -1,5 +1,9 @@
 from fastapi.testclient import TestClient
+from pytest import MonkeyPatch
 
+from app.adapters import tutor_engine
+from app.ai_engine.classifier import ClassificationRequest, classify_student_response
+from app.ai_engine.schemas import TutorResponse
 from app.main import app
 from app.services import session_service
 
@@ -49,8 +53,19 @@ def _hint_body(session_id: str, student_id: str, **overrides: object) -> dict[st
     return body
 
 
-def test_hint_request_returns_tutor_hint() -> None:
+def test_hint_request_returns_tutor_hint(monkeypatch: MonkeyPatch) -> None:
     session_id = _start_guided_session("ST101")
+    session = session_service._sessions[session_id]
+    session_service._sessions[session_id] = session.model_copy(
+        update={"question_completed": True, "question_number": 2}
+    )
+    requests: list[ClassificationRequest] = []
+
+    def capture_request(request: ClassificationRequest) -> TutorResponse:
+        requests.append(request)
+        return classify_student_response(request)
+
+    monkeypatch.setattr(tutor_engine, "classify_student_response", capture_request)
 
     response = client.post("/hint/request", json=_hint_body(session_id, "ST101"))
 
@@ -62,6 +77,10 @@ def test_hint_request_returns_tutor_hint() -> None:
     assert body["hint"] == "Here is a hint: think about the operation being used on x."
     assert body["response_strategy"] == "GUIDED_HINT"
     assert body["answer_reveal_allowed"] is False
+    assert requests[0].attempt_count == session.attempt_count
+    assert requests[0].question_completed is True
+    assert requests[0].question_number == 2
+    assert requests[0].current_phase == session.current_phase
 
 
 def test_hint_level_uses_stored_count_plus_one() -> None:

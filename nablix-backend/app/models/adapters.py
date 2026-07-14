@@ -27,6 +27,8 @@ class AdapterContext(BaseModel):
     input_source: str | None = None
     transcript_confidence: float | None = None
     attempt_count: int | None = None
+    question_completed: bool = False
+    question_number: int | None = None
     current_hint_level: int | None = None
     concept_id: str | None = None
     detected_equation: str | None = None

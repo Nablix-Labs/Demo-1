@@ -285,8 +285,9 @@ def update_interaction_state(
 ) -> SessionRecord:
     """Update frontend-facing session state after one interaction turn.
 
-    transition_updates is the 6.7 phase-transition overlay (previous_phase,
-    new question, counter resets); it is merged last so it wins.
+    transition_updates is the per-turn state overlay (attempt counter,
+    question completion, 6.7 transition/question-advance keys); it is merged
+    last so it wins.
     """
 
     session: SessionRecord = _get_owned_session(session_id, student_id)
