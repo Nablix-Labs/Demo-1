@@ -155,8 +155,10 @@ canvas_review:
   min_region_confidence: 0.75
   max_expression_characters: 160
   feedback_enabled_phases:
+    - DIAGNOSTIC
     - GUIDED_PRACTICE
   annotation_enabled_phases:
+    - DIAGNOSTIC
     - GUIDED_PRACTICE
   messages:
     ARITHMETIC_ERROR: Check the arithmetic in this step before continuing.
