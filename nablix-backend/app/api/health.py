@@ -1,5 +1,4 @@
 from datetime import datetime, timezone
-from typing import Literal
 
 from fastapi import APIRouter
 
@@ -16,11 +15,10 @@ async def health_check() -> HealthResponse:
     Returns the current server time and application name.
     """
     settings = get_settings()
-    mode: Literal["mock", "live"] = "mock" if settings.use_mock_tutor else "live"
     return HealthResponse(
         status="healthy",
         app=settings.app_name,
         version=settings.app_version,
         timestamp=datetime.now(timezone.utc).isoformat(),
-        mode=mode,
+        mode="inprocess",
     )

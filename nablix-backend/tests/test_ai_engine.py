@@ -851,8 +851,8 @@ def test_canvas_math_review_suppresses_feedback_and_annotations_in_phase_3() -> 
 
 
 def test_tutor_adapter_maps_canvas_mistake_to_backend_result() -> None:
-    adapter = TutorEngineServiceAdapter(Settings(use_mock_tutor=True, use_openai_ai_engine=False))
-    result = adapter._mock_response(
+    adapter = TutorEngineServiceAdapter(Settings(use_openai_ai_engine=False))
+    result = adapter._respond(
         TutorEngineRequest(
             context=AdapterContext(
                 session_id="SESSION001",

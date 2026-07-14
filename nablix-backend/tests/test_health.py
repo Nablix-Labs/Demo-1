@@ -13,7 +13,7 @@ def test_health_returns_typed_status() -> None:
     assert body["status"] == "healthy"
     assert body["app"] == "Nablix AI Math Tutor API"
     assert body["version"] == "1.0.0"
-    assert body["mode"] == "mock"
+    assert body["mode"] == "inprocess"
     assert body["timestamp"].endswith("+00:00")
 
 

@@ -9,7 +9,7 @@ import {
 import { cn } from '@/lib/cn';
 
 const TOP_ITEMS = [
-  { icon: Pencil,   label: 'Lesson',         href: '/' },
+  { icon: Pencil,   label: 'Lesson',         href: '/', supportId: 'open-canvas' },
   { icon: BookOpen, label: 'Workbook',       href: '/workbook' },
   { icon: Target,   label: 'Practice',       href: '/practice' },
   { icon: Swords,   label: 'Group Challenge',href: '/challenge' },
@@ -26,9 +26,9 @@ const BOTTOM_ITEMS = [
 ];
 
 function RailLink({
-  icon: Icon, label, href, active,
+  icon: Icon, label, href, active, supportId,
 }: {
-  icon: typeof Pencil; label: string; href: string; active: boolean;
+  icon: typeof Pencil; label: string; href: string; active: boolean; supportId?: string;
 }) {
   return (
     <Link
@@ -36,6 +36,7 @@ function RailLink({
       title={label}
       aria-label={label}
       aria-current={active ? 'page' : undefined}
+      data-support-id={supportId}
       className={cn(
         'w-[38px] h-[38px] rounded-lg flex items-center justify-center transition-colors flex-shrink-0',
         active

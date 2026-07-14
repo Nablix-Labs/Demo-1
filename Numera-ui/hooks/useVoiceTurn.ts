@@ -18,6 +18,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMicLevel, MIC_BARS } from '@/store/useMicLevel';
+import { audioConstraints } from '@/lib/support/micPreference';
 
 // ── Minimal Web Speech typings (not in the standard DOM lib) ──────────────────
 interface SpeechRecognitionAlternativeLike {
@@ -132,7 +133,7 @@ export function useVoiceTurn({
     if (activeRef.current || !supported) return;
 
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      audio: audioConstraints({ echoCancellation: true, noiseSuppression: true, autoGainControl: true }),
     });
     streamRef.current = stream;
 

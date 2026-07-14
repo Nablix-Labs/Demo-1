@@ -10,4 +10,5 @@ class HealthResponse(BaseModel):
     app: str
     version: str
     timestamp: str
-    mode: Literal["mock", "live"]
+    # The tutor always runs in-process; kept as a field so the payload shape is stable.
+    mode: Literal["inprocess"]

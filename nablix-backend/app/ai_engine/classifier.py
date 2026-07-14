@@ -51,6 +51,8 @@ class ClassificationRequest(StrictSchema):
     input_source: InputSource
     transcript_confidence: float | None = Field(ge=0.0, le=1.0)
     attempt_count: int = Field(ge=0)
+    question_completed: bool = False
+    question_number: int = Field(default=1, ge=1)
     current_hint_level: HintLevel | None
     concept_id: str | None = None
     difficulty: str = "FOUNDATION"

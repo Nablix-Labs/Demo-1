@@ -287,7 +287,7 @@ export default function Toolbar({ onCheckWork }: ToolbarProps) {
             </div>
 
             {/* Check */}
-            <button onClick={onCheckWork} aria-label="Check my work"
+            <button onClick={onCheckWork} aria-label="Check my work" data-support-id="check-answer"
               className={cn('bg-highlight-amber text-ink rounded-[20px] text-xs font-semibold flex items-center justify-center gap-[6px] hover:brightness-95 transition-all flex-shrink-0',
                 vertical ? 'w-9 h-9 rounded-full' : 'ml-1 mr-0.5 px-4 py-[9px]')}>
               <CheckCircle2 size={16} strokeWidth={1.8} />

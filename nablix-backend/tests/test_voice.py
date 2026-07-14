@@ -146,3 +146,29 @@ def test_voice_transcript_rejects_invalid_confidence() -> None:
 
     assert response.status_code == 422
     assert response.json()["field"] == "confidence"
+
+
+def test_voice_stream_websocket_accepts_connection() -> None:
+    with client.websocket_connect(
+        "/voice/stream?session=SESSION001&student_id=ST001"
+    ) as websocket:
+        websocket.close()
+
+
+def test_voice_stream_forwards_session_query_param(monkeypatch) -> None:
+    """Frontends have sent both ?session= and ?session_id=; both must reach voice_stream."""
+    captured: dict[str, str] = {}
+
+    async def fake_voice_stream(ws, session="default", student_id="ST001"):
+        captured["session"] = session
+        captured["student_id"] = student_id
+        await ws.accept()
+        await ws.close()
+
+    monkeypatch.setattr("app.api.voice.voice_stream", fake_voice_stream)
+
+    for query in ("session=SESSION001", "session_id=SESSION001"):
+        captured.clear()
+        with client.websocket_connect(f"/voice/stream?{query}&student_id=ST042"):
+            pass
+        assert captured == {"session": "SESSION001", "student_id": "ST042"}, query

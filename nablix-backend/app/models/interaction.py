@@ -41,8 +41,13 @@ class InteractionResponse(BaseModel):
 
     session_id: str
     student_id: str
+    phase_changed: bool = False
+    previous_phase: Phase | None = None
+    phase_transition_message: str | None = None
+    phase_transition_voice: str | None = None
     current_phase: Phase
     current_question: str
+    question_id: str | None = None
     interaction_mode: InteractionMode
     voice_state: VoiceState
     canvas_state: CanvasState

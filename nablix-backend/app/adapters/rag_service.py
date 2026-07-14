@@ -1,9 +1,7 @@
 import time
-from typing import NoReturn
-
 from pydantic import ValidationError
 
-from app.adapters.http_utils import JsonObject, post_json
+from app.adapters.http_utils import JsonObject
 from app.core.config import Settings
 from app.core.exceptions import AdapterError
 from app.models.adapters import AdapterContext, RAGResult, RetrievedDocument
@@ -30,23 +28,7 @@ class RAGServiceAdapterClient:
         error_type: str | None,
         hint_level: int | None,
     ) -> RAGResult:
-        if self._settings.use_mock_rag:
-            return self._mock_response(request)
-
-        payload: JsonObject = self._build_retrieve_payload(request, error_type, hint_level)
-        url = self._settings.rag_service_url.rstrip("/") + "/retrieve"
-
-        try:
-            response = await post_json(
-                "rag_service",
-                url,
-                payload,
-                self._settings.adapter_request_timeout_seconds,
-                self._settings.adapter_request_retry_count,
-            )
-            return self.parse_response(response)
-        except AdapterError as error:
-            self.handle_error(error)
+        return self._local_response(request)
 
     def _build_retrieve_payload(
         self,
@@ -94,10 +76,7 @@ class RAGServiceAdapterClient:
                 f"invalid response body={response}: {error}",
             ) from error
 
-    def handle_error(self, error: AdapterError) -> NoReturn:
-        raise error
-
-    def _mock_response(self, request: AdapterContext) -> RAGResult:
+    def _local_response(self, request: AdapterContext) -> RAGResult:
         return RAGResult(
             documents=[
                 RetrievedDocument(
@@ -113,4 +92,4 @@ class RAGServiceAdapterClient:
 class MockRAGServiceAdapter(RAGServiceAdapterClient):
 
     def __init__(self) -> None:
-        super().__init__(Settings(use_mock_rag=True))
+        super().__init__(Settings())

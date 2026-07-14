@@ -21,6 +21,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMicLevel, MIC_BARS } from '@/store/useMicLevel';
+import { audioConstraints } from '@/lib/support/micPreference';
 
 /** Sample rate the voice server / Deepgram expects. */
 const TARGET_RATE = 16000;
@@ -99,7 +100,7 @@ export function useVoiceStream({ onAudio }: UseVoiceStreamOptions) {
     if (!supported || ctxRef.current) return;
 
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
+      audio: audioConstraints({ echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }),
     });
     streamRef.current = stream;
 

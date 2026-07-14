@@ -13,6 +13,7 @@
  */
 import axios from 'axios';
 import type { CanvasDrawPayload } from '@/store/useNumeraStore';
+import { useAuthStore } from '@/store/useAuthStore';
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
 
@@ -30,6 +31,16 @@ export const api = axios.create({
   baseURL: BASE,
   timeout: 30_000,
   headers: { 'Content-Type': 'application/json' },
+});
+
+// Carry the real auth token (from POST /auth/login) on tutoring calls when one
+// is present. The tutoring backend doesn't require it yet, but attaching it now
+// means these calls are ready the moment it does. Imported lazily via getState
+// so there's no import cycle with the store.
+api.interceptors.request.use((config) => {
+  const token = useAuthStore.getState().accessToken;
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
 });
 
 // ── Error shape ───────────────────────────────────────────────────────────────
@@ -171,7 +182,7 @@ export interface InteractionResponse {
   hint_count: number;
   phase_indicator: string;
   /** Optional tutor drawing to render on the canvas alongside this reply. */
-  canvas_draw?: CanvasDrawPayload;
+  canvas_draw?: CanvasDrawPayload[];
   /** Whether to show the supporting visual cue after this turn. The backend also
    *  sends the richer `visual_cue` object; prefer that when present. */
   show_visual_cue?: boolean;

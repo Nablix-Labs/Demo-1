@@ -64,6 +64,11 @@ function errorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
 }
 
+// Shown in the chat when a tutor call fails (e.g. backend 5xx), so a failure is
+// visible to the student instead of the chat silently freezing.
+const TUTOR_UNAVAILABLE = "Sorry — I couldn't reach the tutor just now. Please try again in a moment.";
+const HINT_UNAVAILABLE = "Sorry — I couldn't fetch a hint right now. Please try again in a moment.";
+
 export function useDemoTutor() {
   const sessionId = useNumeraStore((s) => s.sessionId);
   const setSessionId = useNumeraStore((s) => s.setSessionId);
@@ -121,11 +126,12 @@ export function useDemoTutor() {
         });
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message });
-        if (res.canvas_draw) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
+        if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
         applyVisualCue(res); // backend may ask to show/hide the supporting visual
         speakTutor(res.message); // voice the reply — same verbatim text shown in chat
         return res;
       } catch (err) {
+        addTranscriptMessage({ role: 'ai', text: TUTOR_UNAVAILABLE }); // surface the failure in the chat
         addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Tutor unavailable.') });
         return null;
       }
@@ -156,10 +162,11 @@ export function useDemoTutor() {
         text: res.tutor.tutor_message,
         meta: res.tutor.evaluation,
       });
-      if (res.canvas_draw) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
+      if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
       speakTutor(res.tutor.tutor_message); // voice the reply — same verbatim text shown in chat
       return res;
     } catch (err) {
+      addTranscriptMessage({ role: 'ai', text: TUTOR_UNAVAILABLE }); // surface the failure in the chat
       addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Could not read the canvas.') });
       return null;
     }
@@ -185,6 +192,7 @@ export function useDemoTutor() {
         speakTutor(res.hint); // voice the hint — same verbatim text shown in chat
         return res;
       } catch (err) {
+        addTranscriptMessage({ role: 'ai', text: HINT_UNAVAILABLE }); // surface the failure in the chat
         addTrailEntry({ kind: 'hint', text: errorMessage(err, 'No hint available.') });
         return null;
       }
@@ -226,6 +234,7 @@ export function useDemoTutor() {
           const canvasRes = await submitCanvas(sessionId, png);
           canvasSnapshotId = canvasRes.submission_id;
           console.log('← /canvas/submit', { submission_id: canvasRes.submission_id, ocr: canvasRes.ocr, tutor: canvasRes.tutor });
+          if (canvasRes.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(canvasRes.canvas_draw);
           addTrailEntry({
             kind: 'canvas',
             text: canvasRes.ocr.raw_ocr_text || canvasRes.ocr.detected_equation || 'Canvas submitted.',
@@ -259,7 +268,7 @@ export function useDemoTutor() {
         console.groupEnd();
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message });
-        if (res.canvas_draw) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
+        if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
         applyVisualCue(res); // backend may ask to show/hide the supporting visual
         // Speak exactly what's shown in the chat. The backend's message_voice can
         // carry the same meaning in different words ("we are close" vs "you're
@@ -270,6 +279,7 @@ export function useDemoTutor() {
       } catch (err) {
         console.warn('✗ /interaction failed:', err);
         console.groupEnd();
+        addTranscriptMessage({ role: 'ai', text: TUTOR_UNAVAILABLE }); // surface the failure in the chat
         addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Tutor unavailable.') });
         return null;
       }

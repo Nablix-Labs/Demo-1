@@ -54,6 +54,7 @@ class SessionRecord(BaseModel):
     student_id: StudentId
     concept_id: ConceptId
     current_phase: Phase
+    previous_phase: Phase | None = None
     current_question: str
     question_id: QuestionId
     question_number: int
@@ -73,7 +74,10 @@ class SessionRecord(BaseModel):
     attempt_count: int = 0
     question_completed: bool = False
     conversation_history: list[ConversationMessage] = Field(default_factory=list)
+    scaffold_step_number: int = 0
+    rescue_mode_active: bool = False
+    mastery_check_question_count: int = 0
     # Functional fields the guide omits but the backend needs.
     status: Literal["started", "ended"]
-    mode: Literal["mock", "live"]
+    mode: Literal["inprocess"] = "inprocess"
     canvas_submissions: list[CanvasSubmissionRecord] = Field(default_factory=list)

@@ -9,8 +9,23 @@ const repo = 'Numera-ui';
 // Static export for a self-hosted deploy under a subpath (e.g. nginx on the VM
 // serving the SPA at http://<host>/app/). Set EXPORT_BASE_PATH="/app" at build.
 const exportBasePath = process.env.EXPORT_BASE_PATH;
+const isExport = isPages || Boolean(exportBasePath);
+
+// Auth server host to proxy to. The platform auth API doesn't send CORS headers,
+// so the browser reaches it same-origin via /nablix-auth (see lib/auth/authApi).
+const authUpstream = process.env.NABLIX_AUTH_UPSTREAM || 'https://nablix.ai:8080';
 
 const nextConfig = {
+  // Dev/server-mode proxy for the auth server (rewrites don't apply to static
+  // `output: export`, so in production nginx must proxy /nablix-auth the same
+  // way it already proxies /api).
+  ...(isExport
+    ? {}
+    : {
+        async rewrites() {
+          return [{ source: '/nablix-auth/:path*', destination: `${authUpstream}/:path*` }];
+        },
+      }),
   ...(isPages
     ? {
         output: 'export',

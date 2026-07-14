@@ -21,6 +21,7 @@ import { useNumeraStore, type DrawnItem } from '@/store/useNumeraStore';
 import { uid } from '@/lib/uid';
 import TutorLayer from './TutorLayer';
 import TutorMathOverlay from './TutorMathOverlay';
+import { useTutorRevealSync } from '@/store/useTutorReveal';
 
 interface DrawingCanvasProps {
   onExportReady?: (exportFn: () => string | null) => void;
@@ -40,6 +41,9 @@ export default function DrawingCanvas({ onExportReady }: DrawingCanvasProps) {
   const draftRef = useRef<DrawnItem | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 800, height: 600 });
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Sequence tutor marks so they draw on like handwriting (see useTutorReveal).
+  useTutorRevealSync();
 
   const setDraftItem = useCallback((item: DrawnItem | null) => {
     draftRef.current = item;

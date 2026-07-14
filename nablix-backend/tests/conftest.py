@@ -12,19 +12,22 @@ adapter path without leaving the process.
 import pytest
 
 from app.adapters import provider
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
 
 
 @pytest.fixture(autouse=True)
 def force_mock_adapters(monkeypatch):
+    monkeypatch.setenv("NABLIX_USE_OPENAI_AI_ENGINE", "false")
+    get_settings.cache_clear()
+    test_settings = Settings(
+        use_mock_voice=True,
+        use_mock_vision=True,
+        use_openai_ai_engine=False,
+    )
     monkeypatch.setattr(
         provider,
         "get_settings",
-        lambda: Settings(
-            use_mock_tutor=True,
-            use_mock_rag=True,
-            use_mock_student_model=True,
-            use_mock_voice=True,
-            use_mock_vision=True,
-        ),
+        lambda: test_settings,
     )
+    yield
+    get_settings.cache_clear()
