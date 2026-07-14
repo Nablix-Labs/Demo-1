@@ -927,6 +927,31 @@ def test_canvas_math_review_suppresses_feedback_and_annotations_in_phase_3() -> 
     assert response.annotation_intents == []
 
 
+def test_canvas_math_review_marks_first_mistake_in_diagnostic_phase() -> None:
+    response = classify_student_response(
+        ClassificationRequest(
+            question="x + 4 = 9",
+            correct_answer="x = 5",
+            student_input="x = 9 - 4\nx = 4",
+            current_phase="DIAGNOSTIC",
+            input_source="CANVAS",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+            canvas_regions=[
+                _canvas_region("step-1", "x = 9 - 4", 0.95),
+                _canvas_region("step-2", "x = 4", 0.95),
+            ],
+        )
+    )
+
+    assert response.mistake_classification is not None
+    assert response.mistake_classification.status == "mistake_found"
+    assert response.mistake_classification.mistake_step_id == "step-2"
+    assert response.canvas_feedback.has_feedback is True
+    assert [intent.kind for intent in response.annotation_intents] == ["circle_target"]
+
+
 def test_tutor_adapter_maps_canvas_mistake_to_backend_result() -> None:
     adapter = TutorEngineServiceAdapter(Settings(use_openai_ai_engine=False))
     result = adapter._respond(
