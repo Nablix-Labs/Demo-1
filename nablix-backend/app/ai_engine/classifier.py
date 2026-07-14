@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from pydantic import Field
@@ -62,6 +63,16 @@ class ClassificationRequest(StrictSchema):
     conversation_history: list[ConversationMessage] = Field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class TutorDecision:
+    intent: IntentType
+    evaluation: EvaluationCategory | None
+    error_type: ErrorType | None
+    response_strategy: ResponseStrategy
+    hint_level: HintLevel | None
+    canvas_review: CanvasMathReview | None
+
+
 def classify_student_response(request: ClassificationRequest) -> TutorResponse:
     rules: ClassifierRulesConfig = load_classifier_rules()
     settings: Settings = get_settings()
@@ -70,15 +81,19 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
     intent: IntentType = detect_student_intent(request.student_input, rules)
 
     if safety_check.passed is False:
-        return build_tutor_response(
-            request=request,
-            rules=rules,
-            safety_check=safety_check,
+        safety_decision = TutorDecision(
             intent=intent,
             evaluation=None,
             error_type=None,
             response_strategy="SAFETY_RESPONSE",
             hint_level=None,
+            canvas_review=None,
+        )
+        return build_tutor_response(
+            request=request,
+            rules=rules,
+            safety_check=safety_check,
+            decision=safety_decision,
             answer_reveal_allowed=False,
             confidence=rules.confidence.safety_response,
             tutor_message_override=None,
@@ -117,24 +132,35 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
         current_hint_level=request.current_hint_level,
         attempt_count=request.attempt_count,
     )
-    openai_message: OpenAITutorMessage | None = build_tutor_message_with_openai(
+    decision = build_tutor_decision(
         request=request,
+        rules=rules,
         intent=intent,
         evaluation=evaluation,
         error_type=error_type,
         response_strategy=response_strategy,
         hint_level=hint_level,
+        confidence=rules.confidence.standard_response,
+    )
+    canvas_context = build_canvas_wording_context(
+        decision.canvas_review,
+        request.canvas_regions,
+    )
+    openai_message: OpenAITutorMessage | None = build_tutor_message_with_openai(
+        request=request,
+        intent=decision.intent,
+        evaluation=decision.evaluation,
+        error_type=decision.error_type,
+        response_strategy=decision.response_strategy,
+        hint_level=decision.hint_level,
+        canvas_context=canvas_context,
         openai_client=openai_client,
     )
     return build_tutor_response(
         request=request,
         rules=rules,
         safety_check=safety_check,
-        intent=intent,
-        evaluation=evaluation,
-        error_type=error_type,
-        response_strategy=response_strategy,
-        hint_level=hint_level,
+        decision=decision,
         answer_reveal_allowed=False,
         confidence=rules.confidence.standard_response,
         tutor_message_override=openai_message.tutor_message if openai_message is not None else None,
@@ -228,6 +254,7 @@ def build_tutor_message_with_openai(
     error_type: ErrorType | None,
     response_strategy: ResponseStrategy,
     hint_level: HintLevel | None,
+    canvas_context: dict[str, object] | None,
     openai_client: OpenAIAIEngineClient | None,
 ) -> OpenAITutorMessage | None:
     if openai_client is None:
@@ -236,7 +263,7 @@ def build_tutor_message_with_openai(
         return None
     if intent in {"REQUESTING_ANSWER", "ATTEMPTING_OVERRIDE"}:
         return None
-    if request.input_source == "CANVAS":
+    if request.input_source == "CANVAS" and canvas_context is None:
         return None
 
     try:
@@ -249,6 +276,7 @@ def build_tutor_message_with_openai(
             hint_level=hint_level,
             phase=request.current_phase,
             conversation_history=request.conversation_history,
+            canvas_context=canvas_context,
         )
     except AdapterError as error:
         logger.warning(
@@ -415,23 +443,18 @@ def select_hint_level(
     return 3
 
 
-def build_tutor_response(
+def build_tutor_decision(
     request: ClassificationRequest,
     rules: ClassifierRulesConfig,
-    safety_check: SafetyCheck,
     intent: IntentType,
     evaluation: EvaluationCategory | None,
     error_type: ErrorType | None,
     response_strategy: ResponseStrategy,
     hint_level: HintLevel | None,
-    answer_reveal_allowed: bool,
     confidence: float,
-    tutor_message_override: str | None,
-    voice_message_override: str | None,
-) -> TutorResponse:
+) -> TutorDecision:
     canvas_review: CanvasMathReview | None = None
-    canvas_review_intents: set[IntentType] = {"SUBMITTING_ANSWER"}
-    if request.input_source == "CANVAS" and intent in canvas_review_intents:
+    if request.input_source == "CANVAS" and intent == "SUBMITTING_ANSWER":
         canvas_review = review_canvas_math(
             question=request.question,
             correct_answer=request.correct_answer,
@@ -440,6 +463,7 @@ def build_tutor_response(
             config=rules.canvas_review,
             confidence=confidence,
         )
+
     effective_error_type: ErrorType | None = (
         canvas_review.error_type
         if canvas_review is not None and canvas_review.error_type is not None
@@ -452,6 +476,7 @@ def build_tutor_response(
     effective_evaluation: EvaluationCategory | None = evaluation
     if canvas_mistake_found and evaluation == "CORRECT":
         effective_evaluation = "PARTIALLY_CORRECT"
+
     effective_response_strategy: ResponseStrategy = response_strategy
     effective_hint_level: HintLevel | None = hint_level
     if canvas_mistake_found:
@@ -467,29 +492,82 @@ def build_tutor_response(
             current_hint_level=request.current_hint_level,
             attempt_count=request.attempt_count,
         )
+
+    return TutorDecision(
+        intent=intent,
+        evaluation=effective_evaluation,
+        error_type=effective_error_type,
+        response_strategy=effective_response_strategy,
+        hint_level=effective_hint_level,
+        canvas_review=canvas_review,
+    )
+
+
+def build_canvas_wording_context(
+    canvas_review: CanvasMathReview | None,
+    canvas_regions: list[CanvasTextRegion],
+) -> dict[str, object] | None:
+    if canvas_review is None:
+        return None
+    classification = canvas_review.mistake_classification
+    if classification.status != "mistake_found" or classification.mistake_step_id is None:
+        return None
+
+    target_index: int | None = None
+    for index, region in enumerate(canvas_regions):
+        if region.step_id == classification.mistake_step_id:
+            target_index = index
+            break
+    if target_index is None:
+        return None
+
+    return {
+        "channel": "CANVAS",
+        "mistake_step_id": classification.mistake_step_id,
+        "previous_step": canvas_regions[target_index - 1].text if target_index > 0 else None,
+        "incorrect_step": canvas_regions[target_index].text,
+        "target_text": classification.target_text,
+        "feedback_goal": canvas_review.tutor_feedback,
+        "answer_reveal_allowed": False,
+    }
+
+
+def build_tutor_response(
+    request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
+    safety_check: SafetyCheck,
+    decision: TutorDecision,
+    answer_reveal_allowed: bool,
+    confidence: float,
+    tutor_message_override: str | None,
+    voice_message_override: str | None,
+) -> TutorResponse:
+    canvas_review: CanvasMathReview | None = decision.canvas_review
     fallback_message: str = build_tutor_message(
-        intent,
-        effective_evaluation,
-        effective_error_type,
-        effective_response_strategy,
+        decision.intent,
+        decision.evaluation,
+        decision.error_type,
+        decision.response_strategy,
         request.attempt_count,
         rules,
     )
-    if canvas_review is not None and canvas_review.tutor_feedback is not None:
-        tutor_message: str = canvas_review.tutor_feedback
-    else:
-        tutor_message = tutor_message_override if tutor_message_override is not None else fallback_message
+    canvas_fallback: str | None = (
+        canvas_review.tutor_feedback if canvas_review is not None else None
+    )
+    tutor_message: str = (
+        tutor_message_override
+        if tutor_message_override is not None
+        else canvas_fallback or fallback_message
+    )
     voice_message: str = voice_message_override if voice_message_override is not None else tutor_message
-    if canvas_review is not None and canvas_review.tutor_feedback is not None:
-        voice_message = tutor_message
     event: StudentModelEvent = build_student_model_event(
-        effective_evaluation,
-        effective_error_type,
-        effective_hint_level,
+        decision.evaluation,
+        decision.error_type,
+        decision.hint_level,
     )
     visual_cue: VisualCue = select_visual_cue(
-        error_type=effective_error_type,
-        response_strategy=effective_response_strategy,
+        error_type=decision.error_type,
+        response_strategy=decision.response_strategy,
         current_phase=request.current_phase,
         rules=rules,
     )
@@ -506,14 +584,14 @@ def build_tutor_response(
     )
 
     response: TutorResponse = TutorResponse(
-        evaluation=effective_evaluation,
-        error_type=effective_error_type,
-        intent=intent,
-        response_strategy=effective_response_strategy,
+        evaluation=decision.evaluation,
+        error_type=decision.error_type,
+        intent=decision.intent,
+        response_strategy=decision.response_strategy,
         tutor_message=tutor_message,
         tutor_message_voice_optimised=voice_message,
         voice_optimised=True,
-        hint_level=effective_hint_level,
+        hint_level=decision.hint_level,
         scaffold_steps_delivered=[],
         visual_cue=visual_cue,
         canvas_feedback=canvas_feedback,
