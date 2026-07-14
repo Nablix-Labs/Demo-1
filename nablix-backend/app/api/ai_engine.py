@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.ai_engine.classifier import ClassificationRequest, classify_student_response
 from app.ai_engine.schemas import CanvasTextRegion, HintLevel, InputSource, LearningPhase, TutorResponse
+from app.models.adapters import ConversationMessage
 
 
 router = APIRouter()
@@ -24,6 +25,7 @@ class AiEngineClassifyRequest(BaseModel):
     max_hint_results: int = Field(default=3, ge=1)
     exclude_content_ids: list[str] = Field(default_factory=list)
     canvas_regions: list[CanvasTextRegion] = Field(default_factory=list)
+    conversation_history: list[ConversationMessage] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
@@ -65,6 +67,7 @@ def _classification_request_from(request: AiEngineClassifyRequest) -> Classifica
         max_hint_results=request.max_hint_results,
         exclude_content_ids=request.exclude_content_ids,
         canvas_regions=request.canvas_regions,
+        conversation_history=request.conversation_history,
     )
 
 

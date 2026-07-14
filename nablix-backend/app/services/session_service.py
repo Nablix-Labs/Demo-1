@@ -1,6 +1,6 @@
 from fastapi import HTTPException
 
-from app.models.adapters import VisionOCRResult
+from app.models.adapters import ConversationMessage, VisionOCRResult
 from app.models.canvas import CanvasSubmissionRecord
 from app.models.fields import Phase
 from app.models.session import (
@@ -237,6 +237,8 @@ async def record_canvas_submission(
     student_id: str,
     record: CanvasSubmissionRecord,
     attempt_count: int,
+    question_completed: bool,
+    conversation_history: list[ConversationMessage],
 ) -> SessionRecord:
     """Append a reviewed canvas submission and persist its attempt count."""
 
@@ -251,6 +253,8 @@ async def record_canvas_submission(
         update={
             "canvas_submissions": [*session.canvas_submissions, record],
             "attempt_count": attempt_count,
+            "question_completed": question_completed,
+            "conversation_history": conversation_history,
         }
     )
     # This read-modify-write is safe only while the mock backend uses one worker.
@@ -269,6 +273,30 @@ def increment_hint_count(session_id: str) -> int:
     return new_count
 
 
+def restore_interaction_progress(
+    session_id: str,
+    student_id: str,
+    attempt_count: int | None,
+    question_completed: bool | None,
+    conversation_history: list[ConversationMessage],
+) -> SessionRecord:
+    """Apply orchestration-owned progress after stateless session recovery."""
+
+    session: SessionRecord = _get_owned_session(session_id, student_id)
+    updates: dict[str, object] = {}
+    if attempt_count is not None:
+        updates["attempt_count"] = max(session.attempt_count, attempt_count)
+    if question_completed is not None:
+        updates["question_completed"] = session.question_completed or question_completed
+    if len(conversation_history) > 0:
+        updates["conversation_history"] = conversation_history
+    if len(updates) == 0:
+        return session
+    updated_session: SessionRecord = session.model_copy(update=updates)
+    _sessions[session_id] = updated_session
+    return updated_session
+
+
 def update_interaction_state(
     session_id: str,
     student_id: str,
@@ -281,7 +309,7 @@ def update_interaction_state(
     show_visual_cue: bool,
     show_scaffold_panel: bool,
     scaffold_steps: list[str],
-    transition_updates: dict[str, object] | None = None,
+    transition_updates: dict[str, object],
 ) -> SessionRecord:
     """Update frontend-facing session state after one interaction turn.
 
@@ -313,7 +341,7 @@ def update_interaction_state(
             "show_visual_cue": show_visual_cue,
             "show_scaffold_panel": show_scaffold_panel,
             "scaffold_steps": scaffold_steps,
-            **(transition_updates or {}),
+            **transition_updates,
         }
     )
     _sessions[session_id] = updated_session

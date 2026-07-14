@@ -35,6 +35,12 @@ class AdapterContext(BaseModel):
     detected_steps: list[str] = Field(default_factory=list)
     ocr_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     canvas_regions: list["OCRTextRegion"] = Field(default_factory=list)
+    conversation_history: list["ConversationMessage"] = Field(default_factory=list)
+
+
+class ConversationMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
 
 
 class RetrievedDocument(BaseModel):

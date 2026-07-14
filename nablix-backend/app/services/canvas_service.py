@@ -5,9 +5,11 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from app.adapters.provider import get_adapters
+from app.ai_engine.classifier_config import ClassifierRulesConfig, load_classifier_rules
 from app.core.config import get_settings
 from app.models.adapters import (
     AdapterContext,
+    ConversationMessage,
     SafetyCheckResult,
     TutorResult,
     VisionOCRResult,
@@ -74,7 +76,14 @@ async def submit_canvas(request: CanvasSubmitRequest) -> CanvasSubmitResponse:
 
     written_work = "\n".join(ocr.detected_steps) or ocr.raw_ocr_text
     message = "\n".join(part for part in [written_work, request.transcript] if part)
-    attempt_count = session.attempt_count + 1
+    rules: ClassifierRulesConfig = load_classifier_rules()
+    attempt_count: int = session.attempt_count + 1
+    recent_history: list[ConversationMessage] = (
+        session.conversation_history[-rules.conversation_rules.max_recent_messages :]
+        if rules.conversation_rules.max_recent_messages > 0
+        else []
+    )
+
     context = AdapterContext(
         session_id=request.session_id,
         student_id=request.student_id,
@@ -93,6 +102,7 @@ async def submit_canvas(request: CanvasSubmitRequest) -> CanvasSubmitResponse:
         detected_steps=ocr.detected_steps,
         ocr_confidence=ocr.confidence,
         canvas_regions=canvas_regions,
+        conversation_history=recent_history,
     )
 
     tutor_started = perf_counter()
@@ -121,11 +131,22 @@ async def submit_canvas(request: CanvasSubmitRequest) -> CanvasSubmitResponse:
         latency=latency,
         submitted_at=datetime.now(timezone.utc),
     )
+    updated_history: list[ConversationMessage] = [
+        *session.conversation_history,
+        ConversationMessage(role="user", content=message),
+        ConversationMessage(role="assistant", content=tutor.tutor_message),
+    ]
+    if rules.conversation_rules.max_recent_messages == 0:
+        updated_history = []
+    else:
+        updated_history = updated_history[-rules.conversation_rules.max_recent_messages :]
     await record_canvas_submission(
         request.session_id,
         request.student_id,
         record,
         reviewed_attempt_count,
+        session.question_completed or tutor.evaluation == "CORRECT",
+        updated_history,
     )
 
     return CanvasSubmitResponse(

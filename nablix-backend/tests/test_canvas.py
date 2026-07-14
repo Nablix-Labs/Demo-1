@@ -29,6 +29,7 @@ def _start_session(student_id: str) -> str:
             "student_id": student_id,
             "concept_id": "ALG_LINEAR_ONE_STEP",
             "interaction_mode": "TEXT",
+            "initial_phase": "GUIDED_PRACTICE",
         },
     )
     assert response.status_code == 200
@@ -72,6 +73,10 @@ def test_canvas_submit_returns_mock_ocr_result() -> None:
     assert body["ocr"]["provider"] == "mock"
     assert body["ocr"]["detected_shapes"] == []
     assert body["tutor"]["tutor_message"]
+    assert body["tutor"]["canvas_feedback"]["has_feedback"] is True
+    assert [
+        step["evaluation"] for step in body["tutor"]["canvas_feedback"]["step_feedback"]
+    ] == ["CORRECT", "CORRECT", "CORRECT"]
     assert body["canvas_draw"] == []
     assert body["latency"]["total_latency_ms"] >= 0
     assert {"ocr_latency_ms", "tutor_latency_ms"} <= body["latency"].keys()
@@ -123,7 +128,7 @@ def test_canvas_submit_sends_full_ocr_context_and_forwards_events(
     context = captured_contexts[0]
     assert context.question == "Solve for x: x + 4 = 9"
     assert context.correct_answer == "x = 5"
-    assert context.current_phase == "DIAGNOSTIC"
+    assert context.current_phase == "GUIDED_PRACTICE"
     assert context.attempt_count == 1
     assert context.detected_equation == "x + 4 = 9"
     assert context.detected_steps == ["x + 4 = 9", "x = 9 - 4", "x = 5"]

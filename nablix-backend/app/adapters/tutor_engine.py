@@ -7,7 +7,12 @@ returns the frontend-facing tutoring decision fields.
 
 from typing import cast
 
-from app.ai_engine.classifier import ClassificationRequest, classify_student_response
+from app.ai_engine.classifier import (
+    ClassificationRequest,
+    classify_student_response,
+    contains_answer_reveal,
+)
+from app.ai_engine.classifier_config import load_classifier_rules
 from app.ai_engine.schemas import (
     CanvasTextRegion,
     HintLevel,
@@ -20,6 +25,8 @@ from app.models.adapters import (
     AdapterContext,
     AnnotationIntent,
     CanvasFeedback,
+    CanvasStepFeedback,
+    HighlightInstruction,
     OCRTextRegion,
     RAGResult,
     SafetyCheckResult,
@@ -100,6 +107,7 @@ class TutorEngineServiceAdapter:
                     max_hint_results=3,
                     exclude_content_ids=[],
                     canvas_regions=_coerce_canvas_regions(context.canvas_regions),
+                    conversation_history=context.conversation_history,
                 )
             )
             return _tutor_result_from_ai_response(ai_response)
@@ -131,6 +139,11 @@ class TutorEngineServiceAdapter:
             ],
         )
 
+    def _mock_response(self, request: TutorEngineRequest) -> TutorResult:
+        """Preserve the previous adapter entry point for existing callers."""
+
+        return self._respond(request)
+
 
 class MockTutorEngineAdapter(TutorEngineServiceAdapter):
     """Compatibility wrapper for tests or imports that need a mock-only adapter."""
@@ -155,7 +168,27 @@ def _tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:
             cue_type=response.visual_cue.cue_type,
             description=response.visual_cue.description,
         ),
-        canvas_feedback=CanvasFeedback(),
+        canvas_feedback=CanvasFeedback(
+            has_feedback=response.canvas_feedback.has_feedback,
+            step_feedback=[
+                CanvasStepFeedback(
+                    step_number=step.step_number,
+                    evaluation=step.evaluation,
+                    error_type=step.error_type,
+                    feedback=step.feedback,
+                )
+                for step in response.canvas_feedback.step_feedback
+            ],
+            highlight_instruction=(
+                HighlightInstruction(
+                    step_number=response.canvas_feedback.highlight_instruction.step_number,
+                    highlight_type=response.canvas_feedback.highlight_instruction.highlight_type,
+                    colour=response.canvas_feedback.highlight_instruction.colour,
+                )
+                if response.canvas_feedback.highlight_instruction is not None
+                else None
+            ),
+        ),
         mistake_classification=(
             TutorMistakeClassification(
                 status=response.mistake_classification.status,
@@ -212,7 +245,11 @@ def _tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:
 _CONTENT_STRATEGIES = {"GUIDED_HINT", "SCAFFOLD", "PROVIDE_WORKED_EXAMPLE"}
 
 
-def apply_retrieved_content(result: TutorResult, rag: RAGResult) -> TutorResult:
+def apply_retrieved_content(
+    result: TutorResult,
+    rag: RAGResult,
+    correct_answer: str,
+) -> TutorResult:
     """Use the top retrieved document as the tutor message for content-bearing
     strategies. No documents or a non-content strategy → leave the classifier's
     message untouched. Called by run_tutor_pipeline after classification, so the
@@ -225,4 +262,20 @@ def apply_retrieved_content(result: TutorResult, rag: RAGResult) -> TutorResult:
         return result
 
     content = top_document.content
-    return result.model_copy(update={"tutor_message": content, "tutor_message_voice": content})
+    updated_result: TutorResult = result.model_copy(
+        update={"tutor_message": content, "tutor_message_voice": content}
+    )
+    rules = load_classifier_rules()
+    if result.answer_reveal_allowed is False and contains_answer_reveal(
+        content,
+        correct_answer,
+        rules,
+    ):
+        safe_message: str = rules.answer_reveal_guardrail.safe_message
+        return updated_result.model_copy(
+            update={
+                "tutor_message": safe_message,
+                "tutor_message_voice": safe_message,
+            }
+        )
+    return updated_result

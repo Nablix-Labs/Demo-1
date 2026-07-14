@@ -75,6 +75,7 @@ async def process_hint(request: HintRequest) -> HintResponse:
         question_number=session.question_number,
         current_hint_level=_current_hint_level_from(session.hint_count),
         concept_id=session.concept_id,
+        conversation_history=session.conversation_history,
     )
     _, _, tutor = await run_tutor_pipeline(context)
     adapters = get_adapters()

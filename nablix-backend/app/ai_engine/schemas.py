@@ -147,6 +147,14 @@ class CanvasAnnotationIntent(StrictSchema):
     placement: AnnotationPlacement | None
 
 
+class CanvasMathReview(StrictSchema):
+    error_type: ErrorType | None
+    tutor_feedback: str | None
+    canvas_feedback: CanvasFeedback
+    mistake_classification: CanvasMistakeClassification
+    annotation_intents: list[CanvasAnnotationIntent]
+
+
 class SafetyCheck(StrictSchema):
     passed: StrictBool
     flag_type: str | None

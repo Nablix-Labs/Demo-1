@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.models.adapters import VisionOCRResult
+from app.models.adapters import ConversationMessage, VisionOCRResult
 from app.models.canvas import CanvasSubmissionRecord
 from app.models.fields import (
     ConceptId,
@@ -71,9 +71,9 @@ class SessionRecord(BaseModel):
     allow_text_input: bool = True
     allow_voice_input: bool = True
     hint_count: int
-    # Phase-scoped counters reset by 6.7 transitions (see PHASE_COUNTER_RESETS).
     attempt_count: int = 0
     question_completed: bool = False
+    conversation_history: list[ConversationMessage] = Field(default_factory=list)
     scaffold_step_number: int = 0
     rescue_mode_active: bool = False
     mastery_check_question_count: int = 0

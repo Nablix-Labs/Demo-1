@@ -4,8 +4,8 @@ import logging
 from fastapi.testclient import TestClient
 import pytest
 
-from app.adapters.tutor_engine import TutorEngineServiceAdapter
-from app.ai_engine import openai_client
+from app.adapters.tutor_engine import TutorEngineServiceAdapter, apply_retrieved_content
+from app.ai_engine import classifier, openai_client
 from app.ai_engine.classifier import ClassificationRequest, classify_student_response
 from app.ai_engine.prompt_registry import (
     build_openai_tutor_messages,
@@ -17,7 +17,15 @@ from app.ai_engine.schemas import CanvasTextRegion
 from app.core.config import Settings, get_settings
 from app.core.logger import StructuredJsonFormatter
 from app.main import app, prompt_registry as startup_prompt_registry
-from app.models.adapters import AdapterContext, OCRTextRegion, RAGResult, StudentModelResult, TutorEngineRequest
+from app.models.adapters import (
+    AdapterContext,
+    ConversationMessage,
+    OCRTextRegion,
+    RAGResult,
+    RetrievedDocument,
+    StudentModelResult,
+    TutorEngineRequest,
+)
 
 
 client = TestClient(app)
@@ -137,6 +145,7 @@ def test_ai_engine_can_use_openai_when_feature_flag_is_enabled(monkeypatch) -> N
         assert messages[-1]["content"] not in messages[1]["content"]
         assert request_body["text"]["format"]["type"] == "json_schema"
         assert request_body["text"]["format"]["strict"] is True
+        assert request_body["store"] is False
         assert "schema" in request_body["text"]["format"]
         assert "prompt_cache_key" not in request_body
         assert "cache_control" not in json.dumps(request_body)
@@ -210,12 +219,14 @@ def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> 
         model="gpt-test",
         timeout_seconds=1,
         prompt_cache_key_enabled=False,
+        retry_count=0,
     )
     disabled_client.evaluate_answer(
         question="Solve for x: x + 4 = 9",
         correct_answer="x = 5",
         student_input="x = 13",
         phase="GUIDED_PRACTICE",
+        conversation_history=[],
     )
 
     enabled_client = openai_client.OpenAIAIEngineClient(
@@ -223,18 +234,79 @@ def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> 
         model="gpt-test",
         timeout_seconds=1,
         prompt_cache_key_enabled=True,
+        retry_count=0,
     )
     enabled_client.evaluate_answer(
         question="Solve for x: x + 4 = 9",
         correct_answer="x = 5",
         student_input="x = 13",
         phase="GUIDED_PRACTICE",
+        conversation_history=[
+            ConversationMessage(role="assistant", content="Try the inverse operation.")
+        ],
     )
 
     assert "prompt_cache_key" not in request_bodies[0]
     assert len(request_bodies[1]["prompt_cache_key"]) == 64
     assert request_bodies[1]["prompt_cache_key"].isalnum()
     assert "cache_control" not in json.dumps(request_bodies[1])
+    assert request_bodies[1]["input"][3] == {
+        "role": "assistant",
+        "content": "Try the inverse operation.",
+    }
+
+
+def test_deterministic_correct_result_cannot_be_downgraded_by_openai(monkeypatch) -> None:
+    class _IncorrectOpenAIClient:
+        def evaluate_answer(self, **kwargs) -> openai_client.OpenAIAnswerEvaluation:
+            return openai_client.OpenAIAnswerEvaluation(evaluation="INCORRECT", confidence=0.9)
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _IncorrectOpenAIClient(),
+    )
+
+    response = classify_student_response(
+        ClassificationRequest(
+            question="Solve for x: x + 4 = 9",
+            correct_answer="x = 5",
+            student_input="x = 5",
+            current_phase="GUIDED_PRACTICE",
+            input_source="VOICE",
+            transcript_confidence=0.95,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.evaluation == "CORRECT"
+    assert response.tutor_message == "Correct. Nice work explaining your answer."
+
+
+def test_correct_answer_acknowledgement_is_sanitized_without_refusal(monkeypatch) -> None:
+    monkeypatch.setattr(
+        classifier,
+        "build_tutor_message",
+        lambda *args: "Correct, x = 5.",
+    )
+
+    response = classify_student_response(
+        ClassificationRequest(
+            question="Solve for x: x + 4 = 9",
+            correct_answer="x = 5",
+            student_input="x = 5",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.evaluation == "CORRECT"
+    assert response.tutor_message == "Correct. Nice work explaining your answer."
+    assert response.guardrail_check.passed is True
 
 
 def test_openai_prompt_builder_keeps_history_and_current_input_dynamic() -> None:
@@ -603,13 +675,10 @@ def test_ai_engine_marks_wrong_intermediate_answer_even_when_final_answer_is_cor
     assert response.mistake_classification.status == "mistake_found"
     assert response.mistake_classification.mistake_step_id == "step-2"
     assert response.mistake_classification.target_text == "6"
-    assert response.mistake_classification.replacement_text == "5"
-    assert [intent.kind for intent in response.annotation_intents] == [
-        "circle_target",
-        "write_correction",
-        "draw_arrow",
-    ]
-    assert response.annotation_intents[1].text == "x = 5"
+    assert response.mistake_classification.replacement_text is None
+    assert [intent.kind for intent in response.annotation_intents] == ["circle_target"]
+    assert response.evaluation == "PARTIALLY_CORRECT"
+    assert response.response_strategy == "GUIDED_HINT"
 
 
 def test_ai_engine_returns_uncertain_canvas_mistake_for_ambiguous_ocr() -> None:
@@ -656,6 +725,131 @@ def test_ai_engine_does_not_annotate_canvas_for_direct_answer_request() -> None:
     assert response.annotation_intents == []
 
 
+def test_canvas_math_review_accepts_subtraction_steps() -> None:
+    response = classify_student_response(
+        ClassificationRequest(
+            question="x - 4 = 9",
+            correct_answer="x = 13",
+            student_input="x - 4 = 9\nx = 9 + 4\nx = 13",
+            current_phase="GUIDED_PRACTICE",
+            input_source="CANVAS",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+            canvas_regions=[
+                _canvas_region("step-1", "x - 4 = 9", 0.95),
+                _canvas_region("step-2", "x = 9 + 4", 0.95),
+                _canvas_region("step-3", "x = 13", 0.95),
+            ],
+        )
+    )
+
+    assert response.mistake_classification is not None
+    assert response.mistake_classification.status == "no_mistake"
+    assert [step.evaluation for step in response.canvas_feedback.step_feedback] == [
+        "CORRECT",
+        "CORRECT",
+        "CORRECT",
+    ]
+
+
+def test_canvas_math_review_finds_first_multiplication_error() -> None:
+    response = classify_student_response(
+        ClassificationRequest(
+            question="3x = 12",
+            correct_answer="x = 4",
+            student_input="3x = 12\nx = 12 * 3\nx = 36",
+            current_phase="GUIDED_PRACTICE",
+            input_source="CANVAS",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+            canvas_regions=[
+                _canvas_region("step-1", "3x = 12", 0.95),
+                _canvas_region("step-2", "x = 12 * 3", 0.95),
+                _canvas_region("step-3", "x = 36", 0.95),
+            ],
+        )
+    )
+
+    assert response.mistake_classification is not None
+    assert response.mistake_classification.status == "mistake_found"
+    assert response.mistake_classification.mistake_step_id == "step-2"
+    assert response.error_type == "CONCEPTUAL_MISUNDERSTANDING"
+    assert response.canvas_feedback.highlight_instruction is not None
+    assert response.canvas_feedback.highlight_instruction.step_number == 2
+    assert [step.evaluation for step in response.canvas_feedback.step_feedback] == [
+        "CORRECT",
+        "INCORRECT",
+        "INCORRECT",
+    ]
+
+
+def test_canvas_math_review_accepts_division_steps() -> None:
+    response = classify_student_response(
+        ClassificationRequest(
+            question="x / 3 = 5",
+            correct_answer="x = 15",
+            student_input="x / 3 = 5\nx = 5 * 3\nx = 15",
+            current_phase="GUIDED_PRACTICE",
+            input_source="CANVAS",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+            canvas_regions=[
+                _canvas_region("step-1", "x / 3 = 5", 0.95),
+                _canvas_region("step-2", "x = 5 * 3", 0.95),
+                _canvas_region("step-3", "x = 15", 0.95),
+            ],
+        )
+    )
+
+    assert response.mistake_classification is not None
+    assert response.mistake_classification.status == "no_mistake"
+
+
+def test_canvas_math_review_rejects_unsupported_ocr_expression() -> None:
+    response = classify_student_response(
+        ClassificationRequest(
+            question="x + 4 = 9",
+            correct_answer="x = 5",
+            student_input="sqrt(x) = 5",
+            current_phase="GUIDED_PRACTICE",
+            input_source="CANVAS",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+            canvas_regions=[_canvas_region("step-1", "sqrt(x) = 5", 0.95)],
+        )
+    )
+
+    assert response.mistake_classification is not None
+    assert response.mistake_classification.status == "uncertain"
+    assert response.canvas_feedback.has_feedback is False
+    assert response.annotation_intents == []
+
+
+def test_canvas_math_review_suppresses_feedback_and_annotations_in_phase_3() -> None:
+    response = classify_student_response(
+        ClassificationRequest(
+            question="x + 4 = 9",
+            correct_answer="x = 5",
+            student_input="x = 9 + 4",
+            current_phase="INDEPENDENT_PRACTICE",
+            input_source="CANVAS",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+            canvas_regions=[_canvas_region("step-1", "x = 9 + 4", 0.95)],
+        )
+    )
+
+    assert response.mistake_classification is not None
+    assert response.mistake_classification.status == "mistake_found"
+    assert response.canvas_feedback.has_feedback is False
+    assert response.annotation_intents == []
+
+
 def test_tutor_adapter_maps_canvas_mistake_to_backend_result() -> None:
     adapter = TutorEngineServiceAdapter(Settings(use_openai_ai_engine=False))
     result = adapter._respond(
@@ -690,3 +884,58 @@ def test_tutor_adapter_maps_canvas_mistake_to_backend_result() -> None:
     assert result.mistake_classification is not None
     assert result.mistake_classification.status == "mistake_found"
     assert result.annotation_intents[0].kind == "circle_target"
+    assert result.canvas_feedback.has_feedback is True
+    assert result.canvas_feedback.highlight_instruction is not None
+    assert result.canvas_feedback.highlight_instruction.step_number == 2
+    assert result.canvas_feedback.step_feedback[1].error_type == "ARITHMETIC_ERROR"
+
+
+def test_retrieved_canvas_feedback_is_guarded_before_return() -> None:
+    adapter = TutorEngineServiceAdapter(Settings(use_mock_tutor=True, use_openai_ai_engine=False))
+    result = adapter._mock_response(
+        TutorEngineRequest(
+            context=AdapterContext(
+                session_id="SESSION001",
+                student_id="ST001",
+                message="x = 6",
+                question="x + 4 = 9",
+                correct_answer="x = 5",
+                current_phase="GUIDED_PRACTICE",
+                input_source="CANVAS",
+                attempt_count=1,
+                canvas_regions=[
+                    OCRTextRegion(
+                        step_id="step-1",
+                        text="x = 6",
+                        x=0.1,
+                        y=0.1,
+                        w=0.3,
+                        h=0.08,
+                        confidence=0.95,
+                    )
+                ],
+            ),
+            rag=RAGResult(documents=[], retrieval_confidence=0.0),
+            student=StudentModelResult(
+                student_state="ACTIVE",
+                confidence=0.9,
+                mastery_level="FOUNDATION",
+                recommended_support="GUIDED_HINT",
+            ),
+        )
+    )
+    rag = RAGResult(
+        documents=[
+            RetrievedDocument(
+                title="Unsafe hint",
+                content="The answer is x = 5.",
+                source="curriculum",
+            )
+        ],
+        retrieval_confidence=0.99,
+    )
+
+    guarded = apply_retrieved_content(result, rag, "x = 5")
+
+    assert guarded.tutor_message == "I cannot give the final answer, but I can help you with the next step."
+    assert guarded.tutor_message_voice == guarded.tutor_message
