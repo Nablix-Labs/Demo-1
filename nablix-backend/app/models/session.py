@@ -73,6 +73,7 @@ class SessionRecord(BaseModel):
     hint_count: int
     # Phase-scoped counters reset by 6.7 transitions (see PHASE_COUNTER_RESETS).
     attempt_count: int = 0
+    question_completed: bool = False
     scaffold_step_number: int = 0
     rescue_mode_active: bool = False
     mastery_check_question_count: int = 0

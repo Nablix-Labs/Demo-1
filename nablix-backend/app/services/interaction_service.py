@@ -172,6 +172,11 @@ async def process_interaction(request: InteractionRequest) -> InteractionRespons
     )
     student_message = _student_message_from(request)
 
+    next_attempt_count = (
+        session.attempt_count + 1
+        if request.interaction_type == "ANSWER_SUBMISSION"
+        else session.attempt_count
+    )
     context = AdapterContext(
         session_id=request.session_id,
         student_id=request.student_id,
@@ -183,7 +188,9 @@ async def process_interaction(request: InteractionRequest) -> InteractionRespons
         current_phase=request.current_phase,
         input_source=request.input_source,
         transcript_confidence=request.transcript_confidence,
-        attempt_count=request.hint_count + 1,
+        attempt_count=next_attempt_count,
+        question_completed=session.question_completed,
+        question_number=session.question_number,
         current_hint_level=_current_hint_level_from(request.hint_count),
         concept_id=request.concept_id,
     )
@@ -227,7 +234,13 @@ async def process_interaction(request: InteractionRequest) -> InteractionRespons
     recommended = student.recommended_entry_phase or tutor.next_phase_recommendation
     new_phase = resolve_transition(session.current_phase, recommended)
 
-    transition_updates: dict[str, object] | None = None
+    completed = tutor.evaluation == "CORRECT"
+    # Persisted every turn: the real attempt counter and completion state Sanya
+    # reads back on the next turn.
+    state_updates: dict[str, object] = {
+        "attempt_count": next_attempt_count,
+        "question_completed": completed,
+    }
     if new_phase is not None:
         # Fetch before committing any state: an Aditya failure raises here,
         # so the session (and its phase) is never touched — rollback for free.
@@ -235,12 +248,36 @@ async def process_interaction(request: InteractionRequest) -> InteractionRespons
         if fetched is None:
             raise QuestionFetchError(session.concept_id, new_phase)
         question_text, _correct_answer, question_id = fetched
-        transition_updates = {
-            "previous_phase": session.current_phase,
-            "current_question": question_text,
-            "question_id": question_id,
-            **PHASE_COUNTER_RESETS.get(new_phase, {}),
-        }
+        state_updates.update(
+            {
+                "previous_phase": session.current_phase,
+                "current_question": question_text,
+                "question_id": question_id,
+                "question_number": session.question_number + 1,
+                "attempt_count": 0,
+                "question_completed": False,
+                **PHASE_COUNTER_RESETS.get(new_phase, {}),
+            }
+        )
+    elif completed:
+        # Same phase: route to the next question on a correct answer. The
+        # Aditya stub serves one question per phase, so a same-id fetch just
+        # keeps question_completed=True until a transition swaps the question.
+        fetched = get_next_question(
+            session.concept_id, session.current_phase, session.question_id
+        )
+        if fetched is not None and fetched[2] != session.question_id:
+            question_text, _correct_answer, question_id = fetched
+            state_updates.update(
+                {
+                    "current_question": question_text,
+                    "question_id": question_id,
+                    "question_number": session.question_number + 1,
+                    "attempt_count": 0,
+                    "hint_count": 0,
+                    "question_completed": False,
+                }
+            )
 
     next_phase = new_phase if new_phase is not None else session.current_phase
     updated_session = update_interaction_state(
@@ -255,7 +292,7 @@ async def process_interaction(request: InteractionRequest) -> InteractionRespons
         tutor.visual_cue.show,
         len(scaffold_steps) > 0,
         scaffold_steps,
-        transition_updates=transition_updates,
+        transition_updates=state_updates,
     )
 
     return _response_from(

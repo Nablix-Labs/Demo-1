@@ -85,6 +85,8 @@ async def submit_canvas(request: CanvasSubmitRequest) -> CanvasSubmitResponse:
         input_source="CANVAS",
         transcript_confidence=request.transcript_confidence,
         attempt_count=attempt_count,
+        question_completed=session.question_completed,
+        question_number=session.question_number,
         current_hint_level=_current_hint_level_from(session.hint_count),
         concept_id=session.concept_id,
         detected_equation=ocr.detected_equation,

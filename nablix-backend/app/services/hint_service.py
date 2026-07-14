@@ -67,12 +67,14 @@ async def process_hint(request: HintRequest) -> HintResponse:
         student_id=request.student_id,
         message=f"Hint request for {request.question_id} ({request.concept_id}).",
         question=session.current_question,
-        correct_answer=correct_answer_for(request.question_id),
-        current_phase=request.current_phase,
+        correct_answer=correct_answer_for(session.question_id),
+        current_phase=session.current_phase,
         input_source="TEXT",
-        attempt_count=next_hint_level,
+        attempt_count=session.attempt_count,
+        question_completed=session.question_completed,
+        question_number=session.question_number,
         current_hint_level=_current_hint_level_from(session.hint_count),
-        concept_id=request.concept_id,
+        concept_id=session.concept_id,
     )
     _, _, tutor = await run_tutor_pipeline(context)
     adapters = get_adapters()

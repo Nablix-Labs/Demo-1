@@ -247,8 +247,14 @@ class _FakeStudentModelAdapter:
 
 
 class _FakeTutorAdapter:
-    def __init__(self, next_phase_recommendation: str | None = "GUIDED_PRACTICE") -> None:
+    def __init__(
+        self,
+        next_phase_recommendation: str | None = "GUIDED_PRACTICE",
+        evaluation: str = "PARTIALLY_CORRECT",
+    ) -> None:
         self.next_phase_recommendation = next_phase_recommendation
+        self.evaluation = evaluation
+        self.contexts: list[AdapterContext] = []
 
     async def evaluate(
         self,
@@ -256,8 +262,9 @@ class _FakeTutorAdapter:
         rag: RAGResult,
         student: StudentModelResult,
     ) -> TutorResult:
+        self.contexts.append(context)
         return TutorResult(
-            evaluation="PARTIALLY_CORRECT",
+            evaluation=self.evaluation,
             error_type="ARITHMETIC_ERROR",
             intent="SUBMITTING_ANSWER",
             response_strategy="SCAFFOLD",
@@ -307,12 +314,14 @@ def _fake_pipeline(
     monkeypatch,
     student_phase: str | None = None,
     tutor_phase: str | None = None,
+    evaluation: str = "PARTIALLY_CORRECT",
 ) -> _FakeStudentModelAdapter:
     """Patch the adapter bundle so Tamil/tutor phase recommendations are controlled."""
 
     student_model = _FakeStudentModelAdapter(recommended_entry_phase=student_phase)
     adapters = _FakeAdapters(
-        student_model, _FakeTutorAdapter(next_phase_recommendation=tutor_phase)
+        student_model,
+        _FakeTutorAdapter(next_phase_recommendation=tutor_phase, evaluation=evaluation),
     )
     monkeypatch.setattr(interaction_service, "get_adapters", lambda: adapters)
     return student_model
@@ -474,3 +483,48 @@ def test_build_retrieve_payload_uses_classified_fields() -> None:
     assert payload["error_type"] == "ARITHMETIC_ERROR"
     assert payload["hint_level"] == 2
     assert payload["input_source"] == "TEXT"
+
+
+def test_attempt_count_completion_and_question_routing(monkeypatch) -> None:
+    # Real per-question attempt counter, completion persistence, and
+    # next-question routing on transition (the Aditya stub serves one question
+    # per phase, so a same-phase CORRECT keeps the question but marks it done).
+    session_id = _start_session("ST030")
+    student_model = _FakeStudentModelAdapter()
+    tutor = _FakeTutorAdapter(next_phase_recommendation=None)
+    adapters = _FakeAdapters(student_model, tutor)
+    monkeypatch.setattr(interaction_service, "get_adapters", lambda: adapters)
+
+    def turn(**overrides) -> dict:
+        body = _interaction_body(session_id, "ST030", current_phase="DIAGNOSTIC", **overrides)
+        response = client.post("/interaction", json=body)
+        assert response.status_code == 200
+        return response.json()
+
+    assert turn()["attempt_count"] == 1
+    assert turn()["attempt_count"] == 2
+    assert tutor.contexts[-1].attempt_count == 2
+    assert tutor.contexts[-1].question_completed is False
+    assert tutor.contexts[-1].question_number == 1
+
+    # A hint request is not an attempt.
+    assert turn(interaction_type="HINT_REQUEST")["attempt_count"] == 2
+
+    # CORRECT, same phase: question stays (stub), completion is persisted.
+    tutor.evaluation = "CORRECT"
+    body = turn()
+    assert body["attempt_count"] == 3
+    assert body["question_id"] == "ALG_EQ_DIAG_001"
+    assert session_service._sessions[session_id].question_completed is True
+
+    # Next turn Sanya sees the completion flag; the transition then routes the
+    # new question and resets per-question counters.
+    tutor.next_phase_recommendation = "GUIDED_PRACTICE"
+    body = turn()
+    assert tutor.contexts[-1].question_completed is True
+    assert body["phase_changed"] is True
+    assert body["question_id"] == "ALG_EQ_GP_001"
+    assert body["attempt_count"] == 0
+    session = session_service._sessions[session_id]
+    assert session.question_number == 2
+    assert session.question_completed is False

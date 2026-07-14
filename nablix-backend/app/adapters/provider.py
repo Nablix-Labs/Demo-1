@@ -81,9 +81,9 @@ def get_adapters() -> AdapterSet:
 
     settings = get_settings()
     return AdapterSet(
-        tutor=TutorEngineServiceAdapter(settings),
-        rag=RAGServiceAdapterClient(settings),
-        student_model=StudentModelServiceAdapter(settings),
+        tutor=TutorEngineServiceAdapter(settings), # type: ignore
+        rag=RAGServiceAdapterClient(settings), # type: ignore
+        student_model=StudentModelServiceAdapter(settings), # type: ignore
         voice=VoiceServiceAdapterClient(settings),
         vision=_build_vision_adapter(settings),
         safety=MockSafetyServiceAdapter(),
