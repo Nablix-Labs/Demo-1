@@ -29,7 +29,7 @@ export const DEMO_PHASE = 'GUIDED_PRACTICE';
 
 export const api = axios.create({
   baseURL: BASE,
-  timeout: 10_000,
+  timeout: 30_000,
   headers: { 'Content-Type': 'application/json' },
 });
 
@@ -182,7 +182,7 @@ export interface InteractionResponse {
   hint_count: number;
   phase_indicator: string;
   /** Optional tutor drawing to render on the canvas alongside this reply. */
-  canvas_draw?: CanvasDrawPayload;
+  canvas_draw?: CanvasDrawPayload[];
   /** Whether to show the supporting visual cue after this turn. The backend also
    *  sends the richer `visual_cue` object; prefer that when present. */
   show_visual_cue?: boolean;

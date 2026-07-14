@@ -21,9 +21,6 @@ def force_mock_adapters(monkeypatch):
         provider,
         "get_settings",
         lambda: Settings(
-            use_mock_tutor=True,
-            use_mock_rag=True,
-            use_mock_student_model=True,
             use_mock_voice=True,
             use_mock_vision=True,
         ),

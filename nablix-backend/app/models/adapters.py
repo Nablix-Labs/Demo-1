@@ -29,6 +29,9 @@ class AdapterContext(BaseModel):
     attempt_count: int | None = None
     current_hint_level: int | None = None
     concept_id: str | None = None
+    detected_equation: str | None = None
+    detected_steps: list[str] = Field(default_factory=list)
+    ocr_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     canvas_regions: list["OCRTextRegion"] = Field(default_factory=list)
 
 
@@ -50,6 +53,8 @@ class StudentModelResult(BaseModel):
     confidence: float
     mastery_level: str
     recommended_support: str
+    # Contract 4 phase recommendation; the in-process stub leaves it None.
+    recommended_entry_phase: str | None = None
 
 
 class TutorEngineRequest(BaseModel):

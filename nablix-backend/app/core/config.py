@@ -7,10 +7,8 @@ class Settings(BaseSettings):
     app_name: str = "Nablix AI Math Tutor API"
     app_version: str = "1.0.0"
 
-    #Service URL's
+    # External service URLs
     tutor_engine_url: str = "http://localhost:8001"
-    rag_service_url: str = "http://localhost:8002" #aditya
-    student_model_url: str = "http://localhost:8003" #tamil
     voice_service_url: str = "http://localhost:8004" #chiru+aditya
     safety_service_url: str = "http://localhost:8004" #manjusha
     cors_allowed_origins: list[str] = [
@@ -24,9 +22,8 @@ class Settings(BaseSettings):
     vision_api_key: str = ""
 
     #Mock flags - True during sprint
+    # (the tutor has no flag: it always runs the in-process AI Engine)
     use_mock_tutor: bool = True
-    use_mock_rag: bool = True
-    use_mock_student_model: bool = True
     use_mock_voice: bool = True
     use_mock_vision: bool = True
 
@@ -38,6 +35,7 @@ class Settings(BaseSettings):
     use_openai_ai_engine: bool = False
     openai_ai_engine_model: str = "gpt-4o-mini"
     openai_request_timeout_seconds: int = 20
+    openai_prompt_cache_key_enabled: bool = False
     adapter_request_timeout_seconds: int = 20
     adapter_request_retry_count: int = 2
 

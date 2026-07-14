@@ -9,14 +9,16 @@
  */
 
 import { useEffect, type ReactNode } from 'react';
+import dynamic from 'next/dynamic';
 import { usePathname } from 'next/navigation';
-import ToolRail from './ToolRail';
-import MediaPanel from './MediaPanel';
 import AuthGate from './auth/AuthGate';
 import { useNumeraStore } from '@/store/useNumeraStore';
 
 // Routes that render on their own, without the tool rail or media panel.
 const FOCUS_ROUTES = ['/onboard', '/diagnostic', '/orientation', '/complete', '/consent', '/login', '/restricted'];
+
+const ToolRail = dynamic(() => import('./ToolRail'), { ssr: false });
+const MediaPanel = dynamic(() => import('./MediaPanel'), { ssr: false });
 
 export default function AppFrame({ children }: { children: ReactNode }) {
   const pathname = usePathname();

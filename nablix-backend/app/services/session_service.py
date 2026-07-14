@@ -1,8 +1,5 @@
-from typing import Literal
-
 from fastapi import HTTPException
 
-from app.core.config import get_settings
 from app.models.adapters import VisionOCRResult
 from app.models.canvas import CanvasSubmissionRecord
 from app.models.fields import Phase
@@ -13,6 +10,7 @@ from app.models.session import (
     SessionStartRequest,
     VoiceState,
 )
+from app.services.phase_transition import UI_STATE_FLAGS
 
 
 _sessions: dict[str, SessionRecord] = {}
@@ -42,9 +40,22 @@ def _session_not_found(session_id: str) -> HTTPException:
 # so the two can't drift. Replace with a real question bank when one exists.
 _DEMO_QUESTIONS: dict[str, tuple[str, str, int]] = {
     "ALG_EQ_DIAG_001": ("Solve for x: x + 4 = 9", "x = 5", 1),
+    "ALG_EQ_CO_001": ("Solve for x: x - 3 = 7", "x = 10", 1),
+    "ALG_EQ_GP_001": ("Solve for x: x + 6 = 10", "x = 4", 1),
+    "ALG_EQ_IP_001": ("Solve for x: 3x + 2 = 11", "x = 3", 1),
+    "ALG_EQ_REV_001": ("Solve for x: x / 2 = 8", "x = 16", 1),
 }
 _DEFAULT_QUESTION_ID = "ALG_EQ_DIAG_001"
 _DEMO_STUDENT_ID = "ST001"
+
+# Aditya stub data: (concept_id, phase) -> question_id into _DEMO_QUESTIONS.
+_PHASE_QUESTION_IDS: dict[tuple[str, Phase], str] = {
+    ("ALG_LINEAR_ONE_STEP", "DIAGNOSTIC"): "ALG_EQ_DIAG_001",
+    ("ALG_LINEAR_ONE_STEP", "CONCEPT_ORIENTATION"): "ALG_EQ_CO_001",
+    ("ALG_LINEAR_ONE_STEP", "GUIDED_PRACTICE"): "ALG_EQ_GP_001",
+    ("ALG_LINEAR_ONE_STEP", "INDEPENDENT_PRACTICE"): "ALG_EQ_IP_001",
+    ("ALG_LINEAR_ONE_STEP", "REVIEW"): "ALG_EQ_REV_001",
+}
 
 
 def correct_answer_for(question_id: str) -> str | None:
@@ -64,6 +75,28 @@ def _mock_diagnostic_question() -> tuple[str, str, int]:
     return (question, _DEFAULT_QUESTION_ID, number)
 
 
+def get_next_question(
+    concept_id: str,
+    phase: Phase,
+    previous_question_id: str | None = None,
+    difficulty: str = "FOUNDATION",
+) -> tuple[str, str, str] | None:
+    """Aditya stub: return (question_text, correct_answer, question_id).
+
+    Placeholder for Aditya's POST /question/next. Returns None when Aditya
+    has nothing for the concept/phase — the caller must fail loudly, never
+    continue silently.
+    # ponytail: previous_question_id/difficulty accepted per contract but
+    # ignored (one question per phase); honor them when a real bank exists.
+    """
+
+    question_id = _PHASE_QUESTION_IDS.get((concept_id, phase))
+    if question_id is None:
+        return None
+    question, answer, _number = _DEMO_QUESTIONS[question_id]
+    return (question, answer, question_id)
+
+
 def _diagnostic_start_message(question: str) -> str:
     """Return the frontend intro message for the first diagnostic question."""
 
@@ -77,15 +110,36 @@ def _diagnostic_start_message(question: str) -> str:
 def _get_owned_session(session_id: str, student_id: str) -> SessionRecord:
     """Return the session owned by the student or raise a standard 404."""
 
+    return _get_owned_session_for_turn(
+        session_id,
+        student_id,
+        "GUIDED_PRACTICE",
+        0,
+    )
+
+
+def _get_owned_session_for_turn(
+    session_id: str,
+    student_id: str,
+    current_phase: Phase,
+    hint_count: int,
+) -> SessionRecord:
+    """Recover request-carried demo state when Vercel starts a new instance."""
+
     session: SessionRecord | None = _sessions.get(session_id)
     if session is None and student_id == _DEMO_STUDENT_ID:
-        session = _recover_demo_session(session_id, student_id)
+        session = _recover_demo_session(session_id, student_id, current_phase, hint_count)
     if session is None or session.student_id != student_id:
         raise _session_not_found(session_id)
     return session
 
 
-def _recover_demo_session(session_id: str, student_id: str) -> SessionRecord:
+def _recover_demo_session(
+    session_id: str,
+    student_id: str,
+    current_phase: Phase,
+    hint_count: int,
+) -> SessionRecord:
     """Rebuild the fixed demo session after Vercel drops in-memory state."""
 
     question, question_id, question_number = _mock_diagnostic_question()
@@ -95,16 +149,15 @@ def _recover_demo_session(session_id: str, student_id: str) -> SessionRecord:
         student_id=student_id,
         concept_id="ALG_LINEAR_ONE_STEP",
         interaction_mode="VOICE",
-        current_phase="GUIDED_PRACTICE",
+        current_phase=current_phase,
         current_question=question,
         question_id=question_id,
         question_number=question_number,
-        ui_state="GUIDED_PRACTICE",
-        hint_count=0,
+        ui_state=current_phase,
+        hint_count=hint_count,
         status="started",
-        mode="mock" if get_settings().use_mock_tutor else "live",
         message=_diagnostic_start_message(question),
-        show_hint_button=True,
+        show_hint_button=UI_STATE_FLAGS[current_phase]["show_hint_button"],
     )
     _sessions[session_id] = session
     return session
@@ -113,8 +166,6 @@ def _recover_demo_session(session_id: str, student_id: str) -> SessionRecord:
 async def start_session(request: SessionStartRequest) -> SessionRecord:
     """Create and store the mock session response used before real persistence exists."""
 
-    settings = get_settings()
-    mode: Literal["mock", "live"] = "mock" if settings.use_mock_tutor else "live"
     question, question_id, question_number = _mock_diagnostic_question()
     initial_phase: Phase = request.initial_phase if request.initial_phase is not None else "DIAGNOSTIC"
     session: SessionRecord = SessionRecord(
@@ -129,9 +180,8 @@ async def start_session(request: SessionStartRequest) -> SessionRecord:
         ui_state=initial_phase,
         hint_count=0,
         status="started",
-        mode=mode,
         message=_diagnostic_start_message(question),
-        show_hint_button=initial_phase in ("GUIDED_PRACTICE", "INDEPENDENT_PRACTICE"),
+        show_hint_button=UI_STATE_FLAGS[initial_phase]["show_hint_button"],
     )
     _sessions[session.session_id] = session
     return session
@@ -186,8 +236,9 @@ async def record_canvas_submission(
     session_id: str,
     student_id: str,
     record: CanvasSubmissionRecord,
+    attempt_count: int,
 ) -> SessionRecord:
-    """Append a canvas OCR record to an active mock session."""
+    """Append a reviewed canvas submission and persist its attempt count."""
 
     session: SessionRecord = _get_owned_session(session_id, student_id)
     if session.status == "ended":
@@ -197,7 +248,10 @@ async def record_canvas_submission(
         )
 
     updated_session: SessionRecord = session.model_copy(
-        update={"canvas_submissions": [*session.canvas_submissions, record]}
+        update={
+            "canvas_submissions": [*session.canvas_submissions, record],
+            "attempt_count": attempt_count,
+        }
     )
     # This read-modify-write is safe only while the mock backend uses one worker.
     _sessions[session_id] = updated_session
@@ -227,8 +281,13 @@ def update_interaction_state(
     show_visual_cue: bool,
     show_scaffold_panel: bool,
     scaffold_steps: list[str],
+    transition_updates: dict[str, object] | None = None,
 ) -> SessionRecord:
-    """Update frontend-facing session state after one interaction turn."""
+    """Update frontend-facing session state after one interaction turn.
+
+    transition_updates is the 6.7 phase-transition overlay (previous_phase,
+    new question, counter resets); it is merged last so it wins.
+    """
 
     session: SessionRecord = _get_owned_session(session_id, student_id)
     voice_state: VoiceState = session.voice_state.model_copy(
@@ -247,10 +306,13 @@ def update_interaction_state(
             "hint_count": hint_count,
             "voice_state": voice_state,
             "canvas_state": canvas_state,
-            "show_hint_button": current_phase in ("GUIDED_PRACTICE", "INDEPENDENT_PRACTICE"),
+            # Phase-driven flags first; the tutor's per-turn cue/scaffold
+            # outputs then override their always-False map entries.
+            **UI_STATE_FLAGS[current_phase],
             "show_visual_cue": show_visual_cue,
             "show_scaffold_panel": show_scaffold_panel,
             "scaffold_steps": scaffold_steps,
+            **(transition_updates or {}),
         }
     )
     _sessions[session_id] = updated_session

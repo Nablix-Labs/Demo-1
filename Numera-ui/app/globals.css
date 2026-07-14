@@ -2,9 +2,6 @@
 @tailwind components;
 @tailwind utilities;
 
-/* KaTeX font */
-@import 'katex/dist/katex.min.css';
-
 :root {
   /* Numera brand palette — fixed meanings, never decoration alone */
   --focus-navy: #1b2a4a;

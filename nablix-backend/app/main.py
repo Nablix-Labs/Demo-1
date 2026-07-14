@@ -1,5 +1,4 @@
 from datetime import datetime, timezone
-import logging
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
@@ -9,15 +8,25 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api import ai_engine, canvas, health, hint, interaction, session, voice
+from app.ai_engine.prompt_registry import load_prompt_registry
 from app.core.config import get_settings
+from app.core.logger import logger
 from app.middleware.request_logging import log_requests
 
 
+prompt_registry = load_prompt_registry()
+logger.info(
+    "prompt_registry_validated",
+    extra={
+        "prompt_version": prompt_registry.prompt_version,
+        "diagnostic_layer1_sha256": prompt_registry.manifest.layer_1_sha256,
+        "validation_status": "passed",
+    },
+)
 app: FastAPI = FastAPI(
     title="Nablix AI Math Tutor API",
     version="1.0.0",
 )
-logger: logging.Logger = logging.getLogger(__name__)
 settings = get_settings()
 
 # Registering middleware for logging requests and responses
@@ -150,7 +159,10 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
-    return _error_response(request, exc.status_code, "HTTP_ERROR", str(exc.detail))
+    # Typed exceptions (e.g. QuestionFetchError) carry their own error_code.
+    return _error_response(
+        request, exc.status_code, getattr(exc, "error_code", "HTTP_ERROR"), str(exc.detail)
+    )
 
 
 @app.exception_handler(Exception)

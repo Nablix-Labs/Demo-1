@@ -1,23 +1,14 @@
-"""Student-model adapter.
-
-The student model has two responsibilities: estimate the learner state for the
-current turn and accept events that should update that state. Both paths share
-the same typed result so the tutor pipeline can continue without caring whether
-the source is mock data or a live service.
-"""
-
-from typing import NoReturn
+"""In-process student-model adapter."""
 
 from pydantic import ValidationError
 
-from app.adapters.http_utils import JsonObject, post_json
 from app.core.config import Settings
 from app.core.exceptions import AdapterError
 from app.models.adapters import AdapterContext, StudentModelEvent, StudentModelResult
 
 
 class StudentModelServiceAdapter:
-    """Reads and updates student state through mock data or a service URL."""
+    """Provides the in-process learner-state snapshot."""
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -28,23 +19,9 @@ class StudentModelServiceAdapter:
         return await self.call(context)
 
     async def call(self, request: AdapterContext) -> StudentModelResult:
-        """Return a mock state snapshot or call the live student-model service."""
+        """Return the local state snapshot without a network hop."""
 
-        if self._settings.use_mock_student_model:
-            return self._mock_response()
-
-        payload: JsonObject = request.model_dump(mode="json", exclude={"canvas_regions"})
-        try:
-            response = await post_json(
-                "student_model",
-                self._settings.student_model_url,
-                payload,
-                self._settings.adapter_request_timeout_seconds,
-                self._settings.adapter_request_retry_count,
-            )
-            return self.parse_response(response)
-        except AdapterError as error:
-            self.handle_error(error)
+        return self._local_response()
 
     def parse_response(self, response: dict[str, object]) -> StudentModelResult:
         try:
@@ -55,30 +32,13 @@ class StudentModelServiceAdapter:
                 f"invalid response body={response}: {error}",
             ) from error
 
-    def handle_error(self, error: AdapterError) -> NoReturn:
-        raise error
-
     async def update_from_event(self, event: StudentModelEvent) -> StudentModelResult:
-        """Persist a tutor/student event and return the updated learner state."""
+        """Return the local state snapshot after an event."""
 
-        if self._settings.use_mock_student_model:
-            return self._mock_response()
+        return self._local_response()
 
-        payload: JsonObject = event.model_dump(mode="json")
-        try:
-            response = await post_json(
-                "student_model",
-                self._settings.student_model_url,
-                payload,
-                self._settings.adapter_request_timeout_seconds,
-                self._settings.adapter_request_retry_count,
-            )
-            return self.parse_response(response)
-        except AdapterError as error:
-            self.handle_error(error)
-
-    def _mock_response(self) -> StudentModelResult:
-        """Return the stable development snapshot used by tutor-route tests."""
+    def _local_response(self) -> StudentModelResult:
+        """Return the stable in-process learner-state snapshot."""
 
         return StudentModelResult(
             student_state="NEEDS_GUIDANCE",
@@ -92,4 +52,4 @@ class MockStudentModelAdapter(StudentModelServiceAdapter):
     """Compatibility wrapper for tests or imports that need a mock-only adapter."""
 
     def __init__(self) -> None:
-        super().__init__(Settings(use_mock_student_model=True))
+        super().__init__(Settings())
