@@ -151,6 +151,83 @@ def test_ai_engine_can_use_openai_when_feature_flag_is_enabled(monkeypatch) -> N
         assert "cache_control" not in json.dumps(request_body)
 
 
+def test_canvas_math_decision_uses_openai_wording_without_exposing_answer(monkeypatch) -> None:
+    request_bodies: list[dict[str, object]] = []
+
+    class _CanvasMessageOpenAIClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self) -> "_CanvasMessageOpenAIClient":
+            return self
+
+        def __exit__(self, *exc) -> bool:
+            return False
+
+        def post(self, *args, **kwargs) -> _FakeOpenAIResponse:
+            request_bodies.append(kwargs["json"])
+            return _FakeOpenAIResponse(
+                '{"tutor_message":"Your operation on both sides is correct. '
+                'Recheck the subtraction before writing the value of x.",'
+                '"tutor_message_voice_optimised":"Your operation on both sides is correct. '
+                'Recheck the subtraction before writing the value of x.",'
+                '"confidence":0.94}'
+            )
+
+    monkeypatch.setenv("NABLIX_USE_OPENAI_AI_ENGINE", "true")
+    monkeypatch.setenv("NABLIX_OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(openai_client.httpx, "Client", _CanvasMessageOpenAIClient)
+    get_settings.cache_clear()
+
+    response = client.post(
+        "/ai-engine/classify",
+        json={
+            "question_context": "Solve for x: x + 4 = 9",
+            "expected_answer": "x = 5",
+            "student_input": "x + 4 - 4 = 9 - 4\nx = 10",
+            "phase": "GUIDED_PRACTICE",
+            "input_source": "CANVAS",
+            "attempt_count": 2,
+            "canvas_regions": [
+                {
+                    "step_id": "step-1",
+                    "text": "x + 4 - 4 = 9 - 4",
+                    "x": 0.1,
+                    "y": 0.2,
+                    "w": 0.7,
+                    "h": 0.1,
+                    "confidence": 0.99,
+                },
+                {
+                    "step_id": "step-2",
+                    "text": "x = 10",
+                    "x": 0.1,
+                    "y": 0.4,
+                    "w": 0.3,
+                    "h": 0.1,
+                    "confidence": 0.99,
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["error_type"] == "ARITHMETIC_ERROR"
+    assert body["mistake_classification"]["mistake_step_id"] == "step-2"
+    assert body["tutor_message"] == (
+        "Your operation on both sides is correct. "
+        "Recheck the subtraction before writing the value of x."
+    )
+    assert len(request_bodies) == 1
+    user_payload = json.loads(request_bodies[0]["input"][-1]["content"])
+    assert user_payload["component"] == "tutor_message"
+    assert user_payload["error_type"] == "ARITHMETIC_ERROR"
+    assert user_payload["canvas_context"]["previous_step"] == "x + 4 - 4 = 9 - 4"
+    assert user_payload["canvas_context"]["incorrect_step"] == "x = 10"
+    assert "correct_answer" not in user_payload
+
+
 def test_correct_openai_feedback_uses_generic_confirmation(monkeypatch) -> None:
     responses = [_FakeOpenAIResponse('{"evaluation": "CORRECT", "confidence": 0.99}')]
     request_bodies = []

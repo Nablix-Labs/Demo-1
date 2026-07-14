@@ -121,6 +121,7 @@ class OpenAIAIEngineClient:
         hint_level: int | None,
         phase: LearningPhase,
         conversation_history: list[ConversationMessage],
+        canvas_context: dict[str, object] | None,
     ) -> OpenAITutorMessage:
         schema = OpenAITutorMessage.model_json_schema()
         content = self._request_json(
@@ -136,6 +137,7 @@ class OpenAIAIEngineClient:
                 "error_type": error_type,
                 "response_strategy": response_strategy,
                 "hint_level": hint_level,
+                "canvas_context": canvas_context,
             },
         )
         return OpenAITutorMessage.model_validate(content)
