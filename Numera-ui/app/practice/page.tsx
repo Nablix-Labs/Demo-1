@@ -85,6 +85,7 @@ export default function PracticePage() {
 
   const [mode, setMode] = useState<AIMode>('observing');
   const [hintIndex, setHintIndex] = useState(0);
+  const [hintText, setHintText] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   // Voice support is browser-only; gate render on mount to avoid SSR mismatch.
   const [mounted, setMounted] = useState(false);
@@ -111,16 +112,32 @@ export default function PracticePage() {
     return () => { if (idleTimer.current) clearTimeout(idleTimer.current); };
   }, [items.length, mode]);
 
-  const requestHint = () => {
+  const requestHint = async () => {
     setMode('hint');
-    void tutor.hint({
+    // Mock mode: walk the demo table. With a backend the hint must come from it,
+    // otherwise the card would contradict the backend's question.
+    if (!tutor.apiEnabled) {
+      setHintText(HINTS[hintIndex]);
+      setHintIndex((i) => Math.min(i + 1, HINTS.length - 1));
+      return;
+    }
+    setHintText(null);
+    const res = await tutor.hint({
       concept_id: DEMO_CONCEPT_ID,
       question_id: QUESTION_ID,
       current_phase: PHASE,
       current_hint_count: hintIndex,
     });
-    setHintIndex((i) => Math.min(i + 1, HINTS.length - 1));
+    // tutor.hint() swallows failures (it reports them into the transcript, which
+    // this screen doesn't render) — so say so here instead of showing nothing.
+    setHintText(res ? res.hint : "Sorry — I couldn't fetch a hint right now. Please try again in a moment.");
+    if (res) setHintIndex((i) => i + 1);
   };
+
+  // The idle observer flips to 'hint' without fetching, so in mock mode the card
+  // falls back to the demo table; with a backend it stays closed until the
+  // student asks and a real hint arrives.
+  const hintBody = hintText ?? (tutor.apiEnabled ? null : HINTS[hintIndex]);
 
   const finish = () => {
     // Submit the canvas for live OCR + tutor feedback (best-effort).
@@ -174,12 +191,12 @@ export default function PracticePage() {
         </div>
 
         {/* Hint card — only when the observer offers one */}
-        {mode === 'hint' && !done && (
+        {mode === 'hint' && !done && hintBody && (
           <div className="absolute top-5 left-6 z-20 max-w-sm flex items-start gap-3 bg-white border border-muted-gray rounded-xl px-4 py-3" style={{ boxShadow: '0 4px 16px rgba(0,0,0,0.12)' }}>
             <Lightbulb size={16} strokeWidth={1.8} className="flex-shrink-0 mt-0.5 text-ink" />
             <div>
               <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-0.5">Gentle hint</div>
-              <p className="text-[12.5px] text-ink leading-snug">{HINTS[hintIndex]}</p>
+              <p className="text-[12.5px] text-ink leading-snug">{hintBody}</p>
             </div>
           </div>
         )}
@@ -237,7 +254,7 @@ export default function PracticePage() {
           )}
           {mode !== 'quiet' && (
             <button
-              onClick={requestHint}
+              onClick={() => void requestHint()}
               className="rounded-full border border-muted-gray bg-white px-4 py-2 text-[12px] font-semibold text-ink hover:bg-reading-surface transition-colors"
               style={{ boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}
             >
