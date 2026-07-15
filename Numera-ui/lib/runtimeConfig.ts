@@ -29,6 +29,17 @@ export const voiceStreamingEnabled: boolean =
   voiceWsUrl !== null &&
   process.env.NEXT_PUBLIC_ENABLE_VOICE_STREAMING !== "false";
 
+/**
+ * Testing escape hatch: the tutoring backend requires a bearer token on
+ * /interaction, /hint, /canvas and /voice, but the sign-up flow doesn't log in
+ * to the auth server yet, so a student who signs up has no token and every one
+ * of those calls 401s. With this flag on, anonymous students send a placeholder
+ * bearer so testing isn't blocked. Off by default — a real token, once we have
+ * one, always takes precedence over the placeholder.
+ */
+export const allowAnonTutorCalls: boolean =
+  process.env.NEXT_PUBLIC_ALLOW_ANON_TUTOR === "true";
+
 export const buildVoiceStreamUrl = (sessionId: string): string => {
   if (!voiceStreamingEnabled || !voiceWsUrl) {
     throw new Error(

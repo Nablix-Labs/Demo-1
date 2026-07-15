@@ -14,8 +14,17 @@
 import axios from 'axios';
 import type { CanvasDrawPayload } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
+import { allowAnonTutorCalls } from '@/lib/runtimeConfig';
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
+
+/**
+ * Placeholder bearer for students with no real login (see allowAnonTutorCalls).
+ * The backend only checks that a bearer is present — it doesn't validate it —
+ * so this is purely to get past that check during testing. It is NOT a
+ * credential and grants nothing; drop it once sign-up performs a real login.
+ */
+const ANON_ACCESS_TOKEN = 'anonymous-testing';
 
 /**
  * Fixed demo identifiers — must match the backend's documented test values
@@ -34,11 +43,13 @@ export const api = axios.create({
 });
 
 // Carry the real auth token (from POST /auth/login) on tutoring calls when one
-// is present. The tutoring backend doesn't require it yet, but attaching it now
-// means these calls are ready the moment it does. Imported lazily via getState
-// so there's no import cycle with the store.
+// is present. /interaction, /hint, /canvas and /voice reject a request with no
+// bearer at all (401), so when NEXT_PUBLIC_ALLOW_ANON_TUTOR is on we fall back
+// to a placeholder for students who signed up without logging in — see
+// allowAnonTutorCalls. Imported lazily via getState so there's no import cycle
+// with the store.
 api.interceptors.request.use((config) => {
-  const token = useAuthStore.getState().accessToken;
+  const token = useAuthStore.getState().accessToken ?? (allowAnonTutorCalls ? ANON_ACCESS_TOKEN : null);
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
