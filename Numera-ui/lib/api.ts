@@ -134,9 +134,46 @@ export async function getSession(sessionId: string) {
 }
 
 // ── /session/end ──────────────────────────────────────────────────────────────
+
+/** Summary of an ended session, shown on the Review screen. */
+export interface SessionSummary {
+  session_id: string;
+  concept_id: string;
+  question: string;
+  attempts: number;    // canvas submissions the student made
+  hints_used: number;  // hints requested during the session
+  status: string;      // e.g. "ended"
+}
+
+/** /session/end returns the ended record; the backend may also attach an explicit
+ *  `summary` object and an `attempt_count` alongside the existing fields. */
+export interface SessionEndResponse extends SessionRecord {
+  attempt_count?: number;
+  summary?: Partial<SessionSummary>;
+}
+
+/**
+ * Build the Review-screen summary from the /session/end response. Prefers an
+ * explicit `summary` object when the backend sends one, otherwise derives it
+ * from the ended record. Returns null when the response has no usable session
+ * (so the caller can surface "no summary returned").
+ */
+export function toSessionSummary(res: SessionEndResponse | null | undefined): SessionSummary | null {
+  if (!res || !res.session_id) return null;
+  const s = res.summary;
+  return {
+    session_id: res.session_id,
+    concept_id: s?.concept_id ?? res.concept_id,
+    question: s?.question ?? res.current_question,
+    attempts: s?.attempts ?? res.attempt_count ?? res.canvas_submissions?.length ?? 0,
+    hints_used: s?.hints_used ?? res.hint_count ?? 0,
+    status: s?.status ?? res.status,
+  };
+}
+
 /** POST /session/end — student_id must own the session (else 404). */
 export async function endSession(sessionId: string, studentId: string = STUDENT_ID) {
-  const res = await api.post<SessionRecord>('/session/end', {
+  const res = await api.post<SessionEndResponse>('/session/end', {
     session_id: sessionId,
     student_id: studentId,
   });

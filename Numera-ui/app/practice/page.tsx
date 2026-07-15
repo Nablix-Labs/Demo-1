@@ -34,6 +34,26 @@ export default function PracticePage() {
   const { goStage } = useFlowNav();
   const tutor = useDemoTutor();
 
+  // "Review with tutor": end the backend session first, save its summary, then
+  // move to /review. Disabled while in flight; on failure the student stays here.
+  const [ending, setEnding] = useState(false);
+  const [endError, setEndError] = useState<string | null>(null);
+  const reviewWithTutor = useCallback(async () => {
+    setEndError(null);
+    // No live backend session (mock mode) — just go to the review page.
+    if (!tutor.apiEnabled || !tutor.sessionId) { goStage('review'); return; }
+    setEnding(true);
+    try {
+      // end() saves the summary + clears sessionId on success, or throws.
+      await tutor.end();
+      goStage('review');
+    } catch {
+      setEndError("We couldn't finish your session. Please try again.");
+    } finally {
+      setEnding(false);
+    }
+  }, [tutor, goStage]);
+
   // Practice problem + hints for the placed topic.
   const demo = demoFor(currentTopicId);
   const QUESTION = demo.practiceQuestion;
@@ -170,11 +190,18 @@ export default function PracticePage() {
               <Check size={14} strokeWidth={2} /> Practice saved — nice work.
             </span>
             <button
-              onClick={() => goStage('review')}
-              className="flex items-center gap-1.5 rounded-full border border-focus-navy bg-white px-4 py-2 text-[12px] font-semibold text-ink hover:bg-focus-navy hover:text-white transition-colors"
+              onClick={() => void reviewWithTutor()}
+              disabled={ending}
+              aria-busy={ending}
+              className="flex items-center gap-1.5 rounded-full border border-focus-navy bg-white px-4 py-2 text-[12px] font-semibold text-ink hover:bg-focus-navy hover:text-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:text-ink"
             >
-              Review with tutor <ArrowRight size={13} strokeWidth={2} />
+              {ending ? 'Ending session…' : <>Review with tutor <ArrowRight size={13} strokeWidth={2} /></>}
             </button>
+            {endError && (
+              <span role="alert" className="text-[12px] text-action-orange bg-action-orange/10 border border-action-orange/25 rounded-full px-3 py-1.5">
+                {endError}
+              </span>
+            )}
           </div>
         )}
 

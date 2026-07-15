@@ -19,8 +19,10 @@ import {
   sendInteraction,
   requestHint,
   endSession,
+  toSessionSummary,
   STUDENT_ID,
   type SessionRecord,
+  type SessionSummary,
   type CanvasSubmissionResult,
   type InteractionResponse,
   type HintResponse,
@@ -305,14 +307,24 @@ export function useDemoTutor() {
     [sessionId, canvasExporter, addTranscriptMessage, addTrailEntry]
   );
 
-  /** End the session (best-effort). */
-  const end = useCallback(async (): Promise<void> => {
-    if (!apiEnabled() || !sessionId) return;
-    try {
-      await endSession(sessionId);
-    } catch {
-      /* session end is best-effort for the demo */
-    }
+  /**
+   * End the session and capture its summary for the Review screen.
+   *
+   * On success: saves the summary to the store and clears sessionId (so the next
+   * topic starts a fresh session), and returns the summary. Returns null when
+   * there's no live session to end (mock mode). THROWS on request failure or when
+   * the response carries no usable summary — the caller keeps the student on the
+   * current screen and shows an error.
+   */
+  const end = useCallback(async (): Promise<SessionSummary | null> => {
+    if (!apiEnabled() || !sessionId) return null;
+    const res = await endSession(sessionId); // propagates network/HTTP failures
+    const summary = toSessionSummary(res);
+    if (!summary) throw new Error('Session ended but no summary was returned.');
+    const store = useNumeraStore.getState();
+    store.setSessionSummary(summary);
+    store.clearSessionId();
+    return summary;
   }, [sessionId]);
 
   return {
