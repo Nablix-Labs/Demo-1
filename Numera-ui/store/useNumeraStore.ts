@@ -10,7 +10,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import type { LearningPhase } from '@/lib/phases';
 import type { FlowStage } from '@/lib/flow';
 import { TOPICS } from '@/lib/topics';
-import { DEMO_CONCEPT_ID, DEMO_PHASE, DEMO_QUESTION_ID } from '@/lib/api';
+import { DEMO_CONCEPT_ID, DEMO_PHASE, DEMO_QUESTION_ID, type SessionSummary } from '@/lib/api';
 import { uid } from '@/lib/uid';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -151,7 +151,15 @@ export interface NumeraState {
   // changing it restarts the session so the backend serves that equation.
   activeConceptId: string;
   activeQuestionId: string;
+
+  // Tutoring phase the session is in. Seeded from the session's current_phase
+  // and advanced from each interaction response's current_phase — the value we
+  // send back on the next turn, so the backend can drive phase transitions.
   currentPhase: string;
+
+  // Summary of the ended session (attempts, hints used, …) returned by
+  // /session/end. Shown on the Review screen. Ephemeral — never persisted.
+  sessionSummary: SessionSummary | null;
 
   // Voice
   micMuted: boolean;
@@ -236,6 +244,9 @@ export interface NumeraState {
   setQuestionText: (q: string) => void;
   setQuestionNumber: (n: number) => void;
   setActiveEquation: (conceptId: string, questionId: string, label?: string) => void;
+  setCurrentPhase: (phase: string) => void;
+  setSessionSummary: (summary: SessionSummary | null) => void;
+  clearSessionId: () => void;
   toggleMic: () => void;
   setMicMuted: (value: boolean) => void;
   setVoiceStatus: (s: NumeraState['voiceStatus']) => void;
@@ -301,7 +312,7 @@ export interface NumeraState {
 const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
-  | 'setQuestionText' | 'setQuestionNumber' | 'setActiveEquation' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus'
+  | 'setQuestionText' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setSessionSummary' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus'
   | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue'
   | 'addTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript'
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
@@ -323,11 +334,14 @@ const initial: Omit<
   sessionState: 'idle',
   activeSlide: 2,
   totalSlides: 9,
-  questionText: '2x + 5 = 13',
-  questionNumber: 3,
+  // No hardcoded equation: the backend session drives the question. Empty until
+  // it loads so a stale demo equation never flashes on the live build.
+  questionText: '',
+  questionNumber: 0,
   activeConceptId: DEMO_CONCEPT_ID,
   activeQuestionId: DEMO_QUESTION_ID,
   currentPhase: DEMO_PHASE,
+  sessionSummary: null,
   micMuted: false,
   voiceStatus: 'listening',
   visualCueVisible: false,
@@ -418,6 +432,10 @@ export const useNumeraStore = create<NumeraState>()(
       sessionId: null,
       ...(label ? { questionText: label } : {}),
     }),
+
+  setCurrentPhase: (currentPhase) => set({ currentPhase }),
+  setSessionSummary: (sessionSummary) => set({ sessionSummary }),
+  clearSessionId: () => set({ sessionId: null }),
 
   toggleMic: () =>
     set((s) => ({

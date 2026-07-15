@@ -47,6 +47,7 @@ export default function ReviewPage() {
 
   const completePhase = useNumeraStore((s) => s.completePhase);
   const currentTopicId = useNumeraStore((s) => s.currentTopicId);
+  const sessionSummary = useNumeraStore((s) => s.sessionSummary);
   const { decideReview } = useFlowNav();
 
   // Worksheets + summary for the placed topic.
@@ -83,6 +84,33 @@ export default function ReviewPage() {
       action={<Chip tone="solid">{score} / {total}</Chip>}
     >
       <div className="flex flex-col gap-6 max-w-3xl">
+        {/* Ended-session summary from /session/end (attempts, hints used). */}
+        {sessionSummary && (
+          <div className="rounded-lg border border-muted-gray bg-white px-5 py-4">
+            <div className="text-[11px] font-semibold tracking-widest uppercase text-slate-blue mb-3">
+              Session summary
+            </div>
+            <div className="flex flex-wrap gap-x-10 gap-y-3">
+              <div>
+                <div className="text-[22px] font-semibold text-ink leading-none">{sessionSummary.attempts}</div>
+                <div className="text-[11px] text-slate-blue mt-1">Attempts</div>
+              </div>
+              <div>
+                <div className="text-[22px] font-semibold text-ink leading-none">{sessionSummary.hints_used}</div>
+                <div className="text-[11px] text-slate-blue mt-1">Hints used</div>
+              </div>
+              {sessionSummary.question && (
+                <div className="min-w-0">
+                  <div className="text-[15px] font-semibold text-ink leading-tight font-[Cambria_Math,Georgia,serif] truncate">
+                    {sessionSummary.question}
+                  </div>
+                  <div className="text-[11px] text-slate-blue mt-1">Question</div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Worksheet progress */}
         <div className="flex items-center gap-1.5">
           {WORKSHEETS.map((w, idx) => (

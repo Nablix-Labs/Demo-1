@@ -20,7 +20,6 @@ import { useDemoTutor } from '@/hooks/useDemoTutor';
 import { useVoiceTurn } from '@/hooks/useVoiceTurn';
 import { useVoiceStream } from '@/hooks/useVoiceStream';
 import { useWebSocket } from '@/hooks/useWebSocket';
-import { DEMO_PHASE } from '@/lib/api';
 import { demoFor } from '@/lib/demoContent';
 
 // Voice turn transport. 'rest' (default): browser STT (useVoiceTurn) → REST +
@@ -44,6 +43,7 @@ export default function LessonPage() {
   const setMicMuted = useNumeraStore((s) => s.setMicMuted);
   const activeConceptId = useNumeraStore((s) => s.activeConceptId);
   const activeQuestionId = useNumeraStore((s) => s.activeQuestionId);
+  const currentPhase = useNumeraStore((s) => s.currentPhase);
 
   // ── Live backend wiring (no-op unless NEXT_PUBLIC_API_BASE_URL is set) ──
   const tutor = useDemoTutor();
@@ -80,13 +80,13 @@ export default function LessonPage() {
         {
           concept_id: activeConceptId,
           question_id: activeQuestionId,
-          current_phase: DEMO_PHASE,
+          current_phase: currentPhase,
           hint_count: 0,
         },
         confidence
       );
     },
-    [submitVoiceTurn, activeConceptId, activeQuestionId]
+    [submitVoiceTurn, activeConceptId, activeQuestionId, currentPhase]
   );
   const voice = useVoiceTurn({ onTurnEnd });
   // Server transport: stream raw mic audio to the voice server instead of doing
