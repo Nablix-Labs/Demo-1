@@ -1,8 +1,9 @@
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.models.adapters import ConversationMessage, VisionOCRResult
+from app.models.adapters import CanvasFeedback, ConversationMessage, VisionOCRResult
 from app.models.canvas import CanvasSubmissionRecord
 from app.models.fields import (
     ConceptId,
@@ -47,12 +48,55 @@ class SessionEndRequest(BaseModel):
     student_id: StudentId
 
 
+class QuestionAttemptRecord(BaseModel):
+    question_id: QuestionId
+    phase: Phase
+    evaluation: str
+    input_source: Literal["TEXT", "VOICE", "CANVAS"]
+    hint_level_used: int
+    attempted_at: datetime
+
+
+class PhaseTransitionRecord(BaseModel):
+    previous_phase: Phase
+    current_phase: Phase
+    entry_reason: str | None
+    transitioned_at: datetime
+
+
+class SessionPerformance(BaseModel):
+    total_attempts: int
+    correct_attempts: int
+    incorrect_attempts: int
+    hints_used: int
+    hint_levels_used: list[int]
+    scaffold_steps_delivered: None
+    canvas_submissions: int
+
+
+class SessionSummary(BaseModel):
+    session_id: SessionId
+    student_id: StudentId
+    concept_id: ConceptId
+    session_date: datetime
+    session_duration_seconds: int
+    interaction_mode: InteractionMode
+    phase_4_entry_reason: str | None
+    phases_completed: list[Phase]
+    session_performance: SessionPerformance
+    per_question_history: list[QuestionAttemptRecord]
+    scaffold_history: None
+    canvas_feedback_history: list[CanvasFeedback]
+    phase_transitions: list[PhaseTransitionRecord]
+
+
 class SessionRecord(BaseModel):
     """Current mock session state stored by the in-memory registry."""
 
     session_id: SessionId
     student_id: StudentId
     concept_id: ConceptId
+    started_at: datetime
     current_phase: Phase
     previous_phase: Phase | None = None
     current_question: str
@@ -81,3 +125,7 @@ class SessionRecord(BaseModel):
     status: Literal["started", "ended"]
     mode: Literal["inprocess"] = "inprocess"
     canvas_submissions: list[CanvasSubmissionRecord] = Field(default_factory=list)
+    per_question_history: list[QuestionAttemptRecord] = Field(default_factory=list)
+    hint_levels_used: list[int] = Field(default_factory=list)
+    phase_transitions: list[PhaseTransitionRecord] = Field(default_factory=list)
+    session_summary: SessionSummary | None = None

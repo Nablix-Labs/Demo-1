@@ -2,7 +2,10 @@ import asyncio
 
 from fastapi.testclient import TestClient
 
+from app.adapters import provider, student_model
+from app.adapters.http_utils import JsonObject
 from app.adapters.rag_service import MockRAGServiceAdapter
+from app.core.config import Settings
 from app.models.adapters import (
     AdapterContext,
     CanvasFeedback,
@@ -15,9 +18,9 @@ from app.models.adapters import (
     VisualCue,
 )
 from app.main import app
-from app.services import interaction_service, session_service
+from app.services import hint_service, interaction_service, session_service
 
-client = TestClient(app)
+client = TestClient(app, headers={"Authorization": "Bearer test-token"})
 
 
 def _start_session(student_id: str, mode: str = "TEXT", **overrides) -> str:
@@ -103,6 +106,18 @@ def test_interaction_rejects_malformed_session_id() -> None:
 
     assert response.status_code == 422
     assert response.json()["field"] == "session_id"
+
+
+def test_interaction_requires_bearer_token() -> None:
+    session_id = _start_session("ST041")
+
+    response = client.post(
+        "/interaction",
+        json=_interaction_body(session_id, "ST041"),
+        headers={"Authorization": ""},
+    )
+
+    assert response.status_code == 401
 
 
 def test_interaction_returns_404_for_unknown_session() -> None:
@@ -343,20 +358,26 @@ class _FakeStudentModelAdapter:
 
     async def assess(self, context: AdapterContext) -> StudentModelResult:
         return StudentModelResult(
-            student_state="READY",
-            confidence=0.9,
-            mastery_level="DEVELOPING",
-            recommended_support="LOW_HINT",
+            mastery_status="DEVELOPING",
+            continuity_status="on_track",
             recommended_entry_phase=self.recommended_entry_phase,
+            hint_dependency_score=0.1,
+            intervention_required=False,
         )
 
-    async def update_from_event(self, event: StudentModelEvent) -> StudentModelResult:
+    async def update_from_event(
+        self,
+        event: StudentModelEvent,
+        context: AdapterContext,
+        access_token: str,
+    ) -> StudentModelResult:
         self.events.append(event)
         return StudentModelResult(
-            student_state="READY",
-            confidence=0.9,
-            mastery_level="DEVELOPING",
-            recommended_support="LOW_HINT",
+            mastery_status="DEVELOPING",
+            continuity_status="on_track",
+            recommended_entry_phase=self.recommended_entry_phase,
+            hint_dependency_score=0.1,
+            intervention_required=False,
         )
 
 
@@ -461,6 +482,68 @@ def test_interaction_updates_phase_visual_scaffold_and_student_model_events(monk
     assert body["scaffold_steps"] == ["Divide both sides by 2."]
     assert len(student_model.events) == 1
     assert student_model.events[0].event_type == "PARTIAL_ATTEMPT"
+
+
+def test_interaction_forwards_event_and_uses_student_model_phase(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    settings = Settings(
+        student_model_url="https://student-model.example",
+        student_model_topic_ids={"ALG_LINEAR_ONE_STEP": 2},
+        use_mock_student_model=False,
+        use_openai_ai_engine=False,
+    )
+
+    async def fake_post_json(
+        adapter_name: str,
+        url: str,
+        payload: JsonObject,
+        headers: dict[str, str],
+        timeout_seconds: int,
+        retry_count: int,
+    ) -> JsonObject:
+        captured.update(
+            adapter_name=adapter_name,
+            url=url,
+            payload=payload,
+            headers=headers,
+        )
+        return {
+            "mastery_status": "DEVELOPING",
+            "continuity_status": "on_track",
+            "recommended_entry_phase": "GUIDED_PRACTICE",
+            "hint_dependency_score": 0.67,
+            "intervention_required": False,
+            "intervention_reason": None,
+        }
+
+    monkeypatch.setattr(provider, "get_settings", lambda: settings)
+    monkeypatch.setattr(student_model, "post_json", fake_post_json)
+    session_id = _start_session("ST040")
+
+    response = client.post(
+        "/interaction",
+        json=_interaction_body(
+            session_id,
+            "ST040",
+            current_phase="DIAGNOSTIC",
+            text_input="x = 5",
+        ),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["current_phase"] == "GUIDED_PRACTICE"
+    assert captured["url"] == "https://student-model.example/interaction"
+    assert captured["headers"] == {"Authorization": "Bearer test-token"}
+    assert captured["payload"] == {
+        "topic_id": 2,
+        "event_type": "CORRECT_ATTEMPT",
+        "evaluation": "CORRECT",
+        "error_type": None,
+        "hint_level_used": 0,
+        "independent_success": True,
+        "current_phase": "DIAGNOSTIC",
+        "independent_correct_in_session": 1,
+    }
 
 
 def test_transition_normal_advance(monkeypatch) -> None:
@@ -642,3 +725,83 @@ def test_attempt_count_completion_and_question_routing(monkeypatch) -> None:
     session = session_service._sessions[session_id]
     assert session.question_number == 2
     assert session.question_completed is False
+
+
+def test_session_end_summarises_recorded_activity(monkeypatch) -> None:
+    session_id = _start_session("ST031")
+    student_model = _FakeStudentModelAdapter()
+    tutor = _FakeTutorAdapter(next_phase_recommendation=None)
+    adapters = _FakeAdapters(student_model, tutor)
+    monkeypatch.setattr(interaction_service, "get_adapters", lambda: adapters)
+    monkeypatch.setattr(hint_service, "get_adapters", lambda: adapters)
+
+    first_attempt = client.post(
+        "/interaction",
+        json=_interaction_body(session_id, "ST031", current_phase="DIAGNOSTIC"),
+    )
+    assert first_attempt.status_code == 200
+
+    tutor.evaluation = "CORRECT"
+    tutor.next_phase_recommendation = "GUIDED_PRACTICE"
+    second_attempt = client.post(
+        "/interaction",
+        json=_interaction_body(session_id, "ST031", current_phase="DIAGNOSTIC"),
+    )
+    assert second_attempt.status_code == 200
+
+    hint = client.post(
+        "/hint/request",
+        json={
+            "session_id": session_id,
+            "student_id": "ST031",
+            "current_phase": "GUIDED_PRACTICE",
+            "current_hint_count": 0,
+            "concept_id": "ALG_LINEAR_ONE_STEP",
+            "question_id": "ALG_EQ_GP_001",
+        },
+    )
+    assert hint.status_code == 200
+
+    tutor.next_phase_recommendation = "INDEPENDENT_PRACTICE"
+    independent_attempt = client.post(
+        "/interaction",
+        json=_interaction_body(
+            session_id,
+            "ST031",
+            current_phase="GUIDED_PRACTICE",
+            hint_count=1,
+        ),
+    )
+    assert independent_attempt.status_code == 200
+
+    end = client.post(
+        "/session/end",
+        json={"session_id": session_id, "student_id": "ST031"},
+    )
+    assert end.status_code == 200
+    summary = end.json()["session_summary"]
+    assert summary["session_id"] == session_id
+    assert summary["phase_4_entry_reason"] == "TUTOR_RECOMMENDATION"
+    assert summary["phases_completed"] == [
+        "DIAGNOSTIC",
+        "GUIDED_PRACTICE",
+        "INDEPENDENT_PRACTICE",
+    ]
+    assert summary["session_performance"] == {
+        "total_attempts": 3,
+        "correct_attempts": 2,
+        "incorrect_attempts": 1,
+        "hints_used": 1,
+        "hint_levels_used": [1],
+        "scaffold_steps_delivered": None,
+        "canvas_submissions": 0,
+    }
+    assert [attempt["evaluation"] for attempt in summary["per_question_history"]] == [
+        "PARTIALLY_CORRECT",
+        "CORRECT",
+        "CORRECT",
+    ]
+    assert summary["scaffold_history"] is None
+    assert summary["canvas_feedback_history"] == []
+    assert summary["phase_transitions"][0]["previous_phase"] == "DIAGNOSTIC"
+    assert summary["phase_transitions"][0]["current_phase"] == "GUIDED_PRACTICE"

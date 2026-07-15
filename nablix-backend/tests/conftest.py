@@ -20,6 +20,9 @@ def force_mock_adapters(monkeypatch):
     monkeypatch.setenv("NABLIX_USE_OPENAI_AI_ENGINE", "false")
     get_settings.cache_clear()
     test_settings = Settings(
+        student_model_url="",
+        student_model_topic_ids={},
+        use_mock_student_model=True,
         use_mock_voice=True,
         use_mock_vision=True,
         use_openai_ai_engine=False,

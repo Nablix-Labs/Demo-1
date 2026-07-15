@@ -17,7 +17,7 @@ from app.models.adapters import (
 from app.services import canvas_service, session_service
 from app.services.snapshot_store import get_snapshot
 
-client = TestClient(app)
+client = TestClient(app, headers={"Authorization": "Bearer test-token"})
 
 VALID_SNAPSHOT_DATA_URL = "data:image/png;base64,aGVsbG8="
 
@@ -81,6 +81,15 @@ def test_canvas_submit_returns_mock_ocr_result() -> None:
     assert body["latency"]["total_latency_ms"] >= 0
     assert {"ocr_latency_ms", "tutor_latency_ms"} <= body["latency"].keys()
 
+    end = client.post(
+        "/session/end",
+        json={"session_id": session_id, "student_id": "ST001"},
+    )
+    summary = end.json()["session_summary"]
+    assert summary["session_performance"]["total_attempts"] == 1
+    assert summary["session_performance"]["canvas_submissions"] == 1
+    assert len(summary["canvas_feedback_history"]) == 1
+
 
 def test_canvas_submit_sends_full_ocr_context_and_forwards_events(
     monkeypatch: pytest.MonkeyPatch,
@@ -101,13 +110,16 @@ def test_canvas_submit_sends_full_ocr_context_and_forwards_events(
     async def capture_event(
         adapter: StudentModelServiceAdapter,
         event: StudentModelEvent,
+        context: AdapterContext,
+        access_token: str,
     ) -> StudentModelResult:
         captured_events.append(event)
         return StudentModelResult(
-            student_state="NEEDS_GUIDANCE",
-            confidence=0.82,
-            mastery_level="DEVELOPING",
-            recommended_support="STEP_BY_STEP_HINT",
+            mastery_status="DEVELOPING",
+            continuity_status="on_track",
+            recommended_entry_phase=context.current_phase or "GUIDED_PRACTICE",
+            hint_dependency_score=0.0,
+            intervention_required=False,
         )
 
     monkeypatch.setattr(TutorEngineServiceAdapter, "evaluate", capture_evaluate)
@@ -140,6 +152,37 @@ def test_canvas_submit_sends_full_ocr_context_and_forwards_events(
     ]
     assert len(captured_events) == 1
     assert client.get(f"/session/{session_id}").json()["attempt_count"] == 1
+
+
+def test_voice_canvas_attachment_does_not_record_a_second_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def unexpected_event(
+        adapter: StudentModelServiceAdapter,
+        event: StudentModelEvent,
+        context: AdapterContext,
+        access_token: str,
+    ) -> StudentModelResult:
+        raise AssertionError(f"Voice attachment forwarded duplicate event: {event}")
+
+    monkeypatch.setattr(StudentModelServiceAdapter, "update_from_event", unexpected_event)
+    session_id = _start_session("ST013")
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST013",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+            "submission_role": "VOICE_ATTACHMENT",
+        },
+    )
+
+    assert response.status_code == 200
+    stored_session = client.get(f"/session/{session_id}").json()
+    assert stored_session["attempt_count"] == 0
+    assert stored_session["per_question_history"] == []
+    assert len(stored_session["canvas_submissions"]) == 1
 
 
 def test_canvas_submit_stops_before_tutor_when_ocr_needs_clarification(

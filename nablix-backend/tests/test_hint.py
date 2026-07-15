@@ -7,7 +7,7 @@ from app.ai_engine.schemas import TutorResponse
 from app.main import app
 from app.services import session_service
 
-client = TestClient(app)
+client = TestClient(app, headers={"Authorization": "Bearer test-token"})
 
 
 def _start_guided_session(student_id: str) -> str:

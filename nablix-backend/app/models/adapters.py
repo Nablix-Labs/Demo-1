@@ -10,6 +10,22 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+MasteryStatus = Literal[
+    "NEW_LEARNER",
+    "DEVELOPING",
+    "NEARLY_MASTERED",
+    "MASTERED",
+    "LEARNING_GAP",
+    "REVIEW_DUE",
+]
+ContinuityStatus = Literal[
+    "on_track",
+    "review_due",
+    "learning_gap",
+    "needs_refresh",
+    "restart_recommended",
+]
+
 
 class AdapterContext(BaseModel):
     """Shared input for the three text adapters (tutor, RAG, student model).
@@ -27,6 +43,7 @@ class AdapterContext(BaseModel):
     input_source: str | None = None
     transcript_confidence: float | None = None
     attempt_count: int | None = None
+    independent_correct_in_session: int = 0
     question_completed: bool = False
     question_number: int | None = None
     current_hint_level: int | None = None
@@ -57,12 +74,14 @@ class RAGResult(BaseModel):
 
 
 class StudentModelResult(BaseModel):
-    student_state: str
-    confidence: float
-    mastery_level: str
-    recommended_support: str
-    # Contract 4 phase recommendation; the in-process stub leaves it None.
-    recommended_entry_phase: str | None = None
+    """Response contract returned by Saravanan's Student Model service."""
+
+    mastery_status: MasteryStatus
+    continuity_status: ContinuityStatus
+    recommended_entry_phase: str | None
+    hint_dependency_score: float
+    intervention_required: bool
+    intervention_reason: str | None = None
 
 
 class TutorEngineRequest(BaseModel):

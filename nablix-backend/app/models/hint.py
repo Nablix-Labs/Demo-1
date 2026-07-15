@@ -23,3 +23,4 @@ class HintResponse(BaseModel):
     hint: str
     response_strategy: str
     answer_reveal_allowed: bool
+    recommended_entry_phase: str | None

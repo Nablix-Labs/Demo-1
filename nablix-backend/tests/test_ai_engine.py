@@ -975,10 +975,11 @@ def test_tutor_adapter_maps_canvas_mistake_to_backend_result() -> None:
             ),
             rag=RAGResult(documents=[], retrieval_confidence=0.0),
             student=StudentModelResult(
-                student_state="ACTIVE",
-                confidence=0.9,
-                mastery_level="FOUNDATION",
-                recommended_support="GUIDED_HINT",
+                mastery_status="DEVELOPING",
+                continuity_status="on_track",
+                recommended_entry_phase="GUIDED_PRACTICE",
+                hint_dependency_score=0.0,
+                intervention_required=False,
             ),
         )
     )

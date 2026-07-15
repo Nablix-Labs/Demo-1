@@ -95,6 +95,9 @@ class CanvasSubmitRequest(BaseModel):
     # the Check button, which stays canvas-only.
     transcript: str | None = None
     transcript_confidence: float | None = None
+    submission_role: Literal["STANDALONE_ATTEMPT", "VOICE_ATTACHMENT"] = (
+        "STANDALONE_ATTEMPT"
+    )
 
 
 class CanvasLatency(BaseModel):

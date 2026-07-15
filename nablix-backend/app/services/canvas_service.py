@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from app.adapters.provider import get_adapters
 from app.ai_engine.classifier_config import ClassifierRulesConfig, load_classifier_rules
 from app.core.config import get_settings
+from app.core.exceptions import QuestionFetchError
 from app.models.adapters import (
     AdapterContext,
     ConversationMessage,
@@ -20,16 +21,23 @@ from app.models.canvas import (
     CanvasSubmitRequest,
     CanvasSubmitResponse,
 )
+from app.models.fields import Phase
+from app.models.session import PhaseTransitionRecord
 from app.services.canvas_annotations import assign_step_ids, plan_canvas_draw
 from app.services.interaction_service import (
     _current_hint_level_from,
+    _independent_correct_in_session,
     run_tutor_pipeline,
 )
 from app.services.session_service import (
     correct_answer_for,
     _get_owned_session,
+    get_next_question,
+    record_canvas_attachment,
     record_canvas_submission,
+    update_interaction_state,
 )
+from app.services.phase_transition import PHASE_COUNTER_RESETS, resolve_transition
 from app.services.snapshot_store import build_reference, store_snapshot
 
 
@@ -51,7 +59,10 @@ def _clarification_result(ocr: VisionOCRResult) -> TutorResult:
     )
 
 
-async def submit_canvas(request: CanvasSubmitRequest) -> CanvasSubmitResponse:
+async def submit_canvas(
+    request: CanvasSubmitRequest,
+    access_token: str,
+) -> CanvasSubmitResponse:
     """Recognize a canvas snapshot, run it through the tutor, and store the result."""
 
     settings = get_settings()
@@ -94,6 +105,7 @@ async def submit_canvas(request: CanvasSubmitRequest) -> CanvasSubmitResponse:
         input_source="CANVAS",
         transcript_confidence=request.transcript_confidence,
         attempt_count=attempt_count,
+        independent_correct_in_session=_independent_correct_in_session(session),
         question_completed=session.question_completed,
         question_number=session.question_number,
         current_hint_level=_current_hint_level_from(session.hint_count),
@@ -107,14 +119,63 @@ async def submit_canvas(request: CanvasSubmitRequest) -> CanvasSubmitResponse:
 
     tutor_started = perf_counter()
     reviewed_attempt_count = session.attempt_count
+    new_phase: Phase | None = None
+    transition_updates: dict[str, object] = {}
     if ocr.needs_clarification or ocr.confidence < settings.min_ocr_confidence_threshold:
         tutor = _clarification_result(ocr)
     else:
-        _, _, tutor = await run_tutor_pipeline(context)
-        adapters = get_adapters()
-        for event in tutor.student_model_events:
-            await adapters.student_model.update_from_event(event)
-        reviewed_attempt_count = attempt_count
+        _, student, tutor = await run_tutor_pipeline(context)
+        if request.submission_role == "STANDALONE_ATTEMPT":
+            adapters = get_adapters()
+            for event in tutor.student_model_events:
+                student = await adapters.student_model.update_from_event(
+                    event,
+                    context,
+                    access_token,
+                )
+            recommended = (
+                student.recommended_entry_phase or tutor.next_phase_recommendation
+            )
+            new_phase = resolve_transition(session.current_phase, recommended)
+            if new_phase is not None:
+                fetched = get_next_question(
+                    session.concept_id,
+                    new_phase,
+                    session.question_id,
+                )
+                if fetched is None:
+                    raise QuestionFetchError(session.concept_id, new_phase)
+                question_text, _correct_answer, question_id = fetched
+                transition_updates = {
+                    "previous_phase": session.current_phase,
+                    "current_question": question_text,
+                    "question_id": question_id,
+                    "question_number": session.question_number + 1,
+                    "attempt_count": 0,
+                    "question_completed": False,
+                    "phase_transitions": [
+                        *session.phase_transitions,
+                        PhaseTransitionRecord(
+                            previous_phase=session.current_phase,
+                            current_phase=new_phase,
+                            entry_reason=(
+                                "STUDENT_MODEL_RECOMMENDATION"
+                                if student.recommended_entry_phase is not None
+                                else "TUTOR_RECOMMENDATION"
+                            ),
+                            transitioned_at=datetime.now(timezone.utc),
+                        ),
+                    ],
+                    **PHASE_COUNTER_RESETS.get(new_phase, {}),
+                }
+        authoritative_recommendation = (
+            student.recommended_entry_phase or tutor.next_phase_recommendation
+        )
+        tutor = tutor.model_copy(
+            update={"next_phase_recommendation": authoritative_recommendation}
+        )
+        if request.submission_role == "STANDALONE_ATTEMPT":
+            reviewed_attempt_count = attempt_count
     tutor_latency_ms = (perf_counter() - tutor_started) * 1000
     canvas_draw = plan_canvas_draw(tutor, canvas_regions)
 
@@ -140,14 +201,29 @@ async def submit_canvas(request: CanvasSubmitRequest) -> CanvasSubmitResponse:
         updated_history = []
     else:
         updated_history = updated_history[-rules.conversation_rules.max_recent_messages :]
-    await record_canvas_submission(
-        request.session_id,
-        request.student_id,
-        record,
-        reviewed_attempt_count,
-        session.question_completed or tutor.evaluation == "CORRECT",
-        updated_history,
-    )
+    if request.submission_role == "VOICE_ATTACHMENT":
+        await record_canvas_attachment(
+            request.session_id,
+            request.student_id,
+            record,
+        )
+    else:
+        await record_canvas_submission(
+            request.session_id,
+            request.student_id,
+            record,
+            reviewed_attempt_count,
+            session.question_completed or tutor.evaluation == "CORRECT",
+            updated_history,
+        )
+        if new_phase is not None:
+            _apply_canvas_transition(
+                request,
+                new_phase,
+                transition_updates,
+                ocr,
+                tutor,
+            )
 
     return CanvasSubmitResponse(
         session_id=request.session_id,
@@ -159,4 +235,29 @@ async def submit_canvas(request: CanvasSubmitRequest) -> CanvasSubmitResponse:
         tutor=tutor,
         latency=latency,
         canvas_draw=canvas_draw,
+    )
+
+
+def _apply_canvas_transition(
+    request: CanvasSubmitRequest,
+    new_phase: Phase,
+    transition_updates: dict[str, object],
+    ocr: VisionOCRResult,
+    tutor: TutorResult,
+) -> None:
+    """Apply an authoritative phase recommendation for a standalone attempt."""
+
+    update_interaction_state(
+        request.session_id,
+        request.student_id,
+        new_phase,
+        0,
+        new_phase,
+        request.transcript_confidence,
+        None,
+        ocr,
+        tutor.visual_cue.show,
+        len(tutor.scaffold_steps_delivered) > 0,
+        tutor.scaffold_steps_delivered,
+        transition_updates=transition_updates,
     )

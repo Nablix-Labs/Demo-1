@@ -1,5 +1,6 @@
 from fastapi import APIRouter, WebSocket
 
+from app.api.auth import AccessToken
 from app.models.interaction import InteractionResponse
 from app.models.voice import (
     VoiceRequest,
@@ -34,8 +35,9 @@ async def voice_session_start_endpoint(
 @router.post("/transcript", response_model=InteractionResponse)
 async def voice_transcript_endpoint(
     request: VoiceTranscriptRequest,
+    access_token: AccessToken,
 ) -> InteractionResponse:
-    return await process_voice_transcript(request)
+    return await process_voice_transcript(request, access_token)
 
 
 @router.post("/tts")

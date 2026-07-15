@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from fastapi import HTTPException
 
 from app.models.adapters import ConversationMessage, VisionOCRResult
@@ -5,9 +7,12 @@ from app.models.canvas import CanvasSubmissionRecord
 from app.models.fields import Phase
 from app.models.session import (
     CanvasState,
+    QuestionAttemptRecord,
     SessionEndRequest,
+    SessionPerformance,
     SessionRecord,
     SessionStartRequest,
+    SessionSummary,
     VoiceState,
 )
 from app.services.phase_transition import UI_STATE_FLAGS
@@ -148,6 +153,7 @@ def _recover_demo_session(
         session_id=session_id,
         student_id=student_id,
         concept_id="ALG_LINEAR_ONE_STEP",
+        started_at=datetime.now(timezone.utc),
         interaction_mode="VOICE",
         current_phase=current_phase,
         current_question=question,
@@ -172,6 +178,7 @@ async def start_session(request: SessionStartRequest) -> SessionRecord:
         session_id=_build_session_id(),
         student_id=request.student_id,
         concept_id=request.concept_id,
+        started_at=datetime.now(timezone.utc),
         interaction_mode=request.interaction_mode,
         current_phase=initial_phase,
         current_question=question,
@@ -196,14 +203,65 @@ async def get_session(session_id: str) -> SessionRecord:
     return session
 
 
+def assemble_session_summary(session: SessionRecord, ended_at: datetime) -> SessionSummary:
+    """Build the final summary from recorded session activity."""
+
+    phases_completed: list[Phase] = []
+    for transition in session.phase_transitions:
+        if transition.previous_phase not in phases_completed:
+            phases_completed.append(transition.previous_phase)
+    if session.current_phase not in phases_completed:
+        phases_completed.append(session.current_phase)
+
+    phase_4_entry_reason: str | None = next(
+        (
+            transition.entry_reason
+            for transition in session.phase_transitions
+            if transition.current_phase == "INDEPENDENT_PRACTICE"
+        ),
+        None,
+    )
+    correct_attempts: int = sum(
+        attempt.evaluation == "CORRECT" for attempt in session.per_question_history
+    )
+    total_attempts: int = len(session.per_question_history)
+    return SessionSummary(
+        session_id=session.session_id,
+        student_id=session.student_id,
+        concept_id=session.concept_id,
+        session_date=session.started_at,
+        session_duration_seconds=max(0, int((ended_at - session.started_at).total_seconds())),
+        interaction_mode=session.interaction_mode,
+        phase_4_entry_reason=phase_4_entry_reason,
+        phases_completed=phases_completed,
+        session_performance=SessionPerformance(
+            total_attempts=total_attempts,
+            correct_attempts=correct_attempts,
+            incorrect_attempts=total_attempts - correct_attempts,
+            hints_used=len(session.hint_levels_used),
+            hint_levels_used=session.hint_levels_used,
+            scaffold_steps_delivered=None,
+            canvas_submissions=len(session.canvas_submissions),
+        ),
+        per_question_history=session.per_question_history,
+        scaffold_history=None,
+        canvas_feedback_history=[
+            submission.tutor.canvas_feedback for submission in session.canvas_submissions
+        ],
+        phase_transitions=session.phase_transitions,
+    )
+
+
 async def end_session(request: SessionEndRequest) -> SessionRecord:
     """Mark a stored mock session as ended."""
 
     session: SessionRecord = _get_owned_session(request.session_id, request.student_id)
+    summary: SessionSummary = assemble_session_summary(session, datetime.now(timezone.utc))
     ended_session: SessionRecord = session.model_copy(
         update={
             "status": "ended",
             "message": "Session ended.",
+            "session_summary": summary,
         }
     )
     _sessions[request.session_id] = ended_session
@@ -249,17 +307,69 @@ async def record_canvas_submission(
             detail=f"Session with ID {session_id} has ended.",
         )
 
+    per_question_history: list[QuestionAttemptRecord] = session.per_question_history
+    if record.tutor.evaluation != "UNCLEAR":
+        per_question_history = [
+            *per_question_history,
+            QuestionAttemptRecord(
+                question_id=session.question_id,
+                phase=session.current_phase,
+                evaluation=record.tutor.evaluation,
+                input_source="CANVAS",
+                hint_level_used=record.tutor.hint_level,
+                attempted_at=record.submitted_at,
+            ),
+        ]
     updated_session: SessionRecord = session.model_copy(
         update={
             "canvas_submissions": [*session.canvas_submissions, record],
             "attempt_count": attempt_count,
             "question_completed": question_completed,
             "conversation_history": conversation_history,
+            "per_question_history": per_question_history,
         }
     )
     # This read-modify-write is safe only while the mock backend uses one worker.
     _sessions[session_id] = updated_session
     return updated_session
+
+
+async def record_canvas_attachment(
+    session_id: str,
+    student_id: str,
+    record: CanvasSubmissionRecord,
+) -> SessionRecord:
+    """Store voice-attached OCR without counting a second student attempt."""
+
+    session: SessionRecord = _get_owned_session(session_id, student_id)
+    if session.status == "ended":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Session with ID {session_id} has ended.",
+        )
+    updated_session: SessionRecord = session.model_copy(
+        update={"canvas_submissions": [*session.canvas_submissions, record]}
+    )
+    _sessions[session_id] = updated_session
+    return updated_session
+
+
+def get_canvas_submission(
+    session: SessionRecord,
+    submission_id: str | None,
+) -> CanvasSubmissionRecord | None:
+    """Return a session-owned canvas submission by its public identifier."""
+
+    if submission_id is None:
+        return None
+    return next(
+        (
+            submission
+            for submission in session.canvas_submissions
+            if submission.submission_id == submission_id
+        ),
+        None,
+    )
 
 
 def increment_hint_count(session_id: str) -> int:
@@ -269,7 +379,12 @@ def increment_hint_count(session_id: str) -> int:
     if session is None:
         raise _session_not_found(session_id)
     new_count = session.hint_count + 1
-    _sessions[session_id] = session.model_copy(update={"hint_count": new_count})
+    _sessions[session_id] = session.model_copy(
+        update={
+            "hint_count": new_count,
+            "hint_levels_used": [*session.hint_levels_used, new_count],
+        }
+    )
     return new_count
 
 

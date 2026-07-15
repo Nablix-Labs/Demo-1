@@ -5,7 +5,11 @@ from app.models.adapters import AdapterContext, StudentModelEvent
 from app.models.fields import Phase
 from app.models.hint import HintRequest, HintResponse
 from app.models.session import SessionRecord
-from app.services.interaction_service import _current_hint_level_from, run_tutor_pipeline
+from app.services.interaction_service import (
+    _current_hint_level_from,
+    _independent_correct_in_session,
+    run_tutor_pipeline,
+)
 from app.services.session_service import (
     _get_owned_session_for_turn,
     correct_answer_for,
@@ -45,7 +49,10 @@ def _validate_hint_count(request_count: int, stored_count: int) -> None:
         )
 
 
-async def process_hint(request: HintRequest) -> HintResponse:
+async def process_hint(
+    request: HintRequest,
+    access_token: str,
+) -> HintResponse:
     """Create a short hint response using the shared tutor pipeline.
 
     The next hint level is the current count plus one (guide 6.4). The hint text
@@ -71,6 +78,7 @@ async def process_hint(request: HintRequest) -> HintResponse:
         current_phase=session.current_phase,
         input_source="TEXT",
         attempt_count=session.attempt_count,
+        independent_correct_in_session=_independent_correct_in_session(session),
         question_completed=session.question_completed,
         question_number=session.question_number,
         current_hint_level=_current_hint_level_from(session.hint_count),
@@ -79,14 +87,16 @@ async def process_hint(request: HintRequest) -> HintResponse:
     )
     _, _, tutor = await run_tutor_pipeline(context)
     adapters = get_adapters()
-    await adapters.student_model.update_from_event(
+    student = await adapters.student_model.update_from_event(
         StudentModelEvent(
             event_type="HINT_REQUESTED",
             evaluation=tutor.evaluation,
             error_type=tutor.error_type,
             hint_level_used=next_hint_level,
             independent_success=False,
-        )
+        ),
+        context,
+        access_token,
     )
     stored_hint_count: int = increment_hint_count(request.session_id)
     if stored_hint_count != next_hint_level:
@@ -101,4 +111,5 @@ async def process_hint(request: HintRequest) -> HintResponse:
         hint=tutor.tutor_message,
         response_strategy=tutor.response_strategy,
         answer_reveal_allowed=tutor.answer_reveal_allowed,
+        recommended_entry_phase=student.recommended_entry_phase,
     )

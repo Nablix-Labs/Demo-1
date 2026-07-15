@@ -1,4 +1,5 @@
 import re
+from datetime import datetime, timezone
 
 from fastapi import HTTPException
 
@@ -16,7 +17,7 @@ from app.models.adapters import (
 )
 from app.models.fields import Phase
 from app.models.interaction import InteractionRequest, InteractionResponse
-from app.models.session import SessionRecord
+from app.models.session import PhaseTransitionRecord, QuestionAttemptRecord, SessionRecord
 from app.services.phase_transition import (
     DEFAULT_TRANSITION_MESSAGE,
     PHASE_COUNTER_RESETS,
@@ -26,6 +27,7 @@ from app.services.phase_transition import (
 from app.services.session_service import (
     _get_owned_session_for_turn,
     correct_answer_for,
+    get_canvas_submission,
     get_next_question,
     restore_interaction_progress,
     update_interaction_state,
@@ -140,6 +142,15 @@ def _current_hint_level_from(hint_count: int) -> int | None:
     return min(hint_count, 3)
 
 
+def _independent_correct_in_session(session: SessionRecord) -> int:
+    return sum(
+        attempt.phase == session.current_phase
+        and attempt.evaluation == "CORRECT"
+        and attempt.hint_level_used == 0
+        for attempt in session.per_question_history
+    )
+
+
 def _next_hint_count_from(request: InteractionRequest) -> int:
     if request.interaction_type == "HINT_REQUEST":
         return request.hint_count + 1
@@ -197,7 +208,10 @@ def _response_from(
     )
 
 
-async def process_interaction(request: InteractionRequest) -> InteractionResponse:
+async def process_interaction(
+    request: InteractionRequest,
+    access_token: str,
+) -> InteractionResponse:
     """Run a student interaction through the tutor pipeline and return the session view.
 
     The raw RAG/student/tutor outputs still drive the response, but only the
@@ -261,6 +275,8 @@ async def process_interaction(request: InteractionRequest) -> InteractionRespons
         session.conversation_history,
         rules.conversation_rules.max_recent_messages,
     )
+    canvas_submission = get_canvas_submission(session, request.canvas_snapshot_id)
+    ocr = canvas_submission.ocr if canvas_submission is not None else None
 
     next_attempt_count = (
         session.attempt_count + 1
@@ -279,11 +295,16 @@ async def process_interaction(request: InteractionRequest) -> InteractionRespons
         input_source=request.input_source,
         transcript_confidence=request.transcript_confidence,
         attempt_count=next_attempt_count,
+        independent_correct_in_session=_independent_correct_in_session(session),
         question_completed=session.question_completed,
         question_number=session.question_number,
         current_hint_level=_current_hint_level_from(request.hint_count),
         concept_id=request.concept_id,
         conversation_history=recent_history,
+        detected_equation=ocr.detected_equation if ocr is not None else None,
+        detected_steps=ocr.detected_steps if ocr is not None else [],
+        ocr_confidence=ocr.confidence if ocr is not None else None,
+        canvas_regions=ocr.detected_regions if ocr is not None else [],
     )
     adapters = get_adapters()
     safety_check = await adapters.safety.check(context)
@@ -325,7 +346,11 @@ async def process_interaction(request: InteractionRequest) -> InteractionRespons
     _, student, tutor = await run_tutor_pipeline(context)
     tutor = tutor.model_copy(update={"safety_check": safety_check})
     for event in tutor.student_model_events:
-        await adapters.student_model.update_from_event(event)
+        student = await adapters.student_model.update_from_event(
+            event,
+            context,
+            access_token,
+        )
 
     visual_cue = tutor.visual_cue if tutor.visual_cue.show else None
     scaffold_steps = tutor.scaffold_steps_delivered
@@ -342,6 +367,7 @@ async def process_interaction(request: InteractionRequest) -> InteractionRespons
     new_phase = resolve_transition(session.current_phase, recommended)
 
     completed = tutor.evaluation == "CORRECT"
+    next_hint_count: int = _next_hint_count_from(request)
     # Persisted every turn: the real attempt counter and completion state Sanya
     # reads back on the next turn.
     state_updates: dict[str, object] = {
@@ -349,6 +375,20 @@ async def process_interaction(request: InteractionRequest) -> InteractionRespons
         "question_completed": completed,
         "conversation_history": conversation_history,
     }
+    if request.interaction_type == "ANSWER_SUBMISSION":
+        state_updates["per_question_history"] = [
+            *session.per_question_history,
+            QuestionAttemptRecord(
+                question_id=session.question_id,
+                phase=session.current_phase,
+                evaluation=tutor.evaluation,
+                input_source=request.input_source,
+                hint_level_used=tutor.hint_level,
+                attempted_at=datetime.now(timezone.utc),
+            ),
+        ]
+    elif request.interaction_type == "HINT_REQUEST":
+        state_updates["hint_levels_used"] = [*session.hint_levels_used, next_hint_count]
     if new_phase is not None:
         # Fetch before committing any state: an Aditya failure raises here,
         # so the session (and its phase) is never touched — rollback for free.
@@ -364,6 +404,19 @@ async def process_interaction(request: InteractionRequest) -> InteractionRespons
                 "question_number": session.question_number + 1,
                 "attempt_count": 0,
                 "question_completed": False,
+                "phase_transitions": [
+                    *session.phase_transitions,
+                    PhaseTransitionRecord(
+                        previous_phase=session.current_phase,
+                        current_phase=new_phase,
+                        entry_reason=(
+                            "STUDENT_MODEL_RECOMMENDATION"
+                            if student.recommended_entry_phase is not None
+                            else "TUTOR_RECOMMENDATION"
+                        ),
+                        transitioned_at=datetime.now(timezone.utc),
+                    ),
+                ],
                 **PHASE_COUNTER_RESETS.get(new_phase, {}),
             }
         )
@@ -392,7 +445,7 @@ async def process_interaction(request: InteractionRequest) -> InteractionRespons
         request.session_id,
         request.student_id,
         next_phase,
-        _next_hint_count_from(request),
+        next_hint_count,
         next_phase,
         request.transcript_confidence,
         request.canvas_snapshot_id,

@@ -12,7 +12,7 @@ from app.models.fields import (
     SessionId,
     StudentId,
 )
-from app.models.session import CanvasState, VoiceState
+from app.models.session import CanvasState, SessionSummary, VoiceState
 
 
 class InteractionRequest(BaseModel):
@@ -66,4 +66,4 @@ class InteractionResponse(BaseModel):
     attempt_count: int
     question_completed: bool
     phase_indicator: Phase
-    session_summary: str | None
+    session_summary: SessionSummary | None

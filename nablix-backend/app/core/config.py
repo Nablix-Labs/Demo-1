@@ -1,6 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -11,6 +12,8 @@ class Settings(BaseSettings):
     tutor_engine_url: str = "http://localhost:8001"
     voice_service_url: str = "http://localhost:8004" #chiru+aditya
     safety_service_url: str = "http://localhost:8004" #manjusha
+    student_model_url: str = ""
+    student_model_topic_ids: dict[str, int] = Field(default_factory=dict)
     cors_allowed_origins: list[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
@@ -24,6 +27,7 @@ class Settings(BaseSettings):
     #Mock flags - True during sprint
     # (the tutor has no flag: it always runs the in-process AI Engine)
     use_mock_tutor: bool = True
+    use_mock_student_model: bool = False
     use_mock_voice: bool = True
     use_mock_vision: bool = True
 

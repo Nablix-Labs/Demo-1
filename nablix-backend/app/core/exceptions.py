@@ -35,3 +35,36 @@ class AdapterError(HTTPException):
         # Detail must be in the message itself: `extra` fields are not
         # rendered by the console formatter, which made failures invisible.
         logger.error(f"adapter_error adapter={adapter_name} detail={detail}")
+
+
+class AdapterRequestRejected(HTTPException):
+    """A downstream service rejected a validly delivered request."""
+
+    def __init__(
+        self,
+        adapter_name: str,
+        url: str,
+        status_code: int,
+        body: str,
+        payload: dict[str, object],
+    ) -> None:
+        detail = (
+            f"{adapter_name} rejected request url={url} status={status_code} "
+            f"body={body} payload={payload}"
+        )
+        super().__init__(status_code=status_code, detail=detail)
+        self.error_code = (
+            "AUTHENTICATION_FAILED"
+            if status_code in (401, 403)
+            else "DOWNSTREAM_REQUEST_REJECTED"
+        )
+        logger.error(
+            "adapter_request_rejected",
+            extra={
+                "adapter_name": adapter_name,
+                "url": url,
+                "status_code": status_code,
+                "response_body": body,
+                "payload": payload,
+            },
+        )
