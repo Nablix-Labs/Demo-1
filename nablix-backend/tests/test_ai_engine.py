@@ -79,12 +79,10 @@ class _FakeOpenAIResponse:
 def test_ai_engine_can_use_openai_when_feature_flag_is_enabled(monkeypatch) -> None:
     request_bodies = []
     responses = [
-        _FakeOpenAIResponse('{"evaluation": "PARTIALLY_CORRECT", "confidence": 0.88}'),
         _FakeOpenAIResponse(
-            '{"error_type": "ARITHMETIC_ERROR", "error_description": "Arithmetic mismatch.", "confidence": 0.9}'
-        ),
-        _FakeOpenAIResponse(
-            '{"tutor_message": "Check the inverse operation first.", '
+            '{"intent":"SUBMITTING_ANSWER","evaluation":"PARTIALLY_CORRECT",'
+            '"error_type":"ARITHMETIC_ERROR","response_strategy":"GUIDED_HINT",'
+            '"hint_level":1,"tutor_message": "Check the inverse operation first.", '
             '"tutor_message_voice_optimised": "Check the inverse operation first.", "confidence": 0.86}'
         ),
     ]
@@ -130,7 +128,7 @@ def test_ai_engine_can_use_openai_when_feature_flag_is_enabled(monkeypatch) -> N
     assert body["tutor_message"] == "Check the inverse operation first."
     assert body["answer_reveal_allowed"] is False
     assert body["guardrail_check"]["passed"] is True
-    assert len(request_bodies) == 3
+    assert len(request_bodies) == 1
 
     registry = load_prompt_registry()
     for request_body in request_bodies:
@@ -149,6 +147,11 @@ def test_ai_engine_can_use_openai_when_feature_flag_is_enabled(monkeypatch) -> N
         assert "schema" in request_body["text"]["format"]
         assert "prompt_cache_key" not in request_body
         assert "cache_control" not in json.dumps(request_body)
+    user_payload = json.loads(request_bodies[0]["input"][-1]["content"])
+    assert user_payload["component"] == "tutor_turn"
+    assert user_payload["correct_answer"] == "x = 4"
+    assert user_payload["attempt_count"] == 1
+    assert user_payload["answer_reveal_allowed"] is False
 
 
 def test_canvas_math_decision_uses_openai_wording_without_exposing_answer(monkeypatch) -> None:
@@ -228,8 +231,7 @@ def test_canvas_math_decision_uses_openai_wording_without_exposing_answer(monkey
     assert "correct_answer" not in user_payload
 
 
-def test_correct_openai_feedback_uses_generic_confirmation(monkeypatch) -> None:
-    responses = [_FakeOpenAIResponse('{"evaluation": "CORRECT", "confidence": 0.99}')]
+def test_deterministic_correct_answer_uses_one_openai_call_and_preserves_correct_result(monkeypatch) -> None:
     request_bodies = []
 
     class _CorrectAnswerOpenAIClient:
@@ -244,7 +246,13 @@ def test_correct_openai_feedback_uses_generic_confirmation(monkeypatch) -> None:
 
         def post(self, *args, **kwargs) -> _FakeOpenAIResponse:
             request_bodies.append(kwargs["json"])
-            return responses.pop(0)
+            return _FakeOpenAIResponse(
+                '{"intent":"SUBMITTING_ANSWER","evaluation":"INCORRECT",'
+                '"error_type":"ARITHMETIC_ERROR","response_strategy":"GUIDED_HINT",'
+                '"hint_level":1,"tutor_message":"Correct. Nice work explaining your answer.",'
+                '"tutor_message_voice_optimised":"Correct. Nice work explaining your answer.",'
+                '"confidence":0.98}'
+            )
 
     monkeypatch.setenv("NABLIX_USE_OPENAI_AI_ENGINE", "true")
     monkeypatch.setenv("NABLIX_OPENAI_API_KEY", "sk-test")
@@ -272,6 +280,144 @@ def test_correct_openai_feedback_uses_generic_confirmation(monkeypatch) -> None:
     assert len(request_bodies) == 1
 
 
+@pytest.mark.parametrize(
+    "student_input",
+    ["five", "x equals five", "x is equal to five", "x is equals to five"],
+)
+def test_natural_language_correct_answer_uses_one_openai_turn_and_safe_confirmation(
+    monkeypatch,
+    student_input: str,
+) -> None:
+    request_bodies: list[dict[str, object]] = []
+
+    class _NaturalAnswerOpenAIClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self) -> "_NaturalAnswerOpenAIClient":
+            return self
+
+        def __exit__(self, *exc) -> bool:
+            return False
+
+        def post(self, *args, **kwargs) -> _FakeOpenAIResponse:
+            request_bodies.append(kwargs["json"])
+            return _FakeOpenAIResponse(
+                '{"intent":"EXPRESSING_CONFUSION","evaluation":"PARTIALLY_CORRECT",'
+                '"error_type":"CONCEPTUAL_MISUNDERSTANDING",'
+                '"response_strategy":"CLARIFY","hint_level":null,'
+                '"tutor_message":"Correct. Nice work explaining your answer.",'
+                '"tutor_message_voice_optimised":"Correct. Nice work explaining your answer.",'
+                '"confidence":0.98}'
+            )
+
+    monkeypatch.setenv("NABLIX_USE_OPENAI_AI_ENGINE", "true")
+    monkeypatch.setenv("NABLIX_OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(openai_client.httpx, "Client", _NaturalAnswerOpenAIClient)
+    get_settings.cache_clear()
+
+    response = client.post(
+        "/ai-engine/classify",
+        json={
+            "question_context": "x + 4 = 9",
+            "expected_answer": "x = 5",
+            "student_input": student_input,
+            "phase": "GUIDED_PRACTICE",
+            "input_source": "VOICE",
+            "transcript_confidence": 0.96,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["evaluation"] == "CORRECT"
+    assert body["intent"] == "SUBMITTING_ANSWER"
+    assert body["error_type"] is None
+    assert body["response_strategy"] == "CONFIRM_CORRECT"
+    assert body["tutor_message"] == "Correct. Nice work explaining your answer."
+    assert body["guardrail_check"]["passed"] is True
+    assert len(request_bodies) == 1
+    user_payload = json.loads(request_bodies[0]["input"][-1]["content"])
+    assert user_payload["grounded_intent"] == "SUBMITTING_ANSWER"
+    assert user_payload["grounded_evaluation"] == "CORRECT"
+    assert user_payload["grounded_error_type"] is None
+
+
+def test_unified_openai_turn_cannot_reveal_answer_for_incorrect_attempt(monkeypatch) -> None:
+    request_bodies: list[dict[str, object]] = []
+
+    class _RevealingOpenAIClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self) -> "_RevealingOpenAIClient":
+            return self
+
+        def __exit__(self, *exc) -> bool:
+            return False
+
+        def post(self, *args, **kwargs) -> _FakeOpenAIResponse:
+            request_bodies.append(kwargs["json"])
+            return _FakeOpenAIResponse(
+                '{"intent":"SUBMITTING_ANSWER","evaluation":"INCORRECT",'
+                '"error_type":"ARITHMETIC_ERROR","response_strategy":"GUIDED_HINT",'
+                '"hint_level":1,"tutor_message":"The answer is x = 5.",'
+                '"tutor_message_voice_optimised":"The answer is x equals 5.","confidence":0.93}'
+            )
+
+    monkeypatch.setenv("NABLIX_USE_OPENAI_AI_ENGINE", "true")
+    monkeypatch.setenv("NABLIX_OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(openai_client.httpx, "Client", _RevealingOpenAIClient)
+    get_settings.cache_clear()
+
+    response = client.post(
+        "/ai-engine/classify",
+        json={
+            "question_context": "x + 4 = 9",
+            "expected_answer": "x = 5",
+            "student_input": "x = 10",
+            "phase": "GUIDED_PRACTICE",
+            "input_source": "TEXT",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["evaluation"] == "INCORRECT"
+    assert body["tutor_message"] == "I cannot give the final answer, but I can help you with the next step."
+    assert body["guardrail_check"]["passed"] is False
+    assert len(request_bodies) == 1
+
+
+def test_low_confidence_voice_input_skips_openai_tutor_turn(monkeypatch) -> None:
+    class _UnexpectedOpenAIClient:
+        def generate_tutor_turn(self, **kwargs) -> openai_client.OpenAITutorTurn:
+            raise AssertionError("Low-confidence voice input must not call OpenAI.")
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _UnexpectedOpenAIClient(),
+    )
+
+    response = classify_student_response(
+        ClassificationRequest(
+            question="Solve for x: x + 4 = 9",
+            correct_answer="x = 5",
+            student_input="x might be thirteen",
+            current_phase="GUIDED_PRACTICE",
+            input_source="VOICE",
+            transcript_confidence=0.2,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.evaluation == "UNCLEAR"
+    assert response.response_strategy == "CLARIFY"
+    assert response.tutor_message == "I could not read that clearly. Please try saying or typing your answer again."
+
+
 def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> None:
     request_bodies = []
 
@@ -287,7 +433,12 @@ def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> 
 
         def post(self, *args, **kwargs) -> _FakeOpenAIResponse:
             request_bodies.append(kwargs["json"])
-            return _FakeOpenAIResponse('{"evaluation": "INCORRECT", "confidence": 0.91}')
+            return _FakeOpenAIResponse(
+                '{"intent":"SUBMITTING_ANSWER","evaluation":"INCORRECT",'
+                '"error_type":"ARITHMETIC_ERROR","response_strategy":"GUIDED_HINT",'
+                '"hint_level":1,"tutor_message":"Check your arithmetic.",'
+                '"tutor_message_voice_optimised":"Check your arithmetic.","confidence":0.91}'
+            )
 
     monkeypatch.setattr(openai_client.httpx, "Client", _FakeOpenAIClient)
 
@@ -298,11 +449,19 @@ def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> 
         prompt_cache_key_enabled=False,
         retry_count=0,
     )
-    disabled_client.evaluate_answer(
+    disabled_client.generate_tutor_turn(
         question="Solve for x: x + 4 = 9",
         correct_answer="x = 5",
         student_input="x = 13",
         phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+        question_completed=False,
+        grounded_intent="SUBMITTING_ANSWER",
+        grounded_evaluation="INCORRECT",
+        grounded_error_type="ARITHMETIC_ERROR",
         conversation_history=[],
     )
 
@@ -313,11 +472,19 @@ def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> 
         prompt_cache_key_enabled=True,
         retry_count=0,
     )
-    enabled_client.evaluate_answer(
+    enabled_client.generate_tutor_turn(
         question="Solve for x: x + 4 = 9",
         correct_answer="x = 5",
         student_input="x = 13",
         phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+        question_completed=False,
+        grounded_intent="SUBMITTING_ANSWER",
+        grounded_evaluation="INCORRECT",
+        grounded_error_type="ARITHMETIC_ERROR",
         conversation_history=[
             ConversationMessage(role="assistant", content="Try the inverse operation.")
         ],
@@ -335,8 +502,17 @@ def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> 
 
 def test_deterministic_correct_result_cannot_be_downgraded_by_openai(monkeypatch) -> None:
     class _IncorrectOpenAIClient:
-        def evaluate_answer(self, **kwargs) -> openai_client.OpenAIAnswerEvaluation:
-            return openai_client.OpenAIAnswerEvaluation(evaluation="INCORRECT", confidence=0.9)
+        def generate_tutor_turn(self, **kwargs) -> openai_client.OpenAITutorTurn:
+            return openai_client.OpenAITutorTurn(
+                intent="SUBMITTING_ANSWER",
+                evaluation="INCORRECT",
+                error_type="ARITHMETIC_ERROR",
+                response_strategy="GUIDED_HINT",
+                hint_level=1,
+                tutor_message="Correct. Nice work explaining your answer.",
+                tutor_message_voice_optimised="Correct. Nice work explaining your answer.",
+                confidence=0.98,
+            )
 
     monkeypatch.setattr(
         classifier,

@@ -15,7 +15,16 @@ from app.ai_engine.prompt_registry import (
     build_openai_tutor_prompt_metadata,
     sha256_text,
 )
-from app.ai_engine.schemas import ErrorType, EvaluationCategory, LearningPhase, StrictSchema
+from app.ai_engine.schemas import (
+    ErrorType,
+    EvaluationCategory,
+    HintLevel,
+    InputSource,
+    IntentType,
+    LearningPhase,
+    ResponseStrategy,
+    StrictSchema,
+)
 from app.core.exceptions import AdapterError
 from app.core.logger import logger
 from app.models.adapters import ConversationMessage
@@ -24,14 +33,14 @@ from app.models.adapters import ConversationMessage
 _OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 
 
-class OpenAIAnswerEvaluation(StrictSchema):
-    evaluation: EvaluationCategory
-    confidence: float = Field(ge=0.0, le=1.0)
-
-
-class OpenAIErrorDiagnosis(StrictSchema):
-    error_type: ErrorType
-    error_description: str
+class OpenAITutorTurn(StrictSchema):
+    intent: IntentType
+    evaluation: EvaluationCategory | None
+    error_type: ErrorType | None
+    response_strategy: ResponseStrategy
+    hint_level: HintLevel | None
+    tutor_message: str
+    tutor_message_voice_optimised: str
     confidence: float = Field(ge=0.0, le=1.0)
 
 
@@ -65,17 +74,25 @@ class OpenAIAIEngineClient:
         self._prompt_cache_key_enabled = prompt_cache_key_enabled
         self._retry_count = retry_count
 
-    def evaluate_answer(
+    def generate_tutor_turn(
         self,
         question: str,
         correct_answer: str,
         student_input: str,
         phase: LearningPhase,
+        input_source: InputSource,
+        transcript_confidence: float | None,
+        attempt_count: int,
+        current_hint_level: HintLevel | None,
+        question_completed: bool,
+        grounded_intent: IntentType,
+        grounded_evaluation: EvaluationCategory | None,
+        grounded_error_type: ErrorType | None,
         conversation_history: list[ConversationMessage],
-    ) -> OpenAIAnswerEvaluation:
-        schema = OpenAIAnswerEvaluation.model_json_schema()
+    ) -> OpenAITutorTurn:
+        schema = OpenAITutorTurn.model_json_schema()
         content = self._request_json(
-            name="answer_evaluation",
+            name="tutor_turn",
             schema=schema,
             phase=phase,
             active_triggers=[],
@@ -84,32 +101,18 @@ class OpenAIAIEngineClient:
                 "question": question,
                 "correct_answer": correct_answer,
                 "student_input": student_input,
+                "input_source": input_source,
+                "transcript_confidence": transcript_confidence,
+                "attempt_count": attempt_count,
+                "current_hint_level": current_hint_level,
+                "question_completed": question_completed,
+                "grounded_intent": grounded_intent,
+                "grounded_evaluation": grounded_evaluation,
+                "grounded_error_type": grounded_error_type,
+                "answer_reveal_allowed": False,
             },
         )
-        return OpenAIAnswerEvaluation.model_validate(content)
-
-    def diagnose_error(
-        self,
-        question: str,
-        correct_answer: str,
-        student_input: str,
-        phase: LearningPhase,
-        conversation_history: list[ConversationMessage],
-    ) -> OpenAIErrorDiagnosis:
-        schema = OpenAIErrorDiagnosis.model_json_schema()
-        content = self._request_json(
-            name="error_diagnosis",
-            schema=schema,
-            phase=phase,
-            active_triggers=[],
-            conversation_history=conversation_history,
-            user_payload={
-                "question": question,
-                "correct_answer": correct_answer,
-                "student_input": student_input,
-            },
-        )
-        return OpenAIErrorDiagnosis.model_validate(content)
+        return OpenAITutorTurn.model_validate(content)
 
     def build_tutor_message(
         self,
@@ -234,6 +237,7 @@ class OpenAIAIEngineClient:
         try:
             response_payload = response.json()
             _log_openai_prompt_usage(
+                component=name,
                 model=self._model,
                 phase=phase,
                 prompt_metadata=prompt_metadata,
@@ -350,6 +354,7 @@ def build_openai_prompt_usage_log_metadata(
 
 
 def _log_openai_prompt_usage(
+    component: str,
     model: str,
     phase: LearningPhase,
     prompt_metadata: OpenAITutorPromptMetadata,
@@ -358,13 +363,16 @@ def _log_openai_prompt_usage(
 ) -> None:
     logger.info(
         "openai_prompt_cache_usage",
-        extra=build_openai_prompt_usage_log_metadata(
-            model=model,
-            phase=phase,
-            prompt_metadata=prompt_metadata,
-            response_payload=response_payload,
-            latency_ms=latency_ms,
-        ),
+        extra={
+            "component": component,
+            **build_openai_prompt_usage_log_metadata(
+                model=model,
+                phase=phase,
+                prompt_metadata=prompt_metadata,
+                response_payload=response_payload,
+                latency_ms=latency_ms,
+            ),
+        },
     )
 
 
