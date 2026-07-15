@@ -151,6 +151,10 @@ export interface NumeraState {
   // changing it restarts the session so the backend serves that equation.
   activeConceptId: string;
   activeQuestionId: string;
+
+  // Tutoring phase the session is in. Seeded from the session's current_phase
+  // and advanced from each interaction response's current_phase — the value we
+  // send back on the next turn, so the backend can drive phase transitions.
   currentPhase: string;
 
   // Voice
@@ -236,6 +240,7 @@ export interface NumeraState {
   setQuestionText: (q: string) => void;
   setQuestionNumber: (n: number) => void;
   setActiveEquation: (conceptId: string, questionId: string, label?: string) => void;
+  setCurrentPhase: (phase: string) => void;
   toggleMic: () => void;
   setMicMuted: (value: boolean) => void;
   setVoiceStatus: (s: NumeraState['voiceStatus']) => void;
@@ -301,7 +306,7 @@ export interface NumeraState {
 const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
-  | 'setQuestionText' | 'setQuestionNumber' | 'setActiveEquation' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus'
+  | 'setQuestionText' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus'
   | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue'
   | 'addTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript'
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
@@ -323,8 +328,10 @@ const initial: Omit<
   sessionState: 'idle',
   activeSlide: 2,
   totalSlides: 9,
-  questionText: '2x + 5 = 13',
-  questionNumber: 3,
+  // No hardcoded equation: the backend session drives the question. Empty until
+  // it loads so a stale demo equation never flashes on the live build.
+  questionText: '',
+  questionNumber: 0,
   activeConceptId: DEMO_CONCEPT_ID,
   activeQuestionId: DEMO_QUESTION_ID,
   currentPhase: DEMO_PHASE,
@@ -418,6 +425,8 @@ export const useNumeraStore = create<NumeraState>()(
       sessionId: null,
       ...(label ? { questionText: label } : {}),
     }),
+
+  setCurrentPhase: (currentPhase) => set({ currentPhase }),
 
   toggleMic: () =>
     set((s) => ({

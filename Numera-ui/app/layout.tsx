@@ -2,7 +2,6 @@ import type { Metadata } from 'next';
 import 'katex/dist/katex.min.css';
 import './globals.css';
 import AppFrame from '@/components/AppFrame';
-import FlowControls from '@/components/FlowControls';
 import NeedHelpButton from '@/components/support/NeedHelpButton';
 import SupportPanel from '@/components/support/SupportPanel';
 import RemoteAssistBanner from '@/components/support/RemoteAssistBanner';
@@ -31,8 +30,6 @@ export default function RootLayout({
         >
           <AppFrame>{children}</AppFrame>
         </div>
-        {/* Demo Director — drives the adaptive loop by hand (remove for prod) */}
-        <FlowControls />
         {/* Nablix Assist — in-app support, reachable from every route */}
         <NeedHelpButton />
         <SupportPanel />

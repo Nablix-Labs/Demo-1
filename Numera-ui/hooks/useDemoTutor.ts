@@ -139,6 +139,7 @@ export function useDemoTutor() {
         syncBackendSession(res);
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message });
+        if (res.current_phase) useNumeraStore.getState().setCurrentPhase(res.current_phase); // advance phase
         if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
         applyVisualCue(res); // backend may ask to show/hide the supporting visual
         speakTutor(res.message); // voice the reply — same verbatim text shown in chat
@@ -284,6 +285,7 @@ export function useDemoTutor() {
         console.groupEnd();
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message });
+        if (res.current_phase) useNumeraStore.getState().setCurrentPhase(res.current_phase); // advance phase
         if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
         applyVisualCue(res); // backend may ask to show/hide the supporting visual
         // Speak exactly what's shown in the chat. The backend's message_voice can

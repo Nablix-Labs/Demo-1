@@ -125,9 +125,7 @@ export default function MediaPanel() {
         // Fixed inner width so content doesn't reflow/wrap while the outer
         // <aside> is mid-transition between 234px and 28px.
         <div
-          // pb clears the fixed Demo Director bar (FlowControls) so the chat
-          // input at the bottom isn't hidden behind it.
-          className="flex flex-col min-h-0 h-full pb-12"
+          className="flex flex-col min-h-0 h-full"
           style={{ width: 234 }}
         >
           {/* Header */}
