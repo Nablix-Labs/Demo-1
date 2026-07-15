@@ -69,10 +69,21 @@ function errorMessage(err: unknown, fallback: string): string {
 const TUTOR_UNAVAILABLE = "Sorry — I couldn't reach the tutor just now. Please try again in a moment.";
 const HINT_UNAVAILABLE = "Sorry — I couldn't fetch a hint right now. Please try again in a moment.";
 
+function syncBackendSession(response: {
+  current_phase: string;
+  current_question: string;
+  question_id: string | null;
+}): void {
+  useNumeraStore.setState((state) => ({
+    currentPhase: response.current_phase,
+    activeQuestionId: response.question_id ?? state.activeQuestionId,
+    questionText: response.current_question.replace(/^solve for\s*x\s*:?\s*/i, '').trim(),
+  }));
+}
+
 export function useDemoTutor() {
   const sessionId = useNumeraStore((s) => s.sessionId);
   const setSessionId = useNumeraStore((s) => s.setSessionId);
-  const setQuestionText = useNumeraStore((s) => s.setQuestionText);
   const canvasExporter = useNumeraStore((s) => s.canvasExporter);
   const addTranscriptMessage = useNumeraStore((s) => s.addTranscriptMessage);
   const addTrailEntry = useNumeraStore((s) => s.addTrailEntry);
@@ -93,7 +104,7 @@ export function useDemoTutor() {
         });
         clearTrail();
         setSessionId(rec.session_id);
-        setQuestionText(rec.current_question);
+        syncBackendSession(rec);
         addTrailEntry({ kind: 'question', text: rec.current_question });
         return rec;
       } catch (err) {
@@ -101,7 +112,7 @@ export function useDemoTutor() {
         return null;
       }
     },
-    [setSessionId, setQuestionText, addTrailEntry, clearTrail]
+    [setSessionId, addTrailEntry, clearTrail]
   );
 
   /** Send a typed student answer through the tutor pipeline. */
@@ -113,17 +124,19 @@ export function useDemoTutor() {
       if (!apiEnabled() || !sessionId) return null;
       addTrailEntry({ kind: 'answer', text });
       try {
+        const state = useNumeraStore.getState();
         const res = await sendInteraction({
           session_id: sessionId,
           student_id: STUDENT_ID,
           interaction_type: 'ANSWER_SUBMISSION',
           input_source: 'TEXT',
           text_input: text,
-          current_phase: ctx.current_phase,
+          current_phase: state.currentPhase,
           concept_id: ctx.concept_id,
-          question_id: ctx.question_id,
+          question_id: state.activeQuestionId,
           hint_count: ctx.hint_count,
         });
+        syncBackendSession(res);
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message });
         if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
@@ -179,13 +192,14 @@ export function useDemoTutor() {
     ): Promise<HintResponse | null> => {
       if (!apiEnabled() || !sessionId) return null;
       try {
+        const state = useNumeraStore.getState();
         const res = await requestHint({
           session_id: sessionId,
           student_id: STUDENT_ID,
-          current_phase: ctx.current_phase,
+          current_phase: state.currentPhase,
           current_hint_count: ctx.current_hint_count,
           concept_id: ctx.concept_id,
-          question_id: ctx.question_id,
+          question_id: state.activeQuestionId,
         });
         addTranscriptMessage({ role: 'ai', text: res.hint });
         addTrailEntry({ kind: 'hint', text: res.hint, meta: `Hint ${res.hint_level}` });
@@ -249,6 +263,7 @@ export function useDemoTutor() {
       }
 
       try {
+        const state = useNumeraStore.getState();
         const interactionReq = {
           session_id: sessionId,
           student_id: STUDENT_ID,
@@ -257,13 +272,14 @@ export function useDemoTutor() {
           voice_transcript: transcript,
           transcript_confidence: confidence,
           canvas_snapshot_id: canvasSnapshotId,
-          current_phase: ctx.current_phase,
+          current_phase: state.currentPhase,
           concept_id: ctx.concept_id,
-          question_id: ctx.question_id,
+          question_id: state.activeQuestionId,
           hint_count: ctx.hint_count,
         };
         console.log('→ POST /interaction', interactionReq);
         const res = await sendInteraction(interactionReq);
+        syncBackendSession(res);
         console.log('← /interaction', res);
         console.groupEnd();
         addTranscriptMessage({ role: 'ai', text: res.message });

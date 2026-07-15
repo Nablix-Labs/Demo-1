@@ -176,6 +176,7 @@ export interface InteractionResponse {
   student_id: string;
   current_phase: string;
   current_question: string;
+  question_id: string | null;
   interaction_mode: InteractionMode;
   message: string;
   message_voice: string;

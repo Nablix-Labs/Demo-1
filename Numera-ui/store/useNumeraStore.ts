@@ -10,7 +10,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import type { LearningPhase } from '@/lib/phases';
 import type { FlowStage } from '@/lib/flow';
 import { TOPICS } from '@/lib/topics';
-import { DEMO_CONCEPT_ID, DEMO_QUESTION_ID } from '@/lib/api';
+import { DEMO_CONCEPT_ID, DEMO_PHASE, DEMO_QUESTION_ID } from '@/lib/api';
 import { uid } from '@/lib/uid';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -151,6 +151,7 @@ export interface NumeraState {
   // changing it restarts the session so the backend serves that equation.
   activeConceptId: string;
   activeQuestionId: string;
+  currentPhase: string;
 
   // Voice
   micMuted: boolean;
@@ -326,6 +327,7 @@ const initial: Omit<
   questionNumber: 3,
   activeConceptId: DEMO_CONCEPT_ID,
   activeQuestionId: DEMO_QUESTION_ID,
+  currentPhase: DEMO_PHASE,
   micMuted: false,
   voiceStatus: 'listening',
   visualCueVisible: false,
