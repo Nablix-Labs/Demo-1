@@ -281,6 +281,7 @@ function base64ByteSize(dataUrl: string): number {
 export async function submitCanvas(
   sessionId: string,
   snapshotDataUrl: string,
+  submissionRole: 'STANDALONE_ATTEMPT' | 'VOICE_ATTACHMENT',
   studentId: string = STUDENT_ID
 ) {
   if (!snapshotDataUrl.startsWith(PNG_DATA_URL_PREFIX)) {
@@ -293,6 +294,7 @@ export async function submitCanvas(
     session_id: sessionId,
     student_id: studentId,
     snapshot_data_url: snapshotDataUrl,
+    submission_role: submissionRole,
   });
   return res.data;
 }

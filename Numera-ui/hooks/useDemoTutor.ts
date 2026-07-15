@@ -161,7 +161,7 @@ export function useDemoTutor() {
       return null;
     }
     try {
-      const res = await submitCanvas(sessionId, png);
+      const res = await submitCanvas(sessionId, png, 'STANDALONE_ATTEMPT');
       addTrailEntry({
         kind: 'canvas',
         text: res.ocr.raw_ocr_text || res.ocr.detected_equation || 'Canvas submitted.',
@@ -245,7 +245,7 @@ export function useDemoTutor() {
       if (png) {
         try {
           console.log('→ POST /canvas/submit', { session_id: sessionId, student_id: STUDENT_ID, snapshot_bytes: png.length });
-          const canvasRes = await submitCanvas(sessionId, png);
+          const canvasRes = await submitCanvas(sessionId, png, 'VOICE_ATTACHMENT');
           canvasSnapshotId = canvasRes.submission_id;
           console.log('← /canvas/submit', { submission_id: canvasRes.submission_id, ocr: canvasRes.ocr, tutor: canvasRes.tutor });
           if (canvasRes.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(canvasRes.canvas_draw);
