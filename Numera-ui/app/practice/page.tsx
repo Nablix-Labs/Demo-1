@@ -14,7 +14,7 @@ import { useNumeraStore } from '@/store/useNumeraStore';
 import { useFlowNav } from '@/lib/useFlowNav';
 import { useDemoTutor } from '@/hooks/useDemoTutor';
 import { useVoiceTurn } from '@/hooks/useVoiceTurn';
-import { DEMO_CONCEPT_ID, DEMO_QUESTION_ID, DEMO_PHASE } from '@/lib/api';
+import { DEMO_CONCEPT_ID, DEMO_PHASE } from '@/lib/api';
 import { demoFor } from '@/lib/demoContent';
 import PhaseGate from '@/components/PhaseGate';
 import Toolbar from '@/components/Canvas/Toolbar';
@@ -31,6 +31,8 @@ export default function PracticePage() {
   const setPracticeDone = useNumeraStore((s) => s.setPracticeDone);
   const completePhase = useNumeraStore((s) => s.completePhase);
   const currentTopicId = useNumeraStore((s) => s.currentTopicId);
+  const questionText = useNumeraStore((s) => s.questionText);
+  const activeQuestionId = useNumeraStore((s) => s.activeQuestionId);
   const { goStage } = useFlowNav();
   const tutor = useDemoTutor();
 
@@ -56,12 +58,16 @@ export default function PracticePage() {
 
   // Practice problem + hints for the placed topic.
   const demo = demoFor(currentTopicId);
-  const QUESTION = demo.practiceQuestion;
   const HINTS = demo.practiceHints;
+
+  // The question comes from the backend session (kept in sync by useDemoTutor
+  // from /session/start and every /interaction response); the demo table is the
+  // mock-mode fallback. Empty while the session is still loading.
+  const QUESTION = tutor.apiEnabled ? questionText : demo.practiceQuestion;
 
   // Backend context — fixed demo identifiers, matching the API documentation.
   const PHASE = DEMO_PHASE;
-  const QUESTION_ID = DEMO_QUESTION_ID;
+  const QUESTION_ID = activeQuestionId;
 
   // Hands-free voice: on turn-end, fire the transcript + canvas to the backend.
   const { submitVoiceTurn } = tutor;
@@ -131,7 +137,9 @@ export default function PracticePage() {
       <header className="flex items-center gap-4 px-6 py-3.5 border-b border-muted-gray flex-shrink-0">
         <div>
           <div className="text-[10px] tracking-widest uppercase text-slate-blue">Independent practice</div>
-          <div className="text-[16px] font-semibold text-ink font-[Cambria_Math,Georgia,serif]">Solve {QUESTION}</div>
+          <div className="text-[16px] font-semibold text-ink font-[Cambria_Math,Georgia,serif]">
+            {QUESTION ? `Solve ${QUESTION}` : 'Loading question…'}
+          </div>
         </div>
         <div className="ml-auto flex items-center gap-2">
           {/* AI mode indicator */}
