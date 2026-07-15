@@ -28,6 +28,7 @@ class AnswerPatternsConfig(StrictSchema):
     no_attempt: list[str]
     ambiguous: list[str]
     correct_method: list[str]
+    spoken_number_values: dict[str, float]
 
 
 class ErrorPatternsConfig(StrictSchema):

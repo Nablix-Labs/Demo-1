@@ -38,9 +38,8 @@ from app.models.adapters import ConversationMessage
 if TYPE_CHECKING:
     from app.ai_engine.openai_client import (
         OpenAIAIEngineClient,
-        OpenAIAnswerEvaluation,
-        OpenAIErrorDiagnosis,
         OpenAITutorMessage,
+        OpenAITutorTurn,
     )
 
 
@@ -101,25 +100,7 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
         )
 
     evaluation: EvaluationCategory | None = evaluate_answer_attempt(request, intent, rules)
-    openai_evaluation: OpenAIAnswerEvaluation | None = evaluate_answer_with_openai(
-        request=request,
-        intent=intent,
-        rules=rules,
-        openai_client=openai_client,
-    )
-    if openai_evaluation is not None and evaluation != "CORRECT":
-        evaluation = openai_evaluation.evaluation
-
-    deterministic_error_type: ErrorType | None = classify_student_error(request, evaluation, rules)
-    error_type: ErrorType | None = deterministic_error_type
-    openai_error: OpenAIErrorDiagnosis | None = diagnose_error_with_openai(
-        request=request,
-        evaluation=evaluation,
-        openai_client=openai_client,
-    )
-    if openai_error is not None and deterministic_error_type in {None, "UNKNOWN_ERROR", "ARITHMETIC_ERROR"}:
-        error_type = openai_error.error_type
-
+    error_type: ErrorType | None = classify_student_error(request, evaluation, rules)
     response_strategy: ResponseStrategy = select_response_strategy(
         intent=intent,
         evaluation=evaluation,
@@ -132,7 +113,7 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
         current_hint_level=request.current_hint_level,
         attempt_count=request.attempt_count,
     )
-    decision = build_tutor_decision(
+    deterministic_decision = build_tutor_decision(
         request=request,
         rules=rules,
         intent=intent,
@@ -142,31 +123,79 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
         hint_level=hint_level,
         confidence=rules.confidence.standard_response,
     )
-    canvas_context = build_canvas_wording_context(
-        decision.canvas_review,
-        request.canvas_regions,
-    )
-    openai_message: OpenAITutorMessage | None = build_tutor_message_with_openai(
+    if request.input_source == "CANVAS":
+        canvas_context = build_canvas_wording_context(
+            deterministic_decision.canvas_review,
+            request.canvas_regions,
+        )
+        openai_message: OpenAITutorMessage | None = build_tutor_message_with_openai(
+            request=request,
+            intent=deterministic_decision.intent,
+            evaluation=deterministic_decision.evaluation,
+            error_type=deterministic_decision.error_type,
+            response_strategy=deterministic_decision.response_strategy,
+            hint_level=deterministic_decision.hint_level,
+            canvas_context=canvas_context,
+            openai_client=openai_client,
+        )
+        return build_tutor_response(
+            request=request,
+            rules=rules,
+            safety_check=safety_check,
+            decision=deterministic_decision,
+            answer_reveal_allowed=False,
+            confidence=rules.confidence.standard_response,
+            tutor_message_override=(
+                openai_message.tutor_message if openai_message is not None else None
+            ),
+            voice_message_override=(
+                openai_message.tutor_message_voice_optimised
+                if openai_message is not None
+                else None
+            ),
+        )
+
+    if should_use_deterministic_tutor_turn(request, intent, rules):
+        return build_tutor_response(
+            request=request,
+            rules=rules,
+            safety_check=safety_check,
+            decision=deterministic_decision,
+            answer_reveal_allowed=False,
+            confidence=rules.confidence.standard_response,
+            tutor_message_override=None,
+            voice_message_override=None,
+        )
+
+    openai_turn: OpenAITutorTurn | None = generate_tutor_turn_with_openai(
         request=request,
-        intent=decision.intent,
-        evaluation=decision.evaluation,
-        error_type=decision.error_type,
-        response_strategy=decision.response_strategy,
-        hint_level=decision.hint_level,
-        canvas_context=canvas_context,
+        grounded_intent=intent,
+        grounded_evaluation=evaluation,
+        grounded_error_type=error_type,
         openai_client=openai_client,
     )
+    if openai_turn is None:
+        return build_tutor_response(
+            request=request,
+            rules=rules,
+            safety_check=safety_check,
+            decision=deterministic_decision,
+            answer_reveal_allowed=False,
+            confidence=rules.confidence.standard_response,
+            tutor_message_override=None,
+            voice_message_override=None,
+        )
+
+    decision = build_openai_tutor_decision(request, rules, intent, evaluation, openai_turn)
     return build_tutor_response(
         request=request,
         rules=rules,
         safety_check=safety_check,
         decision=decision,
         answer_reveal_allowed=False,
-        confidence=rules.confidence.standard_response,
-        tutor_message_override=openai_message.tutor_message if openai_message is not None else None,
-        voice_message_override=(
-            openai_message.tutor_message_voice_optimised if openai_message is not None else None
-        ),
+        confidence=openai_turn.confidence,
+        tutor_message_override=openai_turn.tutor_message,
+        voice_message_override=openai_turn.tutor_message_voice_optimised,
     )
 
 
@@ -186,65 +215,108 @@ def build_openai_ai_engine_client(settings: Settings) -> OpenAIAIEngineClient | 
     )
 
 
-def evaluate_answer_with_openai(
+def generate_tutor_turn_with_openai(
+    request: ClassificationRequest,
+    grounded_intent: IntentType,
+    grounded_evaluation: EvaluationCategory | None,
+    grounded_error_type: ErrorType | None,
+    openai_client: OpenAIAIEngineClient | None,
+) -> OpenAITutorTurn | None:
+    if openai_client is None:
+        return None
+
+    try:
+        return openai_client.generate_tutor_turn(
+            question=request.question,
+            correct_answer=request.correct_answer,
+            student_input=request.student_input,
+            phase=request.current_phase,
+            input_source=request.input_source,
+            transcript_confidence=request.transcript_confidence,
+            attempt_count=request.attempt_count,
+            current_hint_level=request.current_hint_level,
+            question_completed=request.question_completed,
+            grounded_intent=grounded_intent,
+            grounded_evaluation=grounded_evaluation,
+            grounded_error_type=grounded_error_type,
+            conversation_history=request.conversation_history,
+        )
+    except AdapterError as error:
+        logger.warning(
+            "openai_ai_engine_fallback",
+            extra={"step": "tutor_turn", "detail": error.message},
+        )
+        return None
+
+
+def should_use_deterministic_tutor_turn(
     request: ClassificationRequest,
     intent: IntentType,
     rules: ClassifierRulesConfig,
-    openai_client: OpenAIAIEngineClient | None,
-) -> OpenAIAnswerEvaluation | None:
-    if openai_client is None:
-        return None
-    if intent != "SUBMITTING_ANSWER":
-        return None
-    if request.input_source == "CANVAS":
-        return None
-    if request.input_source == "VOICE" and is_low_confidence(request.transcript_confidence, rules):
-        return None
-    if normalize_text(request.student_input) == "":
-        return None
-
-    try:
-        return openai_client.evaluate_answer(
-            question=request.question,
-            correct_answer=request.correct_answer,
-            student_input=request.student_input,
-            phase=request.current_phase,
-            conversation_history=request.conversation_history,
-        )
-    except AdapterError as error:
-        logger.warning(
-            "openai_ai_engine_fallback",
-            extra={"step": "answer_evaluation", "detail": error.message},
-        )
-        return None
+) -> bool:
+    if intent in {"REQUESTING_ANSWER", "ATTEMPTING_OVERRIDE"}:
+        return True
+    return request.input_source == "VOICE" and is_low_confidence(
+        request.transcript_confidence,
+        rules,
+    )
 
 
-def diagnose_error_with_openai(
+def build_openai_tutor_decision(
     request: ClassificationRequest,
-    evaluation: EvaluationCategory | None,
-    openai_client: OpenAIAIEngineClient | None,
-) -> OpenAIErrorDiagnosis | None:
-    if openai_client is None:
-        return None
-    if request.input_source == "CANVAS":
-        return None
+    rules: ClassifierRulesConfig,
+    deterministic_intent: IntentType,
+    deterministic_evaluation: EvaluationCategory | None,
+    openai_turn: OpenAITutorTurn,
+) -> TutorDecision:
+    intent = (
+        deterministic_intent
+        if deterministic_evaluation == "CORRECT"
+        else openai_turn.intent
+    )
+    evaluation = (
+        "CORRECT"
+        if deterministic_evaluation == "CORRECT"
+        else openai_turn.evaluation
+    )
+    error_type: ErrorType | None = openai_turn.error_type
     if evaluation not in {"INCORRECT", "PARTIALLY_CORRECT"}:
-        return None
+        error_type = None
+    elif error_type is None:
+        error_type = "UNKNOWN_ERROR"
 
-    try:
-        return openai_client.diagnose_error(
-            question=request.question,
-            correct_answer=request.correct_answer,
-            student_input=request.student_input,
-            phase=request.current_phase,
-            conversation_history=request.conversation_history,
-        )
-    except AdapterError as error:
+    response_strategy: ResponseStrategy = select_response_strategy(
+        intent=intent,
+        evaluation=evaluation,
+        current_phase=request.current_phase,
+        attempt_count=request.attempt_count,
+        rules=rules,
+    )
+    hint_level: HintLevel | None = select_hint_level(
+        response_strategy=response_strategy,
+        current_hint_level=request.current_hint_level,
+        attempt_count=request.attempt_count,
+    )
+    if openai_turn.response_strategy != response_strategy or openai_turn.hint_level != hint_level:
         logger.warning(
-            "openai_ai_engine_fallback",
-            extra={"step": "error_diagnosis", "detail": error.message},
+            "openai_tutor_turn_policy_normalized",
+            extra={
+                "model_response_strategy": openai_turn.response_strategy,
+                "required_response_strategy": response_strategy,
+                "model_hint_level": openai_turn.hint_level,
+                "required_hint_level": hint_level,
+                "phase": request.current_phase,
+            },
         )
-        return None
+
+    return TutorDecision(
+        intent=intent,
+        evaluation=evaluation,
+        error_type=error_type,
+        response_strategy=response_strategy,
+        hint_level=hint_level,
+        canvas_review=None,
+    )
 
 
 def build_tutor_message_with_openai(
@@ -316,7 +388,7 @@ def evaluate_answer_attempt(
     intent: IntentType,
     rules: ClassifierRulesConfig,
 ) -> EvaluationCategory | None:
-    normalized_input: str = normalize_text(request.student_input)
+    normalized_input: str = normalize_answer_input(request, rules)
 
     if intent in {"REQUESTING_ANSWER", "ATTEMPTING_OVERRIDE", "REQUESTING_HINT", "ASKING_QUESTION"}:
         return None
@@ -330,6 +402,8 @@ def evaluate_answer_attempt(
         return "NO_ATTEMPT"
     if is_ambiguous_answer(normalized_input, rules):
         return "UNCLEAR"
+    if is_voice_value_only_correct(request, rules):
+        return "CORRECT"
     if is_value_only_correct(request):
         return "PARTIALLY_CORRECT"
     if is_correct_answer(request, rules):
@@ -348,7 +422,7 @@ def classify_student_error(
     if evaluation not in {"INCORRECT", "PARTIALLY_CORRECT"}:
         return None
 
-    normalized_input: str = normalize_text(request.student_input)
+    normalized_input: str = normalize_answer_input(request, rules)
     normalized_question: str = normalize_text(request.question)
     student_value: float | None = extract_last_number(normalized_input)
     correct_value: float | None = extract_last_number(request.correct_answer)
@@ -820,8 +894,22 @@ def is_value_only_correct(request: ClassificationRequest) -> bool:
     return extract_last_number(normalized_input) == correct_value
 
 
+def is_voice_value_only_correct(
+    request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
+) -> bool:
+    if request.input_source != "VOICE":
+        return False
+
+    normalized_input: str = normalize_answer_input(request, rules).strip(" .!,")
+    correct_value: float | None = extract_last_number(request.correct_answer)
+    if re.fullmatch(r"-?\d+(\.\d+)?", normalized_input) is None:
+        return False
+    return extract_last_number(normalized_input) == correct_value
+
+
 def is_correct_answer(request: ClassificationRequest, rules: ClassifierRulesConfig) -> bool:
-    normalized_input: str = normalize_text(request.student_input)
+    normalized_input: str = normalize_answer_input(request, rules)
     correct_value: float | None = extract_last_number(request.correct_answer)
     student_value: float | None = extract_last_number(normalized_input)
 
@@ -829,6 +917,23 @@ def is_correct_answer(request: ClassificationRequest, rules: ClassifierRulesConf
         return False
 
     return contains_any(normalized_input, rules.answer_patterns.answer_notation)
+
+
+def normalize_answer_input(
+    request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
+) -> str:
+    normalized_input: str = normalize_text(request.student_input)
+    if request.input_source != "VOICE":
+        return normalized_input
+
+    for spoken_number, number_value in rules.answer_patterns.spoken_number_values.items():
+        normalized_input = re.sub(
+            rf"\b{re.escape(spoken_number)}\b",
+            format_number_for_matching(number_value),
+            normalized_input,
+        )
+    return normalized_input
 
 
 def has_visible_correct_method(normalized_input: str, rules: ClassifierRulesConfig) -> bool:
