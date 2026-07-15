@@ -78,6 +78,7 @@ async def evaluate_voice_transcript(
     transcript: str,
     confidence: float,
     audio_duration_seconds: float,
+    access_token: str,
 ) -> dict[str, object]:
     payload = {
         "session_id": session_id,
@@ -89,7 +90,11 @@ async def evaluate_voice_transcript(
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     logger.info(f"[{session_id}] POST /voice/transcript")
-    response = await get_backend_http_client().post("/voice/transcript", json=payload)
+    response = await get_backend_http_client().post(
+        "/voice/transcript",
+        json=payload,
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
     if response.status_code != 200:
         raise RuntimeError(f"status={response.status_code} body={response.text}")
     return response.json()
@@ -101,6 +106,7 @@ async def submit_canvas_work(
     snapshot_data_url: str,
     transcript: str,
     confidence: float,
+    access_token: str,
 ) -> dict[str, object]:
     payload = {
         "session_id": session_id,
@@ -110,7 +116,12 @@ async def submit_canvas_work(
         "transcript_confidence": confidence,
     }
     logger.info(f"[{session_id}] POST {MAIN_BACKEND_URL}/canvas/submit")
-    response = await get_backend_http_client().post("/canvas/submit", json=payload, timeout=40.0)
+    response = await get_backend_http_client().post(
+        "/canvas/submit",
+        json=payload,
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=40.0,
+    )
     if response.status_code != 200:
         raise RuntimeError(f"status={response.status_code} body={response.text}")
     return response.json()
@@ -205,6 +216,7 @@ async def voice_stream(ws: WebSocket, session: str = "default", student_id: str 
     receiving_audio = False
     audio_started_at = 0.0
     turn_already_processed = False  # True when UtteranceEnd auto-triggered a response
+    access_token: str | None = None
 
     deepgram_receiver_task = None
 
@@ -276,10 +288,13 @@ async def voice_stream(ws: WebSocket, session: str = "default", student_id: str 
                         turn_already_processed = True
 
                         try:
+                            if access_token is None:
+                                await ws.close(code=4401, reason="Authentication required")
+                                return
                             await process_and_respond(
                                 ws, session_id, student_id,
                                 transcript_to_process, confidence_to_process,
-                                duration, None,
+                                duration, access_token, None,
                             )
                         except Exception as e:
                             logger.error(f"[{session_id}] Auto-process failed: {e}")
@@ -299,7 +314,19 @@ async def voice_stream(ws: WebSocket, session: str = "default", student_id: str 
                 data = json.loads(message["text"])
                 msg_type = data.get("type", "")
 
-                if msg_type == "start":
+                if msg_type == "authenticate":
+                    candidate = data.get("access_token")
+                    if not isinstance(candidate, str) or candidate == "":
+                        await ws.close(code=4401, reason="Authentication required")
+                        return
+                    access_token = candidate
+                    await ws.send_json({"type": "status", "message": "authenticated"})
+
+                elif access_token is None:
+                    await ws.close(code=4401, reason="Authenticate before sending data")
+                    return
+
+                elif msg_type == "start":
                     # Explicit start (optional -- audio_chunk auto-connects too).
                     # Clean up any existing Deepgram connection first to avoid
                     # duplicate connections from React re-renders.
@@ -398,7 +425,7 @@ async def voice_stream(ws: WebSocket, session: str = "default", student_id: str 
                         audio_duration_seconds = max(time.time() - audio_started_at, 0.001)
                         await process_and_respond(
                             ws, session_id, student_id, final_transcript,
-                            final_confidence, audio_duration_seconds, canvas_snapshot
+                            final_confidence, audio_duration_seconds, access_token, canvas_snapshot
                         )
                     elif not turn_already_processed:
                         logger.info(f"[{session_id}] Stop: no speech detected")
@@ -497,6 +524,7 @@ async def process_and_respond(
     transcript: str,
     confidence: float,
     audio_duration_seconds: float,
+    access_token: str,
     canvas_snapshot: str | None = None,
 ):
     pipeline_start = time.time()
@@ -515,6 +543,7 @@ async def process_and_respond(
                 canvas_snapshot,
                 transcript,
                 confidence,
+                access_token,
             )
             tutor_response = _tutor_response_from_canvas(canvas_response)
             canvas_draw = _canvas_draw_from(canvas_response)
@@ -525,6 +554,7 @@ async def process_and_respond(
                 transcript,
                 confidence,
                 audio_duration_seconds,
+                access_token,
             )
         tutor_ms = int((time.time() - tutor_start) * 1000)
         logger.info(f"[{session_id}] Backend tutor call took {tutor_ms}ms")

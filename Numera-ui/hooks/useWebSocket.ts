@@ -23,6 +23,7 @@
 
 import { useEffect, useRef, useCallback } from 'react';
 import { useNumeraStore } from '@/store/useNumeraStore';
+import { useAuthStore } from '@/store/useAuthStore';
 import { tutorAudioStream } from '@/lib/tts';
 import { buildVoiceStreamUrl, voiceStreamingEnabled } from '@/lib/runtimeConfig';
 
@@ -43,6 +44,12 @@ export function useWebSocket(sessionId: string | null) {
     wsRef.current = ws;
 
     ws.onopen = () => {
+      const accessToken = useAuthStore.getState().accessToken;
+      if (!accessToken) {
+        ws.close(4401, 'Authentication required');
+        return;
+      }
+      ws.send(JSON.stringify({ type: 'authenticate', access_token: accessToken }));
       console.log('[WS] connected');
       setVoiceStatus('listening');
     };

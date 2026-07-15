@@ -1,8 +1,48 @@
+import asyncio
+
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services.voice.streaming import streaming_server
 
 client = TestClient(app, headers={"Authorization": "Bearer test-token"})
+
+
+def test_streaming_tutor_call_forwards_bearer_token(monkeypatch) -> None:
+    captured_headers: dict[str, str] = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, object]:
+            return {"message": "ok"}
+
+    class FakeClient:
+        async def post(
+            self,
+            path: str,
+            *,
+            json: dict[str, object],
+            headers: dict[str, str],
+        ) -> FakeResponse:
+            assert path == "/voice/transcript"
+            captured_headers.update(headers)
+            return FakeResponse()
+
+    monkeypatch.setattr(streaming_server, "get_backend_http_client", FakeClient)
+
+    asyncio.run(
+        streaming_server.evaluate_voice_transcript(
+            "SESSION001",
+            "ST001",
+            "x equals five",
+            0.94,
+            1.0,
+            "test-token",
+        )
+    )
+
+    assert captured_headers == {"Authorization": "Bearer test-token"}
 
 
 def _start_session(student_id: str) -> str:
