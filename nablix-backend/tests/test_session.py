@@ -23,9 +23,9 @@ def test_session_start_get_and_end_flow() -> None:
     assert started["student_id"] == "ST001"
     assert started["concept_id"] == "ALG_LINEAR_ONE_STEP"
     assert started["interaction_mode"] == "VOICE"
-    assert started["current_phase"] == "DIAGNOSTIC"
-    assert started["current_question"] == "Solve for x: x + 4 = 9"
-    assert started["question_id"] == "ALG_EQ_DIAG_001"
+    assert started["current_phase"] == "GUIDED_PRACTICE"
+    assert started["current_question"] == "Solve for x: x + 6 = 10"
+    assert started["question_id"] == "ALG_EQ_GP_001"
     assert started["question_number"] == 1
     assert started["voice_state"] == {
         "stream_active": False,
@@ -38,13 +38,13 @@ def test_session_start_get_and_end_flow() -> None:
         "snapshot_id": None,
         "ocr_result": None,
     }
-    assert started["ui_state"] == "DIAGNOSTIC"
+    assert started["ui_state"] == "GUIDED_PRACTICE"
     assert (
         started["message"]
-        == "Let us start with a quick question to see where you are. Solve for x: x plus 4 equals 9."
+        == "Let us start with a quick question to see where you are. Solve for x: x plus 6 equals 10."
     )
     assert started["show_canvas"] is True
-    assert started["show_hint_button"] is False
+    assert started["show_hint_button"] is True
     assert started["show_visual_cue"] is False
     assert started["show_scaffold_panel"] is False
     assert started["scaffold_steps"] == []
@@ -166,5 +166,5 @@ def test_session_start_stores_correct_answer_and_served_ids() -> None:
     )
     assert response.status_code == 200
     session = session_service._sessions[response.json()["session_id"]]
-    assert session.correct_answer == "x = 5"
+    assert session.correct_answer == "x = 4"
     assert session.served_question_ids == [session.question_id]

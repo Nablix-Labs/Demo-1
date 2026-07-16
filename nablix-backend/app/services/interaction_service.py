@@ -7,6 +7,7 @@ from app.adapters.provider import get_adapters
 from app.adapters.tutor_engine import apply_retrieved_content
 from app.ai_engine.classifier_config import ClassifierRulesConfig, load_classifier_rules
 from app.core.exceptions import QuestionFetchError
+from app.core.logger import logger
 from app.models.adapters import (
     AdapterContext,
     ConversationMessage,
@@ -143,7 +144,7 @@ def _current_hint_level_from(hint_count: int) -> int | None:
 
 def _independent_correct_in_session(session: SessionRecord) -> int:
     return sum(
-        attempt.phase == session.current_phase
+        attempt.phase == "INDEPENDENT_PRACTICE"
         and attempt.evaluation == "CORRECT"
         and attempt.hint_level_used == 0
         for attempt in session.per_question_history
@@ -203,6 +204,7 @@ def _response_from(
         attempt_count=session.attempt_count,
         question_completed=session.question_completed,
         phase_indicator=session.current_phase,
+        recommended_entry_phase=session.recommended_entry_phase,
         session_summary=session_summary,
     )
 
@@ -360,12 +362,22 @@ async def process_interaction(
         rules.conversation_rules.max_recent_messages,
     )
 
-    # Chirudeva 6.7: execute Tamil's recommended phase transition.
-    # ponytail: tutor fallback until real Tamil emits Contract 4; delete the `or` when it lands.
-    recommended = student.recommended_entry_phase or tutor.next_phase_recommendation
-    new_phase = resolve_transition(session.current_phase, recommended)
-
     completed = tutor.evaluation == "CORRECT"
+    # Chirudeva 6.7: Saravanan's recommendation is the only phase authority;
+    # resolve_transition guards against invalid or unrecognised moves.
+    recommended: str | None = student.recommended_entry_phase
+    new_phase = resolve_transition(session.current_phase, recommended)
+    logger.info(
+        "phase_transition_evaluated",
+        extra={
+            "session_id": session.session_id,
+            "current_phase": session.current_phase,
+            "student_model_recommended_phase": recommended,
+            "phase_changed": new_phase is not None,
+            "attempt_count": next_attempt_count,
+        },
+    )
+
     next_hint_count: int = _next_hint_count_from(request)
     # Persisted every turn: the real attempt counter and completion state Sanya
     # reads back on the next turn.
@@ -373,6 +385,7 @@ async def process_interaction(
         "attempt_count": next_attempt_count,
         "question_completed": completed,
         "conversation_history": conversation_history,
+        "recommended_entry_phase": recommended,
     }
     if request.interaction_type == "ANSWER_SUBMISSION":
         state_updates["per_question_history"] = [
@@ -413,11 +426,7 @@ async def process_interaction(
                     PhaseTransitionRecord(
                         previous_phase=session.current_phase,
                         current_phase=new_phase,
-                        entry_reason=(
-                            "STUDENT_MODEL_RECOMMENDATION"
-                            if student.recommended_entry_phase is not None
-                            else "TUTOR_RECOMMENDATION"
-                        ),
+                        entry_reason="STUDENT_MODEL_RECOMMENDATION",
                         transitioned_at=datetime.now(timezone.utc),
                     ),
                 ],

@@ -138,9 +138,28 @@ def _tutor_response_from_canvas(result: dict[str, object]) -> dict[str, object]:
 
     tutor_message_voice = tutor.get("tutor_message_voice")
     return {
+        **_phase_fields_from(result),
         "message": tutor_message,
         "message_voice": tutor_message_voice if isinstance(tutor_message_voice, str) else tutor_message,
     }
+
+
+PHASE_FIELDS = (
+    "phase_changed",
+    "previous_phase",
+    "current_phase",
+    "current_question",
+    "question_id",
+    "ui_state",
+    "recommended_entry_phase",
+    "phase_transition_message",
+    "phase_transition_voice",
+)
+
+
+def _phase_fields_from(result: dict[str, object]) -> dict[str, object]:
+    """Pass the backend's phase state through to the frontend unchanged."""
+    return {key: result.get(key) for key in PHASE_FIELDS if key in result}
 
 
 def _canvas_draw_from(result: dict[str, object]) -> list[object]:
@@ -585,6 +604,7 @@ async def process_and_respond(
         "needs_clarification": confidence < voice_config.CONFIDENCE_THRESHOLD,
         "text_latency_ms": text_sent_ms,
         "canvas_draw": canvas_draw,
+        **_phase_fields_from(tutor_response),
     })
 
     logger.info(f"[{session_id}] Text sent to frontend: {text_sent_ms}ms")

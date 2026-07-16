@@ -36,7 +36,12 @@ from app.services.session_service import (
     record_canvas_submission,
     update_interaction_state,
 )
-from app.services.phase_transition import PHASE_COUNTER_RESETS, resolve_transition
+from app.services.phase_transition import (
+    DEFAULT_TRANSITION_MESSAGE,
+    PHASE_COUNTER_RESETS,
+    TRANSITION_MESSAGES,
+    resolve_transition,
+)
 from app.services.snapshot_store import build_reference, store_snapshot
 
 
@@ -118,6 +123,7 @@ async def submit_canvas(
 
     tutor_started = perf_counter()
     reviewed_attempt_count = session.attempt_count
+    recommended_entry_phase: str | None = session.recommended_entry_phase
     new_phase: Phase | None = None
     transition_updates: dict[str, object] = {}
     if ocr.needs_clarification or ocr.confidence < settings.min_ocr_confidence_threshold:
@@ -132,9 +138,7 @@ async def submit_canvas(
                     context,
                     access_token,
                 )
-            recommended = (
-                student.recommended_entry_phase or tutor.next_phase_recommendation
-            )
+            recommended = student.recommended_entry_phase
             new_phase = resolve_transition(session.current_phase, recommended)
             if new_phase is not None:
                 fetched = await get_next_question(
@@ -159,19 +163,14 @@ async def submit_canvas(
                         PhaseTransitionRecord(
                             previous_phase=session.current_phase,
                             current_phase=new_phase,
-                            entry_reason=(
-                                "STUDENT_MODEL_RECOMMENDATION"
-                                if student.recommended_entry_phase is not None
-                                else "TUTOR_RECOMMENDATION"
-                            ),
+                            entry_reason="STUDENT_MODEL_RECOMMENDATION",
                             transitioned_at=datetime.now(timezone.utc),
                         ),
                     ],
                     **PHASE_COUNTER_RESETS.get(new_phase, {}),
                 }
-        authoritative_recommendation = (
-            student.recommended_entry_phase or tutor.next_phase_recommendation
-        )
+        authoritative_recommendation = student.recommended_entry_phase
+        recommended_entry_phase = authoritative_recommendation
         tutor = tutor.model_copy(
             update={"next_phase_recommendation": authoritative_recommendation}
         )
@@ -216,6 +215,7 @@ async def submit_canvas(
             reviewed_attempt_count,
             session.question_completed or tutor.evaluation == "CORRECT",
             updated_history,
+            recommended_entry_phase,
         )
         if new_phase is not None:
             _apply_canvas_transition(
@@ -226,6 +226,13 @@ async def submit_canvas(
                 tutor,
             )
 
+    transition_message = (
+        TRANSITION_MESSAGES.get(
+            (session.current_phase, new_phase), DEFAULT_TRANSITION_MESSAGE
+        )
+        if new_phase is not None
+        else None
+    )
     return CanvasSubmitResponse(
         session_id=request.session_id,
         student_id=request.student_id,
@@ -236,6 +243,17 @@ async def submit_canvas(
         tutor=tutor,
         latency=latency,
         canvas_draw=canvas_draw,
+        phase_changed=new_phase is not None,
+        previous_phase=session.current_phase if new_phase is not None else None,
+        current_phase=new_phase or session.current_phase,
+        current_question=str(
+            transition_updates.get("current_question", session.current_question)
+        ),
+        question_id=str(transition_updates.get("question_id", session.question_id)),
+        ui_state=new_phase or session.ui_state,
+        recommended_entry_phase=recommended_entry_phase,
+        phase_transition_message=transition_message,
+        phase_transition_voice=transition_message,
     )
 
 

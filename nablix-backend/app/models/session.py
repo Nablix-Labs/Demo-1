@@ -90,6 +90,8 @@ class SessionSummary(BaseModel):
     scaffold_history: None
     canvas_feedback_history: list[CanvasFeedback]
     phase_transitions: list[PhaseTransitionRecord]
+    recommended_entry_phase: str | None
+    conversation_history: list[ConversationMessage]
 
 
 class SessionRecord(BaseModel):
@@ -134,4 +136,5 @@ class SessionRecord(BaseModel):
     per_question_history: list[QuestionAttemptRecord] = Field(default_factory=list)
     hint_levels_used: list[int] = Field(default_factory=list)
     phase_transitions: list[PhaseTransitionRecord] = Field(default_factory=list)
+    recommended_entry_phase: str | None = None
     session_summary: SessionSummary | None = None

@@ -28,6 +28,7 @@ def _start_session(student_id: str, mode: str = "TEXT", **overrides) -> str:
         "student_id": student_id,
         "concept_id": "ALG_LINEAR_ONE_STEP",
         "interaction_mode": mode,
+        "initial_phase": "DIAGNOSTIC",
     }
     body.update(overrides)
     response = client.post("/session/start", json=body)
@@ -464,10 +465,9 @@ def _fake_pipeline(
     return student_model
 
 
-def test_interaction_updates_phase_visual_scaffold_and_student_model_events(monkeypatch) -> None:
-    # Tamil is silent, so the tutor-fallback recommendation (GUIDED_PRACTICE)
-    # drives a valid DIAGNOSTIC -> GUIDED_PRACTICE transition; the tutor's
-    # per-turn cue/scaffold outputs must survive the transition UI flags.
+def test_interaction_keeps_student_model_authoritative_for_phase(monkeypatch) -> None:
+    # Tamil is silent, so Sanya's recommendation must not advance the session.
+    # Tutor cue/scaffold outputs still belong to this turn and must survive.
     session_id = _start_session("ST004")
     student_model = _fake_pipeline(monkeypatch, tutor_phase="GUIDED_PRACTICE")
 
@@ -475,15 +475,27 @@ def test_interaction_updates_phase_visual_scaffold_and_student_model_events(monk
 
     assert response.status_code == 200
     body = response.json()
-    assert body["phase_changed"] is True
-    assert body["current_phase"] == "GUIDED_PRACTICE"
-    assert body["ui_state"] == "GUIDED_PRACTICE"
+    assert body["phase_changed"] is False
+    assert body["current_phase"] == "DIAGNOSTIC"
+    assert body["ui_state"] == "DIAGNOSTIC"
+    assert body["recommended_entry_phase"] is None
     assert body["show_visual_cue"] is True
     assert body["visual_cue"]["cue_type"] == "EQUATION_BALANCE"
     assert body["show_scaffold_panel"] is True
     assert body["scaffold_steps"] == ["Divide both sides by 2."]
     assert len(student_model.events) == 1
     assert student_model.events[0].event_type == "PARTIAL_ATTEMPT"
+
+    ended = client.post(
+        "/session/end",
+        json={"session_id": session_id, "student_id": "ST004"},
+    ).json()
+    summary = ended["session_summary"]
+    assert summary["recommended_entry_phase"] is None
+    assert summary["conversation_history"][-1] == {
+        "role": "assistant",
+        "content": "Your setup is right. Check the final division.",
+    }
 
 
 def test_interaction_forwards_event_and_uses_student_model_phase(monkeypatch) -> None:
@@ -534,6 +546,7 @@ def test_interaction_forwards_event_and_uses_student_model_phase(monkeypatch) ->
 
     assert response.status_code == 200
     assert response.json()["current_phase"] == "GUIDED_PRACTICE"
+    assert response.json()["recommended_entry_phase"] == "GUIDED_PRACTICE"
     assert captured["url"] == "https://student-model.example/interaction"
     assert captured["headers"] == {"Authorization": "Bearer test-token"}
     assert captured["payload"] == {
@@ -542,9 +555,9 @@ def test_interaction_forwards_event_and_uses_student_model_phase(monkeypatch) ->
         "evaluation": "CORRECT",
         "error_type": None,
         "hint_level_used": 0,
-        "independent_success": True,
+        "independent_success": False,
         "current_phase": "DIAGNOSTIC",
-        "independent_correct_in_session": 1,
+        "independent_correct_in_session": 0,
     }
 
 
@@ -585,6 +598,7 @@ def test_transition_not_fired_when_phase_matches(monkeypatch) -> None:
     assert body["phase_transition_message"] is None
     assert body["current_phase"] == "DIAGNOSTIC"
     assert body["question_id"] == "ALG_EQ_DIAG_001"
+    assert body["recommended_entry_phase"] == "DIAGNOSTIC"
 
 
 def test_transition_step_back_resets_guided_counters(monkeypatch) -> None:
@@ -723,7 +737,7 @@ def test_attempt_count_completion_and_question_routing(monkeypatch) -> None:
 
     # Next turn Sanya sees the completion flag; the transition then routes the
     # new question and resets per-question counters.
-    tutor.next_phase_recommendation = "GUIDED_PRACTICE"
+    student_model.recommended_entry_phase = "GUIDED_PRACTICE"
     body = turn()
     assert tutor.contexts[-1].question_completed is True
     assert body["phase_changed"] is True
@@ -749,7 +763,7 @@ def test_session_end_summarises_recorded_activity(monkeypatch) -> None:
     assert first_attempt.status_code == 200
 
     tutor.evaluation = "CORRECT"
-    tutor.next_phase_recommendation = "GUIDED_PRACTICE"
+    student_model.recommended_entry_phase = "GUIDED_PRACTICE"
     second_attempt = client.post(
         "/interaction",
         json=_interaction_body(session_id, "ST031", current_phase="DIAGNOSTIC"),
@@ -769,7 +783,7 @@ def test_session_end_summarises_recorded_activity(monkeypatch) -> None:
     )
     assert hint.status_code == 200
 
-    tutor.next_phase_recommendation = "INDEPENDENT_PRACTICE"
+    student_model.recommended_entry_phase = "INDEPENDENT_PRACTICE"
     independent_attempt = client.post(
         "/interaction",
         json=_interaction_body(
@@ -780,6 +794,7 @@ def test_session_end_summarises_recorded_activity(monkeypatch) -> None:
         ),
     )
     assert independent_attempt.status_code == 200
+    assert independent_attempt.json()["current_phase"] == "INDEPENDENT_PRACTICE"
 
     end = client.post(
         "/session/end",
@@ -788,7 +803,7 @@ def test_session_end_summarises_recorded_activity(monkeypatch) -> None:
     assert end.status_code == 200
     summary = end.json()["session_summary"]
     assert summary["session_id"] == session_id
-    assert summary["phase_4_entry_reason"] == "TUTOR_RECOMMENDATION"
+    assert summary["phase_4_entry_reason"] == "STUDENT_MODEL_RECOMMENDATION"
     assert summary["phases_completed"] == [
         "DIAGNOSTIC",
         "GUIDED_PRACTICE",

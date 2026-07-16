@@ -62,16 +62,20 @@ class StudentModelServiceAdapter:
                 f"no topic_id mapping configured for concept_id={concept_id}",
             )
 
+        independent_success: bool = (
+            context.current_phase == "INDEPENDENT_PRACTICE"
+            and event.independent_success
+        )
         payload: JsonObject = {
             "topic_id": topic_id,
             "event_type": event.event_type,
             "evaluation": event.evaluation,
             "error_type": event.error_type,
             "hint_level_used": event.hint_level_used,
-            "independent_success": event.independent_success,
+            "independent_success": independent_success,
             "current_phase": context.current_phase,
             "independent_correct_in_session": (
-                context.independent_correct_in_session + int(event.independent_success)
+                context.independent_correct_in_session + int(independent_success)
             ),
         }
         response = await post_json(

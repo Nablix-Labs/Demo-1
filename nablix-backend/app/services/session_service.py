@@ -174,7 +174,9 @@ def _recover_demo_session(
 async def start_session(request: SessionStartRequest) -> SessionRecord:
     """Create and store the mock session response used before real persistence exists."""
 
-    initial_phase: Phase = request.initial_phase if request.initial_phase is not None else "DIAGNOSTIC"
+    initial_phase: Phase = (
+        request.initial_phase if request.initial_phase is not None else "GUIDED_PRACTICE"
+    )
     fetched = await get_next_question(request.concept_id, initial_phase)
     if fetched is None:
         raise QuestionFetchError(request.concept_id, initial_phase)
@@ -256,6 +258,8 @@ def assemble_session_summary(session: SessionRecord, ended_at: datetime) -> Sess
             submission.tutor.canvas_feedback for submission in session.canvas_submissions
         ],
         phase_transitions=session.phase_transitions,
+        recommended_entry_phase=session.recommended_entry_phase,
+        conversation_history=session.conversation_history,
     )
 
 
@@ -304,6 +308,7 @@ async def record_canvas_submission(
     attempt_count: int,
     question_completed: bool,
     conversation_history: list[ConversationMessage],
+    recommended_entry_phase: str | None,
 ) -> SessionRecord:
     """Append a reviewed canvas submission and persist its attempt count."""
 
@@ -335,6 +340,7 @@ async def record_canvas_submission(
             "question_completed": question_completed,
             "conversation_history": conversation_history,
             "per_question_history": per_question_history,
+            "recommended_entry_phase": recommended_entry_phase,
         }
     )
     # This read-modify-write is safe only while the mock backend uses one worker.
