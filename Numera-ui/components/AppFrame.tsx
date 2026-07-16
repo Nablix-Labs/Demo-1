@@ -13,6 +13,7 @@ import dynamic from 'next/dynamic';
 import { usePathname } from 'next/navigation';
 import AuthGate from './auth/AuthGate';
 import { useNumeraStore } from '@/store/useNumeraStore';
+import { usePhaseRouting } from '@/lib/usePhaseRouting';
 
 // Routes that render on their own, without the tool rail or media panel.
 const FOCUS_ROUTES = ['/onboard', '/diagnostic', '/orientation', '/complete', '/consent', '/login', '/restricted'];
@@ -23,6 +24,9 @@ const MediaPanel = dynamic(() => import('./MediaPanel'), { ssr: false });
 export default function AppFrame({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const panelSide = useNumeraStore((s) => s.panelSide);
+
+  // Follow the backend's phase across the flow (no-op until a phase advances).
+  usePhaseRouting();
 
   // Load persisted UI prefs + progress once, on the client only.
   useEffect(() => {
