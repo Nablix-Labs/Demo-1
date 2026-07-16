@@ -157,6 +157,30 @@ def _next_hint_count_from(request: InteractionRequest) -> int:
     return request.hint_count
 
 
+async def next_question_updates(
+    session: SessionRecord, phase: Phase
+) -> dict[str, object] | None:
+    """Session updates that route to the next unseen question, or None when
+    the bank has nothing new for the phase."""
+
+    fetched = await get_next_question(
+        session.concept_id, phase, session.served_question_ids
+    )
+    if fetched is None or fetched[2] == session.question_id:
+        return None
+    question_text, correct_answer, question_id = fetched
+    return {
+        "current_question": question_text,
+        "question_id": question_id,
+        "correct_answer": correct_answer,
+        "served_question_ids": [*session.served_question_ids, question_id],
+        "question_number": session.question_number + 1,
+        "attempt_count": 0,
+        "hint_count": 0,
+        "question_completed": False,
+    }
+
+
 def _response_from(
     request: InteractionRequest,
     session: SessionRecord,
@@ -436,26 +460,12 @@ async def process_interaction(
             }
         )
     elif completed:
-        # Same phase: route to the next question on a correct answer. The
-        # demo stub serves one question per phase, so a same-id fetch just
-        # keeps question_completed=True until a transition swaps the question.
-        fetched = await get_next_question(
-            session.concept_id, session.current_phase, session.served_question_ids
-        )
-        if fetched is not None and fetched[2] != session.question_id:
-            question_text, correct_answer, question_id = fetched
-            state_updates.update(
-                {
-                    "current_question": question_text,
-                    "question_id": question_id,
-                    "correct_answer": correct_answer,
-                    "served_question_ids": [*session.served_question_ids, question_id],
-                    "question_number": session.question_number + 1,
-                    "attempt_count": 0,
-                    "hint_count": 0,
-                    "question_completed": False,
-                }
-            )
+        # Same phase: route to the next question on a correct answer. When the
+        # bank is exhausted, question_completed stays True until a transition
+        # swaps the question.
+        advance = await next_question_updates(session, session.current_phase)
+        if advance is not None:
+            state_updates.update(advance)
 
     next_phase = new_phase if new_phase is not None else session.current_phase
     updated_session = update_interaction_state(

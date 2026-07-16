@@ -27,6 +27,7 @@ from app.services.canvas_annotations import assign_step_ids, plan_canvas_draw
 from app.services.interaction_service import (
     _current_hint_level_from,
     _independent_correct_in_session,
+    next_question_updates,
     run_tutor_pipeline,
 )
 from app.services.session_service import (
@@ -141,6 +142,12 @@ async def submit_canvas(
                 )
             recommended = student.recommended_entry_phase
             new_phase = resolve_transition(session.current_phase, recommended)
+            if new_phase is None and tutor.evaluation == "CORRECT":
+                # Same phase: a correct canvas answer routes to the next
+                # question, exactly like the /interaction path.
+                transition_updates = (
+                    await next_question_updates(session, session.current_phase) or {}
+                )
             if new_phase is not None:
                 fetched = await get_next_question(
                     session.concept_id,
@@ -220,10 +227,10 @@ async def submit_canvas(
             recommended_entry_phase,
             student_result,
         )
-        if new_phase is not None:
+        if new_phase is not None or transition_updates:
             _apply_canvas_transition(
                 request,
-                new_phase,
+                new_phase or session.current_phase,
                 transition_updates,
                 ocr,
                 tutor,

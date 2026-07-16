@@ -380,3 +380,63 @@ def test_canvas_submit_returns_409_for_ended_session() -> None:
     )
 
     assert response.status_code == 409
+
+
+def test_canvas_correct_same_phase_routes_next_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A correct standalone canvas answer with no phase change advances to the
+    # next unseen question, exactly like the /interaction path.
+    async def fake_pipeline(context: AdapterContext):
+        student = StudentModelResult(
+            mastery_status="DEVELOPING",
+            continuity_status="on_track",
+            recommended_entry_phase="GUIDED_PRACTICE",
+            hint_dependency_score=0.0,
+            intervention_required=False,
+        )
+        tutor = TutorResult(
+            evaluation="CORRECT",
+            error_type="NONE",
+            intent="SUBMITTING_ANSWER",
+            response_strategy="CONFIRM_CORRECT",
+            tutor_message="Correct.",
+            tutor_message_voice="Correct.",
+            voice_optimised=True,
+            hint_level=0,
+            answer_reveal_allowed=False,
+            confidence=0.95,
+            input_source="CANVAS",
+        )
+        return RAGResult(documents=[], retrieval_confidence=0.0), student, tutor
+
+    monkeypatch.setattr(canvas_service, "run_tutor_pipeline", fake_pipeline)
+    session_id = _start_session("ST012")
+    # The test bank serves one question per phase; free the GP question that
+    # /session/start consumed so the advance has something to fetch.
+    session = session_service._sessions[session_id]
+    session_service._sessions[session_id] = session.model_copy(
+        update={"served_question_ids": ["ALG_EQ_DIAG_001"]}
+    )
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST012",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["phase_changed"] is False
+    assert body["current_phase"] == "GUIDED_PRACTICE"
+    assert body["question_id"] == "ALG_EQ_GP_001"
+    assert body["current_question"] == "Solve for x: x + 6 = 10"
+
+    stored = session_service._sessions[session_id]
+    assert stored.question_id == "ALG_EQ_GP_001"
+    assert stored.attempt_count == 0
+    assert stored.question_completed is False
+    assert stored.question_number == 2
