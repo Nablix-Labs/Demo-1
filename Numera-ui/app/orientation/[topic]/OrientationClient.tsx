@@ -83,8 +83,8 @@ export default function OrientationClient({ topicId }: { topicId: string }) {
     return () => { if (timer.current) clearInterval(timer.current); };
   }, [playing]);
 
-  // Orientation done → into the live Guided Learning lesson for this topic.
-  const finish = () => goStage('guided', topicId);
+  // Orientation done → Teacher Mode (teach the concept back) for this topic.
+  const finish = () => goStage('teach', topicId);
 
   return (
     <main className="flex-1 min-w-0 flex flex-col bg-white" aria-label="Concept orientation">
@@ -148,7 +148,7 @@ export default function OrientationClient({ topicId }: { topicId: string }) {
               </span>
               <h3 className="text-[15px] font-semibold text-ink">Orientation coming soon</h3>
               <p className="text-[12.5px] text-slate-blue mt-1.5 max-w-sm leading-relaxed">
-                We haven&apos;t prepared the concept intro for {topic.title} yet — you can head straight into the guided lesson.
+                We haven&apos;t prepared the concept intro for {topic.title} yet — you can head straight into teaching it back.
               </p>
             </div>
           )}
@@ -186,7 +186,7 @@ export default function OrientationClient({ topicId }: { topicId: string }) {
                 disabled={status === 'error'}
                 className="inline-flex items-center justify-center gap-2 rounded-md bg-focus-navy text-white px-5 py-2.5 text-[13px] font-semibold hover:opacity-80 disabled:opacity-30 transition-opacity"
               >
-                Continue to guided lesson <ArrowRight size={16} strokeWidth={2} />
+                Now teach it back <ArrowRight size={16} strokeWidth={2} />
               </button>
             </div>
           )}
