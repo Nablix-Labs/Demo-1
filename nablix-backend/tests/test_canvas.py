@@ -33,7 +33,18 @@ def _start_session(student_id: str) -> str:
         },
     )
     assert response.status_code == 200
-    return response.json()["session_id"]
+    session_id = response.json()["session_id"]
+    # The mock OCR fixture shows work for the diagnostic question; pin the
+    # session to it since guided sessions now start on the GP question.
+    session = session_service._sessions[session_id]
+    session_service._sessions[session_id] = session.model_copy(
+        update={
+            "current_question": "Solve for x: x + 4 = 9",
+            "question_id": "ALG_EQ_DIAG_001",
+            "correct_answer": "x = 5",
+        }
+    )
+    return session_id
 
 
 def test_canvas_submit_returns_mock_ocr_result() -> None:

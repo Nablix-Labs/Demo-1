@@ -2,6 +2,9 @@ from datetime import datetime, timezone
 
 from fastapi import HTTPException
 
+from app.adapters.question_bank import fetch_question
+from app.core.config import get_settings
+from app.core.exceptions import QuestionFetchError
 from app.models.adapters import ConversationMessage, VisionOCRResult
 from app.models.canvas import CanvasSubmissionRecord
 from app.models.fields import Phase
@@ -53,19 +56,17 @@ _DEMO_QUESTIONS: dict[str, tuple[str, str, int]] = {
 _DEFAULT_QUESTION_ID = "ALG_EQ_DIAG_001"
 _DEMO_STUDENT_ID = "ST001"
 
-# Aditya stub data: (concept_id, phase) -> question_id into _DEMO_QUESTIONS.
-_PHASE_QUESTION_IDS: dict[tuple[str, Phase], str] = {
-    ("ALG_LINEAR_ONE_STEP", "DIAGNOSTIC"): "ALG_EQ_DIAG_001",
-    ("ALG_LINEAR_ONE_STEP", "CONCEPT_ORIENTATION"): "ALG_EQ_CO_001",
-    ("ALG_LINEAR_ONE_STEP", "GUIDED_PRACTICE"): "ALG_EQ_GP_001",
-    ("ALG_LINEAR_ONE_STEP", "INDEPENDENT_PRACTICE"): "ALG_EQ_IP_001",
-    ("ALG_LINEAR_ONE_STEP", "REVIEW"): "ALG_EQ_REV_001",
-}
+# Answers of knowledge-base questions served this process, so lookups by bare
+# question_id (e.g. session review) keep working for non-demo questions.
+_served_answers: dict[str, str] = {}
 
 
 def correct_answer_for(question_id: str) -> str | None:
     """Return the expected answer for a question_id, or None if unknown."""
 
+    served = _served_answers.get(question_id)
+    if served is not None:
+        return served
     entry = _DEMO_QUESTIONS.get(question_id)
     return entry[1] if entry else None
 
@@ -80,26 +81,25 @@ def _mock_diagnostic_question() -> tuple[str, str, int]:
     return (question, _DEFAULT_QUESTION_ID, number)
 
 
-def get_next_question(
+async def get_next_question(
     concept_id: str,
     phase: Phase,
-    previous_question_id: str | None = None,
+    served_question_ids: list[str] | None = None,
     difficulty: str = "FOUNDATION",
 ) -> tuple[str, str, str] | None:
-    """Aditya stub: return (question_text, correct_answer, question_id).
+    """Return (question_text, correct_answer, question_id) or None when exhausted.
 
-    Placeholder for Aditya's POST /question/next. Returns None when Aditya
-    has nothing for the concept/phase — the caller must fail loudly, never
-    continue silently.
-    # ponytail: previous_question_id/difficulty accepted per contract but
-    # ignored (one question per phase); honor them when a real bank exists.
+    Questions come directly from the Qdrant knowledge base. None means the
+    caller must fail loudly, never continue silently.
     """
 
-    question_id = _PHASE_QUESTION_IDS.get((concept_id, phase))
-    if question_id is None:
-        return None
-    question, answer, _number = _DEMO_QUESTIONS[question_id]
-    return (question, answer, question_id)
+    settings = get_settings()
+    if settings.qdrant_url == "" or settings.qdrant_api_key == "":
+        raise QuestionFetchError(concept_id, phase)
+    fetched = await fetch_question(concept_id, phase, served_question_ids, difficulty)
+    if fetched is not None:
+        _served_answers[fetched[2]] = fetched[1]
+    return fetched
 
 
 def _diagnostic_start_message(question: str) -> str:
@@ -159,6 +159,8 @@ def _recover_demo_session(
         current_question=question,
         question_id=question_id,
         question_number=question_number,
+        correct_answer=correct_answer_for(question_id),
+        served_question_ids=[question_id],
         ui_state=current_phase,
         hint_count=hint_count,
         status="started",
@@ -172,8 +174,11 @@ def _recover_demo_session(
 async def start_session(request: SessionStartRequest) -> SessionRecord:
     """Create and store the mock session response used before real persistence exists."""
 
-    question, question_id, question_number = _mock_diagnostic_question()
     initial_phase: Phase = request.initial_phase if request.initial_phase is not None else "DIAGNOSTIC"
+    fetched = await get_next_question(request.concept_id, initial_phase)
+    if fetched is None:
+        raise QuestionFetchError(request.concept_id, initial_phase)
+    question, correct_answer, question_id = fetched
     session: SessionRecord = SessionRecord(
         session_id=_build_session_id(),
         student_id=request.student_id,
@@ -183,7 +188,9 @@ async def start_session(request: SessionStartRequest) -> SessionRecord:
         current_phase=initial_phase,
         current_question=question,
         question_id=question_id,
-        question_number=question_number,
+        question_number=1,
+        correct_answer=correct_answer,
+        served_question_ids=[question_id],
         ui_state=initial_phase,
         hint_count=0,
         status="started",
@@ -313,6 +320,7 @@ async def record_canvas_submission(
             *per_question_history,
             QuestionAttemptRecord(
                 question_id=session.question_id,
+                question_text=session.current_question,
                 phase=session.current_phase,
                 evaluation=record.tutor.evaluation,
                 input_source="CANVAS",

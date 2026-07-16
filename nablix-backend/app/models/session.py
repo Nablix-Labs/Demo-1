@@ -50,6 +50,8 @@ class SessionEndRequest(BaseModel):
 
 class QuestionAttemptRecord(BaseModel):
     question_id: QuestionId
+    # The question as served, so summaries can show real text, not just ids.
+    question_text: str = ""
     phase: Phase
     evaluation: str
     input_source: Literal["TEXT", "VOICE", "CANVAS"]
@@ -102,6 +104,10 @@ class SessionRecord(BaseModel):
     current_question: str
     question_id: QuestionId
     question_number: int
+    # Answer key served with the question (Qdrant payload or demo stub).
+    correct_answer: str | None = None
+    # Every question id served this session, for knowledge-base exclusion.
+    served_question_ids: list[str] = Field(default_factory=list)
     interaction_mode: InteractionMode
     voice_state: VoiceState = Field(default_factory=VoiceState)
     canvas_state: CanvasState = Field(default_factory=CanvasState)

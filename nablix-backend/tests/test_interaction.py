@@ -87,11 +87,13 @@ def test_interaction_returns_session_view() -> None:
 
 
 def test_interaction_returns_visual_cue_for_addition_opposite_operation_error() -> None:
+    # Guided sessions now start on the GP question (x + 6 = 10); its
+    # opposite-operation wrong answer is 10 + 6 = 16.
     session_id = _start_session("ST001", initial_phase="GUIDED_PRACTICE")
 
     response = client.post(
         "/interaction",
-        json=_interaction_body(session_id, "ST001", text_input="x = 13"),
+        json=_interaction_body(session_id, "ST001", text_input="x = 16"),
     )
 
     assert response.status_code == 200
@@ -629,14 +631,19 @@ def test_transition_skipped_on_null_recommendation(monkeypatch) -> None:
 
 
 def test_transition_rolls_back_when_question_fetch_fails(monkeypatch) -> None:
-    # Spec case: Aditya has no question for the concept -> error response and
-    # the session phase is left untouched.
-    session_id = _start_session("ST025", concept_id="UNKNOWN_CONCEPT")
+    # Spec case: the question bank has nothing for the new phase -> error
+    # response and the session phase is left untouched.
+    session_id = _start_session("ST025")
     _fake_pipeline(monkeypatch, student_phase="GUIDED_PRACTICE")
+
+    async def no_question(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(interaction_service, "get_next_question", no_question)
 
     response = client.post(
         "/interaction",
-        json=_interaction_body(session_id, "ST025", concept_id="UNKNOWN_CONCEPT"),
+        json=_interaction_body(session_id, "ST025"),
     )
 
     assert response.status_code == 503

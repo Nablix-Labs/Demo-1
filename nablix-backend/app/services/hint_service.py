@@ -12,7 +12,6 @@ from app.services.interaction_service import (
 )
 from app.services.session_service import (
     _get_owned_session_for_turn,
-    correct_answer_for,
     increment_hint_count,
 )
 
@@ -74,7 +73,7 @@ async def process_hint(
         student_id=request.student_id,
         message=f"Hint request for {request.question_id} ({request.concept_id}).",
         question=session.current_question,
-        correct_answer=correct_answer_for(session.question_id),
+        correct_answer=session.correct_answer,
         current_phase=session.current_phase,
         input_source="TEXT",
         attempt_count=session.attempt_count,

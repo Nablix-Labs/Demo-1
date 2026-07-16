@@ -26,7 +26,6 @@ from app.services.phase_transition import (
 )
 from app.services.session_service import (
     _get_owned_session_for_turn,
-    correct_answer_for,
     get_canvas_submission,
     get_next_question,
     restore_interaction_progress,
@@ -290,7 +289,7 @@ async def process_interaction(
         question=session.current_question,
         # Grade against the session's question: after a 6.7 transition swaps
         # the question, the request's id from the frontend may be stale.
-        correct_answer=correct_answer_for(session.question_id),
+        correct_answer=session.correct_answer,
         current_phase=session.current_phase,
         input_source=request.input_source,
         transcript_confidence=request.transcript_confidence,
@@ -380,6 +379,7 @@ async def process_interaction(
             *session.per_question_history,
             QuestionAttemptRecord(
                 question_id=session.question_id,
+                question_text=session.current_question,
                 phase=session.current_phase,
                 evaluation=tutor.evaluation,
                 input_source=request.input_source,
@@ -392,15 +392,19 @@ async def process_interaction(
     if new_phase is not None:
         # Fetch before committing any state: an Aditya failure raises here,
         # so the session (and its phase) is never touched — rollback for free.
-        fetched = get_next_question(session.concept_id, new_phase, session.question_id)
+        fetched = await get_next_question(
+            session.concept_id, new_phase, session.served_question_ids
+        )
         if fetched is None:
             raise QuestionFetchError(session.concept_id, new_phase)
-        question_text, _correct_answer, question_id = fetched
+        question_text, correct_answer, question_id = fetched
         state_updates.update(
             {
                 "previous_phase": session.current_phase,
                 "current_question": question_text,
                 "question_id": question_id,
+                "correct_answer": correct_answer,
+                "served_question_ids": [*session.served_question_ids, question_id],
                 "question_number": session.question_number + 1,
                 "attempt_count": 0,
                 "question_completed": False,
@@ -422,17 +426,19 @@ async def process_interaction(
         )
     elif completed:
         # Same phase: route to the next question on a correct answer. The
-        # Aditya stub serves one question per phase, so a same-id fetch just
+        # demo stub serves one question per phase, so a same-id fetch just
         # keeps question_completed=True until a transition swaps the question.
-        fetched = get_next_question(
-            session.concept_id, session.current_phase, session.question_id
+        fetched = await get_next_question(
+            session.concept_id, session.current_phase, session.served_question_ids
         )
         if fetched is not None and fetched[2] != session.question_id:
-            question_text, _correct_answer, question_id = fetched
+            question_text, correct_answer, question_id = fetched
             state_updates.update(
                 {
                     "current_question": question_text,
                     "question_id": question_id,
+                    "correct_answer": correct_answer,
+                    "served_question_ids": [*session.served_question_ids, question_id],
                     "question_number": session.question_number + 1,
                     "attempt_count": 0,
                     "hint_count": 0,

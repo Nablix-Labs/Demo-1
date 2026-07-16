@@ -30,7 +30,6 @@ from app.services.interaction_service import (
     run_tutor_pipeline,
 )
 from app.services.session_service import (
-    correct_answer_for,
     _get_owned_session,
     get_next_question,
     record_canvas_attachment,
@@ -100,7 +99,7 @@ async def submit_canvas(
         student_id=request.student_id,
         message=message,
         question=session.current_question,
-        correct_answer=correct_answer_for(session.question_id),
+        correct_answer=session.correct_answer,
         current_phase=session.current_phase,
         input_source="CANVAS",
         transcript_confidence=request.transcript_confidence,
@@ -138,18 +137,20 @@ async def submit_canvas(
             )
             new_phase = resolve_transition(session.current_phase, recommended)
             if new_phase is not None:
-                fetched = get_next_question(
+                fetched = await get_next_question(
                     session.concept_id,
                     new_phase,
-                    session.question_id,
+                    session.served_question_ids,
                 )
                 if fetched is None:
                     raise QuestionFetchError(session.concept_id, new_phase)
-                question_text, _correct_answer, question_id = fetched
+                question_text, correct_answer, question_id = fetched
                 transition_updates = {
                     "previous_phase": session.current_phase,
                     "current_question": question_text,
                     "question_id": question_id,
+                    "correct_answer": correct_answer,
+                    "served_question_ids": [*session.served_question_ids, question_id],
                     "question_number": session.question_number + 1,
                     "attempt_count": 0,
                     "question_completed": False,
