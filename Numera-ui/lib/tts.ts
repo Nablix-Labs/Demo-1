@@ -21,6 +21,7 @@
  */
 
 import { useMicLevel } from '@/store/useMicLevel';
+import { synthesizeSpeech } from '@/lib/api';
 
 /** The voice server always streams MP3. */
 const AUDIO_MIME = 'audio/mpeg';
@@ -28,22 +29,78 @@ const AUDIO_MIME = 'audio/mpeg';
 const MOUTH_PULSE_MS = 180;
 
 // ── Browser engine (Web Speech API) ──────────────────────────────────────────
-export function speakBrowser(text: string): void {
-  if (typeof window === 'undefined' || !('speechSynthesis' in window) || !text) return;
+export function speakBrowser(text: string, onEnd?: () => void): void {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window) || !text) {
+    onEnd?.();
+    return;
+  }
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.onstart = () => useMicLevel.getState().setAiSpeaking(true);
   utterance.onboundary = () => useMicLevel.getState().markBoundary();
-  utterance.onend = () => useMicLevel.getState().setAiSpeaking(false);
-  utterance.onerror = () => useMicLevel.getState().setAiSpeaking(false);
+  utterance.onend = () => { useMicLevel.getState().setAiSpeaking(false); onEnd?.(); };
+  utterance.onerror = () => { useMicLevel.getState().setAiSpeaking(false); onEnd?.(); };
   window.speechSynthesis.cancel();
   useMicLevel.getState().setAiSpeaking(false); // reset before the new utterance starts
   window.speechSynthesis.speak(utterance);
 }
 
-/** Voice the tutor's reply through the browser. Pass the exact text shown in chat
- *  so the audio matches the words on screen. Used by the REST demo path. */
-export function speakTutor(text: string): void {
-  speakBrowser(text);
+// ── Backend engine (/voice/tts, OpenAI) with browser fallback ────────────────
+const ttsApiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
+
+let currentAudio: HTMLAudioElement | null = null;
+let speakToken = 0; // invalidates in-flight TTS fetches when superseded/stopped
+
+/** Stop whichever engine is currently voicing the tutor. */
+export function stopTutorSpeech(): void {
+  speakToken++;
+  if (typeof window !== 'undefined') window.speechSynthesis?.cancel();
+  if (currentAudio) {
+    try { currentAudio.pause(); } catch { /* noop */ }
+    currentAudio = null;
+  }
+  useMicLevel.getState().setAiSpeaking(false);
+}
+
+function playBase64Mp3(base64: string, onEnd?: () => void): void {
+  const audio = new Audio(`data:${AUDIO_MIME};base64,${base64}`);
+  currentAudio = audio;
+  let mouthTimer: ReturnType<typeof setInterval> | null = null;
+  const finish = () => {
+    if (mouthTimer) clearInterval(mouthTimer);
+    useMicLevel.getState().setAiSpeaking(false);
+    if (currentAudio === audio) currentAudio = null;
+    onEnd?.();
+  };
+  audio.onplaying = () => {
+    useMicLevel.getState().setAiSpeaking(true);
+    if (!mouthTimer) mouthTimer = setInterval(() => useMicLevel.getState().markBoundary(), MOUTH_PULSE_MS);
+  };
+  audio.onended = finish;
+  audio.onerror = finish;
+  void audio.play().catch(finish);
+}
+
+/**
+ * Voice the tutor's reply: OpenAI audio via POST /voice/tts first, browser
+ * speechSynthesis when the backend/provider fails (the text stays on screen
+ * either way). Pass the exact text shown in chat so audio matches the words.
+ */
+export function speakTutor(text: string, onEnd?: () => void): void {
+  if (!text) { onEnd?.(); return; }
+  stopTutorSpeech();
+  if (!ttsApiEnabled()) { speakBrowser(text, onEnd); return; }
+  const token = speakToken;
+  synthesizeSpeech(text)
+    .then((audioBase64) => {
+      if (token !== speakToken) return; // superseded while fetching
+      if (!audioBase64) { speakBrowser(text, onEnd); return; }
+      playBase64Mp3(audioBase64, onEnd);
+    })
+    .catch(() => {
+      if (token !== speakToken) return;
+      console.warn('[tts] backend TTS failed; falling back to browser speech');
+      speakBrowser(text, onEnd);
+    });
 }
 
 function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
@@ -73,7 +130,7 @@ class TutorAudioStream {
 
   /** A new tutor reply is starting — reset and prepare to receive audio chunks. */
   begin(): void {
-    window.speechSynthesis?.cancel(); // streamed audio supersedes any browser voice
+    stopTutorSpeech(); // streamed audio supersedes any browser/REST tutor voice
     this.teardown();
 
     const supported =
