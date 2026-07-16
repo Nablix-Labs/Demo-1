@@ -19,6 +19,7 @@ import {
 import PageShell, { Chip } from '@/components/PageShell';
 import PhaseGate from '@/components/PhaseGate';
 import { useNumeraStore } from '@/store/useNumeraStore';
+import { useDemoTutor } from '@/hooks/useDemoTutor';
 import { useFlowNav } from '@/lib/useFlowNav';
 import { demoFor, type DemoWorksheet } from '@/lib/demoContent';
 import { cn } from '@/lib/cn';
@@ -68,6 +69,17 @@ export default function ReviewPage() {
   const sessionSummary = useNumeraStore((s) => s.sessionSummary);
   const sessionReview = useNumeraStore((s) => s.sessionReview);
   const { decideReview, goStage } = useFlowNav();
+  const tutor = useDemoTutor();
+
+  // Arriving here IS the session end. Backend-driven navigation (a REVIEW
+  // phase recommendation) reaches this page without the explicit End-session
+  // flows, so end any live session on arrival; end() stores the summary +
+  // engine review and clears sessionId, so this runs at most once. On failure
+  // (e.g. no graded attempts yet) the page just shows its fallback content.
+  const { apiEnabled, sessionId, end } = tutor;
+  useEffect(() => {
+    if (apiEnabled && sessionId) void end().catch(() => {});
+  }, [apiEnabled, sessionId, end]);
 
   // Real session outcomes when the backend sent them; demo worksheets otherwise.
   const demo = demoFor(currentTopicId);

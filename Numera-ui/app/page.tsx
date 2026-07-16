@@ -34,7 +34,7 @@ if (typeof window !== 'undefined' && !process.env.NEXT_PUBLIC_VOICE_TRANSPORT) {
 }
 
 export default function LessonPage() {
-  const { goStage, currentTopicId } = useFlowNav();
+  const { currentTopicId } = useFlowNav();
   const setQuestionText = useNumeraStore((s) => s.setQuestionText);
   const setQuestionNumber = useNumeraStore((s) => s.setQuestionNumber);
   const setTranscript = useNumeraStore((s) => s.setTranscript);
@@ -122,25 +122,9 @@ export default function LessonPage() {
     else capture.stop();
   }, [apiEnabled, sessionId, micMuted, capture]);
 
-  // End the backend session from the lesson (previously only reachable from
-  // practice): end it, save the summary, then go to Review. Same logic as
-  // practice's "Review with tutor"; on failure the student stays here.
-  const [ending, setEnding] = useState(false);
-  const [endError, setEndError] = useState<string | null>(null);
-  const endSessionAndReview = useCallback(async () => {
-    setEndError(null);
-    if (!tutor.apiEnabled || !tutor.sessionId) { goStage('review', currentTopicId); return; }
-    setEnding(true);
-    try {
-      await tutor.end();
-      goStage('review', currentTopicId);
-    } catch {
-      setEndError("We couldn't end your session. Please try again.");
-    } finally {
-      setEnding(false);
-    }
-  }, [tutor, goStage, currentTopicId]);
-
+  // Navigation off this page is backend-phase-driven (usePhaseRouting follows
+  // the session's current_phase), so the lesson chrome carries no manual
+  // stage buttons.
   return (
     <>
       <SlideDots />
@@ -148,30 +132,6 @@ export default function LessonPage() {
       <ContinuityCheck />
       <FloatingMicButton />
       <VisualCue />
-      {/* Guided lesson → independent practice. Top-right, to the left of the
-          "Explain it back" chrome; the visual-cue card sits below (top-[84px]).
-          A CSS glass pill — not the WebGL liquid-glass component, whose oversized
-          region blocked the canvas and the cue card. */}
-      <div className="fixed top-4 right-44 z-40 flex flex-col items-end gap-2">
-        <button
-          onClick={() => goStage('practice', currentTopicId)}
-          className="lg-glass rounded-full px-5 py-2.5 text-ink text-[12px] font-semibold whitespace-nowrap cursor-pointer hover:brightness-[1.03] transition"
-        >
-          Finish lesson → Practice
-        </button>
-        <button
-          onClick={() => void endSessionAndReview()}
-          disabled={ending}
-          className="lg-glass rounded-full px-5 py-2.5 text-ink text-[12px] font-semibold whitespace-nowrap cursor-pointer hover:brightness-[1.03] transition disabled:opacity-60 disabled:cursor-default"
-        >
-          {ending ? 'Ending session…' : 'End session → Review'}
-        </button>
-        {endError && (
-          <span className="lg-glass rounded-full px-3 py-1.5 text-[11px] font-medium text-red-700 whitespace-nowrap">
-            {endError}
-          </span>
-        )}
-      </div>
     </>
   );
 }
