@@ -146,6 +146,14 @@ export async function getSession(sessionId: string) {
 
 // ── /session/end ──────────────────────────────────────────────────────────────
 
+/** One graded question from the backend's per-question history. */
+export interface QuestionOutcome {
+  question: string;    // the question as served (from the RAG question bank)
+  correct: boolean;    // final evaluation on this question
+  attempts: number;    // attempts it took
+  hint_level: number;  // highest hint level used on it
+}
+
 /** Summary of an ended session, shown on the Review screen. */
 export interface SessionSummary {
   session_id: string;
@@ -154,6 +162,16 @@ export interface SessionSummary {
   attempts: number;    // canvas submissions the student made
   hints_used: number;  // hints requested during the session
   status: string;      // e.g. "ended"
+  /** Real per-question outcomes; empty when the backend sent no history. */
+  outcomes: QuestionOutcome[];
+}
+
+/** Backend per-question attempt record inside session_summary. */
+interface QuestionAttemptRecord {
+  question_id: string;
+  question_text?: string;
+  evaluation: string;
+  hint_level_used: number;
 }
 
 /** /session/end returns the ended record; the backend may also attach an explicit
@@ -161,6 +179,27 @@ export interface SessionSummary {
 export interface SessionEndResponse extends SessionRecord {
   attempt_count?: number;
   summary?: Partial<SessionSummary>;
+  session_summary?: {
+    per_question_history?: QuestionAttemptRecord[];
+  };
+}
+
+/** Collapse attempt records into one outcome per question, in served order. */
+function toOutcomes(history: QuestionAttemptRecord[] | undefined): QuestionOutcome[] {
+  const byQuestion = new Map<string, QuestionOutcome>();
+  for (const attempt of history ?? []) {
+    const entry = byQuestion.get(attempt.question_id) ?? {
+      question: attempt.question_text || attempt.question_id,
+      correct: false,
+      attempts: 0,
+      hint_level: 0,
+    };
+    entry.attempts += 1;
+    entry.correct = attempt.evaluation === 'CORRECT';
+    entry.hint_level = Math.max(entry.hint_level, attempt.hint_level_used ?? 0);
+    byQuestion.set(attempt.question_id, entry);
+  }
+  return [...byQuestion.values()];
 }
 
 /**
@@ -179,6 +218,7 @@ export function toSessionSummary(res: SessionEndResponse | null | undefined): Se
     attempts: s?.attempts ?? res.attempt_count ?? res.canvas_submissions?.length ?? 0,
     hints_used: s?.hints_used ?? res.hint_count ?? 0,
     status: s?.status ?? res.status,
+    outcomes: toOutcomes(res.session_summary?.per_question_history),
   };
 }
 

@@ -20,8 +20,21 @@ import PageShell, { Chip } from '@/components/PageShell';
 import PhaseGate from '@/components/PhaseGate';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useFlowNav } from '@/lib/useFlowNav';
-import { demoFor } from '@/lib/demoContent';
+import { demoFor, type DemoWorksheet } from '@/lib/demoContent';
 import { cn } from '@/lib/cn';
+import type { QuestionOutcome } from '@/lib/api';
+
+/** Real session outcomes rendered through the same worksheet layout. */
+function outcomeWorksheets(outcomes: QuestionOutcome[]): DemoWorksheet[] {
+  return outcomes.map((o) => ({
+    question: o.question,
+    correct: o.correct,
+    student: [],
+    voice: o.correct
+      ? `You solved this correctly in ${o.attempts} attempt${o.attempts === 1 ? '' : 's'}${o.hint_level > 0 ? `, using a level ${o.hint_level} hint` : ''}. Well done.`
+      : `This one isn't solved yet after ${o.attempts} attempt${o.attempts === 1 ? '' : 's'}. We will come back to it together.`,
+  }));
+}
 
 /** Tutor's red pen — the only colour outside the grayscale system, by design. */
 const INK = '#b42318';
@@ -50,15 +63,19 @@ export default function ReviewPage() {
   const sessionSummary = useNumeraStore((s) => s.sessionSummary);
   const { decideReview } = useFlowNav();
 
-  // Worksheets + summary for the placed topic.
+  // Real session outcomes when the backend sent them; demo worksheets otherwise.
   const demo = demoFor(currentTopicId);
-  const WORKSHEETS = demo.worksheets;
-  const SUMMARY = demo.reviewSummary;
+  const outcomes = sessionSummary?.outcomes ?? [];
+  const live = outcomes.length > 0;
+  const WORKSHEETS = live ? outcomeWorksheets(outcomes) : demo.worksheets;
 
   const total = WORKSHEETS.length;
   const done = i >= total;                 // past the last sheet → final summary
   const ws = WORKSHEETS[Math.min(i, total - 1)];
   const score = WORKSHEETS.filter((w) => w.correct).length;
+  const SUMMARY = live
+    ? `You worked through ${total} question${total === 1 ? '' : 's'} this session and solved ${score} of them. ${score === total ? 'Excellent work — you are ready to move on.' : 'Let us keep practising the ones that got away.'}`
+    : demo.reviewSummary;
 
   // Reaching the final summary clears the review phase.
   useEffect(() => {
