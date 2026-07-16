@@ -1,8 +1,33 @@
+from datetime import datetime, timezone
+
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.models.session import QuestionAttemptRecord
+from app.services import session_service
 
 client = TestClient(app)
+
+
+def seed_graded_attempt(session_id: str) -> None:
+    """/session/end refuses sessions with no graded attempts; seed one."""
+
+    session = session_service._sessions[session_id]
+    session_service._sessions[session_id] = session.model_copy(
+        update={
+            "per_question_history": [
+                QuestionAttemptRecord(
+                    question_id="ALG_EQ_GP_001",
+                    question_text="Solve for x: x + 6 = 10",
+                    phase="GUIDED_PRACTICE",
+                    evaluation="CORRECT",
+                    input_source="TEXT",
+                    hint_level_used=0,
+                    attempted_at=datetime.now(timezone.utc),
+                )
+            ]
+        }
+    )
 
 
 def test_session_start_get_and_end_flow() -> None:
@@ -58,6 +83,13 @@ def test_session_start_get_and_end_flow() -> None:
     assert get_response.status_code == 200
     assert get_response.json() == started
 
+    no_attempts = client.post(
+        "/session/end",
+        json={"session_id": session_id, "student_id": "ST001"},
+    )
+    assert no_attempts.status_code == 409
+
+    seed_graded_attempt(session_id)
     end_response = client.post(
         "/session/end",
         json={"session_id": session_id, "student_id": "ST001"},
@@ -68,6 +100,13 @@ def test_session_start_get_and_end_flow() -> None:
     assert ended["session_id"] == session_id
     assert ended["status"] == "ended"
     assert ended["message"] == "Session ended."
+    review = ended["session_review"]
+    assert review["student_facing_summary"]
+    assert review["five_category_summary"]["category_1_strength"]
+    assert review["guardrail_passed"] is True
+    # Null categories are excluded from the spoken order.
+    assert "category_2_first_error" not in review["voice_delivery_order"]
+    assert "category_1_strength" in review["voice_delivery_order"]
 
 
 def test_session_start_rejects_invalid_interaction_mode() -> None:

@@ -124,6 +124,7 @@ async def submit_canvas(
     tutor_started = perf_counter()
     reviewed_attempt_count = session.attempt_count
     recommended_entry_phase: str | None = session.recommended_entry_phase
+    student_result = None
     new_phase: Phase | None = None
     transition_updates: dict[str, object] = {}
     if ocr.needs_clarification or ocr.confidence < settings.min_ocr_confidence_threshold:
@@ -171,6 +172,7 @@ async def submit_canvas(
                 }
         authoritative_recommendation = student.recommended_entry_phase
         recommended_entry_phase = authoritative_recommendation
+        student_result = student
         tutor = tutor.model_copy(
             update={"next_phase_recommendation": authoritative_recommendation}
         )
@@ -216,6 +218,7 @@ async def submit_canvas(
             session.question_completed or tutor.evaluation == "CORRECT",
             updated_history,
             recommended_entry_phase,
+            student_result,
         )
         if new_phase is not None:
             _apply_canvas_transition(

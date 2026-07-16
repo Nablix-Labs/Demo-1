@@ -169,24 +169,42 @@ def _canvas_draw_from(result: dict[str, object]) -> list[object]:
     return canvas_draw
 
 
+def _tts_retry_count() -> int:
+    """Main-app adapter retry setting; default when running standalone."""
+    try:
+        from app.core.config import get_settings
+
+        return get_settings().adapter_request_retry_count
+    except Exception:
+        return 2
+
+
 async def synthesize_speech(text: str) -> str | None:
-    """Configured TTS (OpenAI when keyed) → base64 mp3, or None on empty/failure."""
+    """Configured TTS (OpenAI when keyed) → base64 mp3; None on empty text.
+
+    Retries provider failures per the adapter retry setting, then raises so the
+    caller can return an explicit error (frontend falls back to browser speech).
+    """
     if not text:
         return None
-    try:
-        tts_adapter = get_tts_adapter(voice_config.DEFAULT_TTS_PROVIDER)
-        result = await tts_adapter.generate_speech(
-            text=text,
-            voice=voice_config.TTS_VOICE,
-            audio_format="mp3",
-        )
-        audio_data = result.audio_data
-        if isinstance(audio_data, str):
-            audio_data = audio_data.encode("utf-8")
-        return base64.b64encode(audio_data).decode("utf-8")
-    except Exception as e:
-        logger.error(f"TTS failed: {e}")
-        return None
+    attempts = _tts_retry_count() + 1
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            tts_adapter = get_tts_adapter(voice_config.DEFAULT_TTS_PROVIDER)
+            result = await tts_adapter.generate_speech(
+                text=text,
+                voice=voice_config.TTS_VOICE,
+                audio_format="mp3",
+            )
+            audio_data = result.audio_data
+            if isinstance(audio_data, str):
+                audio_data = audio_data.encode("utf-8")
+            return base64.b64encode(audio_data).decode("utf-8")
+        except Exception as e:
+            last_error = e
+            logger.warning(f"TTS attempt {attempt}/{attempts} failed: {e}")
+    raise RuntimeError(f"TTS failed after {attempts} attempts: {last_error}")
 
 app = FastAPI(
     title="Nablix Math Tutor - Voice Streaming Server",

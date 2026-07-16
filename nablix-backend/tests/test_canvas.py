@@ -360,7 +360,10 @@ def test_canvas_submit_returns_404_for_student_mismatch() -> None:
 
 
 def test_canvas_submit_returns_409_for_ended_session() -> None:
+    from tests.test_session import seed_graded_attempt
+
     session_id = _start_session("ST007")
+    seed_graded_attempt(session_id)
     end_response = client.post(
         "/session/end",
         json={"session_id": session_id, "student_id": "ST007"},

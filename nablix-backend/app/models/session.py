@@ -3,8 +3,14 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.models.adapters import CanvasFeedback, ConversationMessage, VisionOCRResult
+from app.models.adapters import (
+    CanvasFeedback,
+    ConversationMessage,
+    StudentModelResult,
+    VisionOCRResult,
+)
 from app.models.canvas import CanvasSubmissionRecord
+from app.models.session_review import SessionReviewResponse
 from app.models.fields import (
     ConceptId,
     InteractionMode,
@@ -54,6 +60,7 @@ class QuestionAttemptRecord(BaseModel):
     question_text: str = ""
     phase: Phase
     evaluation: str
+    error_type: str | None = None
     input_source: Literal["TEXT", "VOICE", "CANVAS"]
     hint_level_used: int
     attempted_at: datetime
@@ -137,4 +144,8 @@ class SessionRecord(BaseModel):
     hint_levels_used: list[int] = Field(default_factory=list)
     phase_transitions: list[PhaseTransitionRecord] = Field(default_factory=list)
     recommended_entry_phase: str | None = None
+    # Last learner-state snapshot from Saravanan's service, kept so the
+    # end-of-session review reflects his data rather than a reconstruction.
+    last_student_model: StudentModelResult | None = None
     session_summary: SessionSummary | None = None
+    session_review: SessionReviewResponse | None = None

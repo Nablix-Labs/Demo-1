@@ -5,7 +5,7 @@ from fastapi import HTTPException
 from app.adapters.question_bank import fetch_question
 from app.core.config import get_settings
 from app.core.exceptions import QuestionFetchError
-from app.models.adapters import ConversationMessage, VisionOCRResult
+from app.models.adapters import ConversationMessage, StudentModelResult, VisionOCRResult
 from app.models.canvas import CanvasSubmissionRecord
 from app.models.fields import Phase
 from app.models.session import (
@@ -263,16 +263,178 @@ def assemble_session_summary(session: SessionRecord, ended_at: datetime) -> Sess
     )
 
 
+_PHASE_WORDS: dict[str, str] = {
+    "DIAGNOSTIC": "diagnostic",
+    "CONCEPT_ORIENTATION": "concept",
+    "GUIDED_PRACTICE": "guided practice",
+    "INDEPENDENT_PRACTICE": "independent practice",
+    "REVIEW": "review",
+}
+
+
+def _review_hint_level(hint_level: int) -> int | None:
+    return min(hint_level, 3) if hint_level > 0 else None
+
+
+def build_session_review_request(session: SessionRecord) -> "SessionReviewRequest":
+    """Map the stored session onto Chirudeva's strict session-review contract.
+
+    Evidence descriptions deliberately contain no digits or question text: the
+    review guardrail rejects any evidence that echoes a protected answer, and
+    algebra questions can contain their own answer as a coefficient.
+    """
+
+    from app.models.session_review import SessionReviewRequest
+
+    attempts: list[dict[str, object]] = []
+    attempt_numbers: dict[str, int] = {}
+    error_counts: dict[str, int] = {}
+    for record in session.per_question_history:
+        number = attempt_numbers.get(record.question_id, 0) + 1
+        attempt_numbers[record.question_id] = number
+        correct = record.evaluation == "CORRECT"
+        phase_word = _PHASE_WORDS.get(record.phase, "practice")
+        if not correct and record.error_type is not None:
+            error_counts[record.error_type] = error_counts.get(record.error_type, 0) + 1
+        attempts.append(
+            {
+                "question_id": record.question_id,
+                "phase": record.phase,
+                "attempt_number": number,
+                "evaluation": record.evaluation,
+                "error_type": record.error_type,
+                "hint_level_used": _review_hint_level(record.hint_level_used),
+                "independent_success": (
+                    correct
+                    and record.phase == "INDEPENDENT_PRACTICE"
+                    and record.hint_level_used == 0
+                ),
+                "canvas_submitted": record.input_source == "CANVAS",
+                "canvas_first_error_step": None,
+                "canvas_first_error_type": None,
+                "successful_step_descriptions": (
+                    [f"Reached the correct final answer on a {phase_word} question"]
+                    if correct
+                    else []
+                ),
+                "error_description": (
+                    None
+                    if correct
+                    else f"Did not reach the correct final answer on a {phase_word} question"
+                ),
+                "rescue_activated": False,
+            }
+        )
+    if not any(attempt["successful_step_descriptions"] for attempt in attempts) and attempts:
+        attempts[0]["successful_step_descriptions"] = [
+            "Kept attempting every question through the session"
+        ]
+
+    correct_attempts = sum(
+        record.evaluation == "CORRECT" for record in session.per_question_history
+    )
+    phases_completed: list[Phase] = []
+    for transition in session.phase_transitions:
+        if transition.previous_phase not in phases_completed:
+            phases_completed.append(transition.previous_phase)
+    if session.current_phase not in phases_completed:
+        phases_completed.append(session.current_phase)
+
+    student = session.last_student_model
+    dominant_error = max(error_counts, key=error_counts.get) if error_counts else None
+    recommended = session.recommended_entry_phase
+    if recommended not in _PHASE_WORDS:
+        recommended = session.current_phase
+
+    return SessionReviewRequest.model_validate(
+        {
+            "session_summary": {
+                "session_id": session.session_id,
+                "student_id": session.student_id,
+                "concept_id": session.concept_id,
+                "session_date": session.started_at.isoformat(),
+                "session_duration_seconds": max(
+                    0,
+                    int((datetime.now(timezone.utc) - session.started_at).total_seconds()),
+                ),
+                "interaction_mode": session.interaction_mode,
+                "phase_4_entry_reason": "normal_review",
+                "phases_completed": phases_completed,
+                "session_performance": {
+                    "total_attempts": len(attempts),
+                    "correct_attempts": correct_attempts,
+                    "incorrect_attempts": len(attempts) - correct_attempts,
+                    "hints_used": len(session.hint_levels_used),
+                    "hint_levels_used": [
+                        min(level, 3) for level in session.hint_levels_used
+                    ],
+                    "canvas_submissions": len(session.canvas_submissions),
+                    "rescue_mode_activations": int(session.rescue_mode_active),
+                    "long_pressure_events": 0,
+                    "voice_fallback_events": 0,
+                },
+                "per_question_history": attempts,
+                "canvas_feedback_history": [],
+                "phase_transitions": [
+                    {
+                        "from_phase": transition.previous_phase,
+                        "to_phase": transition.current_phase,
+                        "timestamp": transition.transitioned_at.isoformat(),
+                    }
+                    for transition in session.phase_transitions
+                ],
+            },
+            "student_model": {
+                "mastery_status": student.mastery_status if student else "DEVELOPING",
+                "error_counts": error_counts,
+                "dominant_error_type": dominant_error,
+                "hint_dependency_score": (
+                    student.hint_dependency_score if student else 0.0
+                ),
+                "error_confirmed_pattern": False,
+                "recommended_entry_phase": recommended,
+                "next_concept_recommendation": None,
+            },
+        }
+    )
+
+
 async def end_session(request: SessionEndRequest) -> SessionRecord:
-    """Mark a stored mock session as ended."""
+    """Generate the engine review, then mark a stored mock session as ended.
+
+    Review generation runs first: if it fails (or the session has no graded
+    attempts), the caller gets an explicit error and the session stays active.
+    """
+
+    # Imported here: ai_engine.session_review imports this module for answers.
+    from pydantic import ValidationError
+
+    from app.ai_engine.session_review import (
+        SessionReviewValidationError,
+        generate_session_review,
+    )
 
     session: SessionRecord = _get_owned_session(request.session_id, request.student_id)
+    if len(session.per_question_history) == 0:
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot end the session yet: no graded attempts to review.",
+        )
+    try:
+        review = generate_session_review(build_session_review_request(session))
+    except (SessionReviewValidationError, ValidationError, RuntimeError) as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Session review could not be generated; the session is still active. ({error})",
+        ) from error
+
     summary: SessionSummary = assemble_session_summary(session, datetime.now(timezone.utc))
     ended_session: SessionRecord = session.model_copy(
         update={
             "status": "ended",
             "message": "Session ended.",
             "session_summary": summary,
+            "session_review": review,
         }
     )
     _sessions[request.session_id] = ended_session
@@ -309,6 +471,7 @@ async def record_canvas_submission(
     question_completed: bool,
     conversation_history: list[ConversationMessage],
     recommended_entry_phase: str | None,
+    last_student_model: StudentModelResult | None = None,
 ) -> SessionRecord:
     """Append a reviewed canvas submission and persist its attempt count."""
 
@@ -328,6 +491,11 @@ async def record_canvas_submission(
                 question_text=session.current_question,
                 phase=session.current_phase,
                 evaluation=record.tutor.evaluation,
+                error_type=(
+                    record.tutor.error_type
+                    if record.tutor.evaluation != "CORRECT"
+                    else None
+                ),
                 input_source="CANVAS",
                 hint_level_used=record.tutor.hint_level,
                 attempted_at=record.submitted_at,
@@ -341,6 +509,7 @@ async def record_canvas_submission(
             "conversation_history": conversation_history,
             "per_question_history": per_question_history,
             "recommended_entry_phase": recommended_entry_phase,
+            "last_student_model": last_student_model or session.last_student_model,
         }
     )
     # This read-modify-write is safe only while the mock backend uses one worker.

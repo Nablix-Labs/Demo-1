@@ -386,6 +386,7 @@ async def process_interaction(
         "question_completed": completed,
         "conversation_history": conversation_history,
         "recommended_entry_phase": recommended,
+        "last_student_model": student,
     }
     if request.interaction_type == "ANSWER_SUBMISSION":
         state_updates["per_question_history"] = [
@@ -395,6 +396,7 @@ async def process_interaction(
                 question_text=session.current_question,
                 phase=session.current_phase,
                 evaluation=tutor.evaluation,
+                error_type=tutor.error_type if tutor.evaluation != "CORRECT" else None,
                 input_source=request.input_source,
                 hint_level_used=tutor.hint_level,
                 attempted_at=datetime.now(timezone.utc),
