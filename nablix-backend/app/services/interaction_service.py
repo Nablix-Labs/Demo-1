@@ -143,10 +143,10 @@ def _current_hint_level_from(hint_count: int) -> int | None:
 
 
 def _independent_correct_in_session(session: SessionRecord) -> int:
+    # Unaided corrects in any phase — the same semantics as the classifier's
+    # independent_success flag, which Saravanan's promotion gate counts.
     return sum(
-        attempt.phase == "INDEPENDENT_PRACTICE"
-        and attempt.evaluation == "CORRECT"
-        and attempt.hint_level_used == 0
+        attempt.evaluation == "CORRECT" and attempt.hint_level_used == 0
         for attempt in session.per_question_history
     )
 

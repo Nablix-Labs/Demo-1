@@ -555,9 +555,9 @@ def test_interaction_forwards_event_and_uses_student_model_phase(monkeypatch) ->
         "evaluation": "CORRECT",
         "error_type": None,
         "hint_level_used": 0,
-        "independent_success": False,
+        "independent_success": True,
         "current_phase": "DIAGNOSTIC",
-        "independent_correct_in_session": 0,
+        "independent_correct_in_session": 1,
     }
 
 
