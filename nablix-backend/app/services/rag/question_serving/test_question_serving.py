@@ -134,6 +134,113 @@ def test_collection_exists():
         return False
 
 
+def test_diagnostic_fields_structure():
+    """Test 2b: Verify DIAGNOSTIC questions have diagnostic_purpose and expected_method."""
+    logger.info("=== Test 2b: Diagnostic Fields Structure ===")
+
+    bank_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "question_bank.json")
+    with open(bank_path) as f:
+        questions = json.load(f)
+
+    diagnostic_questions = [q for q in questions if q.get("phase") == "DIAGNOSTIC"]
+    errors = []
+
+    if len(diagnostic_questions) == 0:
+        errors.append("No DIAGNOSTIC questions found in question_bank.json")
+    else:
+        logger.info(f"  Found {len(diagnostic_questions)} DIAGNOSTIC questions")
+
+    for q in diagnostic_questions:
+        qid = q.get("question_id", "?")
+        if not q.get("diagnostic_purpose"):
+            errors.append(f"{qid}: missing diagnostic_purpose")
+        if not q.get("expected_method"):
+            errors.append(f"{qid}: missing expected_method")
+
+    if errors:
+        for err in errors:
+            logger.error(f"  FAIL: {err}")
+        return False
+
+    for q in diagnostic_questions:
+        logger.info(f"  {q['question_id']}: purpose='{q['diagnostic_purpose'][:50]}...'")
+
+    logger.info("  PASS")
+    return True
+
+
+def test_get_diagnostic_question():
+    """Test 3b: Test the get_diagnostic_question function."""
+    logger.info("=== Test 3b: get_diagnostic_question ===")
+
+    from question_service import get_diagnostic_question
+
+    errors = []
+
+    # 3b-a: Get a diagnostic question for one-step, foundation
+    result = get_diagnostic_question(
+        concept_id="ALG_LINEAR_ONE_STEP",
+        difficulty="FOUNDATION",
+        previously_seen_ids=[],
+        qdrant_client=_qdrant_client,
+        openai_client=_openai_client,
+    )
+    if result is None:
+        errors.append("3b-a: No diagnostic question returned for ONE_STEP/FOUNDATION")
+    else:
+        logger.info(f"  3b-a: Got {result['question_id']} - {result['question_text']}")
+        if result["phase"] != "DIAGNOSTIC":
+            errors.append(f"3b-a: Wrong phase '{result['phase']}', expected DIAGNOSTIC")
+
+        # Check diagnostic-specific fields are present
+        if not result.get("diagnostic_purpose"):
+            errors.append("3b-a: diagnostic_purpose missing from response")
+        else:
+            logger.info(f"  3b-a: diagnostic_purpose = '{result['diagnostic_purpose']}'")
+
+        if not result.get("expected_method"):
+            errors.append("3b-a: expected_method missing from response")
+        else:
+            logger.info(f"  3b-a: expected_method = '{result['expected_method']}'")
+
+    # 3b-b: Get a diagnostic question for two-step
+    result_2step = get_diagnostic_question(
+        concept_id="ALG_LINEAR_TWO_STEP",
+        difficulty="FOUNDATION",
+        previously_seen_ids=[],
+        qdrant_client=_qdrant_client,
+        openai_client=_openai_client,
+    )
+    if result_2step is None:
+        errors.append("3b-b: No diagnostic question returned for TWO_STEP/FOUNDATION")
+    else:
+        logger.info(f"  3b-b: Got {result_2step['question_id']} - {result_2step['question_text']}")
+
+    # 3b-c: Test previously_seen works for diagnostic
+    if result:
+        first_id = result["question_id"]
+        result2 = get_diagnostic_question(
+            concept_id="ALG_LINEAR_ONE_STEP",
+            difficulty="FOUNDATION",
+            previously_seen_ids=[first_id],
+            qdrant_client=_qdrant_client,
+            openai_client=_openai_client,
+        )
+        if result2 is not None and result2["question_id"] == first_id:
+            errors.append(f"3b-c: Got same question back ({first_id}) despite being in previously_seen")
+        else:
+            second_id = result2["question_id"] if result2 else "None"
+            logger.info(f"  3b-c: Previously-seen works. First: {first_id}, Second: {second_id}")
+
+    if errors:
+        for err in errors:
+            logger.error(f"  FAIL: {err}")
+        return False
+
+    logger.info("  PASS")
+    return True
+
+
 def test_get_next_question():
     """Test 3: Test the get_next_question function."""
     logger.info("=== Test 3: get_next_question ===")
@@ -252,6 +359,9 @@ def main():
     # Test 1: Structure (no API calls needed)
     results["structure"] = test_question_bank_structure()
 
+    # Test 2b: Diagnostic fields structure (no API calls needed)
+    results["diagnostic_structure"] = test_diagnostic_fields_structure()
+
     # Tests 2 & 3 need OpenAI API key + Qdrant data
     if not _has_api_key():
         logger.warning("OPENAI_API_KEY not set. Skipping ingestion/retrieval tests.")
@@ -265,6 +375,7 @@ def main():
             results["collection"] = test_collection_exists()
             if results["collection"]:
                 results["retrieval"] = test_get_next_question()
+                results["diagnostic_retrieval"] = test_get_diagnostic_question()
             else:
                 logger.warning("Skipping retrieval tests since collection check failed.")
         finally:

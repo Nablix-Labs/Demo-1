@@ -1,12 +1,12 @@
 """
-Ingestion script for AD-300 — Question Bank.
+Ingestion script for AD-401 -- Visual Cue Bank.
 
-Reads question_bank.json, generates embeddings via OpenAI,
-stores in a separate Qdrant collection (math_tutor_questions).
+Reads visual_cue_bank.json, generates embeddings via OpenAI,
+stores in a separate Qdrant collection (math_tutor_visual_cues).
 
 Usage:
     python ingest.py
-    python ingest.py path/to/custom_questions.json
+    python ingest.py path/to/custom_visual_cues.json
 """
 
 import json
@@ -31,7 +31,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-logger = logging.getLogger("ingest_questions")
+logger = logging.getLogger("ingest_visual_cues")
 
 
 def get_embedding(client: OpenAI, text: str) -> list[float]:
@@ -55,7 +55,7 @@ def get_qdrant_client() -> QdrantClient:
 
 
 def setup_collection(client: QdrantClient):
-    """Create the questions collection if it doesn't exist."""
+    """Create the visual cues collection if it doesn't exist."""
     collections = [c.name for c in client.get_collections().collections]
 
     if config.QDRANT_COLLECTION in collections:
@@ -83,12 +83,14 @@ def setup_collection(client: QdrantClient):
 def _create_indexes(client: QdrantClient):
     """Create payload indexes for the fields we filter on during retrieval."""
     index_fields = {
+        "content_id": PayloadSchemaType.KEYWORD,
         "concept_id": PayloadSchemaType.KEYWORD,
-        "phase": PayloadSchemaType.KEYWORD,
+        "error_type": PayloadSchemaType.KEYWORD,
+        "visual_cue_type": PayloadSchemaType.KEYWORD,
         "difficulty": PayloadSchemaType.KEYWORD,
         "topic": PayloadSchemaType.KEYWORD,
         "subtopic": PayloadSchemaType.KEYWORD,
-        "question_id": PayloadSchemaType.KEYWORD,
+        "approval_status": PayloadSchemaType.KEYWORD,
     }
     for field_name, field_type in index_fields.items():
         try:
@@ -102,61 +104,48 @@ def _create_indexes(client: QdrantClient):
             logger.info(f"  Index {field_name}: already exists or skipped ({e})")
 
 
-def build_payload(question: dict) -> dict:
-    """Convert a question dict to a Qdrant payload.
-
-    Includes diagnostic-specific fields (diagnostic_purpose, expected_method)
-    if they exist in the question. These are only present on DIAGNOSTIC phase
-    questions and are used by the POST /diagnostic/question endpoint (AD-400).
-    Non-diagnostic questions just won't have these fields -- that's fine.
-    """
-    payload = {
-        "question_id": question["question_id"],
-        "concept_id": question["concept_id"],
-        "topic": question["topic"],
-        "subtopic": question["subtopic"],
-        "phase": question["phase"],
-        "difficulty": question["difficulty"],
-        "question_text": question["question_text"],
-        "correct_answer": question["correct_answer"],
-        "voice_text": question.get("voice_text"),
-        "age_band": question.get("age_band", "11-14"),
-        "language": question.get("language", "en"),
+def build_payload(cue: dict) -> dict:
+    """Convert a visual cue dict to a Qdrant payload."""
+    return {
+        "content_id": cue["content_id"],
+        "concept_id": cue["concept_id"],
+        "topic": cue["topic"],
+        "subtopic": cue["subtopic"],
+        "error_type": cue["error_type"],
+        "visual_cue_type": cue["visual_cue_type"],
+        "difficulty": cue["difficulty"],
+        "text": cue["text"],
+        "voice_text": cue.get("voice_text"),
+        "age_band": cue.get("age_band", "11-14"),
+        "language": cue.get("language", "en"),
+        "approval_status": cue.get("approval_status", "APPROVED"),
     }
-
-    # AD-400: Add diagnostic fields if present
-    if question.get("diagnostic_purpose"):
-        payload["diagnostic_purpose"] = question["diagnostic_purpose"]
-    if question.get("expected_method"):
-        payload["expected_method"] = question["expected_method"]
-
-    return payload
 
 
 def ingest(input_path: str):
     """Main ingestion function. Read JSON, embed, store in Qdrant."""
 
-    # 1. Read questions
-    logger.info(f"Reading questions from: {input_path}")
+    # 1. Read visual cues
+    logger.info(f"Reading visual cues from: {input_path}")
     with open(input_path) as f:
-        questions = json.load(f)
-    logger.info(f"Loaded {len(questions)} questions")
+        cues = json.load(f)
+    logger.info(f"Loaded {len(cues)} visual cues")
 
     # 2. Validate required fields
-    required_fields = ["question_id", "concept_id", "phase", "difficulty",
-                       "question_text", "correct_answer", "topic", "subtopic"]
-    valid_questions = []
-    for i, q in enumerate(questions):
-        missing = [f for f in required_fields if f not in q or not q[f]]
+    required_fields = ["content_id", "concept_id", "error_type", "visual_cue_type",
+                       "difficulty", "text", "topic", "subtopic"]
+    valid_cues = []
+    for i, c in enumerate(cues):
+        missing = [f for f in required_fields if f not in c or not c[f]]
         if missing:
-            logger.warning(f"Question {i} ({q.get('question_id', '?')}): missing fields {missing}, skipping")
+            logger.warning(f"Cue {i} ({c.get('content_id', '?')}): missing fields {missing}, skipping")
         else:
-            valid_questions.append(q)
+            valid_cues.append(c)
 
-    logger.info(f"{len(valid_questions)} questions passed validation")
+    logger.info(f"{len(valid_cues)} cues passed validation")
 
-    if not valid_questions:
-        logger.error("No valid questions to ingest.")
+    if not valid_cues:
+        logger.error("No valid visual cues to ingest.")
         return
 
     # 3. Generate embeddings
@@ -164,41 +153,41 @@ def ingest(input_path: str):
     openai_client = OpenAI(api_key=config.OPENAI_API_KEY)
 
     embedded = []
-    for q in valid_questions:
+    for c in valid_cues:
         try:
-            text_emb = get_embedding(openai_client, q["question_text"])
+            text_emb = get_embedding(openai_client, c["text"])
             voice_emb = None
-            if q.get("voice_text"):
-                voice_emb = get_embedding(openai_client, q["voice_text"])
-            embedded.append((q, text_emb, voice_emb))
-            logger.info(f"  Embedded: {q['question_id']}")
+            if c.get("voice_text"):
+                voice_emb = get_embedding(openai_client, c["voice_text"])
+            embedded.append((c, text_emb, voice_emb))
+            logger.info(f"  Embedded: {c['content_id']}")
         except Exception as e:
-            logger.error(f"  Failed to embed {q['question_id']}: {e}")
+            logger.error(f"  Failed to embed {c['content_id']}: {e}")
 
-    logger.info(f"Generated embeddings for {len(embedded)} questions")
+    logger.info(f"Generated embeddings for {len(embedded)} visual cues")
 
     # 4. Store in Qdrant
     qdrant_client = get_qdrant_client()
     setup_collection(qdrant_client)
 
     points = []
-    for q, text_emb, voice_emb in embedded:
+    for c, text_emb, voice_emb in embedded:
         vectors = {"text": text_emb}
         if voice_emb:
             vectors["voice_text"] = voice_emb
         else:
             vectors["voice_text"] = [0.0] * config.EMBEDDING_DIMENSION
 
-        # Hash question_id to get a stable numeric point ID
-        point_id = int(hashlib.sha256(q["question_id"].encode()).hexdigest()[:16], 16)
+        # Hash content_id to get a stable numeric point ID
+        point_id = int(hashlib.sha256(c["content_id"].encode()).hexdigest()[:16], 16)
 
         points.append(PointStruct(
             id=point_id,
             vector=vectors,
-            payload=build_payload(q),
+            payload=build_payload(c),
         ))
 
-    # Upsert in batches of 10 to avoid timeout on Qdrant Cloud
+    # Upsert in batches of 10
     batch_size = 10
     for i in range(0, len(points), batch_size):
         batch = points[i:i + batch_size]
@@ -208,26 +197,26 @@ def ingest(input_path: str):
         )
         logger.info(f"  Upserted batch {i // batch_size + 1}: {len(batch)} points")
 
-    logger.info(f"Stored {len(points)} questions in '{config.QDRANT_COLLECTION}'")
+    logger.info(f"Stored {len(points)} visual cues in '{config.QDRANT_COLLECTION}'")
 
-    # Close qdrant client to release the file lock (important for local storage)
+    # Close qdrant client to release the file lock
     qdrant_client.close()
 
     # 5. Summary
-    phases = set(q["phase"] for q, _, _ in embedded)
-    concepts = set(q["concept_id"] for q, _, _ in embedded)
-    difficulties = set(q["difficulty"] for q, _, _ in embedded)
+    error_types = set(c["error_type"] for c, _, _ in embedded)
+    concepts = set(c["concept_id"] for c, _, _ in embedded)
+    cue_types = set(c["visual_cue_type"] for c, _, _ in embedded)
 
     logger.info("--- Ingestion Summary ---")
-    logger.info(f"  Total loaded: {len(questions)}")
+    logger.info(f"  Total loaded: {len(cues)}")
     logger.info(f"  Embedded & stored: {len(embedded)}")
     logger.info(f"  Concepts: {sorted(concepts)}")
-    logger.info(f"  Phases: {sorted(phases)}")
-    logger.info(f"  Difficulties: {sorted(difficulties)}")
+    logger.info(f"  Error types: {sorted(error_types)}")
+    logger.info(f"  Visual cue types: {sorted(cue_types)}")
     logger.info("--- Done ---")
 
 
 if __name__ == "__main__":
-    default_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "question_bank.json")
+    default_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "visual_cue_bank.json")
     input_path = sys.argv[1] if len(sys.argv) > 1 else default_path
     ingest(input_path)
