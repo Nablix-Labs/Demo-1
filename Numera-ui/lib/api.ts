@@ -24,7 +24,7 @@ const BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
  * so this is purely to get past that check during testing. It is NOT a
  * credential and grants nothing; drop it once sign-up performs a real login.
  */
-const ANON_ACCESS_TOKEN = 'anonymous-testing';
+export const ANON_ACCESS_TOKEN = 'anonymous-testing';
 
 /**
  * Fixed demo identifiers — must match the backend's documented test values
