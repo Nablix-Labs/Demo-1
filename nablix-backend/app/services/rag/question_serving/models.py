@@ -52,3 +52,37 @@ class QuestionNotFoundResponse(BaseModel):
     phase: str
     difficulty: str
     total_seen: int
+
+
+# --- AD-400: Diagnostic Question Bank ---
+
+class DiagnosticQuestionRequest(BaseModel):
+    """Request body for POST /diagnostic/question.
+
+    No phase field needed -- diagnostic questions are always DIAGNOSTIC phase.
+    The caller just says which concept and difficulty they want.
+    """
+    concept_id: str
+    difficulty: Difficulty = Difficulty.FOUNDATION
+    previously_seen_ids: list[str] = Field(default_factory=list)
+    student_id: Optional[str] = None
+
+
+class DiagnosticQuestionResponse(BaseModel):
+    """Response body for POST /diagnostic/question.
+
+    Same as QuestionNextResponse but adds diagnostic_purpose
+    and expected_method -- the extra fields that tell the AI engine
+    WHY this question is being asked and HOW the student should solve it.
+    """
+    question_id: str
+    question_text: str
+    correct_answer: str
+    difficulty: str
+    phase: str
+    concept_id: str
+    topic: str
+    subtopic: str
+    voice_text: Optional[str] = None
+    diagnostic_purpose: Optional[str] = None
+    expected_method: Optional[str] = None
