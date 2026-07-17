@@ -63,8 +63,8 @@ class StudentModelServiceAdapter:
             )
 
         # independent_success is Sanya's "correct without help" flag in ANY
-        # phase — verified live: Saravanan promotes GUIDED -> INDEPENDENT after
-        # three of these, so gating it to Independent Practice starves his gate.
+        # phase; gating it to Independent Practice starves Saravanan's guided
+        # advancement rule.
         payload: JsonObject = {
             "topic_id": topic_id,
             "event_type": event.event_type,
