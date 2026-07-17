@@ -16,7 +16,7 @@ import { useNumeraStore } from '@/store/useNumeraStore';
 import { usePhaseRouting } from '@/lib/usePhaseRouting';
 
 // Routes that render on their own, without the tool rail or media panel.
-const FOCUS_ROUTES = ['/onboard', '/diagnostic', '/orientation', '/complete', '/consent', '/login', '/restricted'];
+const FOCUS_ROUTES = ['/onboard', '/diagnostic', '/orientation', '/teach', '/complete', '/consent', '/login', '/restricted'];
 
 const ToolRail = dynamic(() => import('./ToolRail'), { ssr: false });
 const MediaPanel = dynamic(() => import('./MediaPanel'), { ssr: false });

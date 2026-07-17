@@ -23,6 +23,7 @@ import EquationPicker from './EquationPicker';
 const STAGE_LABEL: Record<FlowStage, string> = {
   'topic-diagnostic': 'Topic diagnostic',
   orientation: 'Orientation',
+  teach: 'Teacher Mode',
   guided: 'Guided learning',
   practice: 'Practice',
   review: 'Feedback & review',

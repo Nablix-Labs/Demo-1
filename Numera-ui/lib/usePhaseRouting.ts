@@ -23,6 +23,7 @@ import { useNumeraStore } from '@/store/useNumeraStore';
 const PHASE_ORDER = [
   'DIAGNOSTIC',
   'CONCEPT_ORIENTATION',
+  'TEACH_BACK',
   'GUIDED_PRACTICE',
   'INDEPENDENT_PRACTICE',
   'REVIEW',
@@ -32,6 +33,7 @@ const PHASE_ORDER = [
 const PHASE_ROUTE: Record<string, (topicId: string) => string> = {
   DIAGNOSTIC: (t) => `/diagnostic/${t}`,
   CONCEPT_ORIENTATION: (t) => `/orientation/${t}`,
+  TEACH_BACK: (t) => `/teach/${t}`,
   GUIDED_PRACTICE: () => '/',
   INDEPENDENT_PRACTICE: () => '/practice',
   REVIEW: () => '/review',

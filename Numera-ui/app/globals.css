@@ -325,3 +325,27 @@ body {
     @apply bg-white rounded-card border border-muted-gray p-5;
   }
 }
+
+/* ── Teacher Mode (TEACH_BACK) motion ─────────────────────────────────────────
+   CSS-only so it runs off the compositor (no requestAnimationFrame dependency,
+   which the embedded browser pane suppresses). */
+@keyframes teach-fade-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes teach-bob {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-5px); }
+}
+@keyframes teach-pop {
+  0%   { opacity: 0; transform: scale(0.94); }
+  60%  { opacity: 1; transform: scale(1.02); }
+  100% { transform: scale(1); }
+}
+.teach-fade-up { animation: teach-fade-up 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.teach-bob     { animation: teach-bob 3.2s ease-in-out infinite; }
+.teach-pop     { animation: teach-pop 0.4s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .teach-fade-up, .teach-bob, .teach-pop { animation: none; }
+}
