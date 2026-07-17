@@ -16,8 +16,9 @@ import { useGLTF } from '@react-three/drei';
 import { Suspense, useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useMicLevel } from '@/store/useMicLevel';
+import { basePath } from '@/lib/runtimeConfig';
 
-const MODEL_URL = '/models/tutor.glb';
+const MODEL_URL = `${basePath}/models/tutor.glb`;
 
 type MorphMap = Map<string, { mesh: THREE.Mesh; idx: number }[]>;
 

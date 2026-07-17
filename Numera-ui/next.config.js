@@ -11,6 +11,11 @@ const repo = 'Numera-ui';
 const exportBasePath = process.env.EXPORT_BASE_PATH;
 const isExport = isPages || Boolean(exportBasePath);
 
+// The path the app is served under (e.g. "/app" on the VM, "/Numera-ui" on
+// Pages). Exposed to the client so raw /public asset URLs — which, unlike
+// next/link hrefs, are NOT auto-prefixed — can prepend it (see lib/runtimeConfig).
+const effectiveBasePath = isPages ? `/${repo}` : exportBasePath || '';
+
 // Auth server host to proxy to. The platform auth API doesn't send CORS headers,
 // so the browser reaches it same-origin via /nablix-auth (see lib/auth/authApi).
 const authUpstream = process.env.NABLIX_AUTH_UPSTREAM || 'https://nablix.ai:8080';
@@ -42,6 +47,7 @@ const nextConfig = {
         trailingSlash: true,
       }
     : {}),
+  env: { NEXT_PUBLIC_BASE_PATH: effectiveBasePath },
   images: { unoptimized: true },
   // Allow KaTeX CSS to be imported from node_modules
   transpilePackages: ['react-katex'],

@@ -9,6 +9,13 @@
 const trimTrailingSlash = (value: string): string => value.replace(/\/+$/, "");
 
 /**
+ * Base path the app is served under (e.g. "/app" on the VM), set by next.config
+ * from EXPORT_BASE_PATH. Raw /public asset URLs are NOT auto-prefixed the way
+ * next/link hrefs are, so loaders (the 3D model) must prepend this.
+ */
+export const basePath: string = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+
+/**
  * Voice streaming WebSocket URL. Accepts the new NEXT_PUBLIC_VOICE_WS_URL
  * name, falling back to the legacy NEXT_PUBLIC_WS_URL still used by
  * .env.local and the build:selfhost script.
