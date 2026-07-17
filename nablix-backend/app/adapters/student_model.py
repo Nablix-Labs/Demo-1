@@ -62,6 +62,9 @@ class StudentModelServiceAdapter:
                 f"no topic_id mapping configured for concept_id={concept_id}",
             )
 
+        # independent_success is Sanya's "correct without help" flag in ANY
+        # phase; gating it to Independent Practice starves Saravanan's guided
+        # advancement rule.
         payload: JsonObject = {
             "topic_id": topic_id,
             "event_type": event.event_type,

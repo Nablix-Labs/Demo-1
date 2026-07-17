@@ -471,10 +471,17 @@ def generate_session_review(request: SessionReviewRequest) -> SessionReviewRespo
     if review_contains_answer(generated, protected_answers, rules):
         raise RuntimeError("Configured session review fallback reveals a protected answer")
 
+    # Null categories are skipped in the spoken delivery, per the contract example.
+    category_values: dict[str, str | None] = {
+        **generated.five_category_summary.model_dump(),
+        "b6_hook": generated.b6_hook,
+    }
     response = SessionReviewResponse(
         **generated.model_dump(),
         call_to_action=select_call_to_action(request),
-        voice_delivery_order=VOICE_DELIVERY_ORDER,
+        voice_delivery_order=[
+            key for key in VOICE_DELIVERY_ORDER if category_values.get(key) is not None
+        ],
         answer_reveal_allowed=False,
         guardrail_passed=True,
     )

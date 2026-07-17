@@ -52,6 +52,7 @@ def _start_session(student_id: str) -> str:
             "student_id": student_id,
             "concept_id": "ALG_LINEAR_ONE_STEP",
             "interaction_mode": "VOICE",
+            "initial_phase": "DIAGNOSTIC",
         },
     )
     assert response.status_code == 200

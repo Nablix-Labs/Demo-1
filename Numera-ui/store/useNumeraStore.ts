@@ -10,7 +10,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import type { LearningPhase } from '@/lib/phases';
 import type { FlowStage } from '@/lib/flow';
 import { TOPICS } from '@/lib/topics';
-import { DEMO_CONCEPT_ID, DEMO_PHASE, DEMO_QUESTION_ID, type SessionSummary } from '@/lib/api';
+import { DEMO_CONCEPT_ID, DEMO_PHASE, DEMO_QUESTION_ID, type SessionReview, type SessionSummary } from '@/lib/api';
 import { uid } from '@/lib/uid';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -161,6 +161,10 @@ export interface NumeraState {
   // /session/end. Shown on the Review screen. Ephemeral — never persisted.
   sessionSummary: SessionSummary | null;
 
+  // Engine-generated review from /session/end (five categories, student-facing
+  // summary, call to action). Shown verbatim on the Review screen.
+  sessionReview: SessionReview | null;
+
   // Voice
   micMuted: boolean;
   voiceStatus: 'idle' | 'listening' | 'speaking' | 'processing';
@@ -246,6 +250,7 @@ export interface NumeraState {
   setActiveEquation: (conceptId: string, questionId: string, label?: string) => void;
   setCurrentPhase: (phase: string) => void;
   setSessionSummary: (summary: SessionSummary | null) => void;
+  setSessionReview: (review: SessionReview | null) => void;
   clearSessionId: () => void;
   toggleMic: () => void;
   setMicMuted: (value: boolean) => void;
@@ -312,7 +317,7 @@ export interface NumeraState {
 const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
-  | 'setQuestionText' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setSessionSummary' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus'
+  | 'setQuestionText' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus'
   | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue'
   | 'addTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript'
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
@@ -342,6 +347,7 @@ const initial: Omit<
   activeQuestionId: DEMO_QUESTION_ID,
   currentPhase: DEMO_PHASE,
   sessionSummary: null,
+  sessionReview: null,
   micMuted: false,
   voiceStatus: 'listening',
   visualCueVisible: false,
@@ -435,6 +441,7 @@ export const useNumeraStore = create<NumeraState>()(
 
   setCurrentPhase: (currentPhase) => set({ currentPhase }),
   setSessionSummary: (sessionSummary) => set({ sessionSummary }),
+  setSessionReview: (sessionReview) => set({ sessionReview }),
   clearSessionId: () => set({ sessionId: null }),
 
   toggleMic: () =>

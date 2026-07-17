@@ -7,6 +7,7 @@ from app.adapters.provider import get_adapters
 from app.adapters.tutor_engine import apply_retrieved_content
 from app.ai_engine.classifier_config import ClassifierRulesConfig, load_classifier_rules
 from app.core.exceptions import QuestionFetchError
+from app.core.logger import logger
 from app.models.adapters import (
     AdapterContext,
     ConversationMessage,
@@ -26,7 +27,6 @@ from app.services.phase_transition import (
 )
 from app.services.session_service import (
     _get_owned_session_for_turn,
-    correct_answer_for,
     get_canvas_submission,
     get_next_question,
     restore_interaction_progress,
@@ -143,10 +143,10 @@ def _current_hint_level_from(hint_count: int) -> int | None:
 
 
 def _independent_correct_in_session(session: SessionRecord) -> int:
+    # Unaided corrects in any phase — the same semantics as the classifier's
+    # independent_success flag, which Saravanan's promotion gate counts.
     return sum(
-        attempt.phase == session.current_phase
-        and attempt.evaluation == "CORRECT"
-        and attempt.hint_level_used == 0
+        attempt.evaluation == "CORRECT" and attempt.hint_level_used == 0
         for attempt in session.per_question_history
     )
 
@@ -155,6 +155,30 @@ def _next_hint_count_from(request: InteractionRequest) -> int:
     if request.interaction_type == "HINT_REQUEST":
         return request.hint_count + 1
     return request.hint_count
+
+
+async def next_question_updates(
+    session: SessionRecord, phase: Phase
+) -> dict[str, object] | None:
+    """Session updates that route to the next unseen question, or None when
+    the bank has nothing new for the phase."""
+
+    fetched = await get_next_question(
+        session.concept_id, phase, session.served_question_ids
+    )
+    if fetched is None or fetched[2] == session.question_id:
+        return None
+    question_text, correct_answer, question_id = fetched
+    return {
+        "current_question": question_text,
+        "question_id": question_id,
+        "correct_answer": correct_answer,
+        "served_question_ids": [*session.served_question_ids, question_id],
+        "question_number": session.question_number + 1,
+        "attempt_count": 0,
+        "hint_count": 0,
+        "question_completed": False,
+    }
 
 
 def _response_from(
@@ -204,6 +228,7 @@ def _response_from(
         attempt_count=session.attempt_count,
         question_completed=session.question_completed,
         phase_indicator=session.current_phase,
+        recommended_entry_phase=session.recommended_entry_phase,
         session_summary=session_summary,
     )
 
@@ -290,7 +315,7 @@ async def process_interaction(
         question=session.current_question,
         # Grade against the session's question: after a 6.7 transition swaps
         # the question, the request's id from the frontend may be stale.
-        correct_answer=correct_answer_for(session.question_id),
+        correct_answer=session.correct_answer,
         current_phase=session.current_phase,
         input_source=request.input_source,
         transcript_confidence=request.transcript_confidence,
@@ -361,12 +386,22 @@ async def process_interaction(
         rules.conversation_rules.max_recent_messages,
     )
 
-    # Chirudeva 6.7: execute Tamil's recommended phase transition.
-    # ponytail: tutor fallback until real Tamil emits Contract 4; delete the `or` when it lands.
-    recommended = student.recommended_entry_phase or tutor.next_phase_recommendation
-    new_phase = resolve_transition(session.current_phase, recommended)
-
     completed = tutor.evaluation == "CORRECT"
+    # Chirudeva 6.7: Saravanan's recommendation is the only phase authority;
+    # resolve_transition guards against invalid or unrecognised moves.
+    recommended: str | None = student.recommended_entry_phase
+    new_phase = resolve_transition(session.current_phase, recommended)
+    logger.info(
+        "phase_transition_evaluated",
+        extra={
+            "session_id": session.session_id,
+            "current_phase": session.current_phase,
+            "student_model_recommended_phase": recommended,
+            "phase_changed": new_phase is not None,
+            "attempt_count": next_attempt_count,
+        },
+    )
+
     next_hint_count: int = _next_hint_count_from(request)
     # Persisted every turn: the real attempt counter and completion state Sanya
     # reads back on the next turn.
@@ -374,14 +409,18 @@ async def process_interaction(
         "attempt_count": next_attempt_count,
         "question_completed": completed,
         "conversation_history": conversation_history,
+        "recommended_entry_phase": recommended,
+        "last_student_model": student,
     }
     if request.interaction_type == "ANSWER_SUBMISSION":
         state_updates["per_question_history"] = [
             *session.per_question_history,
             QuestionAttemptRecord(
                 question_id=session.question_id,
+                question_text=session.current_question,
                 phase=session.current_phase,
                 evaluation=tutor.evaluation,
+                error_type=tutor.error_type if tutor.evaluation != "CORRECT" else None,
                 input_source=request.input_source,
                 hint_level_used=tutor.hint_level,
                 attempted_at=datetime.now(timezone.utc),
@@ -392,15 +431,19 @@ async def process_interaction(
     if new_phase is not None:
         # Fetch before committing any state: an Aditya failure raises here,
         # so the session (and its phase) is never touched — rollback for free.
-        fetched = get_next_question(session.concept_id, new_phase, session.question_id)
+        fetched = await get_next_question(
+            session.concept_id, new_phase, session.served_question_ids
+        )
         if fetched is None:
             raise QuestionFetchError(session.concept_id, new_phase)
-        question_text, _correct_answer, question_id = fetched
+        question_text, correct_answer, question_id = fetched
         state_updates.update(
             {
                 "previous_phase": session.current_phase,
                 "current_question": question_text,
                 "question_id": question_id,
+                "correct_answer": correct_answer,
+                "served_question_ids": [*session.served_question_ids, question_id],
                 "question_number": session.question_number + 1,
                 "attempt_count": 0,
                 "question_completed": False,
@@ -409,11 +452,7 @@ async def process_interaction(
                     PhaseTransitionRecord(
                         previous_phase=session.current_phase,
                         current_phase=new_phase,
-                        entry_reason=(
-                            "STUDENT_MODEL_RECOMMENDATION"
-                            if student.recommended_entry_phase is not None
-                            else "TUTOR_RECOMMENDATION"
-                        ),
+                        entry_reason="STUDENT_MODEL_RECOMMENDATION",
                         transitioned_at=datetime.now(timezone.utc),
                     ),
                 ],
@@ -421,24 +460,12 @@ async def process_interaction(
             }
         )
     elif completed:
-        # Same phase: route to the next question on a correct answer. The
-        # Aditya stub serves one question per phase, so a same-id fetch just
-        # keeps question_completed=True until a transition swaps the question.
-        fetched = get_next_question(
-            session.concept_id, session.current_phase, session.question_id
-        )
-        if fetched is not None and fetched[2] != session.question_id:
-            question_text, _correct_answer, question_id = fetched
-            state_updates.update(
-                {
-                    "current_question": question_text,
-                    "question_id": question_id,
-                    "question_number": session.question_number + 1,
-                    "attempt_count": 0,
-                    "hint_count": 0,
-                    "question_completed": False,
-                }
-            )
+        # Same phase: route to the next question on a correct answer. When the
+        # bank is exhausted, question_completed stays True until a transition
+        # swaps the question.
+        advance = await next_question_updates(session, session.current_phase)
+        if advance is not None:
+            state_updates.update(advance)
 
     next_phase = new_phase if new_phase is not None else session.current_phase
     updated_session = update_interaction_state(

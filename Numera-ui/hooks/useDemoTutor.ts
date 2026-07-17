@@ -165,6 +165,15 @@ export function useDemoTutor() {
     }
     try {
       const res = await submitCanvas(sessionId, png, 'STANDALONE_ATTEMPT');
+      // Canvas responses now carry the same phase state as /interaction, so a
+      // backend phase change here also drives usePhaseRouting.
+      if (res.current_phase && res.current_question) {
+        syncBackendSession({
+          current_phase: res.current_phase,
+          current_question: res.current_question,
+          question_id: res.question_id ?? null,
+        });
+      }
       addTrailEntry({
         kind: 'canvas',
         text: res.ocr.raw_ocr_text || res.ocr.detected_equation || 'Canvas submitted.',
@@ -308,21 +317,25 @@ export function useDemoTutor() {
   );
 
   /**
-   * End the session and capture its summary for the Review screen.
+   * End the session and capture its summary + engine review for the Review
+   * screen.
    *
-   * On success: saves the summary to the store and clears sessionId (so the next
-   * topic starts a fresh session), and returns the summary. Returns null when
-   * there's no live session to end (mock mode). THROWS on request failure or when
-   * the response carries no usable summary — the caller keeps the student on the
-   * current screen and shows an error.
+   * On success: saves the summary and the engine review to the store and clears
+   * sessionId (so the next topic starts a fresh session), and returns the
+   * summary. Returns null when there's no live session to end (mock mode).
+   * THROWS on request failure or when the response carries no usable summary or
+   * review — the caller keeps the student on the current screen and shows an
+   * error, and the backend leaves the session active.
    */
   const end = useCallback(async (): Promise<SessionSummary | null> => {
     if (!apiEnabled() || !sessionId) return null;
     const res = await endSession(sessionId); // propagates network/HTTP failures
     const summary = toSessionSummary(res);
     if (!summary) throw new Error('Session ended but no summary was returned.');
+    if (!res.session_review) throw new Error('Session ended but no review was returned.');
     const store = useNumeraStore.getState();
     store.setSessionSummary(summary);
+    store.setSessionReview(res.session_review);
     store.clearSessionId();
     return summary;
   }, [sessionId]);

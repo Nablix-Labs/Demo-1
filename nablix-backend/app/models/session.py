@@ -3,8 +3,14 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.models.adapters import CanvasFeedback, ConversationMessage, VisionOCRResult
+from app.models.adapters import (
+    CanvasFeedback,
+    ConversationMessage,
+    StudentModelResult,
+    VisionOCRResult,
+)
 from app.models.canvas import CanvasSubmissionRecord
+from app.models.session_review import SessionReviewResponse
 from app.models.fields import (
     ConceptId,
     InteractionMode,
@@ -50,8 +56,11 @@ class SessionEndRequest(BaseModel):
 
 class QuestionAttemptRecord(BaseModel):
     question_id: QuestionId
+    # The question as served, so summaries can show real text, not just ids.
+    question_text: str = ""
     phase: Phase
     evaluation: str
+    error_type: str | None = None
     input_source: Literal["TEXT", "VOICE", "CANVAS"]
     hint_level_used: int
     attempted_at: datetime
@@ -88,6 +97,8 @@ class SessionSummary(BaseModel):
     scaffold_history: None
     canvas_feedback_history: list[CanvasFeedback]
     phase_transitions: list[PhaseTransitionRecord]
+    recommended_entry_phase: str | None
+    conversation_history: list[ConversationMessage]
 
 
 class SessionRecord(BaseModel):
@@ -102,6 +113,10 @@ class SessionRecord(BaseModel):
     current_question: str
     question_id: QuestionId
     question_number: int
+    # Answer key served with the question (Qdrant payload or demo stub).
+    correct_answer: str | None = None
+    # Every question id served this session, for knowledge-base exclusion.
+    served_question_ids: list[str] = Field(default_factory=list)
     interaction_mode: InteractionMode
     voice_state: VoiceState = Field(default_factory=VoiceState)
     canvas_state: CanvasState = Field(default_factory=CanvasState)
@@ -128,4 +143,9 @@ class SessionRecord(BaseModel):
     per_question_history: list[QuestionAttemptRecord] = Field(default_factory=list)
     hint_levels_used: list[int] = Field(default_factory=list)
     phase_transitions: list[PhaseTransitionRecord] = Field(default_factory=list)
+    recommended_entry_phase: str | None = None
+    # Last learner-state snapshot from Saravanan's service, kept so the
+    # end-of-session review reflects his data rather than a reconstruction.
+    last_student_model: StudentModelResult | None = None
     session_summary: SessionSummary | None = None
+    session_review: SessionReviewResponse | None = None

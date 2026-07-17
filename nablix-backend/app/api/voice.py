@@ -1,4 +1,4 @@
-from fastapi import APIRouter, WebSocket
+from fastapi import APIRouter, HTTPException, WebSocket
 
 from app.api.auth import AccessToken
 from app.models.interaction import InteractionResponse
@@ -42,7 +42,14 @@ async def voice_transcript_endpoint(
 
 @router.post("/tts")
 async def voice_tts_endpoint(request: VoiceTTSRequest) -> dict[str, str | None]:
-    return {"audio_base64": await synthesize_speech(request.text)}
+    try:
+        return {"audio_base64": await synthesize_speech(request.text)}
+    except RuntimeError as error:
+        # Explicit failure so the frontend can fall back to browser speech.
+        raise HTTPException(
+            status_code=502,
+            detail="Text-to-speech is unavailable right now.",
+        ) from error
 
 
 @router.websocket("/stream")

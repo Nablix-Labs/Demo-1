@@ -29,12 +29,14 @@ class QuestionFetchError(HTTPException):
 #for internal server errors, using 503 error. Not commonly used.
 class AdapterError(HTTPException):
     def __init__(self,adapter_name:str, detail:str):
-        super().__init__(status_code=503)
+        super().__init__(status_code=503, detail=detail)
+        self.error_code = "ADAPTER_UNAVAILABLE"
         self.message = "Service Temporarily Unavailable"
         self.field = None
-        # Detail must be in the message itself: `extra` fields are not
-        # rendered by the console formatter, which made failures invisible.
-        logger.error(f"adapter_error adapter={adapter_name} detail={detail}")
+        logger.error(
+            "adapter_error",
+            extra={"adapter_name": adapter_name, "detail": detail},
+        )
 
 
 class AdapterRequestRejected(HTTPException):

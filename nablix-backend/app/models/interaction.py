@@ -66,4 +66,5 @@ class InteractionResponse(BaseModel):
     attempt_count: int
     question_completed: bool
     phase_indicator: Phase
+    recommended_entry_phase: str | None
     session_summary: SessionSummary | None

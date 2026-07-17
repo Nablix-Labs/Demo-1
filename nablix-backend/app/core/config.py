@@ -22,7 +22,18 @@ class Settings(BaseSettings):
 
     #API Keys
     openai_api_key: str = ""
+    embedding_model: str = "text-embedding-3-small"
     vision_api_key: str = ""
+
+    # Shared Qdrant Cloud collection used by question selection and RAG retrieval
+    qdrant_url: str = ""
+    qdrant_api_key: str = ""
+    # Hint/curriculum content (RAG retrieval) vs question bank: two collections.
+    qdrant_collection: str = "math_tutor_content"
+    qdrant_questions_collection: str = "math_tutor_questions"
+    # Backend concept ids -> knowledge-base concept ids (e.g. ALG_LINEAR_ONE_STEP
+    # -> ALG_LINEAR_ONE_STEP_ADDITION), same pattern as student_model_topic_ids.
+    qdrant_concept_id_map: dict[str, str] = Field(default_factory=dict)
 
     #Mock flags - True during sprint
     # (the tutor has no flag: it always runs the in-process AI Engine)

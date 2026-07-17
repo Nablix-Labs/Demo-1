@@ -90,6 +90,15 @@ export function useWebSocket(sessionId: string | null) {
             addTranscriptMessage({ role: 'ai', text: msg.text as string });
             if (Array.isArray(msg.canvas_draw) && msg.canvas_draw.length > 0)
               applyCanvasDraw(msg.canvas_draw as Parameters<typeof applyCanvasDraw>[0]);
+            // The voice server forwards the backend's phase state; keep the
+            // store in sync so usePhaseRouting can follow phase changes.
+            if (typeof msg.current_phase === 'string' && typeof msg.current_question === 'string') {
+              useNumeraStore.setState((state) => ({
+                currentPhase: msg.current_phase as string,
+                activeQuestionId: (msg.question_id as string | null) ?? state.activeQuestionId,
+                questionText: (msg.current_question as string).replace(/^solve for\s*x\s*:?\s*/i, '').trim(),
+              }));
+            }
             tutorAudioStream.begin(); // reset the player; chunks are coming next
             break;
 
