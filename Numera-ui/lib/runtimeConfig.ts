@@ -54,8 +54,10 @@ export const buildVoiceStreamUrl = (sessionId: string): string => {
     );
   }
 
+  // The streaming voice server reads `session` (not `session_id`); a mismatch
+  // makes it fall back to "default", which fails its ^SESSION\d{3}$ check.
   const params = new URLSearchParams({
-    session_id: sessionId,
+    session: sessionId,
     student_id: "ST001",
   });
   return `${voiceWsUrl}?${params.toString()}`;
