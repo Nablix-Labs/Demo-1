@@ -19,25 +19,37 @@ import { create } from 'zustand';
 import { useEffect } from 'react';
 import { useNumeraStore, type TutorElement } from '@/store/useNumeraStore';
 
-const GAP_MS = 110; // pause between finishing one mark and starting the next
+const GAP_MS = 90; // pause between finishing one mark and starting the next
 
 function prefersReducedMotion(): boolean {
   return typeof window !== 'undefined' &&
     Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
 }
 
-/** How long a single mark takes to "write", scaled by how much there is to draw. */
+/**
+ * Ease the raw 0→1 progress so marks accelerate and settle like a hand, instead
+ * of tracing at a constant machine rate. easeInOutCubic — gentle start, smooth
+ * finish — is what makes the writing read as deliberate rather than mechanical.
+ */
+function ease(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+/**
+ * How long a single mark takes to "write", scaled by how much there is to draw.
+ * Paced for a calm, deliberate hand — slow enough to read as writing, not a pop.
+ */
 function durationFor(el: TutorElement): number {
   switch (el.kind) {
-    case 'text':      return Math.max(220, (el.text?.length ?? 0) * 45);
-    case 'math':      return Math.max(260, (el.tex ?? el.text ?? '').length * 34);
-    case 'line':      return 260;
-    case 'arrow':     return 300;
-    case 'ellipse':   return 460;
-    case 'rect':      return 420;
-    case 'freehand':  return Math.max(280, ((el.points?.length ?? 0) / 2) * 16);
-    case 'highlight': return Math.max(220, ((el.points?.length ?? 0) / 2) * 12);
-    default:          return 260;
+    case 'text':      return Math.max(420, (el.text?.length ?? 0) * 55);
+    case 'math':      return Math.max(460, (el.tex ?? el.text ?? '').length * 46);
+    case 'line':      return 380;
+    case 'arrow':     return 460;
+    case 'ellipse':   return 720;
+    case 'rect':      return 640;
+    case 'freehand':  return Math.max(380, ((el.points?.length ?? 0) / 2) * 20);
+    case 'highlight': return Math.max(300, ((el.points?.length ?? 0) / 2) * 15);
+    default:          return 380;
   }
 }
 
@@ -58,9 +70,9 @@ export const useTutorReveal = create<RevealState>((set, get) => {
     const tick = () => {
       // The element may have been cleared mid-write (replace/clear) — bail.
       if (get().progress[job.id] === undefined) { queue.shift(); step(); return; }
-      const p = Math.min(1, (performance.now() - start) / job.duration);
-      set((s) => ({ progress: { ...s.progress, [job.id]: p } }));
-      if (p < 1) { requestAnimationFrame(tick); return; }
+      const raw = Math.min(1, (performance.now() - start) / job.duration);
+      set((s) => ({ progress: { ...s.progress, [job.id]: ease(raw) } }));
+      if (raw < 1) { requestAnimationFrame(tick); return; }
       queue.shift();
       setTimeout(() => requestAnimationFrame(step), GAP_MS);
     };
