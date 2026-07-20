@@ -30,6 +30,12 @@ if voice_config.OPENAI_API_KEY:
 if voice_config.DEEPGRAM_API_KEY:
     import deepgram_tts_adapter
 
+if voice_config.CARTESIA_API_KEY:
+    import cartesia_tts_adapter
+
+if voice_config.INWORLD_API_KEY:
+    import inworld_tts_adapter
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
