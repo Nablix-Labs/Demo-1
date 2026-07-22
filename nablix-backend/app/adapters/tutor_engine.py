@@ -108,6 +108,7 @@ class TutorEngineServiceAdapter:
                     exclude_content_ids=[],
                     canvas_regions=_coerce_canvas_regions(context.canvas_regions),
                     conversation_history=context.conversation_history,
+                    conversation_state=context.conversation_state,
                 )
             )
             return _tutor_result_from_ai_response(ai_response)
@@ -237,6 +238,11 @@ def _tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:
             )
             for event in response.student_model_events
         ],
+        attempt_increment=response.attempt_increment,
+        recommended_conversation_action=(
+            response.recommended_conversation_action
+        ),
+        question_completed=response.question_completed,
     )
 
 

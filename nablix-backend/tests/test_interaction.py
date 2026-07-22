@@ -249,6 +249,40 @@ def test_acknowledgement_after_correct_answer_does_not_restart_question() -> Non
     assert body["attempt_count"] == 1
 
 
+def test_right_after_correct_answer_is_not_treated_as_deviation() -> None:
+    session_id = _start_session("ST023", mode="VOICE")
+    correct_response = client.post(
+        "/interaction",
+        json=_interaction_body(
+            session_id,
+            "ST023",
+            input_source="VOICE",
+            text_input=None,
+            voice_transcript="x equals five",
+            transcript_confidence=0.94,
+        ),
+    )
+    assert correct_response.status_code == 200
+
+    acknowledgement_response = client.post(
+        "/interaction",
+        json=_interaction_body(
+            session_id,
+            "ST023",
+            input_source="VOICE",
+            text_input=None,
+            voice_transcript="Right.",
+            transcript_confidence=0.98,
+        ),
+    )
+
+    assert acknowledgement_response.status_code == 200
+    body = acknowledgement_response.json()
+    assert body["question_completed"] is True
+    assert body["attempt_count"] == 1
+    assert "next question" in body["message"].lower()
+
+
 def test_orchestration_progress_restores_completed_question_after_cold_start() -> None:
     session_id = _start_session("ST001", mode="VOICE")
     session_service._sessions.pop(session_id)

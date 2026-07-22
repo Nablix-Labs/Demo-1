@@ -20,6 +20,7 @@ from app.main import app, prompt_registry as startup_prompt_registry
 from app.models.adapters import (
     AdapterContext,
     ConversationMessage,
+    ConversationState,
     OCRTextRegion,
     RAGResult,
     RetrievedDocument,
@@ -60,6 +61,39 @@ def test_ai_engine_classify_returns_valid_tutor_response() -> None:
     assert body["answer_reveal_allowed"] is False
     assert body["safety_check"]["passed"] is True
     assert body["guardrail_check"]["passed"] is True
+
+
+def test_ai_engine_api_accepts_contextual_conversation_state() -> None:
+    response = client.post(
+        "/ai-engine/classify",
+        json={
+            "student_input": "Right.",
+            "current_phase": "GUIDED_PRACTICE",
+            "question": "Solve for x: x + 4 = 9",
+            "correct_answer": "x = 5",
+            "input_source": "VOICE",
+            "transcript_confidence": 0.98,
+            "attempt_count": 1,
+            "question_completed": True,
+            "conversation_history": [
+                {
+                    "role": "assistant",
+                    "content": "Correct. Nice work explaining your answer.",
+                }
+            ],
+            "conversation_state": {
+                "last_tutor_action": "CONFIRMED_CORRECT_ANSWER",
+                "expected_student_response": "ACKNOWLEDGEMENT_OR_CONTINUE",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == "ACKNOWLEDGEMENT"
+    assert body["attempt_increment"] == 0
+    assert body["recommended_conversation_action"] == "ADVANCE_TO_NEXT_QUESTION"
+    assert body["student_model_events"] == []
 
 
 def test_startup_uses_validated_cached_prompt_registry() -> None:
@@ -463,6 +497,7 @@ def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> 
         grounded_evaluation="INCORRECT",
         grounded_error_type="ARITHMETIC_ERROR",
         conversation_history=[],
+        conversation_state=None,
     )
 
     enabled_client = openai_client.OpenAIAIEngineClient(
@@ -488,6 +523,10 @@ def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> 
         conversation_history=[
             ConversationMessage(role="assistant", content="Try the inverse operation.")
         ],
+        conversation_state=ConversationState(
+            last_tutor_action="ASKED_QUESTION",
+            expected_student_response="EXPLANATION",
+        ),
     )
 
     assert "prompt_cache_key" not in request_bodies[0]
@@ -498,6 +537,8 @@ def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> 
         "role": "assistant",
         "content": "Try the inverse operation.",
     }
+    serialized_context: str = request_bodies[1]["input"][2]["content"]
+    assert '"expected_student_response":"EXPLANATION"' in serialized_context
 
 
 def test_deterministic_correct_result_cannot_be_downgraded_by_openai(monkeypatch) -> None:
@@ -560,6 +601,72 @@ def test_correct_answer_acknowledgement_is_sanitized_without_refusal(monkeypatch
     assert response.evaluation == "CORRECT"
     assert response.tutor_message == "Correct. Nice work explaining your answer."
     assert response.guardrail_check.passed is True
+
+
+def test_contextual_acknowledgement_does_not_evaluate_or_emit_event(monkeypatch) -> None:
+    class _UnexpectedOpenAIClient:
+        def generate_tutor_turn(self, **kwargs) -> openai_client.OpenAITutorTurn:
+            raise AssertionError("A known contextual acknowledgement must not call OpenAI.")
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _UnexpectedOpenAIClient(),
+    )
+
+    response = classify_student_response(
+        ClassificationRequest(
+            question="Solve for x: x + 4 = 9",
+            correct_answer="x = 5",
+            student_input="Right.",
+            current_phase="GUIDED_PRACTICE",
+            input_source="VOICE",
+            transcript_confidence=0.98,
+            attempt_count=1,
+            question_completed=True,
+            current_hint_level=None,
+            conversation_history=[
+                ConversationMessage(
+                    role="assistant",
+                    content="Correct. Nice work explaining your answer.",
+                )
+            ],
+            conversation_state=ConversationState(
+                last_tutor_action="CONFIRMED_CORRECT_ANSWER",
+                expected_student_response="ACKNOWLEDGEMENT_OR_CONTINUE",
+            ),
+        )
+    )
+
+    assert response.intent == "ACKNOWLEDGEMENT"
+    assert response.evaluation is None
+    assert response.response_strategy == "CONTINUE"
+    assert response.attempt_increment == 0
+    assert response.question_completed is True
+    assert response.recommended_conversation_action == "ADVANCE_TO_NEXT_QUESTION"
+    assert response.student_model_events == []
+
+
+def test_acknowledgement_word_is_not_contextual_without_expected_state() -> None:
+    response = classify_student_response(
+        ClassificationRequest(
+            question="Solve for x: x + 4 = 9",
+            correct_answer="x = 5",
+            student_input="Right.",
+            current_phase="GUIDED_PRACTICE",
+            input_source="VOICE",
+            transcript_confidence=0.98,
+            attempt_count=1,
+            question_completed=False,
+            current_hint_level=None,
+            conversation_state=ConversationState(
+                last_tutor_action="ASKED_QUESTION",
+                expected_student_response="ANSWER",
+            ),
+        )
+    )
+
+    assert response.intent != "ACKNOWLEDGEMENT"
 
 
 def test_openai_prompt_builder_keeps_history_and_current_input_dynamic() -> None:

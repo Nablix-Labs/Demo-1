@@ -11,6 +11,7 @@ from app.core.logger import logger
 from app.models.adapters import (
     AdapterContext,
     ConversationMessage,
+    ConversationState,
     RAGResult,
     StudentModelResult,
     TutorResult,
@@ -134,6 +135,18 @@ def _recent_conversation_history(
     if max_messages == 0:
         return []
     return history[-max_messages:]
+
+
+def _conversation_state_from_session(session: SessionRecord) -> ConversationState:
+    if session.question_completed:
+        return ConversationState(
+            last_tutor_action="CONFIRMED_CORRECT_ANSWER",
+            expected_student_response="ACKNOWLEDGEMENT_OR_CONTINUE",
+        )
+    return ConversationState(
+        last_tutor_action="ASKED_QUESTION",
+        expected_student_response="ANSWER",
+    )
 
 
 def _current_hint_level_from(hint_count: int) -> int | None:
@@ -326,6 +339,7 @@ async def process_interaction(
         current_hint_level=_current_hint_level_from(request.hint_count),
         concept_id=request.concept_id,
         conversation_history=recent_history,
+        conversation_state=_conversation_state_from_session(session),
         detected_equation=ocr.detected_equation if ocr is not None else None,
         detected_steps=ocr.detected_steps if ocr is not None else [],
         ocr_confidence=ocr.confidence if ocr is not None else None,
