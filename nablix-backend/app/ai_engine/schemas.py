@@ -33,6 +33,7 @@ IntentType = Literal[
     "REQUESTING_ANSWER",
     "ATTEMPTING_OVERRIDE",
     "OFF_TOPIC",
+    "ACKNOWLEDGEMENT",
 ]
 
 ResponseStrategy = Literal[
@@ -46,6 +47,7 @@ ResponseStrategy = Literal[
     "DIAGNOSTIC_PROMPT",
     "MASTERY_CONFIRM",
     "SAFETY_RESPONSE",
+    "CONTINUE",
 ]
 
 InputSource = Literal["TEXT", "VOICE", "CANVAS"]
@@ -197,3 +199,13 @@ class TutorResponse(StrictSchema):
     safety_check: SafetyCheck
     guardrail_check: GuardrailCheck
     student_model_events: list[StudentModelEvent]
+    attempt_increment: int = Field(default=0, ge=0, le=1)
+    recommended_conversation_action: Literal[
+        "ASK_QUESTION",
+        "GIVE_HINT",
+        "ACKNOWLEDGE_ANSWER",
+        "REQUEST_CLARIFICATION",
+        "ADVANCE_TO_NEXT_QUESTION",
+        "WAIT_FOR_STUDENT",
+    ] = "WAIT_FOR_STUDENT"
+    question_completed: StrictBool = False

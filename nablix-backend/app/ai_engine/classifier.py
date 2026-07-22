@@ -33,7 +33,7 @@ from app.ai_engine.schemas import (
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AdapterError
 from app.core.logger import logger
-from app.models.adapters import ConversationMessage
+from app.models.adapters import ConversationAction, ConversationMessage, ConversationState
 
 if TYPE_CHECKING:
     from app.ai_engine.openai_client import (
@@ -60,6 +60,7 @@ class ClassificationRequest(StrictSchema):
     exclude_content_ids: list[str] = Field(default_factory=list)
     canvas_regions: list[CanvasTextRegion] = Field(default_factory=list)
     conversation_history: list[ConversationMessage] = Field(default_factory=list)
+    conversation_state: ConversationState | None = None
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,13 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
             confidence=rules.confidence.safety_response,
             tutor_message_override=None,
             voice_message_override=None,
+        )
+
+    if is_contextual_acknowledgement(request, rules):
+        return build_contextual_acknowledgement_response(
+            request=request,
+            rules=rules,
+            safety_check=safety_check,
         )
 
     evaluation: EvaluationCategory | None = evaluate_answer_attempt(request, intent, rules)
@@ -240,6 +248,7 @@ def generate_tutor_turn_with_openai(
             grounded_evaluation=grounded_evaluation,
             grounded_error_type=grounded_error_type,
             conversation_history=request.conversation_history,
+            conversation_state=request.conversation_state,
         )
     except AdapterError as error:
         logger.warning(
@@ -472,6 +481,8 @@ def select_response_strategy(
     attempt_count: int,
     rules: ClassifierRulesConfig,
 ) -> ResponseStrategy:
+    if intent == "ACKNOWLEDGEMENT":
+        return "CONTINUE"
     if intent in rules.strategy_rules.clarify_intents:
         return "CLARIFY"
     if intent == rules.strategy_rules.hint_intent:
@@ -634,11 +645,15 @@ def build_tutor_response(
         else canvas_fallback or fallback_message
     )
     voice_message: str = voice_message_override if voice_message_override is not None else tutor_message
-    event: StudentModelEvent = build_student_model_event(
-        decision.evaluation,
-        decision.error_type,
-        decision.hint_level,
-    )
+    events: list[StudentModelEvent] = []
+    if should_emit_student_model_event(decision):
+        events = [
+            build_student_model_event(
+                decision.evaluation,
+                decision.error_type,
+                decision.hint_level,
+            )
+        ]
     visual_cue: VisualCue = select_visual_cue(
         error_type=decision.error_type,
         response_strategy=decision.response_strategy,
@@ -678,7 +693,12 @@ def build_tutor_response(
         transcript_confidence=request.transcript_confidence,
         safety_check=safety_check,
         guardrail_check=GuardrailCheck(passed=True, violation_type=None, action_taken=None),
-        student_model_events=[event],
+        student_model_events=events,
+        attempt_increment=select_attempt_increment(decision),
+        recommended_conversation_action=select_conversation_action(decision),
+        question_completed=(
+            request.question_completed or decision.evaluation == "CORRECT"
+        ),
     )
     return apply_answer_reveal_guardrail(response, request.correct_answer, rules)
 
@@ -794,6 +814,8 @@ def build_tutor_message(
     attempt_count: int,
     rules: ClassifierRulesConfig,
 ) -> str:
+    if intent == "ACKNOWLEDGEMENT":
+        return rules.messages.CONTEXTUAL_ACKNOWLEDGEMENT
     if response_strategy == "SAFETY_RESPONSE":
         return rules.messages.SAFETY_RESPONSE
     if intent in {"REQUESTING_ANSWER", "ATTEMPTING_OVERRIDE"}:
@@ -862,6 +884,96 @@ def select_event_type(evaluation: EvaluationCategory | None, hint_level: HintLev
         return "INCORRECT_ATTEMPT"
 
     return "SESSION_STARTED"
+
+
+def is_contextual_acknowledgement(
+    request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
+) -> bool:
+    if request.question_completed is False or request.conversation_state is None:
+        return False
+    if (
+        request.conversation_state.last_tutor_action != "CONFIRMED_CORRECT_ANSWER"
+        or request.conversation_state.expected_student_response
+        != "ACKNOWLEDGEMENT_OR_CONTINUE"
+    ):
+        return False
+    normalized_input: str = re.sub(
+        r"[^a-z0-9\s]",
+        "",
+        request.student_input.lower(),
+    ).strip()
+    return normalized_input in rules.conversation_rules.acknowledgement_phrases
+
+
+def should_emit_student_model_event(decision: TutorDecision) -> bool:
+    if decision.intent == "ACKNOWLEDGEMENT":
+        return False
+    if decision.hint_level is not None:
+        return True
+    return decision.evaluation in {"CORRECT", "PARTIALLY_CORRECT", "INCORRECT"}
+
+
+def select_attempt_increment(decision: TutorDecision) -> int:
+    if decision.intent == "ACKNOWLEDGEMENT":
+        return 0
+    return int(
+        decision.evaluation in {"CORRECT", "PARTIALLY_CORRECT", "INCORRECT"}
+    )
+
+
+def select_conversation_action(decision: TutorDecision) -> ConversationAction:
+    if decision.intent == "ACKNOWLEDGEMENT" or decision.evaluation == "CORRECT":
+        return "ADVANCE_TO_NEXT_QUESTION"
+    if decision.response_strategy == "GUIDED_HINT":
+        return "GIVE_HINT"
+    if decision.response_strategy == "CLARIFY":
+        return "REQUEST_CLARIFICATION"
+    if decision.response_strategy in {"DIAGNOSTIC_PROMPT", "ENCOURAGE_RETRY"}:
+        return "ASK_QUESTION"
+    return "WAIT_FOR_STUDENT"
+
+
+def build_contextual_acknowledgement_response(
+    request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
+    safety_check: SafetyCheck,
+) -> TutorResponse:
+    message: str = rules.messages.CONTEXTUAL_ACKNOWLEDGEMENT
+    return TutorResponse(
+        evaluation=None,
+        error_type=None,
+        intent="ACKNOWLEDGEMENT",
+        response_strategy="CONTINUE",
+        tutor_message=message,
+        tutor_message_voice_optimised=message,
+        voice_optimised=True,
+        hint_level=None,
+        scaffold_steps_delivered=[],
+        visual_cue=VisualCue(show=False, cue_type=None, description=None),
+        canvas_feedback=CanvasFeedback(
+            has_feedback=False,
+            step_feedback=[],
+            highlight_instruction=None,
+        ),
+        mistake_classification=None,
+        annotation_intents=[],
+        next_phase_recommendation=request.current_phase,
+        answer_reveal_allowed=False,
+        confidence=rules.confidence.standard_response,
+        input_source=request.input_source,
+        transcript_confidence=request.transcript_confidence,
+        safety_check=safety_check,
+        guardrail_check=GuardrailCheck(
+            passed=True,
+            violation_type=None,
+            action_taken=None,
+        ),
+        student_model_events=[],
+        attempt_increment=0,
+        recommended_conversation_action="ADVANCE_TO_NEXT_QUESTION",
+        question_completed=True,
+    )
 
 
 def normalize_text(value: str) -> str:

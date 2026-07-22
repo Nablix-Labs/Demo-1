@@ -27,7 +27,7 @@ from app.ai_engine.schemas import (
 )
 from app.core.exceptions import AdapterError
 from app.core.logger import logger
-from app.models.adapters import ConversationMessage
+from app.models.adapters import ConversationMessage, ConversationState
 
 
 _OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
@@ -89,6 +89,7 @@ class OpenAIAIEngineClient:
         grounded_evaluation: EvaluationCategory | None,
         grounded_error_type: ErrorType | None,
         conversation_history: list[ConversationMessage],
+        conversation_state: ConversationState | None,
     ) -> OpenAITutorTurn:
         schema = OpenAITutorTurn.model_json_schema()
         content = self._request_json(
@@ -109,6 +110,11 @@ class OpenAIAIEngineClient:
                 "grounded_intent": grounded_intent,
                 "grounded_evaluation": grounded_evaluation,
                 "grounded_error_type": grounded_error_type,
+                "conversation_state": (
+                    conversation_state.model_dump()
+                    if conversation_state is not None
+                    else None
+                ),
                 "answer_reveal_allowed": False,
             },
         )
