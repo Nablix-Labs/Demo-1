@@ -23,9 +23,10 @@
 
 import { useEffect, useRef, useCallback } from 'react';
 import { useNumeraStore } from '@/store/useNumeraStore';
+import { useAuthStore } from '@/store/useAuthStore';
 import { tutorAudioStream } from '@/lib/tts';
-
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? '';
+import { buildVoiceStreamUrl, voiceStreamingEnabled, allowAnonTutorCalls } from '@/lib/runtimeConfig';
+import { ANON_ACCESS_TOKEN } from '@/lib/api';
 
 export function useWebSocket(sessionId: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
@@ -38,12 +39,22 @@ export function useWebSocket(sessionId: string | null) {
   } = useNumeraStore();
 
   const connect = useCallback(() => {
-    if (!sessionId || !WS_URL) return;
+    if (!sessionId || !voiceStreamingEnabled) return;
 
-    const ws = new WebSocket(`${WS_URL}?session=${sessionId}`);
+    const ws = new WebSocket(buildVoiceStreamUrl(sessionId));
     wsRef.current = ws;
 
     ws.onopen = () => {
+      // Mirror the REST interceptor: fall back to the placeholder bearer when
+      // there's no real login and anon testing is enabled, so the socket isn't
+      // self-closed on the VM where sign-up doesn't log in yet.
+      const accessToken =
+        useAuthStore.getState().accessToken ?? (allowAnonTutorCalls ? ANON_ACCESS_TOKEN : null);
+      if (!accessToken) {
+        ws.close(4401, 'Authentication required');
+        return;
+      }
+      ws.send(JSON.stringify({ type: 'authenticate', access_token: accessToken }));
       console.log('[WS] connected');
       setVoiceStatus('listening');
     };
@@ -82,6 +93,17 @@ export function useWebSocket(sessionId: string | null) {
           // Keep the socket OPEN — the audio chunks follow this message.
           case 'tutor_response':
             addTranscriptMessage({ role: 'ai', text: msg.text as string });
+            if (Array.isArray(msg.canvas_draw) && msg.canvas_draw.length > 0)
+              applyCanvasDraw(msg.canvas_draw as Parameters<typeof applyCanvasDraw>[0]);
+            // The voice server forwards the backend's phase state; keep the
+            // store in sync so usePhaseRouting can follow phase changes.
+            if (typeof msg.current_phase === 'string' && typeof msg.current_question === 'string') {
+              useNumeraStore.setState((state) => ({
+                currentPhase: msg.current_phase as string,
+                activeQuestionId: (msg.question_id as string | null) ?? state.activeQuestionId,
+                questionText: (msg.current_question as string).replace(/^solve for\s*x\s*:?\s*/i, '').trim(),
+              }));
+            }
             tutorAudioStream.begin(); // reset the player; chunks are coming next
             break;
 
@@ -118,9 +140,6 @@ export function useWebSocket(sessionId: string | null) {
       }
     };
 
-    ws.onerror = (err) => {
-      console.error('[WS] error', err);
-    };
   }, [sessionId, addTranscriptMessage, updatePartialTranscript, setSessionState, setVoiceStatus, applyCanvasDraw]);
 
   useEffect(() => {
@@ -132,23 +151,24 @@ export function useWebSocket(sessionId: string | null) {
 
   /** Send a raw base64 PCM audio chunk to the backend */
   const sendAudioChunk = useCallback((base64: string) => {
-    wsRef.current?.send(JSON.stringify({ type: 'audio_chunk', data: base64 }));
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'audio_chunk', data: base64 }));
+    }
   }, []);
 
   /** Send a typed text message */
   const sendTextMessage = useCallback((text: string) => {
-    wsRef.current?.send(JSON.stringify({ type: 'text_message', text }));
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'text_message', text }));
+    }
   }, []);
 
   /** Send canvas PNG snapshot (+ optional stroke data) on "Check My Work" */
-  const sendCanvasSubmission = useCallback(
-    (png: string, strokes?: object[]) => {
-      wsRef.current?.send(
-        JSON.stringify({ type: 'canvas_submission', png, strokes })
-      );
-    },
-    []
-  );
+  const sendCanvasSubmission = useCallback((png: string, strokes?: object[]) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'canvas_submission', png, strokes }));
+    }
+  }, []);
 
   /** Send a control message (start/stop) to the voice server. */
   const sendControl = useCallback((type: string, extra?: Record<string, unknown>) => {

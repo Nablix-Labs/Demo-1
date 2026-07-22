@@ -321,6 +321,37 @@ def test_mathpix_adapter_splits_array_output_into_step_regions(monkeypatch) -> N
     assert result.detected_regions[1].h == 0.2
 
 
+def test_mathpix_adapter_splits_centered_array_and_flags_incomplete_step(monkeypatch) -> None:
+    array_text = "\\begin{array}{c}x+4-4= \\\\ x+0=13 \\\\ x=13\\end{array}"
+    response = _FakeResponse(
+        200,
+        {
+            "text": array_text,
+            "latex_styled": array_text,
+            "confidence": 0.998,
+            "image_width": 1000,
+            "image_height": 500,
+            "line_data": [
+                {
+                    "text": array_text,
+                    "cnt": [[100, 50], [800, 50], [800, 350], [100, 350]],
+                    "confidence": 0.998,
+                    "conversion_output": True,
+                },
+            ],
+        },
+    )
+    _patch_mathpix_post(monkeypatch, response)
+
+    result = asyncio.run(_mathpix_adapter().recognize(DATA_URL))
+
+    assert result.detected_steps == ["x+4-4=", "x+0=13", "x=13"]
+    assert result.final_answer == "x=13"
+    assert len(result.detected_regions) == 3
+    assert [region.text for region in result.detected_regions] == result.detected_steps
+    assert result.needs_clarification is True
+
+
 def test_mathpix_adapter_marks_missing_confidence_for_review(monkeypatch) -> None:
     _patch_mathpix_post(
         monkeypatch,

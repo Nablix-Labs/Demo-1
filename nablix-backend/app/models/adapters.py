@@ -8,7 +8,54 @@ into the service layer.
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+MasteryStatus = Literal[
+    "NEW_LEARNER",
+    "DEVELOPING",
+    "NEARLY_MASTERED",
+    "MASTERED",
+    "LEARNING_GAP",
+    "REVIEW_DUE",
+]
+ContinuityStatus = Literal[
+    "on_track",
+    "review_due",
+    "learning_gap",
+    "needs_refresh",
+    "restart_recommended",
+]
+TutorAction = Literal[
+    "ASKED_QUESTION",
+    "GAVE_HINT",
+    "REQUESTED_EXPLANATION",
+    "REQUESTED_CLARIFICATION",
+    "CONFIRMED_CORRECT_ANSWER",
+    "GAVE_INCORRECT_FEEDBACK",
+    "ADVANCED_QUESTION",
+]
+ExpectedStudentResponse = Literal[
+    "ANSWER",
+    "EXPLANATION",
+    "CLARIFICATION",
+    "ACKNOWLEDGEMENT_OR_CONTINUE",
+    "NONE",
+]
+ConversationAction = Literal[
+    "ASK_QUESTION",
+    "GIVE_HINT",
+    "ACKNOWLEDGE_ANSWER",
+    "REQUEST_CLARIFICATION",
+    "ADVANCE_TO_NEXT_QUESTION",
+    "WAIT_FOR_STUDENT",
+]
+
+
+class ConversationState(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    last_tutor_action: TutorAction
+    expected_student_response: ExpectedStudentResponse
 
 
 class AdapterContext(BaseModel):
@@ -27,9 +74,22 @@ class AdapterContext(BaseModel):
     input_source: str | None = None
     transcript_confidence: float | None = None
     attempt_count: int | None = None
+    independent_correct_in_session: int = 0
+    question_completed: bool = False
+    question_number: int | None = None
     current_hint_level: int | None = None
     concept_id: str | None = None
+    detected_equation: str | None = None
+    detected_steps: list[str] = Field(default_factory=list)
+    ocr_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     canvas_regions: list["OCRTextRegion"] = Field(default_factory=list)
+    conversation_history: list["ConversationMessage"] = Field(default_factory=list)
+    conversation_state: ConversationState | None = None
+
+
+class ConversationMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
 
 
 class RetrievedDocument(BaseModel):
@@ -46,10 +106,14 @@ class RAGResult(BaseModel):
 
 
 class StudentModelResult(BaseModel):
-    student_state: str
-    confidence: float
-    mastery_level: str
-    recommended_support: str
+    """Response contract returned by Saravanan's Student Model service."""
+
+    mastery_status: MasteryStatus
+    continuity_status: ContinuityStatus
+    recommended_entry_phase: str | None
+    hint_dependency_score: float
+    intervention_required: bool
+    intervention_reason: str | None = None
 
 
 class TutorEngineRequest(BaseModel):
@@ -135,6 +199,9 @@ class TutorResult(BaseModel):
     transcript_confidence: float | None = None
     safety_check: SafetyCheckResult = Field(default_factory=lambda: SafetyCheckResult(passed=True))
     student_model_events: list[StudentModelEvent] = Field(default_factory=list)
+    attempt_increment: int = Field(default=0, ge=0, le=1)
+    recommended_conversation_action: ConversationAction = "WAIT_FOR_STUDENT"
+    question_completed: bool = False
 
 
 class VoiceResult(BaseModel):

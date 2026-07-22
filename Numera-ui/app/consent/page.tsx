@@ -32,6 +32,7 @@ export default function ConsentPage() {
   const [phase, setPhase] = useState<'details' | 'verify' | 'consent'>('details');
   const [g, setG] = useState({ name: '', relationship: 'Parent', email: '', phone: '' });
   const [otp, setOtp] = useState('');
+  const [resent, setResent] = useState(false);
   const [checked, setChecked] = useState<Set<ConsentPurpose>>(new Set());
   const [disclosure, setDisclosure] = useState(false);
 
@@ -152,6 +153,23 @@ export default function ConsentPage() {
             Verify <ShieldCheck size={16} />
           </button>
           <button onClick={() => setPhase('details')} className="btn btn-secondary w-full mt-2.5">Back</button>
+
+          <p className="text-[12px] text-slate-blue text-center mt-4">
+            {resent ? (
+              'A new code is on its way.'
+            ) : (
+              <>
+                Didn&rsquo;t get the code?{' '}
+                <button
+                  onClick={() => setResent(true)}
+                  data-support-id="resend-verification"
+                  className="font-semibold text-learning-blue hover:underline"
+                >
+                  Resend code
+                </button>
+              </>
+            )}
+          </p>
         </>
       )}
 

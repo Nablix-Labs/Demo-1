@@ -28,6 +28,7 @@ class AnswerPatternsConfig(StrictSchema):
     no_attempt: list[str]
     ambiguous: list[str]
     correct_method: list[str]
+    spoken_number_values: dict[str, float]
 
 
 class ErrorPatternsConfig(StrictSchema):
@@ -90,6 +91,28 @@ class AnswerRevealGuardrailConfig(StrictSchema):
     action_taken: str
 
 
+class ConversationRulesConfig(StrictSchema):
+    max_recent_messages: int = Field(ge=0)
+    acknowledgement_phrases: list[str]
+
+
+class CanvasReviewMessagesConfig(StrictSchema):
+    ARITHMETIC_ERROR: str
+    SIGN_ERROR: str
+    OPPOSITE_OPERATION_ERROR: str
+    CONCEPTUAL_MISUNDERSTANDING: str
+    PROCEDURAL_ERROR: str
+    downstream_step: str
+
+
+class CanvasReviewConfig(StrictSchema):
+    min_region_confidence: float = Field(ge=0.0, le=1.0)
+    max_expression_characters: int = Field(ge=1)
+    feedback_enabled_phases: list[LearningPhase]
+    annotation_enabled_phases: list[LearningPhase]
+    messages: CanvasReviewMessagesConfig
+
+
 class MessageConfig(StrictSchema):
     SAFETY_RESPONSE: str
     REQUESTING_ANSWER_OR_OVERRIDE: str
@@ -108,6 +131,9 @@ class MessageConfig(StrictSchema):
     NOTATION_ISSUE: str
     INSUFFICIENT_INFORMATION: str
     DEFAULT: str
+    QUESTION_COMPLETE_ACKNOWLEDGEMENT: str
+    CONTEXTUAL_ACKNOWLEDGEMENT: str
+    QUESTION_ALREADY_COMPLETE: str
 
 
 class ClassifierRulesConfig(StrictSchema):
@@ -121,6 +147,9 @@ class ClassifierRulesConfig(StrictSchema):
     strategy_rules: StrategyRulesConfig
     visual_cue_rules: VisualCueRulesConfig
     answer_reveal_guardrail: AnswerRevealGuardrailConfig
+    conversation_rules: ConversationRulesConfig
+    canvas_review: CanvasReviewConfig
+    progressive_hint_messages: dict[ErrorType, list[str]]
     messages: MessageConfig
 
 

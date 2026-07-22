@@ -130,6 +130,7 @@ async def evaluate_voice_transcript(
     transcript: str,
     confidence: float,
     audio_duration_seconds: float,
+    access_token: str,
 ) -> dict[str, object]:
     payload = {
         "session_id": session_id,
@@ -141,7 +142,11 @@ async def evaluate_voice_transcript(
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     logger.info(f"[{session_id}] POST /voice/transcript")
-    response = await get_backend_http_client().post("/voice/transcript", json=payload)
+    response = await get_backend_http_client().post(
+        "/voice/transcript",
+        json=payload,
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
     if response.status_code != 200:
         raise RuntimeError(f"status={response.status_code} body={response.text}")
     return response.json()
@@ -153,6 +158,7 @@ async def submit_canvas_work(
     snapshot_data_url: str,
     transcript: str,
     confidence: float,
+    access_token: str,
 ) -> dict[str, object]:
     payload = {
         "session_id": session_id,
@@ -162,7 +168,12 @@ async def submit_canvas_work(
         "transcript_confidence": confidence,
     }
     logger.info(f"[{session_id}] POST {MAIN_BACKEND_URL}/canvas/submit")
-    response = await get_backend_http_client().post("/canvas/submit", json=payload, timeout=40.0)
+    response = await get_backend_http_client().post(
+        "/canvas/submit",
+        json=payload,
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=40.0,
+    )
     if response.status_code != 200:
         raise RuntimeError(f"status={response.status_code} body={response.text}")
     return response.json()
@@ -179,9 +190,28 @@ def _tutor_response_from_canvas(result: dict[str, object]) -> dict[str, object]:
 
     tutor_message_voice = tutor.get("tutor_message_voice")
     return {
+        **_phase_fields_from(result),
         "message": tutor_message,
         "message_voice": tutor_message_voice if isinstance(tutor_message_voice, str) else tutor_message,
     }
+
+
+PHASE_FIELDS = (
+    "phase_changed",
+    "previous_phase",
+    "current_phase",
+    "current_question",
+    "question_id",
+    "ui_state",
+    "recommended_entry_phase",
+    "phase_transition_message",
+    "phase_transition_voice",
+)
+
+
+def _phase_fields_from(result: dict[str, object]) -> dict[str, object]:
+    """Pass the backend's phase state through to the frontend unchanged."""
+    return {key: result.get(key) for key in PHASE_FIELDS if key in result}
 
 
 def _canvas_draw_from(result: dict[str, object]) -> list[object]:
@@ -191,24 +221,42 @@ def _canvas_draw_from(result: dict[str, object]) -> list[object]:
     return canvas_draw
 
 
+def _tts_retry_count() -> int:
+    """Main-app adapter retry setting; default when running standalone."""
+    try:
+        from app.core.config import get_settings
+
+        return get_settings().adapter_request_retry_count
+    except Exception:
+        return 2
+
+
 async def synthesize_speech(text: str) -> str | None:
-    """Configured TTS (OpenAI when keyed) → base64 mp3, or None on empty/failure."""
+    """Configured TTS (OpenAI when keyed) → base64 mp3; None on empty text.
+
+    Retries provider failures per the adapter retry setting, then raises so the
+    caller can return an explicit error (frontend falls back to browser speech).
+    """
     if not text:
         return None
-    try:
-        tts_adapter = get_tts_adapter(voice_config.DEFAULT_TTS_PROVIDER)
-        result = await tts_adapter.generate_speech(
-            text=text,
-            voice=voice_config.TTS_VOICE,
-            audio_format="mp3",
-        )
-        audio_data = result.audio_data
-        if isinstance(audio_data, str):
-            audio_data = audio_data.encode("utf-8")
-        return base64.b64encode(audio_data).decode("utf-8")
-    except Exception as e:
-        logger.error(f"TTS failed: {e}")
-        return None
+    attempts = _tts_retry_count() + 1
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            tts_adapter = get_tts_adapter(voice_config.DEFAULT_TTS_PROVIDER)
+            result = await tts_adapter.generate_speech(
+                text=text,
+                voice=voice_config.TTS_VOICE,
+                audio_format="mp3",
+            )
+            audio_data = result.audio_data
+            if isinstance(audio_data, str):
+                audio_data = audio_data.encode("utf-8")
+            return base64.b64encode(audio_data).decode("utf-8")
+        except Exception as e:
+            last_error = e
+            logger.warning(f"TTS attempt {attempt}/{attempts} failed: {e}")
+    raise RuntimeError(f"TTS failed after {attempts} attempts: {last_error}")
 
 app = FastAPI(
     title="Nablix Math Tutor - Voice Streaming Server",
@@ -257,6 +305,7 @@ async def voice_stream(ws: WebSocket, session: str = "default", student_id: str 
     receiving_audio = False
     audio_started_at = 0.0
     turn_already_processed = False  # True when UtteranceEnd auto-triggered a response
+    access_token: str | None = None
 
     deepgram_receiver_task = None
 
@@ -328,10 +377,13 @@ async def voice_stream(ws: WebSocket, session: str = "default", student_id: str 
                         turn_already_processed = True
 
                         try:
+                            if access_token is None:
+                                await ws.close(code=4401, reason="Authentication required")
+                                return
                             await process_and_respond(
                                 ws, session_id, student_id,
                                 transcript_to_process, confidence_to_process,
-                                duration, None,
+                                duration, access_token, None,
                             )
                         except Exception as e:
                             logger.error(f"[{session_id}] Auto-process failed: {e}")
@@ -351,7 +403,19 @@ async def voice_stream(ws: WebSocket, session: str = "default", student_id: str 
                 data = json.loads(message["text"])
                 msg_type = data.get("type", "")
 
-                if msg_type == "start":
+                if msg_type == "authenticate":
+                    candidate = data.get("access_token")
+                    if not isinstance(candidate, str) or candidate == "":
+                        await ws.close(code=4401, reason="Authentication required")
+                        return
+                    access_token = candidate
+                    await ws.send_json({"type": "status", "message": "authenticated"})
+
+                elif access_token is None:
+                    await ws.close(code=4401, reason="Authenticate before sending data")
+                    return
+
+                elif msg_type == "start":
                     # Explicit start (optional -- audio_chunk auto-connects too).
                     # Clean up any existing Deepgram connection first to avoid
                     # duplicate connections from React re-renders.
@@ -440,7 +504,7 @@ async def voice_stream(ws: WebSocket, session: str = "default", student_id: str 
                         audio_duration_seconds = max(time.time() - audio_started_at, 0.001)
                         await process_and_respond(
                             ws, session_id, student_id, final_transcript,
-                            final_confidence, audio_duration_seconds, canvas_snapshot
+                            final_confidence, audio_duration_seconds, access_token, canvas_snapshot
                         )
                     elif not turn_already_processed:
                         logger.info(f"[{session_id}] Stop: no speech detected")
@@ -529,6 +593,7 @@ async def process_and_respond(
     transcript: str,
     confidence: float,
     audio_duration_seconds: float,
+    access_token: str,
     canvas_snapshot: str | None = None,
 ):
     pipeline_start = time.time()
@@ -547,6 +612,7 @@ async def process_and_respond(
                 canvas_snapshot,
                 transcript,
                 confidence,
+                access_token,
             )
             tutor_response = _tutor_response_from_canvas(canvas_response)
             canvas_draw = _canvas_draw_from(canvas_response)
@@ -557,6 +623,7 @@ async def process_and_respond(
                 transcript,
                 confidence,
                 audio_duration_seconds,
+                access_token,
             )
         tutor_ms = int((time.time() - tutor_start) * 1000)
         logger.info(f"[{session_id}] Backend tutor call took {tutor_ms}ms")
@@ -587,6 +654,7 @@ async def process_and_respond(
         "needs_clarification": confidence < voice_config.CONFIDENCE_THRESHOLD,
         "text_latency_ms": text_sent_ms,
         "canvas_draw": canvas_draw,
+        **_phase_fields_from(tutor_response),
     })
 
     logger.info(f"[{session_id}] Text sent to frontend: {text_sent_ms}ms")

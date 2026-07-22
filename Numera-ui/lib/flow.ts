@@ -17,6 +17,7 @@ import { PHASE_ORDER, type LearningPhase } from './phases';
 export type FlowStage =
   | 'topic-diagnostic'
   | 'orientation'
+  | 'teach'
   | 'guided'
   | 'practice'
   | 'review';
@@ -27,6 +28,7 @@ export type ReviewOutcome = 'cant_solve' | 'foundation_weak' | 'pass';
 export const FORWARD: FlowStage[] = [
   'topic-diagnostic',
   'orientation',
+  'teach',
   'guided',
   'practice',
   'review',
@@ -39,6 +41,8 @@ export function routeFor(stage: FlowStage, topicId: string): string {
       return `/diagnostic/${topicId}`;
     case 'orientation':
       return `/orientation/${topicId}`;
+    case 'teach':
+      return `/teach/${topicId}`;
     case 'guided':
       return '/';
     case 'practice':
@@ -87,6 +91,7 @@ export function afterReview(
 const STAGE_ANCHOR: Record<FlowStage, LearningPhase> = {
   'topic-diagnostic': 'diagnostic',
   orientation: 'orientation',
+  teach: 'teach',
   guided: 'workbook',
   practice: 'practice',
   review: 'review',

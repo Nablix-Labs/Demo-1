@@ -18,6 +18,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMicLevel, MIC_BARS } from '@/store/useMicLevel';
+import { audioConstraints } from '@/lib/support/micPreference';
 
 // ── Minimal Web Speech typings (not in the standard DOM lib) ──────────────────
 interface SpeechRecognitionAlternativeLike {
@@ -58,6 +59,9 @@ function getRecognitionCtor(): SpeechRecognitionCtor | null {
 
 interface UseVoiceTurnOptions {
   onTurnEnd: (transcript: string, confidence?: number) => void;
+  /** Live interim transcript as words arrive — lets the caller mirror the in-progress
+   *  words into a single evolving transcript bubble (finalized on turn end). Optional. */
+  onInterim?: (text: string) => void;
   /** Silence gap (ms) that counts as "student stopped". Generous so we don't cut kids off. */
   silenceMs?: number;
   /** RMS energy (post-gain) above this counts as speech. Lower = more sensitive. */
@@ -68,7 +72,8 @@ interface UseVoiceTurnOptions {
 
 export function useVoiceTurn({
   onTurnEnd,
-  silenceMs = 1300,
+  onInterim,
+  silenceMs = 2000,
   energyThreshold = 0.009,
   micGain = 2.4,
 }: UseVoiceTurnOptions) {
@@ -77,11 +82,15 @@ export function useVoiceTurn({
   const supported =
     typeof window !== 'undefined' && getRecognitionCtor() !== null && 'mediaDevices' in navigator;
 
-  // Latest callback without re-subscribing the audio graph.
+  // Latest callbacks without re-subscribing the audio graph.
   const onTurnEndRef = useRef(onTurnEnd);
   useEffect(() => {
     onTurnEndRef.current = onTurnEnd;
   }, [onTurnEnd]);
+  const onInterimRef = useRef(onInterim);
+  useEffect(() => {
+    onInterimRef.current = onInterim;
+  }, [onInterim]);
 
   const streamRef = useRef<MediaStream | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -132,7 +141,7 @@ export function useVoiceTurn({
     if (activeRef.current || !supported) return;
 
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      audio: audioConstraints({ echoCancellation: true, noiseSuppression: true, autoGainControl: true }),
     });
     streamRef.current = stream;
 
@@ -180,7 +189,11 @@ export function useVoiceTurn({
           }
         }
         // Live caption: what we've heard this turn so far + the in-progress words.
-        useMicLevel.getState().setCaption((transcriptRef.current + interim).trim());
+        const live = (transcriptRef.current + interim).trim();
+        useMicLevel.getState().setCaption(live);
+        // Mirror the same words into the caller's single evolving transcript bubble
+        // so partial → final happens in one place (no jump to a fresh bubble).
+        if (live) onInterimRef.current?.(live);
       };
       recognition.onend = () => {
         // Web Speech stops itself periodically; keep it alive while we're active.
@@ -240,6 +253,10 @@ export function useVoiceTurn({
         useMicLevel.getState().setLevels(levels);
       }
 
+      // Half-duplex turn-taking (voice contract §12): capture only runs while it's
+      // the student's turn — the caller stops the mic during PROCESSING/SPEAKING —
+      // so there's no barge-in and no tutor audio to reject here. A turn ends after
+      // `silenceMs` (2s) of quiet.
       if (rms > energyThreshold) {
         hadSpeechRef.current = true;
         lastVoiceTsRef.current = now;

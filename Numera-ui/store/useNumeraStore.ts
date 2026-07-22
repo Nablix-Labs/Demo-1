@@ -10,8 +10,13 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import type { LearningPhase } from '@/lib/phases';
 import type { FlowStage } from '@/lib/flow';
 import { TOPICS } from '@/lib/topics';
-import { DEMO_CONCEPT_ID, DEMO_QUESTION_ID } from '@/lib/api';
+import { DEMO_CONCEPT_ID, DEMO_PHASE, DEMO_QUESTION_ID, type SessionReview, type SessionSummary } from '@/lib/api';
 import { uid } from '@/lib/uid';
+
+// Sequential, human-readable student turn ids (voice contract §3): TURN-0001, …
+// One per LISTENING turn; kept sequential (not uuid) so logs read cleanly.
+let turnCounter = 0;
+const nextTurnId = () => `TURN-${String(++turnCounter).padStart(4, '0')}`;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -152,13 +157,43 @@ export interface NumeraState {
   activeConceptId: string;
   activeQuestionId: string;
 
+  // Tutoring phase the session is in. Seeded from the session's current_phase
+  // and advanced from each interaction response's current_phase — the value we
+  // send back on the next turn, so the backend can drive phase transitions.
+  currentPhase: string;
+
+  // Summary of the ended session (attempts, hints used, …) returned by
+  // /session/end. Shown on the Review screen. Ephemeral — never persisted.
+  sessionSummary: SessionSummary | null;
+
+  // Engine-generated review from /session/end (five categories, student-facing
+  // summary, call to action). Shown verbatim on the Review screen.
+  sessionReview: SessionReview | null;
+
   // Voice
   micMuted: boolean;
-  voiceStatus: 'idle' | 'listening' | 'speaking' | 'processing';
+  // Half-duplex turn phase (voice contract §12). LISTENING = mic open for the
+  // student; PROCESSING = request in flight, mic closed; SPEAKING = tutor audio
+  // playing, mic closed; WAITING/IDLE = no active turn.
+  voiceStatus: 'idle' | 'listening' | 'speaking' | 'processing' | 'waiting';
+  // Turn identifiers (voice contract §3). currentTurnId is minted when the
+  // student's LISTENING turn begins and travels on the /interaction request;
+  // lastTutorTurnId is the tutor_turn_id of the latest backend reply, sent back
+  // as previous_tutor_turn_id so the backend can reject stale/duplicate turns.
+  currentTurnId: string | null;
+  lastTutorTurnId: string | null;
+  // Backend-owned gating (voice contract §11/§12): whether another student turn
+  // is expected and whether voice input is currently allowed. The frontend only
+  // opens the mic when both are true.
+  expectsStudentResponse: boolean;
+  allowVoiceInput: boolean;
 
-  // Guided-practice visual cue — a supporting picture shown on the canvas.
-  // Backend-driven via the session's `show_visual_cue` flag; session-scoped.
+  // Visual cue card — supporting guidance shown when the AI Engine flags a
+  // mistake. `visualCueType` is the backend cue_type (picks which card renders);
+  // `visualCueDescription` is the backend's instructional text. Session-scoped.
   visualCueVisible: boolean;
+  visualCueType: string | null;
+  visualCueDescription: string | null;
 
   // Transcript
   transcript: TranscriptMessage[];
@@ -232,14 +267,27 @@ export interface NumeraState {
   setQuestionText: (q: string) => void;
   setQuestionNumber: (n: number) => void;
   setActiveEquation: (conceptId: string, questionId: string, label?: string) => void;
+  setCurrentPhase: (phase: string) => void;
+  setSessionSummary: (summary: SessionSummary | null) => void;
+  setSessionReview: (review: SessionReview | null) => void;
+  clearSessionId: () => void;
   toggleMic: () => void;
   setMicMuted: (value: boolean) => void;
   setVoiceStatus: (s: NumeraState['voiceStatus']) => void;
+  /** Begin a new student LISTENING turn: mint a fresh turn_id and open the mic
+   *  phase. Call when the student's turn starts (session open, or after the tutor
+   *  finishes and another response is expected). */
+  beginListeningTurn: () => void;
+  /** Record the tutor's reply turn (voice contract §11): store its tutor_turn_id
+   *  as the next previous_tutor_turn_id, and the backend gating for the next turn. */
+  setTutorTurn: (tutorTurnId: string | null, gating: { expects: boolean; allow: boolean }) => void;
   setVisualCueVisible: (v: boolean) => void;
+  setVisualCue: (cue: { show: boolean; cueType?: string | null; description?: string | null }) => void;
   toggleVisualCue: () => void;
   addTranscriptMessage: (msg: Omit<TranscriptMessage, 'id' | 'timestamp'>) => void;
   setTranscript: (msgs: Pick<TranscriptMessage, 'role' | 'text'>[]) => void;
   updatePartialTranscript: (text: string) => void;
+  commitPartialTranscript: (text: string) => void;
   addTrailEntry: (entry: Omit<TrailEntry, 'id' | 'timestamp'>) => void;
   clearTrail: () => void;
   setActiveTool: (t: DrawingTool) => void;
@@ -252,7 +300,7 @@ export interface NumeraState {
   undo: () => void;
   redo: () => void;
   clearCanvas: () => void;
-  applyCanvasDraw: (payload: CanvasDrawPayload) => void;
+  applyCanvasDraw: (payload: CanvasDrawPayload | CanvasDrawPayload[]) => void;
   clearTutorMarks: () => void;
   setInputMode: (m: InputMode) => void;
   setTextInput: (v: string) => void;
@@ -296,9 +344,9 @@ export interface NumeraState {
 const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
-  | 'setQuestionText' | 'setQuestionNumber' | 'setActiveEquation' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus'
-  | 'setVisualCueVisible' | 'toggleVisualCue'
-  | 'addTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript'
+  | 'setQuestionText' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'setTutorTurn'
+  | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue'
+  | 'addTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript' | 'commitPartialTranscript'
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
   | 'setShapeKind' | 'setEraserMode'
   | 'setStrokeColor' | 'setStrokeWidth' | 'addItem' | 'removeItem' | 'undo' | 'redo'
@@ -318,13 +366,24 @@ const initial: Omit<
   sessionState: 'idle',
   activeSlide: 2,
   totalSlides: 9,
-  questionText: '2x + 5 = 13',
-  questionNumber: 3,
+  // No hardcoded equation: the backend session drives the question. Empty until
+  // it loads so a stale demo equation never flashes on the live build.
+  questionText: '',
+  questionNumber: 0,
   activeConceptId: DEMO_CONCEPT_ID,
   activeQuestionId: DEMO_QUESTION_ID,
+  currentPhase: DEMO_PHASE,
+  sessionSummary: null,
+  sessionReview: null,
   micMuted: false,
   voiceStatus: 'listening',
+  currentTurnId: null,
+  lastTutorTurnId: null,
+  expectsStudentResponse: true,
+  allowVoiceInput: true,
   visualCueVisible: false,
+  visualCueType: null,
+  visualCueDescription: null,
   transcript: [
     {
       id: '1',
@@ -411,17 +470,34 @@ export const useNumeraStore = create<NumeraState>()(
       ...(label ? { questionText: label } : {}),
     }),
 
-  toggleMic: () =>
-    set((s) => ({
-      micMuted: !s.micMuted,
-      voiceStatus: s.micMuted ? 'listening' : 'idle',
-    })),
+  setCurrentPhase: (currentPhase) => set({ currentPhase }),
+  setSessionSummary: (sessionSummary) => set({ sessionSummary }),
+  setSessionReview: (sessionReview) => set({ sessionReview }),
+  clearSessionId: () => set({ sessionId: null }),
 
-  setMicMuted: (micMuted) =>
-    set({ micMuted, voiceStatus: micMuted ? 'idle' : 'listening' }),
+  // Mute is orthogonal to the turn phase (voice contract §12): the LISTENING/
+  // PROCESSING/SPEAKING phase is owned by the turn machine (beginListeningTurn /
+  // submitVoiceTurn), not the mic button. Unmuting mid-tutor-speech must NOT open
+  // the mic — the capture gate requires voiceStatus === 'listening' too.
+  toggleMic: () => set((s) => ({ micMuted: !s.micMuted })),
+
+  setMicMuted: (micMuted) => set({ micMuted }),
 
   setVoiceStatus: (voiceStatus) => set({ voiceStatus }),
+
+  beginListeningTurn: () =>
+    set({ currentTurnId: nextTurnId(), voiceStatus: 'listening' }),
+
+  setTutorTurn: (tutorTurnId, { expects, allow }) =>
+    set({
+      lastTutorTurnId: tutorTurnId,
+      expectsStudentResponse: expects,
+      allowVoiceInput: allow,
+    }),
+
   setVisualCueVisible: (visualCueVisible) => set({ visualCueVisible }),
+  setVisualCue: ({ show, cueType = null, description = null }) =>
+    set({ visualCueVisible: show, visualCueType: cueType, visualCueDescription: description }),
   toggleVisualCue: () => set((s) => ({ visualCueVisible: !s.visualCueVisible })),
 
   addTranscriptMessage: (msg) =>
@@ -467,6 +543,22 @@ export const useNumeraStore = create<NumeraState>()(
       };
     }),
 
+  commitPartialTranscript: (text) =>
+    set((s) => {
+      const last = s.transcript[s.transcript.length - 1];
+      // Finalize the in-place partial student bubble so the live words become the
+      // committed turn in the SAME box — no jump from a live caption to a fresh
+      // bubble. Falls back to appending when there's no partial to finalize.
+      if (last?.partial && last.role === 'student') {
+        return {
+          transcript: [...s.transcript.slice(0, -1), { ...last, text, partial: false }],
+        };
+      }
+      return {
+        transcript: [...s.transcript, { id: uid(), role: 'student', text, timestamp: Date.now() }],
+      };
+    }),
+
   addTrailEntry: (entry) =>
     set((s) => ({
       interactionTrail: [
@@ -507,21 +599,28 @@ export const useNumeraStore = create<NumeraState>()(
 
   applyCanvasDraw: (payload) =>
     set((s) => {
-      // A new "replace" resets the layer and the idempotency window.
-      if (payload.mode === 'replace') seenDrawActionIds.clear();
-      // Drop a duplicate command (re-delivered on reconnect).
-      if (payload.actionId) {
-        if (seenDrawActionIds.has(payload.actionId)) return {};
-        seenDrawActionIds.add(payload.actionId);
+      // The WS path delivers one action per message; REST responses deliver a
+      // list of actions. Accept both here so no caller has to care.
+      const actions = Array.isArray(payload) ? payload : [payload];
+      let tutorElements = s.tutorElements;
+      for (const action of actions) {
+        // A new "replace" resets the layer and the idempotency window.
+        if (action.mode === 'replace') {
+          seenDrawActionIds.clear();
+          tutorElements = [];
+        }
+        // Drop a duplicate command (re-delivered on reconnect).
+        if (action.actionId) {
+          if (seenDrawActionIds.has(action.actionId)) continue;
+          seenDrawActionIds.add(action.actionId);
+        }
+        const incoming: TutorElement[] = (action.elements ?? []).map((el) => ({
+          ...el,
+          id: el.id ?? uid(),
+        }));
+        tutorElements = [...tutorElements, ...incoming];
       }
-      const incoming: TutorElement[] = payload.elements.map((el) => ({
-        ...el,
-        id: el.id ?? uid(),
-      }));
-      return {
-        tutorElements:
-          payload.mode === 'replace' ? incoming : [...s.tutorElements, ...incoming],
-      };
+      return { tutorElements };
     }),
 
   clearTutorMarks: () => {

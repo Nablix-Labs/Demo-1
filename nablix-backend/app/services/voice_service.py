@@ -52,6 +52,7 @@ async def start_voice_session(
 
 async def process_voice_transcript(
     request: VoiceTranscriptRequest,
+    access_token: str,
 ) -> InteractionResponse:
     """Route one voice transcript through the same interaction flow as text."""
 
@@ -71,4 +72,4 @@ async def process_voice_transcript(
         hint_count=session.hint_count,
         timestamp=request.timestamp.isoformat(),
     )
-    return await process_interaction(interaction_request)
+    return await process_interaction(interaction_request, access_token)

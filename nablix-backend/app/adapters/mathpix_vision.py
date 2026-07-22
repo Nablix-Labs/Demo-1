@@ -1,5 +1,7 @@
 """Mathpix implementation of the `VisionOCRAdapter` protocol."""
 
+import re
+
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 
@@ -7,6 +9,10 @@ from app.core.exceptions import AdapterError
 from app.models.adapters import OCRTextRegion, VisionOCRResult
 
 _MATHPIX_TEXT_URL = "https://api.mathpix.com/v3/text"
+_ARRAY_BLOCK = re.compile(
+    r"\\begin\{array\}\{[^{}]+\}(.*?)\\end\{array\}",
+    flags=re.DOTALL,
+)
 
 
 class _MathpixLineData(BaseModel):
@@ -89,7 +95,10 @@ class MathpixVisionOCRAdapter:
             detected_regions=regions,
             final_answer=detected_steps[-1] if detected_steps else None,
             confidence=confidence,
-            needs_clarification=confidence < self._min_confidence,
+            needs_clarification=(
+                confidence < self._min_confidence
+                or _contains_incomplete_equation(detected_steps)
+            ),
             latex=payload.latex_styled or payload.text,
             detected_shapes=[],
             confidence_source="ocr_native",
@@ -99,10 +108,9 @@ class MathpixVisionOCRAdapter:
 
 def _steps_for(payload: _MathpixOCRPayload) -> list[str]:
     source = payload.latex_styled or payload.text
-    begin = "\\begin{array}{l}"
-    end = "\\end{array}"
-    if begin in source and end in source:
-        content = source.split(begin, 1)[1].split(end, 1)[0]
+    array_match = _ARRAY_BLOCK.search(source)
+    if array_match is not None:
+        content = array_match.group(1)
         return [_clean_math_text(step) for step in content.split("\\\\") if _clean_math_text(step)]
 
     usable_lines = [line for line in payload.line_data if _has_text_and_contour(line)]
@@ -138,7 +146,24 @@ def _has_text_and_contour(line: _MathpixLineData) -> bool:
 
 
 def _clean_math_text(text: str) -> str:
-    return text.replace("\\(", "").replace("\\)", "").strip()
+    return (
+        text.replace("\\(", "")
+        .replace("\\)", "")
+        .replace("\\[", "")
+        .replace("\\]", "")
+        .replace("&", "")
+        .strip()
+    )
+
+
+def _contains_incomplete_equation(steps: list[str]) -> bool:
+    for step in steps:
+        if step.count("=") != 1:
+            continue
+        left, right = step.split("=", maxsplit=1)
+        if len(left.strip()) == 0 or len(right.strip()) == 0:
+            return True
+    return False
 
 
 def _region_for(line: _MathpixLineData, image_width: int, image_height: int) -> OCRTextRegion:

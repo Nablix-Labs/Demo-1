@@ -1,12 +1,22 @@
+import asyncio
 import time
-from typing import NoReturn
 
 from pydantic import ValidationError
 
-from app.adapters.http_utils import JsonObject, post_json
+from app.adapters.http_utils import JsonObject
 from app.core.config import Settings
 from app.core.exceptions import AdapterError
 from app.models.adapters import AdapterContext, RAGResult, RetrievedDocument
+from app.models.rag import RAGRetrieveRequest, RAGRetrieveResponse
+from app.services.rag_retrieval import retrieve_content
+
+
+def _resolved_hint_level(context: AdapterContext, hint_level: int | None) -> int:
+    if hint_level in (1, 2, 3):
+        return hint_level
+    if context.current_hint_level is not None:
+        return min(context.current_hint_level + 1, 3)
+    return min(max(context.attempt_count or 1, 1), 3)
 
 
 class RAGServiceAdapterClient:
@@ -30,23 +40,20 @@ class RAGServiceAdapterClient:
         error_type: str | None,
         hint_level: int | None,
     ) -> RAGResult:
-        if self._settings.use_mock_rag:
-            return self._mock_response(request)
-
-        payload: JsonObject = self._build_retrieve_payload(request, error_type, hint_level)
-        url = self._settings.rag_service_url.rstrip("/") + "/retrieve"
-
+        payload: JsonObject = self._build_retrieve_payload(
+            request, error_type, hint_level
+        )
         try:
-            response = await post_json(
+            retrieve_request = RAGRetrieveRequest.model_validate(payload)
+        except ValidationError as error:
+            raise AdapterError(
                 "rag_service",
-                url,
-                payload,
-                self._settings.adapter_request_timeout_seconds,
-                self._settings.adapter_request_retry_count,
-            )
-            return self.parse_response(response)
-        except AdapterError as error:
-            self.handle_error(error)
+                f"invalid internal retrieve request payload={payload}: {error}",
+            ) from error
+        response: RAGRetrieveResponse = await asyncio.to_thread(
+            retrieve_content, retrieve_request, self._settings
+        )
+        return self.parse_response(response.model_dump())
 
     def _build_retrieve_payload(
         self,
@@ -60,7 +67,7 @@ class RAGServiceAdapterClient:
             "query_id": f"{context.session_id}-{int(time.time())}",
             "concept_id": context.concept_id or "ALG_LINEAR_ONE_STEP_ADDITION",
             "content_type": "HINT",
-            "hint_level": hint_level,
+            "hint_level": _resolved_hint_level(context, hint_level),
             "error_type": error_type,
             "difficulty": "FOUNDATION",
             "input_source": context.input_source or "TEXT",
@@ -70,34 +77,30 @@ class RAGServiceAdapterClient:
 
     def parse_response(self, response: dict[str, object]) -> RAGResult:
         try:
-            results = response.get("results", [])
-
-            documents = []
-            best_score = 0.0
-            for r in results:
-                documents.append(RetrievedDocument(
-                    title=r.get("content_id", ""),
-                    content=r.get("text", ""),
-                    source=r.get("concept_id", ""),
-                ))
-                score = r.get("relevance_score", 0.0)
-                if score > best_score:
-                    best_score = score
+            parsed = RAGRetrieveResponse.model_validate(response)
+            documents: list[RetrievedDocument] = [
+                RetrievedDocument(
+                    title=result.content_id,
+                    content=result.text,
+                    source=result.concept_id,
+                )
+                for result in parsed.results
+            ]
+            best_score: float = max(
+                (result.relevance_score for result in parsed.results), default=0.0
+            )
 
             return RAGResult(
                 documents=documents,
-                retrieval_confidence=best_score if documents else 0.0,
+                retrieval_confidence=best_score,
             )
-        except (KeyError, TypeError, ValidationError) as error:
+        except ValidationError as error:
             raise AdapterError(
                 "rag_service",
                 f"invalid response body={response}: {error}",
             ) from error
 
-    def handle_error(self, error: AdapterError) -> NoReturn:
-        raise error
-
-    def _mock_response(self, request: AdapterContext) -> RAGResult:
+    def _local_response(self, request: AdapterContext) -> RAGResult:
         return RAGResult(
             documents=[
                 RetrievedDocument(
@@ -113,4 +116,14 @@ class RAGServiceAdapterClient:
 class MockRAGServiceAdapter(RAGServiceAdapterClient):
 
     def __init__(self) -> None:
-        super().__init__(Settings(use_mock_rag=True))
+        super().__init__(Settings())
+
+    async def call(
+        self,
+        request: AdapterContext,
+        *,
+        error_type: str | None,
+        hint_level: int | None,
+    ) -> RAGResult:
+        del error_type, hint_level
+        return self._local_response(request)

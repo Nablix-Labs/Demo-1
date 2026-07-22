@@ -1,12 +1,4 @@
-"""Student-model adapter.
-
-The student model has two responsibilities: estimate the learner state for the
-current turn and accept events that should update that state. Both paths share
-the same typed result so the tutor pipeline can continue without caring whether
-the source is mock data or a live service.
-"""
-
-from typing import NoReturn
+"""Student Model adapter backed by Saravanan's HTTP contract."""
 
 from pydantic import ValidationError
 
@@ -17,7 +9,7 @@ from app.models.adapters import AdapterContext, StudentModelEvent, StudentModelR
 
 
 class StudentModelServiceAdapter:
-    """Reads and updates student state through mock data or a service URL."""
+    """Reads local pre-turn state and persists evaluated events remotely."""
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -28,23 +20,9 @@ class StudentModelServiceAdapter:
         return await self.call(context)
 
     async def call(self, request: AdapterContext) -> StudentModelResult:
-        """Return a mock state snapshot or call the live student-model service."""
+        """Return neutral pre-turn state; the remote service accepts events only."""
 
-        if self._settings.use_mock_student_model:
-            return self._mock_response()
-
-        payload: JsonObject = request.model_dump(mode="json", exclude={"canvas_regions"})
-        try:
-            response = await post_json(
-                "student_model",
-                self._settings.student_model_url,
-                payload,
-                self._settings.adapter_request_timeout_seconds,
-                self._settings.adapter_request_retry_count,
-            )
-            return self.parse_response(response)
-        except AdapterError as error:
-            self.handle_error(error)
+        return self._local_response(request)
 
     def parse_response(self, response: dict[str, object]) -> StudentModelResult:
         try:
@@ -55,36 +33,70 @@ class StudentModelServiceAdapter:
                 f"invalid response body={response}: {error}",
             ) from error
 
-    def handle_error(self, error: AdapterError) -> NoReturn:
-        raise error
-
-    async def update_from_event(self, event: StudentModelEvent) -> StudentModelResult:
-        """Persist a tutor/student event and return the updated learner state."""
+    async def update_from_event(
+        self,
+        event: StudentModelEvent,
+        context: AdapterContext,
+        access_token: str,
+    ) -> StudentModelResult:
+        """Persist one evaluated event and return the authoritative learner state."""
 
         if self._settings.use_mock_student_model:
-            return self._mock_response()
-
-        payload: JsonObject = event.model_dump(mode="json")
-        try:
-            response = await post_json(
+            return self._local_response(context)
+        if self._settings.student_model_url == "":
+            raise AdapterError(
                 "student_model",
-                self._settings.student_model_url,
-                payload,
-                self._settings.adapter_request_timeout_seconds,
-                self._settings.adapter_request_retry_count,
+                "NABLIX_STUDENT_MODEL_URL is required when NABLIX_USE_MOCK_STUDENT_MODEL=false",
             )
-            return self.parse_response(response)
-        except AdapterError as error:
-            self.handle_error(error)
 
-    def _mock_response(self) -> StudentModelResult:
-        """Return the stable development snapshot used by tutor-route tests."""
+        concept_id = context.concept_id
+        if concept_id is None:
+            raise AdapterError(
+                "student_model",
+                "concept_id is required for Student Model updates",
+            )
+        topic_id = self._settings.student_model_topic_ids.get(concept_id)
+        if topic_id is None:
+            raise AdapterError(
+                "student_model",
+                f"no topic_id mapping configured for concept_id={concept_id}",
+            )
+
+        # independent_success is Sanya's "correct without help" flag in ANY
+        # phase; gating it to Independent Practice starves Saravanan's guided
+        # advancement rule.
+        payload: JsonObject = {
+            "topic_id": topic_id,
+            "event_type": event.event_type,
+            "evaluation": event.evaluation,
+            "error_type": event.error_type,
+            "hint_level_used": event.hint_level_used,
+            "independent_success": event.independent_success,
+            "current_phase": context.current_phase,
+            "independent_correct_in_session": (
+                context.independent_correct_in_session + int(event.independent_success)
+            ),
+        }
+        response = await post_json(
+            "student_model",
+            f"{self._settings.student_model_url.rstrip('/')}/interaction",
+            payload,
+            {"Authorization": f"Bearer {access_token}"},
+            self._settings.adapter_request_timeout_seconds,
+            self._settings.adapter_request_retry_count,
+        )
+        return self.parse_response(response)
+
+    def _local_response(self, context: AdapterContext) -> StudentModelResult:
+        """Return the stable in-process learner-state snapshot."""
 
         return StudentModelResult(
-            student_state="NEEDS_GUIDANCE",
-            confidence=0.82,
-            mastery_level="DEVELOPING",
-            recommended_support="STEP_BY_STEP_HINT",
+            mastery_status="DEVELOPING",
+            continuity_status="on_track",
+            recommended_entry_phase=None,
+            hint_dependency_score=0.0,
+            intervention_required=False,
+            intervention_reason=None,
         )
 
 
@@ -92,4 +104,10 @@ class MockStudentModelAdapter(StudentModelServiceAdapter):
     """Compatibility wrapper for tests or imports that need a mock-only adapter."""
 
     def __init__(self) -> None:
-        super().__init__(Settings(use_mock_student_model=True))
+        super().__init__(
+            Settings(
+                student_model_url="",
+                student_model_topic_ids={},
+                use_mock_student_model=True,
+            )
+        )

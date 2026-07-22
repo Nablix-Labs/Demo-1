@@ -371,7 +371,7 @@ def build_student_model_event(
         evaluation=evaluation,
         error_type=error_type,
         hint_level_used=hint_level if hint_level is not None else 0,
-        independent_success=evaluation == "CORRECT",
+        independent_success=evaluation == "CORRECT" and hint_level is None,
     )
 
 

@@ -38,6 +38,7 @@ class VoiceServiceAdapterClient:
                 "voice_service",
                 self._settings.voice_service_url,
                 payload,
+                {},
                 self._settings.adapter_request_timeout_seconds,
                 self._settings.adapter_request_retry_count,
             )

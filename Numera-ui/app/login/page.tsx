@@ -13,7 +13,8 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, Mail, Phone, Check } from 'lucide-react';
-import { useAuthStore, accessDecision, type SsoProvider } from '@/store/useAuthStore';
+import { useAuthStore, accessDecision, type SsoProvider, type Role } from '@/store/useAuthStore';
+import { login, LoginError } from '@/lib/auth/authApi';
 import { SSO_LOGO } from '@/components/auth/SsoLogos';
 
 const SSO: { id: SsoProvider; label: string }[] = [
@@ -36,6 +37,8 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     void useAuthStore.persist.rehydrate();
@@ -48,6 +51,28 @@ export default function LoginPage() {
     const outcome = accessDecision(s);
     router.push(outcome.allowed ? '/' : outcome.redirect);
   };
+
+  // Real email/password login against the Nablix platform (POST /auth/login).
+  const doLogin = async () => {
+    setError(null);
+    if (!/.+@.+\..+/.test(email.trim())) { setError('Please enter a valid email.'); return; }
+    if (!password) { setError('Please enter your password.'); return; }
+    setSubmitting(true);
+    try {
+      const res = await login(email.trim(), password);
+      const role: Role = res.role === 'parent_guardian' ? 'parent_guardian' : 'student';
+      useAuthStore.getState().loginSuccess({ token: res.access_token, role, tier: res.tier, email: email.trim() });
+      router.push('/');
+    } catch (e) {
+      setError(e instanceof LoginError ? e.message : 'Could not log you in. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Email uses the real endpoint; phone-OTP has no endpoint yet, so it stays on
+  // the mock path.
+  const onSubmit = () => (loginMode === 'email' ? void doLogin() : proceed());
 
   return (
     <main className="flex-1 min-w-0 flex bg-off-white" aria-label="Log in to Numera">
@@ -201,8 +226,18 @@ export default function LoginPage() {
             </>
           )}
 
-          <button onClick={proceed} disabled={!hydrated} className="btn btn-primary w-full mt-5">
-            Log in <ArrowRight size={16} />
+          {error && (
+            <p role="alert" className="mt-4 text-[12.5px] text-action-orange bg-action-orange/10 border border-action-orange/25 rounded-btn px-3 py-2">
+              {error}
+            </p>
+          )}
+
+          <button
+            onClick={onSubmit}
+            disabled={!hydrated || submitting}
+            className="btn btn-primary w-full mt-5"
+          >
+            {submitting ? 'Logging in…' : <>Log in <ArrowRight size={16} /></>}
           </button>
 
           <p className="text-[12px] text-slate-blue text-center mt-6">

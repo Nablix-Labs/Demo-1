@@ -12,19 +12,21 @@
 export type LearningPhase =
   | 'diagnostic'
   | 'orientation'
+  | 'teach'
   | 'workbook'
   | 'practice'
   | 'review';
 
 /** Canonical order of the funnel. */
 export const PHASE_ORDER: LearningPhase[] = [
-  'diagnostic', 'orientation', 'workbook', 'practice', 'review',
+  'diagnostic', 'orientation', 'teach', 'workbook', 'practice', 'review',
 ];
 
 /** The single phase that must be complete before a phase unlocks (null = entry). */
 export const PHASE_PREREQ: Record<LearningPhase, LearningPhase | null> = {
   diagnostic: null,
   orientation: 'diagnostic',
+  teach: 'orientation',
   workbook: 'diagnostic',
   practice: 'orientation',
   review: 'practice',
@@ -46,6 +48,12 @@ export const PHASE_META: Record<
     href: '/orientation/algebra',
     cta: 'Watch the orientation',
     blurb: 'A short concept video before you start practising.',
+  },
+  teach: {
+    label: 'Teacher Mode',
+    href: '/teach/algebra',
+    cta: 'Teach it back',
+    blurb: 'Explain the idea back to Numera in your own words.',
   },
   workbook: {
     label: 'Workbook',

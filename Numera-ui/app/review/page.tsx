@@ -19,26 +19,45 @@ import {
 import PageShell, { Chip } from '@/components/PageShell';
 import PhaseGate from '@/components/PhaseGate';
 import { useNumeraStore } from '@/store/useNumeraStore';
+import { useDemoTutor } from '@/hooks/useDemoTutor';
 import { useFlowNav } from '@/lib/useFlowNav';
-import { demoFor } from '@/lib/demoContent';
+import { demoFor, type DemoWorksheet } from '@/lib/demoContent';
 import { cn } from '@/lib/cn';
+import type { FiveCategorySummary, QuestionOutcome } from '@/lib/api';
+import { speakTutor, stopTutorSpeech } from '@/lib/tts';
+
+/** Real session outcomes rendered through the same worksheet layout. */
+function outcomeWorksheets(outcomes: QuestionOutcome[]): DemoWorksheet[] {
+  return outcomes.map((o) => ({
+    question: o.question,
+    correct: o.correct,
+    student: [],
+    voice: o.correct
+      ? `You solved this correctly in ${o.attempts} attempt${o.attempts === 1 ? '' : 's'}${o.hint_level > 0 ? `, using a level ${o.hint_level} hint` : ''}. Well done.`
+      : `This one isn't solved yet after ${o.attempts} attempt${o.attempts === 1 ? '' : 's'}. We will come back to it together.`,
+  }));
+}
 
 /** Tutor's red pen — the only colour outside the grayscale system, by design. */
 const INK = '#b42318';
 
 // ── Speech ────────────────────────────────────────────────────────────────
+// OpenAI audio via /voice/tts with browser speechSynthesis as the fallback.
 function speak(text: string, onEnd: () => void) {
-  if (typeof window === 'undefined' || !('speechSynthesis' in window)) { onEnd(); return; }
-  window.speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(text);
-  u.rate = 0.98;
-  u.onend = onEnd;
-  u.onerror = onEnd;
-  window.speechSynthesis.speak(u);
+  speakTutor(text, onEnd);
 }
 function stopSpeaking() {
-  if (typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();
+  stopTutorSpeech();
 }
+
+/** Human labels for the engine's five review categories, in delivery order. */
+const REVIEW_CATEGORY_LABELS: [keyof FiveCategorySummary, string][] = [
+  ['category_1_strength', 'Strength'],
+  ['category_2_first_error', 'First error'],
+  ['category_3_pattern', 'Pattern'],
+  ['category_4_next_practice', 'Next practice'],
+  ['category_5_mastery', 'Mastery'],
+];
 
 export default function ReviewPage() {
   const [i, setI] = useState(0);
@@ -47,17 +66,41 @@ export default function ReviewPage() {
 
   const completePhase = useNumeraStore((s) => s.completePhase);
   const currentTopicId = useNumeraStore((s) => s.currentTopicId);
-  const { decideReview } = useFlowNav();
+  const sessionSummary = useNumeraStore((s) => s.sessionSummary);
+  const sessionReview = useNumeraStore((s) => s.sessionReview);
+  const { decideReview, goStage } = useFlowNav();
+  const tutor = useDemoTutor();
 
-  // Worksheets + summary for the placed topic.
+  // Arriving here IS the session end. Backend-driven navigation (a REVIEW
+  // phase recommendation) reaches this page without the explicit End-session
+  // flows, so end any live session on arrival; end() stores the summary +
+  // engine review and clears sessionId, so this runs at most once. On failure
+  // (e.g. no graded attempts yet) the page just shows its fallback content.
+  const { apiEnabled, sessionId, end } = tutor;
+  useEffect(() => {
+    if (apiEnabled && sessionId) void end().catch(() => {});
+  }, [apiEnabled, sessionId, end]);
+
+  // Real session outcomes when the backend sent them; demo worksheets otherwise.
   const demo = demoFor(currentTopicId);
-  const WORKSHEETS = demo.worksheets;
-  const SUMMARY = demo.reviewSummary;
+  const outcomes = sessionSummary?.outcomes ?? [];
+  const live = outcomes.length > 0;
+  const WORKSHEETS = live ? outcomeWorksheets(outcomes) : demo.worksheets;
 
   const total = WORKSHEETS.length;
   const done = i >= total;                 // past the last sheet → final summary
   const ws = WORKSHEETS[Math.min(i, total - 1)];
   const score = WORKSHEETS.filter((w) => w.correct).length;
+  // The engine's natural-language review is shown verbatim; the sentence built
+  // from outcome counts is only the fallback when no review was returned.
+  const SUMMARY = sessionReview
+    ? sessionReview.student_facing_summary
+    : live
+      ? `You worked through ${total} question${total === 1 ? '' : 's'} this session and solved ${score} of them. ${score === total ? 'Excellent work — you are ready to move on.' : 'Let us keep practising the ones that got away.'}`
+      : demo.reviewSummary;
+  const reviewCategories = sessionReview
+    ? REVIEW_CATEGORY_LABELS.filter(([key]) => sessionReview.five_category_summary[key] !== null)
+    : [];
 
   // Reaching the final summary clears the review phase.
   useEffect(() => {
@@ -83,6 +126,33 @@ export default function ReviewPage() {
       action={<Chip tone="solid">{score} / {total}</Chip>}
     >
       <div className="flex flex-col gap-6 max-w-3xl">
+        {/* Ended-session summary from /session/end (attempts, hints used). */}
+        {sessionSummary && (
+          <div className="rounded-lg border border-muted-gray bg-white px-5 py-4">
+            <div className="text-[11px] font-semibold tracking-widest uppercase text-slate-blue mb-3">
+              Session summary
+            </div>
+            <div className="flex flex-wrap gap-x-10 gap-y-3">
+              <div>
+                <div className="text-[22px] font-semibold text-ink leading-none">{sessionSummary.attempts}</div>
+                <div className="text-[11px] text-slate-blue mt-1">Attempts</div>
+              </div>
+              <div>
+                <div className="text-[22px] font-semibold text-ink leading-none">{sessionSummary.hints_used}</div>
+                <div className="text-[11px] text-slate-blue mt-1">Hints used</div>
+              </div>
+              {sessionSummary.question && (
+                <div className="min-w-0">
+                  <div className="text-[15px] font-semibold text-ink leading-tight font-[Cambria_Math,Georgia,serif] truncate">
+                    {sessionSummary.question}
+                  </div>
+                  <div className="text-[11px] text-slate-blue mt-1">Question</div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Worksheet progress */}
         <div className="flex items-center gap-1.5">
           {WORKSHEETS.map((w, idx) => (
@@ -216,6 +286,25 @@ export default function ReviewPage() {
               <p className="text-[14px] text-ink leading-relaxed">{SUMMARY}</p>
             </div>
 
+            {/* Engine review — the five categories, shown verbatim (nulls omitted). */}
+            {reviewCategories.length > 0 && sessionReview && (
+              <div className="rounded-lg border border-muted-gray divide-y divide-muted-gray overflow-hidden">
+                {reviewCategories.map(([key, label]) => (
+                  <div key={key} className="px-5 py-3.5">
+                    <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-1">{label}</div>
+                    <p className="text-[13.5px] text-ink leading-relaxed">
+                      {sessionReview.five_category_summary[key]}
+                    </p>
+                  </div>
+                ))}
+                {sessionReview.b6_hook && (
+                  <div className="px-5 py-3.5 bg-reading-surface">
+                    <p className="text-[13.5px] text-ink leading-relaxed italic">{sessionReview.b6_hook}</p>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Per-worksheet recap */}
             <div className="rounded-lg border border-muted-gray divide-y divide-muted-gray overflow-hidden">
               {WORKSHEETS.map((w, idx) => (
@@ -240,7 +329,33 @@ export default function ReviewPage() {
               <ChevronLeft size={15} strokeWidth={1.8} /> Back to worksheets
             </button>
 
-            {/* Decision point — where the tutor routes the student next. */}
+            {/* Decision point. With a live engine review the backend's
+                call_to_action decides the (single) next step; the manual
+                three-way choice remains the mock-mode flow. */}
+            {sessionReview ? (
+              sessionReview.call_to_action !== 'NONE' && (
+                <div className="mt-6 rounded-lg border border-muted-gray bg-reading-surface p-4">
+                  <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-3">What happens next</div>
+                  {sessionReview.call_to_action === 'CONTINUE_PRACTICE' ? (
+                    <button
+                      onClick={() => goStage('practice', currentTopicId)}
+                      className="rounded-md border border-focus-navy bg-focus-navy px-4 py-3 text-left text-white hover:opacity-80 transition-opacity"
+                    >
+                      <div className="text-[13px] font-semibold">Continue practising</div>
+                      <div className="text-[11.5px] text-white/70 mt-0.5">More practice on this topic.</div>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => decideReview('pass')}
+                      className="rounded-md border border-focus-navy bg-focus-navy px-4 py-3 text-left text-white hover:opacity-80 transition-opacity"
+                    >
+                      <div className="text-[13px] font-semibold">Next topic</div>
+                      <div className="text-[11.5px] text-white/70 mt-0.5">On to the next topic.</div>
+                    </button>
+                  )}
+                </div>
+              )
+            ) : (
             <div className="mt-6 rounded-lg border border-muted-gray bg-reading-surface p-4">
               <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-3">What happens next</div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
@@ -267,6 +382,7 @@ export default function ReviewPage() {
                 </button>
               </div>
             </div>
+            )}
           </div>
         )}
       </div>

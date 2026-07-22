@@ -14,7 +14,7 @@ import { useNumeraStore } from '@/store/useNumeraStore';
 import { useFlowNav } from '@/lib/useFlowNav';
 import { useDemoTutor } from '@/hooks/useDemoTutor';
 import { useVoiceTurn } from '@/hooks/useVoiceTurn';
-import { DEMO_CONCEPT_ID, DEMO_QUESTION_ID, DEMO_PHASE } from '@/lib/api';
+import { DEMO_CONCEPT_ID, DEMO_PHASE } from '@/lib/api';
 import { demoFor } from '@/lib/demoContent';
 import PhaseGate from '@/components/PhaseGate';
 import Toolbar from '@/components/Canvas/Toolbar';
@@ -31,17 +31,43 @@ export default function PracticePage() {
   const setPracticeDone = useNumeraStore((s) => s.setPracticeDone);
   const completePhase = useNumeraStore((s) => s.completePhase);
   const currentTopicId = useNumeraStore((s) => s.currentTopicId);
+  const questionText = useNumeraStore((s) => s.questionText);
+  const activeQuestionId = useNumeraStore((s) => s.activeQuestionId);
   const { goStage } = useFlowNav();
   const tutor = useDemoTutor();
 
+  // "Review with tutor": end the backend session first, save its summary, then
+  // move to /review. Disabled while in flight; on failure the student stays here.
+  const [ending, setEnding] = useState(false);
+  const [endError, setEndError] = useState<string | null>(null);
+  const reviewWithTutor = useCallback(async () => {
+    setEndError(null);
+    // No live backend session (mock mode) — just go to the review page.
+    if (!tutor.apiEnabled || !tutor.sessionId) { goStage('review'); return; }
+    setEnding(true);
+    try {
+      // end() saves the summary + clears sessionId on success, or throws.
+      await tutor.end();
+      goStage('review');
+    } catch {
+      setEndError("We couldn't finish your session. Please try again.");
+    } finally {
+      setEnding(false);
+    }
+  }, [tutor, goStage]);
+
   // Practice problem + hints for the placed topic.
   const demo = demoFor(currentTopicId);
-  const QUESTION = demo.practiceQuestion;
   const HINTS = demo.practiceHints;
+
+  // The question comes from the backend session (kept in sync by useDemoTutor
+  // from /session/start and every /interaction response); the demo table is the
+  // mock-mode fallback. Empty while the session is still loading.
+  const QUESTION = tutor.apiEnabled ? questionText : demo.practiceQuestion;
 
   // Backend context — fixed demo identifiers, matching the API documentation.
   const PHASE = DEMO_PHASE;
-  const QUESTION_ID = DEMO_QUESTION_ID;
+  const QUESTION_ID = activeQuestionId;
 
   // Hands-free voice: on turn-end, fire the transcript + canvas to the backend.
   const { submitVoiceTurn } = tutor;
@@ -59,6 +85,7 @@ export default function PracticePage() {
 
   const [mode, setMode] = useState<AIMode>('observing');
   const [hintIndex, setHintIndex] = useState(0);
+  const [hintText, setHintText] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   // Voice support is browser-only; gate render on mount to avoid SSR mismatch.
   const [mounted, setMounted] = useState(false);
@@ -85,16 +112,32 @@ export default function PracticePage() {
     return () => { if (idleTimer.current) clearTimeout(idleTimer.current); };
   }, [items.length, mode]);
 
-  const requestHint = () => {
+  const requestHint = async () => {
     setMode('hint');
-    void tutor.hint({
+    // Mock mode: walk the demo table. With a backend the hint must come from it,
+    // otherwise the card would contradict the backend's question.
+    if (!tutor.apiEnabled) {
+      setHintText(HINTS[hintIndex]);
+      setHintIndex((i) => Math.min(i + 1, HINTS.length - 1));
+      return;
+    }
+    setHintText(null);
+    const res = await tutor.hint({
       concept_id: DEMO_CONCEPT_ID,
       question_id: QUESTION_ID,
       current_phase: PHASE,
       current_hint_count: hintIndex,
     });
-    setHintIndex((i) => Math.min(i + 1, HINTS.length - 1));
+    // tutor.hint() swallows failures (it reports them into the transcript, which
+    // this screen doesn't render) — so say so here instead of showing nothing.
+    setHintText(res ? res.hint : "Sorry — I couldn't fetch a hint right now. Please try again in a moment.");
+    if (res) setHintIndex((i) => i + 1);
   };
+
+  // The idle observer flips to 'hint' without fetching, so in mock mode the card
+  // falls back to the demo table; with a backend it stays closed until the
+  // student asks and a real hint arrives.
+  const hintBody = hintText ?? (tutor.apiEnabled ? null : HINTS[hintIndex]);
 
   const finish = () => {
     // Submit the canvas for live OCR + tutor feedback (best-effort).
@@ -111,7 +154,9 @@ export default function PracticePage() {
       <header className="flex items-center gap-4 px-6 py-3.5 border-b border-muted-gray flex-shrink-0">
         <div>
           <div className="text-[10px] tracking-widest uppercase text-slate-blue">Independent practice</div>
-          <div className="text-[16px] font-semibold text-ink font-[Cambria_Math,Georgia,serif]">Solve {QUESTION}</div>
+          <div className="text-[16px] font-semibold text-ink font-[Cambria_Math,Georgia,serif]">
+            {QUESTION ? `Solve ${QUESTION}` : 'Loading question…'}
+          </div>
         </div>
         <div className="ml-auto flex items-center gap-2">
           {/* AI mode indicator */}
@@ -146,12 +191,12 @@ export default function PracticePage() {
         </div>
 
         {/* Hint card — only when the observer offers one */}
-        {mode === 'hint' && !done && (
+        {mode === 'hint' && !done && hintBody && (
           <div className="absolute top-5 left-6 z-20 max-w-sm flex items-start gap-3 bg-white border border-muted-gray rounded-xl px-4 py-3" style={{ boxShadow: '0 4px 16px rgba(0,0,0,0.12)' }}>
             <Lightbulb size={16} strokeWidth={1.8} className="flex-shrink-0 mt-0.5 text-ink" />
             <div>
               <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-0.5">Gentle hint</div>
-              <p className="text-[12.5px] text-ink leading-snug">{HINTS[hintIndex]}</p>
+              <p className="text-[12.5px] text-ink leading-snug">{hintBody}</p>
             </div>
           </div>
         )}
@@ -170,11 +215,18 @@ export default function PracticePage() {
               <Check size={14} strokeWidth={2} /> Practice saved — nice work.
             </span>
             <button
-              onClick={() => goStage('review')}
-              className="flex items-center gap-1.5 rounded-full border border-focus-navy bg-white px-4 py-2 text-[12px] font-semibold text-ink hover:bg-focus-navy hover:text-white transition-colors"
+              onClick={() => void reviewWithTutor()}
+              disabled={ending}
+              aria-busy={ending}
+              className="flex items-center gap-1.5 rounded-full border border-focus-navy bg-white px-4 py-2 text-[12px] font-semibold text-ink hover:bg-focus-navy hover:text-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:text-ink"
             >
-              Review with tutor <ArrowRight size={13} strokeWidth={2} />
+              {ending ? 'Ending session…' : <>Review with tutor <ArrowRight size={13} strokeWidth={2} /></>}
             </button>
+            {endError && (
+              <span role="alert" className="text-[12px] text-action-orange bg-action-orange/10 border border-action-orange/25 rounded-full px-3 py-1.5">
+                {endError}
+              </span>
+            )}
           </div>
         )}
 
@@ -202,7 +254,7 @@ export default function PracticePage() {
           )}
           {mode !== 'quiet' && (
             <button
-              onClick={requestHint}
+              onClick={() => void requestHint()}
               className="rounded-full border border-muted-gray bg-white px-4 py-2 text-[12px] font-semibold text-ink hover:bg-reading-surface transition-colors"
               style={{ boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}
             >

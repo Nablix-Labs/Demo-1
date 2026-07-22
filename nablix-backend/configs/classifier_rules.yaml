@@ -32,10 +32,35 @@ intent_phrases:
     - favorite movie
     - weather
 answer_patterns:
+  spoken_number_values:
+    zero: 0
+    one: 1
+    two: 2
+    three: 3
+    four: 4
+    five: 5
+    six: 6
+    seven: 7
+    eight: 8
+    nine: 9
+    ten: 10
+    eleven: 11
+    twelve: 12
+    thirteen: 13
+    fourteen: 14
+    fifteen: 15
+    sixteen: 16
+    seventeen: 17
+    eighteen: 18
+    nineteen: 19
+    twenty: 20
   answer_notation:
     - x =
     - x=
     - x equals
+    - x equal to
+    - x is equal to
+    - x is equals to
     - answer is
     - might be
   no_attempt:
@@ -100,7 +125,6 @@ visual_cue_rules:
     - PROVIDE_VISUAL_CUE
   enabled_phases:
     - GUIDED_PRACTICE
-    - REVIEW
   cues:
     OPPOSITE_OPERATION_ERROR:
       cue_type: EQUATION_BLOCK
@@ -142,6 +166,69 @@ answer_reveal_guardrail:
   safe_message: I cannot give the final answer, but I can help you with the next step.
   flag_type: DIRECT_ANSWER_REVEALED
   action_taken: SAFE_MESSAGE_RETURNED
+conversation_rules:
+  max_recent_messages: 6
+  acknowledgement_phrases:
+    - okay
+    - ok
+    - got it
+    - understood
+    - alright
+    - right
+    - "yes"
+    - yeah
+    - correct
+    - thanks
+    - thank you
+canvas_review:
+  min_region_confidence: 0.75
+  max_expression_characters: 160
+  feedback_enabled_phases:
+    - DIAGNOSTIC
+    - GUIDED_PRACTICE
+  annotation_enabled_phases:
+    - DIAGNOSTIC
+    - GUIDED_PRACTICE
+  messages:
+    ARITHMETIC_ERROR: Check the arithmetic in this step before continuing.
+    SIGN_ERROR: Check the sign in this step before continuing.
+    OPPOSITE_OPERATION_ERROR: Check which operation would undo the operation applied to the variable.
+    CONCEPTUAL_MISUNDERSTANDING: Check what the number beside the variable means before continuing.
+    PROCEDURAL_ERROR: This step changes the solution. Apply the same valid operation to both sides.
+    downstream_step: Review the first incorrect step before checking this one.
+progressive_hint_messages:
+  ARITHMETIC_ERROR:
+    - Good try. Your method is close, so check the arithmetic carefully.
+    - Recalculate each number slowly and compare it with the previous line.
+    - Write the arithmetic operation separately, calculate it, and then return to the equation.
+  SIGN_ERROR:
+    - Check the sign on x carefully before writing your final answer.
+    - Compare the sign in your new line with the sign in the previous line.
+    - Rewrite only the signed number first, then rebuild the equation around it.
+  OPPOSITE_OPERATION_ERROR:
+    - Think about the opposite operation needed to isolate x.
+    - Getting x by itself means removing the operation beside it by doing the inverse operation on both sides.
+    - Write the same inverse operation under both sides of the equation before simplifying.
+  CONCEPTUAL_MISUNDERSTANDING:
+    - Remember that a number next to x means multiplication, so think about how to undo it.
+    - To get x by itself, undo that multiplication using the same operation on both sides.
+    - Write the division on both sides before calculating either side.
+  PROCEDURAL_ERROR:
+    - You are using inverse operations, but check the order of your steps.
+    - Any operation applied to one side must also be applied to the other side.
+    - Rewrite the previous correct line, show the operation on both sides, and then simplify.
+  NOTATION_ISSUE:
+    - Your value is right, but write it as a full statement for x.
+    - Put x and the equals sign before the value you found.
+    - Check that the final line states exactly what x equals.
+  INSUFFICIENT_INFORMATION:
+    - Show one more step so I can check your thinking.
+    - Write the operation you want to apply to both sides.
+    - Start from the original equation and write one changed line underneath it.
+  UNKNOWN_ERROR:
+    - Let us review the equation and try the next step carefully.
+    - Explain what you changed from the previous line in your own words.
+    - Rewrite one step at a time so we can identify where the result changes.
 messages:
   SAFETY_RESPONSE: I cannot continue the math task right now. Please speak with a trusted adult or teacher for help.
   REQUESTING_ANSWER_OR_OVERRIDE: I cannot give the final answer, but I can help you think through the next step.
@@ -160,3 +247,6 @@ messages:
   NOTATION_ISSUE: Your value is right, but write it as a full statement for x.
   INSUFFICIENT_INFORMATION: Show one more step so I can check your thinking.
   DEFAULT: Let us review the equation and try the next step carefully.
+  QUESTION_COMPLETE_ACKNOWLEDGEMENT: You are welcome. This question is complete, so let us continue to the next question.
+  CONTEXTUAL_ACKNOWLEDGEMENT: Exactly. Let us move to the next question.
+  QUESTION_ALREADY_COMPLETE: This question is already complete. Let us continue to the next question.

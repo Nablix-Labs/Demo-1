@@ -1,8 +1,48 @@
+import asyncio
+
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services.voice.streaming import streaming_server
 
-client = TestClient(app)
+client = TestClient(app, headers={"Authorization": "Bearer test-token"})
+
+
+def test_streaming_tutor_call_forwards_bearer_token(monkeypatch) -> None:
+    captured_headers: dict[str, str] = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, object]:
+            return {"message": "ok"}
+
+    class FakeClient:
+        async def post(
+            self,
+            path: str,
+            *,
+            json: dict[str, object],
+            headers: dict[str, str],
+        ) -> FakeResponse:
+            assert path == "/voice/transcript"
+            captured_headers.update(headers)
+            return FakeResponse()
+
+    monkeypatch.setattr(streaming_server, "get_backend_http_client", FakeClient)
+
+    asyncio.run(
+        streaming_server.evaluate_voice_transcript(
+            "SESSION001",
+            "ST001",
+            "x equals five",
+            0.94,
+            1.0,
+            "test-token",
+        )
+    )
+
+    assert captured_headers == {"Authorization": "Bearer test-token"}
 
 
 def _start_session(student_id: str) -> str:
@@ -12,6 +52,7 @@ def _start_session(student_id: str) -> str:
             "student_id": student_id,
             "concept_id": "ALG_LINEAR_ONE_STEP",
             "interaction_mode": "VOICE",
+            "initial_phase": "DIAGNOSTIC",
         },
     )
     assert response.status_code == 200
@@ -146,3 +187,29 @@ def test_voice_transcript_rejects_invalid_confidence() -> None:
 
     assert response.status_code == 422
     assert response.json()["field"] == "confidence"
+
+
+def test_voice_stream_websocket_accepts_connection() -> None:
+    with client.websocket_connect(
+        "/voice/stream?session=SESSION001&student_id=ST001"
+    ) as websocket:
+        websocket.close()
+
+
+def test_voice_stream_forwards_session_query_param(monkeypatch) -> None:
+    """Frontends have sent both ?session= and ?session_id=; both must reach voice_stream."""
+    captured: dict[str, str] = {}
+
+    async def fake_voice_stream(ws, session="default", student_id="ST001"):
+        captured["session"] = session
+        captured["student_id"] = student_id
+        await ws.accept()
+        await ws.close()
+
+    monkeypatch.setattr("app.api.voice.voice_stream", fake_voice_stream)
+
+    for query in ("session=SESSION001", "session_id=SESSION001"):
+        captured.clear()
+        with client.websocket_connect(f"/voice/stream?{query}&student_id=ST042"):
+            pass
+        assert captured == {"session": "SESSION001", "student_id": "ST042"}, query

@@ -1,6 +1,6 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from app.models.adapters import VisualCue
+from app.models.adapters import ConversationMessage, VisualCue
 from app.models.fields import (
     BoundedText,
     ConceptId,
@@ -12,7 +12,7 @@ from app.models.fields import (
     SessionId,
     StudentId,
 )
-from app.models.session import CanvasState, VoiceState
+from app.models.session import CanvasState, SessionSummary, VoiceState
 
 
 class InteractionRequest(BaseModel):
@@ -30,6 +30,9 @@ class InteractionRequest(BaseModel):
     concept_id: ConceptId
     question_id: QuestionId
     hint_count: int
+    attempt_count: int | None = Field(default=None, ge=0)
+    question_completed: bool | None = None
+    conversation_history: list[ConversationMessage] = Field(default_factory=list)
     timestamp: str | None = None
 
 
@@ -38,8 +41,13 @@ class InteractionResponse(BaseModel):
 
     session_id: str
     student_id: str
+    phase_changed: bool = False
+    previous_phase: Phase | None = None
+    phase_transition_message: str | None = None
+    phase_transition_voice: str | None = None
     current_phase: Phase
     current_question: str
+    question_id: str | None = None
     interaction_mode: InteractionMode
     voice_state: VoiceState
     canvas_state: CanvasState
@@ -55,5 +63,8 @@ class InteractionResponse(BaseModel):
     allow_text_input: bool
     allow_voice_input: bool
     hint_count: int
+    attempt_count: int
+    question_completed: bool
     phase_indicator: Phase
-    session_summary: str | None
+    recommended_entry_phase: str | None
+    session_summary: SessionSummary | None

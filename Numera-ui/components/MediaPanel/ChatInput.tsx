@@ -12,13 +12,13 @@ import { useState, type FormEvent } from 'react';
 import { Send } from 'lucide-react';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useDemoTutor } from '@/hooks/useDemoTutor';
-import { DEMO_PHASE } from '@/lib/api';
 
 export default function ChatInput() {
   const [text, setText] = useState('');
   const addTranscriptMessage = useNumeraStore((s) => s.addTranscriptMessage);
   const activeConceptId = useNumeraStore((s) => s.activeConceptId);
   const activeQuestionId = useNumeraStore((s) => s.activeQuestionId);
+  const currentPhase = useNumeraStore((s) => s.currentPhase);
   const tutor = useDemoTutor();
 
   const send = (e: FormEvent) => {
@@ -30,7 +30,7 @@ export default function ChatInput() {
     void tutor.answer(value, {
       concept_id: activeConceptId,
       question_id: activeQuestionId,
-      current_phase: DEMO_PHASE,
+      current_phase: currentPhase,
       hint_count: 0,
     });
   };
