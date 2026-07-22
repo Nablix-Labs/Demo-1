@@ -13,6 +13,11 @@ import { TOPICS } from '@/lib/topics';
 import { DEMO_CONCEPT_ID, DEMO_PHASE, DEMO_QUESTION_ID, type SessionReview, type SessionSummary } from '@/lib/api';
 import { uid } from '@/lib/uid';
 
+// Sequential, human-readable student turn ids (voice contract §3): TURN-0001, …
+// One per LISTENING turn; kept sequential (not uuid) so logs read cleanly.
+let turnCounter = 0;
+const nextTurnId = () => `TURN-${String(++turnCounter).padStart(4, '0')}`;
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type SessionState =
@@ -167,7 +172,21 @@ export interface NumeraState {
 
   // Voice
   micMuted: boolean;
-  voiceStatus: 'idle' | 'listening' | 'speaking' | 'processing';
+  // Half-duplex turn phase (voice contract §12). LISTENING = mic open for the
+  // student; PROCESSING = request in flight, mic closed; SPEAKING = tutor audio
+  // playing, mic closed; WAITING/IDLE = no active turn.
+  voiceStatus: 'idle' | 'listening' | 'speaking' | 'processing' | 'waiting';
+  // Turn identifiers (voice contract §3). currentTurnId is minted when the
+  // student's LISTENING turn begins and travels on the /interaction request;
+  // lastTutorTurnId is the tutor_turn_id of the latest backend reply, sent back
+  // as previous_tutor_turn_id so the backend can reject stale/duplicate turns.
+  currentTurnId: string | null;
+  lastTutorTurnId: string | null;
+  // Backend-owned gating (voice contract §11/§12): whether another student turn
+  // is expected and whether voice input is currently allowed. The frontend only
+  // opens the mic when both are true.
+  expectsStudentResponse: boolean;
+  allowVoiceInput: boolean;
 
   // Visual cue card — supporting guidance shown when the AI Engine flags a
   // mistake. `visualCueType` is the backend cue_type (picks which card renders);
@@ -255,12 +274,20 @@ export interface NumeraState {
   toggleMic: () => void;
   setMicMuted: (value: boolean) => void;
   setVoiceStatus: (s: NumeraState['voiceStatus']) => void;
+  /** Begin a new student LISTENING turn: mint a fresh turn_id and open the mic
+   *  phase. Call when the student's turn starts (session open, or after the tutor
+   *  finishes and another response is expected). */
+  beginListeningTurn: () => void;
+  /** Record the tutor's reply turn (voice contract §11): store its tutor_turn_id
+   *  as the next previous_tutor_turn_id, and the backend gating for the next turn. */
+  setTutorTurn: (tutorTurnId: string | null, gating: { expects: boolean; allow: boolean }) => void;
   setVisualCueVisible: (v: boolean) => void;
   setVisualCue: (cue: { show: boolean; cueType?: string | null; description?: string | null }) => void;
   toggleVisualCue: () => void;
   addTranscriptMessage: (msg: Omit<TranscriptMessage, 'id' | 'timestamp'>) => void;
   setTranscript: (msgs: Pick<TranscriptMessage, 'role' | 'text'>[]) => void;
   updatePartialTranscript: (text: string) => void;
+  commitPartialTranscript: (text: string) => void;
   addTrailEntry: (entry: Omit<TrailEntry, 'id' | 'timestamp'>) => void;
   clearTrail: () => void;
   setActiveTool: (t: DrawingTool) => void;
@@ -317,9 +344,9 @@ export interface NumeraState {
 const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
-  | 'setQuestionText' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus'
+  | 'setQuestionText' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'setTutorTurn'
   | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue'
-  | 'addTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript'
+  | 'addTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript' | 'commitPartialTranscript'
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
   | 'setShapeKind' | 'setEraserMode'
   | 'setStrokeColor' | 'setStrokeWidth' | 'addItem' | 'removeItem' | 'undo' | 'redo'
@@ -350,6 +377,10 @@ const initial: Omit<
   sessionReview: null,
   micMuted: false,
   voiceStatus: 'listening',
+  currentTurnId: null,
+  lastTutorTurnId: null,
+  expectsStudentResponse: true,
+  allowVoiceInput: true,
   visualCueVisible: false,
   visualCueType: null,
   visualCueDescription: null,
@@ -444,16 +475,26 @@ export const useNumeraStore = create<NumeraState>()(
   setSessionReview: (sessionReview) => set({ sessionReview }),
   clearSessionId: () => set({ sessionId: null }),
 
-  toggleMic: () =>
-    set((s) => ({
-      micMuted: !s.micMuted,
-      voiceStatus: s.micMuted ? 'listening' : 'idle',
-    })),
+  // Mute is orthogonal to the turn phase (voice contract §12): the LISTENING/
+  // PROCESSING/SPEAKING phase is owned by the turn machine (beginListeningTurn /
+  // submitVoiceTurn), not the mic button. Unmuting mid-tutor-speech must NOT open
+  // the mic — the capture gate requires voiceStatus === 'listening' too.
+  toggleMic: () => set((s) => ({ micMuted: !s.micMuted })),
 
-  setMicMuted: (micMuted) =>
-    set({ micMuted, voiceStatus: micMuted ? 'idle' : 'listening' }),
+  setMicMuted: (micMuted) => set({ micMuted }),
 
   setVoiceStatus: (voiceStatus) => set({ voiceStatus }),
+
+  beginListeningTurn: () =>
+    set({ currentTurnId: nextTurnId(), voiceStatus: 'listening' }),
+
+  setTutorTurn: (tutorTurnId, { expects, allow }) =>
+    set({
+      lastTutorTurnId: tutorTurnId,
+      expectsStudentResponse: expects,
+      allowVoiceInput: allow,
+    }),
+
   setVisualCueVisible: (visualCueVisible) => set({ visualCueVisible }),
   setVisualCue: ({ show, cueType = null, description = null }) =>
     set({ visualCueVisible: show, visualCueType: cueType, visualCueDescription: description }),
@@ -499,6 +540,22 @@ export const useNumeraStore = create<NumeraState>()(
             timestamp: Date.now(),
           },
         ],
+      };
+    }),
+
+  commitPartialTranscript: (text) =>
+    set((s) => {
+      const last = s.transcript[s.transcript.length - 1];
+      // Finalize the in-place partial student bubble so the live words become the
+      // committed turn in the SAME box — no jump from a live caption to a fresh
+      // bubble. Falls back to appending when there's no partial to finalize.
+      if (last?.partial && last.role === 'student') {
+        return {
+          transcript: [...s.transcript.slice(0, -1), { ...last, text, partial: false }],
+        };
+      }
+      return {
+        transcript: [...s.transcript, { id: uid(), role: 'student', text, timestamp: Date.now() }],
       };
     }),
 

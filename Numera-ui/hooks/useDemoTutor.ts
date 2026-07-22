@@ -32,6 +32,11 @@ import { speakTutor } from '@/lib/tts';
 
 const apiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
+// Monotonic voice-turn id. Each fired turn supersedes the previous one, so a slow
+// or barged-over earlier turn can't append its reply after a newer turn has
+// started — the cause of "which text is this reply answering?" in long chats.
+let voiceTurnSeq = 0;
+
 /**
  * True only when the student has actually drawn something. Guards against
  * sending blank canvas snapshots to the backend (and the live OCR provider) when
@@ -238,12 +243,20 @@ export function useDemoTutor() {
       confidence?: number
     ): Promise<InteractionResponse | null> => {
       if (!apiEnabled() || !sessionId || !transcript.trim()) return null;
+      // Overlap guard (contract §5): never submit while another turn is processing.
+      if (useNumeraStore.getState().voiceStatus === 'processing') {
+        console.warn('[voice] turn ignored — a previous turn is still processing');
+        return null;
+      }
+      const myTurn = ++voiceTurnSeq; // claim this turn; later turns supersede it
+      // Enter PROCESSING: the mic closes (half-duplex), duplicate submits are blocked.
+      useNumeraStore.getState().setVoiceStatus('processing');
       addTrailEntry({ kind: 'answer', text: transcript });
-      // Show the student's complete spoken turn in the chat. The live caption is
-      // ephemeral (cleared on commit), so without this the words the student
-      // said — including the trailing 1–2 recovered by the commit-time caption
-      // fallback in useVoiceTurn — never appear in the visible transcript.
-      addTranscriptMessage({ role: 'student', text: transcript });
+      // Show the student's complete spoken turn in the chat by finalizing the live
+      // partial bubble in place (commitPartialTranscript) rather than appending a
+      // fresh one — so the words don't jump from the live caption to a new bubble.
+      // Falls back to appending when there's no partial (e.g. server transport).
+      useNumeraStore.getState().commitPartialTranscript(transcript);
 
       // Console trace for backend integration debugging — shows the exact
       // payloads/responses the frontend exchanges on a voice turn.
@@ -288,28 +301,65 @@ export function useDemoTutor() {
           concept_id: ctx.concept_id,
           question_id: state.activeQuestionId,
           hint_count: ctx.hint_count,
+          // Voice turn-sync contract (§5): identify the turn so the backend can
+          // dedupe/reject stale turns. transcript_final is always true here.
+          turn_id: state.currentTurnId ?? undefined,
+          previous_tutor_turn_id: state.lastTutorTurnId,
+          transcript_final: true,
         };
         console.log('→ POST /interaction', interactionReq);
         const res = await sendInteraction(interactionReq);
-        syncBackendSession(res);
         console.log('← /interaction', res);
+        // A newer turn fired while we were waiting — drop this stale reply so it
+        // can't append out of order under the wrong student turn.
+        if (myTurn !== voiceTurnSeq) {
+          console.log('(superseded by a newer turn — reply dropped)');
+          console.groupEnd();
+          return null;
+        }
+        // Duplicate/stale turns (contract §6): the backend didn't evaluate them, so
+        // don't append a reply, speak, or score — just reopen listening.
+        if (res.status === 'DUPLICATE_TURN' || res.status === 'STALE_TURN') {
+          console.log(`(${res.status} — not applied)`);
+          console.groupEnd();
+          useNumeraStore.getState().beginListeningTurn();
+          return null;
+        }
+        syncBackendSession(res);
         console.groupEnd();
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message });
         if (res.current_phase) useNumeraStore.getState().setCurrentPhase(res.current_phase); // advance phase
         if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
         applyVisualCue(res); // backend may ask to show/hide the supporting visual
+        // Record the tutor turn + backend gating for the next turn (contract §11).
+        // Fallbacks keep the loop working before the backend sends these fields.
+        useNumeraStore.getState().setTutorTurn(res.tutor_turn_id ?? null, {
+          expects: res.expects_student_response ?? true,
+          allow: res.allow_voice_input ?? true,
+        });
+        // SPEAKING: mic stays closed while the tutor voices the reply (half-duplex,
+        // contract §12). When audio ends, reopen a new LISTENING turn if the backend
+        // expects another response; otherwise park in WAITING.
+        useNumeraStore.getState().setVoiceStatus('speaking');
+        const expectsMore = res.expects_student_response ?? true;
         // Speak exactly what's shown in the chat. The backend's message_voice can
         // carry the same meaning in different words ("we are close" vs "you're
         // almost there"), which is confusing when read + heard together — so the
         // spoken audio must match the on-screen text verbatim.
-        speakTutor(res.message);
+        speakTutor(res.message, () => {
+          const store = useNumeraStore.getState();
+          if (store.voiceStatus !== 'speaking') return; // superseded meanwhile
+          if (expectsMore) store.beginListeningTurn();
+          else store.setVoiceStatus('waiting');
+        });
         return res;
       } catch (err) {
         console.warn('✗ /interaction failed:', err);
         console.groupEnd();
         addTranscriptMessage({ role: 'ai', text: TUTOR_UNAVAILABLE }); // surface the failure in the chat
         addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Tutor unavailable.') });
+        useNumeraStore.getState().beginListeningTurn(); // reopen listening so the student can retry
         return null;
       }
     },

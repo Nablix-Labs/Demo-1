@@ -270,6 +270,14 @@ export interface InteractionPayload {
   concept_id: string;
   question_id: string;
   hint_count: number;
+  // Voice turn-sync contract (§3, §5). Optional so the request still works before
+  // the backend adds these fields.
+  /** Unique id for this student turn; reused verbatim on a network retry. */
+  turn_id?: string;
+  /** tutor_turn_id of the last tutor reply — lets the backend reject stale turns. */
+  previous_tutor_turn_id?: string | null;
+  /** Always true for a submitted voice turn — only final transcripts are sent. */
+  transcript_final?: boolean;
 }
 
 /** Supporting picture the backend asks the frontend to show (e.g. an equation
@@ -298,6 +306,23 @@ export interface InteractionResponse {
    *  sends the richer `visual_cue` object; prefer that when present. */
   show_visual_cue?: boolean;
   visual_cue?: VisualCue | null;
+  // Voice turn-sync contract (§11). All optional — present once the backend
+  // implements the contract; the frontend falls back sensibly when they're absent.
+  /** Turn-level status: normal turns omit it; DUPLICATE_TURN / STALE_TURN /
+   *  CLARIFICATION_REQUIRED signal the frontend to not treat this as a fresh reply. */
+  status?: 'DUPLICATE_TURN' | 'STALE_TURN' | 'CLARIFICATION_REQUIRED';
+  /** The student turn_id this reply corresponds to. */
+  accepted_turn_id?: string | null;
+  /** New tutor turn id — becomes previous_tutor_turn_id on the next request. */
+  tutor_turn_id?: string | null;
+  /** Backend's next conversational move (ASK_QUESTION, ADVANCE_TO_NEXT_QUESTION, …). */
+  conversation_action?: string;
+  /** Whether another student response is expected after this reply. */
+  expects_student_response?: boolean;
+  /** The kind of response expected (ANSWER, EXPLANATION, ACKNOWLEDGEMENT_OR_CONTINUE, …). */
+  expected_student_response?: string;
+  /** Whether voice input is currently permitted. */
+  allow_voice_input?: boolean;
 }
 
 /** POST /interaction — core tutoring call. Requires a started, owned session. */

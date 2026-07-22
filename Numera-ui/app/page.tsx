@@ -44,6 +44,9 @@ export default function LessonPage() {
   const activeConceptId = useNumeraStore((s) => s.activeConceptId);
   const activeQuestionId = useNumeraStore((s) => s.activeQuestionId);
   const currentPhase = useNumeraStore((s) => s.currentPhase);
+  const updatePartialTranscript = useNumeraStore((s) => s.updatePartialTranscript);
+  const voiceStatus = useNumeraStore((s) => s.voiceStatus);
+  const beginListeningTurn = useNumeraStore((s) => s.beginListeningTurn);
 
   // ── Live backend wiring (no-op unless NEXT_PUBLIC_API_BASE_URL is set) ──
   const tutor = useDemoTutor();
@@ -88,7 +91,9 @@ export default function LessonPage() {
     },
     [submitVoiceTurn, activeConceptId, activeQuestionId, currentPhase]
   );
-  const voice = useVoiceTurn({ onTurnEnd });
+  // Mirror live words into one evolving student bubble; submitVoiceTurn finalizes
+  // it in place (commitPartialTranscript) so partial → final never jumps surfaces.
+  const voice = useVoiceTurn({ onTurnEnd, onInterim: updatePartialTranscript });
   // Server transport: stream raw mic audio to the voice server instead of doing
   // browser STT + REST. The server drives transcript/tutor_response/audio over WS.
   const voiceStream = useVoiceStream({ onAudio: sendAudioChunk });
@@ -107,20 +112,25 @@ export default function LessonPage() {
       clearTutorMarks();
       // Backend decides whether a supporting picture should be shown.
       useNumeraStore.getState().setVisualCueVisible(rec.show_visual_cue);
+      // Open the student's first LISTENING turn (mints turn_id). Mic stays muted
+      // until the student opts in; half-duplex gating does the rest.
+      beginListeningTurn();
     });
-  }, [hydrated, apiEnabled, sessionId, activeConceptId, startSession, setMicMuted, setQuestionText, setQuestionNumber, setTranscript, clearTutorMarks]);
+  }, [hydrated, apiEnabled, sessionId, activeConceptId, startSession, setMicMuted, setQuestionText, setQuestionNumber, setTranscript, clearTutorMarks, beginListeningTurn]);
 
-  // Mic button drives real voice capture: unmuted → listen; muted → stop. In
-  // 'rest' transport the browser detects turns + fires REST; in 'server' transport
-  // we stream mic audio to the voice server and it drives the turn over the WS.
-  // The voice server auto-connects to Deepgram on first audio and auto-responds
-  // when it detects 1.5s silence (UtteranceEnd) -- no start/stop needed.
+  // Mic capture is half-duplex (voice contract §12): it runs ONLY during the
+  // student's LISTENING turn and while unmuted. During PROCESSING (request in
+  // flight) and SPEAKING (tutor audio playing) the mic is closed, so the tutor's
+  // own voice can never be captured and resubmitted as student speech (§13, test
+  // 17/19). In 'server' transport the voice server owns turn detection, so gate
+  // only on mute there.
   const capture = VOICE_TRANSPORT === 'server' ? voiceStream : voice;
+  const listening = VOICE_TRANSPORT === 'server' ? !micMuted : voiceStatus === 'listening' && !micMuted;
   useEffect(() => {
     if (!apiEnabled || !sessionId || !capture.supported) return;
-    if (!micMuted) void capture.start();
+    if (listening) void capture.start();
     else capture.stop();
-  }, [apiEnabled, sessionId, micMuted, capture]);
+  }, [apiEnabled, sessionId, listening, capture]);
 
   // Navigation off this page is backend-phase-driven (usePhaseRouting follows
   // the session's current_phase), so the lesson chrome carries no manual

@@ -32,7 +32,7 @@ export interface PendingAction {
 /** Voice state captured when support opens, restored exactly on close. */
 interface TutorSnapshot {
   micMuted: boolean;
-  voiceStatus: 'idle' | 'listening' | 'speaking' | 'processing';
+  voiceStatus: 'idle' | 'listening' | 'speaking' | 'processing' | 'waiting';
 }
 
 interface SupportState {
