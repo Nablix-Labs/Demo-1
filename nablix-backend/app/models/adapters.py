@@ -45,6 +45,7 @@ ConversationAction = Literal[
     "ASK_QUESTION",
     "GIVE_HINT",
     "ACKNOWLEDGE_ANSWER",
+    "REQUEST_EXPLANATION",
     "REQUEST_CLARIFICATION",
     "ADVANCE_TO_NEXT_QUESTION",
     "WAIT_FOR_STUDENT",
@@ -76,6 +77,7 @@ class AdapterContext(BaseModel):
     attempt_count: int | None = None
     independent_correct_in_session: int = 0
     question_completed: bool = False
+    answer_value_confirmed: bool = False
     question_number: int | None = None
     current_hint_level: int | None = None
     concept_id: str | None = None
@@ -202,6 +204,8 @@ class TutorResult(BaseModel):
     attempt_increment: int = Field(default=0, ge=0, le=1)
     recommended_conversation_action: ConversationAction = "WAIT_FOR_STUDENT"
     question_completed: bool = False
+    answer_value_confirmed: bool = False
+    reasoning_complete: bool = False
 
 
 class VoiceResult(BaseModel):

@@ -165,8 +165,10 @@ def test_voice_transcript_normalizes_spoken_correct_answer() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["message"] == "Correct. Nice work explaining your answer."
-    assert body["message_voice"] == "Correct. Nice work explaining your answer."
+    assert body["message"] == "Your value is correct. How did you work it out?"
+    assert body["message_voice"] == "Your value is correct. How did you work it out?"
+    assert body["answer_value_confirmed"] is True
+    assert body["question_completed"] is False
 
 
 def test_voice_transcript_rejects_invalid_confidence() -> None:

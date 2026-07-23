@@ -117,7 +117,8 @@ def test_ai_engine_can_use_openai_when_feature_flag_is_enabled(monkeypatch) -> N
             '{"intent":"SUBMITTING_ANSWER","evaluation":"PARTIALLY_CORRECT",'
             '"error_type":"ARITHMETIC_ERROR","response_strategy":"GUIDED_HINT",'
             '"hint_level":1,"tutor_message": "Check the inverse operation first.", '
-            '"tutor_message_voice_optimised": "Check the inverse operation first.", "confidence": 0.86}'
+            '"tutor_message_voice_optimised": "Check the inverse operation first.", '
+            '"reasoning_complete":false,"confidence": 0.86}'
         ),
     ]
 
@@ -285,6 +286,7 @@ def test_deterministic_correct_answer_uses_one_openai_call_and_preserves_correct
                 '"error_type":"ARITHMETIC_ERROR","response_strategy":"GUIDED_HINT",'
                 '"hint_level":1,"tutor_message":"Correct. Nice work explaining your answer.",'
                 '"tutor_message_voice_optimised":"Correct. Nice work explaining your answer.",'
+                '"reasoning_complete":false,'
                 '"confidence":0.98}'
             )
 
@@ -308,8 +310,11 @@ def test_deterministic_correct_answer_uses_one_openai_call_and_preserves_correct
 
     assert response.status_code == 200
     body = response.json()
-    assert body["evaluation"] == "CORRECT"
-    assert body["tutor_message"] == "Correct. Nice work explaining your answer."
+    assert body["evaluation"] == "PARTIALLY_CORRECT"
+    assert body["tutor_message"] == "Your value is correct. How did you work it out?"
+    assert body["answer_value_confirmed"] is True
+    assert body["reasoning_complete"] is False
+    assert body["question_completed"] is False
     assert body["guardrail_check"]["passed"] is True
     assert len(request_bodies) == 1
 
@@ -342,6 +347,7 @@ def test_natural_language_correct_answer_uses_one_openai_turn_and_safe_confirmat
                 '"response_strategy":"CLARIFY","hint_level":null,'
                 '"tutor_message":"Correct. Nice work explaining your answer.",'
                 '"tutor_message_voice_optimised":"Correct. Nice work explaining your answer.",'
+                '"reasoning_complete":false,'
                 '"confidence":0.98}'
             )
 
@@ -364,11 +370,13 @@ def test_natural_language_correct_answer_uses_one_openai_turn_and_safe_confirmat
 
     assert response.status_code == 200
     body = response.json()
-    assert body["evaluation"] == "CORRECT"
+    assert body["evaluation"] == "PARTIALLY_CORRECT"
     assert body["intent"] == "SUBMITTING_ANSWER"
-    assert body["error_type"] is None
-    assert body["response_strategy"] == "CONFIRM_CORRECT"
-    assert body["tutor_message"] == "Correct. Nice work explaining your answer."
+    assert body["error_type"] == "INSUFFICIENT_INFORMATION"
+    assert body["response_strategy"] == "CLARIFY"
+    assert body["tutor_message"] == "Your value is correct. How did you work it out?"
+    assert body["recommended_conversation_action"] == "REQUEST_EXPLANATION"
+    assert body["question_completed"] is False
     assert body["guardrail_check"]["passed"] is True
     assert len(request_bodies) == 1
     user_payload = json.loads(request_bodies[0]["input"][-1]["content"])
@@ -396,7 +404,8 @@ def test_unified_openai_turn_cannot_reveal_answer_for_incorrect_attempt(monkeypa
                 '{"intent":"SUBMITTING_ANSWER","evaluation":"INCORRECT",'
                 '"error_type":"ARITHMETIC_ERROR","response_strategy":"GUIDED_HINT",'
                 '"hint_level":1,"tutor_message":"The answer is x = 5.",'
-                '"tutor_message_voice_optimised":"The answer is x equals 5.","confidence":0.93}'
+                '"tutor_message_voice_optimised":"The answer is x equals 5.",'
+                '"reasoning_complete":false,"confidence":0.93}'
             )
 
     monkeypatch.setenv("NABLIX_USE_OPENAI_AI_ENGINE", "true")
@@ -471,7 +480,8 @@ def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> 
                 '{"intent":"SUBMITTING_ANSWER","evaluation":"INCORRECT",'
                 '"error_type":"ARITHMETIC_ERROR","response_strategy":"GUIDED_HINT",'
                 '"hint_level":1,"tutor_message":"Check your arithmetic.",'
-                '"tutor_message_voice_optimised":"Check your arithmetic.","confidence":0.91}'
+                '"tutor_message_voice_optimised":"Check your arithmetic.",'
+                '"reasoning_complete":false,"confidence":0.91}'
             )
 
     monkeypatch.setattr(openai_client.httpx, "Client", _FakeOpenAIClient)
@@ -493,6 +503,8 @@ def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> 
         attempt_count=1,
         current_hint_level=None,
         question_completed=False,
+        answer_value_confirmed=False,
+        reasoning_required=True,
         grounded_intent="SUBMITTING_ANSWER",
         grounded_evaluation="INCORRECT",
         grounded_error_type="ARITHMETIC_ERROR",
@@ -517,6 +529,8 @@ def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> 
         attempt_count=1,
         current_hint_level=None,
         question_completed=False,
+        answer_value_confirmed=False,
+        reasoning_required=True,
         grounded_intent="SUBMITTING_ANSWER",
         grounded_evaluation="INCORRECT",
         grounded_error_type="ARITHMETIC_ERROR",
@@ -552,6 +566,7 @@ def test_deterministic_correct_result_cannot_be_downgraded_by_openai(monkeypatch
                 hint_level=1,
                 tutor_message="Correct. Nice work explaining your answer.",
                 tutor_message_voice_optimised="Correct. Nice work explaining your answer.",
+                reasoning_complete=False,
                 confidence=0.98,
             )
 
@@ -574,8 +589,10 @@ def test_deterministic_correct_result_cannot_be_downgraded_by_openai(monkeypatch
         )
     )
 
-    assert response.evaluation == "CORRECT"
-    assert response.tutor_message == "Correct. Nice work explaining your answer."
+    assert response.evaluation == "PARTIALLY_CORRECT"
+    assert response.tutor_message == "Your value is correct. How did you work it out?"
+    assert response.answer_value_confirmed is True
+    assert response.question_completed is False
 
 
 def test_correct_answer_acknowledgement_is_sanitized_without_refusal(monkeypatch) -> None:
@@ -598,9 +615,79 @@ def test_correct_answer_acknowledgement_is_sanitized_without_refusal(monkeypatch
         )
     )
 
-    assert response.evaluation == "CORRECT"
-    assert response.tutor_message == "Correct. Nice work explaining your answer."
+    assert response.evaluation == "PARTIALLY_CORRECT"
+    assert response.tutor_message == "Your value is correct. How did you work it out?"
+    assert response.answer_value_confirmed is True
+    assert response.question_completed is False
     assert response.guardrail_check.passed is True
+
+
+def test_correct_value_requires_reasoning_before_question_completion() -> None:
+    value_response = classify_student_response(
+        ClassificationRequest(
+            question="Solve for x: x + 4 = 9",
+            correct_answer="x = 5",
+            student_input="x = 5",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert value_response.answer_value_confirmed is True
+    assert value_response.reasoning_complete is False
+    assert value_response.question_completed is False
+    assert value_response.recommended_conversation_action == "REQUEST_EXPLANATION"
+    assert value_response.student_model_events == []
+
+
+def test_correct_value_with_reasoning_completes_question() -> None:
+    response = classify_student_response(
+        ClassificationRequest(
+            question="Solve for x: x + 4 = 9",
+            correct_answer="x = 5",
+            student_input="I subtracted 4 from both sides, so x = 5.",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.evaluation == "CORRECT"
+    assert response.answer_value_confirmed is True
+    assert response.reasoning_complete is True
+    assert response.question_completed is True
+    assert response.student_model_events[0].event_type == "CORRECT_ATTEMPT"
+
+
+def test_follow_up_reasoning_completes_previously_confirmed_answer() -> None:
+    response = classify_student_response(
+        ClassificationRequest(
+            question="Solve for x: x + 4 = 9",
+            correct_answer="x = 5",
+            student_input="I subtracted 4 from both sides because that isolates x.",
+            current_phase="GUIDED_PRACTICE",
+            input_source="VOICE",
+            transcript_confidence=0.96,
+            attempt_count=1,
+            current_hint_level=None,
+            answer_value_confirmed=True,
+            conversation_state=ConversationState(
+                last_tutor_action="REQUESTED_EXPLANATION",
+                expected_student_response="EXPLANATION",
+            ),
+        )
+    )
+
+    assert response.evaluation == "CORRECT"
+    assert response.reasoning_complete is True
+    assert response.question_completed is True
+    assert response.attempt_increment == 0
+    assert response.tutor_message == "Thanks for explaining your method. Let us continue."
 
 
 def test_contextual_acknowledgement_does_not_evaluate_or_emit_event(monkeypatch) -> None:
@@ -844,7 +931,7 @@ def test_ai_engine_does_not_return_visual_cue_for_correct_answer() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["evaluation"] == "CORRECT"
+    assert body["evaluation"] == "PARTIALLY_CORRECT"
     assert body["visual_cue"]["show"] is False
     assert body["visual_cue"]["cue_type"] is None
     assert body["visual_cue"]["description"] is None

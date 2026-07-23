@@ -93,7 +93,11 @@ async def submit_canvas(
     written_work = "\n".join(ocr.detected_steps) or ocr.raw_ocr_text
     message = "\n".join(part for part in [written_work, request.transcript] if part)
     rules: ClassifierRulesConfig = load_classifier_rules()
-    attempt_count: int = session.attempt_count + 1
+    attempt_count: int = (
+        session.attempt_count
+        if session.answer_value_confirmed
+        else session.attempt_count + 1
+    )
     recent_history: list[ConversationMessage] = (
         session.conversation_history[-rules.conversation_rules.max_recent_messages :]
         if rules.conversation_rules.max_recent_messages > 0
@@ -112,6 +116,7 @@ async def submit_canvas(
         attempt_count=attempt_count,
         independent_correct_in_session=_independent_correct_in_session(session),
         question_completed=session.question_completed,
+        answer_value_confirmed=session.answer_value_confirmed,
         question_number=session.question_number,
         current_hint_level=_current_hint_level_from(session.hint_count),
         concept_id=session.concept_id,
@@ -142,12 +147,15 @@ async def submit_canvas(
                 )
             recommended = student.recommended_entry_phase
             new_phase = resolve_transition(session.current_phase, recommended)
-            if new_phase is None and tutor.evaluation == "CORRECT":
+            if new_phase is None and tutor.question_completed:
                 # Same phase: a correct canvas answer routes to the next
                 # question, exactly like the /interaction path.
                 transition_updates = (
                     await next_question_updates(session, session.current_phase) or {}
                 )
+                if transition_updates:
+                    transition_updates["answer_value_confirmed"] = False
+                    transition_updates["conversation_history"] = []
             if new_phase is not None:
                 fetched = await get_next_question(
                     session.concept_id,
@@ -166,6 +174,8 @@ async def submit_canvas(
                     "question_number": session.question_number + 1,
                     "attempt_count": 0,
                     "question_completed": False,
+                    "answer_value_confirmed": False,
+                    "conversation_history": [],
                     "phase_transitions": [
                         *session.phase_transitions,
                         PhaseTransitionRecord(
@@ -222,7 +232,7 @@ async def submit_canvas(
             request.student_id,
             record,
             reviewed_attempt_count,
-            session.question_completed or tutor.evaluation == "CORRECT",
+            tutor.question_completed,
             updated_history,
             recommended_entry_phase,
             student_result,

@@ -204,8 +204,11 @@ class TutorResponse(StrictSchema):
         "ASK_QUESTION",
         "GIVE_HINT",
         "ACKNOWLEDGE_ANSWER",
+        "REQUEST_EXPLANATION",
         "REQUEST_CLARIFICATION",
         "ADVANCE_TO_NEXT_QUESTION",
         "WAIT_FOR_STUDENT",
     ] = "WAIT_FOR_STUDENT"
     question_completed: StrictBool = False
+    answer_value_confirmed: StrictBool = False
+    reasoning_complete: StrictBool = False

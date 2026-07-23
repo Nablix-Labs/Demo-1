@@ -52,6 +52,7 @@ class ClassificationRequest(StrictSchema):
     transcript_confidence: float | None = Field(ge=0.0, le=1.0)
     attempt_count: int = Field(ge=0)
     question_completed: bool = False
+    answer_value_confirmed: bool = False
     question_number: int = Field(default=1, ge=1)
     current_hint_level: HintLevel | None
     concept_id: str | None = None
@@ -71,6 +72,7 @@ class TutorDecision:
     response_strategy: ResponseStrategy
     hint_level: HintLevel | None
     canvas_review: CanvasMathReview | None
+    reasoning_complete: bool
 
 
 def classify_student_response(request: ClassificationRequest) -> TutorResponse:
@@ -88,6 +90,7 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
             response_strategy="SAFETY_RESPONSE",
             hint_level=None,
             canvas_review=None,
+            reasoning_complete=False,
         )
         return build_tutor_response(
             request=request,
@@ -177,6 +180,7 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
 
     openai_turn: OpenAITutorTurn | None = generate_tutor_turn_with_openai(
         request=request,
+        rules=rules,
         grounded_intent=intent,
         grounded_evaluation=evaluation,
         grounded_error_type=error_type,
@@ -225,6 +229,7 @@ def build_openai_ai_engine_client(settings: Settings) -> OpenAIAIEngineClient | 
 
 def generate_tutor_turn_with_openai(
     request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
     grounded_intent: IntentType,
     grounded_evaluation: EvaluationCategory | None,
     grounded_error_type: ErrorType | None,
@@ -244,6 +249,8 @@ def generate_tutor_turn_with_openai(
             attempt_count=request.attempt_count,
             current_hint_level=request.current_hint_level,
             question_completed=request.question_completed,
+            answer_value_confirmed=request.answer_value_confirmed,
+            reasoning_required=is_reasoning_required(request, rules),
             grounded_intent=grounded_intent,
             grounded_evaluation=grounded_evaluation,
             grounded_error_type=grounded_error_type,
@@ -325,6 +332,10 @@ def build_openai_tutor_decision(
         response_strategy=response_strategy,
         hint_level=hint_level,
         canvas_review=None,
+        reasoning_complete=(
+            openai_turn.reasoning_complete
+            and has_reasoning_evidence(request, rules)
+        ),
     )
 
 
@@ -585,6 +596,7 @@ def build_tutor_decision(
         response_strategy=effective_response_strategy,
         hint_level=effective_hint_level,
         canvas_review=canvas_review,
+        reasoning_complete=has_reasoning_evidence(request, rules),
     )
 
 
@@ -628,6 +640,31 @@ def build_tutor_response(
     voice_message_override: str | None,
 ) -> TutorResponse:
     canvas_review: CanvasMathReview | None = decision.canvas_review
+    reasoning_required: bool = is_reasoning_required(request, rules)
+    answer_value_confirmed: bool = (
+        request.answer_value_confirmed or decision.evaluation == "CORRECT"
+    )
+    reasoning_complete: bool = (
+        not reasoning_required or decision.reasoning_complete
+    )
+    question_completed: bool = (
+        request.question_completed
+        or (
+            answer_value_confirmed
+            and reasoning_complete
+            and decision.evaluation in {"CORRECT", "PARTIALLY_CORRECT"}
+        )
+    )
+    explanation_required: bool = (
+        reasoning_required
+        and answer_value_confirmed
+        and not question_completed
+    )
+    completed_reasoning_turn: bool = (
+        request.answer_value_confirmed
+        and question_completed
+        and not request.question_completed
+    )
     fallback_message: str = build_tutor_message(
         decision.intent,
         decision.evaluation,
@@ -645,12 +682,40 @@ def build_tutor_response(
         else canvas_fallback or fallback_message
     )
     voice_message: str = voice_message_override if voice_message_override is not None else tutor_message
+    if explanation_required:
+        tutor_message = (
+            rules.reasoning_completion.explanation_incomplete_message
+            if request.answer_value_confirmed
+            else rules.reasoning_completion.explanation_required_message
+        )
+        voice_message = tutor_message
+    elif (
+        request.answer_value_confirmed
+        and question_completed
+        and decision.evaluation != "CORRECT"
+    ):
+        tutor_message = rules.reasoning_completion.explanation_accepted_message
+        voice_message = tutor_message
+    response_evaluation: EvaluationCategory | None = (
+        "PARTIALLY_CORRECT"
+        if explanation_required
+        else "CORRECT"
+        if completed_reasoning_turn
+        else decision.evaluation
+    )
+    response_error_type: ErrorType | None = (
+        "INSUFFICIENT_INFORMATION"
+        if explanation_required
+        else None
+        if completed_reasoning_turn
+        else decision.error_type
+    )
     events: list[StudentModelEvent] = []
-    if should_emit_student_model_event(decision):
+    if should_emit_student_model_event(decision) and not explanation_required:
         events = [
             build_student_model_event(
-                decision.evaluation,
-                decision.error_type,
+                response_evaluation,
+                response_error_type,
                 decision.hint_level,
             )
         ]
@@ -673,10 +738,12 @@ def build_tutor_response(
     )
 
     response: TutorResponse = TutorResponse(
-        evaluation=decision.evaluation,
-        error_type=decision.error_type,
+        evaluation=response_evaluation,
+        error_type=response_error_type,
         intent=decision.intent,
-        response_strategy=decision.response_strategy,
+        response_strategy=(
+            "CLARIFY" if explanation_required else decision.response_strategy
+        ),
         tutor_message=tutor_message,
         tutor_message_voice_optimised=voice_message,
         voice_optimised=True,
@@ -694,11 +761,19 @@ def build_tutor_response(
         safety_check=safety_check,
         guardrail_check=GuardrailCheck(passed=True, violation_type=None, action_taken=None),
         student_model_events=events,
-        attempt_increment=select_attempt_increment(decision),
-        recommended_conversation_action=select_conversation_action(decision),
-        question_completed=(
-            request.question_completed or decision.evaluation == "CORRECT"
+        attempt_increment=(
+            0
+            if request.answer_value_confirmed
+            else select_attempt_increment(decision)
         ),
+        recommended_conversation_action=(
+            "REQUEST_EXPLANATION"
+            if explanation_required
+            else select_conversation_action(decision)
+        ),
+        question_completed=question_completed,
+        answer_value_confirmed=answer_value_confirmed,
+        reasoning_complete=reasoning_complete,
     )
     return apply_answer_reveal_guardrail(response, request.correct_answer, rules)
 
@@ -978,6 +1053,42 @@ def build_contextual_acknowledgement_response(
 
 def normalize_text(value: str) -> str:
     return " ".join(value.strip().lower().split())
+
+
+def is_reasoning_required(
+    request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
+) -> bool:
+    return request.current_phase in rules.reasoning_completion.required_phases
+
+
+def has_reasoning_evidence(
+    request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
+) -> bool:
+    if request.input_source == "CANVAS":
+        readable_steps = [
+            region
+            for region in request.canvas_regions
+            if region.text.strip() != ""
+        ]
+        return (
+            len(readable_steps)
+            >= rules.reasoning_completion.minimum_canvas_steps
+        )
+
+    normalized_input: str = normalize_text(request.student_input)
+    explanation_words: list[str] = normalized_input.split()
+    if (
+        len(explanation_words)
+        >= rules.reasoning_completion.minimum_explanation_words
+        and contains_any(
+            normalized_input,
+            rules.reasoning_completion.explanation_terms,
+        )
+    ):
+        return True
+    return normalized_input.count("=") >= 2
 
 
 def contains_any(value: str, phrases: Sequence[str]) -> bool:

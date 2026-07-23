@@ -180,6 +180,40 @@ conversation_rules:
     - correct
     - thanks
     - thank you
+reasoning_completion:
+  required_phases:
+    - DIAGNOSTIC
+    - CONCEPT_ORIENTATION
+    - GUIDED_PRACTICE
+    - INDEPENDENT_PRACTICE
+    - REVIEW
+  explanation_terms:
+    - because
+    - both sides
+    - inverse operation
+    - opposite operation
+    - cancel
+    - isolate
+    - get x by itself
+    - move
+    - add
+    - added
+    - subtract
+    - subtracted
+    - minus
+    - multiply
+    - multiplied
+    - divide
+    - divided
+    - substitute
+    - substituted
+    - simplify
+    - simplified
+  minimum_explanation_words: 4
+  minimum_canvas_steps: 2
+  explanation_required_message: Your value is correct. How did you work it out?
+  explanation_incomplete_message: Your value is correct. Explain which operation you used and why.
+  explanation_accepted_message: Thanks for explaining your method. Let us continue.
 canvas_review:
   min_region_confidence: 0.75
   max_expression_characters: 160

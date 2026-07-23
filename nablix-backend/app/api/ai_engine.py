@@ -27,6 +27,7 @@ class AiEngineClassifyRequest(BaseModel):
     canvas_regions: list[CanvasTextRegion] = Field(default_factory=list)
     conversation_history: list[ConversationMessage] = Field(default_factory=list)
     question_completed: bool = False
+    answer_value_confirmed: bool = False
     conversation_state: ConversationState | None = None
 
     @model_validator(mode="before")
@@ -71,6 +72,7 @@ def _classification_request_from(request: AiEngineClassifyRequest) -> Classifica
         canvas_regions=request.canvas_regions,
         conversation_history=request.conversation_history,
         question_completed=request.question_completed,
+        answer_value_confirmed=request.answer_value_confirmed,
         conversation_state=request.conversation_state,
     )
 

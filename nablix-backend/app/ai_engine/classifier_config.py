@@ -96,6 +96,16 @@ class ConversationRulesConfig(StrictSchema):
     acknowledgement_phrases: list[str]
 
 
+class ReasoningCompletionConfig(StrictSchema):
+    required_phases: list[LearningPhase]
+    explanation_terms: list[str]
+    minimum_explanation_words: int = Field(ge=2)
+    minimum_canvas_steps: int = Field(ge=2)
+    explanation_required_message: str
+    explanation_incomplete_message: str
+    explanation_accepted_message: str
+
+
 class CanvasReviewMessagesConfig(StrictSchema):
     ARITHMETIC_ERROR: str
     SIGN_ERROR: str
@@ -148,6 +158,7 @@ class ClassifierRulesConfig(StrictSchema):
     visual_cue_rules: VisualCueRulesConfig
     answer_reveal_guardrail: AnswerRevealGuardrailConfig
     conversation_rules: ConversationRulesConfig
+    reasoning_completion: ReasoningCompletionConfig
     canvas_review: CanvasReviewConfig
     progressive_hint_messages: dict[ErrorType, list[str]]
     messages: MessageConfig
