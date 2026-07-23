@@ -110,6 +110,7 @@ async def submit_canvas(
     context = AdapterContext(
         session_id=request.session_id,
         student_id=request.student_id,
+        source_turn_id=submission_id,
         message=message,
         question=session.current_question,
         correct_answer=session.correct_answer,

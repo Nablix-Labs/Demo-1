@@ -819,6 +819,7 @@ def test_interaction_forwards_event_and_uses_student_model_phase(monkeypatch) ->
             "ST040",
             current_phase="DIAGNOSTIC",
             text_input="I subtracted 4 from both sides, so x = 5",
+            turn_id="TURN-STUDENT-MODEL",
         ),
     )
 
@@ -828,6 +829,8 @@ def test_interaction_forwards_event_and_uses_student_model_phase(monkeypatch) ->
     assert captured["url"] == "https://student-model.example/interaction"
     assert captured["headers"] == {"Authorization": "Bearer test-token"}
     assert captured["payload"] == {
+        "event_id": f"{session_id}:TURN-STUDENT-MODEL:CORRECT_ATTEMPT",
+        "source_turn_id": "TURN-STUDENT-MODEL",
         "topic_id": 2,
         "event_type": "CORRECT_ATTEMPT",
         "evaluation": "CORRECT",

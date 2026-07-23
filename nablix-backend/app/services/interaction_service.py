@@ -537,6 +537,7 @@ async def _process_interaction(
     context = AdapterContext(
         session_id=request.session_id,
         student_id=request.student_id,
+        source_turn_id=request.turn_id or f"TURN-{uuid4().hex.upper()}",
         message=student_message,
         question=session.current_question,
         # Grade against the session's question: after a 6.7 transition swaps
