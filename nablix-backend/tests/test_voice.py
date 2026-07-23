@@ -3,6 +3,7 @@ import asyncio
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services import interaction_service
 from app.services.voice.streaming import streaming_server
 
 client = TestClient(app, headers={"Authorization": "Bearer test-token"})
@@ -147,8 +148,18 @@ def test_voice_transcript_routes_through_interaction_flow() -> None:
     assert body["interaction_mode"] == "VOICE"
 
 
-def test_voice_transcript_normalizes_spoken_correct_answer() -> None:
+def test_voice_transcript_normalizes_spoken_correct_answer(monkeypatch) -> None:
     session_id = _start_session("ST013")
+
+    async def get_second_question(
+        concept_id: str,
+        phase: str,
+        served_question_ids: list[str] | None,
+    ) -> tuple[str, str, str]:
+        del concept_id, phase, served_question_ids
+        return ("Solve for x: x + 4 = 9", "x = 5", "ALG_EQ_DIAG_002")
+
+    monkeypatch.setattr(interaction_service, "get_next_question", get_second_question)
 
     response = client.post(
         "/voice/transcript",
