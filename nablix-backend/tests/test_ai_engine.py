@@ -661,6 +661,7 @@ def test_correct_value_with_reasoning_completes_question() -> None:
     assert response.answer_value_confirmed is True
     assert response.reasoning_complete is True
     assert response.question_completed is True
+    assert response.tutor_message == "Thanks for explaining your method. Let us continue."
     assert response.student_model_events[0].event_type == "CORRECT_ATTEMPT"
 
 
@@ -726,6 +727,36 @@ def test_valid_worked_steps_override_incorrect_openai_reasoning_flag(monkeypatch
 
     assert response.reasoning_complete is True
     assert response.question_completed is True
+
+
+def test_reasoning_accumulates_across_student_turns_for_current_question() -> None:
+    response = classify_student_response(
+        ClassificationRequest(
+            question="Solve for x: x + 6 = 10",
+            correct_answer="x = 4",
+            student_input="x = 4",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=2,
+            current_hint_level=None,
+            conversation_history=[
+                ConversationMessage(
+                    role="user",
+                    content="x + 6 - 6 = 10 - 6",
+                ),
+                ConversationMessage(
+                    role="assistant",
+                    content="What is 10 minus 6?",
+                ),
+            ],
+        )
+    )
+
+    assert response.answer_value_confirmed is True
+    assert response.reasoning_complete is True
+    assert response.question_completed is True
+    assert response.tutor_message == "Thanks for explaining your method. Let us continue."
 
 
 def test_partial_operation_explanation_receives_a_new_question() -> None:

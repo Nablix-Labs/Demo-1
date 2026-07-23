@@ -699,9 +699,9 @@ def build_tutor_response(
         )
         voice_message = tutor_message
     elif (
-        request.answer_value_confirmed
+        reasoning_required
         and question_completed
-        and decision.evaluation != "CORRECT"
+        and not request.question_completed
     ):
         tutor_message = rules.reasoning_completion.explanation_accepted_message
         voice_message = tutor_message
@@ -1086,7 +1086,13 @@ def has_reasoning_evidence(
             >= rules.reasoning_completion.minimum_canvas_steps
         )
 
-    normalized_input: str = normalize_text(request.student_input)
+    student_evidence: list[str] = [
+        message.content
+        for message in request.conversation_history
+        if message.role == "user"
+    ]
+    student_evidence.append(request.student_input)
+    normalized_input: str = normalize_text(" ".join(student_evidence))
     explanation_words: list[str] = normalized_input.split()
     if (
         len(explanation_words)
