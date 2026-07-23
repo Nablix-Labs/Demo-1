@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
+from app.models.adapters import ConversationAction
+
 
 EvaluationCategory = Literal[
     "CORRECT",
@@ -199,16 +201,8 @@ class TutorResponse(StrictSchema):
     safety_check: SafetyCheck
     guardrail_check: GuardrailCheck
     student_model_events: list[StudentModelEvent]
-    attempt_increment: int = Field(default=0, ge=0, le=1)
-    recommended_conversation_action: Literal[
-        "ASK_QUESTION",
-        "GIVE_HINT",
-        "ACKNOWLEDGE_ANSWER",
-        "REQUEST_EXPLANATION",
-        "REQUEST_CLARIFICATION",
-        "ADVANCE_TO_NEXT_QUESTION",
-        "WAIT_FOR_STUDENT",
-    ] = "WAIT_FOR_STUDENT"
-    question_completed: StrictBool = False
+    attempt_increment: int = Field(ge=0, le=1)
+    recommended_conversation_action: ConversationAction
+    question_completed: StrictBool
     answer_value_confirmed: StrictBool = False
     reasoning_complete: StrictBool = False
