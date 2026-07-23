@@ -61,6 +61,9 @@ def _clarification_result(ocr: VisionOCRResult) -> TutorResult:
         confidence=ocr.confidence,
         input_source="CANVAS",
         safety_check=SafetyCheckResult(passed=True),
+        attempt_increment=0,
+        recommended_conversation_action="REQUEST_CLARIFICATION",
+        question_completed=False,
     )
 
 

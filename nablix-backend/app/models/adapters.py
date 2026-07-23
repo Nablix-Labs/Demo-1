@@ -201,9 +201,9 @@ class TutorResult(BaseModel):
     transcript_confidence: float | None = None
     safety_check: SafetyCheckResult = Field(default_factory=lambda: SafetyCheckResult(passed=True))
     student_model_events: list[StudentModelEvent] = Field(default_factory=list)
-    attempt_increment: int = Field(default=0, ge=0, le=1)
-    recommended_conversation_action: ConversationAction = "WAIT_FOR_STUDENT"
-    question_completed: bool = False
+    attempt_increment: int = Field(ge=0, le=1)
+    recommended_conversation_action: ConversationAction
+    question_completed: bool
     answer_value_confirmed: bool = False
     reasoning_complete: bool = False
 

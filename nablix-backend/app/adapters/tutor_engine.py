@@ -139,6 +139,9 @@ class TutorEngineServiceAdapter:
                     independent_success=False,
                 )
             ],
+            attempt_increment=1,
+            recommended_conversation_action="GIVE_HINT",
+            question_completed=False,
         )
 
     def _mock_response(self, request: TutorEngineRequest) -> TutorResult:

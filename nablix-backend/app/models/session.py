@@ -6,7 +6,9 @@ from pydantic import BaseModel, Field
 from app.models.adapters import (
     CanvasFeedback,
     ConversationMessage,
+    ExpectedStudentResponse,
     StudentModelResult,
+    TutorAction,
     VisionOCRResult,
 )
 from app.models.canvas import CanvasSubmissionRecord
@@ -18,6 +20,7 @@ from app.models.fields import (
     QuestionId,
     SessionId,
     StudentId,
+    TurnId,
 )
 
 
@@ -134,6 +137,10 @@ class SessionRecord(BaseModel):
     question_completed: bool = False
     answer_value_confirmed: bool = False
     conversation_history: list[ConversationMessage] = Field(default_factory=list)
+    last_processed_turn_id: TurnId | None = None
+    last_tutor_turn_id: TurnId | None = None
+    last_tutor_action: TutorAction = "ASKED_QUESTION"
+    expected_student_response: ExpectedStudentResponse = "ANSWER"
     scaffold_step_number: int = 0
     rescue_mode_active: bool = False
     mastery_check_question_count: int = 0

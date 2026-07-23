@@ -1,4 +1,5 @@
 import asyncio
+from itertools import count
 
 from fastapi.testclient import TestClient
 
@@ -21,6 +22,7 @@ from app.main import app
 from app.services import hint_service, interaction_service, session_service
 
 client = TestClient(app, headers={"Authorization": "Bearer test-token"})
+_turn_numbers = count(1)
 
 
 def _start_session(student_id: str, mode: str = "TEXT", **overrides) -> str:
@@ -37,6 +39,7 @@ def _start_session(student_id: str, mode: str = "TEXT", **overrides) -> str:
 
 
 def _interaction_body(session_id: str, student_id: str, **overrides) -> dict:
+    session = session_service._sessions.get(session_id)
     body = {
         "session_id": session_id,
         "student_id": student_id,
@@ -47,9 +50,26 @@ def _interaction_body(session_id: str, student_id: str, **overrides) -> dict:
         "concept_id": "ALG_LINEAR_ONE_STEP",
         "question_id": "ALG_EQ_DIAG_001",
         "hint_count": 0,
+        "turn_id": f"TURN-{next(_turn_numbers):04d}",
+        "previous_tutor_turn_id": (
+            session.last_tutor_turn_id if session is not None else None
+        ),
+        "transcript_final": True,
     }
     body.update(overrides)
     return body
+
+
+def _serve_second_diagnostic_question(monkeypatch) -> None:
+    async def get_second_question(
+        concept_id: str,
+        phase: str,
+        served_question_ids: list[str] | None,
+    ) -> tuple[str, str, str]:
+        del concept_id, phase, served_question_ids
+        return ("Solve for x: x + 4 = 9", "x = 5", "ALG_EQ_DIAG_002")
+
+    monkeypatch.setattr(interaction_service, "get_next_question", get_second_question)
 
 
 def test_interaction_returns_session_view() -> None:
@@ -150,8 +170,9 @@ def test_demo_interaction_recovers_phase_and_hint_count_after_cold_start() -> No
     assert body["hint_count"] == 2
 
 
-def test_interaction_voice_updates_transcript_confidence() -> None:
+def test_interaction_voice_updates_transcript_confidence(monkeypatch) -> None:
     session_id = _start_session("ST002", mode="VOICE")
+    _serve_second_diagnostic_question(monkeypatch)
 
     response = client.post(
         "/interaction",
@@ -169,8 +190,178 @@ def test_interaction_voice_updates_transcript_confidence() -> None:
     assert response.json()["voice_state"]["last_transcript_confidence"] == 0.78
 
 
-def test_interaction_voice_normalizes_spoken_correct_answer() -> None:
+def test_voice_turn_contract_rejects_missing_or_invalid_fields() -> None:
+    session_id = _start_session("ST042", mode="VOICE")
+    base = _interaction_body(
+        session_id,
+        "ST042",
+        input_source="VOICE",
+        text_input=None,
+        voice_transcript="x equals 6",
+        transcript_confidence=0.9,
+    )
+
+    missing_turn = dict(base)
+    missing_turn.pop("turn_id")
+    assert client.post("/interaction", json=missing_turn).status_code == 422
+
+    non_final = {**base, "transcript_final": False}
+    assert client.post("/interaction", json=non_final).status_code == 422
+
+    invalid_confidence = {**base, "transcript_confidence": 1.01}
+    assert client.post("/interaction", json=invalid_confidence).status_code == 422
+
+
+def test_voice_turn_returns_identifiers_and_conversation_fields() -> None:
+    session_id = _start_session("ST043", mode="VOICE")
+    request_body = _interaction_body(
+        session_id,
+        "ST043",
+        input_source="VOICE",
+        text_input=None,
+        voice_transcript="x equals 13",
+        transcript_confidence=0.9,
+    )
+
+    response = client.post("/interaction", json=request_body)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted_turn_id"] == request_body["turn_id"]
+    assert body["tutor_turn_id"].startswith("TUTOR-")
+    assert body["conversation_action"] == "ASK_QUESTION"
+    assert body["expects_student_response"] is True
+    assert body["expected_student_response"] == "ANSWER"
+    assert body["attempt_increment"] == 1
+
+
+def test_duplicate_voice_turn_replays_without_mutating_session(monkeypatch) -> None:
+    session_id = _start_session("ST044", mode="VOICE")
+    request_body = _interaction_body(
+        session_id,
+        "ST044",
+        input_source="VOICE",
+        text_input=None,
+        voice_transcript="x equals 13",
+        transcript_confidence=0.9,
+    )
+    first = client.post("/interaction", json=request_body)
+    assert first.status_code == 200
+    state_after_first = session_service._sessions[session_id]
+
+    def unexpected_adapters() -> None:
+        raise AssertionError("duplicate voice turn must not call adapters")
+
+    monkeypatch.setattr(interaction_service, "get_adapters", unexpected_adapters)
+
+    duplicate = client.post("/interaction", json=request_body)
+
+    assert duplicate.status_code == 200
+    body = duplicate.json()
+    assert body["status"] == "DUPLICATE_TURN"
+    assert body["accepted_turn_id"] == request_body["turn_id"]
+    assert body["tutor_turn_id"] == first.json()["tutor_turn_id"]
+    assert body["conversation_action"] == "WAIT_FOR_STUDENT"
+    assert body["attempt_increment"] == 0
+    assert body["retry_safe"] is True
+    assert session_service._sessions[session_id] == state_after_first
+
+
+def test_stale_voice_turn_returns_409_without_mutating_session() -> None:
+    session_id = _start_session("ST045", mode="VOICE")
+    first = client.post(
+        "/interaction",
+        json=_interaction_body(
+            session_id,
+            "ST045",
+            input_source="VOICE",
+            text_input=None,
+            voice_transcript="x equals 13",
+            transcript_confidence=0.9,
+        ),
+    )
+    assert first.status_code == 200
+    state_after_first = session_service._sessions[session_id]
+
+    stale = client.post(
+        "/interaction",
+        json=_interaction_body(
+            session_id,
+            "ST045",
+            input_source="VOICE",
+            text_input=None,
+            voice_transcript="x equals 12",
+            transcript_confidence=0.9,
+            previous_tutor_turn_id=None,
+        ),
+    )
+
+    assert stale.status_code == 409
+    assert stale.json() == {
+        "status": "STALE_TURN",
+        "accepted_turn_id": None,
+        "expected_previous_tutor_turn_id": first.json()["tutor_turn_id"],
+        "conversation_action": "WAIT_FOR_STUDENT",
+        "attempt_increment": 0,
+        "retry_safe": False,
+        "message": (
+            "The conversation has moved forward. Please use the latest tutor response."
+        ),
+    }
+    assert session_service._sessions[session_id] == state_after_first
+
+    stale_question = client.post(
+        "/interaction",
+        json=_interaction_body(
+            session_id,
+            "ST045",
+            input_source="VOICE",
+            text_input=None,
+            voice_transcript="x equals 12",
+            transcript_confidence=0.9,
+            question_id="ALG_EQ_DIAG_999",
+        ),
+    )
+    assert stale_question.status_code == 409
+    assert stale_question.json()["status"] == "STALE_TURN"
+    assert session_service._sessions[session_id] == state_after_first
+
+
+def test_low_confidence_voice_turn_requests_clarification_without_attempt(
+    monkeypatch,
+) -> None:
+    session_id = _start_session("ST046", mode="VOICE")
+
+    def unexpected_adapters() -> None:
+        raise AssertionError("low-confidence voice must not call adapters")
+
+    monkeypatch.setattr(interaction_service, "get_adapters", unexpected_adapters)
+    request_body = _interaction_body(
+        session_id,
+        "ST046",
+        input_source="VOICE",
+        text_input=None,
+        voice_transcript="Was that five?",
+        transcript_confidence=0.4,
+    )
+
+    response = client.post("/interaction", json=request_body)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "CLARIFICATION_REQUIRED"
+    assert body["accepted_turn_id"] == request_body["turn_id"]
+    assert body["tutor_turn_id"].startswith("TUTOR-")
+    assert body["conversation_action"] == "REQUEST_CLARIFICATION"
+    assert body["expected_student_response"] == "CLARIFICATION"
+    assert body["attempt_increment"] == 0
+    assert body["attempt_count"] == 0
+    assert session_service._sessions[session_id].per_question_history == []
+
+
+def test_interaction_voice_normalizes_spoken_correct_answer(monkeypatch) -> None:
     session_id = _start_session("ST014", mode="VOICE")
+    _serve_second_diagnostic_question(monkeypatch)
 
     response = client.post(
         "/interaction",
@@ -192,8 +383,13 @@ def test_interaction_voice_normalizes_spoken_correct_answer() -> None:
     assert body["question_completed"] is False
 
 
-def test_interaction_voice_normalizes_equal_to_variant() -> None:
+def test_interaction_voice_normalizes_equal_to_variant(monkeypatch) -> None:
     session_id = _start_session("ST020", mode="VOICE")
+    _serve_second_diagnostic_question(monkeypatch)
+    session = session_service._sessions[session_id]
+    session_service._sessions[session_id] = session.model_copy(
+        update={"hint_count": 2}
+    )
 
     response = client.post(
         "/interaction",
@@ -214,21 +410,20 @@ def test_interaction_voice_normalizes_equal_to_variant() -> None:
     assert body["attempt_count"] == 1
 
 
-def test_acknowledgement_after_correct_answer_does_not_restart_question() -> None:
+def test_acknowledgement_after_correct_answer_does_not_restart_question(
+    monkeypatch,
+) -> None:
     session_id = _start_session("ST021", mode="VOICE")
-    correct_response = client.post(
-        "/interaction",
-        json=_interaction_body(
-            session_id,
-            "ST021",
-            input_source="VOICE",
-            text_input=None,
-            voice_transcript="I subtracted four from both sides, so x equals five",
-            transcript_confidence=0.94,
-        ),
+    _serve_second_diagnostic_question(monkeypatch)
+    session = session_service._sessions[session_id]
+    session_service._sessions[session_id] = session.model_copy(
+        update={
+            "question_completed": True,
+            "attempt_count": 1,
+            "last_tutor_action": "CONFIRMED_CORRECT_ANSWER",
+            "expected_student_response": "ACKNOWLEDGEMENT_OR_CONTINUE",
+        }
     )
-    assert correct_response.status_code == 200
-    assert correct_response.json()["question_completed"] is True
 
     acknowledgement_response = client.post(
         "/interaction",
@@ -244,27 +439,25 @@ def test_acknowledgement_after_correct_answer_does_not_restart_question() -> Non
 
     assert acknowledgement_response.status_code == 200
     body = acknowledgement_response.json()
-    assert body["message"] == (
-        "You are welcome. This question is complete, so let us continue to the next question."
-    )
-    assert body["question_completed"] is True
-    assert body["attempt_count"] == 1
+    assert body["message"] == "Exactly. Let us move to the next question."
+    assert body["conversation_action"] == "ADVANCE_TO_NEXT_QUESTION"
+    assert body["question_completed"] is False
+    assert body["attempt_count"] == 0
+    assert body["expected_student_response"] == "ANSWER"
 
 
-def test_right_after_correct_answer_is_not_treated_as_deviation() -> None:
+def test_right_after_correct_answer_is_not_treated_as_deviation(monkeypatch) -> None:
     session_id = _start_session("ST023", mode="VOICE")
-    correct_response = client.post(
-        "/interaction",
-        json=_interaction_body(
-            session_id,
-            "ST023",
-            input_source="VOICE",
-            text_input=None,
-            voice_transcript="I subtracted four from both sides, so x equals five",
-            transcript_confidence=0.94,
-        ),
+    _serve_second_diagnostic_question(monkeypatch)
+    session = session_service._sessions[session_id]
+    session_service._sessions[session_id] = session.model_copy(
+        update={
+            "question_completed": True,
+            "attempt_count": 1,
+            "last_tutor_action": "CONFIRMED_CORRECT_ANSWER",
+            "expected_student_response": "ACKNOWLEDGEMENT_OR_CONTINUE",
+        }
     )
-    assert correct_response.status_code == 200
 
     acknowledgement_response = client.post(
         "/interaction",
@@ -280,13 +473,13 @@ def test_right_after_correct_answer_is_not_treated_as_deviation() -> None:
 
     assert acknowledgement_response.status_code == 200
     body = acknowledgement_response.json()
-    assert body["question_completed"] is True
-    assert body["attempt_count"] == 1
+    assert body["question_completed"] is False
+    assert body["attempt_count"] == 0
     assert "next question" in body["message"].lower()
 
 
-def test_orchestration_progress_restores_completed_question_after_cold_start() -> None:
-    session_id = _start_session("ST001", mode="VOICE")
+def test_client_progress_fields_do_not_override_server_state_after_cold_start() -> None:
+    session_id = _start_session("ST001", mode="TEXT")
     session_service._sessions.pop(session_id)
 
     response = client.post(
@@ -294,10 +487,7 @@ def test_orchestration_progress_restores_completed_question_after_cold_start() -
         json=_interaction_body(
             session_id,
             "ST001",
-            input_source="VOICE",
-            text_input=None,
-            voice_transcript="okay",
-            transcript_confidence=0.94,
+            text_input="x = 13",
             attempt_count=2,
             question_completed=True,
             conversation_history=[
@@ -309,9 +499,9 @@ def test_orchestration_progress_restores_completed_question_after_cold_start() -
 
     assert response.status_code == 200
     body = response.json()
-    assert body["question_completed"] is True
-    assert body["attempt_count"] == 2
-    assert "next question" in body["message"].lower()
+    assert body["question_completed"] is False
+    assert body["attempt_count"] == 1
+    assert session_service._sessions[session_id].conversation_history[0].content == "x = 13"
 
 
 def test_repeated_attempts_receive_progressively_different_explanations() -> None:
@@ -340,7 +530,8 @@ def test_repeated_attempts_receive_progressively_different_explanations() -> Non
     assert len(session_service._sessions[session_id].conversation_history) == 4
 
 
-def test_interaction_voice_accepts_answer_intro_phrases() -> None:
+def test_interaction_voice_accepts_answer_intro_phrases(monkeypatch) -> None:
+    _serve_second_diagnostic_question(monkeypatch)
     cases = [
         "I think the answer is five",
         "It might be five",
@@ -466,6 +657,7 @@ class _FakeTutorAdapter:
                 )
             ],
             attempt_increment=1,
+            recommended_conversation_action="WAIT_FOR_STUDENT",
             question_completed=self.evaluation == "CORRECT",
             answer_value_confirmed=self.evaluation == "CORRECT",
             reasoning_complete=self.evaluation == "CORRECT",
@@ -504,6 +696,51 @@ def _fake_pipeline(
     )
     monkeypatch.setattr(interaction_service, "get_adapters", lambda: adapters)
     return student_model
+
+
+def test_interaction_builds_ai_context_from_server_state(monkeypatch) -> None:
+    session_id = _start_session("ST047")
+    session = session_service._sessions[session_id]
+    session_service._sessions[session_id] = session.model_copy(
+        update={
+            "conversation_history": [
+                {
+                    "role": "assistant",
+                    "content": "What operation should we use next?",
+                }
+            ],
+            "last_tutor_action": "REQUESTED_EXPLANATION",
+            "expected_student_response": "EXPLANATION",
+        }
+    )
+    tutor = _FakeTutorAdapter(next_phase_recommendation=None)
+    adapters = _FakeAdapters(_FakeStudentModelAdapter(), tutor)
+    monkeypatch.setattr(interaction_service, "get_adapters", lambda: adapters)
+
+    response = client.post(
+        "/interaction",
+        json=_interaction_body(
+            session_id,
+            "ST047",
+            current_phase="REVIEW",
+            concept_id="CLIENT_CONCEPT",
+            hint_count=3,
+            text_input="We subtract four.",
+        ),
+    )
+
+    assert response.status_code == 200
+    context = tutor.contexts[-1]
+    assert context.current_phase == session.current_phase
+    assert context.question == session.current_question
+    assert context.correct_answer == session.correct_answer
+    assert context.concept_id == session.concept_id
+    assert context.current_hint_level is None
+    assert context.attempt_count == 1
+    assert context.conversation_history[0].content == "What operation should we use next?"
+    assert context.conversation_state is not None
+    assert context.conversation_state.last_tutor_action == "REQUESTED_EXPLANATION"
+    assert context.conversation_state.expected_student_response == "EXPLANATION"
 
 
 def test_interaction_keeps_student_model_authoritative_for_phase(monkeypatch) -> None:
@@ -605,6 +842,10 @@ def test_interaction_forwards_event_and_uses_student_model_phase(monkeypatch) ->
 def test_transition_normal_advance(monkeypatch) -> None:
     # Spec case: Tamil recommends a valid next phase -> full transition response.
     session_id = _start_session("ST020")
+    session = session_service._sessions[session_id]
+    session_service._sessions[session_id] = session.model_copy(
+        update={"hint_count": 2}
+    )
     _fake_pipeline(monkeypatch, student_phase="GUIDED_PRACTICE")
 
     response = client.post("/interaction", json=_interaction_body(session_id, "ST020"))
@@ -622,6 +863,7 @@ def test_transition_normal_advance(monkeypatch) -> None:
     assert body["current_question"] == "Solve for x: x + 6 = 10"
     assert body["show_hint_button"] is True
     assert body["attempt_count"] == 0
+    assert body["hint_count"] == 0
 
 
 def test_transition_not_fired_when_phase_matches(monkeypatch) -> None:

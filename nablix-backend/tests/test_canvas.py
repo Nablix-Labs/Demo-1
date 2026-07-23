@@ -408,6 +408,7 @@ def test_canvas_correct_same_phase_routes_next_question(
             confidence=0.95,
             input_source="CANVAS",
             attempt_increment=1,
+            recommended_conversation_action="ADVANCE_TO_NEXT_QUESTION",
             question_completed=True,
             answer_value_confirmed=True,
             reasoning_complete=True,

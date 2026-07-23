@@ -1,6 +1,13 @@
-from pydantic import BaseModel, Field
+from typing import Literal
 
-from app.models.adapters import ConversationMessage, VisualCue
+from pydantic import BaseModel, Field, model_validator
+
+from app.models.adapters import (
+    ConversationAction,
+    ConversationMessage,
+    ExpectedStudentResponse,
+    VisualCue,
+)
 from app.models.fields import (
     BoundedText,
     ConceptId,
@@ -11,6 +18,7 @@ from app.models.fields import (
     QuestionId,
     SessionId,
     StudentId,
+    TurnId,
 )
 from app.models.session import CanvasState, SessionSummary, VoiceState
 
@@ -24,7 +32,10 @@ class InteractionRequest(BaseModel):
     input_source: InputSource
     text_input: BoundedText | None = None
     voice_transcript: str | None = None
-    transcript_confidence: float | None = None
+    transcript_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    turn_id: TurnId | None = None
+    previous_tutor_turn_id: TurnId | None = None
+    transcript_final: bool | None = None
     canvas_snapshot_id: str | None = None
     current_phase: Phase
     concept_id: ConceptId
@@ -35,12 +46,34 @@ class InteractionRequest(BaseModel):
     conversation_history: list[ConversationMessage] = Field(default_factory=list)
     timestamp: str | None = None
 
+    @model_validator(mode="after")
+    def validate_voice_turn(self) -> "InteractionRequest":
+        if self.input_source != "VOICE":
+            return self
+        if self.turn_id is None:
+            raise ValueError("turn_id is required for VOICE interactions.")
+        if self.transcript_final is not True:
+            raise ValueError("transcript_final must be true for VOICE interactions.")
+        return self
+
 
 class InteractionResponse(BaseModel):
     """Unified frontend session view returned after a student interaction."""
 
     session_id: str
     student_id: str
+    status: Literal[
+        "DUPLICATE_TURN",
+        "CLARIFICATION_REQUIRED",
+    ] | None = None
+    accepted_turn_id: TurnId | None = None
+    tutor_turn_id: TurnId | None = None
+    conversation_action: ConversationAction
+    expects_student_response: bool
+    expected_student_response: ExpectedStudentResponse
+    retry_safe: bool | None = None
+    expected_previous_tutor_turn_id: TurnId | None = None
+    attempt_increment: int = Field(ge=0, le=1)
     phase_changed: bool = False
     previous_phase: Phase | None = None
     phase_transition_message: str | None = None
@@ -69,3 +102,13 @@ class InteractionResponse(BaseModel):
     phase_indicator: Phase
     recommended_entry_phase: str | None
     session_summary: SessionSummary | None
+
+
+class StaleTurnResponse(BaseModel):
+    status: Literal["STALE_TURN"]
+    accepted_turn_id: None
+    expected_previous_tutor_turn_id: TurnId | None
+    conversation_action: Literal["WAIT_FOR_STUDENT"]
+    attempt_increment: Literal[0]
+    retry_safe: Literal[False]
+    message: str
