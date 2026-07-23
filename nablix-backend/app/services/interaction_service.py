@@ -143,6 +143,11 @@ def _conversation_state_from_session(session: SessionRecord) -> ConversationStat
             last_tutor_action="CONFIRMED_CORRECT_ANSWER",
             expected_student_response="ACKNOWLEDGEMENT_OR_CONTINUE",
         )
+    if session.answer_value_confirmed:
+        return ConversationState(
+            last_tutor_action="REQUESTED_EXPLANATION",
+            expected_student_response="EXPLANATION",
+        )
     return ConversationState(
         last_tutor_action="ASKED_QUESTION",
         expected_student_response="ANSWER",
@@ -240,6 +245,7 @@ def _response_from(
         hint_count=session.hint_count,
         attempt_count=session.attempt_count,
         question_completed=session.question_completed,
+        answer_value_confirmed=session.answer_value_confirmed,
         phase_indicator=session.current_phase,
         recommended_entry_phase=session.recommended_entry_phase,
         session_summary=session_summary,
@@ -318,7 +324,10 @@ async def process_interaction(
 
     next_attempt_count = (
         session.attempt_count + 1
-        if request.interaction_type == "ANSWER_SUBMISSION"
+        if (
+            request.interaction_type == "ANSWER_SUBMISSION"
+            and not session.answer_value_confirmed
+        )
         else session.attempt_count
     )
     context = AdapterContext(
@@ -335,6 +344,7 @@ async def process_interaction(
         attempt_count=next_attempt_count,
         independent_correct_in_session=_independent_correct_in_session(session),
         question_completed=session.question_completed,
+        answer_value_confirmed=session.answer_value_confirmed,
         question_number=session.question_number,
         current_hint_level=_current_hint_level_from(request.hint_count),
         concept_id=request.concept_id,
@@ -400,7 +410,7 @@ async def process_interaction(
         rules.conversation_rules.max_recent_messages,
     )
 
-    completed = tutor.evaluation == "CORRECT"
+    completed = tutor.question_completed
     # Chirudeva 6.7: Saravanan's recommendation is the only phase authority;
     # resolve_transition guards against invalid or unrecognised moves.
     recommended: str | None = student.recommended_entry_phase
@@ -417,11 +427,17 @@ async def process_interaction(
     )
 
     next_hint_count: int = _next_hint_count_from(request)
+    persisted_attempt_count: int = (
+        session.attempt_count + tutor.attempt_increment
+        if request.interaction_type == "ANSWER_SUBMISSION"
+        else session.attempt_count
+    )
     # Persisted every turn: the real attempt counter and completion state Sanya
     # reads back on the next turn.
     state_updates: dict[str, object] = {
-        "attempt_count": next_attempt_count,
+        "attempt_count": persisted_attempt_count,
         "question_completed": completed,
+        "answer_value_confirmed": tutor.answer_value_confirmed,
         "conversation_history": conversation_history,
         "recommended_entry_phase": recommended,
         "last_student_model": student,
@@ -461,6 +477,8 @@ async def process_interaction(
                 "question_number": session.question_number + 1,
                 "attempt_count": 0,
                 "question_completed": False,
+                "answer_value_confirmed": False,
+                "conversation_history": [],
                 "phase_transitions": [
                     *session.phase_transitions,
                     PhaseTransitionRecord(
@@ -479,6 +497,8 @@ async def process_interaction(
         # swaps the question.
         advance = await next_question_updates(session, session.current_phase)
         if advance is not None:
+            advance["answer_value_confirmed"] = False
+            advance["conversation_history"] = []
             state_updates.update(advance)
 
     next_phase = new_phase if new_phase is not None else session.current_phase

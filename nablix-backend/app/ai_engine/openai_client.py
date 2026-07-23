@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from time import perf_counter
 
 import httpx
-from pydantic import Field, ValidationError
+from pydantic import Field, StrictBool, ValidationError
 
 from app.ai_engine.prompt_registry import (
     OpenAITutorPromptMetadata,
@@ -41,6 +41,7 @@ class OpenAITutorTurn(StrictSchema):
     hint_level: HintLevel | None
     tutor_message: str
     tutor_message_voice_optimised: str
+    reasoning_complete: StrictBool
     confidence: float = Field(ge=0.0, le=1.0)
 
 
@@ -85,6 +86,8 @@ class OpenAIAIEngineClient:
         attempt_count: int,
         current_hint_level: HintLevel | None,
         question_completed: bool,
+        answer_value_confirmed: bool,
+        reasoning_required: bool,
         grounded_intent: IntentType,
         grounded_evaluation: EvaluationCategory | None,
         grounded_error_type: ErrorType | None,
@@ -107,6 +110,8 @@ class OpenAIAIEngineClient:
                 "attempt_count": attempt_count,
                 "current_hint_level": current_hint_level,
                 "question_completed": question_completed,
+                "answer_value_confirmed": answer_value_confirmed,
+                "reasoning_required": reasoning_required,
                 "grounded_intent": grounded_intent,
                 "grounded_evaluation": grounded_evaluation,
                 "grounded_error_type": grounded_error_type,

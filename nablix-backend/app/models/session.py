@@ -132,6 +132,7 @@ class SessionRecord(BaseModel):
     hint_count: int
     attempt_count: int = 0
     question_completed: bool = False
+    answer_value_confirmed: bool = False
     conversation_history: list[ConversationMessage] = Field(default_factory=list)
     scaffold_step_number: int = 0
     rescue_mode_active: bool = False

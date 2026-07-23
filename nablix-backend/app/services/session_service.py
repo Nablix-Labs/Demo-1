@@ -506,6 +506,7 @@ async def record_canvas_submission(
             "canvas_submissions": [*session.canvas_submissions, record],
             "attempt_count": attempt_count,
             "question_completed": question_completed,
+            "answer_value_confirmed": record.tutor.answer_value_confirmed,
             "conversation_history": conversation_history,
             "per_question_history": per_question_history,
             "recommended_entry_phase": recommended_entry_phase,

@@ -407,6 +407,10 @@ def test_canvas_correct_same_phase_routes_next_question(
             answer_reveal_allowed=False,
             confidence=0.95,
             input_source="CANVAS",
+            attempt_increment=1,
+            question_completed=True,
+            answer_value_confirmed=True,
+            reasoning_complete=True,
         )
         return RAGResult(documents=[], retrieval_confidence=0.0), student, tutor
 

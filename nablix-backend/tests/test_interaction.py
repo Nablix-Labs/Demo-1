@@ -186,8 +186,10 @@ def test_interaction_voice_normalizes_spoken_correct_answer() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["message"] == "Correct. Nice work explaining your answer."
-    assert body["message_voice"] == "Correct. Nice work explaining your answer."
+    assert body["message"] == "Your value is correct. How did you work it out?"
+    assert body["message_voice"] == "Your value is correct. How did you work it out?"
+    assert body["answer_value_confirmed"] is True
+    assert body["question_completed"] is False
 
 
 def test_interaction_voice_normalizes_equal_to_variant() -> None:
@@ -207,8 +209,8 @@ def test_interaction_voice_normalizes_equal_to_variant() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["message"] == "Correct. Nice work explaining your answer."
-    assert body["question_completed"] is True
+    assert body["message"] == "Your value is correct. How did you work it out?"
+    assert body["question_completed"] is False
     assert body["attempt_count"] == 1
 
 
@@ -221,7 +223,7 @@ def test_acknowledgement_after_correct_answer_does_not_restart_question() -> Non
             "ST021",
             input_source="VOICE",
             text_input=None,
-            voice_transcript="x equals five",
+            voice_transcript="I subtracted four from both sides, so x equals five",
             transcript_confidence=0.94,
         ),
     )
@@ -258,7 +260,7 @@ def test_right_after_correct_answer_is_not_treated_as_deviation() -> None:
             "ST023",
             input_source="VOICE",
             text_input=None,
-            voice_transcript="x equals five",
+            voice_transcript="I subtracted four from both sides, so x equals five",
             transcript_confidence=0.94,
         ),
     )
@@ -361,8 +363,9 @@ def test_interaction_voice_accepts_answer_intro_phrases() -> None:
 
         assert response.status_code == 200
         body = response.json()
-        assert body["message"] == "Correct. Nice work explaining your answer."
-        assert body["message_voice"] == "Correct. Nice work explaining your answer."
+        assert body["message"] == "Your value is correct. How did you work it out?"
+        assert body["message_voice"] == "Your value is correct. How did you work it out?"
+        assert body["question_completed"] is False
 
 
 def test_interaction_safety_failure_short_circuits_pipeline() -> None:
@@ -462,6 +465,10 @@ class _FakeTutorAdapter:
                     independent_success=False,
                 )
             ],
+            attempt_increment=1,
+            question_completed=self.evaluation == "CORRECT",
+            answer_value_confirmed=self.evaluation == "CORRECT",
+            reasoning_complete=self.evaluation == "CORRECT",
         )
 
 
@@ -574,7 +581,7 @@ def test_interaction_forwards_event_and_uses_student_model_phase(monkeypatch) ->
             session_id,
             "ST040",
             current_phase="DIAGNOSTIC",
-            text_input="x = 5",
+            text_input="I subtracted 4 from both sides, so x = 5",
         ),
     )
 
