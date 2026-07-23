@@ -55,6 +55,12 @@ class StudentModelServiceAdapter:
                 "student_model",
                 "concept_id is required for Student Model updates",
             )
+        source_turn_id: str | None = context.source_turn_id
+        if source_turn_id is None:
+            raise AdapterError(
+                "student_model",
+                "source_turn_id is required for Student Model updates",
+            )
         topic_id = self._settings.student_model_topic_ids.get(concept_id)
         if topic_id is None:
             raise AdapterError(
@@ -66,6 +72,8 @@ class StudentModelServiceAdapter:
         # phase; gating it to Independent Practice starves Saravanan's guided
         # advancement rule.
         payload: JsonObject = {
+            "event_id": f"{context.session_id}:{source_turn_id}:{event.event_type}",
+            "source_turn_id": source_turn_id,
             "topic_id": topic_id,
             "event_type": event.event_type,
             "evaluation": event.evaluation,
