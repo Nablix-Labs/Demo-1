@@ -333,8 +333,12 @@ def build_openai_tutor_decision(
         hint_level=hint_level,
         canvas_review=None,
         reasoning_complete=(
-            openai_turn.reasoning_complete
-            and has_reasoning_evidence(request, rules)
+            has_reasoning_evidence(request, rules)
+            and (
+                deterministic_evaluation == "CORRECT"
+                or request.answer_value_confirmed
+                or openai_turn.reasoning_complete
+            )
         ),
     )
 
@@ -684,7 +688,12 @@ def build_tutor_response(
     voice_message: str = voice_message_override if voice_message_override is not None else tutor_message
     if explanation_required:
         tutor_message = (
-            rules.reasoning_completion.explanation_incomplete_message
+            rules.reasoning_completion.explanation_reason_message
+            if (
+                request.answer_value_confirmed
+                and has_operation_evidence(request, rules)
+            )
+            else rules.reasoning_completion.explanation_incomplete_message
             if request.answer_value_confirmed
             else rules.reasoning_completion.explanation_required_message
         )
@@ -1089,6 +1098,16 @@ def has_reasoning_evidence(
     ):
         return True
     return normalized_input.count("=") >= 2
+
+
+def has_operation_evidence(
+    request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
+) -> bool:
+    return contains_any(
+        normalize_text(request.student_input),
+        rules.reasoning_completion.operation_terms,
+    )
 
 
 def contains_any(value: str, phrases: Sequence[str]) -> bool:

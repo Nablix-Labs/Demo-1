@@ -99,10 +99,12 @@ class ConversationRulesConfig(StrictSchema):
 class ReasoningCompletionConfig(StrictSchema):
     required_phases: list[LearningPhase]
     explanation_terms: list[str]
+    operation_terms: list[str]
     minimum_explanation_words: int = Field(ge=2)
     minimum_canvas_steps: int = Field(ge=2)
     explanation_required_message: str
     explanation_incomplete_message: str
+    explanation_reason_message: str
     explanation_accepted_message: str
 
 

@@ -690,6 +690,63 @@ def test_follow_up_reasoning_completes_previously_confirmed_answer() -> None:
     assert response.tutor_message == "Thanks for explaining your method. Let us continue."
 
 
+def test_valid_worked_steps_override_incorrect_openai_reasoning_flag(monkeypatch) -> None:
+    class _OpenAIClient:
+        def generate_tutor_turn(self, **kwargs) -> openai_client.OpenAITutorTurn:
+            return openai_client.OpenAITutorTurn(
+                intent="SUBMITTING_ANSWER",
+                evaluation="CORRECT",
+                error_type=None,
+                response_strategy="CONFIRM_CORRECT",
+                hint_level=None,
+                tutor_message="Thanks for showing your steps.",
+                tutor_message_voice_optimised="Thanks for showing your steps.",
+                reasoning_complete=False,
+                confidence=0.95,
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _OpenAIClient(),
+    )
+
+    response = classify_student_response(
+        ClassificationRequest(
+            question="Solve for x: x + 6 = 10",
+            correct_answer="x = 4",
+            student_input="x + 6 - 6 = 10 - 6, so x = 4",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.reasoning_complete is True
+    assert response.question_completed is True
+
+
+def test_partial_operation_explanation_receives_a_new_question() -> None:
+    response = classify_student_response(
+        ClassificationRequest(
+            question="Solve for x: x + 6 = 10",
+            correct_answer="x = 4",
+            student_input="I used subtraction.",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+            answer_value_confirmed=True,
+        )
+    )
+
+    assert response.question_completed is False
+    assert response.tutor_message == "Why was that operation the right one for this equation?"
+
+
 def test_contextual_acknowledgement_does_not_evaluate_or_emit_event(monkeypatch) -> None:
     class _UnexpectedOpenAIClient:
         def generate_tutor_turn(self, **kwargs) -> openai_client.OpenAITutorTurn:
