@@ -199,6 +199,10 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
         )
 
     decision = build_openai_tutor_decision(request, rules, intent, evaluation, openai_turn)
+    openai_message_is_consistent: bool = (
+        openai_turn.intent == decision.intent
+        and openai_turn.evaluation == decision.evaluation
+    )
     return build_tutor_response(
         request=request,
         rules=rules,
@@ -206,8 +210,16 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
         decision=decision,
         answer_reveal_allowed=False,
         confidence=openai_turn.confidence,
-        tutor_message_override=openai_turn.tutor_message,
-        voice_message_override=openai_turn.tutor_message_voice_optimised,
+        tutor_message_override=(
+            openai_turn.tutor_message
+            if openai_message_is_consistent
+            else None
+        ),
+        voice_message_override=(
+            openai_turn.tutor_message_voice_optimised
+            if openai_message_is_consistent
+            else None
+        ),
     )
 
 
@@ -285,14 +297,18 @@ def build_openai_tutor_decision(
     deterministic_evaluation: EvaluationCategory | None,
     openai_turn: OpenAITutorTurn,
 ) -> TutorDecision:
+    deterministic_decision_required: bool = (
+        deterministic_intent != "SUBMITTING_ANSWER"
+        or deterministic_evaluation == "CORRECT"
+    )
     intent = (
         deterministic_intent
-        if deterministic_evaluation == "CORRECT"
+        if deterministic_decision_required
         else openai_turn.intent
     )
     evaluation = (
-        "CORRECT"
-        if deterministic_evaluation == "CORRECT"
+        deterministic_evaluation
+        if deterministic_decision_required
         else openai_turn.evaluation
     )
     error_type: ErrorType | None = openai_turn.error_type

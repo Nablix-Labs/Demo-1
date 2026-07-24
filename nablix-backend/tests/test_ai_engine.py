@@ -189,6 +189,55 @@ def test_ai_engine_can_use_openai_when_feature_flag_is_enabled(monkeypatch) -> N
     assert user_payload["answer_reveal_allowed"] is False
 
 
+def test_openai_cannot_override_confusion_with_a_correct_answer(monkeypatch) -> None:
+    class _ContradictoryOpenAIClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self) -> "_ContradictoryOpenAIClient":
+            return self
+
+        def __exit__(self, *exc) -> bool:
+            return False
+
+        def post(self, *args, **kwargs) -> _FakeOpenAIResponse:
+            return _FakeOpenAIResponse(
+                '{"intent":"SUBMITTING_ANSWER","evaluation":"CORRECT",'
+                '"error_type":null,"response_strategy":"CONFIRM_CORRECT",'
+                '"hint_level":null,'
+                '"tutor_message":"Correct. Nice work explaining your answer.",'
+                '"tutor_message_voice_optimised":"Correct. Nice work explaining your answer.",'
+                '"reasoning_complete":true,"confidence":0.98}'
+            )
+
+    monkeypatch.setenv("NABLIX_USE_OPENAI_AI_ENGINE", "true")
+    monkeypatch.setenv("NABLIX_OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(openai_client.httpx, "Client", _ContradictoryOpenAIClient)
+    get_settings.cache_clear()
+
+    response = client.post(
+        "/ai-engine/classify",
+        json={
+            "question_context": "5x = 20",
+            "expected_answer": "x = 4",
+            "student_input": "I don't understand can you come again",
+            "phase": "GUIDED_PRACTICE",
+            "input_source": "TEXT",
+            "attempt_count": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == "EXPRESSING_CONFUSION"
+    assert body["evaluation"] == "NO_ATTEMPT"
+    assert body["error_type"] is None
+    assert body["response_strategy"] == "CLARIFY"
+    assert body["tutor_message"] == (
+        "That is okay. Let us slow down and look at what operation is being applied to x."
+    )
+
+
 def test_canvas_math_decision_uses_openai_wording_without_exposing_answer(monkeypatch) -> None:
     request_bodies: list[dict[str, object]] = []
 
