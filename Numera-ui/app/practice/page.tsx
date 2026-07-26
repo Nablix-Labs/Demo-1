@@ -16,6 +16,7 @@ import { useDemoTutor } from '@/hooks/useDemoTutor';
 import { useVoiceTurn } from '@/hooks/useVoiceTurn';
 import { DEMO_CONCEPT_ID, DEMO_PHASE } from '@/lib/api';
 import { demoFor } from '@/lib/demoContent';
+import { isBareEquation } from '@/lib/questionText';
 import PhaseGate from '@/components/PhaseGate';
 import Toolbar from '@/components/Canvas/Toolbar';
 import { cn } from '@/lib/cn';
@@ -152,11 +153,19 @@ export default function PracticePage() {
     <div className="flex-1 min-w-0 flex flex-col bg-white" aria-label="Independent practice">
       {/* Header */}
       <header className="flex items-center gap-4 px-6 py-3.5 border-b border-muted-gray flex-shrink-0">
-        <div>
+        <div className="min-w-0">
           <div className="text-[10px] tracking-widest uppercase text-slate-blue">Independent practice</div>
-          <div className="text-[16px] font-semibold text-ink font-[Cambria_Math,Georgia,serif]">
-            {QUESTION ? `Solve ${QUESTION}` : 'Loading question…'}
-          </div>
+          {/* A bare equation reads as "Solve <eq>" in maths type; a word problem is
+              shown as sent and allowed to wrap (see lib/questionText.ts). */}
+          {!QUESTION ? (
+            <div className="text-[16px] font-semibold text-ink">Loading question…</div>
+          ) : isBareEquation(QUESTION) ? (
+            <div className="text-[16px] font-semibold text-ink font-[Cambria_Math,Georgia,serif]">
+              Solve {QUESTION}
+            </div>
+          ) : (
+            <p className="text-[14px] font-semibold text-ink leading-snug max-w-[70ch]">{QUESTION}</p>
+          )}
         </div>
         <div className="ml-auto flex items-center gap-2">
           {/* AI mode indicator */}

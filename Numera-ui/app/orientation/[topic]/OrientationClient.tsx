@@ -10,23 +10,35 @@
  *   loading → skeleton shimmer while metadata loads
  *   empty   → topic has no orientation content yet
  *   error   → load failed, with retry  (force via ?fail=1)
- * Finishing marks the orientation phase complete and continues to the workbook.
+ *
+ * The phase has TWO steps (Manjusha, 2026-07-26). Once the content is finished —
+ * for a video, the moment playback ends — the tutor poses one concept question
+ * and works it through on the canvas, still inside Phase 1. **Only the tutor
+ * writes here**: the student watches, then explains it back in Teacher Mode
+ * next. (Phase 2 lets both write; Phase 3 is the student alone.)
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { notFound } from 'next/navigation';
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import {
   ChevronLeft, Compass, Play, Pause, RotateCw, ArrowRight, Check, Film,
-  Image as ImageIcon, Sparkles, AlertTriangle,
+  Image as ImageIcon, Sparkles, AlertTriangle, PenLine,
 } from 'lucide-react';
 import { getTopic } from '@/lib/curriculum';
 import { useFlowNav } from '@/lib/useFlowNav';
-import { orientationFor, type OrientationMedia } from '@/lib/demoContent';
+import { orientationFor, orientationCheckFor, type OrientationMedia } from '@/lib/demoContent';
+import { useNumeraStore } from '@/store/useNumeraStore';
 import { Skeleton } from '@/components/PageShell';
 import ConceptArt from '@/components/ConceptArt';
 
+// react-konva is client-only (no SSR), same as everywhere else the canvas mounts.
+const DrawingCanvas = dynamic(() => import('@/components/Canvas/DrawingCanvas'), { ssr: false });
+
 type Status = 'loading' | 'ready' | 'empty' | 'error';
+/** Phase 1 runs content → concept check (tutor writes) → on to Teacher Mode. */
+type Step = 'content' | 'check';
 
 /** Mock metadata fetch — resolves to the topic's media, or fails on ?fail=1. */
 function fetchOrientation(topicId: string): Promise<OrientationMedia | null> {
@@ -53,7 +65,14 @@ export default function OrientationClient({ topicId }: { topicId: string }) {
   const [media, setMedia] = useState<OrientationMedia | null>(null);
   const [playing, setPlaying] = useState(false);
   const [progress, setProgress] = useState(0); // 0–100, simulated video playback
+  const [step, setStep] = useState<Step>('content');
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // The concept check that follows the content, and the tutor-layer actions that
+  // put the tutor's working on its canvas.
+  const check = orientationCheckFor(topicId);
+  const applyCanvasDraw = useNumeraStore((s) => s.applyCanvasDraw);
+  const clearTutorMarks = useNumeraStore((s) => s.clearTutorMarks);
 
   if (!topic) notFound();
 
@@ -61,6 +80,7 @@ export default function OrientationClient({ topicId }: { topicId: string }) {
     setStatus('loading');
     setPlaying(false);
     setProgress(0);
+    setStep('content');
     fetchOrientation(topicId)
       .then((m) => {
         setMedia(m);
@@ -82,6 +102,32 @@ export default function OrientationClient({ topicId }: { topicId: string }) {
     }, 120);
     return () => { if (timer.current) clearInterval(timer.current); };
   }, [playing]);
+
+  // "Once the video is over we display the canvas in the same phase" — as soon as
+  // playback ends, move to the concept check rather than waiting for a tap.
+  useEffect(() => {
+    if (media?.kind === 'video' && progress >= 100 && check) setStep('check');
+  }, [media, progress, check]);
+
+  // Entering the check: hand the tutor's working to the shared tutor layer, which
+  // reveals it stroke by stroke. Cleared on the way out — the tutor layer is
+  // global, so Phase 1's marks must not follow the student into guided practice.
+  //
+  // Held back by a beat so the question and the blank sheet settle first: writing
+  // that starts mid-transition reads as a page glitch rather than someone picking
+  // up a pen.
+  useEffect(() => {
+    if (step !== 'check' || !check) return;
+    const start = setTimeout(() => {
+      applyCanvasDraw({
+        author: 'tutor',
+        mode: 'replace',
+        actionId: `orientation-${topicId}`,
+        elements: check.elements,
+      });
+    }, 550);
+    return () => { clearTimeout(start); clearTutorMarks(); };
+  }, [step, check, topicId, applyCanvasDraw, clearTutorMarks]);
 
   // Orientation done → Teacher Mode (teach the concept back) for this topic.
   const finish = () => goStage('teach', topicId);
@@ -106,7 +152,44 @@ export default function OrientationClient({ topicId }: { topicId: string }) {
       </header>
 
       <div className="flex-1 overflow-y-auto flex items-center justify-center p-8">
-        <div className="w-[640px] max-w-full">
+        <div className={step === 'check' ? 'w-[900px] max-w-full' : 'w-[640px] max-w-full'}>
+          {/* ── Step 2: concept check — the tutor writes, the student watches ── */}
+          {step === 'check' && check && (
+            <div className="lg-anim-rise">
+              <div className="flex items-start gap-3">
+                <span className="mt-0.5 w-8 h-8 rounded-lg bg-focus-navy text-white flex items-center justify-center flex-shrink-0">
+                  <PenLine size={16} strokeWidth={1.8} />
+                </span>
+                <div>
+                  <div className="text-[10px] tracking-widest uppercase text-slate-blue">
+                    Concept check · Numera is writing
+                  </div>
+                  <p className="text-[16px] font-semibold text-ink leading-snug mt-0.5 max-w-[64ch]">
+                    {check.question}
+                  </p>
+                </div>
+              </div>
+
+              {/* Tutor's canvas. tutorOnly: only the tutor writes in this phase,
+                  and the student's ink from other phases stays off it — they
+                  explain it back in Teacher Mode next. */}
+              <div
+                className="relative mt-5 h-[420px] rounded-xl border border-muted-gray bg-white overflow-hidden"
+                style={{
+                  backgroundImage:
+                    'linear-gradient(#EEF0F3 1px, transparent 1px), linear-gradient(90deg, #EEF0F3 1px, transparent 1px)',
+                  backgroundSize: '28px 28px',
+                }}
+              >
+                <DrawingCanvas tutorOnly />
+              </div>
+
+              <p className="text-[12px] text-slate-blue mt-3">
+                Watch how Numera sets it up — you&apos;ll explain it back in your own words next.
+              </p>
+            </div>
+          )}
+
           {/* ── Loading: skeleton shimmer ─────────────────────────────── */}
           {status === 'loading' && (
             <div aria-busy="true">
@@ -121,8 +204,8 @@ export default function OrientationClient({ topicId }: { topicId: string }) {
             </div>
           )}
 
-          {/* ── Ready: render by media kind ───────────────────────────── */}
-          {status === 'ready' && media && (
+          {/* ── Step 1 · Ready: render by media kind ──────────────────── */}
+          {step === 'content' && status === 'ready' && media && (
             <div>
               {media.kind === 'video' && (
                 <VideoPlayer media={media} playing={playing} progress={progress} onToggle={() => setPlaying((p) => !p)} />
@@ -172,7 +255,11 @@ export default function OrientationClient({ topicId }: { topicId: string }) {
             </div>
           )}
 
-          {/* ── Footer actions (hidden while loading) ─────────────────── */}
+          {/* ── Footer actions (hidden while loading) ─────────────────────
+              On the content step, a topic that has a concept check moves to it
+              rather than leaving the phase. A video jumps there by itself when it
+              ends; this button covers the picture / key-points modes and anyone
+              who doesn't watch to the end. */}
           {status !== 'loading' && (
             <div className="flex items-center justify-between mt-7">
               <button
@@ -181,13 +268,22 @@ export default function OrientationClient({ topicId }: { topicId: string }) {
               >
                 Skip
               </button>
-              <button
-                onClick={finish}
-                disabled={status === 'error'}
-                className="inline-flex items-center justify-center gap-2 rounded-md bg-focus-navy text-white px-5 py-2.5 text-[13px] font-semibold hover:opacity-80 disabled:opacity-30 transition-opacity"
-              >
-                Now teach it back <ArrowRight size={16} strokeWidth={2} />
-              </button>
+              {step === 'content' && status === 'ready' && check ? (
+                <button
+                  onClick={() => setStep('check')}
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-focus-navy text-white px-5 py-2.5 text-[13px] font-semibold hover:opacity-80 transition-opacity"
+                >
+                  Continue <ArrowRight size={16} strokeWidth={2} />
+                </button>
+              ) : (
+                <button
+                  onClick={finish}
+                  disabled={status === 'error'}
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-focus-navy text-white px-5 py-2.5 text-[13px] font-semibold hover:opacity-80 disabled:opacity-30 transition-opacity"
+                >
+                  Now teach it back <ArrowRight size={16} strokeWidth={2} />
+                </button>
+              )}
             </div>
           )}
         </div>

@@ -5,6 +5,7 @@
  */
 import { jsPDF } from 'jspdf';
 import type { TranscriptMessage } from '@/store/useNumeraStore';
+import { isBareEquation } from '@/lib/questionText';
 
 interface NotesData {
   questionNumber: number;
@@ -58,8 +59,16 @@ export async function exportNotesPDF({
   doc.text(`QUESTION ${questionNumber}`, M, y);
   y += 18;
   doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(INK);
-  doc.text(`Solve for x:   ${questionText}`, M, y);
-  y += 26;
+  // A bare equation gets the "Solve for x:" lead-in; a word problem is printed as
+  // sent and wrapped to the page width (see lib/questionText.ts).
+  if (isBareEquation(questionText)) {
+    doc.text(`Solve for x:   ${questionText}`, M, y);
+    y += 26;
+  } else {
+    const lines = doc.splitTextToSize(questionText, contentW) as string[];
+    doc.text(lines, M, y);
+    y += 18 * lines.length + 8;
+  }
 
   // ── Working (canvas snapshot) ──
   doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(GREY);

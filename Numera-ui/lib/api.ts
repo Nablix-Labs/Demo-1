@@ -64,11 +64,38 @@ export interface ApiError {
     | 'INPUT_TOO_LONG'
     | 'INVALID_JSON'
     | 'HTTP_ERROR'
-    | 'INTERNAL_ERROR';
+    | 'INTERNAL_ERROR'
+    // The bearer we sent was rejected — either by this backend or by a service it
+    // calls on our behalf (e.g. student_model). Observed 2026-07-26 on the first
+    // CORRECT_ATTEMPT of a session: the backend posts a progress event to
+    // student_model, which unlike the tutoring endpoints actually validates the
+    // token, so ANON_ACCESS_TOKEN gets a 401 INVALID_TOKEN back. Nothing on the
+    // frontend can satisfy it — it needs a real login (see below).
+    | 'AUTHENTICATION_FAILED';
   message: string;
   field?: string;
   timestamp: string;
   request_id: string;
+}
+
+/**
+ * Student-facing copy for a backend error, chosen by `error_code`.
+ *
+ * The backend's own `message` is written for developers — the auth one reads
+ * `student_model rejected request url=… status=401 body={"error_code":…}` — so it
+ * must never be shown to a student. Anything we don't have specific copy for
+ * falls back to the caller's generic message.
+ */
+export function studentFacingError(err: unknown): string | null {
+  const code = (err as { response?: { data?: Partial<ApiError> } })?.response?.data?.error_code;
+  switch (code) {
+    case 'AUTHENTICATION_FAILED':
+      return 'Your session needs to be signed in again before I can mark that. Please log in and retry.';
+    case 'INTERNAL_ERROR':
+      return 'The tutor hit a problem on its side. Please try that again in a moment.';
+    default:
+      return null;
+  }
 }
 
 // ── Shared enums ──────────────────────────────────────────────────────────────

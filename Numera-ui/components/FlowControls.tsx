@@ -56,6 +56,9 @@ export default function FlowControls() {
 
   // Demo: fire a sample tutor drawing (mirrors the backend contract) so the
   // canvas write-along can be shown before the backend produces draw commands.
+  // The two `math` marks share an x so they read as left-aligned working, and
+  // start clear of the arrow tip at 0.62 (`math` x is the left edge, not the
+  // centre — see TutorMathOverlay).
   const demoTutorDraw = () =>
     applyCanvasDraw({
       author: 'tutor',
@@ -63,9 +66,9 @@ export default function FlowControls() {
       actionId: `demo-${Date.now()}`,
       elements: [
         { kind: 'ellipse', x: 0.42, y: 0.48, w: 0.16, h: 0.1, color: '#F77F00', strokeWidth: 3 },
-        { kind: 'arrow', from: [0.51, 0.48], to: [0.61, 0.48], color: '#00B4D8', strokeWidth: 2 },
-        { kind: 'math', x: 0.68, y: 0.48, tex: '2x = 8', size: 28, color: '#1B2A4A' },
-        { kind: 'math', x: 0.68, y: 0.6, tex: 'x = \\frac{8}{2} = 4', size: 24, color: '#1B2A4A' },
+        { kind: 'arrow', from: [0.52, 0.48], to: [0.62, 0.48], color: '#00B4D8', strokeWidth: 2 },
+        { kind: 'math', x: 0.66, y: 0.48, tex: '2x = 8', size: 28, color: '#1B2A4A' },
+        { kind: 'math', x: 0.66, y: 0.6, tex: 'x = \\frac{8}{2} = 4', size: 24, color: '#1B2A4A' },
       ],
     });
 

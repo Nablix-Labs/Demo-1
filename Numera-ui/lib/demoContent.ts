@@ -9,6 +9,7 @@
  */
 
 import type { ConceptArtName } from '@/components/ConceptArt';
+import type { TutorElement } from '@/store/useNumeraStore';
 
 export interface DemoLine {
   text: string;
@@ -369,3 +370,73 @@ export const ORIENTATION_MEDIA: Record<string, OrientationMedia> = {
 /** Orientation media for a topic, or null when none exists yet (→ empty state). */
 export const orientationFor = (topicId: string): OrientationMedia | null =>
   ORIENTATION_MEDIA[topicId] ?? null;
+
+/**
+ * The concept check that follows the orientation content, still inside Phase 1.
+ *
+ * Once the video (or picture / key points) is done, the tutor poses one question
+ * about the idea and works it through on the canvas. **Only the tutor writes
+ * here** (Manjusha, 2026-07-26) — the student watches, then teaches it back in
+ * Phase 2. So `elements` is a tutor draw batch in the normal `canvas_draw`
+ * contract (normalised 0–1, `text`/`math` anchored at their LEFT edge — see
+ * docs/TUTOR-CANVAS-WRITE-SPEC.md §3.3).
+ *
+ * This is demo content: the backend will serve the question and emit the draw
+ * commands once its producer exists, at which point this becomes the mock-mode
+ * fallback like every other entry in this file.
+ */
+export interface OrientationCheck {
+  question: string;
+  elements: Array<Omit<TutorElement, 'id'>>;
+}
+
+export const ORIENTATION_CHECK: Record<string, OrientationCheck> = {
+  algebra: {
+    question: 'A box holds an unknown number of counters. You add 4 more and end up with 9. How would you write that as an equation?',
+    elements: [
+      { kind: 'text', x: 0.08, y: 0.18, text: 'unknown counters in the box:', size: 17, color: '#5A6478' },
+      { kind: 'math', x: 0.08, y: 0.32, tex: 'x', size: 30 },
+      { kind: 'text', x: 0.18, y: 0.32, text: 'add 4 more  →', size: 17, color: '#5A6478' },
+      { kind: 'math', x: 0.45, y: 0.32, tex: 'x + 4', size: 30 },
+      { kind: 'text', x: 0.08, y: 0.52, text: 'ends up as 9, so both sides balance:', size: 17, color: '#5A6478' },
+      { kind: 'math', x: 0.08, y: 0.66, tex: 'x + 4 = 9', size: 34 },
+      { kind: 'line', from: [0.08, 0.74], to: [0.30, 0.74], color: '#F77F00', strokeWidth: 3 },
+    ],
+  },
+  number: {
+    question: 'Three of four equal parts of a bar are shaded. How would you write that as a fraction?',
+    elements: [
+      { kind: 'text', x: 0.08, y: 0.20, text: 'parts shaded', size: 17, color: '#5A6478' },
+      { kind: 'text', x: 0.08, y: 0.42, text: 'equal parts in total', size: 17, color: '#5A6478' },
+      { kind: 'math', x: 0.55, y: 0.31, tex: '\\frac{3}{4}', size: 40 },
+      { kind: 'arrow', from: [0.34, 0.20], to: [0.52, 0.26], color: '#00B4D8', strokeWidth: 2 },
+      { kind: 'arrow', from: [0.34, 0.42], to: [0.52, 0.37], color: '#00B4D8', strokeWidth: 2 },
+      { kind: 'text', x: 0.08, y: 0.66, text: 'the bottom number says how many parts make a whole', size: 16, color: '#5A6478' },
+    ],
+  },
+  geometry: {
+    question: 'Two angles sit on a straight line and one of them is 130°. How would you find the other?',
+    elements: [
+      { kind: 'line', from: [0.08, 0.34], to: [0.52, 0.34], color: '#1B2A4A', strokeWidth: 3 },
+      { kind: 'line', from: [0.30, 0.34], to: [0.38, 0.14], color: '#1B2A4A', strokeWidth: 3 },
+      { kind: 'text', x: 0.17, y: 0.28, text: '130°', size: 18 },
+      { kind: 'text', x: 0.40, y: 0.28, text: '?', size: 20, color: '#F77F00' },
+      { kind: 'text', x: 0.08, y: 0.54, text: 'angles on a straight line add to 180°', size: 17, color: '#5A6478' },
+      { kind: 'math', x: 0.08, y: 0.70, tex: '180 - 130 = 50', size: 32 },
+    ],
+  },
+  statistics: {
+    question: 'On a bar chart, one bar is taller than all the others. What does that tell you?',
+    elements: [
+      { kind: 'rect', x: 0.10, y: 0.40, w: 0.06, h: 0.22, color: '#1B2A4A', strokeWidth: 2 },
+      { kind: 'rect', x: 0.20, y: 0.26, w: 0.06, h: 0.36, color: '#F77F00', strokeWidth: 3 },
+      { kind: 'rect', x: 0.30, y: 0.48, w: 0.06, h: 0.14, color: '#1B2A4A', strokeWidth: 2 },
+      { kind: 'text', x: 0.42, y: 0.30, text: 'tallest bar = most frequent value', size: 17, color: '#5A6478' },
+      { kind: 'text', x: 0.42, y: 0.44, text: 'that value is the mode', size: 18 },
+    ],
+  },
+};
+
+/** The Phase-1 concept check for a topic, or null when none exists yet. */
+export const orientationCheckFor = (topicId: string): OrientationCheck | null =>
+  ORIENTATION_CHECK[topicId] ?? null;
