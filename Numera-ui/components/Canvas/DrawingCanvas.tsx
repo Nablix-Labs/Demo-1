@@ -25,9 +25,23 @@ import { useTutorRevealSync } from '@/store/useTutorReveal';
 
 interface DrawingCanvasProps {
   onExportReady?: (exportFn: () => string | null) => void;
+  /**
+   * The canvas belongs to the tutor: the student can't draw on it, and their ink
+   * isn't shown on it either. Used by Phase 1 (concept orientation), where only
+   * the tutor writes — the student watches the worked idea, then teaches it back.
+   * Phase 2 (guided practice) leaves this off so both can write; Phase 3
+   * (independent practice) is the student alone.
+   *
+   * Hiding the student's ink matters as much as blocking input: `items` lives in
+   * the module-level store and nothing clears it when the topic or route changes,
+   * so without this a stroke drawn during guided practice would reappear on the
+   * next topic's orientation canvas — the student's handwriting sitting in the
+   * middle of the tutor's demonstration.
+   */
+  tutorOnly?: boolean;
 }
 
-export default function DrawingCanvas({ onExportReady }: DrawingCanvasProps) {
+export default function DrawingCanvas({ onExportReady, tutorOnly = false }: DrawingCanvasProps) {
   const stageRef = useRef<Konva.Stage>(null);
   const isDrawing = useRef(false);
   const startPos = useRef<{ x: number; y: number } | null>(null);
@@ -50,7 +64,7 @@ export default function DrawingCanvas({ onExportReady }: DrawingCanvasProps) {
     setDraft(item);
   }, []);
 
-  const objectErase = activeTool === 'eraser' && eraserMode === 'object';
+  const objectErase = !tutorOnly && activeTool === 'eraser' && eraserMode === 'object';
 
   // ── Resize observer ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -76,6 +90,7 @@ export default function DrawingCanvas({ onExportReady }: DrawingCanvasProps) {
   // ── Pointer handlers ─────────────────────────────────────────────────────────
   const handleDown = useCallback(
     (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
+      if (tutorOnly) return; // tutor-only canvas — the student can't draw
       // Object-eraser deletes via clicking a shape, not by drawing.
       if (activeTool === 'eraser' && eraserMode === 'object') return;
       const pos = e.target.getStage()?.getPointerPosition();
@@ -111,7 +126,7 @@ export default function DrawingCanvas({ onExportReady }: DrawingCanvasProps) {
         }
       }
     },
-    [activeTool, eraserMode, shapeKind, strokeColor, strokeWidth, setDraftItem]
+    [tutorOnly, activeTool, eraserMode, shapeKind, strokeColor, strokeWidth, setDraftItem]
   );
 
   const handleMove = useCallback(
@@ -246,7 +261,8 @@ export default function DrawingCanvas({ onExportReady }: DrawingCanvasProps) {
   };
 
   const cursor =
-    activeTool === 'eraser' ? (eraserMode === 'object' ? 'pointer' : 'cell')
+    tutorOnly ? 'default'
+    : activeTool === 'eraser' ? (eraserMode === 'object' ? 'pointer' : 'cell')
     : (activeTool === 'pen' || activeTool === 'pencil' || activeTool === 'highlighter') ? 'crosshair'
     : 'copy';
 
@@ -265,8 +281,10 @@ export default function DrawingCanvas({ onExportReady }: DrawingCanvasProps) {
         style={{ cursor }}
       >
         <Layer>
-          {remoteItems.map((it) => renderItem(it))}
-          {items.map((it) => renderItem(it, true))}
+          {/* Student + peer ink, omitted entirely on a tutor-only canvas (see the
+              `tutorOnly` note above — this ink outlives the route that made it). */}
+          {!tutorOnly && remoteItems.map((it) => renderItem(it))}
+          {!tutorOnly && items.map((it) => renderItem(it, true))}
           {draft && renderItem(draft)}
         </Layer>
         {/* AI-tutor marks — separate, non-erasable layer above the student's */}

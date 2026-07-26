@@ -88,8 +88,8 @@ This is the exact shape the frontend consumes. (Source of truth:
 
 | kind | Uses | Meaning |
 |---|---|---|
-| `text` | `x,y` (anchor centre), `text`, `size`, `color` | Plain text (labels, notes) |
-| `math` | `x,y` (anchor centre), `tex` (or `text`), `size`, `color` | An equation/step (rendered in a math font today — see §7) |
+| `text` | `x,y` (**left edge**, vertical centre), `text`, `size`, `color` | Plain text (labels, notes) |
+| `math` | `x,y` (**left edge**, vertical centre), `tex` (or `text`), `size`, `color` | An equation/step (rendered in a math font today — see §7) |
 | `line` | `from`, `to`, `color`, `strokeWidth` | Straight line (e.g. underline, fraction bar) |
 | `arrow` | `from`, `to`, `color`, `strokeWidth` | Arrow with a head at `to` (point at a term/step) |
 | `rect` | `x,y` (top-left), `w,h`, `color`, `strokeWidth` | Rectangle (box a region) |
@@ -99,6 +99,37 @@ This is the exact shape the frontend consumes. (Source of truth:
 
 > Coordinate frame: **`(0,0)` = top-left, `(1,1)` = bottom-right** of the canvas
 > working area. Numbers are fractions of the canvas width (x) and height (y).
+
+#### Written marks anchor LEFT, not centre (changed 2026-07-26)
+
+For `text` and `math`, `x` is **where the pen touches down** — the left edge of the
+writing — and `y` is the vertical centre. The mark therefore occupies
+`[x, x + renderedWidth]`, growing rightward.
+
+This changed because the producer **cannot know how wide the rendered glyphs will
+be** (KaTeX width depends on the typeset result, the font, and `size`). Centring
+made the left edge unpredictable, so a mark would silently creep backwards over
+whatever was placed beside it. Real example: an arrow ending at `x = 0.61` and
+`{ kind:"math", x:0.68, tex:"x = 9 - 4", size:28 }` — the maths rendered ~0.135
+wide, putting its left edge at ≈0.61, exactly under the arrowhead. The same
+command with a *narrower* expression (`2x = 8`) cleared it, so the bug looked
+intermittent when it was actually structural.
+
+**What this means for the producer:**
+
+- To write *next to* something that ends at `x₀`, set `x` a little past it
+  (`x₀ + 0.03` or so). You no longer have to guess a centre.
+- Leave room to the right: a long expression at `x = 0.9` will run off the canvas.
+  Budget roughly `0.02 × characters` at `size: 24` as a rule of thumb.
+- Stack successive worked lines at the **same `x`** with increasing `y` (≈0.10–0.12
+  apart) — they then read as left-aligned working, the way a person writes.
+- The frontend does **not** currently detect or resolve collisions between marks;
+  it renders exactly what you send. Non-overlapping layout is the producer's
+  responsibility. (A frontend collision fallback is possible — see §7 — but it
+  would move marks away from where you meant them, so we'd rather not guess.)
+
+Pointing marks (`arrow`, `ellipse`, `line`, `rect`) are unchanged and keep the
+anchors in the table above: they target a precise spot and must never be nudged.
 
 ---
 
@@ -198,6 +229,12 @@ canvas. Options to decide together:
 - **Progressive/animated strokes** (draw a stroke over ~300ms rather than instantly)
   is an optional enhancement; the current contract can carry it later via per-element
   timing without breaking changes.
+- **Collision resolution — deliberately not built.** The frontend could measure each
+  rendered mark and push a colliding one down a line. We haven't, because it trades a
+  visible bug for an invisible one: marks would land somewhere the tutor didn't intend
+  and no longer line up with what they're describing out loud. Left-anchoring (§3.3)
+  removes the structural cause; if real backend output still collides once the producer
+  exists, we'll revisit with actual cases rather than guess at the rules now.
 
 ---
 

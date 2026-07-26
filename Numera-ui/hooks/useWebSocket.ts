@@ -101,7 +101,8 @@ export function useWebSocket(sessionId: string | null) {
               useNumeraStore.setState((state) => ({
                 currentPhase: msg.current_phase as string,
                 activeQuestionId: (msg.question_id as string | null) ?? state.activeQuestionId,
-                questionText: (msg.current_question as string).replace(/^solve for\s*x\s*:?\s*/i, '').trim(),
+                // Verbatim — see the matching note in useDemoTutor.syncBackendSession.
+                questionText: (msg.current_question as string).trim(),
               }));
             }
             tutorAudioStream.begin(); // reset the player; chunks are coming next

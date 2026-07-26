@@ -16,6 +16,7 @@ import { useNumeraStore } from '@/store/useNumeraStore';
 import { useAuthStore, isConsentActive } from '@/store/useAuthStore';
 import { useDemoTutor } from '@/hooks/useDemoTutor';
 import { gridBackground, GRID_OPTIONS } from '@/lib/canvasGrid';
+import { isBareEquation } from '@/lib/questionText';
 import Toolbar from './Toolbar';
 import TeachBack from './TeachBack';
 
@@ -86,16 +87,24 @@ export default function CanvasStage() {
       aria-label="Canvas workspace"
       style={gridBackground(canvasGrid)}
     >
-      {/* Question header */}
-      <div className="absolute top-[26px] left-[34px] right-[34px] flex items-center gap-3 z-10">
+      {/* Question header — a bare equation gets the "Solve for x:" lead-in and
+          maths type; anything with its own wording (e.g. a word problem) is shown
+          verbatim as prose that wraps. See lib/questionText.ts. */}
+      <div className="absolute top-[26px] left-[34px] right-[34px] flex items-start gap-3 z-10">
         <div className="w-[30px] h-[30px] rounded-md border border-muted-gray bg-reading-surface flex items-center justify-center text-xs font-semibold text-slate-blue flex-shrink-0">
           {questionNumber}
         </div>
-        <div className="text-[22px] font-semibold text-ink">
-          Solve for{' '}
-          <span className="italic font-[Cambria_Math,Georgia,serif]">x</span>:{' '}
-          <span className="font-[Cambria_Math,Georgia,serif]">{questionText}</span>
-        </div>
+        {isBareEquation(questionText) ? (
+          <div className="text-[22px] font-semibold text-ink">
+            Solve for{' '}
+            <span className="italic font-[Cambria_Math,Georgia,serif]">x</span>:{' '}
+            <span className="font-[Cambria_Math,Georgia,serif]">{questionText}</span>
+          </div>
+        ) : (
+          <p className="text-[17px] font-semibold text-ink leading-snug max-w-[62ch]">
+            {questionText}
+          </p>
+        )}
       </div>
 
       {/* §14: canvas consent missing */}

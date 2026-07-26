@@ -24,6 +24,7 @@ import {
   type SessionRecord,
   type SessionSummary,
   type CanvasSubmissionResult,
+  studentFacingError,
   type InteractionResponse,
   type HintResponse,
 } from '@/lib/api';
@@ -76,6 +77,19 @@ function errorMessage(err: unknown, fallback: string): string {
 const TUTOR_UNAVAILABLE = "Sorry — I couldn't reach the tutor just now. Please try again in a moment.";
 const HINT_UNAVAILABLE = "Sorry — I couldn't fetch a hint right now. Please try again in a moment.";
 
+/**
+ * What the student sees in the chat when a tutor call fails.
+ *
+ * Some failures aren't "couldn't reach the tutor" at all — an auth rejection is a
+ * request that landed and was refused, and telling the student to retry is wrong
+ * advice they'll follow forever. Use specific copy when the backend named the
+ * cause, otherwise the generic fallback. The developer-facing detail still goes
+ * to the session trail and the console.
+ */
+function chatError(err: unknown, fallback: string): string {
+  return studentFacingError(err) ?? fallback;
+}
+
 function syncBackendSession(response: {
   current_phase: string;
   current_question: string;
@@ -84,7 +98,11 @@ function syncBackendSession(response: {
   useNumeraStore.setState((state) => ({
     currentPhase: response.current_phase,
     activeQuestionId: response.question_id ?? state.activeQuestionId,
-    questionText: response.current_question.replace(/^solve for\s*x\s*:?\s*/i, '').trim(),
+    // Kept verbatim. This used to strip a leading "solve for x:" because the
+    // screens re-added it themselves — which silently mangled any question that
+    // wasn't a bare equation. The screens now decide presentation from the text
+    // itself (lib/questionText.ts), so the backend's wording must survive.
+    questionText: response.current_question.trim(),
   }));
 }
 
@@ -152,7 +170,7 @@ export function useDemoTutor() {
         speakTutor(res.message); // voice the reply — same verbatim text shown in chat
         return res;
       } catch (err) {
-        addTranscriptMessage({ role: 'ai', text: TUTOR_UNAVAILABLE }); // surface the failure in the chat
+        addTranscriptMessage({ role: 'ai', text: chatError(err, TUTOR_UNAVAILABLE) }); // surface the failure in the chat
         addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Tutor unavailable.') });
         return null;
       }
@@ -196,7 +214,7 @@ export function useDemoTutor() {
       speakTutor(res.tutor.tutor_message); // voice the reply — same verbatim text shown in chat
       return res;
     } catch (err) {
-      addTranscriptMessage({ role: 'ai', text: TUTOR_UNAVAILABLE }); // surface the failure in the chat
+      addTranscriptMessage({ role: 'ai', text: chatError(err, TUTOR_UNAVAILABLE) }); // surface the failure in the chat
       addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Could not read the canvas.') });
       return null;
     }
@@ -223,7 +241,7 @@ export function useDemoTutor() {
         speakTutor(res.hint); // voice the hint — same verbatim text shown in chat
         return res;
       } catch (err) {
-        addTranscriptMessage({ role: 'ai', text: HINT_UNAVAILABLE }); // surface the failure in the chat
+        addTranscriptMessage({ role: 'ai', text: chatError(err, HINT_UNAVAILABLE) }); // surface the failure in the chat
         addTrailEntry({ kind: 'hint', text: errorMessage(err, 'No hint available.') });
         return null;
       }
@@ -357,7 +375,7 @@ export function useDemoTutor() {
       } catch (err) {
         console.warn('✗ /interaction failed:', err);
         console.groupEnd();
-        addTranscriptMessage({ role: 'ai', text: TUTOR_UNAVAILABLE }); // surface the failure in the chat
+        addTranscriptMessage({ role: 'ai', text: chatError(err, TUTOR_UNAVAILABLE) }); // surface the failure in the chat
         addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Tutor unavailable.') });
         useNumeraStore.getState().beginListeningTurn(); // reopen listening so the student can retry
         return null;

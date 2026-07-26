@@ -10,6 +10,13 @@
  * on like handwriting instead of popping in: text types out, strokes draw from
  * start to tip, outlines trace around, freehand paths trace point by point.
  *
+ * For written marks (`text`, and `math` in TutorMathOverlay) `x` is the LEFT edge
+ * — where the pen touches down — because the producer can't know how wide the
+ * rendered glyphs will be, and centring made the left edge unpredictable enough
+ * to collide with whatever sits beside it. Pointing marks (`arrow`, `ellipse`,
+ * `line`, `rect`) keep their documented anchors: they target a precise spot and
+ * must not be nudged.
+ *
  * v1 renders maths as real KaTeX via TutorMathOverlay (HTML); everything else is
  * Konva here.
  */
@@ -45,10 +52,10 @@ export default function TutorLayer({ width, height }: { width: number; height: n
       case 'text': {
         const content = el.text ?? '';
         const fontSize = el.size ?? 14;
-        // Type the text out left→right. offsetX stays keyed to the FULL width so
-        // the final position matches and it grows rightward from a fixed anchor.
+        // Type the text out left→right from the anchor (see the `x` note in the
+        // file header): no offsetX, so the mark occupies [x, x+width] and can't
+        // creep leftward into a mark that was placed before it.
         const shown = content.slice(0, Math.round(content.length * p));
-        const estW = content.length * fontSize * 0.55;
         return (
           <Text
             key={el.id}
@@ -58,7 +65,6 @@ export default function TutorLayer({ width, height }: { width: number; height: n
             fontSize={fontSize}
             fontFamily={'Helvetica, Arial, sans-serif'}
             fill={color}
-            offsetX={estW / 2}
             offsetY={fontSize / 2}
           />
         );
