@@ -509,10 +509,25 @@ export async function sendVoiceTranscript(payload: VoiceTranscriptPayload) {
   return res.data;
 }
 
-/** POST /voice/tts — OpenAI speech for a tutor/review message. Returns base64
+/** POST /voice/tts — tutor speech for a tutor/review message. Returns base64
  *  MP3, or null for empty text. Throws (502) when the provider is down after
- *  retries — callers fall back to browser speechSynthesis. */
-export async function synthesizeSpeech(text: string): Promise<string | null> {
-  const res = await api.post<{ audio_base64: string | null }>('/voice/tts', { text });
+ *  retries — callers fall back to browser speechSynthesis.
+ *
+ *  `provider`/`voice` carry the testing-only voice variant (lib/voiceOptions.ts).
+ *  The backend IGNORES them today: VoiceTTSRequest accepts only `text`, and the
+ *  provider/voice come from the VOICE_TTS_PROVIDER / VOICE_TTS_VOICE env vars.
+ *  Pydantic drops unknown fields rather than rejecting them, so sending these is
+ *  harmless now and starts working the moment the backend reads them — no
+ *  frontend change needed then. Omitted entirely when nothing is selected, so
+ *  the default request shape is unchanged. */
+export async function synthesizeSpeech(
+  text: string,
+  opts?: { provider?: string | null; voice?: string | null },
+): Promise<string | null> {
+  const res = await api.post<{ audio_base64: string | null }>('/voice/tts', {
+    text,
+    ...(opts?.provider ? { provider: opts.provider } : {}),
+    ...(opts?.voice ? { voice: opts.voice } : {}),
+  });
   return res.data.audio_base64;
 }

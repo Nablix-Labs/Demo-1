@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { MoreVertical, PanelLeft, PanelRight, Eye, EyeOff, FileDown, ChevronsLeft, ChevronsRight } from 'lucide-react';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { exportNotesPDF } from '@/lib/exportNotes';
+import VoicePicker from '@/components/VoicePicker';
 import TutorTile from './TutorTile';
 import VoiceBar from './VoiceBar';
 import Transcript from './Transcript';
@@ -134,11 +135,15 @@ export default function MediaPanel() {
               <div className="text-sm font-semibold tracking-[0.4px]">Numera</div>
               <div className="text-[8.5px] font-normal text-slate-blue tracking-[1.5px] uppercase">by Nablix</div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
               <div className="border border-muted-gray rounded-full px-2.5 py-1 text-[10px] tracking-[0.4px] flex items-center gap-1.5 text-slate-blue">
                 <span className="w-1.5 h-1.5 rounded-full bg-ai-cyan inline-block" />
                 {stateLabel[sessionState] ?? 'Guided'}
               </div>
+              {/* Testing-only tutor voice variant picker (see lib/voiceOptions.ts).
+                  Sits by the tutor it controls so it's findable without the demo
+                  panel, which isn't mounted anywhere. */}
+              <VoicePicker />
               <PanelMenu />
             </div>
           </div>

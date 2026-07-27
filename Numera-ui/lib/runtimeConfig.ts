@@ -47,7 +47,10 @@ export const voiceStreamingEnabled: boolean =
 export const allowAnonTutorCalls: boolean =
   process.env.NEXT_PUBLIC_ALLOW_ANON_TUTOR === "true";
 
-export const buildVoiceStreamUrl = (sessionId: string): string => {
+export const buildVoiceStreamUrl = (
+  sessionId: string,
+  voice?: { provider?: string | null; voice?: string | null },
+): string => {
   if (!voiceStreamingEnabled || !voiceWsUrl) {
     throw new Error(
       "Voice streaming is disabled or NEXT_PUBLIC_VOICE_WS_URL/NEXT_PUBLIC_WS_URL is missing",
@@ -60,5 +63,10 @@ export const buildVoiceStreamUrl = (sessionId: string): string => {
     session: sessionId,
     student_id: "ST001",
   });
+  // Testing-only voice variant. The /voice/stream endpoint declares only
+  // session/session_id/student_id, and undeclared query params are ignored
+  // rather than rejected — so these are inert until the server reads them.
+  if (voice?.provider) params.set("tts_provider", voice.provider);
+  if (voice?.voice) params.set("tts_voice", voice.voice);
   return `${voiceWsUrl}?${params.toString()}`;
 };

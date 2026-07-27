@@ -21,6 +21,7 @@
  */
 
 import { useMicLevel } from '@/store/useMicLevel';
+import { useNumeraStore } from '@/store/useNumeraStore';
 import { synthesizeSpeech } from '@/lib/api';
 
 /** The voice server always streams MP3. */
@@ -90,7 +91,10 @@ export function speakTutor(text: string, onEnd?: () => void): void {
   stopTutorSpeech();
   if (!ttsApiEnabled()) { speakBrowser(text, onEnd); return; }
   const token = speakToken;
-  synthesizeSpeech(text)
+  // Testing-only voice variant, read at call time so a change takes effect on the
+  // next reply without re-wiring callers (see lib/voiceOptions.ts).
+  const { ttsProvider, ttsVoice } = useNumeraStore.getState();
+  synthesizeSpeech(text, { provider: ttsProvider, voice: ttsVoice })
     .then((audioBase64) => {
       if (token !== speakToken) return; // superseded while fetching
       if (!audioBase64) { speakBrowser(text, onEnd); return; }

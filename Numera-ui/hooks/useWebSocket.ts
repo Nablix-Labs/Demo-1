@@ -41,7 +41,10 @@ export function useWebSocket(sessionId: string | null) {
   const connect = useCallback(() => {
     if (!sessionId || !voiceStreamingEnabled) return;
 
-    const ws = new WebSocket(buildVoiceStreamUrl(sessionId));
+    const { ttsProvider, ttsVoice } = useNumeraStore.getState();
+    const ws = new WebSocket(
+      buildVoiceStreamUrl(sessionId, { provider: ttsProvider, voice: ttsVoice }),
+    );
     wsRef.current = ws;
 
     ws.onopen = () => {

@@ -225,6 +225,13 @@ export interface NumeraState {
   micButtonPos: { x: number; y: number } | null; // draggable mic button; null = default (bottom-centre)
   canvasGrid: CanvasGrid;             // paper style behind the drawing surface
 
+  // Tutor voice variant (testing only — see lib/voiceOptions.ts). null = let the
+  // backend use whatever VOICE_TTS_PROVIDER / VOICE_TTS_VOICE are set to, which
+  // is the only thing that has any effect until the backend reads a per-request
+  // voice. Persisted so a tester's pick survives a reload.
+  ttsProvider: string | null;
+  ttsVoice: string | null;
+
   // Runtime: canvas PNG exporter, registered by the canvas for PDF notes
   canvasExporter: (() => string | null) | null;
 
@@ -313,6 +320,7 @@ export interface NumeraState {
   setToolbarOrientation: (o: 'horizontal' | 'vertical') => void;
   setMicButtonPos: (pos: { x: number; y: number } | null) => void;
   setCanvasGrid: (g: CanvasGrid) => void;
+  setTtsVoice: (provider: string | null, voice: string | null) => void;
   setCanvasExporter: (fn: (() => string | null) | null) => void;
   startGroupSession: () => void;
   endGroupSession: () => void;
@@ -352,7 +360,7 @@ const initial: Omit<
   | 'setStrokeColor' | 'setStrokeWidth' | 'addItem' | 'removeItem' | 'undo' | 'redo'
   | 'clearCanvas' | 'applyCanvasDraw' | 'clearTutorMarks'
   | 'setInputMode' | 'setTextInput' | 'setPanelSide' | 'togglePanelSide' | 'togglePanelCollapsed'
-  | 'toggleTranscript' | 'setToolbarPos' | 'toggleToolbarCollapsed' | 'setToolbarOrientation' | 'setMicButtonPos' | 'setCanvasGrid'
+  | 'toggleTranscript' | 'setToolbarPos' | 'toggleToolbarCollapsed' | 'setToolbarOrientation' | 'setMicButtonPos' | 'setCanvasGrid' | 'setTtsVoice'
   | 'setCanvasExporter' | 'startGroupSession' | 'endGroupSession'
   | 'upsertParticipant' | 'removeParticipant' | 'setParticipantCursor'
   | 'addRemoteItem' | 'toggleLessonLearned' | 'setPracticeDone' | 'setStudentAge' | 'setStudentName'
@@ -423,6 +431,8 @@ const initial: Omit<
   toolbarOrientation: 'horizontal',
   micButtonPos: null,
   canvasGrid: 'grid',
+  ttsProvider: null,
+  ttsVoice: null,
   canvasExporter: null,
   sessionMode: 'solo',
   participants: [],
@@ -640,6 +650,10 @@ export const useNumeraStore = create<NumeraState>()(
   setToolbarOrientation: (toolbarOrientation) => set({ toolbarOrientation }),
   setMicButtonPos: (micButtonPos) => set({ micButtonPos }),
   setCanvasGrid: (canvasGrid) => set({ canvasGrid }),
+
+  /** Pick a tutor voice variant, or pass (null, null) to fall back to the
+   *  backend's configured default. */
+  setTtsVoice: (ttsProvider, ttsVoice) => set({ ttsProvider, ttsVoice }),
   setCanvasExporter: (canvasExporter) => set({ canvasExporter }),
 
   startGroupSession: () => set({ sessionMode: 'group' }),
@@ -737,6 +751,8 @@ export const useNumeraStore = create<NumeraState>()(
         toolbarOrientation: s.toolbarOrientation,
         micButtonPos: s.micButtonPos,
         canvasGrid: s.canvasGrid,
+        ttsProvider: s.ttsProvider,
+        ttsVoice: s.ttsVoice,
         shapeKind: s.shapeKind,
         eraserMode: s.eraserMode,
         completedLessons: s.completedLessons,
