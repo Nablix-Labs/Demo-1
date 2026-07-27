@@ -1,5 +1,7 @@
 import re
 from datetime import datetime, timezone
+from typing import Literal
+from uuid import uuid4
 
 from fastapi import HTTPException
 
@@ -10,15 +12,28 @@ from app.core.exceptions import QuestionFetchError
 from app.core.logger import logger
 from app.models.adapters import (
     AdapterContext,
+    ConversationAction,
     ConversationMessage,
+    ConversationState,
+    ExpectedStudentResponse,
     RAGResult,
     StudentModelResult,
+    TutorAction,
     TutorResult,
     VisualCue,
 )
 from app.models.fields import Phase
-from app.models.interaction import InteractionRequest, InteractionResponse
-from app.models.session import PhaseTransitionRecord, QuestionAttemptRecord, SessionRecord
+from app.models.interaction import (
+    InteractionRequest,
+    InteractionResponse,
+    StaleTurnResponse,
+)
+from app.models.session import (
+    PhaseTransitionRecord,
+    QuestionAttemptRecord,
+    SessionRecord,
+    SessionSummary,
+)
 from app.services.phase_transition import (
     DEFAULT_TRANSITION_MESSAGE,
     PHASE_COUNTER_RESETS,
@@ -27,14 +42,20 @@ from app.services.phase_transition import (
 )
 from app.services.session_service import (
     _get_owned_session_for_turn,
+    cache_interaction_response,
     get_canvas_submission,
     get_next_question,
-    restore_interaction_progress,
+    interaction_lock_for,
+    last_interaction_response_for,
     update_interaction_state,
 )
 
 
 _EMPTY_RAG = RAGResult(documents=[], retrieval_confidence=0.0)
+_LOW_CONFIDENCE_MESSAGE = "I’m not sure I heard that clearly. Could you say it again?"
+_STALE_TURN_MESSAGE = (
+    "The conversation has moved forward. Please use the latest tutor response."
+)
 _SPOKEN_DIGITS: dict[str, str] = {
     "zero": "0",
     "one": "1",
@@ -136,6 +157,13 @@ def _recent_conversation_history(
     return history[-max_messages:]
 
 
+def _conversation_state_from_session(session: SessionRecord) -> ConversationState:
+    return ConversationState(
+        last_tutor_action=session.last_tutor_action,
+        expected_student_response=session.expected_student_response,
+    )
+
+
 def _current_hint_level_from(hint_count: int) -> int | None:
     if hint_count <= 0:
         return None
@@ -151,10 +179,126 @@ def _independent_correct_in_session(session: SessionRecord) -> int:
     )
 
 
-def _next_hint_count_from(request: InteractionRequest) -> int:
+def _next_hint_count_from(session: SessionRecord, request: InteractionRequest) -> int:
     if request.interaction_type == "HINT_REQUEST":
-        return request.hint_count + 1
-    return request.hint_count
+        return session.hint_count + 1
+    return session.hint_count
+
+
+def _new_tutor_turn_id() -> str:
+    return f"TUTOR-{uuid4()}"
+
+
+def _voice_turn_updates(
+    request: InteractionRequest,
+    last_tutor_action: TutorAction,
+    expected_student_response: ExpectedStudentResponse,
+) -> dict[str, object]:
+    updates: dict[str, object] = {
+        "last_tutor_action": last_tutor_action,
+        "expected_student_response": expected_student_response,
+    }
+    if request.input_source != "VOICE":
+        return updates
+    if request.turn_id is None:
+        raise RuntimeError("validated VOICE interaction is missing turn_id")
+    updates.update(
+        {
+            "last_processed_turn_id": request.turn_id,
+            "last_tutor_turn_id": _new_tutor_turn_id(),
+        }
+    )
+    return updates
+
+
+def _conversation_state_for(
+    conversation_action: ConversationAction,
+    question_completed: bool,
+    evaluation: str | None,
+) -> tuple[TutorAction, ExpectedStudentResponse]:
+    if conversation_action == "ADVANCE_TO_NEXT_QUESTION":
+        return "ADVANCED_QUESTION", "ANSWER"
+    if conversation_action == "GIVE_HINT":
+        return "GAVE_HINT", "ANSWER"
+    if conversation_action == "REQUEST_CLARIFICATION":
+        return "REQUESTED_CLARIFICATION", "CLARIFICATION"
+    if conversation_action == "REQUEST_EXPLANATION":
+        return "REQUESTED_EXPLANATION", "EXPLANATION"
+    if question_completed:
+        return "CONFIRMED_CORRECT_ANSWER", "ACKNOWLEDGEMENT_OR_CONTINUE"
+    if evaluation in {"PARTIALLY_CORRECT", "INCORRECT"}:
+        return "GAVE_INCORRECT_FEEDBACK", "ANSWER"
+    return "ASKED_QUESTION", "ANSWER"
+
+
+def _stale_turn_response(session: SessionRecord) -> StaleTurnResponse:
+    return StaleTurnResponse(
+        status="STALE_TURN",
+        accepted_turn_id=None,
+        expected_previous_tutor_turn_id=session.last_tutor_turn_id,
+        conversation_action="WAIT_FOR_STUDENT",
+        attempt_increment=0,
+        retry_safe=False,
+        message=_STALE_TURN_MESSAGE,
+    )
+
+
+def _duplicate_turn_response(
+    request: InteractionRequest,
+    session: SessionRecord,
+) -> InteractionResponse | None:
+    if (
+        request.input_source != "VOICE"
+        or request.turn_id != session.last_processed_turn_id
+    ):
+        return None
+    response = last_interaction_response_for(session.session_id)
+    if response is None:
+        raise RuntimeError(
+            f"cached response is missing for duplicate session_id={session.session_id} "
+            f"turn_id={request.turn_id}"
+        )
+    return response.model_copy(
+        update={
+            "status": "DUPLICATE_TURN",
+            "conversation_action": "WAIT_FOR_STUDENT",
+            "attempt_increment": 0,
+            "retry_safe": True,
+        }
+    )
+
+
+def _turn_is_stale(request: InteractionRequest, session: SessionRecord) -> bool:
+    if request.input_source != "VOICE":
+        return False
+    return (
+        request.previous_tutor_turn_id != session.last_tutor_turn_id
+        or request.question_id != session.question_id
+    )
+
+
+async def next_question_updates(
+    session: SessionRecord, phase: Phase
+) -> dict[str, object] | None:
+    """Session updates that route to the next unseen question, or None when
+    the bank has nothing new for the phase."""
+
+    fetched = await get_next_question(
+        session.concept_id, phase, session.served_question_ids
+    )
+    if fetched is None or fetched[2] == session.question_id:
+        return None
+    question_text, correct_answer, question_id = fetched
+    return {
+        "current_question": question_text,
+        "question_id": question_id,
+        "correct_answer": correct_answer,
+        "served_question_ids": [*session.served_question_ids, question_id],
+        "question_number": session.question_number + 1,
+        "attempt_count": 0,
+        "hint_count": 0,
+        "question_completed": False,
+    }
 
 
 def _response_from(
@@ -164,7 +308,11 @@ def _response_from(
     message_voice: str,
     visual_cue: VisualCue | None,
     scaffold_steps: list[str],
-    session_summary: str | None,
+    session_summary: SessionSummary | None,
+    conversation_action: ConversationAction,
+    attempt_increment: int,
+    status: Literal["CLARIFICATION_REQUIRED"] | None,
+    retry_safe: bool | None,
     previous_phase: Phase | None = None,
 ) -> InteractionResponse:
     # previous_phase is only passed on the turn a 6.7 transition executed;
@@ -179,6 +327,21 @@ def _response_from(
     return InteractionResponse(
         session_id=request.session_id,
         student_id=request.student_id,
+        status=status,
+        accepted_turn_id=(
+            session.last_processed_turn_id
+            if request.input_source == "VOICE"
+            else None
+        ),
+        tutor_turn_id=(
+            session.last_tutor_turn_id if request.input_source == "VOICE" else None
+        ),
+        conversation_action=conversation_action,
+        expects_student_response=session.expected_student_response != "NONE",
+        expected_student_response=session.expected_student_response,
+        retry_safe=retry_safe,
+        expected_previous_tutor_turn_id=None,
+        attempt_increment=attempt_increment,
         phase_changed=previous_phase is not None,
         previous_phase=previous_phase,
         phase_transition_message=transition_message,
@@ -203,16 +366,34 @@ def _response_from(
         hint_count=session.hint_count,
         attempt_count=session.attempt_count,
         question_completed=session.question_completed,
+        answer_value_confirmed=session.answer_value_confirmed,
         phase_indicator=session.current_phase,
         recommended_entry_phase=session.recommended_entry_phase,
         session_summary=session_summary,
     )
 
 
+def _cache_voice_response(
+    request: InteractionRequest,
+    response: InteractionResponse,
+) -> InteractionResponse:
+    if request.input_source == "VOICE":
+        cache_interaction_response(request.session_id, response)
+    return response
+
+
 async def process_interaction(
     request: InteractionRequest,
     access_token: str,
-) -> InteractionResponse:
+) -> InteractionResponse | StaleTurnResponse:
+    async with interaction_lock_for(request.session_id):
+        return await _process_interaction(request, access_token)
+
+
+async def _process_interaction(
+    request: InteractionRequest,
+    access_token: str,
+) -> InteractionResponse | StaleTurnResponse:
     """Run a student interaction through the tutor pipeline and return the session view.
 
     The raw RAG/student/tutor outputs still drive the response, but only the
@@ -226,22 +407,24 @@ async def process_interaction(
         request.current_phase,
         request.hint_count,
     )
-    session = restore_interaction_progress(
-        request.session_id,
-        request.student_id,
-        request.attempt_count,
-        request.question_completed,
-        request.conversation_history,
-    )
+    duplicate_response = _duplicate_turn_response(request, session)
+    if duplicate_response is not None:
+        return duplicate_response
+    if _turn_is_stale(request, session):
+        return _stale_turn_response(session)
+
     student_message = _student_message_from(request)
     rules: ClassifierRulesConfig = load_classifier_rules()
 
-    if session.question_completed and _is_acknowledgement(student_message, rules):
-        completion_message: str = rules.messages.QUESTION_COMPLETE_ACKNOWLEDGEMENT
-        completed_history: list[ConversationMessage] = _updated_conversation_history(
+    if (
+        request.input_source == "VOICE"
+        and request.transcript_confidence is not None
+        and request.transcript_confidence < rules.low_transcript_confidence_threshold
+    ):
+        clarification_history = _updated_conversation_history(
             session.conversation_history,
             student_message,
-            completion_message,
+            _LOW_CONFIDENCE_MESSAGE,
             rules.conversation_rules.max_recent_messages,
         )
         updated_session = update_interaction_state(
@@ -258,18 +441,82 @@ async def process_interaction(
             [],
             {
                 "attempt_count": session.attempt_count,
-                "question_completed": True,
-                "conversation_history": completed_history,
+                "question_completed": session.question_completed,
+                "conversation_history": clarification_history,
+                **_voice_turn_updates(
+                    request,
+                    "REQUESTED_CLARIFICATION",
+                    "CLARIFICATION",
+                ),
             },
         )
-        return _response_from(
+        return _cache_voice_response(
             request,
-            updated_session,
+            _response_from(
+                request,
+                updated_session,
+                _LOW_CONFIDENCE_MESSAGE,
+                _LOW_CONFIDENCE_MESSAGE,
+                None,
+                [],
+                None,
+                "REQUEST_CLARIFICATION",
+                0,
+                "CLARIFICATION_REQUIRED",
+                None,
+            ),
+        )
+
+    if (
+        session.question_completed
+        and session.last_tutor_action == "CONFIRMED_CORRECT_ANSWER"
+        and session.expected_student_response == "ACKNOWLEDGEMENT_OR_CONTINUE"
+        and _is_acknowledgement(student_message, rules)
+    ):
+        completion_message: str = rules.messages.CONTEXTUAL_ACKNOWLEDGEMENT
+        completed_history: list[ConversationMessage] = _updated_conversation_history(
+            session.conversation_history,
+            student_message,
             completion_message,
-            completion_message,
+            rules.conversation_rules.max_recent_messages,
+        )
+        advance = await next_question_updates(session, session.current_phase)
+        if advance is None:
+            raise QuestionFetchError(session.concept_id, session.current_phase)
+        updated_session = update_interaction_state(
+            request.session_id,
+            request.student_id,
+            session.current_phase,
+            session.hint_count,
+            session.current_phase,
+            request.transcript_confidence,
+            request.canvas_snapshot_id,
             None,
+            False,
+            False,
             [],
-            None,
+            {
+                "attempt_count": session.attempt_count,
+                "conversation_history": completed_history,
+                **advance,
+                **_voice_turn_updates(request, "ADVANCED_QUESTION", "ANSWER"),
+            },
+        )
+        return _cache_voice_response(
+            request,
+            _response_from(
+                request,
+                updated_session,
+                completion_message,
+                completion_message,
+                None,
+                [],
+                None,
+                "ADVANCE_TO_NEXT_QUESTION",
+                0,
+                None,
+                None,
+            ),
         )
 
     recent_history: list[ConversationMessage] = _recent_conversation_history(
@@ -281,12 +528,16 @@ async def process_interaction(
 
     next_attempt_count = (
         session.attempt_count + 1
-        if request.interaction_type == "ANSWER_SUBMISSION"
+        if (
+            request.interaction_type == "ANSWER_SUBMISSION"
+            and not session.answer_value_confirmed
+        )
         else session.attempt_count
     )
     context = AdapterContext(
         session_id=request.session_id,
         student_id=request.student_id,
+        source_turn_id=request.turn_id or f"TURN-{uuid4().hex.upper()}",
         message=student_message,
         question=session.current_question,
         # Grade against the session's question: after a 6.7 transition swaps
@@ -298,10 +549,12 @@ async def process_interaction(
         attempt_count=next_attempt_count,
         independent_correct_in_session=_independent_correct_in_session(session),
         question_completed=session.question_completed,
+        answer_value_confirmed=session.answer_value_confirmed,
         question_number=session.question_number,
-        current_hint_level=_current_hint_level_from(request.hint_count),
-        concept_id=request.concept_id,
+        current_hint_level=_current_hint_level_from(session.hint_count),
+        concept_id=session.concept_id,
         conversation_history=recent_history,
+        conversation_state=_conversation_state_from_session(session),
         detected_equation=ocr.detected_equation if ocr is not None else None,
         detected_steps=ocr.detected_steps if ocr is not None else [],
         ocr_confidence=ocr.confidence if ocr is not None else None,
@@ -314,9 +567,9 @@ async def process_interaction(
         updated_session = update_interaction_state(
             request.session_id,
             request.student_id,
-            request.current_phase,
-            request.hint_count,
-            request.current_phase,
+            session.current_phase,
+            session.hint_count,
+            session.current_phase,
             request.transcript_confidence,
             request.canvas_snapshot_id,
             None,
@@ -332,16 +585,28 @@ async def process_interaction(
                     fallback,
                     rules.conversation_rules.max_recent_messages,
                 ),
+                **_voice_turn_updates(
+                    request,
+                    session.last_tutor_action,
+                    session.expected_student_response,
+                ),
             },
         )
-        return _response_from(
+        return _cache_voice_response(
             request,
-            updated_session,
-            fallback,
-            fallback,
-            None,
-            [],
-            None,
+            _response_from(
+                request,
+                updated_session,
+                fallback,
+                fallback,
+                None,
+                [],
+                None,
+                "WAIT_FOR_STUDENT",
+                0,
+                None,
+                None,
+            ),
         )
 
     _, student, tutor = await run_tutor_pipeline(context)
@@ -362,7 +627,17 @@ async def process_interaction(
         rules.conversation_rules.max_recent_messages,
     )
 
-    completed = tutor.evaluation == "CORRECT"
+    effective_attempt_increment: int = (
+        tutor.attempt_increment
+        if request.interaction_type == "ANSWER_SUBMISSION"
+        else 0
+    )
+    completed: bool = (
+        tutor.question_completed
+        if request.interaction_type == "ANSWER_SUBMISSION"
+        else session.question_completed
+    )
+    applied_attempt_count: int = session.attempt_count + effective_attempt_increment
     # Chirudeva 6.7: Saravanan's recommendation is the only phase authority;
     # resolve_transition guards against invalid or unrecognised moves.
     recommended: str | None = student.recommended_entry_phase
@@ -374,21 +649,26 @@ async def process_interaction(
             "current_phase": session.current_phase,
             "student_model_recommended_phase": recommended,
             "phase_changed": new_phase is not None,
-            "attempt_count": next_attempt_count,
+            "attempt_count": applied_attempt_count,
         },
     )
 
-    next_hint_count: int = _next_hint_count_from(request)
+    next_hint_count: int = _next_hint_count_from(session, request)
+    conversation_action: ConversationAction = tutor.recommended_conversation_action
     # Persisted every turn: the real attempt counter and completion state Sanya
     # reads back on the next turn.
     state_updates: dict[str, object] = {
-        "attempt_count": next_attempt_count,
+        "attempt_count": applied_attempt_count,
         "question_completed": completed,
+        "answer_value_confirmed": tutor.answer_value_confirmed,
         "conversation_history": conversation_history,
         "recommended_entry_phase": recommended,
         "last_student_model": student,
     }
-    if request.interaction_type == "ANSWER_SUBMISSION":
+    if (
+        request.interaction_type == "ANSWER_SUBMISSION"
+        and effective_attempt_increment == 1
+    ):
         state_updates["per_question_history"] = [
             *session.per_question_history,
             QuestionAttemptRecord(
@@ -422,7 +702,10 @@ async def process_interaction(
                 "served_question_ids": [*session.served_question_ids, question_id],
                 "question_number": session.question_number + 1,
                 "attempt_count": 0,
+                "hint_count": 0,
                 "question_completed": False,
+                "answer_value_confirmed": False,
+                "conversation_history": [],
                 "phase_transitions": [
                     *session.phase_transitions,
                     PhaseTransitionRecord(
@@ -435,27 +718,30 @@ async def process_interaction(
                 **PHASE_COUNTER_RESETS.get(new_phase, {}),
             }
         )
-    elif completed:
-        # Same phase: route to the next question on a correct answer. The
-        # demo stub serves one question per phase, so a same-id fetch just
-        # keeps question_completed=True until a transition swaps the question.
-        fetched = await get_next_question(
-            session.concept_id, session.current_phase, session.served_question_ids
+        conversation_action = "ADVANCE_TO_NEXT_QUESTION"
+    elif conversation_action == "ADVANCE_TO_NEXT_QUESTION":
+        advance = await next_question_updates(session, session.current_phase)
+        if advance is None:
+            raise QuestionFetchError(session.concept_id, session.current_phase)
+        advance["answer_value_confirmed"] = False
+        advance["conversation_history"] = []
+        state_updates.update(advance)
+
+    resulting_question_completed: bool = bool(
+        state_updates.get("question_completed", completed)
+    )
+    last_tutor_action, expected_student_response = _conversation_state_for(
+        conversation_action,
+        resulting_question_completed,
+        tutor.evaluation,
+    )
+    state_updates.update(
+        _voice_turn_updates(
+            request,
+            last_tutor_action,
+            expected_student_response,
         )
-        if fetched is not None and fetched[2] != session.question_id:
-            question_text, correct_answer, question_id = fetched
-            state_updates.update(
-                {
-                    "current_question": question_text,
-                    "question_id": question_id,
-                    "correct_answer": correct_answer,
-                    "served_question_ids": [*session.served_question_ids, question_id],
-                    "question_number": session.question_number + 1,
-                    "attempt_count": 0,
-                    "hint_count": 0,
-                    "question_completed": False,
-                }
-            )
+    )
 
     next_phase = new_phase if new_phase is not None else session.current_phase
     updated_session = update_interaction_state(
@@ -473,13 +759,20 @@ async def process_interaction(
         state_updates,
     )
 
-    return _response_from(
+    return _cache_voice_response(
         request,
-        updated_session,
-        tutor.tutor_message,
-        tutor.tutor_message_voice,
-        visual_cue,
-        scaffold_steps,
-        None,
-        previous_phase=session.current_phase if new_phase is not None else None,
+        _response_from(
+            request,
+            updated_session,
+            tutor.tutor_message,
+            tutor.tutor_message_voice,
+            visual_cue,
+            scaffold_steps,
+            None,
+            conversation_action,
+            effective_attempt_increment,
+            None,
+            None,
+            previous_phase=session.current_phase if new_phase is not None else None,
+        ),
     )

@@ -100,6 +100,7 @@ class TutorEngineServiceAdapter:
                     transcript_confidence=context.transcript_confidence,
                     attempt_count=context.attempt_count if context.attempt_count is not None else 1,
                     question_completed=context.question_completed,
+                    answer_value_confirmed=context.answer_value_confirmed,
                     question_number=context.question_number or 1,
                     current_hint_level=_coerce_hint_level(context.current_hint_level),
                     concept_id=context.concept_id,
@@ -108,6 +109,7 @@ class TutorEngineServiceAdapter:
                     exclude_content_ids=[],
                     canvas_regions=_coerce_canvas_regions(context.canvas_regions),
                     conversation_history=context.conversation_history,
+                    conversation_state=context.conversation_state,
                 )
             )
             return _tutor_result_from_ai_response(ai_response)
@@ -137,6 +139,9 @@ class TutorEngineServiceAdapter:
                     independent_success=False,
                 )
             ],
+            attempt_increment=1,
+            recommended_conversation_action="GIVE_HINT",
+            question_completed=False,
         )
 
     def _mock_response(self, request: TutorEngineRequest) -> TutorResult:
@@ -237,6 +242,13 @@ def _tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:
             )
             for event in response.student_model_events
         ],
+        attempt_increment=response.attempt_increment,
+        recommended_conversation_action=(
+            response.recommended_conversation_action
+        ),
+        question_completed=response.question_completed,
+        answer_value_confirmed=response.answer_value_confirmed,
+        reasoning_complete=response.reasoning_complete,
     )
 
 

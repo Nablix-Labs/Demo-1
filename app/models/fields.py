@@ -63,6 +63,7 @@ SnapshotDataUrl = Annotated[str, AfterValidator(_check_snapshot_data_url)]
 # Non-empty for now; tighten to a pattern when the concept catalog is defined.
 ConceptId = NonEmptyText
 QuestionId = NonEmptyText
+TurnId = NonEmptyText
 
 # Shared enums from the Chirudeva module guide (Submodules 6.1-6.4).
 Phase = Literal[
