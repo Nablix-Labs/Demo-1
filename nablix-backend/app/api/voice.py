@@ -43,7 +43,13 @@ async def voice_transcript_endpoint(
 @router.post("/tts")
 async def voice_tts_endpoint(request: VoiceTTSRequest) -> dict[str, str | None]:
     try:
-        return {"audio_base64": await synthesize_speech(request.text)}
+        return {
+            "audio_base64": await synthesize_speech(
+                request.text,
+                provider=request.provider,
+                voice=request.voice,
+            )
+        }
     except RuntimeError as error:
         # Explicit failure so the frontend can fall back to browser speech.
         raise HTTPException(
@@ -58,7 +64,15 @@ async def voice_stream_endpoint(
     session: str = "default",
     session_id: str | None = None,
     student_id: str = "ST001",
+    tts_provider: str | None = None,
+    tts_voice: str | None = None,
 ) -> None:
     # Frontends have sent both ?session= and ?session_id= at different points;
     # accept either so a client/server version skew can't silently drop the ID.
-    await voice_stream(websocket, session=session_id or session, student_id=student_id)
+    await voice_stream(
+        websocket,
+        session=session_id or session,
+        student_id=student_id,
+        tts_provider=tts_provider,
+        tts_voice=tts_voice,
+    )

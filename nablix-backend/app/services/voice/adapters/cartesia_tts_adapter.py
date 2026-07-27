@@ -39,6 +39,21 @@ def _get_client(api_key: str) -> httpx.AsyncClient:
     return _cartesia_http_client
 
 
+# Curated Cartesia voice presets for the math tutor.
+# Each entry maps a short label to a Cartesia voice UUID.
+# Browse all voices at https://play.cartesia.ai/voices
+CARTESIA_VOICES: dict[str, str] = {
+    "Skylar - Friendly Guide": "db6b0ed5-d5d3-463d-ae85-518a07d3c2b4",
+    "Teacher Lady":            "573e3144-a684-4e72-ac2b-9b2063a50b53",
+    "Tutorial Man":            "bd9120b6-7761-47a6-a446-77ca49132781",
+    "Friendly Sidekick":       "e00d0e4c-a5c8-443f-a8a3-473eb9a62355",
+    "Helpful Woman":           "156fb8d2-335b-4950-9cb3-a2d33befec77",
+    "Calm Lady":               "00a77add-48d5-4ef6-8157-71e5437b282d",
+    "Sweet Lady":              "e3827ec5-697a-4b7c-9704-1a23041bbc51",
+    "Reading Lady":            "15a9cd88-84b0-4a8b-95f2-5d583b54c72e",
+}
+
+
 class CartesiaTTSAdapter(TTSAdapter):
     """Cartesia Sonic TTS adapter.
 
@@ -50,7 +65,7 @@ class CartesiaTTSAdapter(TTSAdapter):
     Voice library: https://play.cartesia.ai/voices
     """
 
-    # Default voice: "Barbershop Man" -- a clear, friendly male voice.
+    # Default voice: "Skylar - Friendly Guide" -- warm, approachable.
     # Browse voices at https://play.cartesia.ai/voices
     # You can swap this for any voice ID from their library.
     DEFAULT_VOICE_ID = "db6b0ed5-d5d3-463d-ae85-518a07d3c2b4"
