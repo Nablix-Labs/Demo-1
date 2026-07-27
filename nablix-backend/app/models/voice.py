@@ -15,9 +15,16 @@ class VoiceRequest(BaseModel):
 
 
 class VoiceTTSRequest(BaseModel):
-    """Text to synthesize into tutor speech (e.g. for the Canvas Check button)."""
+    """Text to synthesize into tutor speech (e.g. for the Canvas Check button).
+
+    provider and voice are optional overrides sent by the frontend voice
+    picker.  When absent the server falls back to the process-level env
+    defaults (VOICE_TTS_PROVIDER / VOICE_TTS_VOICE).
+    """
 
     text: NonEmptyText
+    provider: str | None = None
+    voice: str | None = None
 
 
 class VoiceResponse(BaseModel):
