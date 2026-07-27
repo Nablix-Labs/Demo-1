@@ -905,7 +905,7 @@ def test_transition_step_back_resets_guided_counters(monkeypatch) -> None:
 def test_transition_blocked_when_invalid_or_unknown(monkeypatch) -> None:
     # Spec cases: invalid transitions and unrecognised phases are logged and
     # ignored, never executed.
-    for recommended in ("INDEPENDENT_PRACTICE", "MASTERY"):
+    for recommended in ("REVIEW", "MASTERY"):
         session_id = _start_session("ST023")
         _fake_pipeline(monkeypatch, student_phase=recommended)
 

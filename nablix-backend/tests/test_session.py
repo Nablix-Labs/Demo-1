@@ -6,7 +6,7 @@ from app.main import app
 from app.models.session import QuestionAttemptRecord
 from app.services import session_service
 
-client = TestClient(app)
+client = TestClient(app, headers={"Authorization": "Bearer test-token"})
 
 
 def seed_graded_attempt(session_id: str) -> None:
@@ -37,6 +37,7 @@ def test_session_start_get_and_end_flow() -> None:
             "student_id": "ST001",
             "concept_id": "ALG_LINEAR_ONE_STEP",
             "interaction_mode": "VOICE",
+            "initial_phase": "GUIDED_PRACTICE",
         },
     )
 
@@ -201,6 +202,7 @@ def test_session_start_stores_correct_answer_and_served_ids() -> None:
             "student_id": "ST001",
             "concept_id": "ALG_LINEAR_ONE_STEP",
             "interaction_mode": "TEXT",
+            "initial_phase": "GUIDED_PRACTICE",
         },
     )
     assert response.status_code == 200

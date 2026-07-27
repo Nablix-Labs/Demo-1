@@ -27,6 +27,7 @@ def _start_session() -> str:
             "student_id": "ST101",
             "concept_id": "ALG_LINEAR_ONE_STEP",
             "interaction_mode": "TEXT",
+            "initial_phase": "GUIDED_PRACTICE",
         },
     )
     assert response.status_code == 200
