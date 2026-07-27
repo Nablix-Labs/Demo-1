@@ -34,6 +34,7 @@ from app.models.session import (
     SessionRecord,
     SessionSummary,
 )
+from app.models.student_model_session import GuidedAttemptEvent, SupportUsed
 from app.services.phase_transition import (
     DEFAULT_TRANSITION_MESSAGE,
     PHASE_COUNTER_RESETS,
@@ -41,6 +42,7 @@ from app.services.phase_transition import (
     resolve_transition,
 )
 from app.services.session_service import (
+    _apply_schema_event,
     _get_owned_session_for_turn,
     cache_interaction_response,
     get_canvas_submission,
@@ -69,6 +71,14 @@ _SPOKEN_DIGITS: dict[str, str] = {
     "nine": "9",
     "ten": "10",
 }
+_SUPPORT_RANK: tuple[SupportUsed, ...] = (
+    "NONE",
+    "HINT",
+    "VISUAL_CUE",
+    "SCAFFOLD",
+    "PARALLEL_EXAMPLE",
+    "TUTOR_SOLVED",
+)
 
 
 async def run_tutor_pipeline(
@@ -146,6 +156,54 @@ def _updated_conversation_history(
     if max_messages == 0:
         return []
     return updated_history[-max_messages:]
+
+
+def _schema_question_micro_skills(session: SessionRecord) -> list[str]:
+    event = session.student_model_event
+    if (
+        event is None
+        or event.phase_payload is None
+        or event.phase_payload.question_set is None
+        or session.question_id is None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="The active Schema 3.0 question is missing its micro-skill mapping.",
+        )
+    question = next(
+        (
+            item
+            for item in event.phase_payload.question_set.questions
+            if item.question_id == session.question_id
+        ),
+        None,
+    )
+    if question is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Student Model did not return metadata for {session.question_id}.",
+        )
+    skills = [mapping.micro_skill_id for mapping in question.micro_skill_mappings]
+    if not skills:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Student Model returned no micro-skills for {session.question_id}.",
+        )
+    return skills
+
+
+def _schema_support_used(
+    session: SessionRecord,
+    micro_skill_ids: list[str],
+) -> SupportUsed:
+    event = session.student_model_event
+    if event is None:
+        raise RuntimeError("Schema support lookup requires a stored Student Model event.")
+    support_by_skill = (
+        event.journey_state.phase_2_guided_learning.highest_support_used_by_skill
+    )
+    supports = [support_by_skill.get(skill, "NONE") for skill in micro_skill_ids]
+    return max(supports, key=_SUPPORT_RANK.index)
 
 
 def _recent_conversation_history(
@@ -370,6 +428,8 @@ def _response_from(
         phase_indicator=session.current_phase,
         recommended_entry_phase=session.recommended_entry_phase,
         session_summary=session_summary,
+        student_model_event=session.student_model_event,
+        student_model_state=session.student_model_state,
     )
 
 
@@ -519,6 +579,13 @@ async def _process_interaction(
             ),
         )
 
+    if session.current_question is None or session.question_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="The current phase has no active question.",
+        )
+
+    turn_session = session
     recent_history: list[ConversationMessage] = _recent_conversation_history(
         session.conversation_history,
         rules.conversation_rules.max_recent_messages,
@@ -611,17 +678,64 @@ async def _process_interaction(
 
     _, student, tutor = await run_tutor_pipeline(context)
     tutor = tutor.model_copy(update={"safety_check": safety_check})
-    for event in tutor.student_model_events:
-        student = await adapters.student_model.update_from_event(
-            event,
-            context,
+    schema_response = None
+    schema_session = session.student_model_event is not None
+    schema_managed = (
+        schema_session
+        and session.current_phase == "GUIDED_PRACTICE"
+        and request.interaction_type == "ANSWER_SUBMISSION"
+    )
+    schema_event_type: Literal["CORRECT_ATTEMPT", "INCORRECT_ATTEMPT"] | None = (
+        "CORRECT_ATTEMPT"
+        if tutor.evaluation == "CORRECT"
+        else (
+            "INCORRECT_ATTEMPT"
+            if tutor.evaluation in {"INCORRECT", "PARTIALLY_CORRECT"}
+            else None
+        )
+    )
+    if schema_managed and schema_event_type is not None:
+        stored_event = session.student_model_event
+        if stored_event is None or session.question_id is None:
+            raise RuntimeError("Schema 3.0 guided event lost its stored session state.")
+        micro_skill_ids = _schema_question_micro_skills(session)
+        schema_response = await adapters.student_model.send_session_event(
+            GuidedAttemptEvent(
+                request_id=(
+                    f"{session.session_id}:{schema_event_type}:"
+                    f"{stored_event.journey_state.version + 1}"
+                ),
+                event_type=schema_event_type,
+                topic_id=stored_event.journey_state.topic_id,
+                student_id=session.student_id,
+                timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                question_id=session.question_id,
+                micro_skill_ids=micro_skill_ids,
+                student_response=student_message,
+                support_used=(
+                    _schema_support_used(session, micro_skill_ids)
+                    if schema_event_type == "CORRECT_ATTEMPT"
+                    else None
+                ),
+                error_code=(
+                    tutor.error_type
+                    if schema_event_type == "INCORRECT_ATTEMPT"
+                    else None
+                ),
+            ),
             access_token,
         )
+        session = _apply_schema_event(session, schema_response)
+
+    for event in tutor.student_model_events:
+        if schema_session:
+            continue
+        student = await adapters.student_model.update_from_event(event, context, access_token)
 
     visual_cue = tutor.visual_cue if tutor.visual_cue.show else None
     scaffold_steps = tutor.scaffold_steps_delivered
     conversation_history: list[ConversationMessage] = _updated_conversation_history(
-        session.conversation_history,
+        turn_session.conversation_history,
         student_message,
         tutor.tutor_message,
         rules.conversation_rules.max_recent_messages,
@@ -640,13 +754,25 @@ async def _process_interaction(
     applied_attempt_count: int = session.attempt_count + effective_attempt_increment
     # Chirudeva 6.7: Saravanan's recommendation is the only phase authority;
     # resolve_transition guards against invalid or unrecognised moves.
-    recommended: str | None = student.recommended_entry_phase
-    new_phase = resolve_transition(session.current_phase, recommended)
+    recommended: str | None = (
+        session.recommended_entry_phase
+        if schema_response is not None
+        else student.recommended_entry_phase
+    )
+    new_phase = (
+        session.current_phase
+        if schema_response is not None and session.current_phase != turn_session.current_phase
+        else (
+            resolve_transition(session.current_phase, recommended)
+            if schema_response is None
+            else None
+        )
+    )
     logger.info(
         "phase_transition_evaluated",
         extra={
             "session_id": session.session_id,
-            "current_phase": session.current_phase,
+            "current_phase": turn_session.current_phase,
             "student_model_recommended_phase": recommended,
             "phase_changed": new_phase is not None,
             "attempt_count": applied_attempt_count,
@@ -657,14 +783,26 @@ async def _process_interaction(
     conversation_action: ConversationAction = tutor.recommended_conversation_action
     # Persisted every turn: the real attempt counter and completion state Sanya
     # reads back on the next turn.
+    schema_question_changed = (
+        schema_response is not None and session.question_id != turn_session.question_id
+    )
     state_updates: dict[str, object] = {
-        "attempt_count": applied_attempt_count,
-        "question_completed": completed,
-        "answer_value_confirmed": tutor.answer_value_confirmed,
+        "attempt_count": (
+            session.attempt_count if schema_question_changed else applied_attempt_count
+        ),
+        "question_completed": (
+            session.question_completed if schema_question_changed else completed
+        ),
+        "answer_value_confirmed": (
+            session.answer_value_confirmed
+            if schema_question_changed
+            else tutor.answer_value_confirmed
+        ),
         "conversation_history": conversation_history,
         "recommended_entry_phase": recommended,
-        "last_student_model": student,
     }
+    if schema_response is None:
+        state_updates["last_student_model"] = student
     if (
         request.interaction_type == "ANSWER_SUBMISSION"
         and effective_attempt_increment == 1
@@ -672,9 +810,9 @@ async def _process_interaction(
         state_updates["per_question_history"] = [
             *session.per_question_history,
             QuestionAttemptRecord(
-                question_id=session.question_id,
-                question_text=session.current_question,
-                phase=session.current_phase,
+                question_id=turn_session.question_id,
+                question_text=turn_session.current_question,
+                phase=turn_session.current_phase,
                 evaluation=tutor.evaluation,
                 error_type=tutor.error_type if tutor.evaluation != "CORRECT" else None,
                 input_source=request.input_source,
@@ -684,7 +822,7 @@ async def _process_interaction(
         ]
     elif request.interaction_type == "HINT_REQUEST":
         state_updates["hint_levels_used"] = [*session.hint_levels_used, next_hint_count]
-    if new_phase is not None:
+    if new_phase is not None and schema_response is None:
         # Fetch before committing any state: an Aditya failure raises here,
         # so the session (and its phase) is never touched — rollback for free.
         fetched = await get_next_question(
@@ -719,7 +857,13 @@ async def _process_interaction(
             }
         )
         conversation_action = "ADVANCE_TO_NEXT_QUESTION"
-    elif conversation_action == "ADVANCE_TO_NEXT_QUESTION":
+    elif (
+        conversation_action == "ADVANCE_TO_NEXT_QUESTION"
+        and schema_response is None
+    ):
+        # Same phase: route to the next question on a correct answer. When the
+        # bank is exhausted, question_completed stays True until a transition
+        # swaps the question.
         advance = await next_question_updates(session, session.current_phase)
         if advance is None:
             raise QuestionFetchError(session.concept_id, session.current_phase)
@@ -743,7 +887,9 @@ async def _process_interaction(
         )
     )
 
-    next_phase = new_phase if new_phase is not None else session.current_phase
+    next_phase = session.current_phase if schema_response is not None else (
+        new_phase if new_phase is not None else session.current_phase
+    )
     updated_session = update_interaction_state(
         request.session_id,
         request.student_id,

@@ -12,7 +12,11 @@ from app.models.fields import Phase
 
 
 VALID_TRANSITIONS: dict[Phase, tuple[Phase, ...]] = {
-    "DIAGNOSTIC": ("CONCEPT_ORIENTATION", "GUIDED_PRACTICE"),
+    "DIAGNOSTIC": (
+        "CONCEPT_ORIENTATION",
+        "GUIDED_PRACTICE",
+        "INDEPENDENT_PRACTICE",
+    ),
     "CONCEPT_ORIENTATION": ("GUIDED_PRACTICE", "DIAGNOSTIC", "REVIEW"),
     "GUIDED_PRACTICE": ("INDEPENDENT_PRACTICE", "DIAGNOSTIC", "REVIEW"),
     "INDEPENDENT_PRACTICE": ("GUIDED_PRACTICE", "REVIEW"),
@@ -121,12 +125,12 @@ def resolve_transition(current_phase: Phase, recommended: str | None) -> Phase |
     """
 
     if not recommended:
-        logger.warning("Tamil returned null recommended_entry_phase")
+        logger.warning("Saravanan returned null recommended_entry_phase")
         return None
     if recommended == current_phase:
         return None
     if recommended not in _PHASE_VALUES:
-        logger.error(f"Unrecognised phase from Tamil: {recommended}")
+        logger.error(f"Unrecognised phase from Saravanan: {recommended}")
         return None
     if recommended not in VALID_TRANSITIONS[current_phase]:
         logger.warning(f"Invalid transition attempted: {current_phase} -> {recommended}")

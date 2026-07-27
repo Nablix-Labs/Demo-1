@@ -21,6 +21,10 @@ from app.models.fields import (
     TurnId,
 )
 from app.models.session import CanvasState, SessionSummary, VoiceState
+from app.models.student_model_session import (
+    StudentModelCoreState,
+    StudentModelSessionEventResponse,
+)
 
 
 class InteractionRequest(BaseModel):
@@ -79,7 +83,7 @@ class InteractionResponse(BaseModel):
     phase_transition_message: str | None = None
     phase_transition_voice: str | None = None
     current_phase: Phase
-    current_question: str
+    current_question: str | None
     question_id: str | None = None
     interaction_mode: InteractionMode
     voice_state: VoiceState
@@ -102,6 +106,8 @@ class InteractionResponse(BaseModel):
     phase_indicator: Phase
     recommended_entry_phase: str | None
     session_summary: SessionSummary | None
+    student_model_event: StudentModelSessionEventResponse | None = None
+    student_model_state: StudentModelCoreState | None = None
 
 
 class StaleTurnResponse(BaseModel):

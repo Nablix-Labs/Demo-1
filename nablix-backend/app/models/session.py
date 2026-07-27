@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.adapters import (
     CanvasFeedback,
@@ -12,15 +12,20 @@ from app.models.adapters import (
     VisionOCRResult,
 )
 from app.models.canvas import CanvasSubmissionRecord
-from app.models.session_review import SessionReviewResponse
 from app.models.fields import (
     ConceptId,
     InteractionMode,
+    NonEmptyText,
     Phase,
     QuestionId,
     SessionId,
     StudentId,
     TurnId,
+)
+from app.models.session_review import SessionReviewResponse
+from app.models.student_model_session import (
+    StudentModelCoreState,
+    StudentModelSessionEventResponse,
 )
 
 
@@ -54,6 +59,26 @@ class SessionEndRequest(BaseModel):
     """Validated request to end an active tutoring session."""
 
     session_id: SessionId
+    student_id: StudentId
+
+
+class DiagnosticAnswer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question_id: QuestionId
+    student_response: NonEmptyText
+
+
+class DiagnosticCompleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    student_id: StudentId
+    answers: list[DiagnosticAnswer]
+
+
+class OrientationPhaseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     student_id: StudentId
 
 
@@ -113,8 +138,8 @@ class SessionRecord(BaseModel):
     started_at: datetime
     current_phase: Phase
     previous_phase: Phase | None = None
-    current_question: str
-    question_id: QuestionId
+    current_question: str | None
+    question_id: QuestionId | None
     question_number: int
     # Answer key served with the question (Qdrant payload or demo stub).
     correct_answer: str | None = None
@@ -155,5 +180,7 @@ class SessionRecord(BaseModel):
     # Last learner-state snapshot from Saravanan's service, kept so the
     # end-of-session review reflects his data rather than a reconstruction.
     last_student_model: StudentModelResult | None = None
+    student_model_event: StudentModelSessionEventResponse | None = None
+    student_model_state: StudentModelCoreState | None = None
     session_summary: SessionSummary | None = None
     session_review: SessionReviewResponse | None = None
