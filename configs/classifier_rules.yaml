@@ -174,8 +174,59 @@ conversation_rules:
     - got it
     - understood
     - alright
+    - right
+    - "yes"
+    - yeah
+    - correct
     - thanks
     - thank you
+reasoning_completion:
+  required_phases:
+    - DIAGNOSTIC
+    - CONCEPT_ORIENTATION
+    - GUIDED_PRACTICE
+    - INDEPENDENT_PRACTICE
+    - REVIEW
+  explanation_terms:
+    - because
+    - both sides
+    - inverse operation
+    - opposite operation
+    - cancel
+    - isolate
+    - get x by itself
+    - move
+    - add
+    - added
+    - subtract
+    - subtracted
+    - minus
+    - multiply
+    - multiplied
+    - divide
+    - divided
+    - substitute
+    - substituted
+    - simplify
+    - simplified
+  operation_terms:
+    - add
+    - added
+    - subtract
+    - subtracted
+    - minus
+    - multiply
+    - multiplied
+    - divide
+    - divided
+    - inverse operation
+    - opposite operation
+  minimum_explanation_words: 4
+  minimum_canvas_steps: 2
+  explanation_required_message: Your value is correct. How did you work it out?
+  explanation_incomplete_message: Your value is correct. Explain which operation you used and why.
+  explanation_reason_message: Why was that operation the right one for this equation?
+  explanation_accepted_message: Thanks for explaining your method. Let us continue.
 canvas_review:
   min_region_confidence: 0.75
   max_expression_characters: 160
@@ -244,4 +295,5 @@ messages:
   INSUFFICIENT_INFORMATION: Show one more step so I can check your thinking.
   DEFAULT: Let us review the equation and try the next step carefully.
   QUESTION_COMPLETE_ACKNOWLEDGEMENT: You are welcome. This question is complete, so let us continue to the next question.
+  CONTEXTUAL_ACKNOWLEDGEMENT: Exactly. Let us move to the next question.
   QUESTION_ALREADY_COMPLETE: This question is already complete. Let us continue to the next question.
