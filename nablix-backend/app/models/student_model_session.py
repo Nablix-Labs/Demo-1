@@ -154,6 +154,7 @@ class JourneyPhaseState(BaseModel):
     remaining_micro_skill_ids: list[str] = Field(default_factory=list)
     verified_micro_skill_ids: list[str] = Field(default_factory=list)
     unresolved_micro_skill_ids: list[str] = Field(default_factory=list)
+    retry_required_micro_skill_ids: list[str] = Field(default_factory=list)
     highest_support_used_by_skill: dict[str, SupportUsed] = Field(default_factory=dict)
     current_question_id: str | None = None
     used_question_ids: list[str] = Field(default_factory=list)
@@ -236,12 +237,44 @@ class GuidedAttemptEvent(SessionEventBase):
     error_code: str | None = None
 
 
+class GuidedSupportEvent(SessionEventBase):
+    event_type: Literal[
+        "GUIDED_SUPPORT_ESCALATION_REQUIRED",
+        "MAXIMUM_GUIDED_SUPPORT_REQUIRED",
+    ]
+    question_id: str
+    micro_skill_id: str
+
+
+class GuidedPhaseCompletedEvent(SessionEventBase):
+    event_type: Literal["GUIDED_PHASE_COMPLETED"]
+    completed_micro_skill_ids: list[str]
+
+
+class IndependentRetryCompletedEvent(SessionEventBase):
+    event_type: Literal["INDEPENDENT_RETRY_COMPLETED"]
+    question_id: str
+    micro_skill_ids: list[str]
+    student_response: str
+    independent_success: bool
+    error_code: str | None = None
+
+
+class GuidedQuestionSetRequestedEvent(SessionEventBase):
+    event_type: Literal["GUIDED_QUESTION_SET_REQUESTED"]
+    target_micro_skill_ids: list[str]
+
+
 StudentModelSessionEvent: TypeAlias = (
     DiagnosticQuestionSetRequestedEvent
     | DiagnosticCompletedEvent
     | WorkedExampleRequestedEvent
     | OrientationCompletedEvent
     | GuidedAttemptEvent
+    | GuidedSupportEvent
+    | GuidedPhaseCompletedEvent
+    | IndependentRetryCompletedEvent
+    | GuidedQuestionSetRequestedEvent
 )
 
 

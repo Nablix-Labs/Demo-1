@@ -343,8 +343,20 @@ def _event_response(
         }
         payload["payload_type"] = "SUPPORT_AND_RETRY"
         payload["support_to_serve"] = {
-            "support_type": "HINT",
-            "items": [],
+            "support_type": "HINT_AND_VISUAL_CUE",
+            "items": [
+                {
+                    "content_type": "HINT",
+                    "content_id": "HINT-T02-M1-L1",
+                    "content": "Undo the addition first.",
+                    "level": 1,
+                },
+                {
+                    "content_type": "VISUAL_CUE",
+                    "content_id": "VC-T02-COEFFICIENT-COUNT",
+                    "description": "Count the equal letter terms.",
+                }
+            ],
             "retry_same_question": True,
         }
         routing.update(
@@ -352,6 +364,67 @@ def _event_response(
                 "reason_code": "GUIDED_HINT_REQUIRED",
                 "reason": "Student incorrect. Delivering support for retry.",
                 "next_action": "DELIVER_SUPPORT_AND_RETRY",
+            }
+        )
+    elif event_type == "GUIDED_PHASE_COMPLETED":
+        response = _event_response("ORIENTATION_COMPLETED", request_id)
+        journey = response["journey_state"]
+        payload = response["phase_payload"]
+        routing = response["routing"]
+        assert isinstance(journey, dict)
+        assert isinstance(payload, dict)
+        assert isinstance(routing, dict)
+        journey["current_phase"] = "PHASE_3_INDEPENDENT_PRACTICE"
+        journey["recommended_entry_phase"] = "PHASE_3_INDEPENDENT_PRACTICE"
+        journey["phase_2_guided_learning"]["status"] = "COMPLETED"
+        journey["phase_2_guided_learning"]["completed_micro_skill_ids"] = ["T02.M1"]
+        journey["phase_2_guided_learning"]["remaining_micro_skill_ids"] = []
+        journey["phase_3_independent_practice"] = {
+            "status": "IN_PROGRESS",
+            "phase_visit_no": 1,
+            "target_micro_skill_ids": ["T02.M1"],
+            "remaining_micro_skill_ids": ["T02.M1"],
+            "verified_micro_skill_ids": [],
+            "current_question_id": "Q-T02-004",
+            "used_question_ids": [],
+        }
+        payload["phase"] = "PHASE_3_INDEPENDENT_PRACTICE"
+        payload["payload_type"] = "QUESTION_SET"
+        routing.update(
+            {
+                "reason_code": "GUIDED_COMPLETED",
+                "reason": "Proceeding to Independent Practice.",
+                "next_action": "START_INDEPENDENT",
+            }
+        )
+    elif event_type == "GUIDED_SUPPORT_ESCALATION_REQUIRED":
+        response = _event_response("ORIENTATION_COMPLETED", request_id)
+        journey = response["journey_state"]
+        payload = response["phase_payload"]
+        routing = response["routing"]
+        assert isinstance(journey, dict)
+        assert isinstance(payload, dict)
+        assert isinstance(routing, dict)
+        journey["phase_2_guided_learning"]["highest_support_used_by_skill"] = {
+            "T02.M1": "SCAFFOLD"
+        }
+        payload["payload_type"] = "SCAFFOLD"
+        payload["support_to_serve"] = {
+            "support_type": "SCAFFOLD",
+            "scaffold_id": "SCF-T02-M1",
+            "steps": [
+                {
+                    "step_id": "SCF-T02-M1-S1",
+                    "prompt": "Which operation should you undo first?",
+                }
+            ],
+            "retry_same_question": True,
+        }
+        routing.update(
+            {
+                "reason_code": "GUIDED_SCAFFOLD_REQUIRED",
+                "reason": "Delivering scaffolded support.",
+                "next_action": "DELIVER_SCAFFOLD_STEP",
             }
         )
     return response
@@ -527,6 +600,37 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert guided_incorrect.json()["student_model_state"][
         "highest_support_used_by_skill"
     ] == {"T02.M1": "HINT"}
+    assert guided_incorrect.json()["show_visual_cue"] is True
+    assert guided_incorrect.json()["visual_cue"] == {
+        "show": True,
+        "cue_type": "VC-T02-COEFFICIENT-COUNT",
+        "description": "Count the equal letter terms.",
+    }
+    assert guided_incorrect.json()["message"] == "Undo the addition first."
+
+    for answer in ("x = 3", "x = 2"):
+        guided_incorrect = client.post(
+            "/interaction",
+            json={
+                "session_id": session_id,
+                "student_id": "ST001",
+                "interaction_type": "ANSWER_SUBMISSION",
+                "input_source": "TEXT",
+                "text_input": answer,
+                "current_phase": "GUIDED_PRACTICE",
+                "concept_id": "ALG_LINEAR_ONE_STEP",
+                "question_id": "Q-T02-004",
+                "hint_count": 0,
+            },
+        )
+        assert guided_incorrect.status_code == 200
+
+    assert events[-2]["event_type"] == "INCORRECT_ATTEMPT"
+    assert events[-1]["event_type"] == "GUIDED_SUPPORT_ESCALATION_REQUIRED"
+    assert guided_incorrect.json()["show_scaffold_panel"] is True
+    assert guided_incorrect.json()["scaffold_steps"] == [
+        "Which operation should you undo first?"
+    ]
 
     guided = client.post(
         "/interaction",
@@ -544,14 +648,17 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     )
 
     assert guided.status_code == 200
-    assert events[-1]["event_type"] == "CORRECT_ATTEMPT"
-    assert events[-1]["question_id"] == "Q-T02-004"
-    assert events[-1]["micro_skill_ids"] == ["T02.M1"]
-    assert events[-1]["student_response"] == "x = 5"
-    assert events[-1]["support_used"] == "HINT"
+    assert events[-2]["event_type"] == "CORRECT_ATTEMPT"
+    assert events[-2]["question_id"] == "Q-T02-004"
+    assert events[-2]["micro_skill_ids"] == ["T02.M1"]
+    assert events[-2]["student_response"] == "x = 5"
+    assert events[-2]["support_used"] == "SCAFFOLD"
+    assert events[-1]["event_type"] == "GUIDED_PHASE_COMPLETED"
+    assert events[-1]["completed_micro_skill_ids"] == ["T02.M1"]
+    assert guided.json()["current_phase"] == "INDEPENDENT_PRACTICE"
     state = guided.json()["student_model_state"]
-    assert state["completed_micro_skill_ids"] == ["T02.M1"]
-    assert state["used_question_ids"] == ["Q-T02-004"]
+    assert state["target_micro_skill_ids"] == ["T02.M1"]
+    assert state["completed_micro_skill_ids"] == []
 
 
 def test_diagnostic_no_gaps_honors_direct_independent_transition(monkeypatch) -> None:

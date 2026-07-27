@@ -34,7 +34,15 @@ from app.models.session import (
     SessionRecord,
     SessionSummary,
 )
-from app.models.student_model_session import GuidedAttemptEvent, SupportUsed
+from app.models.student_model_session import (
+    GuidedAttemptEvent,
+    GuidedPhaseCompletedEvent,
+    GuidedQuestionSetRequestedEvent,
+    GuidedSupportEvent,
+    IndependentRetryCompletedEvent,
+    StudentModelSessionEventResponse,
+    SupportUsed,
+)
 from app.services.phase_transition import (
     DEFAULT_TRANSITION_MESSAGE,
     PHASE_COUNTER_RESETS,
@@ -204,6 +212,71 @@ def _schema_support_used(
     )
     supports = [support_by_skill.get(skill, "NONE") for skill in micro_skill_ids]
     return max(supports, key=_SUPPORT_RANK.index)
+
+
+def _schema_visual_cue(
+    event: StudentModelSessionEventResponse | None,
+) -> VisualCue | None:
+    if event is None or event.phase_payload is None:
+        return None
+    support = event.phase_payload.support_to_serve
+    if support is None:
+        return None
+    items = support.get("items")
+    if not isinstance(items, list):
+        return None
+    for item in items:
+        if not isinstance(item, dict) or item.get("content_type") != "VISUAL_CUE":
+            continue
+        content_id = item.get("content_id")
+        description = item.get("description")
+        if not isinstance(content_id, str) or not isinstance(description, str):
+            raise RuntimeError("Student Model returned a malformed visual cue.")
+        return VisualCue(show=True, cue_type=content_id, description=description)
+    return None
+
+
+def _schema_hint(event: StudentModelSessionEventResponse | None) -> str | None:
+    if event is None or event.phase_payload is None:
+        return None
+    support = event.phase_payload.support_to_serve
+    items = support.get("items") if support is not None else None
+    if not isinstance(items, list):
+        return None
+    for item in items:
+        if isinstance(item, dict) and item.get("content_type") == "HINT":
+            content = item.get("content")
+            return content if isinstance(content, str) else None
+    return None
+
+
+def _schema_support_steps(
+    event: StudentModelSessionEventResponse | None,
+) -> list[str]:
+    if event is None or event.phase_payload is None:
+        return []
+    support = event.phase_payload.support_to_serve
+    if support is not None:
+        steps = support.get("steps")
+        if isinstance(steps, list):
+            prompts: list[str] = []
+            for step in steps:
+                if isinstance(step, dict) and isinstance(step.get("prompt"), str):
+                    prompts.append(step["prompt"])
+            return prompts
+    rescue = event.phase_payload.rescue_to_serve
+    if rescue is None:
+        return []
+    result: list[str] = []
+    parallel = rescue.get("parallel_example")
+    if isinstance(parallel, dict):
+        worked_steps = parallel.get("worked_steps")
+        if isinstance(worked_steps, list):
+            result.extend(step for step in worked_steps if isinstance(step, str))
+    solved = rescue.get("tutor_solved")
+    if isinstance(solved, dict) and isinstance(solved.get("explanation"), str):
+        result.append(solved["explanation"])
+    return result
 
 
 def _recent_conversation_history(
@@ -678,11 +751,12 @@ async def _process_interaction(
 
     _, student, tutor = await run_tutor_pipeline(context)
     tutor = tutor.model_copy(update={"safety_check": safety_check})
-    schema_response = None
+    schema_response: StudentModelSessionEventResponse | None = None
+    schema_content_response: StudentModelSessionEventResponse | None = None
     schema_session = session.student_model_event is not None
     schema_managed = (
         schema_session
-        and session.current_phase == "GUIDED_PRACTICE"
+        and session.current_phase in {"GUIDED_PRACTICE", "INDEPENDENT_PRACTICE"}
         and request.interaction_type == "ANSWER_SUBMISSION"
     )
     schema_event_type: Literal["CORRECT_ATTEMPT", "INCORRECT_ATTEMPT"] | None = (
@@ -699,32 +773,147 @@ async def _process_interaction(
         if stored_event is None or session.question_id is None:
             raise RuntimeError("Schema 3.0 guided event lost its stored session state.")
         micro_skill_ids = _schema_question_micro_skills(session)
-        schema_response = await adapters.student_model.send_session_event(
-            GuidedAttemptEvent(
-                request_id=(
-                    f"{session.session_id}:{schema_event_type}:"
-                    f"{stored_event.journey_state.version + 1}"
-                ),
-                event_type=schema_event_type,
-                topic_id=stored_event.journey_state.topic_id,
-                student_id=session.student_id,
-                timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                question_id=session.question_id,
-                micro_skill_ids=micro_skill_ids,
-                student_response=student_message,
-                support_used=(
-                    _schema_support_used(session, micro_skill_ids)
-                    if schema_event_type == "CORRECT_ATTEMPT"
-                    else None
-                ),
-                error_code=(
-                    tutor.error_type
-                    if schema_event_type == "INCORRECT_ATTEMPT"
-                    else None
-                ),
-            ),
-            access_token,
+        retry_required = (
+            stored_event.journey_state.phase_3_independent_practice
+            .retry_required_micro_skill_ids
         )
+        if session.current_phase == "INDEPENDENT_PRACTICE" and retry_required:
+            schema_response = await adapters.student_model.send_session_event(
+                IndependentRetryCompletedEvent(
+                    request_id=(
+                        f"{session.session_id}:INDEPENDENT_RETRY_COMPLETED:"
+                        f"{stored_event.journey_state.version + 1}"
+                    ),
+                    event_type="INDEPENDENT_RETRY_COMPLETED",
+                    topic_id=stored_event.journey_state.topic_id,
+                    student_id=session.student_id,
+                    timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    question_id=session.question_id,
+                    micro_skill_ids=micro_skill_ids,
+                    student_response=student_message,
+                    independent_success=schema_event_type == "CORRECT_ATTEMPT",
+                    error_code=(
+                        tutor.error_type
+                        if schema_event_type == "INCORRECT_ATTEMPT"
+                        else None
+                    ),
+                ),
+                access_token,
+            )
+        else:
+            schema_response = await adapters.student_model.send_session_event(
+                GuidedAttemptEvent(
+                    request_id=(
+                        f"{session.session_id}:{schema_event_type}:"
+                        f"{stored_event.journey_state.version + 1}"
+                    ),
+                    event_type=schema_event_type,
+                    topic_id=stored_event.journey_state.topic_id,
+                    student_id=session.student_id,
+                    timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    question_id=session.question_id,
+                    micro_skill_ids=micro_skill_ids,
+                    student_response=student_message,
+                    support_used=(
+                        _schema_support_used(session, micro_skill_ids)
+                        if (
+                            session.current_phase == "GUIDED_PRACTICE"
+                            and schema_event_type == "CORRECT_ATTEMPT"
+                        )
+                        else None
+                    ),
+                    error_code=(
+                        tutor.error_type
+                        if schema_event_type == "INCORRECT_ATTEMPT"
+                        else None
+                    ),
+                ),
+                access_token,
+            )
+        schema_content_response = schema_response
+
+        if (
+            session.current_phase == "GUIDED_PRACTICE"
+            and schema_event_type == "INCORRECT_ATTEMPT"
+            and tutor.response_strategy in {"SCAFFOLD", "PROVIDE_WORKED_EXAMPLE"}
+        ):
+            escalation_type: Literal[
+                "GUIDED_SUPPORT_ESCALATION_REQUIRED",
+                "MAXIMUM_GUIDED_SUPPORT_REQUIRED",
+            ] = (
+                "GUIDED_SUPPORT_ESCALATION_REQUIRED"
+                if tutor.response_strategy == "SCAFFOLD"
+                else "MAXIMUM_GUIDED_SUPPORT_REQUIRED"
+            )
+            schema_response = await adapters.student_model.send_session_event(
+                GuidedSupportEvent(
+                    request_id=(
+                        f"{session.session_id}:{escalation_type}:"
+                        f"{schema_response.journey_state.version + 1}"
+                    ),
+                    event_type=escalation_type,
+                    topic_id=schema_response.journey_state.topic_id,
+                    student_id=session.student_id,
+                    timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    question_id=session.question_id,
+                    micro_skill_id=micro_skill_ids[0],
+                ),
+                access_token,
+            )
+            schema_content_response = schema_response
+
+        guided = schema_response.journey_state.phase_2_guided_learning
+        if (
+            session.current_phase == "GUIDED_PRACTICE"
+            and (
+                schema_response.routing.next_action == "PROCEED_TO_PHASE_3"
+                or (
+                    schema_event_type == "CORRECT_ATTEMPT"
+                    and not guided.remaining_micro_skill_ids
+                )
+            )
+        ):
+            schema_response = await adapters.student_model.send_session_event(
+                GuidedPhaseCompletedEvent(
+                    request_id=(
+                        f"{session.session_id}:GUIDED_PHASE_COMPLETED:"
+                        f"{schema_response.journey_state.version + 1}"
+                    ),
+                    event_type="GUIDED_PHASE_COMPLETED",
+                    topic_id=schema_response.journey_state.topic_id,
+                    student_id=session.student_id,
+                    timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    completed_micro_skill_ids=guided.completed_micro_skill_ids,
+                ),
+                access_token,
+            )
+
+        if (
+            session.current_phase == "INDEPENDENT_PRACTICE"
+            and retry_required
+            and schema_response.phase_payload is None
+            and schema_response.journey_state.recommended_entry_phase
+            == "PHASE_2_GUIDED_LEARNING"
+        ):
+            unresolved = (
+                schema_response.journey_state.phase_3_independent_practice
+                .unresolved_micro_skill_ids
+            )
+            schema_response = await adapters.student_model.send_session_event(
+                GuidedQuestionSetRequestedEvent(
+                    request_id=(
+                        f"{session.session_id}:GUIDED_QUESTION_SET_REQUESTED:"
+                        f"{schema_response.journey_state.version + 1}"
+                    ),
+                    event_type="GUIDED_QUESTION_SET_REQUESTED",
+                    topic_id=schema_response.journey_state.topic_id,
+                    student_id=session.student_id,
+                    timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    target_micro_skill_ids=unresolved,
+                ),
+                access_token,
+            )
+
         session = _apply_schema_event(session, schema_response)
 
     for event in tutor.student_model_events:
@@ -732,12 +921,18 @@ async def _process_interaction(
             continue
         student = await adapters.student_model.update_from_event(event, context, access_token)
 
-    visual_cue = tutor.visual_cue if tutor.visual_cue.show else None
-    scaffold_steps = tutor.scaffold_steps_delivered
+    visual_cue = _schema_visual_cue(schema_content_response) or (
+        tutor.visual_cue if tutor.visual_cue.show else None
+    )
+    schema_hint = _schema_hint(schema_content_response)
+    schema_steps = _schema_support_steps(schema_content_response)
+    scaffold_steps = schema_steps or tutor.scaffold_steps_delivered
+    tutor_message = schema_hint or tutor.tutor_message
+    tutor_message_voice = schema_hint or tutor.tutor_message_voice
     conversation_history: list[ConversationMessage] = _updated_conversation_history(
         turn_session.conversation_history,
         student_message,
-        tutor.tutor_message,
+        tutor_message,
         rules.conversation_rules.max_recent_messages,
     )
 
@@ -899,7 +1094,7 @@ async def _process_interaction(
         request.transcript_confidence,
         request.canvas_snapshot_id,
         None,
-        tutor.visual_cue.show,
+        visual_cue is not None,
         len(scaffold_steps) > 0,
         scaffold_steps,
         state_updates,
@@ -910,8 +1105,8 @@ async def _process_interaction(
         _response_from(
             request,
             updated_session,
-            tutor.tutor_message,
-            tutor.tutor_message_voice,
+            tutor_message,
+            tutor_message_voice,
             visual_cue,
             scaffold_steps,
             None,
