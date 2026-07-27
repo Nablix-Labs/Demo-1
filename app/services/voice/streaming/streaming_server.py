@@ -30,6 +30,12 @@ if voice_config.OPENAI_API_KEY:
 if voice_config.DEEPGRAM_API_KEY:
     import deepgram_tts_adapter
 
+if voice_config.CARTESIA_API_KEY:
+    import cartesia_tts_adapter
+
+if voice_config.INWORLD_API_KEY:
+    import inworld_tts_adapter
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -40,6 +46,52 @@ logger = logging.getLogger("streaming")
 DEEPGRAM_WS_URL = "wss://api.deepgram.com/v1/listen"
 DEEPGRAM_API_KEY = voice_config.DEEPGRAM_API_KEY
 MAIN_BACKEND_URL = os.getenv("NABLIX_MAIN_BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
+
+# Math-domain keyterms for Deepgram Nova-3 keyterm prompting.
+# These help the STT model recognize math vocabulary that it
+# often mis-transcribes (e.g. "coefficient" -> "co efficient",
+# "x equals" -> "eggs equals"). Up to 100 terms / 500 tokens.
+# Docs: https://developers.deepgram.com/docs/keyterm
+MATH_KEYTERMS = [
+    # Algebra basics
+    "equation", "variable", "coefficient", "constant",
+    "expression", "simplify", "substitute",
+    # Operations
+    "addition", "subtraction", "multiplication", "division",
+    "subtract", "multiply", "divide",
+    # Fractions and numbers
+    "numerator", "denominator", "fraction", "decimal",
+    "negative", "positive", "integer",
+    # Equation solving
+    "solve for x", "both sides", "isolate",
+    "x equals", "inverse operation", "x equal to", "x is equal to", "x is",
+    # Types
+    "linear", "quadratic", "one step", "two step",
+    # Common math phrases students say
+    "plus", "minus", "times", "divided by", "equals",
+    "squared", "cubed", "square root",
+    "greater than", "less than",
+]
+
+
+def _build_deepgram_params(language: str = "en") -> str:
+    """Build the Deepgram WebSocket query string with keyterm prompting."""
+    params = (
+        f"?model=nova-3"
+        f"&language={language}"
+        f"&smart_format=true"
+        f"&punctuate=true"
+        f"&interim_results=true"
+        f"&utterance_end_ms=1500"
+        f"&encoding=linear16"
+        f"&sample_rate=16000"
+        f"&channels=1"
+    )
+    # Add each math keyterm. Multi-word phrases use + encoding.
+    for term in MATH_KEYTERMS:
+        encoded = term.replace(" ", "+")
+        params += f"&keyterm={encoded}"
+    return params
 
 # Reuse one backend client, but create it lazily so importing app.main does not
 # initialize the voice streaming HTTP stack.
@@ -229,7 +281,7 @@ async def warm_tts_connection():
     """
     try:
         tts_adapter = get_tts_adapter(voice_config.DEFAULT_TTS_PROVIDER)
-        await tts_adapter.generate_speech(text=".", voice=voice_config.TTS_VOICE, audio_format="mp3")
+        await tts_adapter.generate_speech(text="hello", voice=voice_config.TTS_VOICE, audio_format="mp3")
         logger.info("TTS connection pre-warmed successfully")
     except Exception as e:
         logger.warning(f"TTS pre-warm failed (non-fatal): {e}")
@@ -388,17 +440,7 @@ async def voice_stream(ws: WebSocket, session: str = "default", student_id: str 
                     audio_started_at = time.time()
                     turn_already_processed = False
 
-                    params = (
-                        f"?model=nova-3"
-                        f"&language={language}"
-                        f"&smart_format=true"
-                        f"&punctuate=true"
-                        f"&interim_results=true"
-                        f"&utterance_end_ms=1500"
-                        f"&encoding=linear16"
-                        f"&sample_rate=16000"
-                        f"&channels=1"
-                    )
+                    params = _build_deepgram_params(language)
 
                     dg_url = DEEPGRAM_WS_URL + params
                     extra_headers = {
@@ -494,17 +536,7 @@ async def voice_stream(ws: WebSocket, session: str = "default", student_id: str 
                         receiving_audio = True
                         audio_started_at = time.time()
 
-                        params = (
-                            f"?model=nova-3"
-                            f"&language={language}"
-                            f"&smart_format=true"
-                            f"&punctuate=true"
-                            f"&interim_results=true"
-                            f"&utterance_end_ms=1500"
-                            f"&encoding=linear16"
-                            f"&sample_rate=16000"
-                            f"&channels=1"
-                        )
+                        params = _build_deepgram_params(language)
                         dg_url = DEEPGRAM_WS_URL + params
                         extra_headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}"}
                         ssl_context = ssl.create_default_context(cafile=certifi.where())
