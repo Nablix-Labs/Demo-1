@@ -26,6 +26,9 @@ def _tutor_result(
         input_source="CANVAS",
         mistake_classification=classification,
         annotation_intents=annotation_intents,
+        attempt_increment=1,
+        recommended_conversation_action="GIVE_HINT",
+        question_completed=False,
     )
 
 

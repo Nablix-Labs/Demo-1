@@ -71,6 +71,7 @@ async def process_hint(
     context = AdapterContext(
         session_id=request.session_id,
         student_id=request.student_id,
+        source_turn_id=f"HINT-{next_hint_level}",
         message=f"Hint request for {request.question_id} ({request.concept_id}).",
         question=session.current_question,
         correct_answer=session.correct_answer,
