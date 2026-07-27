@@ -10,7 +10,9 @@
     "correct_answer": "x = 5",
     "voice_text": "Solve for x. x plus 4 equals 9.",
     "age_band": "11-14",
-    "language": "en"
+    "language": "en",
+    "diagnostic_purpose": "Check if student can solve a basic one-step addition equation by isolating x",
+    "expected_method": "Subtract 4 from both sides to get x = 5"
   },
   {
     "question_id": "ALG_1STEP_DIAG_F02",
@@ -23,7 +25,9 @@
     "correct_answer": "x = 10",
     "voice_text": "Solve for x. x minus 3 equals 7.",
     "age_band": "11-14",
-    "language": "en"
+    "language": "en",
+    "diagnostic_purpose": "Check if student can solve a basic one-step subtraction equation",
+    "expected_method": "Add 3 to both sides to get x = 10"
   },
   {
     "question_id": "ALG_1STEP_DIAG_I01",
@@ -36,7 +40,9 @@
     "correct_answer": "x = 17",
     "voice_text": "Solve for x. x plus 15 equals 32.",
     "age_band": "11-14",
-    "language": "en"
+    "language": "en",
+    "diagnostic_purpose": "Check if student can handle larger numbers in one-step addition equations",
+    "expected_method": "Subtract 15 from both sides to get x = 17"
   },
   {
     "question_id": "ALG_1STEP_CO_F01",
@@ -244,7 +250,9 @@
     "correct_answer": "x = 3",
     "voice_text": "Solve for x. 2x plus 3 equals 9.",
     "age_band": "11-14",
-    "language": "en"
+    "language": "en",
+    "diagnostic_purpose": "Check if student can solve a basic two-step equation requiring subtraction then division",
+    "expected_method": "Subtract 3 from both sides to get 2x = 6, then divide by 2 to get x = 3"
   },
   {
     "question_id": "ALG_2STEP_DIAG_F02",
@@ -257,7 +265,9 @@
     "correct_answer": "x = 3",
     "voice_text": "Solve for x. 3x minus 1 equals 8.",
     "age_band": "11-14",
-    "language": "en"
+    "language": "en",
+    "diagnostic_purpose": "Check if student can solve a two-step equation with subtraction and division",
+    "expected_method": "Add 1 to both sides to get 3x = 9, then divide by 3 to get x = 3"
   },
   {
     "question_id": "ALG_2STEP_CO_F01",

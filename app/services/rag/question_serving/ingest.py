@@ -103,8 +103,14 @@ def _create_indexes(client: QdrantClient):
 
 
 def build_payload(question: dict) -> dict:
-    """Convert a question dict to a Qdrant payload."""
-    return {
+    """Convert a question dict to a Qdrant payload.
+
+    Includes diagnostic-specific fields (diagnostic_purpose, expected_method)
+    if they exist in the question. These are only present on DIAGNOSTIC phase
+    questions and are used by the POST /diagnostic/question endpoint (AD-400).
+    Non-diagnostic questions just won't have these fields -- that's fine.
+    """
+    payload = {
         "question_id": question["question_id"],
         "concept_id": question["concept_id"],
         "topic": question["topic"],
@@ -117,6 +123,14 @@ def build_payload(question: dict) -> dict:
         "age_band": question.get("age_band", "11-14"),
         "language": question.get("language", "en"),
     }
+
+    # AD-400: Add diagnostic fields if present
+    if question.get("diagnostic_purpose"):
+        payload["diagnostic_purpose"] = question["diagnostic_purpose"]
+    if question.get("expected_method"):
+        payload["expected_method"] = question["expected_method"]
+
+    return payload
 
 
 def ingest(input_path: str):

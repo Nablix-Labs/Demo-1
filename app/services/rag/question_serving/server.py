@@ -22,8 +22,11 @@ from openai import OpenAI
 from qdrant_client import QdrantClient
 
 import config
-from models import QuestionNextRequest, QuestionNextResponse, QuestionNotFoundResponse
-from question_service import get_next_question, count_available_questions
+from models import (
+    QuestionNextRequest, QuestionNextResponse, QuestionNotFoundResponse,
+    DiagnosticQuestionRequest, DiagnosticQuestionResponse,
+)
+from question_service import get_next_question, get_diagnostic_question, count_available_questions
 
 logging.basicConfig(
     level=logging.INFO,
@@ -121,6 +124,52 @@ def next_question(body: QuestionNextRequest):
         raise
     except Exception as e:
         logger.error(f"Question retrieval failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/diagnostic/question", response_model=DiagnosticQuestionResponse)
+def diagnostic_question(body: DiagnosticQuestionRequest):
+    """
+    Return the next unseen DIAGNOSTIC question for a concept and difficulty.
+
+    AD-400: Diagnostic Question Bank endpoint.
+    Unlike /question/next, this always filters for DIAGNOSTIC phase
+    and returns extra fields (diagnostic_purpose, expected_method)
+    that help the AI engine interpret the student's response.
+    """
+    try:
+        result = get_diagnostic_question(
+            concept_id=body.concept_id,
+            difficulty=body.difficulty.value,
+            previously_seen_ids=body.previously_seen_ids,
+            qdrant_client=qdrant_client,
+            openai_client=openai_client,
+        )
+
+        if result is None:
+            total = count_available_questions(
+                concept_id=body.concept_id,
+                phase="DIAGNOSTIC",
+                difficulty=body.difficulty.value,
+                qdrant_client=qdrant_client,
+            )
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "message": "No unseen diagnostic questions available for this concept/difficulty.",
+                    "concept_id": body.concept_id,
+                    "difficulty": body.difficulty.value,
+                    "total_questions": total,
+                    "previously_seen": len(body.previously_seen_ids),
+                },
+            )
+
+        return DiagnosticQuestionResponse(**result)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Diagnostic question retrieval failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
