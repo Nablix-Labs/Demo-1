@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -34,6 +35,7 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import AdapterError
 from app.core.logger import logger
 from app.models.adapters import ConversationAction, ConversationMessage, ConversationState
+from app.models.student_model_session import AnswerSpec
 
 if TYPE_CHECKING:
     from app.ai_engine.openai_client import (
@@ -46,6 +48,7 @@ if TYPE_CHECKING:
 class ClassificationRequest(StrictSchema):
     question: str
     correct_answer: str
+    answer_spec: AnswerSpec | None = None
     student_input: str
     current_phase: LearningPhase
     input_source: InputSource
@@ -111,6 +114,7 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
         )
 
     evaluation: EvaluationCategory | None = evaluate_answer_attempt(request, intent, rules)
+    authoritative_verification = uses_authoritative_verification(request)
     error_type: ErrorType | None = classify_student_error(request, evaluation, rules)
     response_strategy: ResponseStrategy = select_response_strategy(
         intent=intent,
@@ -198,7 +202,18 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
             voice_message_override=None,
         )
 
-    decision = build_openai_tutor_decision(request, rules, intent, evaluation, openai_turn)
+    decision = build_openai_tutor_decision(
+        request,
+        rules,
+        intent,
+        evaluation,
+        authoritative_verification,
+        openai_turn,
+    )
+    use_openai_wording = (
+        not authoritative_verification
+        or openai_turn.evaluation == evaluation
+    )
     return build_tutor_response(
         request=request,
         rules=rules,
@@ -206,8 +221,14 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
         decision=decision,
         answer_reveal_allowed=False,
         confidence=openai_turn.confidence,
-        tutor_message_override=openai_turn.tutor_message,
-        voice_message_override=openai_turn.tutor_message_voice_optimised,
+        tutor_message_override=(
+            openai_turn.tutor_message if use_openai_wording else None
+        ),
+        voice_message_override=(
+            openai_turn.tutor_message_voice_optimised
+            if use_openai_wording
+            else None
+        ),
     )
 
 
@@ -242,6 +263,7 @@ def generate_tutor_turn_with_openai(
         return openai_client.generate_tutor_turn(
             question=request.question,
             correct_answer=request.correct_answer,
+            answer_spec=request.answer_spec,
             student_input=request.student_input,
             phase=request.current_phase,
             input_source=request.input_source,
@@ -283,6 +305,7 @@ def build_openai_tutor_decision(
     rules: ClassifierRulesConfig,
     deterministic_intent: IntentType,
     deterministic_evaluation: EvaluationCategory | None,
+    authoritative_verification: bool,
     openai_turn: OpenAITutorTurn,
 ) -> TutorDecision:
     intent = (
@@ -291,9 +314,13 @@ def build_openai_tutor_decision(
         else openai_turn.intent
     )
     evaluation = (
-        "CORRECT"
-        if deterministic_evaluation == "CORRECT"
-        else openai_turn.evaluation
+        deterministic_evaluation
+        if authoritative_verification
+        else (
+            "CORRECT"
+            if deterministic_evaluation == "CORRECT"
+            else openai_turn.evaluation
+        )
     )
     error_type: ErrorType | None = openai_turn.error_type
     if evaluation not in {"INCORRECT", "PARTIALLY_CORRECT"}:
@@ -426,6 +453,9 @@ def evaluate_answer_attempt(
         return "NO_ATTEMPT"
     if is_ambiguous_answer(normalized_input, rules):
         return "UNCLEAR"
+    contract_evaluation = evaluate_answer_contract(request)
+    if contract_evaluation is not None:
+        return contract_evaluation
     if is_voice_value_only_correct(request, rules):
         return "CORRECT"
     if is_value_only_correct(request):
@@ -436,6 +466,128 @@ def evaluate_answer_attempt(
         return "PARTIALLY_CORRECT"
 
     return "INCORRECT"
+
+
+_AUTHORITATIVE_VERIFICATION_METHODS: frozenset[str] = frozenset(
+    {
+        "EXACT_CHOICE_MATCH",
+        "EXACT_NOTATION_MATCH",
+        "SYMBOLIC_EQUIVALENCE",
+    }
+)
+_SUPERSCRIPT_CHARACTERS: dict[str, str] = {
+    "⁰": "0",
+    "¹": "1",
+    "²": "2",
+    "³": "3",
+    "⁴": "4",
+    "⁵": "5",
+    "⁶": "6",
+    "⁷": "7",
+    "⁸": "8",
+    "⁹": "9",
+}
+
+
+def uses_authoritative_verification(request: ClassificationRequest) -> bool:
+    return (
+        request.answer_spec is not None
+        and request.answer_spec.verification_method
+        in _AUTHORITATIVE_VERIFICATION_METHODS
+    )
+
+
+def evaluate_answer_contract(
+    request: ClassificationRequest,
+) -> EvaluationCategory | None:
+    answer_spec = request.answer_spec
+    if answer_spec is None:
+        return None
+    method = answer_spec.verification_method
+    accepted_answers = [
+        answer_spec.canonical_answer,
+        *answer_spec.accepted_answers,
+    ]
+    if method == "EXACT_CHOICE_MATCH":
+        student_choice = request.student_input.strip().upper()
+        accepted_choices = {answer.strip().upper() for answer in accepted_answers}
+        return "CORRECT" if student_choice in accepted_choices else "INCORRECT"
+    if method == "EXACT_NOTATION_MATCH":
+        student_notation = normalize_exact_notation(request.student_input)
+        accepted_notation = {
+            normalize_exact_notation(answer)
+            for answer in accepted_answers
+        }
+        return "CORRECT" if student_notation in accepted_notation else "INCORRECT"
+    if method == "SYMBOLIC_EQUIVALENCE":
+        return (
+            "CORRECT"
+            if is_symbolically_equivalent(request.student_input, accepted_answers)
+            else "INCORRECT"
+        )
+    if normalize_semantic_answer(request.student_input) in {
+        normalize_semantic_answer(answer)
+        for answer in accepted_answers
+    }:
+        return "CORRECT"
+    return None
+
+
+def normalize_exact_notation(value: str) -> str:
+    normalized = unicodedata.normalize("NFC", value)
+    result: list[str] = []
+    index = 0
+    while index < len(normalized):
+        character = normalized[index]
+        if character in _SUPERSCRIPT_CHARACTERS:
+            digits: list[str] = []
+            while (
+                index < len(normalized)
+                and normalized[index] in _SUPERSCRIPT_CHARACTERS
+            ):
+                digits.append(_SUPERSCRIPT_CHARACTERS[normalized[index]])
+                index += 1
+            result.extend(("^", "".join(digits)))
+            continue
+        result.append(character)
+        index += 1
+    compact = "".join(result).replace("−", "-").replace("⁄", "/")
+    compact = re.sub(r"\s+", "", compact)
+    return re.sub(r"\^\{(\d+)\}", r"^\1", compact)
+
+
+def normalize_semantic_answer(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+
+
+def is_symbolically_equivalent(
+    student_input: str,
+    accepted_answers: list[str],
+) -> bool:
+    from sympy import Symbol, simplify, sympify
+
+    allowed_pattern = r"[A-Za-z0-9+\-*/^().\s]+"
+    if re.fullmatch(allowed_pattern, student_input) is None:
+        return False
+    expressions = [student_input, *accepted_answers]
+    symbol_names = set(re.findall(r"[A-Za-z]+", " ".join(expressions)))
+    symbols = {name: Symbol(name) for name in symbol_names}
+    try:
+        student_expression = sympify(
+            student_input.replace("^", "**"),
+            locals=symbols,
+        )
+        return any(
+            simplify(
+                student_expression
+                - sympify(answer.replace("^", "**"), locals=symbols)
+            )
+            == 0
+            for answer in accepted_answers
+            if re.fullmatch(allowed_pattern, answer) is not None
+        )
+    except (TypeError, ValueError, SyntaxError):
+        return False
 
 
 def classify_student_error(
@@ -1068,6 +1220,8 @@ def is_reasoning_required(
     request: ClassificationRequest,
     rules: ClassifierRulesConfig,
 ) -> bool:
+    if uses_authoritative_verification(request):
+        return False
     return request.current_phase in rules.reasoning_completion.required_phases
 
 

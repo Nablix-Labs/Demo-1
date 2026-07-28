@@ -232,6 +232,11 @@ def _recover_demo_session(
             if current_phase == "DIAGNOSTIC"
             else None
         ),
+        diagnostic_transition_messages=(
+            load_phase0_tutor_config().neutral_transition_messages
+            if current_phase == "DIAGNOSTIC"
+            else []
+        ),
         show_canvas=UI_STATE_FLAGS[current_phase]["show_canvas"],
         show_hint_button=UI_STATE_FLAGS[current_phase]["show_hint_button"],
     )
@@ -271,6 +276,11 @@ async def _start_legacy_session(
             load_phase0_tutor_config().neutral_transition_message
             if initial_phase == "DIAGNOSTIC"
             else None
+        ),
+        diagnostic_transition_messages=(
+            load_phase0_tutor_config().neutral_transition_messages
+            if initial_phase == "DIAGNOSTIC"
+            else []
         ),
         show_canvas=UI_STATE_FLAGS[initial_phase]["show_canvas"],
         show_hint_button=UI_STATE_FLAGS[initial_phase]["show_hint_button"],
@@ -343,6 +353,9 @@ async def start_session(
         message=_diagnostic_start_message(),
         diagnostic_transition_message=(
             load_phase0_tutor_config().neutral_transition_message
+        ),
+        diagnostic_transition_messages=(
+            load_phase0_tutor_config().neutral_transition_messages
         ),
         show_canvas=flags["show_canvas"],
         show_hint_button=flags["show_hint_button"],

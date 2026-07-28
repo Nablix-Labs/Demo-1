@@ -1,4 +1,12 @@
 intro_message: "I’ll ask you a few short questions to understand what you already know about this topic. Select the answer you think is correct."
 neutral_transition_message: "Okay. Let’s continue."
+neutral_transition_messages:
+  - "Okay. Let’s continue with the next one."
+  - "Now, see what you think about this question."
+  - "Let’s try the next one."
+  - "Here’s another one for you to consider."
+  - "Take a look at this one and choose what you think is correct."
+  - "Ready for another? Try this one."
+  - "Let’s keep going with one more question."
 gaps_transition_message: "I can see a few areas we should strengthen. Let’s work through them together."
 no_gaps_transition_message: "You already understand the main ideas in this topic. Let’s try some more challenging questions on your own."
