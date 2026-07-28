@@ -242,6 +242,11 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
   return (
     <Centered>
       <div>
+        {i === 0 && backendSession?.message && (
+          <p className="text-[13px] text-slate-blue mb-5 leading-relaxed">
+            {backendSession.message}
+          </p>
+        )}
         <div className="flex items-center gap-1.5 mb-6">
           {questions.map((_, idx) => (
             <span key={idx} className={cn('h-1.5 flex-1 rounded-full', idx <= i ? 'bg-focus-navy' : 'bg-reading-surface')} />
@@ -272,6 +277,12 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
         {/* No score, no verdict: the backend decides what this means. */}
         <p className="text-[11.5px] text-slate-blue mt-5">
           Tap an answer to move on — this only tells Numera where to begin.
+        </p>
+        <p
+          className="min-h-5 text-[12.5px] text-slate-blue mt-2"
+          aria-live="polite"
+        >
+          {picked ? backendSession?.diagnostic_transition_message : ''}
         </p>
       </div>
     </Centered>

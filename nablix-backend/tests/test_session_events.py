@@ -470,6 +470,15 @@ def test_session_start_uses_schema_3_diagnostic_contract(monkeypatch) -> None:
     assert body["current_phase"] == "DIAGNOSTIC"
     assert body["current_question"] == "What does 4y mean?"
     assert body["question_id"] == "Q-T02-D01"
+    assert body["show_canvas"] is False
+    assert body["show_hint_button"] is False
+    assert body["show_visual_cue"] is False
+    assert body["show_scaffold_panel"] is False
+    assert body["message"] == (
+        "I’ll ask you a few short questions to understand what you already know "
+        "about this topic. Select the answer you think is correct."
+    )
+    assert body["diagnostic_transition_message"] == "Okay. Let’s continue."
     assert body["student_model_state"]["target_micro_skill_ids"] == [
         "T02.M1",
         "T02.M2",
@@ -481,6 +490,25 @@ def test_session_start_uses_schema_3_diagnostic_contract(monkeypatch) -> None:
         "T02.M8",
     ]
     assert len(body["student_model_event"]["phase_payload"]["question_set"]["questions"]) == 8
+    public_json = response.text
+    for private_field in (
+        "correct_answer",
+        "canonical_answer",
+        "accepted_answers",
+        "tutor_view",
+        "micro_skill_mappings",
+        "potential_errors",
+        "results_by_skill",
+        "weak_micro_skill_ids",
+        "reason_code",
+    ):
+        assert private_field not in public_json
+    stored = session_service._sessions[body["session_id"]]
+    assert stored.correct_answer == "B"
+    assert stored.student_model_event is not None
+    internal_question_set = stored.student_model_event.phase_payload.question_set
+    assert internal_question_set is not None
+    assert internal_question_set.questions[0].tutor_view.answer_spec.canonical_answer == "B"
     assert captured["url"] == "https://student-model.example/session/event"
     assert captured["headers"] == {"Authorization": "Bearer test-token"}
     payload = captured["payload"]
@@ -541,6 +569,9 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert diagnostic.status_code == 200
     assert diagnostic.json()["current_phase"] == "CONCEPT_ORIENTATION"
     assert diagnostic.json()["current_question"] is None
+    assert diagnostic.json()["message"] == (
+        "I can see a few areas we should strengthen. Let’s work through them together."
+    )
     assert events[-1]["micro_skill_results"] == [
         {"micro_skill_id": "T02.M1", "result": "INCORRECT"}
     ]
@@ -750,6 +781,77 @@ def test_diagnostic_no_gaps_honors_direct_independent_transition(monkeypatch) ->
     body = completed.json()
     assert body["current_phase"] == "INDEPENDENT_PRACTICE"
     assert body["phase_transitions"][-1]["entry_reason"] == "DIAGNOSTIC_NO_GAPS"
+    assert body["message"] == (
+        "You already understand the main ideas in this topic. "
+        "Let’s try some more challenging questions on your own."
+    )
+
+
+def test_diagnostic_requires_every_mapping_for_one_skill_to_be_correct(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_post_json(
+        adapter_name: str,
+        url: str,
+        payload: dict[str, object],
+        headers: dict[str, str],
+        timeout_seconds: int,
+        retry_count: int,
+    ) -> dict[str, object]:
+        del adapter_name, url, headers, timeout_seconds, retry_count
+        captured.update(payload)
+        if payload["event_type"] == "DIAGNOSTIC_QUESTION_SET_REQUESTED":
+            response = _diagnostic_started_response()
+            phase_payload = response["phase_payload"]
+            assert isinstance(phase_payload, dict)
+            question_set = phase_payload["question_set"]
+            assert isinstance(question_set, dict)
+            questions = question_set["questions"]
+            assert isinstance(questions, list)
+            second = deepcopy(questions[0])
+            second["question_id"] = "Q-T02-D01-B"
+            second["question_usage_id"] = "QU-T02-D01-B-P0"
+            questions.append(second)
+            response["request_id"] = payload["request_id"]
+            return response
+        return _event_response(
+            str(payload["event_type"]),
+            str(payload["request_id"]),
+        )
+
+    settings = Settings(
+        student_model_url="https://student-model.example",
+        student_model_topic_codes={"ALG_LINEAR_ONE_STEP": "ALG-ORI-02"},
+        use_mock_student_model=False,
+    )
+    monkeypatch.setattr(provider, "get_settings", lambda: settings)
+    monkeypatch.setattr(session_service, "get_settings", lambda: settings)
+    monkeypatch.setattr(student_model, "post_json", fake_post_json)
+
+    started = client.post(
+        "/session/start",
+        json={
+            "student_id": "ST001",
+            "concept_id": "ALG_LINEAR_ONE_STEP",
+            "interaction_mode": "TEXT",
+        },
+    ).json()
+    completed = client.post(
+        f"/session/{started['session_id']}/diagnostic/complete",
+        json={
+            "student_id": "ST001",
+            "answers": [
+                {"question_id": "Q-T02-D01", "student_response": "B"},
+                {"question_id": "Q-T02-D01-B", "student_response": "A"},
+            ],
+        },
+    )
+
+    assert completed.status_code == 200
+    assert captured["micro_skill_results"] == [
+        {"micro_skill_id": "T02.M1", "result": "INCORRECT"}
+    ]
+    assert completed.json()["current_phase"] == "CONCEPT_ORIENTATION"
 
 
 def test_diagnostic_rejects_incomplete_answers_without_transition(monkeypatch) -> None:

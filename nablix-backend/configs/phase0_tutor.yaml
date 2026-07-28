@@ -1,0 +1,4 @@
+intro_message: "I’ll ask you a few short questions to understand what you already know about this topic. Select the answer you think is correct."
+neutral_transition_message: "Okay. Let’s continue."
+gaps_transition_message: "I can see a few areas we should strengthen. Let’s work through them together."
+no_gaps_transition_message: "You already understand the main ideas in this topic. Let’s try some more challenging questions on your own."
