@@ -40,6 +40,7 @@ from app.services.phase_transition import (
     UI_STATE_FLAGS,
     resolve_transition,
 )
+from app.services.phase0_tutor import load_phase0_tutor_config
 from app.services.student_model_session import (
     PHASE_FROM_STUDENT_MODEL,
     project_student_model_state,
@@ -150,9 +151,11 @@ async def get_next_question(
     return fetched
 
 
-def _diagnostic_start_message(question: str) -> str:
-    """Return the frontend intro message for the first diagnostic question."""
+def _diagnostic_start_message() -> str:
+    return load_phase0_tutor_config().intro_message
 
+
+def _legacy_start_message(question: str) -> str:
     spoken_question: str = question.replace("+", "plus").replace("=", "equals")
     return (
         "Let us start with a quick question to see where you are. "
@@ -212,7 +215,17 @@ def _recover_demo_session(
         ui_state=current_phase,
         hint_count=hint_count,
         status="started",
-        message=_diagnostic_start_message(question),
+        message=(
+            _diagnostic_start_message()
+            if current_phase == "DIAGNOSTIC"
+            else _legacy_start_message(question)
+        ),
+        diagnostic_transition_message=(
+            load_phase0_tutor_config().neutral_transition_message
+            if current_phase == "DIAGNOSTIC"
+            else None
+        ),
+        show_canvas=UI_STATE_FLAGS[current_phase]["show_canvas"],
         show_hint_button=UI_STATE_FLAGS[current_phase]["show_hint_button"],
     )
     _sessions[session_id] = session
@@ -242,7 +255,17 @@ async def _start_legacy_session(
         ui_state=initial_phase,
         hint_count=0,
         status="started",
-        message=_diagnostic_start_message(question),
+        message=(
+            _diagnostic_start_message()
+            if initial_phase == "DIAGNOSTIC"
+            else _legacy_start_message(question)
+        ),
+        diagnostic_transition_message=(
+            load_phase0_tutor_config().neutral_transition_message
+            if initial_phase == "DIAGNOSTIC"
+            else None
+        ),
+        show_canvas=UI_STATE_FLAGS[initial_phase]["show_canvas"],
         show_hint_button=UI_STATE_FLAGS[initial_phase]["show_hint_button"],
     )
     _sessions[session.session_id] = session
@@ -307,7 +330,10 @@ async def start_session(
         served_question_ids=question_ids,
         interaction_mode=request.interaction_mode,
         ui_state=phase,
-        message=_diagnostic_start_message(first.student_view.question_text),
+        message=_diagnostic_start_message(),
+        diagnostic_transition_message=(
+            load_phase0_tutor_config().neutral_transition_message
+        ),
         show_canvas=flags["show_canvas"],
         show_hint_button=flags["show_hint_button"],
         show_visual_cue=flags["show_visual_cue"],
@@ -454,8 +480,21 @@ def _apply_schema_event(
                 ],
             }
         )
-        transition_message = TRANSITION_MESSAGES.get(
-            (session.current_phase, next_phase)
+        phase0_config = load_phase0_tutor_config()
+        transition_message = (
+            phase0_config.gaps_transition_message
+            if (
+                session.current_phase == "DIAGNOSTIC"
+                and next_phase == "CONCEPT_ORIENTATION"
+            )
+            else (
+                phase0_config.no_gaps_transition_message
+                if (
+                    session.current_phase == "DIAGNOSTIC"
+                    and next_phase == "INDEPENDENT_PRACTICE"
+                )
+                else TRANSITION_MESSAGES.get((session.current_phase, next_phase))
+            )
         )
         if transition_message is not None:
             updates["message"] = transition_message

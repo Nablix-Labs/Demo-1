@@ -66,7 +66,7 @@ TRANSITION_MESSAGES: dict[tuple[Phase, Phase], str] = {
 # per-turn tutor outputs overlaid after this map is applied.
 UI_STATE_FLAGS: dict[Phase, dict[str, bool]] = {
     "DIAGNOSTIC": {
-        "show_canvas": True,
+        "show_canvas": False,
         "show_hint_button": False,
         "show_visual_cue": False,
         "show_scaffold_panel": False,
