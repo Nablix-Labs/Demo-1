@@ -56,7 +56,7 @@ export default function AuthShell({
           </div>
         </div>
 
-        <BrandPanel headline={headline} />
+        <BrandPanel headline={headline} side="right" />
       </div>
     </main>
   );

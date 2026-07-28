@@ -2,9 +2,7 @@ import type { Metadata } from 'next';
 import 'katex/dist/katex.min.css';
 import './globals.css';
 import AppFrame from '@/components/AppFrame';
-import NeedHelpButton from '@/components/support/NeedHelpButton';
-import SupportPanel from '@/components/support/SupportPanel';
-import RemoteAssistBanner from '@/components/support/RemoteAssistBanner';
+import SupportChrome from '@/components/support/SupportChrome';
 
 export const metadata: Metadata = {
   title: 'Numera — AI Math Tutor',
@@ -30,10 +28,11 @@ export default function RootLayout({
         >
           <AppFrame>{children}</AppFrame>
         </div>
-        {/* Nablix Assist — in-app support, reachable from every route */}
-        <NeedHelpButton />
-        <SupportPanel />
-        <RemoteAssistBanner />
+        {/* Nablix Assist — in-app support. Mounted inside AppFrame so it can be
+            withheld from the pre-auth screens: a "Need help?" launcher floating
+            over the login page is in-app chrome shown to someone who is not in
+            the app yet. */}
+        <SupportChrome />
       </body>
     </html>
   );

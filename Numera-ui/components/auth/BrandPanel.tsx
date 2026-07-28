@@ -1,5 +1,9 @@
 'use client';
 
+import { useEffect, useState } from 'react';
+import { GrainGradient } from '@paper-design/shaders-react';
+import { cn } from '@/lib/cn';
+
 /**
  * BrandPanel — the deep-blue half of the pre-auth screens.
  *
@@ -10,31 +14,56 @@
  * fold, and getting into the account is the only job of these screens.
  */
 
-export default function BrandPanel({ headline }: { headline: string }) {
+/** True when the viewer has asked for reduced motion — the shader then holds
+ *  still instead of animating. */
+function usePrefersReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    setReduced(mq.matches);
+    const onChange = () => setReduced(mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  return reduced;
+}
+
+export default function BrandPanel({
+  headline,
+  side = 'right',
+}: {
+  headline: string;
+  /** Which column the panel sits in. Login and sign-up sit on opposite sides,
+   *  so moving between them reads as the panel sliding across rather than the
+   *  page being replaced. */
+  side?: 'left' | 'right';
+}) {
+  const reducedMotion = usePrefersReducedMotion();
+
   return (
-    <aside className="relative hidden overflow-hidden rounded-xl bg-focus-navy p-10 text-white lg:flex xl:p-14">
-      {/* Depth built from the brand blues rather than a shader library — a WebGL
-          dependency to light an auth background is weight this app (already
-          carrying a 3D avatar and a canvas engine) shouldn't pay. */}
-      <div
+    <aside
+      className={cn(
+        'relative hidden overflow-hidden rounded-xl bg-focus-navy p-10 text-white lg:flex xl:p-14',
+        side === 'left' ? 'lg:order-first' : 'lg:order-last',
+      )}
+    >
+      {/* Live grain gradient in the brand blues. A flat CSS blend read as a
+          plain panel; the shader gives it depth that moves.
+          `speed={0}` under reduced motion so it renders as a still image. */}
+      <GrainGradient
+        speed={reducedMotion ? 0 : 0.6}
+        scale={1}
+        rotation={0}
+        offsetX={0}
+        offsetY={0}
+        softness={0.5}
+        intensity={0.45}
+        noise={0.22}
+        shape="corners"
+        frame={2854.5}
+        colors={['#0E1A33', '#4169E1', '#00B4D8', '#0E1A33']}
+        colorBack="#0B1426"
         className="absolute inset-0"
-        style={{
-          background:
-            'radial-gradient(120% 90% at 85% 8%, rgba(0,180,216,0.42) 0%, transparent 55%),' +
-            'radial-gradient(110% 80% at 8% 95%, rgba(65,105,225,0.50) 0%, transparent 58%),' +
-            'linear-gradient(160deg, #1B2A4A 0%, #16223c 55%, #101a2e 100%)',
-        }}
-        aria-hidden
-      />
-      {/* Grain, so the gradient reads as a printed surface rather than a flat
-          CSS blend. */}
-      <div
-        className="absolute inset-0 opacity-[0.16] mix-blend-overlay"
-        style={{
-          backgroundImage:
-            "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E\")",
-        }}
-        aria-hidden
       />
 
       {/* The signature: the sigma set enormous and bled off the corner, so the

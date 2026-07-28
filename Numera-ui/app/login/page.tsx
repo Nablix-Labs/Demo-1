@@ -237,7 +237,7 @@ export default function LoginPage() {
           </div>
         </div>
 
-        <BrandPanel headline="Maths that meets you where you are." />
+        <BrandPanel headline="Maths that meets you where you are." side="left" />
       </div>
     </main>
   );
