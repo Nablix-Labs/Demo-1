@@ -168,6 +168,13 @@ export default function LoginPage() {
             <span className="h-px flex-1 bg-muted-gray" />
           </div>
 
+          {/* A real <form>. Without one, Enter in the email or password field did
+              nothing — there was no submit target, so the only way in was
+              clicking the button (reported 2026-07-28). It also stops the
+              browser warning that the password field isn't in a form, which is
+              what password managers key off. */}
+          <form onSubmit={(e) => { e.preventDefault(); onSubmit(); }} noValidate>
+
           {/* Email vs phone-OTP login */}
           <div className="grid grid-cols-2 gap-1 rounded-btn bg-reading-surface p-1 mb-3">
             {([
@@ -176,6 +183,7 @@ export default function LoginPage() {
             ] as const).map(({ id, label, Icon }) => (
               <button
                 key={id}
+                type="button"
                 onClick={() => setLoginMode(id)}
                 className={
                   'flex items-center justify-center gap-1.5 rounded-[10px] py-2 text-[12px] font-semibold transition-colors ' +
@@ -196,6 +204,8 @@ export default function LoginPage() {
                   <Phone size={16} className="text-slate-blue flex-shrink-0" />
                   <input
                     type="tel"
+                    name="tel"
+                    autoComplete="tel"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
                     placeholder="+44 7700 900000"
@@ -213,6 +223,8 @@ export default function LoginPage() {
                   <Mail size={16} className="text-slate-blue flex-shrink-0" />
                   <input
                     type="email"
+                    name="email"
+                    autoComplete="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="you@example.com"
@@ -228,6 +240,8 @@ export default function LoginPage() {
                 </span>
                 <input
                   type="password"
+                  name="password"
+                  autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
@@ -244,12 +258,14 @@ export default function LoginPage() {
           )}
 
           <button
-            onClick={onSubmit}
+            type="submit"
             disabled={!hydrated || submitting}
             className="btn btn-primary w-full mt-5"
           >
             {submitting ? 'Logging in…' : <>Log in <ArrowRight size={16} /></>}
           </button>
+
+          </form>
 
           <p className="text-[12px] text-slate-blue text-center mt-6">
             New to Numera?{' '}
