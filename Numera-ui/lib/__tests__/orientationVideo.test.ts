@@ -79,7 +79,8 @@ describe('orientation video source precedence', () => {
  */
 describe('orientation video hosting preference', () => {
   const resolve = (assetUrl: string | null, topicCode: string) => {
-    if (assetUrl) return { kind: 'backend', value: assetUrl };
+    const heavy = Boolean(assetUrl && assetUrl.includes('nablixmathvideos.blob.core.windows.net'));
+    if (assetUrl && !heavy) return { kind: 'backend', value: assetUrl };
     const yt = orientationYouTubeIdForTopicCode(topicCode);
     if (yt) return { kind: 'youtube', value: yt };
     const blob = orientationVideoForTopicCode(topicCode);
@@ -90,8 +91,17 @@ describe('orientation video hosting preference', () => {
     expect(resolve(null, 'ALG-ORI-02')).toEqual({ kind: 'youtube', value: 'Yl-uS9s4xM0' });
   });
 
-  it('still lets a backend asset_url win over both', () => {
+  it('lets a non-blob backend asset_url win over both', () => {
     expect(resolve('https://cdn.example.com/x.mp4', 'ALG-ORI-02').kind).toBe('backend');
+  });
+
+  it('overrides an asset_url that points at the heavy blob', () => {
+    // The backend now sends asset_url — at the ~163 MB Azure file, which is
+    // exactly the thing making the app sluggish.
+    expect(resolve(
+      'https://nablixmathvideos.blob.core.windows.net/numeradev/ALG-ORI-02.mp4',
+      'ALG-ORI-02',
+    )).toEqual({ kind: 'youtube', value: 'Yl-uS9s4xM0' });
   });
 
   it('falls back to the blob for topics not yet on YouTube', () => {

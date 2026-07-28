@@ -730,12 +730,18 @@ function OrientationItem({
   isLast: boolean;
 }) {
   if (item.content_type === 'ORIENTATION_VIDEO' && item.video) {
-    // The Student Model carries the video record but leaves asset_url null, so
-    // the topic code resolves the upload. YouTube is preferred over the blob
-    // file: same video, but an adaptive CDN stream instead of a ~163 MB
-    // download that bogged the whole app down.
-    const src = item.video.asset_url ?? orientationVideoForTopicCode(topicCode);
-    const youTubeId = item.video.asset_url ? null : orientationYouTubeIdForTopicCode(topicCode);
+    // The backend now sends asset_url — but pointed at the ~163 MB Azure blob,
+    // which is exactly what made the whole app sluggish while a video was on
+    // screen. So YouTube wins over an asset_url that IS one of those blobs
+    // (same video, adaptive CDN stream) and over the blob fallback.
+    //
+    // Any other asset_url is used as given, so the moment the Student Model
+    // serves a CDN or YouTube link itself this override stops applying and the
+    // whole branch can be deleted.
+    const assetUrl = item.video.asset_url;
+    const isHeavyBlob = Boolean(assetUrl?.includes('nablixmathvideos.blob.core.windows.net'));
+    const youTubeId = !assetUrl || isHeavyBlob ? orientationYouTubeIdForTopicCode(topicCode) : null;
+    const src = assetUrl ?? orientationVideoForTopicCode(topicCode);
     return (
       <section>
         <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-2 inline-flex items-center gap-1.5">

@@ -9,11 +9,13 @@
  *   - the orientation video record arrives with `asset_url: null`
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   diagnosticQuestions,
   orientationSequence,
   requiredOrientationContent,
+  completeOrientation,
+  api,
   sessionTopicCode,
   type SessionRecord,
 } from '@/lib/api';
@@ -136,5 +138,50 @@ describe('requiredOrientationContent', () => {
     expect(complete(['VID-KS3-T02-ORI'], [])).toBe(false);                 // video only -> 409
     expect(complete([], ['WE-KS3-T02-01'])).toBe(false);                   // example only -> 409
     expect(complete(['VID-KS3-T02-ORI'], ['WE-KS3-T02-01'])).toBe(true);   // both -> allowed
+  });
+});
+
+/**
+ * completeOrientation must work against a backend on either side of PR #44.
+ *
+ * Frontend and backend deploy independently, so for a window the client sends
+ * completed_video_ids to a backend whose OrientationPhaseRequest still sets
+ * extra="forbid" and answers 422 "Extra inputs are not permitted". Without the
+ * retry, nobody can finish orientation during that window.
+ */
+describe('completeOrientation across backend versions', () => {
+  const url = '/session/SESSION001/orientation/complete';
+  const forbid = {
+    response: { status: 422, data: { message: 'Extra inputs are not permitted', field: 'completed_video_ids' } },
+  };
+
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('sends the ids to a backend that accepts them', async () => {
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { session_id: 'SESSION001' } } as never);
+    await completeOrientation('SESSION001', 'ST001', { videoIds: ['V1'], workedExampleIds: ['W1'] });
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post.mock.calls[0][1]).toMatchObject({
+      completed_video_ids: ['V1'],
+      completed_worked_example_ids: ['W1'],
+    });
+  });
+
+  it('retries without them against a pre-#44 backend', async () => {
+    const post = vi.spyOn(api, 'post')
+      .mockRejectedValueOnce(forbid)
+      .mockResolvedValueOnce({ data: { session_id: 'SESSION001' } } as never);
+    const rec = await completeOrientation('SESSION001', 'ST001', { videoIds: ['V1'], workedExampleIds: ['W1'] });
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(post.mock.calls[1]).toEqual([url, { student_id: 'ST001' }]);
+    expect(rec).toEqual({ session_id: 'SESSION001' });
+  });
+
+  it('does not swallow a real rejection', async () => {
+    // A genuine 409 (missing required content) must still surface.
+    vi.spyOn(api, 'post').mockRejectedValue({ response: { status: 409, data: { message: 'missing' } } });
+    await expect(
+      completeOrientation('SESSION001', 'ST001', { videoIds: [], workedExampleIds: [] }),
+    ).rejects.toBeTruthy();
   });
 });

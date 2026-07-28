@@ -391,12 +391,34 @@ export async function completeOrientation(
   student: string,
   completed: { videoIds: string[]; workedExampleIds: string[] },
 ) {
-  const res = await api.post<SessionRecord>(`/session/${sessionId}/orientation/complete`, {
-    student_id: student,
-    completed_video_ids: completed.videoIds,
-    completed_worked_example_ids: completed.workedExampleIds,
-  });
-  return res.data;
+  const url = `/session/${sessionId}/orientation/complete`;
+  try {
+    const res = await api.post<SessionRecord>(url, {
+      student_id: student,
+      completed_video_ids: completed.videoIds,
+      completed_worked_example_ids: completed.workedExampleIds,
+    });
+    return res.data;
+  } catch (err) {
+    // A backend from before the completion contract (PR #44) sets extra="forbid"
+    // on OrientationPhaseRequest, so the id arrays come back as
+    // 422 "Extra inputs are not permitted". Retry without them so the frontend
+    // works against either version — otherwise deploying the two out of step
+    // leaves nobody able to finish orientation. Remove once #44 is everywhere.
+    if (!isExtraInputsRejected(err)) throw err;
+    console.warn('[orientation] backend predates the completion contract — retrying without content ids');
+    const res = await api.post<SessionRecord>(url, { student_id: student });
+    return res.data;
+  }
+}
+
+/** True when the backend rejected a field it doesn't know about (pre-#44). */
+function isExtraInputsRejected(err: unknown): boolean {
+  const res = (err as { response?: { status?: number; data?: Partial<ApiError> } })?.response;
+  if (res?.status !== 422) return false;
+  const field = res.data?.field ?? '';
+  return /Extra inputs are not permitted/i.test(res.data?.message ?? '')
+    && (field === 'completed_video_ids' || field === 'completed_worked_example_ids');
 }
 
 /** The content ids this session's orientation bundle requires, in order. */
