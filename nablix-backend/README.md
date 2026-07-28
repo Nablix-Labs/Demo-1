@@ -227,7 +227,16 @@ NABLIX_USE_MOCK_STUDENT_MODEL=true
 NABLIX_USE_MOCK_VOICE=true
 NABLIX_ADAPTER_REQUEST_TIMEOUT_SECONDS=20
 NABLIX_ADAPTER_REQUEST_RETRY_COUNT=2
+NABLIX_STUDENT_MODEL_BASE_URL=https://student-model.example
+NABLIX_STUDENT_MODEL_TOKEN=replace-with-service-token
+NABLIX_STUDENT_MODEL_TEST_STUDENT_ID=replace-with-test-student-code
 ```
+
+Demo 3 uses `POST /learning-events` as the Tutor Backend entry point. The
+endpoint accepts Saravanan's flat event contract, based on `request_id` and
+`event_type`, and forwards it to the Student Model's `POST /session/event`.
+Event-specific fields such as `micro_skill_results` and
+`target_micro_skill_ids` remain at the top level.
 
 ## Local Development
 

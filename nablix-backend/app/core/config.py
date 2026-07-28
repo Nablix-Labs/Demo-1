@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     safety_service_url: str = "http://localhost:8004" #manjusha
     student_model_url: str = ""
     student_model_topic_ids: dict[str, int] = Field(default_factory=dict)
+    student_model_base_url: str = ""
+    student_model_token: str = ""
+    student_model_test_student_id: str = ""
     cors_allowed_origins: list[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",

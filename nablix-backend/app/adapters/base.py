@@ -29,6 +29,7 @@ from app.models.adapters import (
     VisionOCRResult,
     VoiceResult,
 )
+from app.models.student_model import StudentModelSessionEvent, StudentModelSessionResponse
 
 
 class RAGServiceAdapter(Protocol):
@@ -65,6 +66,10 @@ class StudentModelAdapter(Protocol):
         context: AdapterContext,
         access_token: str,
     ) -> StudentModelResult: ...
+    async def send_session_event(
+        self,
+        event: StudentModelSessionEvent,
+    ) -> StudentModelSessionResponse: ...
 
 
 class TutorEngineAdapter(Protocol):
