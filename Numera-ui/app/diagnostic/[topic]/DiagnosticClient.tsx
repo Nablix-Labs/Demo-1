@@ -94,6 +94,8 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
   // an effect that retried on failure re-fired continuously and fired 256
   // session starts in five seconds. Only the retry button clears this.
   const started = useRef(false);
+  // True while the chosen option is being shown, just before the next question.
+  const advancing = useRef(false);
 
   const questions = diagnosticQuestions(backendSession);
 
@@ -154,10 +156,19 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
    * picked — the "no gap -> Independent Practice" branch could never fire.
    */
   const choose = (question: SchemaQuestion, response: string) => {
+    if (advancing.current) return;       // ignore a double-tap mid-transition
+    advancing.current = true;
     const next = { ...answers, [question.question_id]: response };
     setAnswers(next);
-    if (i + 1 < questions.length) { setI(i + 1); return; }
-    void submit(next);
+    // Hold on the chosen option for a beat before moving on. Advancing the
+    // instant it is tapped gives no sign the tap landed — the question just
+    // swaps — which is why a tester asked how you go to the next question at
+    // all. The pause is what makes tapping an answer read as the way forward.
+    window.setTimeout(() => {
+      advancing.current = false;
+      if (i + 1 < questions.length) { setI(i + 1); return; }
+      void submit(next);
+    }, 420);
   };
 
   /**
@@ -260,7 +271,7 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
         </div>
         {/* No score, no verdict: the backend decides what this means. */}
         <p className="text-[11.5px] text-slate-blue mt-5">
-          Answer as best you can — this only tells Numera where to begin.
+          Tap an answer to move on — this only tells Numera where to begin.
         </p>
       </div>
     </Centered>

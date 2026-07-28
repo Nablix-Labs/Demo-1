@@ -28,6 +28,22 @@ function GateSkeleton() {
   );
 }
 
+/**
+ * With a backend, the phase is not ours to gate.
+ *
+ * `phasesDone` is written only by the manual mock flow (goStage), so a student
+ * whose phase comes from the Student Model has it empty — and the gate then
+ * blocks the very screen the backend just routed them to. Worse, it blocks the
+ * children from mounting, so the screen never opens a session, the phase never
+ * changes, and nothing can ever unlock it: a deadlock that showed a returning
+ * student "ORIENTATION LOCKED — finish diagnostic first" for a diagnostic they
+ * had already completed (2026-07-28).
+ *
+ * usePhaseRouting already keeps the student on the page matching the backend's
+ * current_phase, which is the real gate. This one is mock-mode scaffolding.
+ */
+const apiEnabled = Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
+
 export default function PhaseGate({
   phase,
   children,
@@ -38,6 +54,8 @@ export default function PhaseGate({
   const phasesDone = useNumeraStore((s) => s.phasesDone);
   const completePhase = useNumeraStore((s) => s.completePhase);
 
+  // Backend-driven builds never gate (see above). Declared after the hooks so
+  // the hook order stays stable.
   // The store rehydrates on the client (skipHydration); wait for it so we don't
   // gate a student who has actually completed the prerequisite.
   const [hydrated, setHydrated] = useState(false);
@@ -46,6 +64,7 @@ export default function PhaseGate({
     return useNumeraStore.persist.onFinishHydration(() => setHydrated(true));
   }, []);
 
+  if (apiEnabled) return <>{children}</>;
   if (!hydrated) return <GateSkeleton />;
 
   const missing = missingPrereqs(phase, phasesDone);

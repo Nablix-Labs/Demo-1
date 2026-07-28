@@ -101,7 +101,15 @@ export interface ApiError {
  * falls back to the caller's generic message.
  */
 export function studentFacingError(err: unknown): string | null {
-  const code = (err as { response?: { data?: Partial<ApiError> } })?.response?.data?.error_code;
+  const res = (err as { response?: { status?: number; data?: Partial<ApiError> } })?.response;
+  // 409 on a session call means the Student Model already has this topic part
+  // way through and will not hand back a fresh one. There is no resume path yet
+  // (backend ask #3), so say what is actually true rather than blaming the
+  // network and sending the student off retrying forever.
+  if (res?.status === 409) {
+    return 'You already have this topic in progress, and the tutor can\u2019t pick it back up yet. Ask the team to reset it for you.';
+  }
+  const code = res?.data?.error_code;
   switch (code) {
     case 'AUTHENTICATION_FAILED':
       return 'Your session needs to be signed in again before I can mark that. Please log in and retry.';

@@ -35,6 +35,7 @@ import {
   type OrientationMedia,
 } from '@/lib/demoContent';
 import { useNumeraStore, type TutorElement } from '@/store/useNumeraStore';
+import { beginSession, sessionStartError } from '@/hooks/useDemoTutor';
 import { useAuthStore } from '@/store/useAuthStore';
 import {
   completeOrientation,
@@ -78,15 +79,20 @@ const KIND_LABEL: Record<OrientationMedia['kind'], { icon: typeof Film; text: st
 const apiEnabled = Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
 /**
- * With a live session the Student Model owns this phase — it says what to play
- * and in what order. Without one (mock mode, or the session hasn't started)
- * fall back to the local demo content so the flow still runs standalone.
+ * The Student Model owns this phase — it says what to play and in what order.
+ *
+ * The demo content is ONLY for a build with no backend. This used to also fall
+ * back to it whenever there was no local session, which is the state a returning
+ * student is in on every fresh page load: the tutoring session lives in the
+ * backend's memory and its id is not persisted. So a student routed here by
+ * their journey was shown the hardcoded "x + 4 = 9" concept check — silently,
+ * with no narration, and with no way to reach the real lesson (Manjusha,
+ * 2026-07-28). Showing invented content in place of a failure is worse than
+ * showing the failure.
  */
 export default function OrientationClient({ topicId }: { topicId: string }) {
-  const sessionId = useNumeraStore((s) => s.sessionId);
-  return apiEnabled && sessionId
-    ? <BackendOrientation topicId={topicId} sessionId={sessionId} />
-    : <MockOrientation topicId={topicId} />;
+  if (!apiEnabled) return <MockOrientation topicId={topicId} />;
+  return <BackendOrientation topicId={topicId} />;
 }
 
 function MockOrientation({ topicId }: { topicId: string }) {
@@ -459,8 +465,10 @@ function MicroCard({ media }: { media: Extract<OrientationMedia, { kind: 'micro'
  * Guided Practice — leaving the screen without it means the Student Model still
  * has the student in PHASE_1_ORIENTATION, and they land back here next session.
  */
-function BackendOrientation({ topicId, sessionId }: { topicId: string; sessionId: string }) {
+function BackendOrientation({ topicId }: { topicId: string }) {
   const topic = getTopic(topicId);
+  const sessionId = useNumeraStore((s) => s.sessionId);
+  const activeConceptId = useNumeraStore((s) => s.activeConceptId);
   const backendSession = useNumeraStore((s) => s.backendSession);
   const setBackendSession = useNumeraStore((s) => s.setBackendSession);
   const setCurrentPhase = useNumeraStore((s) => s.setCurrentPhase);
@@ -485,7 +493,17 @@ function BackendOrientation({ topicId, sessionId }: { topicId: string; sessionId
     setStatus('loading');
     setError(null);
     try {
-      const rec = await startOrientation(sessionId, studentId());
+      // No local session — a returning student on a fresh load. Open one; the
+      // backend always starts it in DIAGNOSTIC, and usePhaseRouting then moves
+      // them to the phase it actually reports. (A true mid-journey resume needs
+      // the backend change tracked as ask #3.)
+      const active = sessionId ?? (await beginSession(activeConceptId, 'TEXT'))?.session_id;
+      if (!active) {
+        setError(sessionStartError() ?? "Couldn't reach the tutor to load this topic.");
+        setStatus('error');
+        return;
+      }
+      const rec = await startOrientation(active, studentId());
       setBackendSession(rec);
       setStatus(orientationSequence(rec).length > 0 ? 'ready' : 'empty');
     } catch {
@@ -495,7 +513,7 @@ function BackendOrientation({ topicId, sessionId }: { topicId: string; sessionId
       // diagnostic screen once fired thousands of requests. Only the retry
       // button below clears it.
     }
-  }, [sessionId, setBackendSession]);
+  }, [sessionId, activeConceptId, setBackendSession]);
 
   // Always call /orientation/start once per session — even though
   // /diagnostic/complete already returned an orientation_bundle.
@@ -514,6 +532,7 @@ function BackendOrientation({ topicId, sessionId }: { topicId: string; sessionId
   }, [sessionId]);
 
   const finish = async () => {
+    if (!sessionId) return;   // load() opens one first; nothing to complete yet
     setFinishing(true);
     setError(null);
     try {
