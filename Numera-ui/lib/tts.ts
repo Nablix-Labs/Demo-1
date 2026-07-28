@@ -21,6 +21,8 @@
  */
 
 import { useMicLevel } from '@/store/useMicLevel';
+import { useAuthStore } from '@/store/useAuthStore';
+import { defaultVoiceForTier } from '@/lib/voiceOptions';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { synthesizeSpeech } from '@/lib/api';
 
@@ -110,8 +112,14 @@ export function speakTutor(text: string, onEnd?: () => void): void {
   const token = speakToken;
   // Testing-only voice variant, read at call time so a change takes effect on the
   // next reply without re-wiring callers (see lib/voiceOptions.ts).
+  // Fall back to the tier's provider when nothing is picked — sending no
+  // provider hits the backend's broken default and 502s (see
+  // defaultVoiceForTier), which is what put students on the browser voice.
   const { ttsProvider, ttsVoice } = useNumeraStore.getState();
-  synthesizeSpeech(text, { provider: ttsProvider, voice: ttsVoice })
+  const fallback = ttsProvider ? null : defaultVoiceForTier(useAuthStore.getState().tier);
+  const provider = ttsProvider ?? fallback?.provider ?? null;
+  const voice = ttsVoice ?? fallback?.voice ?? null;
+  synthesizeSpeech(text, { provider, voice })
     .then((audioBase64) => {
       if (token !== speakToken) return; // superseded while fetching
       if (!audioBase64) { speakBrowser(text, onEnd); return; }

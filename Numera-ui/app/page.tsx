@@ -134,11 +134,22 @@ export default function LessonPage() {
   // only on mute there.
   const capture = VOICE_TRANSPORT === 'server' ? voiceStream : voice;
   const listening = VOICE_TRANSPORT === 'server' ? !micMuted : voiceStatus === 'listening' && !micMuted;
+
+  // Depend on the individual callbacks, not on `capture`. The hooks return a
+  // fresh object every render, so depending on it re-ran this effect on EVERY
+  // render — a constant start/stop churn against an async getUserMedia, which
+  // is what made it possible for the mic to end up live while muted.
+  // start/stop are useCallback-stable, so this now runs only when the
+  // listening decision actually changes.
+  const { supported: captureSupported, start: startCapture, stop: stopCapture } = capture;
   useEffect(() => {
-    if (!apiEnabled || !sessionId || !capture.supported) return;
-    if (listening) void capture.start();
-    else capture.stop();
-  }, [apiEnabled, sessionId, listening, capture]);
+    if (!apiEnabled || !sessionId || !captureSupported) return;
+    if (listening) void startCapture();
+    else stopCapture();
+  }, [apiEnabled, sessionId, listening, captureSupported, startCapture, stopCapture]);
+
+  // Whatever happens, the mic must not outlive this screen.
+  useEffect(() => stopCapture, [stopCapture]);
 
   // Navigation off this page is backend-phase-driven (usePhaseRouting follows
   // the session's current_phase), so the lesson chrome carries no manual

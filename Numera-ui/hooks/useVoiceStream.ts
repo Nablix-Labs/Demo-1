@@ -85,7 +85,23 @@ export function useVoiceStream({ onAudio }: UseVoiceStreamOptions) {
   const ctxRef = useRef<AudioContext | null>(null);
   const procRef = useRef<ScriptProcessorNode | null>(null);
 
+  /**
+   * Bumped by every stop(). A start() that was awaiting getUserMedia compares
+   * the generation it began in against this: if they differ it was cancelled
+   * while waiting, and must throw away the stream it just acquired.
+   *
+   * Without it the mic could go live AFTER being muted — start()'s only guard
+   * was `ctxRef.current`, which isn't set until after the await, so a stop()
+   * during permission/acquisition cleared nothing and the pending start() then
+   * installed a live capture. The student saw "Muted" while the tutor kept
+   * hearing them and answering (reported 2026-07-28).
+   */
+  const generation = useRef(0);
+  const starting = useRef(false);
+
   const stop = useCallback(() => {
+    generation.current += 1;
+    starting.current = false;
     setActive(false);
     procRef.current?.disconnect();
     procRef.current = null;
@@ -97,11 +113,29 @@ export function useVoiceStream({ onAudio }: UseVoiceStreamOptions) {
   }, []);
 
   const start = useCallback(async () => {
-    if (!supported || ctxRef.current) return;
+    // `starting` is checked synchronously so two calls in the same tick can't
+    // both get past the guard and open two microphones.
+    if (!supported || ctxRef.current || starting.current) return;
+    starting.current = true;
+    const myGeneration = generation.current;
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: audioConstraints({ echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }),
-    });
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: audioConstraints({ echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }),
+      });
+    } catch {
+      starting.current = false;   // permission refused or no device
+      return;
+    }
+
+    // Muted (or unmounted) while we were waiting — release the mic immediately
+    // rather than wiring up a capture nobody asked for.
+    if (myGeneration !== generation.current) {
+      stream.getTracks().forEach((t) => t.stop());
+      starting.current = false;
+      return;
+    }
     streamRef.current = stream;
 
     const Ctx = window.AudioContext ?? (window as SpeechWindow).webkitAudioContext!;
@@ -135,6 +169,7 @@ export function useVoiceStream({ onAudio }: UseVoiceStreamOptions) {
 
     useMicLevel.getState().setActive(true);
     setActive(true);
+    starting.current = false;
   }, [supported]);
 
   // Clean up on unmount.

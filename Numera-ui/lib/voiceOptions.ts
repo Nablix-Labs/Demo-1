@@ -124,3 +124,23 @@ export function providersForTier(tier: string | null | undefined): VoiceProvider
   if (!id) return [];
   return VOICE_PROVIDERS.filter((p) => p.id === id);
 }
+
+/**
+ * The provider/voice to send when the student hasn't picked one.
+ *
+ * The backend's own default is broken: POST /voice/tts with no provider returns
+ * 502 "Text-to-speech is unavailable right now", while the same call WITH an
+ * explicit provider returns audio (verified 2026-07-28). Sending nothing
+ * therefore meant every reply fell back to the browser's robotic voice.
+ *
+ * Naming the tier's provider explicitly sidesteps that entirely, and is what we
+ * want anyway — the student hears the voice their plan includes rather than
+ * whatever the server env happens to be set to.
+ */
+export function defaultVoiceForTier(
+  tier: string | null | undefined,
+): { provider: string; voice: string } | null {
+  const provider = providersForTier(tier)[0];
+  if (!provider || !provider.voices.length) return null;
+  return { provider: provider.id, voice: provider.voices[0].id };
+}

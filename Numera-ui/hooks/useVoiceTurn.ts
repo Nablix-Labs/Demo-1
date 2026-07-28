@@ -120,7 +120,21 @@ export function useVoiceTurn({
     if (text) onTurnEndRef.current(text, confidenceRef.current);
   }, []);
 
+  /**
+   * Bumped by every stop(), so a start() that was awaiting getUserMedia can
+   * tell it was cancelled and release the stream instead of going live.
+   *
+   * start()'s only guard was `activeRef.current`, which isn't set until after
+   * the await — so muting during permission/acquisition cleared nothing and the
+   * pending start() then opened the mic anyway. The student saw "Muted" while
+   * the tutor kept hearing them (reported 2026-07-28).
+   */
+  const generation = useRef(0);
+  const starting = useRef(false);
+
   const stop = useCallback(() => {
+    generation.current += 1;
+    starting.current = false;
     activeRef.current = false;
     setActive(false);
     setSpeaking(false);
@@ -138,11 +152,29 @@ export function useVoiceTurn({
   }, []);
 
   const start = useCallback(async () => {
-    if (activeRef.current || !supported) return;
+    // `starting` is checked synchronously so two calls in one tick can't both
+    // get past the guard and open two microphones.
+    if (activeRef.current || starting.current || !supported) return;
+    starting.current = true;
+    const myGeneration = generation.current;
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: audioConstraints({ echoCancellation: true, noiseSuppression: true, autoGainControl: true }),
-    });
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: audioConstraints({ echoCancellation: true, noiseSuppression: true, autoGainControl: true }),
+      });
+    } catch {
+      starting.current = false;   // permission refused or no device
+      return;
+    }
+
+    // Muted (or unmounted) while waiting — release the mic rather than wiring
+    // up a capture nobody asked for.
+    if (myGeneration !== generation.current) {
+      stream.getTracks().forEach((t) => t.stop());
+      starting.current = false;
+      return;
+    }
     streamRef.current = stream;
 
     const Ctx = window.AudioContext ?? (window as SpeechWindow).webkitAudioContext!;
@@ -224,6 +256,7 @@ export function useVoiceTurn({
     }
 
     activeRef.current = true;
+    starting.current = false;
     setActive(true);
     lastVoiceTsRef.current = performance.now();
 
