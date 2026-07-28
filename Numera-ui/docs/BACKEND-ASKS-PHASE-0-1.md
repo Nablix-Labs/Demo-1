@@ -33,6 +33,11 @@ fixed. Both are kept below so the findings aren't lost.
 
 **Items 3 and 4 are what still block the demo path.**
 
+> ### 🔴 9. NOBODY CAN START A SESSION RIGHT NOW — see item 9 below
+> Every `POST /session/start` is being rejected by student_model as a
+> `DUPLICATE_REQUEST`. This is not intermittent; it is total, and a backend
+> restart makes it worse rather than better. One-line fix, details below.
+
 ---
 
 ## 1. ~~`/auth/login` must return `student_code`~~ — DONE
@@ -300,3 +305,69 @@ For reference, so the contract is unambiguous:
 - Voice: `provider`/`voice` are sent on `/voice/tts` and as `tts_provider`/
   `tts_voice` on the `/voice/stream` WS, with all Cartesia and Inworld presets
   exposed in the picker (issue #41).
+
+
+---
+
+## 9. Session start is permanently broken by a reused `request_id` (🔴 LIVE OUTAGE)
+
+**Every `POST /session/start` currently fails.** Verified against the live VM at
+2026-07-28 10:0x UTC — four consecutive attempts, all rejected:
+
+```
+attempt 1 -> REJECTED  (collided on SESSION010:DIAGNOSTIC_QUESTION_SET_REQUESTED)
+attempt 2 -> REJECTED  (collided on SESSION011:DIAGNOSTIC_QUESTION_SET_REQUESTED)
+attempt 3 -> REJECTED  (collided on SESSION012:DIAGNOSTIC_QUESTION_SET_REQUESTED)
+attempt 4 -> REJECTED  (collided on SESSION013:DIAGNOSTIC_QUESTION_SET_REQUESTED)
+```
+
+```json
+{"error_code": "DOWNSTREAM_REQUEST_REJECTED",
+ "message": "student_model rejected request status=409 body={\"error_code\":\"DUPLICATE_REQUEST\"}"}
+```
+
+### Why
+
+Two facts combine badly:
+
+1. `_build_session_id()` (`session_service.py:56`) counts from an **in-memory**
+   `_next_session_number = 1`, so ids are `SESSION001`, `SESSION002`, … and
+   **reset to 1 on every restart**.
+2. The start event's id is derived from the session id alone
+   (`session_service.py:296`):
+   ```python
+   request_id=f"{session_id}:DIAGNOSTIC_QUESTION_SET_REQUESTED"
+   ```
+
+student_model dedupes on `request_id` **permanently** (it is in Postgres, not
+memory). So after a restart the counter replays ids whose request_ids have
+already been consumed, and every one of them is refused.
+
+This gets **worse with each restart**, never better: the set of burned ids only
+grows, so the number of dead attempts at the start of each run keeps rising.
+It also explains the "works for X but not for Y" reports — it depends entirely
+on where the counter happens to be.
+
+### Fix (one line)
+
+Make the request id unique per attempt rather than derived from a reused
+counter:
+
+```python
+request_id=f"{session_id}:DIAGNOSTIC_QUESTION_SET_REQUESTED:{uuid4()}"
+```
+
+…or persist `_next_session_number` so ids are never reused. The same reasoning
+applies to `_schema_request_id()`, which builds ids from
+`session_id + event_type + journey version` — also reused after a restart.
+
+**Do not restart the service as a workaround.** It resets the counter to 1 and
+guarantees collisions from the very first request.
+
+### Related
+
+This is the same in-memory counter as item 7 (`SESSION999` exhaustion). Both go
+away if session ids are persisted or made unique.
+
+**Nothing can be done frontend-side** — `request_id` is minted entirely on the
+backend.
