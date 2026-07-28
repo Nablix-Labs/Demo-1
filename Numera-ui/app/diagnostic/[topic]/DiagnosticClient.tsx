@@ -187,22 +187,41 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
     advancing.current = true;
     const next = { ...answers, [question.question_id]: response };
     setAnswers(next);
-    // The tutor's between-questions line, spoken as well as shown.
-    const transition = diagnosticTransitionFor(
+
+    const isLast = i + 1 >= questions.length;
+    const transition = isLast ? null : diagnosticTransitionFor(
       backendSession?.diagnostic_transition_messages,
       backendSession?.diagnostic_transition_message,
-      i
+      i,
     );
-    if (i + 1 < questions.length && transition) speakTutor(transition);
-    // Hold on the chosen option for a beat before moving on. Advancing the
-    // instant it is tapped gives no sign the tap landed — the question just
-    // swaps — which is why a tester asked how you go to the next question at
-    // all. The pause is what makes tapping an answer read as the way forward.
-    window.setTimeout(() => {
-      advancing.current = false;
-      if (i + 1 < questions.length) { setI(i + 1); return; }
-      void submit(next);
-    }, 420);
+
+    /**
+     * Move on once the tutor has finished saying the transition — not on a
+     * fixed timer. A flat 420ms flashed the line up and swapped the question
+     * before it could be read, which looked broken rather than conversational
+     * (Sanya, 2026-07-28).
+     *
+     * MIN_DWELL keeps a short line on screen long enough to register; the
+     * failsafe covers a TTS provider that never calls back, so a silent failure
+     * can't strand the student mid-check.
+     */
+    const MIN_DWELL = 900;
+    const FAILSAFE = 8000;
+    const shownAt = Date.now();
+    let moved = false;
+    const go = () => {
+      if (moved) return;
+      moved = true;
+      window.setTimeout(() => {
+        advancing.current = false;
+        if (!isLast) { setI(i + 1); return; }
+        void submit(next);
+      }, Math.max(0, MIN_DWELL - (Date.now() - shownAt)));
+    };
+
+    if (transition) speakTutor(transition, go);
+    else window.setTimeout(go, 420);
+    window.setTimeout(go, FAILSAFE);
   };
 
   /**
