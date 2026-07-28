@@ -11,18 +11,15 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Volume2 } from 'lucide-react';
+import { Volume2, X } from 'lucide-react';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { VOICE_PROVIDERS, providerById, VOICE_SAMPLE_TEXT } from '@/lib/voiceOptions';
 import { speakTutor } from '@/lib/tts';
-
-const PANEL_W = 288;
 
 export default function VoicePicker() {
   const ttsProvider = useNumeraStore((s) => s.ttsProvider);
   const ttsVoice = useNumeraStore((s) => s.ttsVoice);
   const setTtsVoice = useNumeraStore((s) => s.setTtsVoice);
-  const panelSide = useNumeraStore((s) => s.panelSide);
 
   const [open, setOpen] = useState(false);
   const [customVoice, setCustomVoice] = useState('');
@@ -34,8 +31,8 @@ export default function VoicePicker() {
 
   useEffect(() => {
     if (!open) return;
-    // The popover is portalled out of this subtree, so an outside-click test has
-    // to check the popover AND the trigger explicitly — the trigger would
+    // The dialog is portalled out of this subtree, so an outside-click test has
+    // to check the dialog AND the trigger explicitly — the trigger would
     // otherwise close on mousedown and immediately reopen on click.
     const onDoc = (e: MouseEvent) => {
       const t = e.target as Node;
@@ -50,25 +47,6 @@ export default function VoicePicker() {
 
   const selected = ttsProvider ? providerById(ttsProvider) : undefined;
   const triggerLabel = selected ? `${selected.label} · ${ttsVoice ?? 'default'}` : 'Backend default';
-
-  /**
-   * The popover renders in a portal with fixed positioning because the tutor
-   * panel `<aside>` is `overflow-hidden` and only 234px wide — an absolutely
-   * positioned child gets visually clipped at the panel edge even though its
-   * layout box says otherwise. Anchored under the trigger, opening away from
-   * whichever side the panel is docked on so it never runs off-screen.
-   */
-  const anchor = () => {
-    const r = triggerRef.current?.getBoundingClientRect();
-    if (!r) return { top: 0, left: 0 };
-    // Fall back rather than trust a zero/absent viewport width — clamping
-    // against 0 would place the popover at a negative offset, i.e. off-screen.
-    const vw = window.innerWidth || document.documentElement.clientWidth || PANEL_W + 16;
-    const left = panelSide === 'left'
-      ? Math.min(r.left, vw - PANEL_W - 8)
-      : r.right - PANEL_W;
-    return { top: r.bottom + 6, left: Math.max(8, left) };
-  };
 
   const applyCustom = () => {
     const v = customVoice.trim();
@@ -92,12 +70,30 @@ export default function VoicePicker() {
       </button>
 
       {open && mounted && createPortal(
-        <div
-          ref={ref}
-          className="fixed z-[60] max-h-[70vh] overflow-y-auto rounded-lg border border-muted-gray bg-white"
-          style={{ ...anchor(), width: PANEL_W, boxShadow: '0 6px 20px rgba(0,0,0,0.16)' }}
-          role="menu"
-        >
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          {/* Backdrop. The panel used to be anchored under the trigger, which put
+              it off-screen once the picker moved to the corner of a full-bleed
+              screen — present in the DOM but unreadable. A centred dialog is
+              position-independent, so it works wherever the trigger sits. */}
+          <div className="absolute inset-0 bg-ink/40" aria-hidden="true" onClick={() => setOpen(false)} />
+          <div
+            ref={ref}
+            className="relative w-full max-w-sm max-h-[80vh] overflow-y-auto rounded-xl border border-muted-gray bg-white"
+            style={{ boxShadow: '0 18px 48px rgba(0,0,0,0.28)' }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Tutor voice"
+          >
+            <div className="sticky top-0 flex items-center justify-between gap-3 px-3 py-2.5 border-b border-muted-gray bg-white">
+              <span className="text-[13px] font-semibold text-ink">Tutor voice</span>
+              <button
+                onClick={() => setOpen(false)}
+                aria-label="Close"
+                className="w-7 h-7 rounded-md flex items-center justify-center text-slate-blue hover:bg-reading-surface hover:text-ink transition-colors"
+              >
+                <X size={16} strokeWidth={2} />
+              </button>
+            </div>
           <div className="px-3 pt-2 text-[11px] text-slate-blue">
             Current: <span className="font-semibold text-ink">{triggerLabel}</span>
           </div>
@@ -172,6 +168,7 @@ export default function VoicePicker() {
             >
               <Volume2 size={13} strokeWidth={1.9} /> Test voice
             </button>
+          </div>
           </div>
         </div>,
         document.body,
