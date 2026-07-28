@@ -20,7 +20,7 @@ import {
   requestHint,
   endSession,
   toSessionSummary,
-  STUDENT_ID,
+  studentId,
   type SessionRecord,
   type SessionSummary,
   type CanvasSubmissionResult,
@@ -37,6 +37,29 @@ const apiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 // or barged-over earlier turn can't append its reply after a newer turn has
 // started — the cause of "which text is this reply answering?" in long chats.
 let voiceTurnSeq = 0;
+
+/**
+ * Session-start de-duplication. Module scope on purpose — a component ref does
+ * NOT survive a remount, and AuthGate swaps `children` for a spinner whenever
+ * the auth store changes, so any screen that opens a session can be torn down
+ * and rebuilt at will.
+ *
+ * Without this, a screen that starts a session on mount and remounts in a loop
+ * fires /session/start continuously. That is not theoretical: it exhausted the
+ * backend's in-memory SESSION001–SESSION999 range on 2026-07-28, which 500s
+ * every subsequent request until the service is restarted.
+ *
+ * `inFlight` collapses concurrent callers onto one request. `failedConcept`
+ * stops an automatic retry after a failure — only an explicit retry (which
+ * calls resetSessionStart) tries again.
+ */
+let inFlight: Promise<SessionRecord | null> | null = null;
+let failedConcept: string | null = null;
+
+/** Let an explicit user-driven retry attempt a failed concept again. */
+export function resetSessionStart(): void {
+  failedConcept = null;
+}
 
 /**
  * True only when the student has actually drawn something. Guards against
@@ -90,75 +113,111 @@ function chatError(err: unknown, fallback: string): string {
   return studentFacingError(err) ?? fallback;
 }
 
+/**
+ * Adopt the phase/question the backend just reported.
+ *
+ * A null question is a real state, not a missing value: orientation has no
+ * question of its own, so the backend answers `question_id: null` there. This
+ * used to fall back to the previous id (`?? state.activeQuestionId`), which kept
+ * the diagnostic question on screen for the whole orientation and attached the
+ * next turn to a question the student had already finished. Take the null.
+ */
 function syncBackendSession(response: {
   current_phase: string;
-  current_question: string;
+  current_question: string | null;
   question_id: string | null;
 }): void {
-  useNumeraStore.setState((state) => ({
+  useNumeraStore.setState({
     currentPhase: response.current_phase,
-    activeQuestionId: response.question_id ?? state.activeQuestionId,
+    activeQuestionId: response.question_id,
     // Kept verbatim. This used to strip a leading "solve for x:" because the
     // screens re-added it themselves — which silently mangled any question that
     // wasn't a bare equation. The screens now decide presentation from the text
     // itself (lib/questionText.ts), so the backend's wording must survive.
-    questionText: response.current_question.trim(),
-  }));
+    questionText: response.current_question?.trim() ?? '',
+  });
+}
+
+/**
+ * Open a tutoring session for a concept, at most once.
+ *
+ * Deliberately a plain module function, not part of the hook: the de-duplication
+ * above only works if every caller shares it, and React identity (refs, callback
+ * closures) resets on remount. Reads its store handles via getState() so it has
+ * no React dependency at all — which is also what makes it testable.
+ */
+export async function beginSession(
+  conceptId: string,
+  mode: 'VOICE' | 'TEXT' = 'TEXT',
+): Promise<SessionRecord | null> {
+  if (!apiEnabled()) return null;
+  const store = useNumeraStore.getState();
+  // Already open — never mint a second session for the same run.
+  if (store.sessionId) return store.backendSession;
+  if (inFlight) return inFlight;
+  if (failedConcept === conceptId) return null;
+
+  inFlight = (async () => {
+    try {
+      const rec = await startSession({
+        student_id: studentId(),
+        concept_id: conceptId,
+        interaction_mode: mode,
+      });
+      const s = useNumeraStore.getState();
+      s.clearTrail();
+      s.setSessionId(rec.session_id);
+      s.setBackendSession(rec);
+      syncBackendSession(rec);
+      if (rec.current_question) s.addTrailEntry({ kind: 'question', text: rec.current_question });
+      return rec;
+    } catch (err) {
+      // Latch the failure so a remount loop can't hammer the endpoint.
+      failedConcept = conceptId;
+      useNumeraStore.getState().addTrailEntry({
+        kind: 'tutor',
+        text: errorMessage(err, 'Could not start session.'),
+      });
+      return null;
+    } finally {
+      inFlight = null;
+    }
+  })();
+  return inFlight;
 }
 
 export function useDemoTutor() {
   const sessionId = useNumeraStore((s) => s.sessionId);
-  const setSessionId = useNumeraStore((s) => s.setSessionId);
   const canvasExporter = useNumeraStore((s) => s.canvasExporter);
   const addTranscriptMessage = useNumeraStore((s) => s.addTranscriptMessage);
   const addTrailEntry = useNumeraStore((s) => s.addTrailEntry);
-  const clearTrail = useNumeraStore((s) => s.clearTrail);
 
   /** Begin a tutoring session for a concept. Returns the record, or null. */
-  const start = useCallback(
-    async (
-      conceptId: string,
-      mode: 'VOICE' | 'TEXT' = 'TEXT'
-    ): Promise<SessionRecord | null> => {
-      if (!apiEnabled()) return null;
-      try {
-        const rec = await startSession({
-          student_id: STUDENT_ID,
-          concept_id: conceptId,
-          interaction_mode: mode,
-        });
-        clearTrail();
-        setSessionId(rec.session_id);
-        syncBackendSession(rec);
-        addTrailEntry({ kind: 'question', text: rec.current_question });
-        return rec;
-      } catch (err) {
-        addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Could not start session.') });
-        return null;
-      }
-    },
-    [setSessionId, addTrailEntry, clearTrail]
-  );
+  const start = useCallback(beginSession, []);
 
   /** Send a typed student answer through the tutor pipeline. */
   const answer = useCallback(
     async (
       text: string,
-      ctx: { concept_id: string; question_id: string; current_phase: string; hint_count: number }
+      ctx: { concept_id: string; current_phase: string; hint_count: number }
     ): Promise<InteractionResponse | null> => {
       if (!apiEnabled() || !sessionId) return null;
+      const questionId = useNumeraStore.getState().activeQuestionId;
+      // No active question means the phase has none to answer (orientation).
+      // /interaction requires a question_id, so sending here would 422.
+      if (!questionId) return null;
       addTrailEntry({ kind: 'answer', text });
       try {
         const state = useNumeraStore.getState();
         const res = await sendInteraction({
           session_id: sessionId,
-          student_id: STUDENT_ID,
+          student_id: studentId(),
           interaction_type: 'ANSWER_SUBMISSION',
           input_source: 'TEXT',
           text_input: text,
           current_phase: state.currentPhase,
           concept_id: ctx.concept_id,
-          question_id: state.activeQuestionId,
+          question_id: questionId,
           hint_count: ctx.hint_count,
         });
         syncBackendSession(res);
@@ -223,18 +282,20 @@ export function useDemoTutor() {
   /** Ask for the next hint. */
   const hint = useCallback(
     async (
-      ctx: { concept_id: string; question_id: string; current_phase: string; current_hint_count: number }
+      ctx: { concept_id: string; current_phase: string; current_hint_count: number }
     ): Promise<HintResponse | null> => {
       if (!apiEnabled() || !sessionId) return null;
+      const questionId = useNumeraStore.getState().activeQuestionId;
+      if (!questionId) return null; // nothing to hint at between questions
       try {
         const state = useNumeraStore.getState();
         const res = await requestHint({
           session_id: sessionId,
-          student_id: STUDENT_ID,
+          student_id: studentId(),
           current_phase: state.currentPhase,
           current_hint_count: ctx.current_hint_count,
           concept_id: ctx.concept_id,
-          question_id: state.activeQuestionId,
+          question_id: questionId,
         });
         addTranscriptMessage({ role: 'ai', text: res.hint });
         addTrailEntry({ kind: 'hint', text: res.hint, meta: `Hint ${res.hint_level}` });
@@ -257,13 +318,18 @@ export function useDemoTutor() {
   const submitVoiceTurn = useCallback(
     async (
       transcript: string,
-      ctx: { concept_id: string; question_id: string; current_phase: string; hint_count: number },
+      ctx: { concept_id: string; current_phase: string; hint_count: number },
       confidence?: number
     ): Promise<InteractionResponse | null> => {
       if (!apiEnabled() || !sessionId || !transcript.trim()) return null;
       // Overlap guard (contract §5): never submit while another turn is processing.
       if (useNumeraStore.getState().voiceStatus === 'processing') {
         console.warn('[voice] turn ignored — a previous turn is still processing');
+        return null;
+      }
+      const questionId = useNumeraStore.getState().activeQuestionId;
+      if (!questionId) {
+        console.warn('[voice] turn ignored — no question is active in this phase');
         return null;
       }
       const myTurn = ++voiceTurnSeq; // claim this turn; later turns supersede it
@@ -287,7 +353,7 @@ export function useDemoTutor() {
       const png = hasCanvasActivity() ? canvasExporter?.() : null;
       if (png) {
         try {
-          console.log('→ POST /canvas/submit', { session_id: sessionId, student_id: STUDENT_ID, snapshot_bytes: png.length });
+          console.log('→ POST /canvas/submit', { session_id: sessionId, student_id: studentId(), snapshot_bytes: png.length });
           const canvasRes = await submitCanvas(sessionId, png, 'VOICE_ATTACHMENT');
           canvasSnapshotId = canvasRes.submission_id;
           console.log('← /canvas/submit', { submission_id: canvasRes.submission_id, ocr: canvasRes.ocr, tutor: canvasRes.tutor });
@@ -309,7 +375,7 @@ export function useDemoTutor() {
         const state = useNumeraStore.getState();
         const interactionReq = {
           session_id: sessionId,
-          student_id: STUDENT_ID,
+          student_id: studentId(),
           interaction_type: 'ANSWER_SUBMISSION' as const,
           input_source: 'VOICE' as const,
           voice_transcript: transcript,
@@ -317,7 +383,7 @@ export function useDemoTutor() {
           canvas_snapshot_id: canvasSnapshotId,
           current_phase: state.currentPhase,
           concept_id: ctx.concept_id,
-          question_id: state.activeQuestionId,
+          question_id: questionId,
           hint_count: ctx.hint_count,
           // Voice turn-sync contract (§5): identify the turn so the backend can
           // dedupe/reject stale turns. transcript_final is always true here.

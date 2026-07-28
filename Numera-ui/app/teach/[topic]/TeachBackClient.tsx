@@ -25,6 +25,7 @@ import {
   type TeachTurnResponse,
   type TeachInputSource,
 } from '@/lib/teachback/teachApi';
+import { studentId } from '@/lib/api';
 import { cn } from '@/lib/cn';
 
 const DrawingCanvas = dynamic(() => import('@/components/Canvas/DrawingCanvas'), { ssr: false });
@@ -73,7 +74,7 @@ export default function TeachBackClient({ topicId }: { topicId: string }) {
       const snapshot = source === 'CANVAS' ? canvasExporter?.() ?? null : null;
       const res = await submitTeachTurn({
         session_id: null,
-        student_id: 'ST001',
+        student_id: studentId(),
         current_phase: 'TEACH_BACK',
         input_source: source,
         text_input: source === 'TEXT' ? value : undefined,

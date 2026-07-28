@@ -3,22 +3,41 @@
 /**
  * Topic-entry diagnostic — the SMALL diagnostic. Unlike the one-time placement
  * diagnostic at /diagnostic, this short check opens before every NEW topic to
- * confirm the student is ready and tune where the topic begins. On finish it
- * leads into the concept Orientation screen for that topic.
+ * confirm the student is ready and tune where the topic begins.
  *
- * (Scoring is backend in production; mocked here as a 2-question gate.)
+ * With a backend (NEXT_PUBLIC_API_BASE_URL set) this screen is a renderer only:
+ * the Student Model serves the questions, the student's answers are posted once
+ * to /session/{id}/diagnostic/complete, and the PHASE THE BACKEND RETURNS
+ * decides where the student goes — CONCEPT_ORIENTATION when it finds gaps,
+ * INDEPENDENT_PRACTICE when it doesn't. Nothing here grades anything; showing a
+ * local verdict would contradict the routing the backend just made.
+ *
+ * Without a backend it falls back to the original mocked 2-question gate so the
+ * demo flow still runs standalone.
  */
 
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { notFound } from 'next/navigation';
-import { Compass, ArrowRight, Check } from 'lucide-react';
+import { Compass, ArrowRight, Check, AlertTriangle, RotateCw } from 'lucide-react';
 import { getTopic } from '@/lib/curriculum';
 import { useFlowNav } from '@/lib/useFlowNav';
+import { useNumeraStore } from '@/store/useNumeraStore';
+import { useAuthStore } from '@/store/useAuthStore';
+import { useDemoTutor, resetSessionStart } from '@/hooks/useDemoTutor';
+import {
+  completeDiagnostic,
+  diagnosticQuestions,
+  studentId,
+  type DiagnosticAnswer,
+  type SchemaQuestion,
+} from '@/lib/api';
 import { cn } from '@/lib/cn';
+
+const apiEnabled = Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
 interface Q { prompt: string; options: string[]; answer: number }
 
-// A tiny readiness probe per topic; falls back to a generic pair.
+// A tiny readiness probe per topic; falls back to a generic pair. Mock mode only.
 const PROBES: Record<string, Q[]> = {
   algebra: [
     { prompt: 'What does x mean in 2x?', options: ['Add 2 and x', '2 times x', 'x squared'], answer: 1 },
@@ -44,16 +63,218 @@ const GENERIC: Q[] = [
 ];
 
 export default function DiagnosticClient({ topicId }: { topicId: string }) {
-  const { decideDiagnostic } = useFlowNav();
   const topic = getTopic(topicId);
+  if (!topic) notFound();
+  return apiEnabled ? <BackendDiagnostic topicId={topicId} /> : <MockDiagnostic topicId={topicId} />;
+}
+
+// ─── Backend-driven ──────────────────────────────────────────────────────────
+
+type Status = 'loading' | 'ready' | 'submitting' | 'error';
+
+function BackendDiagnostic({ topicId }: { topicId: string }) {
+  const topic = getTopic(topicId)!;
+  const tutor = useDemoTutor();
+  const sessionId = useNumeraStore((s) => s.sessionId);
+  const backendSession = useNumeraStore((s) => s.backendSession);
+  const setBackendSession = useNumeraStore((s) => s.setBackendSession);
+  const activeConceptId = useNumeraStore((s) => s.activeConceptId);
+  const setCurrentPhase = useNumeraStore((s) => s.setCurrentPhase);
+
+  const [status, setStatus] = useState<Status>('loading');
+  const [error, setError] = useState<string | null>(null);
+  const [i, setI] = useState(0);
+  // question_id -> the option text the student chose.
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  // Has a session start been attempted? Ref, not state: it must gate the effect
+  // synchronously, or React 18's double-invoke opens two sessions.
+  //
+  // Deliberately NOT reset on failure. useDemoTutor() returns a fresh object
+  // every render, so anything depending on it changes identity every render —
+  // an effect that retried on failure re-fired continuously and fired 256
+  // session starts in five seconds. Only the retry button clears this.
+  const started = useRef(false);
+
+  const questions = diagnosticQuestions(backendSession);
+
+  const openSession = useCallback(async () => {
+    started.current = true;
+    setStatus('loading');
+    setError(null);
+    const rec = await tutor.start(activeConceptId, 'TEXT');
+    if (!rec) {
+      setError("Couldn't reach the tutor to start your check.");
+      setStatus('error');
+      return;
+    }
+    if (diagnosticQuestions(rec).length === 0) {
+      setError('The tutor served no questions for this topic yet.');
+      setStatus('error');
+      return;
+    }
+    setStatus('ready');
+  }, [tutor, activeConceptId]);
+
+  // The auth store persists with skipHydration, so a session started before it
+  // rehydrates sends the anonymous bearer instead of the student's real token —
+  // student_model rejects that with 401 and the check dies on arrival.
+  //
+  // This route must rehydrate it ITSELF. `/diagnostic` is in AppFrame's
+  // FOCUS_ROUTES, which renders the page WITHOUT AuthGate — and AuthGate is what
+  // normally calls rehydrate(). Waiting on hydration here without asking for it
+  // waits forever. Same call as /login and /restricted make; it's idempotent.
+  //
+  // Starts false and is only set from an effect: `useAuthStore.persist` is
+  // undefined during the static prerender, so reading it in a useState
+  // initializer crashes `next build` on this page.
+  const [authReady, setAuthReady] = useState(false);
+  useEffect(() => {
+    void useAuthStore.persist.rehydrate();
+    setAuthReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (questions.length > 0) { setStatus('ready'); return; }
+    if (!authReady || sessionId || started.current) return;
+    void openSession();
+    // openSession is intentionally omitted — see the note on `started`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [questions.length, sessionId, authReady]);
+
+  /** Record the choice and move on; the last one submits the whole set. */
+  const choose = (question: SchemaQuestion, optionText: string) => {
+    const next = { ...answers, [question.question_id]: optionText };
+    setAnswers(next);
+    if (i + 1 < questions.length) { setI(i + 1); return; }
+    void submit(next);
+  };
+
+  /**
+   * Post every answer once. The backend derives the micro-skills, so the client
+   * sends only what the student picked — never a skill id, never a verdict.
+   */
+  const submit = async (collected: Record<string, string>) => {
+    if (!sessionId) return;
+    setStatus('submitting');
+    setError(null);
+    const payload: DiagnosticAnswer[] = questions.map((q) => ({
+      question_id: q.question_id,
+      student_response: collected[q.question_id] ?? '',
+    }));
+    try {
+      const rec = await completeDiagnostic(sessionId, studentId(), payload);
+      setBackendSession(rec);
+      // Drives usePhaseRouting to whichever phase the backend chose. The record
+      // carries question_id: null here, which the store now keeps as null.
+      useNumeraStore.setState({
+        activeQuestionId: rec.question_id,
+        questionText: rec.current_question?.trim() ?? '',
+      });
+      setCurrentPhase(rec.current_phase);
+    } catch {
+      setError("Couldn't send your answers. Please try again.");
+      setStatus('ready');
+    }
+  };
+
+  if (status === 'loading' || status === 'submitting') {
+    return (
+      <Centered>
+        <div className="text-center" aria-busy="true">
+          <div className="w-12 h-12 mx-auto rounded-xl bg-focus-navy text-white flex items-center justify-center mb-4">
+            <Compass size={22} strokeWidth={1.8} />
+          </div>
+          <h1 className="text-[20px] font-semibold text-ink">
+            {status === 'submitting' ? 'Working out where to start you' : 'Getting your check ready'}
+          </h1>
+          <p className="text-[13px] text-slate-blue mt-2">One moment.</p>
+        </div>
+      </Centered>
+    );
+  }
+
+  if (status === 'error') {
+    return (
+      <Centered>
+        <div className="text-center">
+          <div className="w-12 h-12 mx-auto rounded-xl border border-muted-gray bg-reading-surface text-slate-blue flex items-center justify-center mb-4">
+            <AlertTriangle size={22} strokeWidth={1.8} />
+          </div>
+          <h1 className="text-[20px] font-semibold text-ink">Couldn&apos;t start the check</h1>
+          <p className="text-[13px] text-slate-blue mt-2 leading-relaxed">{error}</p>
+          <button
+            onClick={() => { started.current = false; resetSessionStart(); void openSession(); }}
+            className="mt-5 inline-flex items-center gap-1.5 rounded-md border border-focus-navy px-4 py-2.5 text-[12.5px] font-semibold text-ink hover:bg-focus-navy hover:text-white transition-colors"
+          >
+            <RotateCw size={14} strokeWidth={1.9} /> Try again
+          </button>
+        </div>
+      </Centered>
+    );
+  }
+
+  const question = questions[i];
+  if (!question) return null;
+  const picked = answers[question.question_id];
+
+  return (
+    <Centered>
+      <div>
+        <div className="flex items-center gap-1.5 mb-6">
+          {questions.map((_, idx) => (
+            <span key={idx} className={cn('h-1.5 flex-1 rounded-full', idx <= i ? 'bg-focus-navy' : 'bg-reading-surface')} />
+          ))}
+        </div>
+        <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-2">
+          {topic.title} · Question {i + 1} of {questions.length}
+        </div>
+        <h2 className="text-[20px] font-semibold text-ink font-[Cambria_Math,Georgia,serif] mb-5">
+          {question.student_view.question_text}
+        </h2>
+        {error && <p className="text-[12.5px] text-action-orange mb-3">{error}</p>}
+        <div className="flex flex-col gap-2.5">
+          {question.student_view.options.map((opt) => (
+            <button
+              key={opt.option_id}
+              onClick={() => choose(question, opt.text)}
+              className={cn(
+                'flex items-center justify-between rounded-lg border px-4 py-3 text-left text-[14px] transition-colors font-[Cambria_Math,Georgia,serif]',
+                picked === opt.text ? 'border-focus-navy bg-reading-surface' : 'border-muted-gray hover:border-focus-navy'
+              )}
+            >
+              {opt.text}
+              {picked === opt.text && <Check size={16} strokeWidth={2} />}
+            </button>
+          ))}
+        </div>
+        {/* No score, no verdict: the backend decides what this means. */}
+        <p className="text-[11.5px] text-slate-blue mt-5">
+          Answer as best you can — this only tells Numera where to begin.
+        </p>
+      </div>
+    </Centered>
+  );
+}
+
+function Centered({ children }: { children: React.ReactNode }) {
+  return (
+    <main className="flex-1 min-w-0 flex items-center justify-center bg-white p-8" aria-label="Topic check">
+      <div className="w-[460px] max-w-full">{children}</div>
+    </main>
+  );
+}
+
+// ─── Mock (no backend) ───────────────────────────────────────────────────────
+
+function MockDiagnostic({ topicId }: { topicId: string }) {
+  const { decideDiagnostic } = useFlowNav();
+  const topic = getTopic(topicId)!;
   const questions = PROBES[topicId] ?? GENERIC;
 
   const [step, setStep] = useState<'intro' | 'quiz' | 'result'>('intro');
   const [i, setI] = useState(0);
   const [score, setScore] = useState(0);
   const [picked, setPicked] = useState<number | null>(null);
-
-  if (!topic) notFound();
 
   const answer = (idx: number) => {
     setPicked(idx);
@@ -68,71 +289,69 @@ export default function DiagnosticClient({ topicId }: { topicId: string }) {
   const ready = score >= Math.ceil(questions.length / 2);
 
   return (
-    <main className="flex-1 min-w-0 flex items-center justify-center bg-white p-8" aria-label="Topic check">
-      <div className="w-[460px] max-w-full">
-        {step === 'intro' && (
-          <div className="text-center">
-            <div className="w-12 h-12 mx-auto rounded-xl bg-focus-navy text-white flex items-center justify-center mb-4">
-              <Compass size={22} strokeWidth={1.8} />
-            </div>
-            <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-1">New topic · {topic.title}</div>
-            <h1 className="text-[22px] font-semibold text-ink">Quick check before we start</h1>
-            <p className="text-[13px] text-slate-blue mt-2 leading-relaxed">
-              Two short questions so Numera knows where to begin <b>{topic.title}</b>. This runs once before each new topic.
-            </p>
-            <button onClick={() => setStep('quiz')} className="mt-5 w-full rounded-md bg-focus-navy text-white px-4 py-3 text-[13px] font-semibold hover:opacity-80 transition-opacity">
-              Begin check
-            </button>
+    <Centered>
+      {step === 'intro' && (
+        <div className="text-center">
+          <div className="w-12 h-12 mx-auto rounded-xl bg-focus-navy text-white flex items-center justify-center mb-4">
+            <Compass size={22} strokeWidth={1.8} />
           </div>
-        )}
+          <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-1">New topic · {topic.title}</div>
+          <h1 className="text-[22px] font-semibold text-ink">Quick check before we start</h1>
+          <p className="text-[13px] text-slate-blue mt-2 leading-relaxed">
+            Two short questions so Numera knows where to begin <b>{topic.title}</b>. This runs once before each new topic.
+          </p>
+          <button onClick={() => setStep('quiz')} className="mt-5 w-full rounded-md bg-focus-navy text-white px-4 py-3 text-[13px] font-semibold hover:opacity-80 transition-opacity">
+            Begin check
+          </button>
+        </div>
+      )}
 
-        {step === 'quiz' && (
-          <div>
-            <div className="flex items-center gap-1.5 mb-6">
-              {questions.map((_, idx) => (
-                <span key={idx} className={cn('h-1.5 flex-1 rounded-full', idx <= i ? 'bg-focus-navy' : 'bg-reading-surface')} />
-              ))}
-            </div>
-            <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-2">Question {i + 1} of {questions.length}</div>
-            <h2 className="text-[20px] font-semibold text-ink font-[Cambria_Math,Georgia,serif] mb-5">{questions[i].prompt}</h2>
-            <div className="flex flex-col gap-2.5">
-              {questions[i].options.map((opt, idx) => (
-                <button
-                  key={opt}
-                  onClick={() => picked === null && answer(idx)}
-                  className={cn(
-                    'flex items-center justify-between rounded-lg border px-4 py-3 text-left text-[14px] transition-colors font-[Cambria_Math,Georgia,serif]',
-                    picked === idx ? 'border-focus-navy bg-reading-surface' : 'border-muted-gray hover:border-muted-gray'
-                  )}
-                >
-                  {opt}
-                  {picked === idx && <Check size={16} strokeWidth={2} />}
-                </button>
-              ))}
-            </div>
+      {step === 'quiz' && (
+        <div>
+          <div className="flex items-center gap-1.5 mb-6">
+            {questions.map((_, idx) => (
+              <span key={idx} className={cn('h-1.5 flex-1 rounded-full', idx <= i ? 'bg-focus-navy' : 'bg-reading-surface')} />
+            ))}
           </div>
-        )}
+          <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-2">Question {i + 1} of {questions.length}</div>
+          <h2 className="text-[20px] font-semibold text-ink font-[Cambria_Math,Georgia,serif] mb-5">{questions[i].prompt}</h2>
+          <div className="flex flex-col gap-2.5">
+            {questions[i].options.map((opt, idx) => (
+              <button
+                key={opt}
+                onClick={() => picked === null && answer(idx)}
+                className={cn(
+                  'flex items-center justify-between rounded-lg border px-4 py-3 text-left text-[14px] transition-colors font-[Cambria_Math,Georgia,serif]',
+                  picked === idx ? 'border-focus-navy bg-reading-surface' : 'border-muted-gray hover:border-muted-gray'
+                )}
+              >
+                {opt}
+                {picked === idx && <Check size={16} strokeWidth={2} />}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
-        {step === 'result' && (
-          <div className="text-center">
-            <div className="w-12 h-12 mx-auto rounded-xl bg-focus-navy text-white flex items-center justify-center mb-4">
-              <Check size={22} strokeWidth={2} />
-            </div>
-            <h1 className="text-[22px] font-semibold text-ink">Ready to begin</h1>
-            <p className="text-[13px] text-slate-blue mt-2">
-              {ready
-                ? `You already know the concept — we'll skip ahead to guided ${topic.title}.`
-                : `We'll ease into ${topic.title} with the concept orientation first.`}
-            </p>
-            <button
-              onClick={() => decideDiagnostic(ready, topic.id)}
-              className="mt-5 w-full inline-flex items-center justify-center gap-2 rounded-md bg-focus-navy text-white px-4 py-3 text-[13px] font-semibold hover:opacity-80 transition-opacity"
-            >
-              {ready ? 'Start guided learning' : 'Begin orientation'} <ArrowRight size={16} strokeWidth={2} />
-            </button>
+      {step === 'result' && (
+        <div className="text-center">
+          <div className="w-12 h-12 mx-auto rounded-xl bg-focus-navy text-white flex items-center justify-center mb-4">
+            <Check size={22} strokeWidth={2} />
           </div>
-        )}
-      </div>
-    </main>
+          <h1 className="text-[22px] font-semibold text-ink">Ready to begin</h1>
+          <p className="text-[13px] text-slate-blue mt-2">
+            {ready
+              ? `You already know the concept — we'll skip ahead to guided ${topic.title}.`
+              : `We'll ease into ${topic.title} with the concept orientation first.`}
+          </p>
+          <button
+            onClick={() => decideDiagnostic(ready, topic.id)}
+            className="mt-5 w-full inline-flex items-center justify-center gap-2 rounded-md bg-focus-navy text-white px-4 py-3 text-[13px] font-semibold hover:opacity-80 transition-opacity"
+          >
+            {ready ? 'Start guided learning' : 'Begin orientation'} <ArrowRight size={16} strokeWidth={2} />
+          </button>
+        </div>
+      )}
+    </Centered>
   );
 }

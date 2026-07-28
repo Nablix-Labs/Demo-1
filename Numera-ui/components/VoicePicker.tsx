@@ -4,11 +4,9 @@
  * VoicePicker — a Demo Director control to switch the tutor's voice variant, so
  * different TTS providers/voices can be compared (Manjusha's ask, 2026-07-26).
  *
- * The selection is sent on POST /voice/tts and on the /voice/stream WS, but the
- * backend does not read it yet — provider and voice come from the process-level
- * VOICE_TTS_PROVIDER / VOICE_TTS_VOICE env vars. The panel says so, because a
- * picker that silently changes nothing reads as a broken feature rather than a
- * missing backend field. See lib/voiceOptions.ts.
+ * The selection is sent on POST /voice/tts and on the /voice/stream WS, and the
+ * backend honours both since PR #39 — falling back to the VOICE_TTS_PROVIDER /
+ * VOICE_TTS_VOICE env vars when nothing is picked. See lib/voiceOptions.ts.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -107,15 +105,6 @@ export default function VoicePicker() {
             Tutor voice
           </div>
 
-          {/* Honest state: without this, a tester picks a voice, hears no change
-              and files it as a frontend bug. */}
-          <div className="px-3 py-2 bg-action-orange/10 border-b border-action-orange/25 text-[11px] leading-snug text-ink">
-            Sent to the backend, but <span className="font-semibold">not applied yet</span> — the
-            voice server reads <code className="text-[10.5px]">VOICE_TTS_PROVIDER</code> /{' '}
-            <code className="text-[10.5px]">VOICE_TTS_VOICE</code> from env. Works as soon as
-            <code className="text-[10.5px]"> /voice/tts</code> accepts a per-request voice.
-          </div>
-
           <button
             onClick={() => { setTtsVoice(null, null); setOpen(false); }}
             className={
@@ -156,9 +145,8 @@ export default function VoicePicker() {
             </div>
           ))}
 
-          {/* Cartesia uses opaque UUIDs and Inworld/Deepgram catalogue names that
-              aren't in this repo, so any voice ID can be pasted rather than
-              shipping guessed IDs that would fail at the provider. */}
+          {/* The lists above mirror each adapter's curated presets; this covers
+              anything else a tester wants to try from the provider's playground. */}
           <div className="border-t border-muted-gray p-3 space-y-2">
             <div className="text-[10px] font-semibold tracking-wide uppercase text-slate-blue">
               Custom voice ID

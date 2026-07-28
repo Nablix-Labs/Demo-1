@@ -42,7 +42,6 @@ export default function LessonPage() {
   const micMuted = useNumeraStore((s) => s.micMuted);
   const setMicMuted = useNumeraStore((s) => s.setMicMuted);
   const activeConceptId = useNumeraStore((s) => s.activeConceptId);
-  const activeQuestionId = useNumeraStore((s) => s.activeQuestionId);
   const currentPhase = useNumeraStore((s) => s.currentPhase);
   const updatePartialTranscript = useNumeraStore((s) => s.updatePartialTranscript);
   const voiceStatus = useNumeraStore((s) => s.voiceStatus);
@@ -82,14 +81,13 @@ export default function LessonPage() {
         transcript,
         {
           concept_id: activeConceptId,
-          question_id: activeQuestionId,
           current_phase: currentPhase,
           hint_count: 0,
         },
         confidence
       );
     },
-    [submitVoiceTurn, activeConceptId, activeQuestionId, currentPhase]
+    [submitVoiceTurn, activeConceptId, currentPhase]
   );
   // Mirror live words into one evolving student bubble; submitVoiceTurn finalizes
   // it in place (commitPartialTranscript) so partial → final never jumps surfaces.
@@ -106,7 +104,8 @@ export default function LessonPage() {
     void startSession(activeConceptId, 'VOICE').then((rec) => {
       if (!rec) return;
       // CanvasStage renders the "Solve for x:" prefix itself, so strip it.
-      setQuestionText(rec.current_question.replace(/^solve for\s*x\s*:?\s*/i, '').trim());
+      // Null when the session opened on a phase with no question of its own.
+      setQuestionText((rec.current_question ?? '').replace(/^solve for\s*x\s*:?\s*/i, '').trim());
       setQuestionNumber(rec.question_number);
       setTranscript([{ role: 'ai', text: rec.message }]);
       clearTutorMarks();

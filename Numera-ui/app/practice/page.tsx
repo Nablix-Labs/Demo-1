@@ -33,7 +33,6 @@ export default function PracticePage() {
   const completePhase = useNumeraStore((s) => s.completePhase);
   const currentTopicId = useNumeraStore((s) => s.currentTopicId);
   const questionText = useNumeraStore((s) => s.questionText);
-  const activeQuestionId = useNumeraStore((s) => s.activeQuestionId);
   const { goStage } = useFlowNav();
   const tutor = useDemoTutor();
 
@@ -68,7 +67,6 @@ export default function PracticePage() {
 
   // Backend context — fixed demo identifiers, matching the API documentation.
   const PHASE = DEMO_PHASE;
-  const QUESTION_ID = activeQuestionId;
 
   // Hands-free voice: on turn-end, fire the transcript + canvas to the backend.
   const { submitVoiceTurn } = tutor;
@@ -76,11 +74,11 @@ export default function PracticePage() {
     (transcript: string, confidence?: number) => {
       void submitVoiceTurn(
         transcript,
-        { concept_id: DEMO_CONCEPT_ID, question_id: QUESTION_ID, current_phase: PHASE, hint_count: 0 },
+        { concept_id: DEMO_CONCEPT_ID, current_phase: PHASE, hint_count: 0 },
         confidence
       );
     },
-    [submitVoiceTurn, QUESTION_ID, PHASE]
+    [submitVoiceTurn, PHASE]
   );
   const voice = useVoiceTurn({ onTurnEnd });
 
@@ -125,7 +123,6 @@ export default function PracticePage() {
     setHintText(null);
     const res = await tutor.hint({
       concept_id: DEMO_CONCEPT_ID,
-      question_id: QUESTION_ID,
       current_phase: PHASE,
       current_hint_count: hintIndex,
     });
