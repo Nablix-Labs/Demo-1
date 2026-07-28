@@ -519,6 +519,21 @@ def test_session_start_uses_schema_3_diagnostic_contract(monkeypatch) -> None:
     assert isinstance(payload["timestamp"], str)
 
 
+def test_student_model_request_ids_remain_unique_after_session_counter_restart() -> None:
+    first = session_service._student_model_request_id(
+        "SESSION001",
+        "DIAGNOSTIC_QUESTION_SET_REQUESTED",
+    )
+    second = session_service._student_model_request_id(
+        "SESSION001",
+        "DIAGNOSTIC_QUESTION_SET_REQUESTED",
+    )
+
+    assert first != second
+    assert first.startswith("SESSION001:DIAGNOSTIC_QUESTION_SET_REQUESTED:")
+    assert second.startswith("SESSION001:DIAGNOSTIC_QUESTION_SET_REQUESTED:")
+
+
 def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> None:
     events: list[dict[str, object]] = []
 

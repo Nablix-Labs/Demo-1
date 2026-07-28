@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from fastapi import HTTPException
 
@@ -62,6 +63,10 @@ def _build_session_id() -> str:
     session_id: str = f"SESSION{_next_session_number:03d}"
     _next_session_number += 1
     return session_id
+
+
+def _student_model_request_id(session_id: str, event_type: str) -> str:
+    return f"{session_id}:{event_type}:{uuid4().hex}"
 
 
 def _session_not_found(session_id: str) -> HTTPException:
@@ -293,7 +298,10 @@ async def start_session(
     started_at = datetime.now(timezone.utc)
     event = await get_adapters().student_model.send_session_event(
         DiagnosticQuestionSetRequestedEvent(
-            request_id=f"{session_id}:DIAGNOSTIC_QUESTION_SET_REQUESTED",
+            request_id=_student_model_request_id(
+                session_id,
+                "DIAGNOSTIC_QUESTION_SET_REQUESTED",
+            ),
             event_type="DIAGNOSTIC_QUESTION_SET_REQUESTED",
             topic_id=topic_id,
             student_id=request.student_id,
@@ -361,10 +369,9 @@ def _schema_session(session_id: str, student_id: str) -> SessionRecord:
 
 
 def _schema_request_id(session: SessionRecord, event_type: str) -> str:
-    event = session.student_model_event
-    if event is None:
+    if session.student_model_event is None:
         raise RuntimeError("Schema 3.0 request id requires a stored Student Model event.")
-    return f"{session.session_id}:{event_type}:{event.journey_state.version + 1}"
+    return _student_model_request_id(session.session_id, event_type)
 
 
 def _schema_timestamp() -> str:
