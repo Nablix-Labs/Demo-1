@@ -10,6 +10,7 @@ from app.api.auth import AccessToken
 from app.models.fields import SessionId
 from app.models.session import (
     DiagnosticCompleteRequest,
+    OrientationCompletionRequest,
     OrientationPhaseRequest,
     SessionEndRequest,
     SessionRecord,
@@ -58,7 +59,7 @@ async def start_orientation_endpoint(
 @router.post("/{session_id}/orientation/complete", response_model=SessionResponse)
 async def complete_orientation_endpoint(
     session_id: SessionId,
-    request: OrientationPhaseRequest,
+    request: OrientationCompletionRequest,
     access_token: AccessToken,
 ) -> SessionRecord:
     return await complete_orientation(session_id, request, access_token)
