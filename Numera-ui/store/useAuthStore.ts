@@ -243,7 +243,25 @@ export const useAuthStore = create<AuthState>()(
 
       activateAccount: () => set({ accountStatus: 'active' }),
       suspend: () => set({ accountStatus: 'suspended' }),
-      logout: () => set({ authMethod: null, ssoProvider: null, accessToken: null, tier: null, studentCode: null }),
+      // Clears identity as well as the token. Dropping only the token left
+      // `role: 'student'` and `accountStatus: 'active'` behind, so
+      // accessDecision fell through to the client-side chain and let a
+      // signed-out person straight back into the app (2026-07-28). Consents go
+      // too — they belong to the account that just left, not the next one.
+      logout: () =>
+        set({
+          authMethod: null,
+          ssoProvider: null,
+          accessToken: null,
+          tier: null,
+          studentCode: null,
+          role: null,
+          email: '',
+          phone: '',
+          accountStatus: 'registration_started',
+          consents: emptyConsents(),
+          disclosureAck: { acknowledged: false, version: SAFETY_DISCLOSURE_VERSION, at: null },
+        }),
       reset: () => set({ ...initial, consents: emptyConsents() }),
     }),
     {
