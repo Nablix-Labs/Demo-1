@@ -6,20 +6,18 @@
  * (`register_tts_adapter(...)` in app/services/voice/), so they are the only
  * values `VOICE_TTS_PROVIDER` can legally take.
  *
- * ── Pending backend support ──────────────────────────────────────────────────
- * The backend does NOT accept a per-request voice yet: `VoiceTTSRequest` carries
- * only `text`, and the provider/voice come from the process-level env vars
- * `VOICE_TTS_PROVIDER` / `VOICE_TTS_VOICE`, read once at import. So a selection
- * made here is sent but ignored until the backend reads it — changing the voice
- * today still means editing env and restarting the voice server. The UI says so
- * plainly; see the note in FlowControls.
+ * ── Backend support (live since PR #39) ─────────────────────────────────────
+ * A selection made here is now honoured end to end: `VoiceTTSRequest` carries
+ * `provider`/`voice` (app/api/voice.py), and the streaming server reads the
+ * `tts_provider`/`tts_voice` query params (streaming_server.py:310), each
+ * falling back to the `VOICE_TTS_PROVIDER` / `VOICE_TTS_VOICE` env defaults.
  *
- * ── Why the voice lists are short ────────────────────────────────────────────
- * Only voice IDs that are verifiable are listed: each adapter's own documented
- * default, plus OpenAI's published voice set. Cartesia identifies voices by
- * opaque UUID and Inworld/Deepgram by catalogue names that aren't in this repo —
- * guessing those would produce IDs that fail at the provider, so instead every
- * provider takes a free-text ID pasted from its own playground.
+ * ── Why these voice IDs ─────────────────────────────────────────────────────
+ * Every id below is copied from the adapter that resolves it, so nothing here
+ * can drift into a value the provider rejects: Cartesia UUIDs from
+ * CARTESIA_VOICES, Inworld names from INWORLD_VOICES, plus OpenAI's published
+ * set. Providers whose catalogue isn't in the repo still take a free-text id
+ * pasted from their own playground.
  */
 
 export interface VoiceProvider {
@@ -46,15 +44,37 @@ export const VOICE_PROVIDERS: VoiceProvider[] = [
     ],
   },
   {
+    // UUIDs mirror CARTESIA_VOICES in cartesia_tts_adapter.py. The first was
+    // previously labelled "Barbershop Man" here — it is Skylar (Aditya, 2026-07-27).
     id: 'cartesia',
     label: 'Cartesia',
-    voices: [{ id: 'db6b0ed5-d5d3-463d-ae85-518a07d3c2b4', label: 'Adapter default' }],
+    voices: [
+      { id: 'db6b0ed5-d5d3-463d-ae85-518a07d3c2b4', label: 'Skylar — Friendly Guide (default)' },
+      { id: '573e3144-a684-4e72-ac2b-9b2063a50b53', label: 'Teacher Lady' },
+      { id: 'bd9120b6-7761-47a6-a446-77ca49132781', label: 'Tutorial Man' },
+      { id: 'e00d0e4c-a5c8-443f-a8a3-473eb9a62355', label: 'Friendly Sidekick' },
+      { id: '156fb8d2-335b-4950-9cb3-a2d33befec77', label: 'Helpful Woman' },
+      { id: '00a77add-48d5-4ef6-8157-71e5437b282d', label: 'Calm Lady' },
+      { id: 'e3827ec5-697a-4b7c-9704-1a23041bbc51', label: 'Sweet Lady' },
+      { id: '15a9cd88-84b0-4a8b-95f2-5d583b54c72e', label: 'Reading Lady' },
+    ],
     browseAt: 'play.cartesia.ai',
   },
   {
+    // Names mirror INWORLD_VOICES in inworld_tts_adapter.py — Inworld takes the
+    // name string itself as the voice id, not a UUID.
     id: 'inworld',
     label: 'Inworld',
-    voices: [{ id: 'Ashley', label: 'Ashley (default)' }],
+    voices: [
+      { id: 'Ashley', label: 'Ashley — warm, natural female (default)' },
+      { id: 'Dennis', label: 'Dennis — smooth, calm, friendly male' },
+      { id: 'Olivia', label: 'Olivia — upbeat, friendly British female' },
+      { id: 'Alex', label: 'Alex — energetic, expressive male' },
+      { id: 'Julia', label: 'Julia — clear female' },
+      { id: 'Sarah', label: 'Sarah — friendly female' },
+      { id: 'Claire', label: 'Claire — approachable female' },
+      { id: 'Priya', label: 'Priya — warm female' },
+    ],
     browseAt: 'platform.inworld.ai/tts-playground',
   },
   {

@@ -15,6 +15,9 @@ import { useRouter } from 'next/navigation';
 import { ArrowRight, Mail, Phone, Check } from 'lucide-react';
 import { useAuthStore, accessDecision, type SsoProvider, type Role } from '@/store/useAuthStore';
 import { login, LoginError } from '@/lib/auth/authApi';
+import { useNumeraStore } from '@/store/useNumeraStore';
+import { landingRoute } from '@/lib/usePhaseRouting';
+import { phasesToUnlock } from '@/lib/flow';
 import { SSO_LOGO } from '@/components/auth/SsoLogos';
 
 const SSO: { id: SsoProvider; label: string }[] = [
@@ -61,8 +64,16 @@ export default function LoginPage() {
     try {
       const res = await login(email.trim(), password);
       const role: Role = res.role === 'parent_guardian' ? 'parent_guardian' : 'student';
-      useAuthStore.getState().loginSuccess({ token: res.access_token, role, tier: res.tier, email: email.trim() });
-      router.push('/');
+      useAuthStore.getState().loginSuccess({ token: res.access_token, role, tier: res.tier, email: email.trim(), studentCode: res.student_code });
+      // Land on the phase the backend says this student is in — for a new
+      // student that's the topic diagnostic, not the guided lesson.
+      const store = useNumeraStore.getState();
+      const { href, unlock } = landingRoute(
+        res.last_journey_state?.current_phase,
+        store.currentTopicId,
+      );
+      phasesToUnlock(unlock).forEach(store.completePhase);
+      router.push(href);
     } catch (e) {
       setError(e instanceof LoginError ? e.message : 'Could not log you in. Please try again.');
     } finally {

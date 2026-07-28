@@ -51,7 +51,9 @@ export interface TopicDemo {
  * picture, or a "micro-content" card of illustrated key points.
  */
 export type OrientationMedia =
-  | { kind: 'video'; title: string; duration: string; summary: string }
+  // `src` is a real MP4 (see ORIENTATION_VIDEOS). Without it the player falls
+  // back to the poster + simulated playback used before any file existed.
+  | { kind: 'video'; title: string; duration: string; summary: string; src?: string }
   | { kind: 'image'; title: string; summary: string; art: ConceptArtName; caption: string }
   | { kind: 'micro'; title: string; summary: string; art: ConceptArtName; points: string[] };
 
@@ -325,21 +327,68 @@ export const demoFor = (topicId: string): TopicDemo =>
   DEMO_CONTENT[topicId] ?? ALGEBRA;
 
 /**
- * Per-topic orientation media — deliberately one of each mode so all three are
- * demonstrable: algebra → micro-content, number → picture, geometry → video.
- * `statistics` is intentionally absent so the "coming soon" empty state shows.
+ * The real concept-orientation videos Manjusha uploaded (2026-07-26), served
+ * public from Azure blob storage. Six exist (01–06); 07 is a 404.
+ *
+ * The file number is the Algebra subtopic's `sequence_no` in the backend's
+ * `learning.topics`, NOT its `topic_code` — the codes there are inconsistent
+ * (subtopic 1 is `ALG-KS3-01`, 4 is `ALG-04`), so matching on the code would
+ * silently miss files. Titles below are that table's `subtopic` column.
+ *
+ * The container has no CORS headers, which is fine: a <video src> loads
+ * cross-origin without them. Do NOT set crossOrigin on the element — that opts
+ * into a CORS check the container would fail.
+ */
+const ORIENTATION_VIDEO_BASE = 'https://nablixmathvideos.blob.core.windows.net/numeradev';
+
+export const ORIENTATION_VIDEOS: { sequence: number; title: string; src: string }[] = [
+  'What Is Algebra?',
+  'Algebraic Notation',
+  'Variables and Constants',
+  'Expressions',
+  'Terms, Coefficients and Factors',
+  'Substitution',
+].map((title, i) => ({
+  sequence: i + 1,
+  title,
+  src: `${ORIENTATION_VIDEO_BASE}/ALG-ORI-0${i + 1}.mp4`,
+}));
+
+/**
+ * The blob URL for a backend topic code, or null when there's no file for it.
+ *
+ * The Student Model serves an orientation video record per topic but leaves
+ * `asset_url` null — verified live on 2026-07-28, topic ALG-ORI-02 returns
+ * video VID-KS3-T02-ORI with no URL. Manjusha's uploads are named after the
+ * topic code itself, so the code resolves the file the backend is missing.
+ *
+ * Matched on the trailing number rather than the whole code: the codes in
+ * `learning.topics` are inconsistent (`ALG-KS3-01`, `ALG-ORI-02`, `ALG-04`)
+ * while the files are uniformly `ALG-ORI-0N`. Only 1–6 exist.
+ */
+export function orientationVideoForTopicCode(topicCode: string | null | undefined): string | null {
+  const match = /(\d+)\s*$/.exec(topicCode ?? '');
+  if (!match) return null;
+  return ORIENTATION_VIDEOS.find((v) => v.sequence === Number(match[1]))?.src ?? null;
+}
+
+/**
+ * Per-topic orientation media — one of each mode so all three are demonstrable:
+ * algebra → the real video, number → picture, geometry → video (still the
+ * simulated player, no file for it yet), statistics → key points.
+ *
+ * Only the FIRST algebra video is reachable today. The other five belong to
+ * algebra subtopics, and orientation routes by topic (`/orientation/algebra`),
+ * not subtopic — so serving 02–06 needs subtopic-level routing that doesn't
+ * exist yet.
  */
 export const ORIENTATION_MEDIA: Record<string, OrientationMedia> = {
   algebra: {
-    kind: 'micro',
-    title: 'Solving linear equations',
-    summary: 'The one idea to hold onto before you start practising.',
-    art: 'balance',
-    points: [
-      'An equation is a balance: both sides are equal.',
-      'Undo operations one step at a time (±, then ×÷).',
-      'Whatever you do to one side, do to the other.',
-    ],
+    kind: 'video',
+    title: ORIENTATION_VIDEOS[0].title,
+    duration: '',
+    summary: 'Start here — what algebra is for, before you solve anything with it.',
+    src: ORIENTATION_VIDEOS[0].src,
   },
   number: {
     kind: 'image',

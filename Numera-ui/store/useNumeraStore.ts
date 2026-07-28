@@ -10,7 +10,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import type { LearningPhase } from '@/lib/phases';
 import type { FlowStage } from '@/lib/flow';
 import { TOPICS } from '@/lib/topics';
-import { DEMO_CONCEPT_ID, DEMO_PHASE, DEMO_QUESTION_ID, type SessionReview, type SessionSummary } from '@/lib/api';
+import { DEMO_CONCEPT_ID, type SessionRecord, type SessionReview, type SessionSummary } from '@/lib/api';
 import { uid } from '@/lib/uid';
 
 // Sequential, human-readable student turn ids (voice contract §3): TURN-0001, …
@@ -154,13 +154,23 @@ export interface NumeraState {
 
   // Active question the tutor session runs on. Sent as concept_id/question_id;
   // changing it restarts the session so the backend serves that equation.
+  //
+  // Null when the current phase has no question — orientation is the case that
+  // matters. The backend answers with question_id: null there, and carrying the
+  // previous id forward left the diagnostic question on screen through the whole
+  // orientation and attached the next turn to a question that was already done.
   activeConceptId: string;
-  activeQuestionId: string;
+  activeQuestionId: string | null;
 
   // Tutoring phase the session is in. Seeded from the session's current_phase
   // and advanced from each interaction response's current_phase — the value we
   // send back on the next turn, so the backend can drive phase transitions.
   currentPhase: string;
+
+  // Latest session record from the backend, kept whole so the screens can read
+  // the Schema 3.0 payload off it (diagnosticQuestions / orientationSequence in
+  // lib/api.ts) rather than each one re-fetching the session. Null in mock mode.
+  backendSession: SessionRecord | null;
 
   // Summary of the ended session (attempts, hints used, …) returned by
   // /session/end. Shown on the Review screen. Ephemeral — never persisted.
@@ -275,6 +285,7 @@ export interface NumeraState {
   setQuestionNumber: (n: number) => void;
   setActiveEquation: (conceptId: string, questionId: string, label?: string) => void;
   setCurrentPhase: (phase: string) => void;
+  setBackendSession: (record: SessionRecord | null) => void;
   setSessionSummary: (summary: SessionSummary | null) => void;
   setSessionReview: (review: SessionReview | null) => void;
   clearSessionId: () => void;
@@ -352,7 +363,7 @@ export interface NumeraState {
 const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
-  | 'setQuestionText' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'setTutorTurn'
+  | 'setQuestionText' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'setTutorTurn'
   | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue'
   | 'addTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript' | 'commitPartialTranscript'
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
@@ -378,9 +389,16 @@ const initial: Omit<
   // it loads so a stale demo equation never flashes on the live build.
   questionText: '',
   questionNumber: 0,
+  // The concept to open a session on. Still a constant because the frontend has
+  // no other source for it — the concept_id -> topic_code mapping lives in the
+  // backend's settings.student_model_topic_codes. Everything else below is
+  // backend-owned and starts EMPTY: seeding a phase and a question id meant the
+  // app claimed to be in GUIDED_PRACTICE on a question nobody had served,
+  // routing the student to the lesson screen before the backend had spoken.
   activeConceptId: DEMO_CONCEPT_ID,
-  activeQuestionId: DEMO_QUESTION_ID,
-  currentPhase: DEMO_PHASE,
+  activeQuestionId: null,
+  currentPhase: '',
+  backendSession: null,
   sessionSummary: null,
   sessionReview: null,
   micMuted: false,
@@ -481,6 +499,7 @@ export const useNumeraStore = create<NumeraState>()(
     }),
 
   setCurrentPhase: (currentPhase) => set({ currentPhase }),
+  setBackendSession: (backendSession) => set({ backendSession }),
   setSessionSummary: (sessionSummary) => set({ sessionSummary }),
   setSessionReview: (sessionReview) => set({ sessionReview }),
   clearSessionId: () => set({ sessionId: null }),

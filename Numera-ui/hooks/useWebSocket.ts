@@ -26,7 +26,7 @@ import { useNumeraStore } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { tutorAudioStream } from '@/lib/tts';
 import { buildVoiceStreamUrl, voiceStreamingEnabled, allowAnonTutorCalls } from '@/lib/runtimeConfig';
-import { ANON_ACCESS_TOKEN } from '@/lib/api';
+import { ANON_ACCESS_TOKEN, studentId } from '@/lib/api';
 
 export function useWebSocket(sessionId: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
@@ -43,7 +43,7 @@ export function useWebSocket(sessionId: string | null) {
 
     const { ttsProvider, ttsVoice } = useNumeraStore.getState();
     const ws = new WebSocket(
-      buildVoiceStreamUrl(sessionId, { provider: ttsProvider, voice: ttsVoice }),
+      buildVoiceStreamUrl(sessionId, studentId(), { provider: ttsProvider, voice: ttsVoice }),
     );
     wsRef.current = ws;
 
@@ -100,13 +100,22 @@ export function useWebSocket(sessionId: string | null) {
               applyCanvasDraw(msg.canvas_draw as Parameters<typeof applyCanvasDraw>[0]);
             // The voice server forwards the backend's phase state; keep the
             // store in sync so usePhaseRouting can follow phase changes.
-            if (typeof msg.current_phase === 'string' && typeof msg.current_question === 'string') {
-              useNumeraStore.setState((state) => ({
+            //
+            // Gated on the PHASE only. current_question is null whenever the new
+            // phase has no question (orientation), and requiring it to be a
+            // string dropped the whole update — so the phase change never
+            // reached the store and the routing never followed it. A null
+            // question is then taken as-is rather than falling back to the
+            // previous id, which is what left the orientation showing the
+            // question from the phase before it.
+            if (typeof msg.current_phase === 'string') {
+              const question = typeof msg.current_question === 'string' ? msg.current_question : null;
+              useNumeraStore.setState({
                 currentPhase: msg.current_phase as string,
-                activeQuestionId: (msg.question_id as string | null) ?? state.activeQuestionId,
+                activeQuestionId: (msg.question_id as string | null) ?? null,
                 // Verbatim — see the matching note in useDemoTutor.syncBackendSession.
-                questionText: (msg.current_question as string).trim(),
-              }));
+                questionText: question?.trim() ?? '',
+              });
             }
             tutorAudioStream.begin(); // reset the player; chunks are coming next
             break;

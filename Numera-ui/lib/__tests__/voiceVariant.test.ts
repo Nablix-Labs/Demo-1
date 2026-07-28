@@ -21,7 +21,7 @@ describe('buildVoiceStreamUrl', () => {
   it('carries the selected provider and voice as query params', async () => {
     const { buildVoiceStreamUrl } = await import('@/lib/runtimeConfig');
     const url = new URL(
-      buildVoiceStreamUrl('SESSION005', { provider: 'cartesia', voice: 'abc-123' }),
+      buildVoiceStreamUrl('SESSION005', 'ST001', { provider: 'cartesia', voice: 'abc-123' }),
     );
     expect(url.searchParams.get('tts_provider')).toBe('cartesia');
     expect(url.searchParams.get('tts_voice')).toBe('abc-123');
@@ -31,8 +31,8 @@ describe('buildVoiceStreamUrl', () => {
 
   it('omits both params when nothing is selected, leaving the URL unchanged', async () => {
     const { buildVoiceStreamUrl } = await import('@/lib/runtimeConfig');
-    const plain = buildVoiceStreamUrl('SESSION005');
-    const withNulls = buildVoiceStreamUrl('SESSION005', { provider: null, voice: null });
+    const plain = buildVoiceStreamUrl('SESSION005', 'ST001');
+    const withNulls = buildVoiceStreamUrl('SESSION005', 'ST001', { provider: null, voice: null });
     expect(plain).toBe(withNulls);
     expect(plain).not.toContain('tts_provider');
     expect(plain).not.toContain('tts_voice');

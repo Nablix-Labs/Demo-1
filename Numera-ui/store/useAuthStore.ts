@@ -112,6 +112,9 @@ interface AuthState {
   // client-side until those endpoints exist.
   accessToken: string | null;
   tier: string | null;
+  // Workbook student code (ST###) for tutoring calls. Null until the backend
+  // returns it on login — see LoginResponse.student_code.
+  studentCode: string | null;
 
   // Registration
   startRegistration: (method: AuthMethod, opts?: { email?: string; phone?: string; ssoProvider?: SsoProvider }) => void;
@@ -126,7 +129,7 @@ interface AuthState {
   grantConsent: (purpose: ConsentPurpose) => void; // (re-)grant a single consent
 
   // Lifecycle
-  loginSuccess: (p: { token: string; role: Role; tier: string; email: string }) => void;
+  loginSuccess: (p: { token: string; role: Role; tier: string; email: string; studentCode?: string | null }) => void;
   activateAccount: () => void;
   suspend: () => void;
   logout: () => void;
@@ -152,6 +155,7 @@ const initial = {
   disclosureAck: { acknowledged: false, version: SAFETY_DISCLOSURE_VERSION, at: null },
   accessToken: null as string | null,
   tier: null as string | null,
+  studentCode: null as string | null,
 };
 
 export const useAuthStore = create<AuthState>()(
@@ -216,7 +220,7 @@ export const useAuthStore = create<AuthState>()(
       // consent state, mark the mandatory consents satisfied so the feature
       // gates (voice/canvas §10) don't block a legitimately logged-in user.
       // TODO(auth): replace with real consent state once /consent endpoints exist.
-      loginSuccess: ({ token, role, tier, email }) =>
+      loginSuccess: ({ token, role, tier, email, studentCode }) =>
         set((s) => {
           const now = new Date().toISOString();
           const consents = { ...s.consents };
@@ -224,6 +228,7 @@ export const useAuthStore = create<AuthState>()(
           return {
             accessToken: token,
             tier,
+            studentCode: studentCode ?? null,
             role,
             email,
             authMethod: 'password',
@@ -235,7 +240,7 @@ export const useAuthStore = create<AuthState>()(
 
       activateAccount: () => set({ accountStatus: 'active' }),
       suspend: () => set({ accountStatus: 'suspended' }),
-      logout: () => set({ authMethod: null, ssoProvider: null, accessToken: null, tier: null }),
+      logout: () => set({ authMethod: null, ssoProvider: null, accessToken: null, tier: null, studentCode: null }),
       reset: () => set({ ...initial, consents: emptyConsents() }),
     }),
     {

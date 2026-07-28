@@ -49,6 +49,7 @@ export const allowAnonTutorCalls: boolean =
 
 export const buildVoiceStreamUrl = (
   sessionId: string,
+  studentId: string,
   voice?: { provider?: string | null; voice?: string | null },
 ): string => {
   if (!voiceStreamingEnabled || !voiceWsUrl) {
@@ -61,7 +62,7 @@ export const buildVoiceStreamUrl = (
   // makes it fall back to "default", which fails its ^SESSION\d{3}$ check.
   const params = new URLSearchParams({
     session: sessionId,
-    student_id: "ST001",
+    student_id: studentId,
   });
   // Testing-only voice variant. The /voice/stream endpoint declares only
   // session/session_id/student_id, and undeclared query params are ignored

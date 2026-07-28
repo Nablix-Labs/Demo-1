@@ -32,6 +32,20 @@ export const ANON_ACCESS_TOKEN = 'anonymous-testing';
  * fixed here; it's minted by POST /session/start and read from the response.
  */
 export const STUDENT_ID = 'ST001';
+
+/**
+ * The student id to send on tutoring calls: the logged-in student's own code
+ * when the backend has given us one, else the fixed demo id.
+ *
+ * The fallback is a known-wrong value for any real student — student_model
+ * checks that the code belongs to the JWT's user and answers 403
+ * STUDENT_FORBIDDEN when it doesn't (issue #40). It stays until
+ * LoginResponse.student_code exists; see the note there for why nothing on the
+ * frontend can do better today.
+ */
+export function studentId(): string {
+  return useAuthStore.getState().studentCode ?? STUDENT_ID;
+}
 export const DEMO_CONCEPT_ID = 'ALG_LINEAR_ONE_STEP';
 export const DEMO_QUESTION_ID = 'ALG_EQ_DIAG_001';
 export const DEMO_PHASE = 'GUIDED_PRACTICE';
@@ -122,15 +136,113 @@ export interface CanvasState {
   ocr_result: OcrResult | null;
 }
 
+// ── Student Model Schema 3.0 payload ─────────────────────────────────────────
+// The backend forwards Saravanan's event response verbatim on the session record
+// as `student_model_event`. It is the source of truth for the diagnostic
+// question set and the orientation bundle — the session record's own
+// `current_question` only ever carries the FIRST question of a set.
+//
+// Only the fields the UI renders are typed here; the real payload carries more
+// (including `tutor_view`, which holds the answer key — never read it, and never
+// surface it).
+
+export interface SchemaQuestionOption {
+  option_id: string;
+  text: string;
+}
+
+export interface SchemaStudentQuestionView {
+  question_text: string;
+  /** e.g. 'MCQ' | 'SHORT_ANSWER' — drives how the question is rendered. */
+  question_type: string;
+  /** Empty for free-response questions. */
+  options: SchemaQuestionOption[];
+  requires_student_response: boolean;
+}
+
+export interface SchemaQuestion {
+  question_id: string;
+  student_view: SchemaStudentQuestionView;
+}
+
+export interface SchemaQuestionSet {
+  questions: SchemaQuestion[];
+}
+
+/** A concept video the Student Model wants played during orientation. */
+export interface SchemaOrientationVideo {
+  video_id: string;
+  title: string;
+  /** Null when the content exists but no file has been uploaded for it yet. */
+  asset_url: string | null;
+  duration_seconds: number | null;
+}
+
+export interface SchemaWorkedExampleStep {
+  step_id: string;
+  sequence_no: number;
+  /** What to put on screen for this step. */
+  screen_content: string | null;
+  /** What the tutor says while it's shown. */
+  narration_text: string | null;
+}
+
+export interface SchemaWorkedExample {
+  worked_example_id: string;
+  title: string;
+  final_answer: string | null;
+  student_answer_required: boolean;
+  steps: SchemaWorkedExampleStep[];
+}
+
+export interface SchemaOrientationItem {
+  sequence_no: number;
+  content_type: 'ORIENTATION_VIDEO' | 'WORKED_EXAMPLE';
+  video: SchemaOrientationVideo | null;
+  worked_example: SchemaWorkedExample | null;
+}
+
+export interface SchemaOrientationBundle {
+  target_micro_skill_ids: string[];
+  /** Play/show in `sequence_no` order. */
+  delivery_sequence: SchemaOrientationItem[];
+}
+
+export interface SchemaPhasePayload {
+  phase: string;
+  payload_type: string;
+  question_set: SchemaQuestionSet | null;
+  orientation_bundle: SchemaOrientationBundle | null;
+}
+
+export interface StudentModelEvent {
+  phase_payload: SchemaPhasePayload | null;
+  /** Workbook topic this session runs on, e.g. 'ALG-ORI-02'. */
+  journey_state: { topic_id: string };
+}
+
+/** Flattened learner state the backend projects from the journey. */
+export interface StudentModelState {
+  current_phase: string;
+  mastery_status: string;
+  recommended_entry_phase: string | null;
+  target_micro_skill_ids: string[];
+  completed_micro_skill_ids: string[];
+  current_question_id: string | null;
+}
+
 export interface SessionRecord {
   session_id: string;
   student_id: string;
   concept_id: string;
   interaction_mode: InteractionMode;
   current_phase: string;
-  current_question: string;
-  question_id: string;
+  /** Null between phases — orientation has no question of its own. */
+  current_question: string | null;
+  question_id: string | null;
   question_number: number;
+  student_model_event?: StudentModelEvent | null;
+  student_model_state?: StudentModelState | null;
   voice_state: VoiceState;
   canvas_state: CanvasState;
   ui_state: string;
@@ -161,6 +273,95 @@ export interface StartSessionPayload {
 /** POST /session/start */
 export async function startSession(payload: StartSessionPayload) {
   const res = await api.post<SessionRecord>('/session/start', payload);
+  return res.data;
+}
+
+// ── Reading the Schema 3.0 payload off a session record ──────────────────────
+
+/**
+ * Every diagnostic question the Student Model served, in order.
+ *
+ * `record.current_question` is only the first one, so anything that walks the
+ * whole diagnostic must come through here. Empty when the session predates
+ * Schema 3.0 or the backend sent no set — callers fall back to demo content.
+ */
+export function diagnosticQuestions(record: SessionRecord | null | undefined): SchemaQuestion[] {
+  const payload = record?.student_model_event?.phase_payload;
+  if (!payload?.question_set) return [];
+  return payload.question_set.questions.filter((q) => q.student_view?.question_text);
+}
+
+/** The orientation bundle for this session, or null when there isn't one. */
+export function orientationBundle(
+  record: SessionRecord | null | undefined,
+): SchemaOrientationBundle | null {
+  return record?.student_model_event?.phase_payload?.orientation_bundle ?? null;
+}
+
+/** Orientation items in the order the Student Model wants them delivered. */
+export function orientationSequence(
+  record: SessionRecord | null | undefined,
+): SchemaOrientationItem[] {
+  const bundle = orientationBundle(record);
+  if (!bundle) return [];
+  return [...bundle.delivery_sequence].sort((a, b) => a.sequence_no - b.sequence_no);
+}
+
+/** Workbook topic code for this session (e.g. 'ALG-ORI-02'), or null. */
+export function sessionTopicCode(record: SessionRecord | null | undefined): string | null {
+  return record?.student_model_event?.journey_state?.topic_id ?? null;
+}
+
+// ── Phase 0 → 1 lifecycle ────────────────────────────────────────────────────
+// The backend derives micro-skills from the answers themselves, so the client
+// never sends micro_skill_ids (Chirudeva, 2026-07-27).
+
+/** One diagnostic answer, exactly as served. */
+export interface DiagnosticAnswer {
+  question_id: string;
+  /** Must be non-empty — the backend rejects a blank response. */
+  student_response: string;
+}
+
+/**
+ * POST /session/{id}/diagnostic/complete — submits every answer at once and
+ * returns the session in whichever phase the Student Model routed to:
+ * CONCEPT_ORIENTATION when a gap was found, INDEPENDENT_PRACTICE when not.
+ * 409 if the session isn't in DIAGNOSTIC (e.g. submitted twice).
+ */
+export async function completeDiagnostic(
+  sessionId: string,
+  student: string,
+  answers: DiagnosticAnswer[],
+) {
+  const res = await api.post<SessionRecord>(`/session/${sessionId}/diagnostic/complete`, {
+    student_id: student,
+    answers,
+  });
+  return res.data;
+}
+
+/**
+ * POST /session/{id}/orientation/start — asks for the worked example. Returns
+ * the record with `orientation_bundle` populated. 409 unless the session is in
+ * CONCEPT_ORIENTATION.
+ */
+export async function startOrientation(sessionId: string, student: string) {
+  const res = await api.post<SessionRecord>(`/session/${sessionId}/orientation/start`, {
+    student_id: student,
+  });
+  return res.data;
+}
+
+/**
+ * POST /session/{id}/orientation/complete — marks orientation done and routes
+ * on to Guided Practice. Must be called before leaving the phase, or the
+ * Student Model never advances and the student re-enters orientation forever.
+ */
+export async function completeOrientation(sessionId: string, student: string) {
+  const res = await api.post<SessionRecord>(`/session/${sessionId}/orientation/complete`, {
+    student_id: student,
+  });
   return res.data;
 }
 
@@ -263,7 +464,7 @@ export function toSessionSummary(res: SessionEndResponse | null | undefined): Se
   return {
     session_id: res.session_id,
     concept_id: s?.concept_id ?? res.concept_id,
-    question: s?.question ?? res.current_question,
+    question: s?.question ?? res.current_question ?? '',
     attempts: s?.attempts ?? res.attempt_count ?? res.canvas_submissions?.length ?? 0,
     hints_used: s?.hints_used ?? res.hint_count ?? 0,
     status: s?.status ?? res.status,
@@ -272,10 +473,10 @@ export function toSessionSummary(res: SessionEndResponse | null | undefined): Se
 }
 
 /** POST /session/end — student_id must own the session (else 404). */
-export async function endSession(sessionId: string, studentId: string = STUDENT_ID) {
+export async function endSession(sessionId: string, student: string = studentId()) {
   const res = await api.post<SessionEndResponse>('/session/end', {
     session_id: sessionId,
-    student_id: studentId,
+    student_id: student,
   });
   return res.data;
 }
@@ -320,7 +521,8 @@ export interface InteractionResponse {
   session_id: string;
   student_id: string;
   current_phase: string;
-  current_question: string;
+  /** Null when the new phase has no question of its own (e.g. orientation). */
+  current_question: string | null;
   question_id: string | null;
   interaction_mode: InteractionMode;
   message: string;
@@ -454,7 +656,7 @@ export async function submitCanvas(
   sessionId: string,
   snapshotDataUrl: string,
   submissionRole: 'STANDALONE_ATTEMPT' | 'VOICE_ATTACHMENT',
-  studentId: string = STUDENT_ID
+  student: string = studentId()
 ) {
   if (!snapshotDataUrl.startsWith(PNG_DATA_URL_PREFIX)) {
     throw new Error(`snapshot_data_url must start with "${PNG_DATA_URL_PREFIX}"`);
@@ -464,7 +666,7 @@ export async function submitCanvas(
   }
   const res = await api.post<CanvasSubmissionResult>('/canvas/submit', {
     session_id: sessionId,
-    student_id: studentId,
+    student_id: student,
     snapshot_data_url: snapshotDataUrl,
     submission_role: submissionRole,
   });
@@ -484,11 +686,11 @@ export interface VoiceSessionStartResponse {
 /** POST /voice/session/start — marks the session voice-active (mock token). */
 export async function startVoiceSession(
   sessionId: string,
-  studentId: string = STUDENT_ID
+  student: string = studentId()
 ) {
   const res = await api.post<VoiceSessionStartResponse>('/voice/session/start', {
     session_id: sessionId,
-    student_id: studentId,
+    student_id: student,
   });
   return res.data;
 }
@@ -514,12 +716,9 @@ export async function sendVoiceTranscript(payload: VoiceTranscriptPayload) {
  *  retries — callers fall back to browser speechSynthesis.
  *
  *  `provider`/`voice` carry the testing-only voice variant (lib/voiceOptions.ts).
- *  The backend IGNORES them today: VoiceTTSRequest accepts only `text`, and the
- *  provider/voice come from the VOICE_TTS_PROVIDER / VOICE_TTS_VOICE env vars.
- *  Pydantic drops unknown fields rather than rejecting them, so sending these is
- *  harmless now and starts working the moment the backend reads them — no
- *  frontend change needed then. Omitted entirely when nothing is selected, so
- *  the default request shape is unchanged. */
+ *  VoiceTTSRequest accepts both and falls back to the VOICE_TTS_PROVIDER /
+ *  VOICE_TTS_VOICE env vars, so they're omitted entirely when nothing is
+ *  selected and the default request shape is unchanged. */
 export async function synthesizeSpeech(
   text: string,
   opts?: { provider?: string | null; voice?: string | null },
