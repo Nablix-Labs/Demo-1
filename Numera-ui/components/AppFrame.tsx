@@ -15,6 +15,7 @@ import AuthGate from './auth/AuthGate';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { usePhaseRouting } from '@/lib/usePhaseRouting';
+import { basePath } from '@/lib/runtimeConfig';
 
 // Routes that render on their own, without the tool rail or media panel.
 const FOCUS_ROUTES = ['/onboard', '/diagnostic', '/orientation', '/teach', '/complete', '/consent', '/login', '/restricted'];
@@ -23,6 +24,38 @@ const ToolRail = dynamic(() => import('./ToolRail'), { ssr: false });
 const MediaPanel = dynamic(() => import('./MediaPanel'), { ssr: false });
 const VoicePicker = dynamic(() => import('./VoicePicker'), { ssr: false });
 const LogOutButton = dynamic(() => import('./LogOutButton'), { ssr: false });
+
+/**
+ * A deployed build with no API base URL is a broken build, not mock mode.
+ *
+ * `NEXT_PUBLIC_*` are inlined at build time, so omitting NEXT_PUBLIC_API_BASE_URL
+ * produces a bundle that compiles, deploys and loads — and then silently runs
+ * the whole app on demo data, showing things like "2x + 5 = 13" as if they were
+ * the student's real lesson. That shipped over a working build on 2026-07-28 and
+ * read as the app being broken rather than as a bad deploy.
+ *
+ * basePath is only set for an exported build (EXPORT_BASE_PATH), so it is a
+ * reliable "this is deployed, not local dev" signal. Local mock runs have
+ * neither var and are unaffected.
+ */
+const misconfigured = Boolean(basePath) && !process.env.NEXT_PUBLIC_API_BASE_URL;
+
+function ConfigError() {
+  return (
+    <div className="flex-1 flex items-center justify-center bg-off-white p-8">
+      <div className="max-w-md text-center">
+        <h1 className="text-[18px] font-semibold text-ink">This build can&apos;t reach the tutor</h1>
+        <p className="text-[13px] text-slate-blue mt-2 leading-relaxed">
+          It was built without <code>NEXT_PUBLIC_API_BASE_URL</code>, so nothing here would be
+          real — it would show demo content instead of your actual lesson.
+        </p>
+        <p className="text-[12px] text-slate-blue mt-3 leading-relaxed">
+          Rebuild and redeploy using the command in <code>docs/DEPLOY.md</code>.
+        </p>
+      </div>
+    </div>
+  );
+}
 
 export default function AppFrame({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -52,6 +85,8 @@ export default function AppFrame({ children }: { children: ReactNode }) {
       console.warn(`[auth] student code pinned to ${code.toUpperCase()} via ?student= (testing override)`);
     }
   }, []);
+
+  if (misconfigured) return <ConfigError />;
 
   const focus = FOCUS_ROUTES.some(
     (p) => pathname === p || pathname.startsWith(`${p}/`),
