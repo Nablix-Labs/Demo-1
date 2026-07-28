@@ -18,7 +18,7 @@
  * next. (Phase 2 lets both write; Phase 3 is the student alone.)
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { notFound } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
@@ -34,7 +34,7 @@ import {
   orientationVideoForTopicCode,
   type OrientationMedia,
 } from '@/lib/demoContent';
-import { useNumeraStore } from '@/store/useNumeraStore';
+import { useNumeraStore, type TutorElement } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import {
   completeOrientation,
@@ -45,6 +45,8 @@ import {
   type SchemaOrientationItem,
   type SchemaWorkedExample,
 } from '@/lib/api';
+import { speakTutor, stopTutorSpeech } from '@/lib/tts';
+import { cn } from '@/lib/cn';
 import { Skeleton } from '@/components/PageShell';
 import ConceptArt from '@/components/ConceptArt';
 
@@ -645,42 +647,159 @@ function OrientationItem({
   }
 
   if (item.content_type === 'WORKED_EXAMPLE' && item.worked_example) {
-    return <WorkedExampleCard example={item.worked_example} />;
+    return <WorkedExampleCanvas example={item.worked_example} />;
   }
   return null;
 }
 
 /**
- * The tutor's worked example, step by step. `screen_content` is what goes on
- * screen and `narration_text` is what the tutor says about it — both are shown,
- * because a student reading alone still needs the explanation.
+ * The tutor's worked example, written onto the canvas one step at a time in
+ * time with the tutor's voice (Manjusha, 2026-07-28).
+ *
+ * It used to render all eight steps at once as a list of cards, which read as a
+ * document to skim rather than a lesson to follow. Now each step's
+ * `screen_content` is written onto the shared tutor canvas as the matching
+ * `narration_text` is spoken, and the next step only starts once the voice for
+ * the current one has finished — so the writing and the talking stay together.
+ *
+ * Only the tutor writes here; the student watches and explains it back in
+ * Teacher Mode next, so the canvas is mounted `tutorOnly`.
  */
-function WorkedExampleCard({ example }: { example: SchemaWorkedExample }) {
+function WorkedExampleCanvas({ example }: { example: SchemaWorkedExample }) {
+  const applyCanvasDraw = useNumeraStore((s) => s.applyCanvasDraw);
+  const clearTutorMarks = useNumeraStore((s) => s.clearTutorMarks);
+
+  const steps = useMemo(
+    () => [...example.steps].sort((a, b) => a.sequence_no - b.sequence_no),
+    [example.steps],
+  );
+
+  // -1 = nothing written yet; steps.length = finished.
+  const [index, setIndex] = useState(-1);
+  const advance = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Start on a clean sheet, and never let this phase's marks follow the student
+  // into the next one — the tutor layer is global.
+  useEffect(() => {
+    clearTutorMarks();
+    const kick = setTimeout(() => setIndex(0), 500);
+    return () => {
+      clearTimeout(kick);
+      if (advance.current) clearTimeout(advance.current);
+      stopTutorSpeech();
+      clearTutorMarks();
+    };
+  }, [clearTutorMarks, example.worked_example_id]);
+
+  useEffect(() => {
+    if (index < 0 || index >= steps.length) return;
+    const step = steps[index];
+
+    applyCanvasDraw({
+      author: 'tutor',
+      mode: 'append',
+      actionId: `${example.worked_example_id}-${step.step_id}`,
+      elements: stepElements(step.screen_content, index, steps.length),
+    });
+
+    // Move on when the narration finishes. `done` is latched because speakTutor
+    // fires onEnd immediately for empty text and the browser-speech fallback can
+    // fire it more than once; the timeout is the safety net for a provider that
+    // never calls back at all, so a silent failure can't strand the lesson.
+    let done = false;
+    const next = () => {
+      if (done) return;
+      done = true;
+      advance.current = setTimeout(() => setIndex((n) => n + 1), 450);
+    };
+    speakTutor(step.narration_text ?? '', next);
+    const failsafe = setTimeout(next, 15_000);
+    return () => clearTimeout(failsafe);
+  }, [index, steps, applyCanvasDraw, example.worked_example_id]);
+
+  const current = index >= 0 && index < steps.length ? steps[index] : null;
+  const finished = index >= steps.length;
+
   return (
     <section>
-      <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-2 inline-flex items-center gap-1.5">
-        <PenLine size={12} strokeWidth={1.8} /> Worked example
+      <div className="flex items-end justify-between gap-4 mb-2">
+        <div>
+          <div className="text-[10px] tracking-widest uppercase text-slate-blue inline-flex items-center gap-1.5">
+            <PenLine size={12} strokeWidth={1.8} /> Worked example · Numera is writing
+          </div>
+          <h2 className="text-[17px] font-semibold text-ink mt-0.5">{example.title}</h2>
+        </div>
+        <div className="text-[11.5px] text-slate-blue flex-shrink-0" aria-live="polite">
+          {finished ? 'Done' : `Step ${Math.max(index, 0) + 1} of ${steps.length}`}
+        </div>
       </div>
-      <h2 className="text-[17px] font-semibold text-ink mb-4">{example.title}</h2>
-      <ol className="flex flex-col gap-3">
-        {[...example.steps].sort((a, b) => a.sequence_no - b.sequence_no).map((step) => (
-          <li key={step.step_id} className="flex items-start gap-3 rounded-lg border border-muted-gray bg-reading-surface p-4">
-            <span className="mt-0.5 flex-shrink-0 w-6 h-6 rounded-full bg-focus-navy text-white text-[11px] font-semibold flex items-center justify-center">
-              {step.sequence_no}
-            </span>
-            <div className="min-w-0">
-              {step.screen_content && (
-                <div className="text-[16px] text-ink font-[Cambria_Math,Georgia,serif] leading-snug">
-                  {step.screen_content}
-                </div>
-              )}
-              {step.narration_text && (
-                <p className="text-[13px] text-slate-blue leading-relaxed mt-1.5">{step.narration_text}</p>
-              )}
-            </div>
-          </li>
+
+      {/* Progress across the steps, so the student can see how far in they are. */}
+      <div className="flex items-center gap-1 mb-3" aria-hidden="true">
+        {steps.map((s, i) => (
+          <span
+            key={s.step_id}
+            className={cn('h-1 flex-1 rounded-full transition-colors',
+              i <= index ? 'bg-focus-navy' : 'bg-reading-surface')}
+          />
         ))}
-      </ol>
+      </div>
+
+      <div
+        className="relative h-[460px] rounded-xl border border-muted-gray bg-white overflow-hidden"
+        style={{
+          backgroundImage:
+            'linear-gradient(#EEF0F3 1px, transparent 1px), linear-gradient(90deg, #EEF0F3 1px, transparent 1px)',
+          backgroundSize: '28px 28px',
+        }}
+      >
+        <DrawingCanvas tutorOnly />
+      </div>
+
+      {/* What the tutor is saying, in text — the lesson must still work with the
+          sound off, and it is what a student re-reads after listening. */}
+      <p className="text-[13.5px] text-ink leading-relaxed mt-3 min-h-[3rem]" aria-live="polite">
+        {current?.narration_text ?? (finished ? 'That\u2019s the whole idea \u2014 now try explaining it back.' : '')}
+      </p>
+
+      {!finished && (
+        <button
+          onClick={() => { stopTutorSpeech(); setIndex(steps.length); }}
+          className="text-[12px] font-semibold text-slate-blue hover:text-ink transition-colors"
+        >
+          Skip the walkthrough
+        </button>
+      )}
     </section>
   );
 }
+
+/**
+ * One step's line of working, placed down the page like a hand writing on paper.
+ *
+ * `screen_content` is plain unicode maths ("a × a = a²"), not LaTeX, so it is a
+ * `text` element rather than `math` — handing it to KaTeX would render the
+ * source, not the maths. Geometry is normalised 0–1 (TUTOR-CANVAS-WRITE-SPEC
+ * §3.3) and left-anchored, so the lines stack regardless of canvas size.
+ */
+function stepElements(
+  screenContent: string | null,
+  index: number,
+  total: number,
+): Array<Omit<TutorElement, 'id'>> {
+  if (!screenContent) return [];
+  // Spread the steps down the sheet with a little top margin, tightening the
+  // spacing as the count grows so eight steps still fit without overflowing.
+  const top = 0.07;
+  const span = 0.86;
+  const y = top + (span / Math.max(total, 1)) * index;
+  return [{
+    kind: 'text',
+    x: 0.07,
+    y,
+    text: screenContent,
+    size: total > 6 ? 19 : 22,
+    color: '#1B2A4A',
+  }];
+}
+
