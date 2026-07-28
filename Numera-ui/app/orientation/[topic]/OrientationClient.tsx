@@ -509,6 +509,15 @@ function BackendOrientation({ topicId }: { topicId: string }) {
   // Ids of content the student has actually finished. Collected as each piece
   // completes rather than assumed from the bundle: /orientation/complete 409s on
   // anything missing and 422s on anything unknown, so guessing would fail.
+  /**
+   * The tutor's line for the current hand-off, shown and spoken.
+   *
+   * The backend authors all six of these (configs/phase1_tutor.yaml) and we were
+   * only using two, so moving between the diagnostic, the video and the worked
+   * example happened in silence — "there are no transition messages between the
+   * phases" (Manjusha, 2026-07-28).
+   */
+  const [stageMessage, setStageMessage] = useState<string | null>(null);
   const [doneVideoIds, setDoneVideoIds] = useState<string[]>([]);
   const [doneExampleIds, setDoneExampleIds] = useState<string[]>([]);
   const [finishing, setFinishing] = useState(false);
@@ -573,6 +582,18 @@ function BackendOrientation({ topicId }: { topicId: string }) {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
+
+  // Arriving from the diagnostic: greet before anything plays. Guarded so it
+  // speaks once, not on every re-render of a ready screen.
+  const greeted = useRef(false);
+  useEffect(() => {
+    if (status !== 'ready' || greeted.current) return;
+    const arrival = messages?.transition_to_orientation_message;
+    if (!arrival) return;
+    greeted.current = true;
+    setStageMessage(arrival);
+    speakTutor(arrival);
+  }, [status, messages]);
 
   // Every served video and worked example is done — move on by itself rather
   // than parking the student on a button (Manjusha, 2026-07-28). The ref makes
@@ -667,6 +688,12 @@ function BackendOrientation({ topicId }: { topicId: string }) {
             </div>
           )}
 
+          {status === 'ready' && stageMessage && (
+            <p className="text-[14px] leading-relaxed text-ink mb-5" aria-live="polite">
+              {stageMessage}
+            </p>
+          )}
+
           {status === 'ready' && items[itemIndex] && (
             /* One item at a time, in the Student Model's delivery order: the
                video plays first and the worked example only begins once it has
@@ -679,6 +706,14 @@ function BackendOrientation({ topicId }: { topicId: string }) {
               topicCode={topicCode}
               messages={messages}
               onFinished={(completed) => {
+                // Bridge into whatever comes next, in the backend's words.
+                const next = items[itemIndex + 1];
+                const bridge = !next
+                  ? null
+                  : next.content_type === 'WORKED_EXAMPLE'
+                    ? messages?.video_to_worked_example_message
+                    : messages?.between_videos_message;
+                if (bridge) { setStageMessage(bridge); speakTutor(bridge); }
                 if (completed?.videoId) {
                   setDoneVideoIds((ids) => (ids.includes(completed.videoId!) ? ids : [...ids, completed.videoId!]));
                 }

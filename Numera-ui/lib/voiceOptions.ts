@@ -144,3 +144,23 @@ export function defaultVoiceForTier(
   if (!provider || !provider.voices.length) return null;
   return { provider: provider.id, voice: provider.voices[0].id };
 }
+
+/**
+ * A provider to try when the student's own one fails.
+ *
+ * Providers die for reasons the frontend can't see or fix — on 2026-07-28 the
+ * Inworld account ran out of credits and every basic-tier reply came back 502
+ * ("You have no credits remaining"), dropping students onto the browser's
+ * robotic voice. Trying another real provider before giving up keeps the tutor
+ * sounding like the tutor.
+ *
+ * Returns null once every provider has been tried.
+ */
+export function alternateProvider(
+  tried: string | null | undefined,
+): { provider: string; voice: string } | null {
+  const next = VOICE_PROVIDERS.find(
+    (p) => p.id !== tried && p.id !== 'mock' && p.voices.length > 0,
+  );
+  return next ? { provider: next.id, voice: next.voices[0].id } : null;
+}

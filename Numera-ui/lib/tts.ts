@@ -22,7 +22,7 @@
 
 import { useMicLevel } from '@/store/useMicLevel';
 import { useAuthStore } from '@/store/useAuthStore';
-import { defaultVoiceForTier } from '@/lib/voiceOptions';
+import { alternateProvider, defaultVoiceForTier } from '@/lib/voiceOptions';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { synthesizeSpeech } from '@/lib/api';
 
@@ -119,17 +119,40 @@ export function speakTutor(text: string, onEnd?: () => void): void {
   const fallback = ttsProvider ? null : defaultVoiceForTier(useAuthStore.getState().tier);
   const provider = ttsProvider ?? fallback?.provider ?? null;
   const voice = ttsVoice ?? fallback?.voice ?? null;
-  synthesizeSpeech(text, { provider, voice })
-    .then((audioBase64) => {
-      if (token !== speakToken) return; // superseded while fetching
-      if (!audioBase64) { speakBrowser(text, onEnd); return; }
-      playBase64Mp3(audioBase64, onEnd);
-    })
-    .catch(() => {
-      if (token !== speakToken) return;
-      console.warn('[tts] backend TTS failed; falling back to browser speech');
-      speakBrowser(text, onEnd);
-    });
+  /**
+   * Try one provider, then a real alternative, and only then the browser.
+   *
+   * A provider can fail for reasons the frontend can't see or fix — Inworld ran
+   * out of credits on 2026-07-28 and returned 502 for every basic-tier reply,
+   * putting students on the browser's robotic voice. One retry against another
+   * configured provider keeps the tutor sounding like the tutor, and costs a
+   * single extra request only when something is actually broken.
+   */
+  const attempt = (p: string | null, v: string | null, allowRetry: boolean): void => {
+    synthesizeSpeech(text, { provider: p, voice: v })
+      .then((audioBase64) => {
+        if (token !== speakToken) return; // superseded while fetching
+        if (audioBase64) { playBase64Mp3(audioBase64, onEnd); return; }
+        giveUp(p, allowRetry);
+      })
+      .catch(() => {
+        if (token !== speakToken) return;
+        giveUp(p, allowRetry);
+      });
+  };
+
+  const giveUp = (failed: string | null, allowRetry: boolean): void => {
+    const alt = allowRetry ? alternateProvider(failed) : null;
+    if (alt) {
+      console.warn(`[tts] ${failed ?? 'default'} failed; retrying with ${alt.provider}`);
+      attempt(alt.provider, alt.voice, false);
+      return;
+    }
+    console.warn('[tts] no provider available; falling back to browser speech');
+    speakBrowser(text, onEnd);
+  };
+
+  attempt(provider, voice, true);
 }
 
 function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {

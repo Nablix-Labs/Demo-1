@@ -3,15 +3,20 @@
 /**
  * SlideDots — a vertical progress rail for the lesson's steps. Reads as a
  * connected stepper: completed steps fill cyan, the current one is a ringed navy
- * node, upcoming ones are hollow. Clicking a node jumps to that step. Floats as
- * its own glass rail so it reads as a distinct control, not part of the canvas.
+ * node, upcoming ones are hollow. Floats as its own glass rail so it reads as a
+ * distinct control, not part of the canvas.
+ *
+ * Read-only on purpose. The nodes used to be buttons that jumped to any step,
+ * which let a student skip ahead of the phase the backend had them in — the
+ * whole point of the adaptive loop is that progression is earned, not selected
+ * (Manjusha, 2026-07-28). It reports progress; it does not steer.
  */
 
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { cn } from '@/lib/cn';
 
 export default function SlideDots() {
-  const { activeSlide, totalSlides, setActiveSlide } = useNumeraStore();
+  const { activeSlide, totalSlides } = useNumeraStore();
 
   return (
     <div
@@ -37,18 +42,15 @@ export default function SlideDots() {
                 )}
               />
             )}
-            <button
-              title={`Step ${i + 1}`}
-              aria-label={`Go to step ${i + 1}`}
+            <span
               aria-current={active ? 'step' : undefined}
-              onClick={() => setActiveSlide(i)}
               className={cn(
                 'rounded-full transition-all duration-300 flex-shrink-0',
                 active
                   ? 'w-[13px] h-[13px] bg-focus-navy ring-2 ring-white'
                   : done
-                  ? 'w-[10px] h-[10px] bg-ai-cyan hover:scale-110'
-                  : 'w-[9px] h-[9px] bg-white/80 border border-muted-gray hover:border-focus-navy'
+                  ? 'w-[10px] h-[10px] bg-ai-cyan'
+                  : 'w-[9px] h-[9px] bg-white/80 border border-muted-gray'
               )}
             />
           </div>
