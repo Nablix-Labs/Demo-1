@@ -16,7 +16,7 @@ import FloatingMicButton from '@/components/FloatingMicButton';
 import VisualCue from '@/components/VisualCue';
 import { useFlowNav } from '@/lib/useFlowNav';
 import { useNumeraStore } from '@/store/useNumeraStore';
-import { useDemoTutor } from '@/hooks/useDemoTutor';
+import { useDemoTutor, resetSessionStart, sessionStartError } from '@/hooks/useDemoTutor';
 import { useVoiceTurn } from '@/hooks/useVoiceTurn';
 import { useVoiceStream } from '@/hooks/useVoiceStream';
 import { useWebSocket } from '@/hooks/useWebSocket';
@@ -59,6 +59,7 @@ export default function LessonPage() {
   // Wait for the persisted store to rehydrate before writing lesson content —
   // writing earlier would persist default state over the saved placement.
   const [hydrated, setHydrated] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
   useEffect(() => {
     if (useNumeraStore.persist.hasHydrated()) setHydrated(true);
     return useNumeraStore.persist.onFinishHydration(() => setHydrated(true));
@@ -102,7 +103,15 @@ export default function LessonPage() {
     if (!hydrated || !apiEnabled || sessionId) return;
     setMicMuted(true);
     void startSession(activeConceptId, 'VOICE').then((rec) => {
-      if (!rec) return;
+      if (!rec) {
+        // The lesson used to swallow this entirely, leaving the student on a
+        // blank canvas with no question, no message and no way to retry — which
+        // is what a failed session start actually looked like to a tester
+        // (2026-07-28). Say what happened and offer a way out.
+        setStartError(sessionStartError() ?? "We couldn't start your lesson just now.");
+        return;
+      }
+      setStartError(null);
       // CanvasStage renders the "Solve for x:" prefix itself, so strip it.
       // Null when the session opened on a phase with no question of its own.
       setQuestionText((rec.current_question ?? '').replace(/^solve for\s*x\s*:?\s*/i, '').trim());
@@ -134,6 +143,23 @@ export default function LessonPage() {
   // Navigation off this page is backend-phase-driven (usePhaseRouting follows
   // the session's current_phase), so the lesson chrome carries no manual
   // stage buttons.
+  if (startError) {
+    return (
+      <main className="flex-1 min-w-0 flex items-center justify-center bg-white p-8" aria-label="Lesson unavailable">
+        <div className="w-[420px] max-w-full text-center">
+          <h1 className="text-[18px] font-semibold text-ink">Couldn&apos;t start your lesson</h1>
+          <p className="text-[13px] text-slate-blue mt-2 leading-relaxed">{startError}</p>
+          <button
+            onClick={() => { resetSessionStart(); setStartError(null); useNumeraStore.getState().clearSessionId(); }}
+            className="mt-5 inline-flex items-center gap-1.5 rounded-md border border-focus-navy px-4 py-2.5 text-[12.5px] font-semibold text-ink hover:bg-focus-navy hover:text-white transition-colors"
+          >
+            Try again
+          </button>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <>
       <SlideDots />

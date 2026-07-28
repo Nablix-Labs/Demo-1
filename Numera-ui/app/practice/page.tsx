@@ -12,7 +12,7 @@ import dynamic from 'next/dynamic';
 import { Eye, EyeOff, Lightbulb, Check, ArrowRight } from 'lucide-react';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useFlowNav } from '@/lib/useFlowNav';
-import { useDemoTutor } from '@/hooks/useDemoTutor';
+import { useDemoTutor, resetSessionStart, sessionStartError } from '@/hooks/useDemoTutor';
 import { useVoiceTurn } from '@/hooks/useVoiceTurn';
 import { DEMO_CONCEPT_ID, DEMO_PHASE } from '@/lib/api';
 import { demoFor } from '@/lib/demoContent';
@@ -33,6 +33,7 @@ export default function PracticePage() {
   const completePhase = useNumeraStore((s) => s.completePhase);
   const currentTopicId = useNumeraStore((s) => s.currentTopicId);
   const questionText = useNumeraStore((s) => s.questionText);
+  const clearSessionId = useNumeraStore((s) => s.clearSessionId);
   const { goStage } = useFlowNav();
   const tutor = useDemoTutor();
 
@@ -96,10 +97,16 @@ export default function PracticePage() {
   }, [setCanvasExporter]);
 
   // Start a backend session once on entry (no-op unless an API base URL is set).
+  //
+  // A failure here used to be swallowed, leaving "Loading question…" on screen
+  // forever with no error and no way to retry — which is what a failed session
+  // start actually looked like to a tester (2026-07-28).
+  const [startError, setStartError] = useState<string | null>(null);
   useEffect(() => {
-    if (tutor.apiEnabled && !tutor.sessionId) {
-      void tutor.start(DEMO_CONCEPT_ID, 'TEXT');
-    }
+    if (!tutor.apiEnabled || tutor.sessionId) return;
+    void tutor.start(DEMO_CONCEPT_ID, 'TEXT').then((rec) => {
+      if (!rec) setStartError(sessionStartError() ?? "We couldn't load your practice question.");
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -154,7 +161,17 @@ export default function PracticePage() {
           <div className="text-[10px] tracking-widest uppercase text-slate-blue">Independent practice</div>
           {/* A bare equation reads as "Solve <eq>" in maths type; a word problem is
               shown as sent and allowed to wrap (see lib/questionText.ts). */}
-          {!QUESTION ? (
+          {!QUESTION && startError ? (
+            <div className="flex items-center gap-3">
+              <span className="text-[14px] font-semibold text-ink">{startError}</span>
+              <button
+                onClick={() => { resetSessionStart(); setStartError(null); clearSessionId(); }}
+                className="text-[12px] font-semibold text-learning-blue hover:underline"
+              >
+                Try again
+              </button>
+            </div>
+          ) : !QUESTION ? (
             <div className="text-[16px] font-semibold text-ink">Loading question…</div>
           ) : isBareEquation(QUESTION) ? (
             <div className="text-[16px] font-semibold text-ink font-[Cambria_Math,Georgia,serif]">
