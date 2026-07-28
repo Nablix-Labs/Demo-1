@@ -28,6 +28,7 @@ from app.models.student_model_session import (
     StudentModelCoreState,
     StudentModelSessionEventResponse,
 )
+from app.services.phase1_tutor import Phase1TutorMessages
 
 
 class VoiceState(BaseModel):
@@ -81,6 +82,14 @@ class OrientationPhaseRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     student_id: StudentId
+
+
+class OrientationCompletionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    student_id: StudentId
+    completed_video_ids: list[NonEmptyText]
+    completed_worked_example_ids: list[NonEmptyText]
 
 
 class QuestionAttemptRecord(BaseModel):
@@ -152,6 +161,7 @@ class SessionRecord(BaseModel):
     ui_state: str
     message: str
     diagnostic_transition_message: str | None = None
+    orientation_messages: Phase1TutorMessages | None = None
     show_canvas: bool = True
     show_hint_button: bool = False
     show_visual_cue: bool = False

@@ -1,0 +1,6 @@
+transition_to_orientation_message: "I found one idea that will be useful to look at before we continue. Let’s watch a short explanation together."
+shared_video_transition_message: "Let’s first look at how these examples connect and how we can write one general rule."
+before_video_message: "Watch how the numbers change and what stays the same. You can pause or replay any part."
+video_to_worked_example_message: "You’ve now seen how the idea works. Let’s go through one example together and apply it step by step."
+between_videos_message: "That explains how the changing number is represented. Let’s look at one more short idea."
+worked_example_to_guided_message: "Now let’s use this idea together in a question."

@@ -192,6 +192,28 @@ def _event_response(
                                 "duration_seconds": 75,
                             },
                             "worked_example": None,
+                        },
+                        {
+                            "sequence_no": 2,
+                            "content_type": "WORKED_EXAMPLE",
+                            "video": None,
+                            "worked_example": {
+                                "worked_example_id": "WE-KS3-T02-01",
+                                "title": "Many Cases, One General Rule",
+                                "covered_micro_skill_ids": ["T02.M1"],
+                                "final_answer": "n + 4",
+                                "student_answer_required": False,
+                                "steps": [
+                                    {
+                                        "step_id": "WE-KS3-T02-01-S01",
+                                        "sequence_no": 1,
+                                        "screen_content": "2 + 4",
+                                        "narration_text": "Start with one case.",
+                                        "must_show": None,
+                                        "must_not_show": None,
+                                    }
+                                ],
+                            },
                         }
                     ],
                 },
@@ -230,6 +252,28 @@ def _event_response(
                                 "duration_seconds": 75,
                             },
                             "worked_example": None,
+                        },
+                        {
+                            "sequence_no": 2,
+                            "content_type": "WORKED_EXAMPLE",
+                            "video": None,
+                            "worked_example": {
+                                "worked_example_id": "WE-KS3-T02-01",
+                                "title": "Many Cases, One General Rule",
+                                "covered_micro_skill_ids": ["T02.M1"],
+                                "final_answer": "n + 4",
+                                "student_answer_required": False,
+                                "steps": [
+                                    {
+                                        "step_id": "WE-KS3-T02-01-S01",
+                                        "sequence_no": 1,
+                                        "screen_content": "2 + 4",
+                                        "narration_text": "Start with one case.",
+                                        "must_show": None,
+                                        "must_not_show": None,
+                                    }
+                                ],
+                            },
                         }
                     ],
                 },
@@ -585,7 +629,12 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert diagnostic.json()["current_phase"] == "CONCEPT_ORIENTATION"
     assert diagnostic.json()["current_question"] is None
     assert diagnostic.json()["message"] == (
-        "I can see a few areas we should strengthen. Let’s work through them together."
+        "I found one idea that will be useful to look at before we continue. "
+        "Let’s watch a short explanation together."
+    )
+    assert diagnostic.json()["orientation_messages"]["before_video_message"] == (
+        "Watch how the numbers change and what stays the same. "
+        "You can pause or replay any part."
     )
     assert events[-1]["micro_skill_results"] == [
         {"micro_skill_id": "T02.M1", "result": "INCORRECT"}
@@ -593,7 +642,11 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
 
     premature_completion = client.post(
         f"/session/{session_id}/orientation/complete",
-        json={"student_id": "ST001"},
+        json={
+            "student_id": "ST001",
+            "completed_video_ids": [],
+            "completed_worked_example_ids": [],
+        },
     )
     assert premature_completion.status_code == 409
     assert len(events) == 2
@@ -604,10 +657,30 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     )
     assert orientation_started.status_code == 200
     assert events[-1]["target_micro_skill_ids"] == ["T02.M1"]
+    assert orientation_started.json()["message"] == (
+        "Watch how the numbers change and what stays the same. "
+        "You can pause or replay any part."
+    )
+
+    incomplete_orientation = client.post(
+        f"/session/{session_id}/orientation/complete",
+        json={
+            "student_id": "ST001",
+            "completed_video_ids": ["VID-KS3-T02-ORI"],
+            "completed_worked_example_ids": [],
+        },
+    )
+    assert incomplete_orientation.status_code == 409
+    assert "WE-KS3-T02-01" in incomplete_orientation.json()["message"]
+    assert len(events) == 3
 
     orientation_completed = client.post(
         f"/session/{session_id}/orientation/complete",
-        json={"student_id": "ST001"},
+        json={
+            "student_id": "ST001",
+            "completed_video_ids": ["VID-KS3-T02-ORI"],
+            "completed_worked_example_ids": ["WE-KS3-T02-01"],
+        },
     )
 
     assert orientation_completed.status_code == 200
@@ -615,6 +688,7 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert completed["current_phase"] == "GUIDED_PRACTICE"
     assert completed["question_id"] == "Q-T02-004"
     assert completed["student_model_state"]["target_micro_skill_ids"] == ["T02.M1"]
+    assert completed["message"] == "Now let’s use this idea together in a question."
     assert [event["event_type"] for event in events] == [
         "DIAGNOSTIC_QUESTION_SET_REQUESTED",
         "DIAGNOSTIC_COMPLETED",
