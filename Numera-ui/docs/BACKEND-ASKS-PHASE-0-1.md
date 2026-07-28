@@ -18,16 +18,18 @@ Everything below was verified against the **live VM** (`https://nablix.ai`) on
 
 | # | Ask | Owner | Blocking? |
 |---|-----|-------|-----------|
-| 1 | Return `student_code` on `/auth/login` | Chirudeva / Saravanan | **Yes** — every logged-in student is still ST001 |
-| 2 | Diagnostic never returns "no gaps" | Saravanan | **Yes** — one branch of the loop is unreachable |
+| 1 | Return `student_code` on `/auth/login` | Owner of `mathtutor-student` service | **Yes** — every logged-in student is still ST001 |
+| ~~2~~ | ~~Diagnostic never returns "no gaps"~~ | — | **Withdrawn — this was a frontend bug, now fixed** |
 | 3 | No way to resume a session mid-journey | Chirudeva | **Yes** — students re-take the diagnostic every login |
-| 4 | `TEACH_BACK` is skipped entirely | Chirudeva / Saravanan | Yes, if teach-back is in scope |
-| 5 | Orientation videos have `asset_url: null` | Saravanan | No — frontend falls back by topic code |
-| 6 | Answer key is sent to the browser | Saravanan | No, but it's a correctness/integrity hole |
+| 4 | `TEACH_BACK` is skipped entirely | Chirudeva | Yes, if teach-back is in scope |
+| 5 | Orientation videos have `asset_url: null` | Saravanan (data) | No — frontend falls back by topic code |
+| 6 | Answer key is sent to the browser | Question-bank owner | No, but it's a correctness/integrity hole |
 | 7 | Session ids exhaust at 999 and 500 forever | Chirudeva | No, but it took the dev API down twice |
-| 8 | `learning.topics.topic_code` is inconsistent | Saravanan | No — worked around |
+| 8 | `learning.topics.topic_code` is inconsistent | Saravanan (data) | No — worked around |
 
-Items 1–4 are what actually block the demo path.
+Items 1, 3 and 4 are what actually block the demo path. **Item 2 has been
+withdrawn** — it turned out to be a frontend bug and is already fixed and
+deployed; it is kept below only so the finding isn't lost.
 
 ---
 
@@ -85,35 +87,37 @@ curl -s -X POST https://nablix.ai/nablix-auth/auth/login \
 
 ---
 
-## 2. The diagnostic never returns "no gaps" (BLOCKER)
+## 2. ~~The diagnostic never returns "no gaps"~~ — WITHDRAWN, frontend bug
 
-The agreed acceptance criteria include:
+**No backend action needed.** Recording it because the symptom looked like a
+Student Model problem and someone will otherwise re-diagnose it.
 
-> Weak result: Diagnostic → Concept Orientation → Guided Practice.
-> **No gap: Diagnostic → Independent Practice.**
+The diagnostic always came back `DIAGNOSTIC_GAPS_FOUND` → `CONCEPT_ORIENTATION`,
+no matter what the student answered. Cause: the frontend was sending the option
+**text** as `student_response`, while grading is
 
-The second branch is currently unreachable. Submitting **all 8 answers correct**
-— taken from each question's own `tutor_view.answer_spec.canonical_answer` —
-still comes back as:
-
-```json
-{ "current_phase": "CONCEPT_ORIENTATION",
-  "routing": { "reason_code": "DIAGNOSTIC_GAPS_FOUND" } }
+```python
+answers[question.question_id] in answer_spec.accepted_answers
 ```
 
-The frontend handles either outcome (it just follows `current_phase`), so
-nothing needs to change on our side — but the no-gap path cannot be demonstrated
-until the Student Model can actually produce it.
+and for `EXACT_CHOICE_MATCH` questions `accepted_answers` holds option **ids**
+(`["B"]`). So every answer scored INCORRECT and every micro-skill came back as a
+gap.
 
-Worth confirming how `_diagnostic_results()` maps `student_response` to
-`micro_skill_results`: we send the **option text** (e.g. `"4 × y"`), because
-that is what the student picked. If the grader expects the `option_id`
-(`"B"`) instead, every answer reads as wrong and gaps are always found. **Please
-confirm which one you want** — we'll send whichever is correct.
+Fixed frontend-side — the client now sends `option_id`. Verified live: a
+full-marks diagnostic returns
 
-**Repro:** `POST /session/start`, read `canonical_answer` per question, map it
-through `student_view.options` to the option text, submit all 8 to
-`/session/{id}/diagnostic/complete`.
+```json
+{ "current_phase": "INDEPENDENT_PRACTICE",
+  "routing": { "reason_code": "DIAGNOSTIC_NO_GAPS" } }
+```
+
+so both branches of the acceptance criteria now work end to end.
+
+**Optional hardening (nice to have, not blocking):** `_diagnostic_results()`
+silently treats an unrecognised `student_response` as INCORRECT. Returning a 422
+when a response matches neither an option id nor any accepted answer would have
+surfaced this in minutes instead of hours.
 
 ---
 

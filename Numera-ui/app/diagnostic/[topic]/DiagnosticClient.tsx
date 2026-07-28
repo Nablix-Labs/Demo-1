@@ -141,9 +141,18 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [questions.length, sessionId, authReady]);
 
-  /** Record the choice and move on; the last one submits the whole set. */
-  const choose = (question: SchemaQuestion, optionText: string) => {
-    const next = { ...answers, [question.question_id]: optionText };
+  /**
+   * Record the choice and move on; the last one submits the whole set.
+   *
+   * `response` must be the OPTION ID, not the option text. The backend grades
+   * with `student_response in answer_spec.accepted_answers`, and for
+   * EXACT_CHOICE_MATCH questions `accepted_answers` holds ids (`["B"]`).
+   * Sending the text scored every answer INCORRECT, so the diagnostic always
+   * reported gaps and always routed to orientation no matter what the student
+   * picked — the "no gap -> Independent Practice" branch could never fire.
+   */
+  const choose = (question: SchemaQuestion, response: string) => {
+    const next = { ...answers, [question.question_id]: response };
     setAnswers(next);
     if (i + 1 < questions.length) { setI(i + 1); return; }
     void submit(next);
@@ -236,14 +245,14 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
           {question.student_view.options.map((opt) => (
             <button
               key={opt.option_id}
-              onClick={() => choose(question, opt.text)}
+              onClick={() => choose(question, opt.option_id)}
               className={cn(
                 'flex items-center justify-between rounded-lg border px-4 py-3 text-left text-[14px] transition-colors font-[Cambria_Math,Georgia,serif]',
-                picked === opt.text ? 'border-focus-navy bg-reading-surface' : 'border-muted-gray hover:border-focus-navy'
+                picked === opt.option_id ? 'border-focus-navy bg-reading-surface' : 'border-muted-gray hover:border-focus-navy'
               )}
             >
               {opt.text}
-              {picked === opt.text && <Check size={16} strokeWidth={2} />}
+              {picked === opt.option_id && <Check size={16} strokeWidth={2} />}
             </button>
           ))}
         </div>
