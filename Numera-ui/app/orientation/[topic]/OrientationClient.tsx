@@ -348,6 +348,15 @@ function VideoFile({
   media, onEnded,
 }: { media: Extract<OrientationMedia, { kind: 'video' }>; onEnded: () => void }) {
   const [failed, setFailed] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  // Try to start on arrival. Browsers block autoplay WITH SOUND unless the page
+  // has user activation, and a lesson video muted is pointless — so when the
+  // attempt is refused we simply leave the poster and controls up and let the
+  // student press play. Never force it muted just to make autoplay succeed.
+  useEffect(() => {
+    videoRef.current?.play().catch(() => {/* blocked — the controls are there */});
+  }, []);
 
   if (failed) {
     return (
@@ -367,6 +376,7 @@ function VideoFile({
   return (
     <div className="relative aspect-video w-full overflow-hidden rounded-xl border border-focus-navy bg-black">
       <video
+        ref={videoRef}
         src={media.src}
         controls
         playsInline
@@ -474,6 +484,8 @@ function BackendOrientation({ topicId }: { topicId: string }) {
   const setCurrentPhase = useNumeraStore((s) => s.setCurrentPhase);
 
   const [status, setStatus] = useState<Status>('loading');
+  // Position in the delivery sequence — the video, then the worked example.
+  const [itemIndex, setItemIndex] = useState(0);
   const [finishing, setFinishing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Guards React 18's double-invoke from opening orientation twice.
@@ -610,12 +622,19 @@ function BackendOrientation({ topicId }: { topicId: string }) {
             </div>
           )}
 
-          {status === 'ready' && (
-            <div className="flex flex-col gap-8">
-              {items.map((item) => (
-                <OrientationItem key={`${item.content_type}-${item.sequence_no}`} item={item} topicCode={topicCode} />
-              ))}
-            </div>
+          {status === 'ready' && items[itemIndex] && (
+            /* One item at a time, in the Student Model's delivery order: the
+               video plays first and the worked example only begins once it has
+               finished. Rendering the whole sequence at once had the tutor
+               writing out the example while the video sat unplayed behind it
+               (Manjusha, 2026-07-28). */
+            <OrientationItem
+              key={`${items[itemIndex].content_type}-${items[itemIndex].sequence_no}`}
+              item={items[itemIndex]}
+              topicCode={topicCode}
+              onFinished={() => setItemIndex((n) => Math.min(n + 1, items.length - 1))}
+              isLast={itemIndex === items.length - 1}
+            />
           )}
 
           {status !== 'loading' && (
@@ -640,8 +659,13 @@ function BackendOrientation({ topicId }: { topicId: string }) {
 
 /** One entry in the Student Model's delivery sequence. */
 function OrientationItem({
-  item, topicCode,
-}: { item: SchemaOrientationItem; topicCode: string | null }) {
+  item, topicCode, onFinished, isLast,
+}: {
+  item: SchemaOrientationItem;
+  topicCode: string | null;
+  onFinished: () => void;
+  isLast: boolean;
+}) {
   if (item.content_type === 'ORIENTATION_VIDEO' && item.video) {
     // The Student Model carries the video record but leaves asset_url null, so
     // the topic code resolves the uploaded file (see orientationVideoForTopicCode).
@@ -653,13 +677,33 @@ function OrientationItem({
         </div>
         <h2 className="text-[17px] font-semibold text-ink mb-3">{item.video.title}</h2>
         {src ? (
-          <VideoFile media={{ kind: 'video', title: item.video.title, duration: '', summary: '', src }} onEnded={() => {}} />
+          <>
+            <VideoFile
+              media={{ kind: 'video', title: item.video.title, duration: '', summary: '', src }}
+              onEnded={onFinished}
+            />
+            {!isLast && (
+              <button
+                onClick={onFinished}
+                className="mt-3 text-[12px] font-semibold text-slate-blue hover:text-ink transition-colors"
+              >
+                Skip the video
+              </button>
+            )}
+          </>
         ) : (
           <div className="flex flex-col items-center justify-center text-center rounded-xl border border-dashed border-muted-gray bg-reading-surface aspect-video w-full">
             <p className="text-[12.5px] text-slate-blue max-w-sm leading-relaxed">
-              This video hasn&apos;t been uploaded yet. Read through the worked example below —
-              it covers the same ground.
+              This video hasn&apos;t been uploaded yet — the worked example covers the same ground.
             </p>
+            {!isLast && (
+              <button
+                onClick={onFinished}
+                className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-focus-navy text-white px-4 py-2 text-[12.5px] font-semibold hover:opacity-80 transition-opacity"
+              >
+                Continue <ArrowRight size={15} strokeWidth={2} />
+              </button>
+            )}
           </div>
         )}
       </section>
