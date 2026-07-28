@@ -17,6 +17,7 @@
  *   - any tutor speech still playing
  */
 
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { LogOut } from 'lucide-react';
 import { useAuthStore } from '@/store/useAuthStore';
@@ -27,16 +28,42 @@ import { cn } from '@/lib/cn';
 
 export default function LogOutButton({ className }: { className?: string }) {
   const router = useRouter();
+  const [signingOut, setSigningOut] = useState(false);
 
+  /**
+   * Order matters here.
+   *
+   * Clearing the stores first re-rendered whatever screen the student was on
+   * with its data gone — the diagnostic blanked its own question — and only
+   * then navigated. It read as the app breaking on the way out (reported with
+   * a screen recording, 2026-07-28).
+   *
+   * So: cover the screen, navigate, and only wipe state once the route has
+   * actually changed. Nothing ever renders a half-cleared screen.
+   */
   const signOut = () => {
+    if (signingOut) return;
+    setSigningOut(true);
     stopTutorSpeech();
-    resetSessionStart();
-    useNumeraStore.getState().reset();
-    useAuthStore.getState().logout();
     router.replace('/login');
+    // After the route swap, so the screen being left is never re-rendered empty.
+    setTimeout(() => {
+      resetSessionStart();
+      useNumeraStore.getState().reset();
+      useAuthStore.getState().logout();
+    }, 0);
   };
 
   return (
+    <>
+      {signingOut && (
+        <div
+          className="fixed inset-0 z-[100] bg-white flex items-center justify-center"
+          aria-live="polite"
+        >
+          <span className="text-[13px] text-slate-blue">Signing out…</span>
+        </div>
+      )}
     <button
       onClick={signOut}
       title="Log out"
@@ -48,5 +75,6 @@ export default function LogOutButton({ className }: { className?: string }) {
     >
       <LogOut size={17} strokeWidth={1.8} />
     </button>
+    </>
   );
 }
