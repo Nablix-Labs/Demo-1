@@ -270,6 +270,7 @@ export interface SessionRecord {
   ui_state: string;
   message: string;
   diagnostic_transition_message?: string | null;
+  diagnostic_transition_messages?: string[];
   orientation_messages?: OrientationMessages | null;
   // UI flags on the session record (start / read). Stash them client-side after
   // /session/start. Note: the backend also echoes show_visual_cue / visual_cue on

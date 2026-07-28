@@ -13,6 +13,7 @@ class Phase0TutorConfig(BaseModel):
 
     intro_message: str
     neutral_transition_message: str
+    neutral_transition_messages: list[str]
     gaps_transition_message: str
     no_gaps_transition_message: str
 

@@ -523,6 +523,15 @@ def test_session_start_uses_schema_3_diagnostic_contract(monkeypatch) -> None:
         "about this topic. Select the answer you think is correct."
     )
     assert body["diagnostic_transition_message"] == "Okay. Let’s continue."
+    assert body["diagnostic_transition_messages"] == [
+        "Okay. Let’s continue with the next one.",
+        "Now, see what you think about this question.",
+        "Let’s try the next one.",
+        "Here’s another one for you to consider.",
+        "Take a look at this one and choose what you think is correct.",
+        "Ready for another? Try this one.",
+        "Let’s keep going with one more question.",
+    ]
     assert body["student_model_state"]["target_micro_skill_ids"] == [
         "T02.M1",
         "T02.M2",

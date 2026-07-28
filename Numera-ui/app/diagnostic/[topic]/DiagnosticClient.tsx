@@ -63,6 +63,17 @@ const GENERIC: Q[] = [
   { prompt: 'Simplify: 2x + 3x', options: ['5x', '6x', '23x'], answer: 0 },
 ];
 
+function diagnosticTransitionFor(
+  messages: string[] | undefined,
+  fallback: string | null | undefined,
+  questionIndex: number
+): string | undefined {
+  if (messages && messages.length > 0) {
+    return messages[questionIndex % messages.length];
+  }
+  return fallback ?? undefined;
+}
+
 export default function DiagnosticClient({ topicId }: { topicId: string }) {
   const topic = getTopic(topicId);
   if (!topic) notFound();
@@ -177,7 +188,11 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
     const next = { ...answers, [question.question_id]: response };
     setAnswers(next);
     // The tutor's between-questions line, spoken as well as shown.
-    const transition = backendSession?.diagnostic_transition_message;
+    const transition = diagnosticTransitionFor(
+      backendSession?.diagnostic_transition_messages,
+      backendSession?.diagnostic_transition_message,
+      i
+    );
     if (transition) speakTutor(transition);
     // Hold on the chosen option for a beat before moving on. Advancing the
     // instant it is tapped gives no sign the tap landed — the question just
@@ -301,7 +316,13 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
           className="min-h-5 text-[12.5px] text-slate-blue mt-2"
           aria-live="polite"
         >
-          {picked ? backendSession?.diagnostic_transition_message : ''}
+          {picked
+            ? diagnosticTransitionFor(
+                backendSession?.diagnostic_transition_messages,
+                backendSession?.diagnostic_transition_message,
+                i
+              )
+            : ''}
         </p>
       </div>
     </Centered>
