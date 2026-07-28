@@ -35,7 +35,7 @@ export default function ManageConsentPage() {
   const isBlocking = (p: ConsentPurpose) => ACCOUNT_BLOCKING_PURPOSES.includes(p);
 
   return (
-    <AuthShell width={phase === 'manage' ? 560 : 440}>
+    <AuthShell>
       {phase === 'verify' ? (
         <>
           <h1 className="text-2xl font-semibold text-ink leading-tight">Manage consent</h1>

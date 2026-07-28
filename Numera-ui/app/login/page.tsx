@@ -12,25 +12,20 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, Mail, Phone, Check } from 'lucide-react';
+import { ArrowRight, Mail, Phone } from 'lucide-react';
 import { useAuthStore, accessDecision, type SsoProvider, type Role } from '@/store/useAuthStore';
 import { login, LoginError } from '@/lib/auth/authApi';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { landingRoute } from '@/lib/usePhaseRouting';
 import { phasesToUnlock } from '@/lib/flow';
 import { SSO_LOGO } from '@/components/auth/SsoLogos';
+import BrandPanel from '@/components/auth/BrandPanel';
 
 const SSO: { id: SsoProvider; label: string }[] = [
   { id: 'google', label: 'Google' },
   { id: 'microsoft', label: 'Microsoft' },
   { id: 'apple', label: 'Apple' },
   { id: 'school', label: 'School ID' },
-];
-
-const HIGHLIGHTS = [
-  'Adaptive AI tutor that meets each student at their level',
-  'Guided, step-by-step maths — not just answers',
-  'Safe and guardian-approved from day one',
 ];
 
 export default function LoginPage() {
@@ -86,195 +81,164 @@ export default function LoginPage() {
   const onSubmit = () => (loginMode === 'email' ? void doLogin() : proceed());
 
   return (
-    <main className="flex-1 min-w-0 flex bg-off-white" aria-label="Log in to Numera">
-      {/* ── Brand hero (desktop) ─────────────────────────────────────── */}
-      <aside className="hidden lg:flex flex-col justify-between w-[46%] max-w-[620px] relative overflow-hidden bg-focus-navy text-white p-14">
-        {/* depth: soft brand glows */}
-        <div className="absolute -top-24 -right-16 w-80 h-80 rounded-full bg-ai-cyan/20 blur-3xl" aria-hidden />
-        <div className="absolute bottom-[-6rem] left-[-4rem] w-96 h-96 rounded-full bg-learning-blue/20 blur-3xl" aria-hidden />
-        {/* faint equation motif */}
-        <div className="absolute inset-0 flex items-center justify-center opacity-[0.06] select-none pointer-events-none" aria-hidden>
-          <span className="text-[220px] font-serif italic leading-none">∑</span>
-        </div>
-
-        <div className="relative flex items-center gap-2.5">
-          <span className="w-10 h-10 rounded-xl bg-ai-cyan text-white flex items-center justify-center font-bold text-lg">N</span>
-          <div className="leading-none">
-            <div className="text-[17px] font-semibold tracking-[0.2px]">Numera</div>
-            <div className="text-[9px] font-normal text-white/60 tracking-[2px] uppercase mt-1">by Nablix</div>
-          </div>
-        </div>
-
-        <div className="relative">
-          <h2 className="text-[34px] font-semibold leading-[1.15] tracking-[-0.5px]">
-            Maths that meets<br />every student<br />where they are.
-          </h2>
-          <ul className="mt-8 flex flex-col gap-3.5">
-            {HIGHLIGHTS.map((h) => (
-              <li key={h} className="flex items-start gap-3 text-[13.5px] text-white/85 leading-snug">
-                <span className="flex-shrink-0 mt-0.5 w-5 h-5 rounded-full bg-ai-cyan/20 text-ai-cyan flex items-center justify-center">
-                  <Check size={12} strokeWidth={3} />
-                </span>
-                {h}
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        <div className="relative flex items-center gap-2 text-[12px] text-white/55">
-          <span className="w-1.5 h-1.5 rounded-full bg-success-sage inline-block" />
-          Trusted for KS3–KS4 maths tutoring
-        </div>
-      </aside>
-
-      {/* ── Login form ───────────────────────────────────────────────── */}
-      <section className="flex-1 flex flex-col items-center justify-center px-6 py-10 overflow-y-auto">
-        <div className="w-[400px] max-w-full">
-          {/* logo shown when hero is hidden */}
-          <div className="lg:hidden flex items-center gap-2.5 mb-8">
-            <span className="w-9 h-9 rounded-lg bg-ai-cyan text-white flex items-center justify-center font-bold text-base">N</span>
-            <div className="leading-none">
-              <div className="text-[15px] font-semibold text-ink tracking-[0.2px]">Numera</div>
-              <div className="text-[8.5px] font-normal text-slate-blue tracking-[1.5px] uppercase mt-0.5">by Nablix</div>
+    <main
+      className="flex-1 min-w-0 bg-white p-3 text-ink antialiased"
+      aria-label="Log in to Numera"
+    >
+      <div className="grid min-h-[calc(100vh-1.5rem)] gap-3 lg:grid-cols-[1.05fr_0.95fr]">
+        {/* ── Form ─────────────────────────────────────────────────────── */}
+        <div className="flex items-center rounded-xl border border-muted-gray bg-white px-6 py-12 sm:px-10 lg:px-14 xl:px-20">
+          <div className="mx-auto w-full max-w-[460px]">
+            {/* Wordmark — carries the panel's identity on small screens where
+                the brand side is hidden. */}
+            <div className="flex items-center gap-2.5 lg:hidden mb-10">
+              <span className="w-9 h-9 rounded-lg bg-learning-blue text-white flex items-center justify-center font-bold text-base">N</span>
+              <div className="leading-none">
+                <div className="text-[15px] font-semibold text-ink tracking-[0.2px]">Numera</div>
+                <div className="text-[8.5px] text-slate-blue tracking-[1.5px] uppercase mt-0.5">by Nablix</div>
+              </div>
             </div>
-          </div>
 
-          <h1 className="text-[28px] font-semibold text-ink leading-tight tracking-[-0.3px]">Welcome back</h1>
-          <p className="text-[13px] text-slate-blue mt-1.5 leading-relaxed">
-            Log in to continue learning with Numera.
-          </p>
-
-          <div className="flex flex-col gap-2.5 mt-7">
-            {SSO.map((p) => {
-              const Logo = SSO_LOGO[p.id];
-              return (
-                <button
-                  key={p.id}
-                  onClick={proceed}
-                  disabled={!hydrated}
-                  className="group flex items-center gap-3 rounded-btn border border-muted-gray bg-white px-4 py-3 text-[13.5px] font-semibold text-ink hover:border-slate-blue hover:shadow-sm transition-all"
-                >
-                  <Logo size={18} />
-                  <span>Continue with {p.label}</span>
-                  <ArrowRight size={15} className="ml-auto text-muted-gray group-hover:text-slate-blue transition-colors" />
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="flex items-center gap-3 my-5">
-            <span className="h-px flex-1 bg-muted-gray" />
-            <span className="text-[11px] uppercase tracking-widest text-slate-blue">or with email / phone</span>
-            <span className="h-px flex-1 bg-muted-gray" />
-          </div>
-
-          {/* A real <form>. Without one, Enter in the email or password field did
-              nothing — there was no submit target, so the only way in was
-              clicking the button (reported 2026-07-28). It also stops the
-              browser warning that the password field isn't in a form, which is
-              what password managers key off. */}
-          <form onSubmit={(e) => { e.preventDefault(); onSubmit(); }} noValidate>
-
-          {/* Email vs phone-OTP login */}
-          <div className="grid grid-cols-2 gap-1 rounded-btn bg-reading-surface p-1 mb-3">
-            {([
-              { id: 'email', label: 'Email', Icon: Mail },
-              { id: 'phone', label: 'Phone OTP', Icon: Phone },
-            ] as const).map(({ id, label, Icon }) => (
-              <button
-                key={id}
-                type="button"
-                onClick={() => setLoginMode(id)}
-                className={
-                  'flex items-center justify-center gap-1.5 rounded-[10px] py-2 text-[12px] font-semibold transition-colors ' +
-                  (loginMode === id ? 'bg-white text-ink shadow-sm' : 'text-slate-blue hover:text-ink')
-                }
-              >
-                <Icon size={13} />
-                {label}
-              </button>
-            ))}
-          </div>
-
-          {loginMode === 'phone' ? (
-            <>
-              <label className="block text-[12px] font-semibold text-ink">
-                Phone
-                <div className="mt-1.5 flex items-center gap-2 rounded-btn border border-muted-gray bg-white px-3 focus-within:border-ai-cyan focus-within:ring-2 focus-within:ring-ai-cyan/15 transition-all">
-                  <Phone size={16} className="text-slate-blue flex-shrink-0" />
-                  <input
-                    type="tel"
-                    name="tel"
-                    autoComplete="tel"
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    placeholder="+44 7700 900000"
-                    className="flex-1 min-w-0 bg-transparent py-2.5 text-[14px] text-ink placeholder:text-slate-blue focus:outline-none"
-                  />
-                </div>
-              </label>
-              <p className="text-[11px] text-slate-blue mt-1.5">We&rsquo;ll text a one-time code to sign you in.</p>
-            </>
-          ) : (
-            <>
-              <label className="block text-[12px] font-semibold text-ink">
-                Email
-                <div className="mt-1.5 flex items-center gap-2 rounded-btn border border-muted-gray bg-white px-3 focus-within:border-ai-cyan focus-within:ring-2 focus-within:ring-ai-cyan/15 transition-all">
-                  <Mail size={16} className="text-slate-blue flex-shrink-0" />
-                  <input
-                    type="email"
-                    name="email"
-                    autoComplete="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="you@example.com"
-                    className="flex-1 min-w-0 bg-transparent py-2.5 text-[14px] text-ink placeholder:text-slate-blue focus:outline-none"
-                  />
-                </div>
-              </label>
-
-              <label className="block text-[12px] font-semibold text-ink mt-3">
-                <span className="flex items-center justify-between">
-                  Password
-                  <button type="button" className="text-[11px] font-medium text-learning-blue hover:underline">Forgot?</button>
-                </span>
-                <input
-                  type="password"
-                  name="password"
-                  autoComplete="current-password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="mt-1.5 w-full rounded-btn border border-muted-gray bg-white px-3.5 py-2.5 text-[14px] text-ink placeholder:text-muted-gray focus:border-ai-cyan focus:ring-2 focus:ring-ai-cyan/15 focus:outline-none transition-all"
-                />
-              </label>
-            </>
-          )}
-
-          {error && (
-            <p role="alert" className="mt-4 text-[12.5px] text-action-orange bg-action-orange/10 border border-action-orange/25 rounded-btn px-3 py-2">
-              {error}
+            <h1 className="text-3xl font-semibold tracking-[-0.03em] text-ink sm:text-4xl lg:text-[42px] lg:leading-[1.05]">
+              Welcome back
+            </h1>
+            <p className="mt-3 text-lg leading-snug text-slate-blue sm:text-xl">
+              Pick up where you left off.
             </p>
-          )}
 
-          <button
-            type="submit"
-            disabled={!hydrated || submitting}
-            className="btn btn-primary w-full mt-5"
-          >
-            {submitting ? 'Logging in…' : <>Log in <ArrowRight size={16} /></>}
-          </button>
+            <div className="mt-10 grid gap-3 sm:grid-cols-2">
+              {SSO.map((p) => {
+                const Logo = SSO_LOGO[p.id];
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={proceed}
+                    disabled={!hydrated}
+                    className="flex h-11 items-center justify-center gap-2 rounded-[10px] border border-muted-gray bg-white px-3 text-[13.5px] font-medium text-ink transition-colors hover:bg-reading-surface disabled:opacity-40"
+                  >
+                    <Logo size={17} />
+                    <span className="whitespace-nowrap">{p.label}</span>
+                  </button>
+                );
+              })}
+            </div>
 
-          </form>
+            <div className="my-8 flex items-center gap-3">
+              <span className="h-px flex-1 bg-muted-gray" />
+              <span className="text-[13px] font-medium text-slate-blue">or</span>
+              <span className="h-px flex-1 bg-muted-gray" />
+            </div>
 
-          <p className="text-[12px] text-slate-blue text-center mt-6">
-            New to Numera?{' '}
-            <button onClick={() => router.push('/onboard')} className="font-semibold text-learning-blue hover:underline">
-              Create an account
-            </button>
-          </p>
+            {/* A real <form>. Without one, Enter in the email or password field
+                did nothing — there was no submit target, so the only way in was
+                clicking the button (reported 2026-07-28). It also stops the
+                browser warning that the password field isn't in a form, which
+                is what password managers key off. */}
+            <form onSubmit={(e) => { e.preventDefault(); onSubmit(); }} noValidate>
+              <div className="grid grid-cols-2 gap-1 rounded-[10px] bg-reading-surface p-1">
+                {([
+                  { id: 'email', label: 'Email', Icon: Mail },
+                  { id: 'phone', label: 'Phone OTP', Icon: Phone },
+                ] as const).map(({ id, label, Icon }) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setLoginMode(id)}
+                    className={
+                      'flex items-center justify-center gap-1.5 rounded-[8px] py-2 text-[12.5px] font-semibold transition-colors ' +
+                      (loginMode === id ? 'bg-white text-ink shadow-sm' : 'text-slate-blue hover:text-ink')
+                    }
+                  >
+                    <Icon size={13} />
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {loginMode === 'phone' ? (
+                <label className="mt-5 block">
+                  <span className="text-[13px] font-medium text-ink">Phone</span>
+                  <div className="mt-2 flex h-14 items-center gap-2 rounded-[10px] border border-muted-gray bg-white px-4 focus-within:border-learning-blue transition-colors">
+                    <Phone size={16} className="text-slate-blue flex-shrink-0" />
+                    <input
+                      type="tel"
+                      name="tel"
+                      autoComplete="tel"
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      placeholder="+44 7700 900000"
+                      className="min-w-0 flex-1 bg-transparent text-[16px] text-ink placeholder:text-slate-blue/60 focus:outline-none"
+                    />
+                  </div>
+                  <span className="mt-2 block text-[12.5px] text-slate-blue">
+                    We&rsquo;ll text a one-time code to sign you in.
+                  </span>
+                </label>
+              ) : (
+                <>
+                  <label className="mt-5 block">
+                    <span className="text-[13px] font-medium text-ink">Email</span>
+                    <div className="mt-2 flex h-14 items-center gap-2 rounded-[10px] border border-muted-gray bg-white px-4 focus-within:border-learning-blue transition-colors">
+                      <Mail size={16} className="text-slate-blue flex-shrink-0" />
+                      <input
+                        type="email"
+                        name="email"
+                        autoComplete="email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder="you@example.com"
+                        className="min-w-0 flex-1 bg-transparent text-[16px] text-ink placeholder:text-slate-blue/60 focus:outline-none"
+                      />
+                    </div>
+                  </label>
+
+                  <label className="mt-4 block">
+                    <span className="flex items-center justify-between">
+                      <span className="text-[13px] font-medium text-ink">Password</span>
+                      <button type="button" className="text-[12px] font-medium text-learning-blue hover:underline">
+                        Forgot?
+                      </button>
+                    </span>
+                    <input
+                      type="password"
+                      name="password"
+                      autoComplete="current-password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="mt-2 h-14 w-full rounded-[10px] border border-muted-gray bg-white px-4 text-[16px] text-ink placeholder:text-muted-gray focus:border-learning-blue focus:outline-none transition-colors"
+                    />
+                  </label>
+                </>
+              )}
+
+              {error && (
+                <p role="alert" className="mt-4 rounded-[10px] border border-action-orange/25 bg-action-orange/10 px-3 py-2 text-[12.5px] text-action-orange">
+                  {error}
+                </p>
+              )}
+
+              <button
+                type="submit"
+                disabled={!hydrated || submitting}
+                className="mt-7 flex h-12 w-full items-center justify-center gap-2 rounded-[10px] bg-learning-blue text-[16px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+              >
+                {submitting ? 'Logging in…' : <>Log in <ArrowRight size={17} /></>}
+              </button>
+            </form>
+
+            <p className="mt-7 text-center text-[13px] text-slate-blue">
+              New to Numera?{' '}
+              <button onClick={() => router.push('/onboard')} className="font-semibold text-learning-blue hover:underline">
+                Create an account
+              </button>
+            </p>
+          </div>
         </div>
-      </section>
+
+        <BrandPanel headline="Maths that meets you where you are." />
+      </div>
     </main>
   );
 }

@@ -18,6 +18,9 @@ import { usePhaseRouting } from '@/lib/usePhaseRouting';
 import { basePath } from '@/lib/runtimeConfig';
 
 // Routes that render on their own, without the tool rail or media panel.
+// Screens shown before a student is signed in.
+const PRE_AUTH_ROUTES = ['/login', '/onboard', '/consent', '/restricted'];
+
 const FOCUS_ROUTES = ['/onboard', '/diagnostic', '/orientation', '/teach', '/complete', '/consent', '/login', '/restricted'];
 
 const ToolRail = dynamic(() => import('./ToolRail'), { ssr: false });
@@ -92,6 +95,11 @@ export default function AppFrame({ children }: { children: ReactNode }) {
     (p) => pathname === p || pathname.startsWith(`${p}/`),
   );
 
+  // Pre-auth screens: nobody is signed in, so a Log out button and a tutor
+  // voice picker are nonsense there — the logout icon showed up on /login
+  // itself after signing out.
+  const preAuth = PRE_AUTH_ROUTES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+
   if (focus) {
     // Full-bleed: just the routed page — plus the voice picker, which otherwise
     // only mounts inside MediaPanel on the lesson route. Since routing follows
@@ -100,10 +108,12 @@ export default function AppFrame({ children }: { children: ReactNode }) {
     return (
       <div className="flex-1 flex min-w-0 relative">
         {children}
-        <div className="fixed bottom-5 left-5 z-50 flex items-center gap-1">
-          <VoicePicker />
-          <LogOutButton />
-        </div>
+        {!preAuth && (
+          <div className="fixed bottom-5 left-5 z-50 flex items-center gap-1">
+            <VoicePicker />
+            <LogOutButton />
+          </div>
+        )}
       </div>
     );
   }

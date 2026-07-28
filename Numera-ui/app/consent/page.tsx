@@ -64,7 +64,7 @@ export default function ConsentPage() {
   };
 
   return (
-    <AuthShell width={phase === 'consent' ? 560 : 480}>
+    <AuthShell>
       {/* Context banner */}
       <div className="flex items-center gap-2.5 rounded-btn border border-muted-gray bg-white px-4 py-3 mb-6">
         <span className="w-8 h-8 rounded-lg bg-reading-surface text-slate-blue flex items-center justify-center flex-shrink-0">
