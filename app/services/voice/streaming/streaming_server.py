@@ -231,22 +231,33 @@ def _tts_retry_count() -> int:
         return 2
 
 
-async def synthesize_speech(text: str) -> str | None:
+async def synthesize_speech(
+    text: str,
+    provider: str | None = None,
+    voice: str | None = None,
+) -> str | None:
     """Configured TTS (OpenAI when keyed) → base64 mp3; None on empty text.
+
+    *provider* and *voice* are optional per-request overrides sent by the
+    frontend voice picker.  When ``None`` the process-level env defaults
+    (``VOICE_TTS_PROVIDER`` / ``VOICE_TTS_VOICE``) are used, so existing
+    callers that pass only ``text`` keep working unchanged.
 
     Retries provider failures per the adapter retry setting, then raises so the
     caller can return an explicit error (frontend falls back to browser speech).
     """
     if not text:
         return None
+    use_provider = provider or voice_config.DEFAULT_TTS_PROVIDER
+    use_voice = voice or voice_config.TTS_VOICE
     attempts = _tts_retry_count() + 1
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
         try:
-            tts_adapter = get_tts_adapter(voice_config.DEFAULT_TTS_PROVIDER)
+            tts_adapter = get_tts_adapter(use_provider)
             result = await tts_adapter.generate_speech(
                 text=text,
-                voice=voice_config.TTS_VOICE,
+                voice=use_voice,
                 audio_format="mp3",
             )
             audio_data = result.audio_data
@@ -292,10 +303,16 @@ def health():
     return {"status": "ok", "service": "voice-streaming"}
 
 @app.websocket("/voice/stream")
-async def voice_stream(ws: WebSocket, session: str = "default", student_id: str = "ST001"):
+async def voice_stream(
+    ws: WebSocket,
+    session: str = "default",
+    student_id: str = "ST001",
+    tts_provider: str | None = None,
+    tts_voice: str | None = None,
+):
     session_id = session  # frontend sends ?session=, not ?session_id=
     await ws.accept()
-    logger.info(f"[{session_id}] WebSocket connected")
+    logger.info(f"[{session_id}] WebSocket connected (tts_provider={tts_provider}, tts_voice={tts_voice})")
 
     language = "en"
     deepgram_ws = None
@@ -384,6 +401,7 @@ async def voice_stream(ws: WebSocket, session: str = "default", student_id: str 
                                 ws, session_id, student_id,
                                 transcript_to_process, confidence_to_process,
                                 duration, access_token, None,
+                                tts_provider, tts_voice,
                             )
                         except Exception as e:
                             logger.error(f"[{session_id}] Auto-process failed: {e}")
@@ -504,7 +522,8 @@ async def voice_stream(ws: WebSocket, session: str = "default", student_id: str 
                         audio_duration_seconds = max(time.time() - audio_started_at, 0.001)
                         await process_and_respond(
                             ws, session_id, student_id, final_transcript,
-                            final_confidence, audio_duration_seconds, access_token, canvas_snapshot
+                            final_confidence, audio_duration_seconds, access_token, canvas_snapshot,
+                            tts_provider, tts_voice,
                         )
                     elif not turn_already_processed:
                         logger.info(f"[{session_id}] Stop: no speech detected")
@@ -595,6 +614,8 @@ async def process_and_respond(
     audio_duration_seconds: float,
     access_token: str,
     canvas_snapshot: str | None = None,
+    tts_provider: str | None = None,
+    tts_voice: str | None = None,
 ):
     pipeline_start = time.time()
 
@@ -663,7 +684,9 @@ async def process_and_respond(
     # Instead of waiting for the full audio file (2-3 seconds),
     # we send chunks as OpenAI generates them.  The frontend can
     # start playback after receiving the first chunk (~300-500ms).
-    tts_adapter = get_tts_adapter(voice_config.DEFAULT_TTS_PROVIDER)
+    use_provider = tts_provider or voice_config.DEFAULT_TTS_PROVIDER
+    use_voice = tts_voice or voice_config.TTS_VOICE
+    tts_adapter = get_tts_adapter(use_provider)
     supports_streaming = hasattr(tts_adapter, "generate_speech_stream")
 
     if supports_streaming and tutor_voice_text:
@@ -674,7 +697,7 @@ async def process_and_respond(
         try:
             async for chunk in tts_adapter.generate_speech_stream(
                 text=tutor_voice_text,
-                voice=voice_config.TTS_VOICE,
+                voice=use_voice,
                 audio_format="mp3",
             ):
                 chunk_b64 = base64.b64encode(chunk).decode("utf-8")
@@ -725,7 +748,7 @@ async def process_and_respond(
 
             tts_result = await tts_adapter.generate_speech(
                 text=tutor_voice_text,
-                voice=voice_config.TTS_VOICE,
+                voice=use_voice,
                 audio_format="mp3",
             )
 

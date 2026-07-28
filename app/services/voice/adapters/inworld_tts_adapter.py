@@ -37,6 +37,21 @@ def _get_client(api_key: str) -> httpx.AsyncClient:
     return _inworld_http_client
 
 
+# Curated Inworld voice presets for the math tutor.
+# Inworld uses simple name strings (not UUIDs).
+# Full list of 73+ voices at https://docs.inworld.ai/api-reference/ttsAPI/texttospeech/list-voices
+INWORLD_VOICES: dict[str, str] = {
+    "Ashley":   "Warm, natural female voice",
+    "Dennis":   "Smooth, calm and friendly male voice",
+    "Olivia":   "Upbeat, friendly British female",
+    "Alex":     "Energetic and expressive mid-range male",
+    "Julia":    "Clear female voice",
+    "Sarah":    "Friendly female voice",
+    "Claire":   "Approachable female voice",
+    "Priya":    "Warm female voice",
+}
+
+
 class InworldTTSAdapter(TTSAdapter):
     """Inworld Realtime TTS adapter.
 
