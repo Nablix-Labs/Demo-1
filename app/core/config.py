@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     safety_service_url: str = "http://localhost:8004" #manjusha
     student_model_url: str = ""
     student_model_topic_ids: dict[str, int] = Field(default_factory=dict)
+    student_model_topic_codes: dict[str, str] = Field(default_factory=dict)
     cors_allowed_origins: list[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
@@ -62,7 +63,7 @@ class Settings(BaseSettings):
 
     #ID format patterns(SIMPLE REGEX FOR PATTERN MATCHING)
     student_id_pattern: str = r"^ST\d{3}$"
-    session_id_pattern: str = r"^SESSION\d{3}$"
+    session_id_pattern: str = r"^SESSION(?:\d{3}|[0-9a-fA-F]{32})$"
 
     model_config = SettingsConfigDict(
         env_file=".env",

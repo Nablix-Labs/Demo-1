@@ -3,10 +3,19 @@ from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.models.session import QuestionAttemptRecord
+from app.models.session import QuestionAttemptRecord, SessionEndRequest
 from app.services import session_service
 
-client = TestClient(app)
+client = TestClient(app, headers={"Authorization": "Bearer test-token"})
+
+
+def test_generated_session_ids_are_unique_and_valid() -> None:
+    session_ids = [session_service._build_session_id() for _ in range(1001)]
+
+    assert len(set(session_ids)) == 1001
+    assert all(session_id.startswith("SESSION") for session_id in session_ids)
+    for session_id in session_ids:
+        SessionEndRequest(session_id=session_id, student_id="ST001")
 
 
 def seed_graded_attempt(session_id: str) -> None:
@@ -37,6 +46,7 @@ def test_session_start_get_and_end_flow() -> None:
             "student_id": "ST001",
             "concept_id": "ALG_LINEAR_ONE_STEP",
             "interaction_mode": "VOICE",
+            "initial_phase": "GUIDED_PRACTICE",
         },
     )
 
@@ -201,6 +211,7 @@ def test_session_start_stores_correct_answer_and_served_ids() -> None:
             "student_id": "ST001",
             "concept_id": "ALG_LINEAR_ONE_STEP",
             "interaction_mode": "TEXT",
+            "initial_phase": "GUIDED_PRACTICE",
         },
     )
     assert response.status_code == 200

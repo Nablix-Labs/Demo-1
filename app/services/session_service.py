@@ -1,8 +1,10 @@
 import asyncio
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from fastapi import HTTPException
 
+from app.adapters.provider import get_adapters
 from app.adapters.question_bank import fetch_question
 from app.core.config import get_settings
 from app.core.exceptions import QuestionFetchError
@@ -12,6 +14,9 @@ from app.models.fields import Phase
 from app.models.interaction import InteractionResponse
 from app.models.session import (
     CanvasState,
+    DiagnosticCompleteRequest,
+    OrientationPhaseRequest,
+    PhaseTransitionRecord,
     QuestionAttemptRecord,
     SessionEndRequest,
     SessionPerformance,
@@ -20,24 +25,35 @@ from app.models.session import (
     SessionSummary,
     VoiceState,
 )
-from app.services.phase_transition import UI_STATE_FLAGS
+from app.models.student_model_session import (
+    DiagnosticResult,
+    DiagnosticCompletedEvent,
+    DiagnosticQuestionSetRequestedEvent,
+    MicroSkillResult,
+    OrientationCompletedEvent,
+    StudentModelPhase,
+    StudentModelQuestion,
+    StudentModelSessionEventResponse,
+    WorkedExampleRequestedEvent,
+)
+from app.services.phase_transition import (
+    TRANSITION_MESSAGES,
+    UI_STATE_FLAGS,
+    resolve_transition,
+)
+from app.services.student_model_session import (
+    PHASE_FROM_STUDENT_MODEL,
+    project_student_model_state,
+)
 
 
 _sessions: dict[str, SessionRecord] = {}
 _interaction_locks: dict[str, asyncio.Lock] = {}
 _last_interaction_responses: dict[str, InteractionResponse] = {}
-_next_session_number: int = 1
 
 
 def _build_session_id() -> str:
-    global _next_session_number
-
-    if _next_session_number > 999:
-        raise RuntimeError("mock session id range exhausted at SESSION999.")
-
-    session_id: str = f"SESSION{_next_session_number:03d}"
-    _next_session_number += 1
-    return session_id
+    return f"SESSION{uuid4().hex}"
 
 
 def _session_not_found(session_id: str) -> HTTPException:
@@ -196,12 +212,10 @@ def _recover_demo_session(
     return session
 
 
-async def start_session(request: SessionStartRequest) -> SessionRecord:
-    """Create and store the mock session response used before real persistence exists."""
-
-    initial_phase: Phase = (
-        request.initial_phase if request.initial_phase is not None else "GUIDED_PRACTICE"
-    )
+async def _start_legacy_session(
+    request: SessionStartRequest,
+    initial_phase: Phase,
+) -> SessionRecord:
     fetched = await get_next_question(request.concept_id, initial_phase)
     if fetched is None:
         raise QuestionFetchError(request.concept_id, initial_phase)
@@ -226,6 +240,421 @@ async def start_session(request: SessionStartRequest) -> SessionRecord:
     )
     _sessions[session.session_id] = session
     return session
+
+
+async def start_session(
+    request: SessionStartRequest,
+    access_token: str,
+) -> SessionRecord:
+    """Start Schema 3.0 diagnostic unless an explicit legacy phase was requested."""
+
+    if request.initial_phase is not None:
+        return await _start_legacy_session(request, request.initial_phase)
+
+    settings = get_settings()
+    topic_id = settings.student_model_topic_codes.get(request.concept_id)
+    if topic_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"No Student Model topic code is configured for {request.concept_id}.",
+        )
+
+    session_id = _build_session_id()
+    started_at = datetime.now(timezone.utc)
+    event = await get_adapters().student_model.send_session_event(
+        DiagnosticQuestionSetRequestedEvent(
+            request_id=f"{session_id}:DIAGNOSTIC_QUESTION_SET_REQUESTED",
+            event_type="DIAGNOSTIC_QUESTION_SET_REQUESTED",
+            topic_id=topic_id,
+            student_id=request.student_id,
+            timestamp=started_at.isoformat().replace("+00:00", "Z"),
+        ),
+        access_token,
+    )
+    _require_schema_phase(event, ("PHASE_0_DIAGNOSTIC",))
+    payload = event.phase_payload
+    if (
+        payload is None
+        or payload.payload_type != "QUESTION_SET"
+        or payload.question_set is None
+        or not payload.question_set.questions
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="Student Model returned no diagnostic questions.",
+        )
+    first = payload.question_set.questions[0]
+    phase = PHASE_FROM_STUDENT_MODEL[payload.phase]
+    flags = UI_STATE_FLAGS[phase]
+    question_ids = [question.question_id for question in payload.question_set.questions]
+    session = SessionRecord(
+        session_id=session_id,
+        student_id=request.student_id,
+        concept_id=request.concept_id,
+        started_at=started_at,
+        current_phase=phase,
+        current_question=first.student_view.question_text,
+        question_id=first.question_id,
+        question_number=1,
+        correct_answer=first.tutor_view.answer_spec.canonical_answer,
+        served_question_ids=question_ids,
+        interaction_mode=request.interaction_mode,
+        ui_state=phase,
+        message=_diagnostic_start_message(first.student_view.question_text),
+        show_canvas=flags["show_canvas"],
+        show_hint_button=flags["show_hint_button"],
+        show_visual_cue=flags["show_visual_cue"],
+        show_scaffold_panel=flags["show_scaffold_panel"],
+        allow_text_input=flags["allow_text_input"],
+        allow_voice_input=flags["allow_voice_input"],
+        hint_count=0,
+        status="started",
+        recommended_entry_phase=phase,
+        student_model_event=event,
+        student_model_state=project_student_model_state(event),
+    )
+    _sessions[session_id] = session
+    return session
+
+
+def _schema_session(session_id: str, student_id: str) -> SessionRecord:
+    session = _get_owned_session(session_id, student_id)
+    if session.student_model_event is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Session {session_id} was not initialized through Student Model Schema 3.0.",
+        )
+    return session
+
+
+def _schema_request_id(session: SessionRecord, event_type: str) -> str:
+    event = session.student_model_event
+    if event is None:
+        raise RuntimeError("Schema 3.0 request id requires a stored Student Model event.")
+    return f"{session.session_id}:{event_type}:{event.journey_state.version + 1}"
+
+
+def _schema_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _question_updates(
+    event: StudentModelSessionEventResponse,
+) -> dict[str, object]:
+    payload = event.phase_payload
+    if payload is None or payload.question_set is None or not payload.question_set.questions:
+        return {
+            "current_question": None,
+            "question_id": None,
+            "correct_answer": None,
+        }
+    first = payload.question_set.questions[0]
+    return {
+        "current_question": first.student_view.question_text,
+        "question_id": first.question_id,
+        "correct_answer": first.tutor_view.answer_spec.canonical_answer,
+        "served_question_ids": [
+            question.question_id for question in payload.question_set.questions
+        ],
+    }
+
+
+def _require_schema_phase(
+    event: StudentModelSessionEventResponse,
+    allowed_phases: tuple[StudentModelPhase, ...],
+) -> None:
+    payload = event.phase_payload
+    if payload is None or payload.phase not in allowed_phases:
+        actual_phase = payload.phase if payload is not None else None
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Student Model returned an unexpected phase "
+                f"{actual_phase}; expected one of {allowed_phases}."
+            ),
+        )
+
+
+def _apply_schema_event(
+    session: SessionRecord,
+    event: StudentModelSessionEventResponse,
+) -> SessionRecord:
+    payload = event.phase_payload
+    if payload is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Student Model returned no phase payload.",
+        )
+    next_phase = PHASE_FROM_STUDENT_MODEL[payload.phase]
+    transition = resolve_transition(session.current_phase, next_phase)
+    if next_phase != session.current_phase and transition is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Student Model returned an invalid phase transition "
+                f"{session.current_phase} -> {next_phase}."
+            ),
+        )
+
+    flags = UI_STATE_FLAGS[next_phase]
+    question_updates = _question_updates(event)
+    updates: dict[str, object] = {
+        "current_phase": next_phase,
+        "ui_state": next_phase,
+        "message": event.routing.reason,
+        "recommended_entry_phase": (
+            PHASE_FROM_STUDENT_MODEL[event.journey_state.recommended_entry_phase]
+            if event.journey_state.recommended_entry_phase is not None
+            else None
+        ),
+        "student_model_event": event,
+        "student_model_state": project_student_model_state(event),
+        "show_canvas": flags["show_canvas"],
+        "show_hint_button": flags["show_hint_button"],
+        "show_visual_cue": flags["show_visual_cue"],
+        "show_scaffold_panel": flags["show_scaffold_panel"],
+        "allow_text_input": flags["allow_text_input"],
+        "allow_voice_input": flags["allow_voice_input"],
+        **question_updates,
+    }
+    next_question_id = question_updates["question_id"]
+    if next_question_id != session.question_id:
+        updates.update(
+            {
+                "question_number": (
+                    session.question_number + 1
+                    if next_question_id is not None
+                    else session.question_number
+                ),
+                "attempt_count": 0,
+                "question_completed": next_question_id is None,
+            }
+        )
+    if transition is not None:
+        updates.update(
+            {
+                "previous_phase": session.current_phase,
+                "attempt_count": 0,
+                "question_completed": False,
+                "phase_transitions": [
+                    *session.phase_transitions,
+                    PhaseTransitionRecord(
+                        previous_phase=session.current_phase,
+                        current_phase=next_phase,
+                        entry_reason=event.routing.reason_code,
+                        transitioned_at=event.processed_at,
+                    ),
+                ],
+            }
+        )
+        transition_message = TRANSITION_MESSAGES.get(
+            (session.current_phase, next_phase)
+        )
+        if transition_message is not None:
+            updates["message"] = transition_message
+    updated = session.model_copy(update=updates)
+    _sessions[session.session_id] = updated
+    return updated
+
+
+def _diagnostic_results(
+    session: SessionRecord,
+    request: DiagnosticCompleteRequest,
+) -> list[MicroSkillResult]:
+    event = session.student_model_event
+    if event is None or event.phase_payload is None:
+        raise RuntimeError("Diagnostic grading requires the stored start event.")
+    question_set = event.phase_payload.question_set
+    if question_set is None:
+        raise HTTPException(status_code=409, detail="No diagnostic question set is active.")
+
+    answers = {answer.question_id: answer.student_response for answer in request.answers}
+    if len(answers) != len(request.answers):
+        raise HTTPException(status_code=422, detail="Diagnostic question IDs must be unique.")
+    questions: dict[str, StudentModelQuestion] = {
+        question.question_id: question for question in question_set.questions
+    }
+    if set(answers) != set(questions):
+        raise HTTPException(
+            status_code=422,
+            detail="Answers must include every served diagnostic question exactly once.",
+        )
+
+    results: dict[str, DiagnosticResult] = {}
+    for question in question_set.questions:
+        answer_spec = question.tutor_view.answer_spec
+        if answer_spec.verification_method != "EXACT_CHOICE_MATCH":
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Unsupported diagnostic verification method "
+                    f"{answer_spec.verification_method} for {question.question_id}."
+                ),
+            )
+        result = (
+            "CORRECT"
+            if answers[question.question_id] in answer_spec.accepted_answers
+            else "INCORRECT"
+        )
+        for mapping in question.micro_skill_mappings:
+            previous = results.get(mapping.micro_skill_id)
+            results[mapping.micro_skill_id] = (
+                "INCORRECT" if previous == "INCORRECT" or result == "INCORRECT" else "CORRECT"
+            )
+    expected_skills = set(event.journey_state.phase_0_diagnostic.target_micro_skill_ids)
+    if set(results) != expected_skills:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Student Model diagnostic questions do not cover the declared "
+                "target micro-skills."
+            ),
+        )
+    return [
+        MicroSkillResult(micro_skill_id=micro_skill_id, result=result)
+        for micro_skill_id, result in results.items()
+    ]
+
+
+async def complete_diagnostic(
+    session_id: str,
+    request: DiagnosticCompleteRequest,
+    access_token: str,
+) -> SessionRecord:
+    session = _schema_session(session_id, request.student_id)
+    if session.current_phase != "DIAGNOSTIC":
+        raise HTTPException(status_code=409, detail="The session is not in DIAGNOSTIC.")
+    stored_event = session.student_model_event
+    if stored_event is None:
+        raise RuntimeError("Schema 3.0 session is missing its stored event.")
+    event = await get_adapters().student_model.send_session_event(
+        DiagnosticCompletedEvent(
+            request_id=_schema_request_id(session, "DIAGNOSTIC_COMPLETED"),
+            event_type="DIAGNOSTIC_COMPLETED",
+            topic_id=stored_event.journey_state.topic_id,
+            student_id=session.student_id,
+            timestamp=_schema_timestamp(),
+            micro_skill_results=_diagnostic_results(session, request),
+        ),
+        access_token,
+    )
+    _require_schema_phase(
+        event,
+        ("PHASE_1_ORIENTATION", "PHASE_3_INDEPENDENT_PRACTICE"),
+    )
+    payload = event.phase_payload
+    if (
+        payload is not None
+        and payload.phase == "PHASE_1_ORIENTATION"
+        and payload.orientation_bundle is None
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="Student Model returned no orientation bundle.",
+        )
+    if (
+        payload is not None
+        and payload.phase == "PHASE_3_INDEPENDENT_PRACTICE"
+        and (payload.question_set is None or not payload.question_set.questions)
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="Student Model returned no independent-practice questions.",
+        )
+    return _apply_schema_event(session, event)
+
+
+def _orientation_targets(session: SessionRecord) -> list[str]:
+    event = session.student_model_event
+    if event is None:
+        raise RuntimeError("Orientation requires a stored Schema 3.0 event.")
+    targets = event.journey_state.phase_1_orientation.target_micro_skill_ids
+    if not targets:
+        raise HTTPException(
+            status_code=409,
+            detail="Student Model returned no orientation target micro-skills.",
+        )
+    return targets
+
+
+async def start_orientation(
+    session_id: str,
+    request: OrientationPhaseRequest,
+    access_token: str,
+) -> SessionRecord:
+    session = _schema_session(session_id, request.student_id)
+    if session.current_phase != "CONCEPT_ORIENTATION":
+        raise HTTPException(
+            status_code=409,
+            detail="The session is not in CONCEPT_ORIENTATION.",
+        )
+    event = session.student_model_event
+    if event is None:
+        raise RuntimeError("Schema 3.0 session is missing its stored event.")
+    response = await get_adapters().student_model.send_session_event(
+        WorkedExampleRequestedEvent(
+            request_id=_schema_request_id(session, "WORKED_EXAMPLE_REQUESTED"),
+            event_type="WORKED_EXAMPLE_REQUESTED",
+            topic_id=event.journey_state.topic_id,
+            student_id=session.student_id,
+            timestamp=_schema_timestamp(),
+            target_micro_skill_ids=_orientation_targets(session),
+        ),
+        access_token,
+    )
+    _require_schema_phase(response, ("PHASE_1_ORIENTATION",))
+    if (
+        response.phase_payload is None
+        or response.phase_payload.orientation_bundle is None
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="Student Model returned no orientation bundle.",
+        )
+    return _apply_schema_event(session, response)
+
+
+async def complete_orientation(
+    session_id: str,
+    request: OrientationPhaseRequest,
+    access_token: str,
+) -> SessionRecord:
+    session = _schema_session(session_id, request.student_id)
+    if session.current_phase != "CONCEPT_ORIENTATION":
+        raise HTTPException(
+            status_code=409,
+            detail="The session is not in CONCEPT_ORIENTATION.",
+        )
+    event = session.student_model_event
+    if event is None:
+        raise RuntimeError("Schema 3.0 session is missing its stored event.")
+    if event.journey_state.phase_1_orientation.status != "IN_PROGRESS":
+        raise HTTPException(
+            status_code=409,
+            detail="Orientation must be started before it can be completed.",
+        )
+    response = await get_adapters().student_model.send_session_event(
+        OrientationCompletedEvent(
+            request_id=_schema_request_id(session, "ORIENTATION_COMPLETED"),
+            event_type="ORIENTATION_COMPLETED",
+            topic_id=event.journey_state.topic_id,
+            student_id=session.student_id,
+            timestamp=_schema_timestamp(),
+            target_micro_skill_ids=_orientation_targets(session),
+        ),
+        access_token,
+    )
+    _require_schema_phase(response, ("PHASE_2_GUIDED_LEARNING",))
+    if (
+        response.phase_payload is None
+        or response.phase_payload.question_set is None
+        or not response.phase_payload.question_set.questions
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="Student Model returned no guided-practice questions.",
+        )
+    return _apply_schema_event(session, response)
 
 
 async def get_session(session_id: str) -> SessionRecord:
@@ -509,6 +938,11 @@ async def record_canvas_submission(
 
     per_question_history: list[QuestionAttemptRecord] = session.per_question_history
     if record.tutor.evaluation != "UNCLEAR":
+        if session.question_id is None or session.current_question is None:
+            raise HTTPException(
+                status_code=409,
+                detail="The current phase has no active question.",
+            )
         per_question_history = [
             *per_question_history,
             QuestionAttemptRecord(

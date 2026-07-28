@@ -11,7 +11,9 @@ from app.core.config import get_settings
 def _check_session_id(value: str) -> str:
     settings = get_settings()
     if re.fullmatch(settings.session_id_pattern, value) is None:
-        raise ValueError("session_id must use the SESSION### format.")
+        raise ValueError(
+            "session_id must use SESSION followed by three digits or a UUID hex string."
+        )
     return value
 
 

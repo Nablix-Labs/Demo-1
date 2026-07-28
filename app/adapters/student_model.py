@@ -6,6 +6,10 @@ from app.adapters.http_utils import JsonObject, post_json
 from app.core.config import Settings
 from app.core.exceptions import AdapterError
 from app.models.adapters import AdapterContext, StudentModelEvent, StudentModelResult
+from app.models.student_model_session import (
+    StudentModelSessionEvent,
+    StudentModelSessionEventResponse,
+)
 
 
 class StudentModelServiceAdapter:
@@ -94,6 +98,62 @@ class StudentModelServiceAdapter:
             self._settings.adapter_request_retry_count,
         )
         return self.parse_response(response)
+
+    async def send_session_event(
+        self,
+        event: StudentModelSessionEvent,
+        access_token: str,
+    ) -> StudentModelSessionEventResponse:
+        """Persist one Schema 3.0 journey event and return its full state."""
+
+        if self._settings.use_mock_student_model:
+            raise AdapterError(
+                "student_model",
+                "Schema 3.0 session events require NABLIX_USE_MOCK_STUDENT_MODEL=false",
+            )
+        if self._settings.student_model_url == "":
+            raise AdapterError(
+                "student_model",
+                "NABLIX_STUDENT_MODEL_URL is required for Schema 3.0 session events",
+            )
+        response = await post_json(
+            "student_model",
+            f"{self._settings.student_model_url.rstrip('/')}/session/event",
+            event.model_dump(exclude_none=True),
+            {"Authorization": f"Bearer {access_token}"},
+            self._settings.adapter_request_timeout_seconds,
+            self._settings.adapter_request_retry_count,
+        )
+        try:
+            parsed = StudentModelSessionEventResponse.model_validate(response)
+        except ValidationError as error:
+            raise AdapterError(
+                "student_model",
+                f"invalid Schema 3.0 response body={response}: {error}",
+            ) from error
+        if (
+            parsed.request_id != event.request_id
+            or parsed.journey_state.student_id != event.student_id
+            or parsed.journey_state.topic_id != event.topic_id
+        ):
+            raise AdapterError(
+                "student_model",
+                (
+                    "Schema 3.0 response identity mismatch "
+                    f"request_id={parsed.request_id} "
+                    f"student_id={parsed.journey_state.student_id} "
+                    f"topic_id={parsed.journey_state.topic_id} body={response}"
+                ),
+            )
+        if not parsed.status.success:
+            raise AdapterError(
+                "student_model",
+                (
+                    f"Schema 3.0 event failed status={parsed.status.model_dump()} "
+                    f"body={response}"
+                ),
+            )
+        return parsed
 
     def _local_response(self, context: AdapterContext) -> StudentModelResult:
         """Return the stable in-process learner-state snapshot."""

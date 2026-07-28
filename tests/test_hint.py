@@ -129,6 +129,7 @@ def test_hint_request_rejects_unavailable_phase() -> None:
             "student_id": "ST104",
             "concept_id": "ALG_LINEAR_ONE_STEP",
             "interaction_mode": "TEXT",
+            "initial_phase": "DIAGNOSTIC",
         },
     )
     assert start_response.status_code == 200

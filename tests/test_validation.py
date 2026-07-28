@@ -27,6 +27,7 @@ def _start_session() -> str:
             "student_id": "ST101",
             "concept_id": "ALG_LINEAR_ONE_STEP",
             "interaction_mode": "TEXT",
+            "initial_phase": "GUIDED_PRACTICE",
         },
     )
     assert response.status_code == 200
@@ -54,7 +55,10 @@ def test_validation_returns_invalid_format_code() -> None:
     assert response.status_code == 422
     body = response.json()
     assert body["error_code"] == "INVALID_FORMAT"
-    assert body["message"] == "session_id must follow the format SESSION followed by three digits."
+    assert body["message"] == (
+        "session_id must follow the format SESSION followed by three digits "
+        "or a UUID hex string."
+    )
     assert body["field"] == "session_id"
     assert body["request_id"] == "REQ002"
 
