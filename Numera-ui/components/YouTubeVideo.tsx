@@ -70,6 +70,7 @@ export default function YouTubeVideo({
       playerRef.current = new window.YT.Player(hostRef.current, {
         videoId,
         playerVars: {
+          controls: 1,        // scrub, pause and volume — set explicitly, not assumed
           rel: 0,             // no unrelated videos at the end
           modestbranding: 1,
           playsinline: 1,

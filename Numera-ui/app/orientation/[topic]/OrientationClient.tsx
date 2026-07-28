@@ -764,6 +764,9 @@ function OrientationItem({
   onFinished: (completed?: CompletedContent) => void;
   isLast: boolean;
 }) {
+  // Bumped to remount the player, which is how "Watch again" restarts it.
+  const [replayKey, setReplayKey] = useState(0);
+
   if (item.content_type === 'ORIENTATION_VIDEO' && item.video) {
     // The backend now sends asset_url — but pointed at the ~163 MB Azure blob,
     // which is exactly what made the whole app sluggish while a video was on
@@ -789,18 +792,30 @@ function OrientationItem({
               <p className="text-[13.5px] text-ink leading-relaxed mb-3">{messages.before_video_message}</p>
             )}
             <YouTubeVideo
+              key={replayKey}
               videoId={youTubeId}
               title={item.video.title}
               onEnded={() => onFinished({ videoId: item.video!.video_id })}
             />
-            {!isLast && (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {/* Remounting the player is the replay: the IFrame API owns
+                  playback state, so a fresh instance is cleaner than reaching
+                  into it. */}
               <button
-                onClick={() => onFinished({ videoId: item.video!.video_id })}
-                className="mt-3 text-[12px] font-semibold text-slate-blue hover:text-ink transition-colors"
+                onClick={() => setReplayKey((k) => k + 1)}
+                className="inline-flex items-center gap-1.5 rounded-md border border-muted-gray px-3 py-2 text-[12.5px] font-semibold text-ink transition-colors hover:border-focus-navy"
               >
-                Skip the video
+                <RotateCw size={14} strokeWidth={2} /> Watch again
               </button>
-            )}
+              {!isLast && (
+                <button
+                  onClick={() => onFinished({ videoId: item.video!.video_id })}
+                  className="ml-auto text-[12px] font-semibold text-slate-blue transition-colors hover:text-ink"
+                >
+                  Skip the video
+                </button>
+              )}
+            </div>
           </>
         ) : src ? (
           <>
@@ -882,6 +897,32 @@ function WorkedExampleCanvas({
   const [index, setIndex] = useState(-1);
   const advance = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  /**
+   * Paused means "don't advance by yourself" — the student still moves with the
+   * step buttons. The walkthrough used to run start to finish with no way to
+   * hold it, go back over a step, or replay it (Manjusha, 2026-07-28), which is
+   * exactly what a student needs when a step goes past too fast.
+   *
+   * Mirrored into a ref because the advance callback is created inside the step
+   * effect and would otherwise close over a stale value.
+   */
+  const [paused, setPaused] = useState(false);
+  const pausedRef = useRef(false);
+
+  /**
+   * Set the ref FIRST, then the state.
+   *
+   * Mirroring the ref during render left a window where a narration finishing
+   * between the click and the re-render still saw `paused === false` and
+   * scheduled the next step — pressing Pause visibly advanced anyway. The ref
+   * is what the advance callback reads, so it has to change synchronously.
+   */
+  const setPausedNow = (next: boolean) => {
+    pausedRef.current = next;
+    if (next && advance.current) clearTimeout(advance.current);
+    setPaused(next);
+  };
+
   // Start on a clean sheet, and never let this phase's marks follow the student
   // into the next one — the tutor layer is global.
   useEffect(() => {
@@ -918,12 +959,31 @@ function WorkedExampleCanvas({
     const next = () => {
       if (done) return;
       done = true;
-      advance.current = setTimeout(() => setIndex((n) => n + 1), 450);
+      if (pausedRef.current) return;   // held — the student advances manually
+      // Re-check on fire: Pause pressed inside this 450ms window would
+      // otherwise still land one more step, so the button looked ignored.
+      advance.current = setTimeout(() => {
+        if (pausedRef.current) return;
+        setIndex((n) => n + 1);
+      }, 450);
     };
     speakTutor(step.narration_text ?? '', next);
     const failsafe = setTimeout(next, 15_000);
     return () => clearTimeout(failsafe);
   }, [index, steps, applyCanvasDraw, example.worked_example_id]);
+
+  /** Jump to a step: stops any narration and any pending auto-advance first. */
+  const goTo = (n: number) => {
+    if (advance.current) clearTimeout(advance.current);
+    stopTutorSpeech();
+    setIndex(Math.max(0, Math.min(n, steps.length - 1)));
+  };
+
+  // Stepping by hand means the student is driving; don't yank them along.
+  const stepBy = (delta: number) => {
+    setPausedNow(true);
+    goTo(index + delta);
+  };
 
   const current = index >= 0 && index < steps.length ? steps[index] : null;
   const finished = index >= steps.length;
@@ -980,14 +1040,49 @@ function WorkedExampleCanvas({
         {current?.narration_text ?? (finished ? closingMessage ?? '' : '')}
       </p>
 
-      {!finished && (
+      {/* Controls. Named for what they do to the lesson, not to the player. */}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
         <button
-          onClick={() => { stopTutorSpeech(); setIndex(steps.length); }}
-          className="text-[12px] font-semibold text-slate-blue hover:text-ink transition-colors"
+          onClick={() => stepBy(-1)}
+          disabled={index <= 0}
+          className="inline-flex items-center gap-1.5 rounded-md border border-muted-gray px-3 py-2 text-[12.5px] font-semibold text-ink transition-colors hover:border-focus-navy disabled:opacity-30"
         >
-          Skip the walkthrough
+          <ChevronLeft size={14} strokeWidth={2} /> Previous step
         </button>
-      )}
+
+        {!finished && (
+          <button
+            onClick={() => setPausedNow(!paused)}
+            className="inline-flex items-center gap-1.5 rounded-md border border-muted-gray px-3 py-2 text-[12.5px] font-semibold text-ink transition-colors hover:border-focus-navy"
+          >
+            {paused ? <><Play size={14} strokeWidth={2} /> Continue</> : <><Pause size={14} strokeWidth={2} /> Pause</>}
+          </button>
+        )}
+
+        <button
+          onClick={() => stepBy(1)}
+          disabled={finished || index >= steps.length - 1}
+          className="inline-flex items-center gap-1.5 rounded-md border border-muted-gray px-3 py-2 text-[12.5px] font-semibold text-ink transition-colors hover:border-focus-navy disabled:opacity-30"
+        >
+          Next step <ArrowRight size={14} strokeWidth={2} />
+        </button>
+
+        <button
+          onClick={() => { clearTutorMarks(); reported.current = false; goTo(0); }}
+          className="inline-flex items-center gap-1.5 rounded-md border border-muted-gray px-3 py-2 text-[12.5px] font-semibold text-ink transition-colors hover:border-focus-navy"
+        >
+          <RotateCw size={14} strokeWidth={2} /> Start again
+        </button>
+
+        {!finished && (
+          <button
+            onClick={() => { stopTutorSpeech(); setIndex(steps.length); }}
+            className="ml-auto text-[12px] font-semibold text-slate-blue transition-colors hover:text-ink"
+          >
+            Skip the walkthrough
+          </button>
+        )}
+      </div>
     </section>
   );
 }
