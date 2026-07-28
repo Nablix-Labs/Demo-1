@@ -17,7 +17,8 @@
  *   - any tutor speech still playing
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { LogOut } from 'lucide-react';
 import { useAuthStore } from '@/store/useAuthStore';
@@ -29,6 +30,8 @@ import { cn } from '@/lib/cn';
 export default function LogOutButton({ className }: { className?: string }) {
   const router = useRouter();
   const [signingOut, setSigningOut] = useState(false);
+  const [mounted, setMounted] = useState(false); // portals need a client DOM
+  useEffect(() => setMounted(true), []);
 
   /**
    * Order matters here.
@@ -56,13 +59,21 @@ export default function LogOutButton({ className }: { className?: string }) {
 
   return (
     <>
-      {signingOut && (
+      {/* Portalled to <body>. `position: fixed` is NOT relative to the viewport
+          when an ancestor has a transform, filter or backdrop-filter — the tool
+          rail uses .lg-glass-dark (backdrop-filter), which made this overlay
+          lay out inside a 56px-wide nav instead of covering the screen
+          (2026-07-28). A portal removes the ancestor entirely. */}
+      {signingOut && mounted && createPortal(
         <div
-          className="fixed inset-0 z-[100] bg-white flex items-center justify-center"
+          className="fixed inset-0 z-[100] bg-off-white flex flex-col items-center justify-center gap-4"
+          role="status"
           aria-live="polite"
         >
-          <span className="text-[13px] text-slate-blue">Signing out…</span>
-        </div>
+          <span className="w-7 h-7 rounded-full border-2 border-muted-gray border-t-ai-cyan animate-spin-slow" />
+          <span className="text-[13.5px] text-slate-blue">Signing out…</span>
+        </div>,
+        document.body,
       )}
     <button
       onClick={signOut}
