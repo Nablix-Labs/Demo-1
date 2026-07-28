@@ -7,6 +7,7 @@ import {
   Bell, Clock, Headphones,
 } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import LogOutButton from '@/components/LogOutButton';
 
 const TOP_ITEMS = [
   { icon: Pencil,   label: 'Lesson',         href: '/', supportId: 'open-canvas' },
@@ -81,6 +82,7 @@ export default function ToolRail() {
       {BOTTOM_ITEMS.map((item) => (
         <RailLink key={item.href} {...item} active={isActive(item.href)} />
       ))}
+      <LogOutButton className="text-white/70 hover:bg-white/10 hover:text-white" />
     </nav>
   );
 }

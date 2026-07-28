@@ -22,6 +22,7 @@ const FOCUS_ROUTES = ['/onboard', '/diagnostic', '/orientation', '/teach', '/com
 const ToolRail = dynamic(() => import('./ToolRail'), { ssr: false });
 const MediaPanel = dynamic(() => import('./MediaPanel'), { ssr: false });
 const VoicePicker = dynamic(() => import('./VoicePicker'), { ssr: false });
+const LogOutButton = dynamic(() => import('./LogOutButton'), { ssr: false });
 
 export default function AppFrame({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -64,8 +65,9 @@ export default function AppFrame({ children }: { children: ReactNode }) {
     return (
       <div className="flex-1 flex min-w-0 relative">
         {children}
-        <div className="fixed bottom-5 left-5 z-50">
+        <div className="fixed bottom-5 left-5 z-50 flex items-center gap-1">
           <VoicePicker />
+          <LogOutButton />
         </div>
       </div>
     );
