@@ -92,3 +92,35 @@ export const providerById = (id: string): VoiceProvider | undefined =>
 /** A short line for the "Test voice" button — enough words to judge a voice by. */
 export const VOICE_SAMPLE_TEXT =
   "Let's solve this together. What do you think we should do first?";
+
+/**
+ * Which TTS provider a student's subscription gets.
+ *
+ * The picker used to list every provider to everyone, which is wrong twice: a
+ * basic-tier student could pick Cartesia at ~7.5x the cost per character, and
+ * the list implies a choice the product doesn't actually offer (Manjusha,
+ * 2026-07-28).
+ *
+ * Tier values are the real ones in `identity.user_credentials.tier`
+ * (basic / premium / enterprise), not the free/premium pair in the original
+ * TTS design note. The split follows that note's reasoning: Inworld is ~$5 per
+ * million characters and sustainable at volume, Cartesia is ~$38 but has much
+ * lower time-to-first-audio.
+ *
+ * NOTE FOR PRODUCT: OpenAI is deliberately unassigned — say which tier should
+ * get it (if any) and this is a one-line change. An unknown or missing tier
+ * falls back to the backend default, which is the safe direction: it never
+ * silently upgrades someone onto the expensive provider.
+ */
+export const TIER_PROVIDER: Record<string, VoiceProvider['id']> = {
+  basic: 'inworld',
+  premium: 'cartesia',
+  enterprise: 'cartesia',
+};
+
+/** The providers to offer this student. Empty = backend default only. */
+export function providersForTier(tier: string | null | undefined): VoiceProvider[] {
+  const id = tier ? TIER_PROVIDER[tier.toLowerCase()] : undefined;
+  if (!id) return [];
+  return VOICE_PROVIDERS.filter((p) => p.id === id);
+}

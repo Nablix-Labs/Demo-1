@@ -32,6 +32,7 @@ import {
   orientationFor,
   orientationCheckFor,
   orientationVideoForTopicCode,
+  orientationYouTubeIdForTopicCode,
   type OrientationMedia,
 } from '@/lib/demoContent';
 import { useNumeraStore, type TutorElement } from '@/store/useNumeraStore';
@@ -56,6 +57,8 @@ import ConceptArt from '@/components/ConceptArt';
 
 // react-konva is client-only (no SSR), same as everywhere else the canvas mounts.
 const DrawingCanvas = dynamic(() => import('@/components/Canvas/DrawingCanvas'), { ssr: false });
+// Client-only: it injects the YouTube IFrame API and touches window.
+const YouTubeVideo = dynamic(() => import('@/components/YouTubeVideo'), { ssr: false });
 
 type Status = 'loading' | 'ready' | 'empty' | 'error';
 /** Phase 1 runs content → concept check (tutor writes) → on to Teacher Mode. */
@@ -571,6 +574,17 @@ function BackendOrientation({ topicId }: { topicId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
+  // Every served video and worked example is done — move on by itself rather
+  // than parking the student on a button (Manjusha, 2026-07-28). The ref makes
+  // it fire once; `finishing` alone would let a re-render start a second call.
+  const advanced = useRef(false);
+  useEffect(() => {
+    if (!allComplete || advanced.current || status !== 'ready' || !sessionId) return;
+    advanced.current = true;
+    void finish();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allComplete, status, sessionId]);
+
   const finish = async () => {
     if (!sessionId) return;   // load() opens one first; nothing to complete yet
     setFinishing(true);
@@ -717,15 +731,37 @@ function OrientationItem({
 }) {
   if (item.content_type === 'ORIENTATION_VIDEO' && item.video) {
     // The Student Model carries the video record but leaves asset_url null, so
-    // the topic code resolves the uploaded file (see orientationVideoForTopicCode).
+    // the topic code resolves the upload. YouTube is preferred over the blob
+    // file: same video, but an adaptive CDN stream instead of a ~163 MB
+    // download that bogged the whole app down.
     const src = item.video.asset_url ?? orientationVideoForTopicCode(topicCode);
+    const youTubeId = item.video.asset_url ? null : orientationYouTubeIdForTopicCode(topicCode);
     return (
       <section>
         <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-2 inline-flex items-center gap-1.5">
           <Film size={12} strokeWidth={1.8} /> Concept video
         </div>
         <h2 className="text-[17px] font-semibold text-ink mb-3">{item.video.title}</h2>
-        {src ? (
+        {youTubeId ? (
+          <>
+            {messages?.before_video_message && (
+              <p className="text-[13.5px] text-ink leading-relaxed mb-3">{messages.before_video_message}</p>
+            )}
+            <YouTubeVideo
+              videoId={youTubeId}
+              title={item.video.title}
+              onEnded={() => onFinished({ videoId: item.video!.video_id })}
+            />
+            {!isLast && (
+              <button
+                onClick={() => onFinished({ videoId: item.video!.video_id })}
+                className="mt-3 text-[12px] font-semibold text-slate-blue hover:text-ink transition-colors"
+              >
+                Skip the video
+              </button>
+            )}
+          </>
+        ) : src ? (
           <>
             <VideoFile
               media={{ kind: 'video', title: item.video.title, duration: '', summary: '', src }}

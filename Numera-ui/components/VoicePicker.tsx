@@ -13,10 +13,14 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Volume2, X } from 'lucide-react';
 import { useNumeraStore } from '@/store/useNumeraStore';
-import { VOICE_PROVIDERS, providerById, VOICE_SAMPLE_TEXT } from '@/lib/voiceOptions';
+import { useAuthStore } from '@/store/useAuthStore';
+import { providersForTier, providerById, VOICE_SAMPLE_TEXT } from '@/lib/voiceOptions';
 import { speakTutor } from '@/lib/tts';
 
 export default function VoicePicker() {
+  // Only the provider this subscription actually includes.
+  const tier = useAuthStore((s) => s.tier);
+  const providers = providersForTier(tier);
   const ttsProvider = useNumeraStore((s) => s.ttsProvider);
   const ttsVoice = useNumeraStore((s) => s.ttsVoice);
   const setTtsVoice = useNumeraStore((s) => s.setTtsVoice);
@@ -112,7 +116,7 @@ export default function VoicePicker() {
             <span className="block text-[10.5px] text-slate-blue">Whatever env is set to</span>
           </button>
 
-          {VOICE_PROVIDERS.map((p) => (
+          {providers.map((p) => (
             <div key={p.id} className="border-t border-muted-gray">
               <div className="px-3 pt-2 pb-1 text-[10px] font-semibold tracking-wide uppercase text-slate-blue">
                 {p.label}
@@ -140,6 +144,13 @@ export default function VoicePicker() {
               )}
             </div>
           ))}
+
+          {providers.length === 0 && (
+            <p className="px-3 py-3 text-[12px] text-slate-blue leading-relaxed">
+              Your plan uses the tutor&apos;s standard voice. Voice choice comes with an
+              upgraded subscription.
+            </p>
+          )}
 
           {/* The lists above mirror each adapter's curated presets; this covers
               anything else a tester wants to try from the provider's playground. */}
