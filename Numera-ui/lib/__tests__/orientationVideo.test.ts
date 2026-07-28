@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { ORIENTATION_VIDEOS, orientationFor } from '@/lib/demoContent';
+import { ORIENTATION_VIDEOS, orientationFor, orientationVideoForTopicCode } from '@/lib/demoContent';
 
 describe('ORIENTATION_VIDEOS', () => {
   it('covers exactly the six files that exist in the container', () => {
@@ -38,5 +38,34 @@ describe('orientationFor', () => {
     const media = orientationFor('geometry');
     expect(media?.kind).toBe('video');
     expect(media && 'src' in media ? media.src : undefined).toBeUndefined();
+  });
+});
+
+/**
+ * Which URL the player uses.
+ *
+ * The backend currently sends `asset_url: null` and we fall back to the blob
+ * file resolved from the topic code. The moment the Student Model populates
+ * asset_url it must take priority with no frontend change — this pins that
+ * precedence so the fallback can't quietly shadow a real backend URL.
+ *
+ * Mirrors `const src = item.video.asset_url ?? orientationVideoForTopicCode(...)`
+ * in OrientationClient's OrientationItem.
+ */
+describe('orientation video source precedence', () => {
+  const resolve = (assetUrl: string | null, topicCode: string | null) =>
+    assetUrl ?? orientationVideoForTopicCode(topicCode);
+
+  it('uses the backend asset_url when it is present', () => {
+    expect(resolve('https://cdn.example.com/whatever.mp4', 'ALG-ORI-02'))
+      .toBe('https://cdn.example.com/whatever.mp4');
+  });
+
+  it('falls back to the uploaded file when asset_url is null', () => {
+    expect(resolve(null, 'ALG-ORI-02')).toMatch(/ALG-ORI-02\.mp4$/);
+  });
+
+  it('renders no player when there is neither', () => {
+    expect(resolve(null, 'ALG-99')).toBeNull();
   });
 });

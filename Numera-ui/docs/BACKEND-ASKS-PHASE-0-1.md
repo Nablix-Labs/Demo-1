@@ -18,7 +18,7 @@ Everything below was verified against the **live VM** (`https://nablix.ai`) on
 
 | # | Ask | Owner | Blocking? |
 |---|-----|-------|-----------|
-| 1 | Return `student_code` on `/auth/login` | Owner of `mathtutor-student` service | **Yes** — every logged-in student is still ST001 |
+| ~~1~~ | ~~Return `student_code` on `/auth/login`~~ | — | **DONE — shipped and verified live 2026-07-28** |
 | ~~2~~ | ~~Diagnostic never returns "no gaps"~~ | — | **Withdrawn — this was a frontend bug, now fixed** |
 | 3 | No way to resume a session mid-journey | Chirudeva | **Yes** — students re-take the diagnostic every login |
 | 4 | `TEACH_BACK` is skipped entirely | Chirudeva | Yes, if teach-back is in scope |
@@ -27,13 +27,40 @@ Everything below was verified against the **live VM** (`https://nablix.ai`) on
 | 7 | Session ids exhaust at 999 and 500 forever | Chirudeva | No, but it took the dev API down twice |
 | 8 | `learning.topics.topic_code` is inconsistent | Saravanan (data) | No — worked around |
 
-Items 1, 3 and 4 are what actually block the demo path. **Item 2 has been
-withdrawn** — it turned out to be a frontend bug and is already fixed and
-deployed; it is kept below only so the finding isn't lost.
+**Items 1 and 2 are now closed.** Item 1 was shipped by the backend on
+2026-07-28 and is verified live; item 2 turned out to be a frontend bug and is
+fixed. Both are kept below so the findings aren't lost.
+
+**Items 3 and 4 are what still block the demo path.**
 
 ---
 
-## 1. `/auth/login` must return `student_code` (BLOCKER)
+## 1. ~~`/auth/login` must return `student_code`~~ — DONE
+
+**Shipped and verified live on 2026-07-28.** `TokenResponse` now advertises
+`student_code` in the deployed OpenAPI, and `auth_service.login()` populates it
+for any user with a student row:
+
+```python
+student = session.execute(
+    select(Student.student_id, Student.student_code).where(Student.user_id == user.user_id)
+).first()
+if student is not None:
+    result["student_code"] = student.student_code
+```
+
+The frontend already consumes it — `LoginResponse.student_code` →
+`useAuthStore.loginSuccess` → `studentId()`, which every tutoring call goes
+through. **No frontend change needed; it works as soon as a student logs in.**
+
+Remaining frontend cleanup, once a real login is confirmed end to end: drop the
+`ST001` fallback in `studentId()` and the `?student=ST###` testing override.
+Both are still in place because a user with no `identity.students` row still
+gets no code, and we would rather degrade than crash.
+
+The original analysis is kept below for the record.
+
+### Original ask (resolved)
 
 **The claim we were given:** "No backend change is required — Manav just replaces
 the hardcoded `ST001` with the authenticated user's `student_code` from
