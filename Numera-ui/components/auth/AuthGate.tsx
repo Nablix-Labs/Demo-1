@@ -28,7 +28,12 @@ export default function AuthGate({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!hydrated) return;
-    if (state.role === null) { router.replace('/onboard'); return; }
+    // No role means nobody is signed in — which is true both for a first-time
+    // visitor AND for someone who just signed out, and the two are
+    // indistinguishable from state. Send them to /login, which links to
+    // sign-up; sending them to /onboard dropped a returning student who had
+    // just logged out into account creation (2026-07-28).
+    if (state.role === null) { router.replace('/login'); return; }
     if (!outcome.allowed) router.replace(outcome.redirect);
   }, [hydrated, state.role, outcome, router]);
 
