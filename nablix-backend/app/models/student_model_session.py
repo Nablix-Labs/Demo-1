@@ -196,6 +196,44 @@ class StudentModelSessionEventResponse(BaseModel):
     status: StudentModelStatus
 
 
+class PublicStudentModelQuestion(BaseModel):
+    model_config = ConfigDict(from_attributes=True, extra="forbid")
+
+    question_id: str
+    student_view: StudentQuestionView
+
+
+class PublicQuestionSet(BaseModel):
+    model_config = ConfigDict(from_attributes=True, extra="forbid")
+
+    questions: list[PublicStudentModelQuestion]
+
+
+class PublicStudentModelPhasePayload(BaseModel):
+    model_config = ConfigDict(from_attributes=True, extra="forbid")
+
+    phase: StudentModelPhase
+    payload_type: str
+    question_set: PublicQuestionSet | None = None
+    orientation_bundle: OrientationBundle | None = None
+
+
+class PublicStudentModelJourney(BaseModel):
+    model_config = ConfigDict(from_attributes=True, extra="forbid")
+
+    topic_id: str
+
+
+class PublicStudentModelEvent(BaseModel):
+    model_config = ConfigDict(from_attributes=True, extra="forbid")
+
+    schema_version: Literal["3.0"]
+    request_id: str
+    processed_at: str
+    journey_state: PublicStudentModelJourney
+    phase_payload: PublicStudentModelPhasePayload | None
+
+
 class SessionEventBase(BaseModel):
     request_id: str
     event_type: str

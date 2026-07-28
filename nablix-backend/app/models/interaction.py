@@ -22,8 +22,8 @@ from app.models.fields import (
 )
 from app.models.session import CanvasState, SessionSummary, VoiceState
 from app.models.student_model_session import (
+    PublicStudentModelEvent,
     StudentModelCoreState,
-    StudentModelSessionEventResponse,
 )
 
 
@@ -106,7 +106,7 @@ class InteractionResponse(BaseModel):
     phase_indicator: Phase
     recommended_entry_phase: str | None
     session_summary: SessionSummary | None
-    student_model_event: StudentModelSessionEventResponse | None = None
+    student_model_event: PublicStudentModelEvent | None = None
     student_model_state: StudentModelCoreState | None = None
 
 
