@@ -193,7 +193,7 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
       backendSession?.diagnostic_transition_message,
       i
     );
-    if (transition) speakTutor(transition);
+    if (i + 1 < questions.length && transition) speakTutor(transition);
     // Hold on the chosen option for a beat before moving on. Advancing the
     // instant it is tapped gives no sign the tap landed — the question just
     // swaps — which is why a tester asked how you go to the next question at
@@ -316,7 +316,7 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
           className="min-h-5 text-[12.5px] text-slate-blue mt-2"
           aria-live="polite"
         >
-          {picked
+          {picked && i + 1 < questions.length
             ? diagnosticTransitionFor(
                 backendSession?.diagnostic_transition_messages,
                 backendSession?.diagnostic_transition_message,
