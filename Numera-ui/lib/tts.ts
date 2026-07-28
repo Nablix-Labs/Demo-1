@@ -27,6 +27,9 @@ import { synthesizeSpeech } from '@/lib/api';
 /** The voice server always streams MP3. */
 const AUDIO_MIME = 'audio/mpeg';
 /** Mouth-flutter pace while streamed audio plays (no real word boundaries in mp3). */
+// Mouth pulses with no audio progress before we treat the utterance as over.
+const STALL_TICKS = 6;
+
 const MOUTH_PULSE_MS = 180;
 
 // ── Browser engine (Web Speech API) ──────────────────────────────────────────
@@ -74,7 +77,21 @@ function playBase64Mp3(base64: string, onEnd?: () => void): void {
   };
   audio.onplaying = () => {
     useMicLevel.getState().setAiSpeaking(true);
-    if (!mouthTimer) mouthTimer = setInterval(() => useMicLevel.getState().markBoundary(), MOUTH_PULSE_MS);
+    if (mouthTimer) return;
+    // Same rule as the streaming path: the mouth follows real audio progress,
+    // so a stalled or silently-failed clip ends rather than animating forever.
+    let lastTime = -1;
+    let stalledTicks = 0;
+    mouthTimer = setInterval(() => {
+      const advanced = !audio.paused && !audio.ended && audio.currentTime > lastTime;
+      if (advanced) {
+        lastTime = audio.currentTime;
+        stalledTicks = 0;
+        useMicLevel.getState().markBoundary();
+        return;
+      }
+      if (++stalledTicks >= STALL_TICKS) finish();
+    }, MOUTH_PULSE_MS);
   };
   audio.onended = finish;
   audio.onerror = finish;
@@ -223,9 +240,31 @@ class TutorAudioStream {
     }
   }
 
+  /**
+   * Pulse the avatar's mouth ONLY while the audio is genuinely advancing.
+   *
+   * This used to pulse on a bare interval, stopped only by onended/onerror. If
+   * playback stalled or never really started — a dropped stream, a browser that
+   * refused to play — neither fired, so the tutor's face kept talking with no
+   * sound and no text behind it (reported 2026-07-28). Watching currentTime
+   * means the mouth can only move when there is really something to hear, and
+   * a stall ends the utterance instead of hanging.
+   */
   private startMouth(): void {
     if (this.mouthTimer) return;
-    this.mouthTimer = setInterval(() => useMicLevel.getState().markBoundary(), MOUTH_PULSE_MS);
+    let lastTime = -1;
+    let stalledTicks = 0;
+    this.mouthTimer = setInterval(() => {
+      const audio = this.audio;
+      const advanced = Boolean(audio && !audio.paused && !audio.ended && audio.currentTime > lastTime);
+      if (advanced) {
+        lastTime = audio!.currentTime;
+        stalledTicks = 0;
+        useMicLevel.getState().markBoundary();
+        return;
+      }
+      if (++stalledTicks >= STALL_TICKS) this.finish();
+    }, MOUTH_PULSE_MS);
   }
 
   private finish(): void {
