@@ -35,12 +35,14 @@ from app.models.session import (
     SessionSummary,
 )
 from app.models.student_model_session import (
+    AnswerSpec,
     GuidedAttemptEvent,
     GuidedPhaseCompletedEvent,
     GuidedQuestionSetRequestedEvent,
     GuidedSupportEvent,
     IndependentRetryCompletedEvent,
     StudentModelSessionEventResponse,
+    StudentModelQuestion,
     SupportUsed,
 )
 from app.services.phase_transition import (
@@ -166,7 +168,7 @@ def _updated_conversation_history(
     return updated_history[-max_messages:]
 
 
-def _schema_question_micro_skills(session: SessionRecord) -> list[str]:
+def _schema_question(session: SessionRecord) -> StudentModelQuestion:
     event = session.student_model_event
     if (
         event is None
@@ -178,7 +180,7 @@ def _schema_question_micro_skills(session: SessionRecord) -> list[str]:
             status_code=409,
             detail="The active Schema 3.0 question is missing its micro-skill mapping.",
         )
-    question = next(
+    question: StudentModelQuestion | None = next(
         (
             item
             for item in event.phase_payload.question_set.questions
@@ -191,6 +193,17 @@ def _schema_question_micro_skills(session: SessionRecord) -> list[str]:
             status_code=409,
             detail=f"Student Model did not return metadata for {session.question_id}.",
         )
+    return question
+
+
+def _active_answer_spec(session: SessionRecord) -> AnswerSpec | None:
+    if session.student_model_event is None:
+        return None
+    return _schema_question(session).tutor_view.answer_spec
+
+
+def _schema_question_micro_skills(session: SessionRecord) -> list[str]:
+    question = _schema_question(session)
     skills = [mapping.micro_skill_id for mapping in question.micro_skill_mappings]
     if not skills:
         raise HTTPException(
@@ -683,6 +696,7 @@ async def _process_interaction(
         # Grade against the session's question: after a 6.7 transition swaps
         # the question, the request's id from the frontend may be stale.
         correct_answer=session.correct_answer,
+        answer_spec=_active_answer_spec(session),
         current_phase=session.current_phase,
         input_source=request.input_source,
         transcript_confidence=request.transcript_confidence,

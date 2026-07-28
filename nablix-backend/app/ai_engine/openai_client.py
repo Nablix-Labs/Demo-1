@@ -28,6 +28,7 @@ from app.ai_engine.schemas import (
 from app.core.exceptions import AdapterError
 from app.core.logger import logger
 from app.models.adapters import ConversationMessage, ConversationState
+from app.models.student_model_session import AnswerSpec
 
 
 _OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
@@ -79,6 +80,7 @@ class OpenAIAIEngineClient:
         self,
         question: str,
         correct_answer: str,
+        answer_spec: AnswerSpec | None,
         student_input: str,
         phase: LearningPhase,
         input_source: InputSource,
@@ -104,6 +106,11 @@ class OpenAIAIEngineClient:
             user_payload={
                 "question": question,
                 "correct_answer": correct_answer,
+                "answer_spec": (
+                    answer_spec.model_dump()
+                    if answer_spec is not None
+                    else None
+                ),
                 "student_input": student_input,
                 "input_source": input_source,
                 "transcript_confidence": transcript_confidence,

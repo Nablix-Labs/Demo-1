@@ -94,6 +94,7 @@ class TutorEngineServiceAdapter:
                 ClassificationRequest(
                     question=context.question,
                     correct_answer=context.correct_answer,
+                    answer_spec=context.answer_spec,
                     student_input=context.message,
                     current_phase=_coerce_learning_phase(context.current_phase),
                     input_source=_coerce_input_source(context.input_source),

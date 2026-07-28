@@ -27,9 +27,23 @@ from app.models.adapters import (
     StudentModelResult,
     TutorEngineRequest,
 )
+from app.models.student_model_session import AnswerSpec
 
 
 client = TestClient(app)
+
+
+def _answer_spec(
+    canonical_answer: str,
+    accepted_answers: list[str],
+    verification_method: str,
+) -> AnswerSpec:
+    return AnswerSpec(
+        answer_spec_id="ANS-TEST",
+        canonical_answer=canonical_answer,
+        accepted_answers=accepted_answers,
+        verification_method=verification_method,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -39,6 +53,130 @@ def disable_openai_ai_engine_by_default(monkeypatch):
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+
+
+def test_exact_notation_match_accepts_caret_exponent_and_cannot_be_overridden(
+    monkeypatch,
+) -> None:
+    class _ContradictingOpenAIClient:
+        def generate_tutor_turn(self, **kwargs):
+            return openai_client.OpenAITutorTurn(
+                intent="SUBMITTING_ANSWER",
+                evaluation="INCORRECT",
+                error_type="NOTATION_ISSUE",
+                response_strategy="GUIDED_HINT",
+                hint_level=1,
+                tutor_message="There is a spacing problem.",
+                tutor_message_voice_optimised="There is a spacing problem.",
+                reasoning_complete=False,
+                confidence=0.91,
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _ContradictingOpenAIClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question="Write p × p × q in compact algebraic notation.",
+            correct_answer="p²q",
+            answer_spec=_answer_spec(
+                canonical_answer="p²q",
+                accepted_answers=["p²q", "p^2q"],
+                verification_method="EXACT_NOTATION_MATCH",
+            ),
+            student_input="p^2q",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.evaluation == "CORRECT"
+    assert response.question_completed is True
+    assert response.tutor_message == "Correct. Nice work explaining your answer."
+
+
+def test_symbolic_equivalence_accepts_reordered_addition() -> None:
+    response = classify_student_response(
+        ClassificationRequest(
+            question="Write the general rule.",
+            correct_answer="n + 5",
+            answer_spec=_answer_spec(
+                canonical_answer="n + 5",
+                accepted_answers=["n+5", "5+n"],
+                verification_method="SYMBOLIC_EQUIVALENCE",
+            ),
+            student_input="5 + n",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.evaluation == "CORRECT"
+    assert response.question_completed is True
+
+
+def test_semantic_verification_sends_full_answer_spec_to_llm(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _SemanticOpenAIClient:
+        def generate_tutor_turn(self, **kwargs):
+            captured.update(kwargs)
+            return openai_client.OpenAITutorTurn(
+                intent="SUBMITTING_ANSWER",
+                evaluation="PARTIALLY_CORRECT",
+                error_type="INSUFFICIENT_INFORMATION",
+                response_strategy="GUIDED_HINT",
+                hint_level=1,
+                tutor_message=(
+                    "You identified the counters. Does n mean the counters "
+                    "themselves or their number?"
+                ),
+                tutor_message_voice_optimised=(
+                    "You identified the counters. Does n mean the counters "
+                    "themselves or their number?"
+                ),
+                reasoning_complete=False,
+                confidence=0.93,
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _SemanticOpenAIClient(),
+    )
+    answer_spec = _answer_spec(
+        canonical_answer="The number of additional counters.",
+        accepted_answers=[
+            "number of additional counters",
+            "how many counters are added",
+        ],
+        verification_method="CONCEPT_TEXT_MATCH",
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question="In Total = n + 4, what does n represent?",
+            correct_answer=answer_spec.canonical_answer,
+            answer_spec=answer_spec,
+            student_input="the counters",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert captured["answer_spec"] == answer_spec
+    assert response.evaluation == "PARTIALLY_CORRECT"
+    assert response.tutor_message.startswith("You identified the counters.")
 
 
 def test_ai_engine_classify_returns_valid_tutor_response() -> None:
@@ -496,6 +634,7 @@ def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> 
     disabled_client.generate_tutor_turn(
         question="Solve for x: x + 4 = 9",
         correct_answer="x = 5",
+        answer_spec=None,
         student_input="x = 13",
         phase="GUIDED_PRACTICE",
         input_source="TEXT",
@@ -522,6 +661,7 @@ def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> 
     enabled_client.generate_tutor_turn(
         question="Solve for x: x + 4 = 9",
         correct_answer="x = 5",
+        answer_spec=None,
         student_input="x = 13",
         phase="GUIDED_PRACTICE",
         input_source="TEXT",

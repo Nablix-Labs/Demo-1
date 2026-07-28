@@ -10,6 +10,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.student_model_session import AnswerSpec
+
 MasteryStatus = Literal[
     "NEW_LEARNER",
     "DEVELOPING",
@@ -72,6 +74,7 @@ class AdapterContext(BaseModel):
     message: str
     question: str | None = None
     correct_answer: str | None = None
+    answer_spec: AnswerSpec | None = None
     current_phase: str | None = None
     input_source: str | None = None
     transcript_confidence: float | None = None
