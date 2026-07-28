@@ -44,6 +44,7 @@ import {
   studentId,
   type SchemaOrientationItem,
   type SchemaWorkedExample,
+  type SchemaWorkedExampleStep,
 } from '@/lib/api';
 import { speakTutor, stopTutorSpeech } from '@/lib/tts';
 import { cn } from '@/lib/cn';
@@ -695,11 +696,15 @@ function WorkedExampleCanvas({ example }: { example: SchemaWorkedExample }) {
     if (index < 0 || index >= steps.length) return;
     const step = steps[index];
 
+    // `replace`, not `append`: the canvas shows ONE step at a time. Stacking
+    // every step turned the sheet back into the list of eight this was meant to
+    // get away from (Manjusha, 2026-07-28) — by the end the student is reading a
+    // wall of working instead of watching one idea being written.
     applyCanvasDraw({
       author: 'tutor',
-      mode: 'append',
+      mode: 'replace',
       actionId: `${example.worked_example_id}-${step.step_id}`,
-      elements: stepElements(step.screen_content, index, steps.length),
+      elements: stepElements(step, index, steps.length),
     });
 
     // Move on when the narration finishes. `done` is latched because speakTutor
@@ -775,31 +780,40 @@ function WorkedExampleCanvas({ example }: { example: SchemaWorkedExample }) {
 }
 
 /**
- * One step's line of working, placed down the page like a hand writing on paper.
+ * One step's line of working, alone on the sheet.
+ *
+ * Only the current step is drawn, so it sits large and centred rather than being
+ * squeezed into a stack — the point is to watch one idea being written, not to
+ * end up rereading eight lines.
  *
  * `screen_content` is plain unicode maths ("a × a = a²"), not LaTeX, so it is a
  * `text` element rather than `math` — handing it to KaTeX would render the
- * source, not the maths. Geometry is normalised 0–1 (TUTOR-CANVAS-WRITE-SPEC
- * §3.3) and left-anchored, so the lines stack regardless of canvas size.
+ * source, not the maths. Geometry is normalised 0–1 and text is anchored at its
+ * LEFT edge (TUTOR-CANVAS-WRITE-SPEC §3.3).
  */
 function stepElements(
-  screenContent: string | null,
+  step: SchemaWorkedExampleStep,
   index: number,
   total: number,
 ): Array<Omit<TutorElement, 'id'>> {
-  if (!screenContent) return [];
-  // Spread the steps down the sheet with a little top margin, tightening the
-  // spacing as the count grows so eight steps still fit without overflowing.
-  const top = 0.07;
-  const span = 0.86;
-  const y = top + (span / Math.max(total, 1)) * index;
-  return [{
-    kind: 'text',
-    x: 0.07,
-    y,
-    text: screenContent,
-    size: total > 6 ? 19 : 22,
-    color: '#1B2A4A',
-  }];
+  if (!step.screen_content) return [];
+  return [
+    {
+      kind: 'text',
+      x: 0.08,
+      y: 0.34,
+      text: `Step ${index + 1} of ${total}`,
+      size: 15,
+      color: '#5A6478',
+    },
+    {
+      kind: 'text',
+      x: 0.08,
+      y: 0.48,
+      text: step.screen_content,
+      size: 34,
+      color: '#1B2A4A',
+    },
+  ];
 }
 
