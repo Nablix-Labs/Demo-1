@@ -161,6 +161,7 @@ class SessionRecord(BaseModel):
     ui_state: str
     message: str
     diagnostic_transition_message: str | None = None
+    diagnostic_transition_messages: list[str] = Field(default_factory=list)
     orientation_messages: Phase1TutorMessages | None = None
     show_canvas: bool = True
     show_hint_button: bool = False
