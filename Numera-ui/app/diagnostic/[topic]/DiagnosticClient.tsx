@@ -31,6 +31,7 @@ import {
   type DiagnosticAnswer,
   type SchemaQuestion,
 } from '@/lib/api';
+import { speakTutor, stopTutorSpeech } from '@/lib/tts';
 import { cn } from '@/lib/cn';
 
 const apiEnabled = Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
@@ -137,6 +138,21 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
     setAuthReady(true);
   }, []);
 
+  // Speak the tutor's opening line once, when the check is ready. Phase 0 was
+  // silent — the messages were shown but never voiced (Sanya, 2026-07-28).
+  // The text stays on screen too, so it still works with the sound off.
+  const greeted = useRef(false);
+  useEffect(() => {
+    if (status !== 'ready' || greeted.current) return;
+    const opening = backendSession?.message;
+    if (!opening) return;
+    greeted.current = true;
+    speakTutor(opening);
+  }, [status, backendSession?.message]);
+
+  // Never let tutor speech follow the student off this screen.
+  useEffect(() => () => stopTutorSpeech(), []);
+
   useEffect(() => {
     if (questions.length > 0) { setStatus('ready'); return; }
     if (!authReady || sessionId || started.current) return;
@@ -160,6 +176,9 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
     advancing.current = true;
     const next = { ...answers, [question.question_id]: response };
     setAnswers(next);
+    // The tutor's between-questions line, spoken as well as shown.
+    const transition = backendSession?.diagnostic_transition_message;
+    if (transition) speakTutor(transition);
     // Hold on the chosen option for a beat before moving on. Advancing the
     // instant it is tapped gives no sign the tap landed — the question just
     // swaps — which is why a tester asked how you go to the next question at

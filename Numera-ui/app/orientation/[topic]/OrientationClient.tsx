@@ -40,6 +40,8 @@ import { useAuthStore } from '@/store/useAuthStore';
 import {
   completeOrientation,
   orientationSequence,
+  requiredOrientationContent,
+  type OrientationMessages,
   sessionTopicCode,
   startOrientation,
   studentId,
@@ -247,7 +249,7 @@ function MockOrientation({ topicId }: { topicId: string }) {
             <div>
               {media.kind === 'video' && (
                 media.src
-                  ? <VideoFile media={media} onEnded={() => setProgress(100)} />
+                  ? <VideoFile media={media} spoken={null} onEnded={() => setProgress(100)} />
                   : <VideoPlayer media={media} playing={playing} progress={progress} onToggle={() => setPlaying((p) => !p)} />
               )}
               {media.kind === 'image' && <ImageCard media={media} />}
@@ -345,10 +347,22 @@ function MockOrientation({ topicId }: { topicId: string }) {
  * setting it would turn a working load into a failed one.
  */
 function VideoFile({
-  media, onEnded,
-}: { media: Extract<OrientationMedia, { kind: 'video' }>; onEnded: () => void }) {
+  media, spoken, onEnded,
+}: {
+  media: Extract<OrientationMedia, { kind: 'video' }>;
+  /** Backend-authored line for this stage; spoken and shown, never invented here. */
+  spoken: string | null;
+  onEnded: () => void;
+}) {
   const [failed, setFailed] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+
+  // Say the tutor's line before the video starts. Stopped on the way out so it
+  // can't talk over the video or follow the student to the next screen.
+  useEffect(() => {
+    if (spoken) speakTutor(spoken);
+    return () => stopTutorSpeech();
+  }, [spoken]);
 
   // Try to start on arrival. Browsers block autoplay WITH SOUND unless the page
   // has user activation, and a lesson video muted is pointless — so when the
@@ -374,6 +388,8 @@ function VideoFile({
   }
 
   return (
+    <>
+      {spoken && <p className="text-[13.5px] text-ink leading-relaxed mb-3">{spoken}</p>}
     <div className="relative aspect-video w-full overflow-hidden rounded-xl border border-focus-navy bg-black">
       <video
         ref={videoRef}
@@ -386,6 +402,7 @@ function VideoFile({
         className="w-full h-full"
       />
     </div>
+    </>
   );
 }
 
@@ -486,6 +503,11 @@ function BackendOrientation({ topicId }: { topicId: string }) {
   const [status, setStatus] = useState<Status>('loading');
   // Position in the delivery sequence — the video, then the worked example.
   const [itemIndex, setItemIndex] = useState(0);
+  // Ids of content the student has actually finished. Collected as each piece
+  // completes rather than assumed from the bundle: /orientation/complete 409s on
+  // anything missing and 422s on anything unknown, so guessing would fail.
+  const [doneVideoIds, setDoneVideoIds] = useState<string[]>([]);
+  const [doneExampleIds, setDoneExampleIds] = useState<string[]>([]);
   const [finishing, setFinishing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Guards React 18's double-invoke from opening orientation twice.
@@ -493,6 +515,12 @@ function BackendOrientation({ topicId }: { topicId: string }) {
 
   const items = orientationSequence(backendSession);
   const topicCode = sessionTopicCode(backendSession);
+  const required = requiredOrientationContent(backendSession);
+  const messages = backendSession?.orientation_messages ?? null;
+  // Continue stays disabled until every served video and worked example is done.
+  const allComplete =
+    required.videoIds.every((id) => doneVideoIds.includes(id)) &&
+    required.workedExampleIds.every((id) => doneExampleIds.includes(id));
 
   // `/orientation` is a FOCUS_ROUTE too, so AuthGate never mounts here and
   // nothing else rehydrates the auth store — see the matching note in
@@ -548,7 +576,10 @@ function BackendOrientation({ topicId }: { topicId: string }) {
     setFinishing(true);
     setError(null);
     try {
-      const rec = await completeOrientation(sessionId, studentId());
+      const rec = await completeOrientation(sessionId, studentId(), {
+        videoIds: doneVideoIds,
+        workedExampleIds: doneExampleIds,
+      });
       setBackendSession(rec);
       // usePhaseRouting follows this to the next phase's screen.
       useNumeraStore.setState({
@@ -632,7 +663,17 @@ function BackendOrientation({ topicId }: { topicId: string }) {
               key={`${items[itemIndex].content_type}-${items[itemIndex].sequence_no}`}
               item={items[itemIndex]}
               topicCode={topicCode}
-              onFinished={() => setItemIndex((n) => Math.min(n + 1, items.length - 1))}
+              messages={messages}
+              onFinished={(completed) => {
+                if (completed?.videoId) {
+                  setDoneVideoIds((ids) => (ids.includes(completed.videoId!) ? ids : [...ids, completed.videoId!]));
+                }
+                if (completed?.workedExampleId) {
+                  setDoneExampleIds((ids) =>
+                    ids.includes(completed.workedExampleId!) ? ids : [...ids, completed.workedExampleId!]);
+                }
+                setItemIndex((n) => Math.min(n + 1, items.length - 1));
+              }}
               isLast={itemIndex === items.length - 1}
             />
           )}
@@ -644,7 +685,8 @@ function BackendOrientation({ topicId }: { topicId: string }) {
               )}
               <button
                 onClick={() => void finish()}
-                disabled={finishing}
+                disabled={finishing || !allComplete}
+                title={allComplete ? undefined : 'Finish the video and the worked example first'}
                 className="inline-flex items-center justify-center gap-2 rounded-md bg-focus-navy text-white px-5 py-2.5 text-[13px] font-semibold hover:opacity-80 disabled:opacity-40 transition-opacity"
               >
                 {finishing ? 'Saving…' : 'Now teach it back'} <ArrowRight size={16} strokeWidth={2} />
@@ -658,12 +700,19 @@ function BackendOrientation({ topicId }: { topicId: string }) {
 }
 
 /** One entry in the Student Model's delivery sequence. */
+/** What a finished item reports back, so its id can be sent on completion. */
+interface CompletedContent {
+  videoId?: string;
+  workedExampleId?: string;
+}
+
 function OrientationItem({
-  item, topicCode, onFinished, isLast,
+  item, topicCode, messages, onFinished, isLast,
 }: {
   item: SchemaOrientationItem;
   topicCode: string | null;
-  onFinished: () => void;
+  messages: OrientationMessages | null;
+  onFinished: (completed?: CompletedContent) => void;
   isLast: boolean;
 }) {
   if (item.content_type === 'ORIENTATION_VIDEO' && item.video) {
@@ -680,11 +729,12 @@ function OrientationItem({
           <>
             <VideoFile
               media={{ kind: 'video', title: item.video.title, duration: '', summary: '', src }}
-              onEnded={onFinished}
+              spoken={messages?.before_video_message ?? null}
+              onEnded={() => onFinished({ videoId: item.video!.video_id })}
             />
             {!isLast && (
               <button
-                onClick={onFinished}
+                onClick={() => onFinished({ videoId: item.video!.video_id })}
                 className="mt-3 text-[12px] font-semibold text-slate-blue hover:text-ink transition-colors"
               >
                 Skip the video
@@ -698,7 +748,7 @@ function OrientationItem({
             </p>
             {!isLast && (
               <button
-                onClick={onFinished}
+                onClick={() => onFinished({ videoId: item.video!.video_id })}
                 className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-focus-navy text-white px-4 py-2 text-[12.5px] font-semibold hover:opacity-80 transition-opacity"
               >
                 Continue <ArrowRight size={15} strokeWidth={2} />
@@ -711,7 +761,13 @@ function OrientationItem({
   }
 
   if (item.content_type === 'WORKED_EXAMPLE' && item.worked_example) {
-    return <WorkedExampleCanvas example={item.worked_example} />;
+    return (
+      <WorkedExampleCanvas
+        example={item.worked_example}
+        closingMessage={messages?.worked_example_to_guided_message ?? null}
+        onFinished={() => onFinished({ workedExampleId: item.worked_example!.worked_example_id })}
+      />
+    );
   }
   return null;
 }
@@ -729,7 +785,14 @@ function OrientationItem({
  * Only the tutor writes here; the student watches and explains it back in
  * Teacher Mode next, so the canvas is mounted `tutorOnly`.
  */
-function WorkedExampleCanvas({ example }: { example: SchemaWorkedExample }) {
+function WorkedExampleCanvas({
+  example, closingMessage, onFinished,
+}: {
+  example: SchemaWorkedExample;
+  /** Backend-authored hand-off line, spoken once the last step lands. */
+  closingMessage: string | null;
+  onFinished: () => void;
+}) {
   const applyCanvasDraw = useNumeraStore((s) => s.applyCanvasDraw);
   const clearTutorMarks = useNumeraStore((s) => s.clearTutorMarks);
 
@@ -788,6 +851,16 @@ function WorkedExampleCanvas({ example }: { example: SchemaWorkedExample }) {
   const current = index >= 0 && index < steps.length ? steps[index] : null;
   const finished = index >= steps.length;
 
+  // Report completion once the last step lands, and say the backend's hand-off
+  // line. Guarded by a ref because `finished` stays true on every later render.
+  const reported = useRef(false);
+  useEffect(() => {
+    if (!finished || reported.current) return;
+    reported.current = true;
+    if (closingMessage) speakTutor(closingMessage);
+    onFinished();
+  }, [finished, closingMessage, onFinished]);
+
   return (
     <section>
       <div className="flex items-end justify-between gap-4 mb-2">
@@ -827,7 +900,7 @@ function WorkedExampleCanvas({ example }: { example: SchemaWorkedExample }) {
       {/* What the tutor is saying, in text — the lesson must still work with the
           sound off, and it is what a student re-reads after listening. */}
       <p className="text-[13.5px] text-ink leading-relaxed mt-3 min-h-[3rem]" aria-live="polite">
-        {current?.narration_text ?? (finished ? 'That\u2019s the whole idea \u2014 now try explaining it back.' : '')}
+        {current?.narration_text ?? (finished ? closingMessage ?? '' : '')}
       </p>
 
       {!finished && (

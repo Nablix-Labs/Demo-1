@@ -239,6 +239,20 @@ export interface StudentModelState {
   current_question_id: string | null;
 }
 
+/**
+ * The tutor's spoken/shown lines for Phase 1, authored backend-side in
+ * `configs/phase1_tutor.yaml`. Never hardcode these in the frontend — the
+ * wording is content, and the backend owns it (Sanya, 2026-07-28).
+ */
+export interface OrientationMessages {
+  transition_to_orientation_message: string;
+  shared_video_transition_message: string;
+  before_video_message: string;
+  video_to_worked_example_message: string;
+  between_videos_message: string;
+  worked_example_to_guided_message: string;
+}
+
 export interface SessionRecord {
   session_id: string;
   student_id: string;
@@ -256,6 +270,7 @@ export interface SessionRecord {
   ui_state: string;
   message: string;
   diagnostic_transition_message?: string | null;
+  orientation_messages?: OrientationMessages | null;
   // UI flags on the session record (start / read). Stash them client-side after
   // /session/start. Note: the backend also echoes show_visual_cue / visual_cue on
   // /interaction responses (see InteractionResponse), so those update per turn.
@@ -366,12 +381,35 @@ export async function startOrientation(sessionId: string, student: string) {
  * POST /session/{id}/orientation/complete — marks orientation done and routes
  * on to Guided Practice. Must be called before leaving the phase, or the
  * Student Model never advances and the student re-enters orientation forever.
+ *
+ * The id arrays must match EXACTLY what the bundle served: anything missing is
+ * a 409, and a duplicate or unrecognised id is a 422. So they are collected as
+ * each piece of content actually finishes, never assumed.
  */
-export async function completeOrientation(sessionId: string, student: string) {
+export async function completeOrientation(
+  sessionId: string,
+  student: string,
+  completed: { videoIds: string[]; workedExampleIds: string[] },
+) {
   const res = await api.post<SessionRecord>(`/session/${sessionId}/orientation/complete`, {
     student_id: student,
+    completed_video_ids: completed.videoIds,
+    completed_worked_example_ids: completed.workedExampleIds,
   });
   return res.data;
+}
+
+/** The content ids this session's orientation bundle requires, in order. */
+export function requiredOrientationContent(record: SessionRecord | null | undefined): {
+  videoIds: string[];
+  workedExampleIds: string[];
+} {
+  const items = orientationSequence(record);
+  return {
+    videoIds: items.flatMap((i) => (i.content_type === 'ORIENTATION_VIDEO' && i.video ? [i.video.video_id] : [])),
+    workedExampleIds: items.flatMap((i) =>
+      i.content_type === 'WORKED_EXAMPLE' && i.worked_example ? [i.worked_example.worked_example_id] : []),
+  };
 }
 
 // ── GET /session/{session_id} ─────────────────────────────────────────────────

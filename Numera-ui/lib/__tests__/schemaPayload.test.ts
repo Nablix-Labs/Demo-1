@@ -13,6 +13,7 @@ import { describe, it, expect } from 'vitest';
 import {
   diagnosticQuestions,
   orientationSequence,
+  requiredOrientationContent,
   sessionTopicCode,
   type SessionRecord,
 } from '@/lib/api';
@@ -102,5 +103,38 @@ describe('orientationVideoForTopicCode', () => {
   it('returns null when no file exists for that topic', () => {
     expect(orientationVideoForTopicCode('ALG-07')).toBeNull();
     expect(orientationVideoForTopicCode(null)).toBeNull();
+  });
+});
+
+/**
+ * Orientation completion contract (PR #44).
+ *
+ * /orientation/complete rejects anything that isn't exactly what was served:
+ * missing ids are a 409, duplicate or unknown ids a 422. The frontend collects
+ * ids as each piece of content finishes, so the required list has to be read
+ * from the bundle correctly or the call fails at runtime with no local signal.
+ */
+describe('requiredOrientationContent', () => {
+  it('lists the ids the bundle actually served', () => {
+    expect(requiredOrientationContent(ORIENTATION)).toEqual({
+      videoIds: ['VID-KS3-T02-ORI'],
+      workedExampleIds: ['WE-KS3-T02-01'],
+    });
+  });
+
+  it('is empty when there is no orientation bundle', () => {
+    expect(requiredOrientationContent(DIAGNOSTIC)).toEqual({ videoIds: [], workedExampleIds: [] });
+    expect(requiredOrientationContent(null)).toEqual({ videoIds: [], workedExampleIds: [] });
+  });
+
+  it('gates Continue until every served item is complete', () => {
+    const { videoIds, workedExampleIds } = requiredOrientationContent(ORIENTATION);
+    const complete = (v: string[], w: string[]) =>
+      videoIds.every((id) => v.includes(id)) && workedExampleIds.every((id) => w.includes(id));
+
+    expect(complete([], [])).toBe(false);                                  // nothing watched
+    expect(complete(['VID-KS3-T02-ORI'], [])).toBe(false);                 // video only -> 409
+    expect(complete([], ['WE-KS3-T02-01'])).toBe(false);                   // example only -> 409
+    expect(complete(['VID-KS3-T02-ORI'], ['WE-KS3-T02-01'])).toBe(true);   // both -> allowed
   });
 });
