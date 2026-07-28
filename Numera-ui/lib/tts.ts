@@ -105,6 +105,16 @@ function playBase64Mp3(base64: string, onEnd?: () => void): void {
  * speechSynthesis when the backend/provider fails (the text stays on screen
  * either way). Pass the exact text shown in chat so audio matches the words.
  */
+/**
+ * Providers that have already failed this session.
+ *
+ * Without this the tier's provider is retried on EVERY utterance even once it's
+ * clearly down — Inworld ran out of credits on 2026-07-28 and each reply burned
+ * a 502 before falling through. One failure is enough to learn from; the set
+ * resets on reload, so a provider coming back is picked up next session.
+ */
+const deadProviders = new Set<string>();
+
 export function speakTutor(text: string, onEnd?: () => void): void {
   if (!text) { onEnd?.(); return; }
   stopTutorSpeech();
@@ -117,8 +127,14 @@ export function speakTutor(text: string, onEnd?: () => void): void {
   // defaultVoiceForTier), which is what put students on the browser voice.
   const { ttsProvider, ttsVoice } = useNumeraStore.getState();
   const fallback = ttsProvider ? null : defaultVoiceForTier(useAuthStore.getState().tier);
-  const provider = ttsProvider ?? fallback?.provider ?? null;
-  const voice = ttsVoice ?? fallback?.voice ?? null;
+  let provider = ttsProvider ?? fallback?.provider ?? null;
+  let voice = ttsVoice ?? fallback?.voice ?? null;
+  // Skip a provider already known to be down this session.
+  if (provider && deadProviders.has(provider)) {
+    const alt = alternateProvider(provider, deadProviders);
+    provider = alt?.provider ?? null;
+    voice = alt?.voice ?? null;
+  }
   /**
    * Try one provider, then a real alternative, and only then the browser.
    *
@@ -142,7 +158,8 @@ export function speakTutor(text: string, onEnd?: () => void): void {
   };
 
   const giveUp = (failed: string | null, allowRetry: boolean): void => {
-    const alt = allowRetry ? alternateProvider(failed) : null;
+    if (failed) deadProviders.add(failed);
+    const alt = allowRetry ? alternateProvider(failed, deadProviders) : null;
     if (alt) {
       console.warn(`[tts] ${failed ?? 'default'} failed; retrying with ${alt.provider}`);
       attempt(alt.provider, alt.voice, false);

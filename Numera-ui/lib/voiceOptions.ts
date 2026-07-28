@@ -158,9 +158,10 @@ export function defaultVoiceForTier(
  */
 export function alternateProvider(
   tried: string | null | undefined,
+  skip: ReadonlySet<string> = new Set(),
 ): { provider: string; voice: string } | null {
   const next = VOICE_PROVIDERS.find(
-    (p) => p.id !== tried && p.id !== 'mock' && p.voices.length > 0,
+    (p) => p.id !== tried && p.id !== 'mock' && !skip.has(p.id) && p.voices.length > 0,
   );
   return next ? { provider: next.id, voice: next.voices[0].id } : null;
 }
