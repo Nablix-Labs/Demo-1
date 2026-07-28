@@ -410,26 +410,12 @@ const initial: Omit<
   visualCueVisible: false,
   visualCueType: null,
   visualCueDescription: null,
-  transcript: [
-    {
-      id: '1',
-      role: 'ai',
-      text: 'What do we do first to get the x term on its own?',
-      timestamp: Date.now() - 30_000,
-    },
-    {
-      id: '2',
-      role: 'student',
-      text: 'Subtract 5 from both sides?',
-      timestamp: Date.now() - 20_000,
-    },
-    {
-      id: '3',
-      role: 'ai',
-      text: 'Exactly. So what does the left side become?',
-      timestamp: Date.now() - 10_000,
-    },
-  ],
+  // Empty. This used to seed a three-message demo conversation about
+  // "2x + 5 = 13", which rendered for every student before the backend had said
+  // anything — a real tester reported it as "I am getting my old questions"
+  // (2026-07-28). Mock mode fills it from demoContent; the live session fills it
+  // from the tutor's replies.
+  transcript: [],
   interactionTrail: [],
   activeTool: 'pen',
   shapeKind: 'rect',

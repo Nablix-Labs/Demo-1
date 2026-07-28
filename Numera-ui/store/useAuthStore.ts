@@ -130,6 +130,7 @@ interface AuthState {
 
   // Lifecycle
   loginSuccess: (p: { token: string; role: Role; tier: string; email: string; studentCode?: string | null }) => void;
+  setStudentCode: (code: string | null) => void;
   activateAccount: () => void;
   suspend: () => void;
   logout: () => void;
@@ -237,6 +238,8 @@ export const useAuthStore = create<AuthState>()(
             disclosureAck: { acknowledged: true, version: SAFETY_DISCLOSURE_VERSION, at: now },
           };
         }),
+
+      setStudentCode: (studentCode) => set({ studentCode }),
 
       activateAccount: () => set({ accountStatus: 'active' }),
       suspend: () => set({ accountStatus: 'suspended' }),

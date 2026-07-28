@@ -56,9 +56,19 @@ let voiceTurnSeq = 0;
 let inFlight: Promise<SessionRecord | null> | null = null;
 let failedConcept: string | null = null;
 
+/**
+ * Student-facing reason the last session start failed, when the backend named
+ * one. Without this a screen can only say "couldn't reach the tutor", which is
+ * wrong and unactionable for the common case: the request landed and was
+ * refused because the student id we sent isn't theirs (403 STUDENT_FORBIDDEN).
+ */
+let lastStartError: string | null = null;
+export const sessionStartError = (): string | null => lastStartError;
+
 /** Let an explicit user-driven retry attempt a failed concept again. */
 export function resetSessionStart(): void {
   failedConcept = null;
+  lastStartError = null;
 }
 
 /**
@@ -174,6 +184,7 @@ export async function beginSession(
     } catch (err) {
       // Latch the failure so a remount loop can't hammer the endpoint.
       failedConcept = conceptId;
+      lastStartError = studentFacingError(err);
       useNumeraStore.getState().addTrailEntry({
         kind: 'tutor',
         text: errorMessage(err, 'Could not start session.'),

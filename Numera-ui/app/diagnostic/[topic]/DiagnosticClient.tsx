@@ -23,7 +23,7 @@ import { getTopic } from '@/lib/curriculum';
 import { useFlowNav } from '@/lib/useFlowNav';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
-import { useDemoTutor, resetSessionStart } from '@/hooks/useDemoTutor';
+import { useDemoTutor, resetSessionStart, sessionStartError } from '@/hooks/useDemoTutor';
 import {
   completeDiagnostic,
   diagnosticQuestions,
@@ -103,7 +103,9 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
     setError(null);
     const rec = await tutor.start(activeConceptId, 'TEXT');
     if (!rec) {
-      setError("Couldn't reach the tutor to start your check.");
+      // Prefer the backend's own reason (e.g. the sign-in mismatch) over the
+      // generic network copy, which sends the student off retrying forever.
+      setError(sessionStartError() ?? "Couldn't reach the tutor to start your check.");
       setStatus('error');
       return;
     }
