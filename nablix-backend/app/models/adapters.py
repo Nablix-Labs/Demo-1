@@ -61,6 +61,18 @@ class ConversationState(BaseModel):
     expected_student_response: ExpectedStudentResponse
 
 
+class Phase2PromptContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    target_micro_skill_ids: list[str]
+    support_state: dict[str, object]
+    potential_errors: list[dict[str, object]]
+    support_catalog: dict[str, object]
+    current_support: dict[str, object] | None
+    current_scaffold_step_number: int
+    consecutive_stuck_count: int
+
+
 class AdapterContext(BaseModel):
     """Shared input for the three text adapters (tutor, RAG, student model).
 
@@ -75,6 +87,7 @@ class AdapterContext(BaseModel):
     question: str | None = None
     correct_answer: str | None = None
     answer_spec: AnswerSpec | None = None
+    phase_2_prompt_context: Phase2PromptContext | None = None
     current_phase: str | None = None
     input_source: str | None = None
     transcript_confidence: float | None = None
@@ -147,6 +160,7 @@ class VisualCue(BaseModel):
     show: bool = False
     cue_type: str | None = None
     description: str | None = None
+    actions: list[dict[str, object]] = Field(default_factory=list)
 
 
 class CanvasStepFeedback(BaseModel):

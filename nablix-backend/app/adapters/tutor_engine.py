@@ -95,6 +95,7 @@ class TutorEngineServiceAdapter:
                     question=context.question,
                     correct_answer=context.correct_answer,
                     answer_spec=context.answer_spec,
+                    phase_2_prompt_context=context.phase_2_prompt_context,
                     student_input=context.message,
                     current_phase=_coerce_learning_phase(context.current_phase),
                     input_source=_coerce_input_source(context.input_source),
@@ -173,6 +174,7 @@ def _tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:
             show=response.visual_cue.show,
             cue_type=response.visual_cue.cue_type,
             description=response.visual_cue.description,
+            actions=response.visual_cue.actions,
         ),
         canvas_feedback=CanvasFeedback(
             has_feedback=response.canvas_feedback.has_feedback,

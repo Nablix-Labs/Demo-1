@@ -97,6 +97,9 @@ class InteractionResponse(BaseModel):
     visual_cue: VisualCue | None
     show_scaffold_panel: bool
     scaffold_steps: list[str]
+    scaffold_id: str | None = None
+    current_scaffold_step_id: str | None = None
+    scaffold_step_number: int = 0
     allow_text_input: bool
     allow_voice_input: bool
     hint_count: int

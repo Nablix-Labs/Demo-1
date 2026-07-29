@@ -7,6 +7,7 @@ from fastapi import HTTPException
 
 from app.adapters.provider import get_adapters
 from app.adapters.tutor_engine import apply_retrieved_content
+from app.ai_engine.classifier import detect_student_intent, normalize_exact_notation
 from app.ai_engine.classifier_config import ClassifierRulesConfig, load_classifier_rules
 from app.core.exceptions import QuestionFetchError
 from app.core.logger import logger
@@ -16,6 +17,7 @@ from app.models.adapters import (
     ConversationMessage,
     ConversationState,
     ExpectedStudentResponse,
+    Phase2PromptContext,
     RAGResult,
     StudentModelResult,
     TutorAction,
@@ -202,13 +204,80 @@ def _active_answer_spec(session: SessionRecord) -> AnswerSpec | None:
     return _schema_question(session).tutor_view.answer_spec
 
 
-def _schema_question_micro_skills(session: SessionRecord) -> list[str]:
+def _phase_2_prompt_context(
+    session: SessionRecord,
+) -> Phase2PromptContext | None:
+    event = session.student_model_event
+    if event is None or session.current_phase != "GUIDED_PRACTICE":
+        return None
+    question = _schema_question(session)
+    guided = event.journey_state.phase_2_guided_learning
+    support = (
+        event.phase_payload.support_to_serve
+        if event.phase_payload is not None
+        else None
+    )
+    return Phase2PromptContext(
+        target_micro_skill_ids=guided.current_question_target_micro_skill_ids,
+        support_state={
+            "highest_support_used_by_skill": guided.highest_support_used_by_skill,
+            "completed_micro_skill_ids": guided.completed_micro_skill_ids,
+            "remaining_micro_skill_ids": guided.remaining_micro_skill_ids,
+        },
+        potential_errors=question.tutor_view.potential_errors,
+        support_catalog=question.tutor_view.support_catalog,
+        current_support=support,
+        current_scaffold_step_number=session.scaffold_step_number,
+        consecutive_stuck_count=session.stuck_count,
+    )
+
+
+def _db_error_code(session: SessionRecord, student_message: str) -> str | None:
+    if session.student_model_event is None:
+        return None
+    normalized_message = normalize_exact_notation(student_message).casefold()
+    for potential_error in _schema_question(session).tutor_view.potential_errors:
+        error_code = potential_error.get("error_code")
+        response_patterns = potential_error.get("response_patterns")
+        if not isinstance(error_code, str) or not isinstance(response_patterns, list):
+            continue
+        if any(
+            isinstance(pattern, str)
+            and normalize_exact_notation(pattern).casefold() == normalized_message
+            for pattern in response_patterns
+        ):
+            return error_code
+    return None
+
+
+def _schema_question_mapped_micro_skills(session: SessionRecord) -> list[str]:
     question = _schema_question(session)
     skills = [mapping.micro_skill_id for mapping in question.micro_skill_mappings]
     if not skills:
         raise HTTPException(
             status_code=409,
             detail=f"Student Model returned no micro-skills for {session.question_id}.",
+        )
+    return skills
+
+
+def _schema_event_micro_skills(session: SessionRecord) -> list[str]:
+    event = session.student_model_event
+    if event is None:
+        raise RuntimeError("Schema event skill lookup requires stored journey state.")
+    if session.current_phase != "GUIDED_PRACTICE":
+        return _schema_question_mapped_micro_skills(session)
+    skills = (
+        event.journey_state.phase_2_guided_learning
+        .current_question_target_micro_skill_ids
+    )
+    if not skills:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Student Model returned no active Phase 2 target micro-skills "
+                f"for {session.question_id}."
+            ),
         )
     return skills
 
@@ -243,9 +312,19 @@ def _schema_visual_cue(
             continue
         content_id = item.get("content_id")
         description = item.get("description")
+        actions = item.get("actions", [])
         if not isinstance(content_id, str) or not isinstance(description, str):
             raise RuntimeError("Student Model returned a malformed visual cue.")
-        return VisualCue(show=True, cue_type=content_id, description=description)
+        if not isinstance(actions, list) or not all(
+            isinstance(action, dict) for action in actions
+        ):
+            raise RuntimeError("Student Model returned malformed visual cue actions.")
+        return VisualCue(
+            show=True,
+            cue_type=content_id,
+            description=description,
+            actions=actions,
+        )
     return None
 
 
@@ -270,26 +349,59 @@ def _schema_support_steps(
         return []
     support = event.phase_payload.support_to_serve
     if support is not None:
+        current_prompt = support.get("prompt")
+        if isinstance(current_prompt, str):
+            return [current_prompt]
+        current_step_id = support.get("current_step_id")
         steps = support.get("steps")
         if isinstance(steps, list):
-            prompts: list[str] = []
             for step in steps:
-                if isinstance(step, dict) and isinstance(step.get("prompt"), str):
-                    prompts.append(step["prompt"])
-            return prompts
-    rescue = event.phase_payload.rescue_to_serve
-    if rescue is None:
-        return []
-    result: list[str] = []
-    parallel = rescue.get("parallel_example")
-    if isinstance(parallel, dict):
-        worked_steps = parallel.get("worked_steps")
-        if isinstance(worked_steps, list):
-            result.extend(step for step in worked_steps if isinstance(step, str))
-    solved = rescue.get("tutor_solved")
-    if isinstance(solved, dict) and isinstance(solved.get("explanation"), str):
-        result.append(solved["explanation"])
-    return result
+                if not isinstance(step, dict):
+                    continue
+                if current_step_id is not None and step.get("step_id") != current_step_id:
+                    continue
+                prompt = step.get("prompt")
+                if isinstance(prompt, str):
+                    return [prompt]
+                if current_step_id is not None:
+                    break
+    # Rescue catalogues contain final answers and future teaching steps. They stay
+    # private until the dedicated parallel/tutor-solved conversation is active.
+    return []
+
+
+def _schema_scaffold_state(
+    event: StudentModelSessionEventResponse | None,
+) -> dict[str, object]:
+    if event is None or event.phase_payload is None:
+        return {}
+    support = event.phase_payload.support_to_serve
+    if support is None or support.get("support_type") != "SCAFFOLD":
+        return {}
+    scaffold_id = support.get("scaffold_id")
+    current_step_id = support.get("current_step_id")
+    expected_response = support.get("expected_response")
+    steps = support.get("steps")
+    step_number = 0
+    if isinstance(steps, list):
+        for index, step in enumerate(steps, start=1):
+            if isinstance(step, dict) and step.get("step_id") == current_step_id:
+                step_number = index
+                if expected_response is None:
+                    expected_response = step.get("expected_response")
+                break
+    delivered = [current_step_id] if isinstance(current_step_id, str) else []
+    return {
+        "scaffold_id": scaffold_id if isinstance(scaffold_id, str) else None,
+        "current_scaffold_step_id": (
+            current_step_id if isinstance(current_step_id, str) else None
+        ),
+        "scaffold_step_number": step_number,
+        "delivered_scaffold_step_ids": delivered,
+        "scaffold_expected_response": (
+            expected_response if isinstance(expected_response, str) else None
+        ),
+    }
 
 
 def _recent_conversation_history(
@@ -331,6 +443,10 @@ def _next_hint_count_from(session: SessionRecord, request: InteractionRequest) -
 
 def _new_tutor_turn_id() -> str:
     return f"TUTOR-{uuid4()}"
+
+
+def _schema_interaction_request_id(session: SessionRecord, event_type: str) -> str:
+    return f"{session.session_id}:{event_type}:{uuid4().hex}"
 
 
 def _voice_turn_updates(
@@ -440,6 +556,7 @@ async def next_question_updates(
         "served_question_ids": [*session.served_question_ids, question_id],
         "question_number": session.question_number + 1,
         "attempt_count": 0,
+        "stuck_count": 0,
         "hint_count": 0,
         "question_completed": False,
     }
@@ -505,6 +622,9 @@ def _response_from(
         visual_cue=visual_cue,
         show_scaffold_panel=session.show_scaffold_panel,
         scaffold_steps=scaffold_steps,
+        scaffold_id=session.scaffold_id,
+        current_scaffold_step_id=session.current_scaffold_step_id,
+        scaffold_step_number=session.scaffold_step_number,
         allow_text_input=session.allow_text_input,
         allow_voice_input=session.allow_voice_input,
         hint_count=session.hint_count,
@@ -679,8 +799,14 @@ async def _process_interaction(
     canvas_submission = get_canvas_submission(session, request.canvas_snapshot_id)
     ocr = canvas_submission.ocr if canvas_submission is not None else None
 
+    detected_intent = detect_student_intent(student_message, rules)
     next_attempt_count = (
-        session.attempt_count + 1
+        session.attempt_count
+        + (
+            session.stuck_count + 1
+            if detected_intent == "EXPRESSING_CONFUSION"
+            else 1
+        )
         if (
             request.interaction_type == "ANSWER_SUBMISSION"
             and not session.answer_value_confirmed
@@ -697,6 +823,7 @@ async def _process_interaction(
         # the question, the request's id from the frontend may be stale.
         correct_answer=session.correct_answer,
         answer_spec=_active_answer_spec(session),
+        phase_2_prompt_context=_phase_2_prompt_context(session),
         current_phase=session.current_phase,
         input_source=request.input_source,
         transcript_confidence=request.transcript_confidence,
@@ -778,25 +905,59 @@ async def _process_interaction(
         if tutor.evaluation == "CORRECT"
         else (
             "INCORRECT_ATTEMPT"
-            if tutor.evaluation in {"INCORRECT", "PARTIALLY_CORRECT"}
+            if tutor.evaluation == "INCORRECT"
             else None
         )
     )
-    if schema_managed and schema_event_type is not None:
+    schema_stuck = (
+        schema_managed
+        and session.current_phase == "GUIDED_PRACTICE"
+        and tutor.intent == "EXPRESSING_CONFUSION"
+    )
+    schema_stuck_escalation = (
+        schema_stuck
+        and session.stuck_count + 1
+        >= rules.strategy_rules.stuck_scaffold_min_count
+    )
+    if schema_managed and (
+        schema_event_type is not None or schema_stuck_escalation
+    ):
         stored_event = session.student_model_event
         if stored_event is None or session.question_id is None:
             raise RuntimeError("Schema 3.0 guided event lost its stored session state.")
-        micro_skill_ids = _schema_question_micro_skills(session)
+        micro_skill_ids = _schema_event_micro_skills(session)
         retry_required = (
             stored_event.journey_state.phase_3_independent_practice
             .retry_required_micro_skill_ids
         )
-        if session.current_phase == "INDEPENDENT_PRACTICE" and retry_required:
+        if schema_stuck_escalation:
+            escalation_type: Literal[
+                "GUIDED_SUPPORT_ESCALATION_REQUIRED",
+                "MAXIMUM_GUIDED_SUPPORT_REQUIRED",
+            ] = (
+                "MAXIMUM_GUIDED_SUPPORT_REQUIRED"
+                if tutor.response_strategy == "PROVIDE_WORKED_EXAMPLE"
+                else "GUIDED_SUPPORT_ESCALATION_REQUIRED"
+            )
+            schema_response = await adapters.student_model.send_session_event(
+                GuidedSupportEvent(
+                    request_id=_schema_interaction_request_id(
+                        session, escalation_type
+                    ),
+                    event_type=escalation_type,
+                    topic_id=stored_event.journey_state.topic_id,
+                    student_id=session.student_id,
+                    timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    question_id=session.question_id,
+                    micro_skill_id=micro_skill_ids[0],
+                ),
+                access_token,
+            )
+        elif session.current_phase == "INDEPENDENT_PRACTICE" and retry_required:
             schema_response = await adapters.student_model.send_session_event(
                 IndependentRetryCompletedEvent(
-                    request_id=(
-                        f"{session.session_id}:INDEPENDENT_RETRY_COMPLETED:"
-                        f"{stored_event.journey_state.version + 1}"
+                    request_id=_schema_interaction_request_id(
+                        session, "INDEPENDENT_RETRY_COMPLETED"
                     ),
                     event_type="INDEPENDENT_RETRY_COMPLETED",
                     topic_id=stored_event.journey_state.topic_id,
@@ -807,7 +968,8 @@ async def _process_interaction(
                     student_response=student_message,
                     independent_success=schema_event_type == "CORRECT_ATTEMPT",
                     error_code=(
-                        tutor.error_type
+                        _db_error_code(session, student_message)
+                        or tutor.error_type
                         if schema_event_type == "INCORRECT_ATTEMPT"
                         else None
                     ),
@@ -817,9 +979,8 @@ async def _process_interaction(
         else:
             schema_response = await adapters.student_model.send_session_event(
                 GuidedAttemptEvent(
-                    request_id=(
-                        f"{session.session_id}:{schema_event_type}:"
-                        f"{stored_event.journey_state.version + 1}"
+                    request_id=_schema_interaction_request_id(
+                        session, schema_event_type
                     ),
                     event_type=schema_event_type,
                     topic_id=stored_event.journey_state.topic_id,
@@ -837,7 +998,8 @@ async def _process_interaction(
                         else None
                     ),
                     error_code=(
-                        tutor.error_type
+                        _db_error_code(session, student_message)
+                        or tutor.error_type
                         if schema_event_type == "INCORRECT_ATTEMPT"
                         else None
                     ),
@@ -845,36 +1007,6 @@ async def _process_interaction(
                 access_token,
             )
         schema_content_response = schema_response
-
-        if (
-            session.current_phase == "GUIDED_PRACTICE"
-            and schema_event_type == "INCORRECT_ATTEMPT"
-            and tutor.response_strategy in {"SCAFFOLD", "PROVIDE_WORKED_EXAMPLE"}
-        ):
-            escalation_type: Literal[
-                "GUIDED_SUPPORT_ESCALATION_REQUIRED",
-                "MAXIMUM_GUIDED_SUPPORT_REQUIRED",
-            ] = (
-                "GUIDED_SUPPORT_ESCALATION_REQUIRED"
-                if tutor.response_strategy == "SCAFFOLD"
-                else "MAXIMUM_GUIDED_SUPPORT_REQUIRED"
-            )
-            schema_response = await adapters.student_model.send_session_event(
-                GuidedSupportEvent(
-                    request_id=(
-                        f"{session.session_id}:{escalation_type}:"
-                        f"{schema_response.journey_state.version + 1}"
-                    ),
-                    event_type=escalation_type,
-                    topic_id=schema_response.journey_state.topic_id,
-                    student_id=session.student_id,
-                    timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                    question_id=session.question_id,
-                    micro_skill_id=micro_skill_ids[0],
-                ),
-                access_token,
-            )
-            schema_content_response = schema_response
 
         guided = schema_response.journey_state.phase_2_guided_learning
         if (
@@ -889,9 +1021,8 @@ async def _process_interaction(
         ):
             schema_response = await adapters.student_model.send_session_event(
                 GuidedPhaseCompletedEvent(
-                    request_id=(
-                        f"{session.session_id}:GUIDED_PHASE_COMPLETED:"
-                        f"{schema_response.journey_state.version + 1}"
+                    request_id=_schema_interaction_request_id(
+                        session, "GUIDED_PHASE_COMPLETED"
                     ),
                     event_type="GUIDED_PHASE_COMPLETED",
                     topic_id=schema_response.journey_state.topic_id,
@@ -915,9 +1046,8 @@ async def _process_interaction(
             )
             schema_response = await adapters.student_model.send_session_event(
                 GuidedQuestionSetRequestedEvent(
-                    request_id=(
-                        f"{session.session_id}:GUIDED_QUESTION_SET_REQUESTED:"
-                        f"{schema_response.journey_state.version + 1}"
+                    request_id=_schema_interaction_request_id(
+                        session, "GUIDED_QUESTION_SET_REQUESTED"
                     ),
                     event_type="GUIDED_QUESTION_SET_REQUESTED",
                     topic_id=schema_response.journey_state.topic_id,
@@ -1009,7 +1139,19 @@ async def _process_interaction(
         ),
         "conversation_history": conversation_history,
         "recommended_entry_phase": recommended,
+        "stuck_count": (
+            session.stuck_count + 1
+            if tutor.intent == "EXPRESSING_CONFUSION"
+            else (
+                0
+                if request.interaction_type == "ANSWER_SUBMISSION"
+                else session.stuck_count
+            )
+        ),
+        **_schema_scaffold_state(schema_content_response),
     }
+    if schema_question_changed:
+        state_updates["stuck_count"] = 0
     if schema_response is None:
         state_updates["last_student_model"] = student
     if (
@@ -1049,6 +1191,7 @@ async def _process_interaction(
                 "served_question_ids": [*session.served_question_ids, question_id],
                 "question_number": session.question_number + 1,
                 "attempt_count": 0,
+                "stuck_count": 0,
                 "hint_count": 0,
                 "question_completed": False,
                 "answer_value_confirmed": False,

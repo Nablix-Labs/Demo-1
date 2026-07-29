@@ -302,6 +302,7 @@ def _event_response(
             "remaining_micro_skill_ids": ["T02.M1"],
             "highest_support_used_by_skill": {},
             "current_question_id": "Q-T02-004",
+            "current_question_target_micro_skill_ids": ["T02.M1"],
             "used_question_ids": [],
         }
         question_set = deepcopy(
@@ -313,9 +314,30 @@ def _event_response(
         question["question_id"] = "Q-T02-004"
         question["question_usage_id"] = "QU-T02-004-P2"
         question["question_role"] = "GUIDED"
+        question["micro_skill_mappings"] = [
+            {
+                "micro_skill_id": "T02.M5",
+                "is_primary": True,
+                "weight": 0.7,
+            },
+            {
+                "micro_skill_id": "T02.M1",
+                "is_primary": False,
+                "weight": 0.3,
+            },
+        ]
         question["student_view"]["question_text"] = "Solve for x: x + 4 = 9"
         question["tutor_view"]["answer_spec"]["canonical_answer"] = "x = 5"
         question["tutor_view"]["answer_spec"]["accepted_answers"] = ["x = 5"]
+        question["tutor_view"]["potential_errors"] = [
+            {
+                "error_code": "ERR-T02-SUBTRACTION-MISAPPLIED",
+                "error_description": "Subtraction was applied incorrectly.",
+                "detection_method": "EXACT_NOTATION_MATCH",
+                "response_patterns": ["x = 4"],
+                "linked_misconceptions": [],
+            }
+        ]
         payload.update(
             {
                 "phase": "PHASE_2_GUIDED_LEARNING",
@@ -383,6 +405,7 @@ def _event_response(
             "remaining_micro_skill_ids": ["T02.M1"],
             "highest_support_used_by_skill": {"T02.M1": "HINT"},
             "current_question_id": "Q-T02-004",
+            "current_question_target_micro_skill_ids": ["T02.M1"],
             "used_question_ids": [],
         }
         payload["payload_type"] = "SUPPORT_AND_RETRY"
@@ -399,6 +422,13 @@ def _event_response(
                     "content_type": "VISUAL_CUE",
                     "content_id": "VC-T02-COEFFICIENT-COUNT",
                     "description": "Count the equal letter terms.",
+                    "actions": [
+                        {
+                            "action": "HIGHLIGHT_TOKEN",
+                            "target": "x",
+                            "style": "VARIABLE",
+                        }
+                    ],
                 }
             ],
             "retry_same_question": True,
@@ -456,10 +486,19 @@ def _event_response(
         payload["support_to_serve"] = {
             "support_type": "SCAFFOLD",
             "scaffold_id": "SCF-T02-M1",
+            "current_step_id": "SCF-T02-M1-S1",
+            "prompt": "Which operation should you undo first?",
+            "expected_response": "Addition",
             "steps": [
                 {
                     "step_id": "SCF-T02-M1-S1",
                     "prompt": "Which operation should you undo first?",
+                    "expected_response": "Addition",
+                },
+                {
+                    "step_id": "SCF-T02-M1-S2",
+                    "prompt": "What should you subtract from both sides?",
+                    "expected_response": "4",
                 }
             ],
             "retry_same_question": True,
@@ -705,6 +744,42 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
         "ORIENTATION_COMPLETED",
     ]
 
+    event_count_before_stuck = len(events)
+    for expected_stuck_count in (1, 2):
+        stuck = client.post(
+            "/interaction",
+            json={
+                "session_id": session_id,
+                "student_id": "ST001",
+                "interaction_type": "ANSWER_SUBMISSION",
+                "input_source": "TEXT",
+                "text_input": "I don't know",
+                "current_phase": "GUIDED_PRACTICE",
+                "concept_id": "ALG_LINEAR_ONE_STEP",
+                "question_id": "Q-T02-004",
+                "hint_count": 0,
+            },
+        )
+
+        assert stuck.status_code == 200
+        assert stuck.json()["attempt_count"] == 0
+        if expected_stuck_count == 1:
+            assert len(events) == event_count_before_stuck
+            assert stuck.json()["scaffold_steps"] == []
+            assert stuck.json()["current_scaffold_step_id"] is None
+        else:
+            assert len(events) == event_count_before_stuck + 1
+            assert events[-1]["event_type"] == "GUIDED_SUPPORT_ESCALATION_REQUIRED"
+            assert events[-1]["micro_skill_id"] == "T02.M1"
+            assert stuck.json()["scaffold_steps"] == [
+                "Which operation should you undo first?"
+            ]
+            assert stuck.json()["current_scaffold_step_id"] == "SCF-T02-M1-S1"
+        assert "scaffold_expected_response" not in stuck.json()
+        assert client.get(f"/session/{session_id}").json()["stuck_count"] == (
+            expected_stuck_count
+        )
+
     guided_incorrect = client.post(
         "/interaction",
         json={
@@ -725,16 +800,24 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert events[-1]["question_id"] == "Q-T02-004"
     assert events[-1]["micro_skill_ids"] == ["T02.M1"]
     assert events[-1]["student_response"] == "x = 4"
-    assert isinstance(events[-1]["error_code"], str)
+    assert events[-1]["error_code"] == "ERR-T02-SUBTRACTION-MISAPPLIED"
+    assert client.get(f"/session/{session_id}").json()["stuck_count"] == 0
     assert guided_incorrect.json()["student_model_state"][
         "highest_support_used_by_skill"
     ] == {"T02.M1": "HINT"}
     assert guided_incorrect.json()["show_visual_cue"] is True
     assert guided_incorrect.json()["visual_cue"] == {
         "show": True,
-        "cue_type": "VC-T02-COEFFICIENT-COUNT",
-        "description": "Count the equal letter terms.",
-    }
+            "cue_type": "VC-T02-COEFFICIENT-COUNT",
+            "description": "Count the equal letter terms.",
+            "actions": [
+                {
+                    "action": "HIGHLIGHT_TOKEN",
+                    "target": "x",
+                    "style": "VARIABLE",
+                }
+            ],
+        }
     assert guided_incorrect.json()["message"] == "Undo the addition first."
 
     for answer in ("x = 3", "x = 2"):
@@ -754,12 +837,10 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
         )
         assert guided_incorrect.status_code == 200
 
-    assert events[-2]["event_type"] == "INCORRECT_ATTEMPT"
-    assert events[-1]["event_type"] == "GUIDED_SUPPORT_ESCALATION_REQUIRED"
-    assert guided_incorrect.json()["show_scaffold_panel"] is True
-    assert guided_incorrect.json()["scaffold_steps"] == [
-        "Which operation should you undo first?"
-    ]
+    assert events[-1]["event_type"] == "INCORRECT_ATTEMPT"
+    assert events[-1]["micro_skill_ids"] == ["T02.M1"]
+    assert guided_incorrect.json()["show_scaffold_panel"] is False
+    assert guided_incorrect.json()["scaffold_steps"] == []
 
     guided = client.post(
         "/interaction",
@@ -781,7 +862,7 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert events[-2]["question_id"] == "Q-T02-004"
     assert events[-2]["micro_skill_ids"] == ["T02.M1"]
     assert events[-2]["student_response"] == "x = 5"
-    assert events[-2]["support_used"] == "SCAFFOLD"
+    assert events[-2]["support_used"] == "HINT"
     assert events[-1]["event_type"] == "GUIDED_PHASE_COMPLETED"
     assert events[-1]["completed_micro_skill_ids"] == ["T02.M1"]
     assert guided.json()["current_phase"] == "INDEPENDENT_PRACTICE"

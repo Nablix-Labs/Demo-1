@@ -8,6 +8,7 @@ from app.adapters.tutor_engine import TutorEngineServiceAdapter, apply_retrieved
 from app.ai_engine import classifier, openai_client
 from app.ai_engine.classifier import ClassificationRequest, classify_student_response
 from app.ai_engine.prompt_registry import (
+    Trigger,
     build_openai_tutor_messages,
     build_openai_tutor_prompt_metadata,
     load_prompt_registry,
@@ -22,6 +23,7 @@ from app.models.adapters import (
     ConversationMessage,
     ConversationState,
     OCRTextRegion,
+    Phase2PromptContext,
     RAGResult,
     RetrievedDocument,
     StudentModelResult,
@@ -160,11 +162,21 @@ def test_semantic_verification_sends_full_answer_spec_to_llm(monkeypatch) -> Non
         ],
         verification_method="CONCEPT_TEXT_MATCH",
     )
+    phase_2_context = Phase2PromptContext(
+        target_micro_skill_ids=["T02.M8"],
+        support_state={"highest_support_used_by_skill": {"T02.M8": "HINT"}},
+        potential_errors=[{"error_code": "VARIABLE_MEANING_INCOMPLETE"}],
+        support_catalog={"hints": [{"hint_id": "H-T02-M8-01"}]},
+        current_support={"support_type": "HINT"},
+        current_scaffold_step_number=0,
+        consecutive_stuck_count=0,
+    )
     response = classify_student_response(
         ClassificationRequest(
             question="In Total = n + 4, what does n represent?",
             correct_answer=answer_spec.canonical_answer,
             answer_spec=answer_spec,
+            phase_2_prompt_context=phase_2_context,
             student_input="the counters",
             current_phase="GUIDED_PRACTICE",
             input_source="TEXT",
@@ -175,8 +187,47 @@ def test_semantic_verification_sends_full_answer_spec_to_llm(monkeypatch) -> Non
     )
 
     assert captured["answer_spec"] == answer_spec
+    assert captured["phase_2_prompt_context"] == phase_2_context
     assert response.evaluation == "PARTIALLY_CORRECT"
     assert response.tutor_message.startswith("You identified the counters.")
+
+
+def test_protocol_triggers_are_derived_from_input_confidence() -> None:
+    rules = classifier.load_classifier_rules()
+    voice_request = ClassificationRequest(
+        question="Solve x + 4 = 9.",
+        correct_answer="x = 5",
+        student_input="x maybe five",
+        current_phase="GUIDED_PRACTICE",
+        input_source="VOICE",
+        transcript_confidence=0.2,
+        attempt_count=1,
+        current_hint_level=None,
+    )
+    canvas_request = voice_request.model_copy(
+        update={
+            "input_source": "CANVAS",
+            "transcript_confidence": None,
+            "canvas_regions": [
+                CanvasTextRegion(
+                    step_id="step-1",
+                    text="x + 4",
+                    x=0.1,
+                    y=0.1,
+                    w=0.2,
+                    h=0.1,
+                    confidence=0.1,
+                )
+            ],
+        }
+    )
+
+    assert classifier.detect_protocol_triggers(voice_request, rules) == [
+        Trigger.VOICE_AMBIGUITY
+    ]
+    assert classifier.detect_protocol_triggers(canvas_request, rules) == [
+        Trigger.HANDWRITING_AMBIGUITY
+    ]
 
 
 def test_ai_engine_classify_returns_valid_tutor_response() -> None:
@@ -633,8 +684,10 @@ def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> 
     )
     disabled_client.generate_tutor_turn(
         question="Solve for x: x + 4 = 9",
-        correct_answer="x = 5",
-        answer_spec=None,
+            correct_answer="x = 5",
+            answer_spec=None,
+            phase_2_prompt_context=None,
+            active_triggers=[],
         student_input="x = 13",
         phase="GUIDED_PRACTICE",
         input_source="TEXT",
@@ -660,8 +713,10 @@ def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> 
     )
     enabled_client.generate_tutor_turn(
         question="Solve for x: x + 4 = 9",
-        correct_answer="x = 5",
-        answer_spec=None,
+            correct_answer="x = 5",
+            answer_spec=None,
+            phase_2_prompt_context=None,
+            active_triggers=[],
         student_input="x = 13",
         phase="GUIDED_PRACTICE",
         input_source="TEXT",
@@ -829,6 +884,40 @@ def test_follow_up_reasoning_completes_previously_confirmed_answer() -> None:
     assert response.question_completed is True
     assert response.attempt_increment == 0
     assert response.tutor_message == "Thanks for explaining your method. Let us continue."
+
+
+@pytest.mark.parametrize(
+    ("attempt_count", "expected_strategy", "expected_hint_level"),
+    [
+        (1, "GUIDED_HINT", 1),
+        (2, "GUIDED_HINT", 2),
+        (3, "SCAFFOLD", None),
+        (4, "PROVIDE_WORKED_EXAMPLE", None),
+    ],
+)
+def test_repeated_confusion_progresses_guided_support(
+    attempt_count: int,
+    expected_strategy: str,
+    expected_hint_level: int | None,
+) -> None:
+    response = classify_student_response(
+        ClassificationRequest(
+            question="Write p × p × q in compact algebraic notation.",
+            correct_answer="p²q",
+            student_input="I don't know",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=attempt_count,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.intent == "EXPRESSING_CONFUSION"
+    assert response.evaluation == "NO_ATTEMPT"
+    assert response.response_strategy == expected_strategy
+    assert response.hint_level == expected_hint_level
+    assert response.attempt_increment == 0
 
 
 def test_valid_worked_steps_override_incorrect_openai_reasoning_flag(monkeypatch) -> None:

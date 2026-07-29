@@ -27,7 +27,7 @@ from app.ai_engine.schemas import (
 )
 from app.core.exceptions import AdapterError
 from app.core.logger import logger
-from app.models.adapters import ConversationMessage, ConversationState
+from app.models.adapters import ConversationMessage, ConversationState, Phase2PromptContext
 from app.models.student_model_session import AnswerSpec
 
 
@@ -81,6 +81,8 @@ class OpenAIAIEngineClient:
         question: str,
         correct_answer: str,
         answer_spec: AnswerSpec | None,
+        phase_2_prompt_context: Phase2PromptContext | None,
+        active_triggers: list[Trigger],
         student_input: str,
         phase: LearningPhase,
         input_source: InputSource,
@@ -101,7 +103,7 @@ class OpenAIAIEngineClient:
             name="tutor_turn",
             schema=schema,
             phase=phase,
-            active_triggers=[],
+            active_triggers=active_triggers,
             conversation_history=conversation_history,
             user_payload={
                 "question": question,
@@ -109,6 +111,11 @@ class OpenAIAIEngineClient:
                 "answer_spec": (
                     answer_spec.model_dump()
                     if answer_spec is not None
+                    else None
+                ),
+                "phase_2_context": (
+                    phase_2_prompt_context.model_dump()
+                    if phase_2_prompt_context is not None
                     else None
                 ),
                 "student_input": student_input,

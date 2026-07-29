@@ -2,8 +2,14 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field, model_validator
 
 from app.ai_engine.classifier import ClassificationRequest, classify_student_response
-from app.ai_engine.schemas import CanvasTextRegion, HintLevel, InputSource, LearningPhase, TutorResponse
-from app.models.adapters import ConversationMessage, ConversationState
+from app.ai_engine.schemas import (
+    CanvasTextRegion,
+    HintLevel,
+    InputSource,
+    LearningPhase,
+    TutorResponse,
+)
+from app.models.adapters import ConversationMessage, ConversationState, Phase2PromptContext
 from app.models.student_model_session import AnswerSpec
 
 
@@ -16,6 +22,7 @@ class AiEngineClassifyRequest(BaseModel):
     question: str
     correct_answer: str
     answer_spec: AnswerSpec | None = None
+    phase_2_prompt_context: Phase2PromptContext | None = None
     input_source: InputSource
     transcript_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     attempt_count: int = Field(default=1, ge=0)
@@ -62,6 +69,7 @@ def _classification_request_from(request: AiEngineClassifyRequest) -> Classifica
         question=request.question,
         correct_answer=request.correct_answer,
         answer_spec=request.answer_spec,
+        phase_2_prompt_context=request.phase_2_prompt_context,
         student_input=_combined_student_input(request),
         current_phase=request.current_phase,
         input_source=request.input_source,

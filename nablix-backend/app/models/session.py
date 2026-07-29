@@ -172,6 +172,7 @@ class SessionRecord(BaseModel):
     allow_voice_input: bool = True
     hint_count: int
     attempt_count: int = 0
+    stuck_count: int = 0
     question_completed: bool = False
     answer_value_confirmed: bool = False
     conversation_history: list[ConversationMessage] = Field(default_factory=list)
@@ -179,7 +180,11 @@ class SessionRecord(BaseModel):
     last_tutor_turn_id: TurnId | None = None
     last_tutor_action: TutorAction = "ASKED_QUESTION"
     expected_student_response: ExpectedStudentResponse = "ANSWER"
+    scaffold_id: str | None = None
+    current_scaffold_step_id: str | None = None
     scaffold_step_number: int = 0
+    delivered_scaffold_step_ids: list[str] = Field(default_factory=list)
+    scaffold_expected_response: str | None = None
     rescue_mode_active: bool = False
     mastery_check_question_count: int = 0
     # Functional fields the guide omits but the backend needs.
@@ -203,4 +208,5 @@ class SessionResponse(SessionRecord):
     model_config = ConfigDict(from_attributes=True)
 
     correct_answer: str | None = Field(default=None, exclude=True)
+    scaffold_expected_response: str | None = Field(default=None, exclude=True)
     student_model_event: PublicStudentModelEvent | None = None
