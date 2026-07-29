@@ -14,6 +14,7 @@
  */
 import { useCallback } from 'react';
 import {
+  activeScaffold,
   startSession,
   submitCanvas,
   sendInteraction,
@@ -84,6 +85,27 @@ function hasCanvasActivity(): boolean {
  *  Prefers the richer `visual_cue.show`, falling back to the flat
  *  `show_visual_cue`. No-ops when neither is present so a response that omits the
  *  field never hides an already-shown cue. */
+/**
+ * Apply the scaffold step the backend authorised on this turn.
+ *
+ * Returns what should be SPOKEN for the turn, because the two decisions are the
+ * same decision (handoff §5.4 / §8): when a step is showing, the tutor voices
+ * that step; otherwise it voices `message`. Splitting them is how the shown
+ * text and the spoken text drift apart.
+ *
+ * A response that omits `show_scaffold_panel` entirely leaves the panel exactly
+ * as it was — an older backend, or a turn that simply isn't about support, must
+ * not close a panel the student is mid-way through.
+ */
+function applyScaffold(res: InteractionResponse): string {
+  if (res.show_scaffold_panel === undefined) return res.message;
+  const next = activeScaffold(res);
+  useNumeraStore.getState().setActiveScaffold(next);
+  if (!next) return res.message;
+  // Prefer the step's own voice line; fall back to the message (§5.4).
+  return next.stepVoice ?? next.stepText ?? res.message;
+}
+
 function applyVisualCue(res: InteractionResponse): void {
   const cue = res.visual_cue;
   const show = cue?.show ?? res.show_visual_cue;
@@ -137,14 +159,17 @@ function syncBackendSession(response: {
   current_question: string | null;
   question_id: string | null;
 }): void {
-  useNumeraStore.setState({
-    currentPhase: response.current_phase,
-    activeQuestionId: response.question_id,
-    // Kept verbatim. This used to strip a leading "solve for x:" because the
-    // screens re-added it themselves — which silently mangled any question that
-    // wasn't a bare equation. The screens now decide presentation from the text
-    // itself (lib/questionText.ts), so the backend's wording must survive.
-    questionText: response.current_question?.trim() ?? '',
+  // Text is kept verbatim. This used to strip a leading "solve for x:" because
+  // the screens re-added it themselves — which silently mangled any question
+  // that wasn't a bare equation. The screens now decide presentation from the
+  // text itself (lib/questionText.ts), so the backend's wording must survive.
+  //
+  // Whether a null question clears the current one depends on the phase; see
+  // applyBackendPhase, which both transports share.
+  useNumeraStore.getState().applyBackendPhase({
+    phase: response.current_phase,
+    questionId: response.question_id,
+    questionText: response.current_question,
   });
 }
 
@@ -237,7 +262,8 @@ export function useDemoTutor() {
         if (res.current_phase) useNumeraStore.getState().setCurrentPhase(res.current_phase); // advance phase
         if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
         applyVisualCue(res); // backend may ask to show/hide the supporting visual
-        speakTutor(res.message); // voice the reply — same verbatim text shown in chat
+        const spoken = applyScaffold(res); // one authorised step, and what to say
+        speakTutor(spoken); // voice the reply — same words the student can read
         return res;
       } catch (err) {
         addTranscriptMessage({ role: 'ai', text: chatError(err, TUTOR_UNAVAILABLE) }); // surface the failure in the chat

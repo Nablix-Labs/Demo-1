@@ -10,7 +10,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import type { LearningPhase } from '@/lib/phases';
 import type { FlowStage } from '@/lib/flow';
 import { TOPICS } from '@/lib/topics';
-import { DEMO_CONCEPT_ID, type SessionRecord, type SessionReview, type SessionSummary } from '@/lib/api';
+import { DEMO_CONCEPT_ID, type ActiveScaffold, type SessionRecord, type SessionReview, type SessionSummary } from '@/lib/api';
 import { uid } from '@/lib/uid';
 
 // Sequential, human-readable student turn ids (voice contract §3): TURN-0001, …
@@ -201,6 +201,15 @@ export interface NumeraState {
   // Visual cue card — supporting guidance shown when the AI Engine flags a
   // mistake. `visualCueType` is the backend cue_type (picks which card renders);
   // `visualCueDescription` is the backend's instructional text. Session-scoped.
+  /**
+   * The single scaffold step the backend has authorised, or null.
+   *
+   * Holds `ActiveScaffold` — one step, no catalogue, no expected answer — so
+   * there is nothing tutor-only in student-visible state (Phase 2 handoff §9).
+   * Never persisted: support state belongs to the live session, and a stale
+   * step restored on reload would contradict the Student Model.
+   */
+  activeScaffold: ActiveScaffold | null;
   visualCueVisible: boolean;
   visualCueType: string | null;
   visualCueDescription: string | null;
@@ -282,6 +291,11 @@ export interface NumeraState {
   setActiveSlide: (n: number) => void;
   setTotalSlides: (n: number) => void;
   setQuestionText: (q: string) => void;
+  applyBackendPhase: (p: {
+    phase: string;
+    questionId: string | null;
+    questionText: string | null;
+  }) => void;
   setQuestionNumber: (n: number) => void;
   setActiveEquation: (conceptId: string, questionId: string, label?: string) => void;
   setCurrentPhase: (phase: string) => void;
@@ -300,6 +314,8 @@ export interface NumeraState {
    *  as the next previous_tutor_turn_id, and the backend gating for the next turn. */
   setTutorTurn: (tutorTurnId: string | null, gating: { expects: boolean; allow: boolean }) => void;
   setVisualCueVisible: (v: boolean) => void;
+  setActiveScaffold: (s: ActiveScaffold | null) => void;
+
   setVisualCue: (cue: { show: boolean; cueType?: string | null; description?: string | null }) => void;
   toggleVisualCue: () => void;
   addTranscriptMessage: (msg: Omit<TranscriptMessage, 'id' | 'timestamp'>) => void;
@@ -363,7 +379,7 @@ export interface NumeraState {
 const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
-  | 'setQuestionText' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'setTutorTurn'
+  | 'setQuestionText' | 'applyBackendPhase' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'setTutorTurn'
   | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue'
   | 'addTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript' | 'commitPartialTranscript'
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
@@ -371,7 +387,7 @@ const initial: Omit<
   | 'setStrokeColor' | 'setStrokeWidth' | 'addItem' | 'removeItem' | 'undo' | 'redo'
   | 'clearCanvas' | 'applyCanvasDraw' | 'clearTutorMarks'
   | 'setInputMode' | 'setTextInput' | 'setPanelSide' | 'togglePanelSide' | 'togglePanelCollapsed'
-  | 'toggleTranscript' | 'setToolbarPos' | 'toggleToolbarCollapsed' | 'setToolbarOrientation' | 'setMicButtonPos' | 'setCanvasGrid' | 'setTtsVoice'
+  | 'toggleTranscript' | 'setToolbarPos' | 'toggleToolbarCollapsed' | 'setToolbarOrientation' | 'setMicButtonPos' | 'setCanvasGrid' | 'setTtsVoice' | 'setActiveScaffold'
   | 'setCanvasExporter' | 'startGroupSession' | 'endGroupSession'
   | 'upsertParticipant' | 'removeParticipant' | 'setParticipantCursor'
   | 'addRemoteItem' | 'toggleLessonLearned' | 'setPracticeDone' | 'setStudentAge' | 'setStudentName'
@@ -407,6 +423,7 @@ const initial: Omit<
   lastTutorTurnId: null,
   expectsStudentResponse: true,
   allowVoiceInput: true,
+  activeScaffold: null as ActiveScaffold | null,
   visualCueVisible: false,
   visualCueType: null,
   visualCueDescription: null,
@@ -471,6 +488,36 @@ export const useNumeraStore = create<NumeraState>()(
   setActiveSlide: (activeSlide) => set({ activeSlide }),
   setTotalSlides: (totalSlides) => set({ totalSlides }),
   setQuestionText: (questionText) => set({ questionText }),
+
+  /**
+   * Apply the phase/question the backend just reported.
+   *
+   * Shared by both transports (useDemoTutor's REST sync and useWebSocket's
+   * tutor_response) because the rule below is subtle and they had drifted into
+   * two different wrong answers.
+   *
+   * The rule turns on whether the PHASE changed:
+   *
+   *   - Phase changed → take the backend's answer verbatim, null included.
+   *     Orientation genuinely has no question, and falling back to the previous
+   *     one left a finished diagnostic question on screen for the whole phase.
+   *
+   *   - Phase unchanged → a missing question does NOT erase the current one.
+   *     Mid-lesson replies are conversational and often carry no
+   *     `current_question`; treating that as "no question" blanked the canvas
+   *     while the student was still working on it (Manjusha, 2026-07-29).
+   */
+  applyBackendPhase: ({ phase, questionId, questionText }) =>
+    set((s) => {
+      const phaseChanged = phase !== s.currentPhase;
+      const text = questionText?.trim() ?? '';
+      return {
+        currentPhase: phase,
+        activeQuestionId:
+          phaseChanged || questionId !== null ? questionId : s.activeQuestionId,
+        questionText: text || (phaseChanged ? '' : s.questionText),
+      };
+    }),
   setQuestionNumber: (questionNumber) => set({ questionNumber }),
 
   // Switch the question the session runs on. Clearing sessionId makes the lesson
@@ -511,6 +558,8 @@ export const useNumeraStore = create<NumeraState>()(
     }),
 
   setVisualCueVisible: (visualCueVisible) => set({ visualCueVisible }),
+  setActiveScaffold: (activeScaffold) => set({ activeScaffold }),
+
   setVisualCue: ({ show, cueType = null, description = null }) =>
     set({ visualCueVisible: show, visualCueType: cueType, visualCueDescription: description }),
   toggleVisualCue: () => set((s) => ({ visualCueVisible: !s.visualCueVisible })),
@@ -533,26 +582,34 @@ export const useNumeraStore = create<NumeraState>()(
       })),
     }),
 
+  /**
+   * The live caption of what the student is saying.
+   *
+   * INVARIANT: at most one partial bubble exists at any time, and it is always
+   * last. Both actions below enforce it by dropping every existing partial
+   * before writing, reusing its id so the bubble is updated rather than
+   * remounted (which would flicker mid-sentence).
+   *
+   * The previous version only looked at `transcript[length - 1]`. If the tutor
+   * replied while a partial was still pending — which happens whenever speech
+   * is still being finalised as the reply lands — the last entry was the AI's
+   * message, the check failed, and the partial was orphaned: a grey
+   * "…transcribing" bubble stuck in the log forever, with the student's real
+   * words appended below it as a second bubble. Every turn after that added
+   * another pair (Manjusha's recording, 2026-07-29).
+   */
   updatePartialTranscript: (text) =>
     set((s) => {
-      const last = s.transcript[s.transcript.length - 1];
-      if (last?.partial) {
-        return {
-          transcript: [
-            ...s.transcript.slice(0, -1),
-            { ...last, text },
-          ],
-        };
-      }
+      const existing = s.transcript.find((m) => m.partial);
       return {
         transcript: [
-          ...s.transcript,
+          ...s.transcript.filter((m) => !m.partial),
           {
-            id: uid(),
+            id: existing?.id ?? uid(),
             role: 'student',
             text,
             partial: true,
-            timestamp: Date.now(),
+            timestamp: existing?.timestamp ?? Date.now(),
           },
         ],
       };
@@ -560,17 +617,17 @@ export const useNumeraStore = create<NumeraState>()(
 
   commitPartialTranscript: (text) =>
     set((s) => {
-      const last = s.transcript[s.transcript.length - 1];
-      // Finalize the in-place partial student bubble so the live words become the
-      // committed turn in the SAME box — no jump from a live caption to a fresh
-      // bubble. Falls back to appending when there's no partial to finalize.
-      if (last?.partial && last.role === 'student') {
-        return {
-          transcript: [...s.transcript.slice(0, -1), { ...last, text, partial: false }],
-        };
-      }
+      const existing = s.transcript.find((m) => m.partial);
       return {
-        transcript: [...s.transcript, { id: uid(), role: 'student', text, timestamp: Date.now() }],
+        transcript: [
+          ...s.transcript.filter((m) => !m.partial),
+          {
+            id: existing?.id ?? uid(),
+            role: 'student',
+            text,
+            timestamp: existing?.timestamp ?? Date.now(),
+          },
+        ],
       };
     }),
 
