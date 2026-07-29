@@ -14,7 +14,7 @@ import { createPortal } from 'react-dom';
 import { Volume2, X } from 'lucide-react';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
-import { providersForTier, providerById, VOICE_SAMPLE_TEXT } from '@/lib/voiceOptions';
+import { providersForTier, providerById, defaultVoiceForTier, VOICE_SAMPLE_TEXT } from '@/lib/voiceOptions';
 import { speakTutor } from '@/lib/tts';
 
 export default function VoicePicker() {
@@ -50,7 +50,24 @@ export default function VoicePicker() {
   }, [open]);
 
   const selected = ttsProvider ? providerById(ttsProvider) : undefined;
-  const triggerLabel = selected ? `${selected.label} · ${ttsVoice ?? 'default'}` : 'Backend default';
+
+  /**
+   * What "no selection" actually sounds like. Nothing picked no longer means
+   * "the server env default" — both transports resolve an unset selection to
+   * the tier's provider (see effectiveVoice in lib/tts.ts) — so the picker says
+   * which voice that is rather than describing it as a server setting.
+   */
+  const tierDefault = defaultVoiceForTier(tier);
+  const defaultLabel = tierDefault
+    ? `${providerById(tierDefault.provider)?.label ?? tierDefault.provider} · ${
+        providerById(tierDefault.provider)?.voices.find((v) => v.id === tierDefault.voice)?.label ??
+        tierDefault.voice
+      }`
+    : null;
+
+  const triggerLabel = selected
+    ? `${selected.label} · ${ttsVoice ?? 'default'}`
+    : defaultLabel ?? 'Default voice';
 
   const applyCustom = () => {
     const v = customVoice.trim();
@@ -112,8 +129,10 @@ export default function VoicePicker() {
               (!ttsProvider ? 'bg-reading-surface font-semibold text-ink' : 'hover:bg-reading-surface text-ink')
             }
           >
-            Backend default
-            <span className="block text-[10.5px] text-slate-blue">Whatever env is set to</span>
+            Default for your plan
+            <span className="block text-[10.5px] text-slate-blue">
+              {defaultLabel ?? 'Set by your subscription'}
+            </span>
           </button>
 
           {providers.map((p) => (

@@ -24,7 +24,7 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
-import { tutorAudioStream } from '@/lib/tts';
+import { tutorAudioStream, effectiveVoice } from '@/lib/tts';
 import { buildVoiceStreamUrl, voiceStreamingEnabled, allowAnonTutorCalls } from '@/lib/runtimeConfig';
 import { ANON_ACCESS_TOKEN, studentId } from '@/lib/api';
 
@@ -41,10 +41,11 @@ export function useWebSocket(sessionId: string | null) {
   const connect = useCallback(() => {
     if (!sessionId || !voiceStreamingEnabled) return;
 
-    const { ttsProvider, ttsVoice } = useNumeraStore.getState();
-    const ws = new WebSocket(
-      buildVoiceStreamUrl(sessionId, studentId(), { provider: ttsProvider, voice: ttsVoice }),
-    );
+    // Same resolver the REST path uses, so the streamed voice matches the one
+    // the student heard in the diagnostic. Passing the raw store values here
+    // sent nothing until the picker was opened, and the server then fell back
+    // to its env default — a different voice mid-session.
+    const ws = new WebSocket(buildVoiceStreamUrl(sessionId, studentId(), effectiveVoice()));
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -101,20 +102,17 @@ export function useWebSocket(sessionId: string | null) {
             // The voice server forwards the backend's phase state; keep the
             // store in sync so usePhaseRouting can follow phase changes.
             //
-            // Gated on the PHASE only. current_question is null whenever the new
-            // phase has no question (orientation), and requiring it to be a
-            // string dropped the whole update — so the phase change never
-            // reached the store and the routing never followed it. A null
-            // question is then taken as-is rather than falling back to the
-            // previous id, which is what left the orientation showing the
-            // question from the phase before it.
+            // Gated on the PHASE only: requiring current_question to be a string
+            // dropped the whole update, so the phase change never reached the
+            // store and the routing never followed it. What a null question then
+            // means depends on whether the phase moved — applyBackendPhase owns
+            // that rule, and both transports go through it.
             if (typeof msg.current_phase === 'string') {
-              const question = typeof msg.current_question === 'string' ? msg.current_question : null;
-              useNumeraStore.setState({
-                currentPhase: msg.current_phase as string,
-                activeQuestionId: (msg.question_id as string | null) ?? null,
-                // Verbatim — see the matching note in useDemoTutor.syncBackendSession.
-                questionText: question?.trim() ?? '',
+              useNumeraStore.getState().applyBackendPhase({
+                phase: msg.current_phase as string,
+                questionId: (msg.question_id as string | null) ?? null,
+                questionText:
+                  typeof msg.current_question === 'string' ? msg.current_question : null,
               });
             }
             tutorAudioStream.begin(); // reset the player; chunks are coming next

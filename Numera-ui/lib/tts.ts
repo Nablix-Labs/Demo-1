@@ -22,7 +22,7 @@
 
 import { useMicLevel } from '@/store/useMicLevel';
 import { useAuthStore } from '@/store/useAuthStore';
-import { alternateProvider, defaultVoiceForTier } from '@/lib/voiceOptions';
+import { defaultVoiceForTier } from '@/lib/voiceOptions';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { synthesizeSpeech } from '@/lib/api';
 
@@ -50,8 +50,32 @@ export function speakBrowser(text: string, onEnd?: () => void): void {
   window.speechSynthesis.speak(utterance);
 }
 
-// ── Backend engine (/voice/tts, OpenAI) with browser fallback ────────────────
+// ── Backend engine (/voice/tts) with browser fallback ───────────────────────
 const ttsApiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
+
+/**
+ * The provider/voice this student should be heard in, right now.
+ *
+ * THE single source of truth for both transports — REST `POST /voice/tts` and
+ * the `/voice/stream` WebSocket — so a student hears one voice across every
+ * phase. Resolve at call time rather than seeding the store at login: the tier
+ * is the server's to decide, and a value written into persisted state at login
+ * would outlive an upgrade or downgrade.
+ *
+ * A null selection means "whatever my plan gives me", NOT "whatever the server
+ * env is set to". That distinction is the bug this fixes: the WebSocket used to
+ * pass the raw store values through, so before anyone opened the voice picker
+ * it sent no tts_provider at all and guided practice fell back to the server
+ * default (OpenAI) while the diagnostic — which already applied the tier
+ * default — spoke as Cartesia or Inworld. Same student, two voices, one
+ * session (Manjusha, 2026-07-29).
+ */
+export function effectiveVoice(): { provider: string | null; voice: string | null } {
+  const { ttsProvider, ttsVoice } = useNumeraStore.getState();
+  if (ttsProvider) return { provider: ttsProvider, voice: ttsVoice };
+  const tierDefault = defaultVoiceForTier(useAuthStore.getState().tier);
+  return { provider: tierDefault?.provider ?? null, voice: tierDefault?.voice ?? null };
+}
 
 let currentAudio: HTMLAudioElement | null = null;
 let speakToken = 0; // invalidates in-flight TTS fetches when superseded/stopped
@@ -101,75 +125,81 @@ function playBase64Mp3(base64: string, onEnd?: () => void): void {
 }
 
 /**
- * Voice the tutor's reply: OpenAI audio via POST /voice/tts first, browser
- * speechSynthesis when the backend/provider fails (the text stays on screen
- * either way). Pass the exact text shown in chat so audio matches the words.
- */
-/**
- * Providers that have already failed this session.
+ * When each provider last failed.
  *
- * Without this the tier's provider is retried on EVERY utterance even once it's
- * clearly down — Inworld ran out of credits on 2026-07-28 and each reply burned
- * a 502 before falling through. One failure is enough to learn from; the set
- * resets on reload, so a provider coming back is picked up next session.
+ * Purpose is to stop hammering a provider that is genuinely down — Inworld ran
+ * out of credits on 2026-07-28 and every reply burned a 502 first. It is a
+ * COOL-OFF, not a blacklist: the previous version put the provider in a Set
+ * that nothing ever cleared, so a single transient 502 silenced the real voice
+ * for the rest of the page's life.
  */
-const deadProviders = new Set<string>();
+const failedAt = new Map<string, number>();
+const COOL_OFF_MS = 60_000;
 
+const coolingOff = (provider: string | null): boolean => {
+  if (!provider) return false;
+  const at = failedAt.get(provider);
+  return at !== undefined && Date.now() - at < COOL_OFF_MS;
+};
+
+/**
+ * Voice the tutor's reply: the student's own provider via POST /voice/tts,
+ * browser speechSynthesis only when that fails (the text stays on screen either
+ * way). Pass the exact text shown in chat so audio matches the words.
+ *
+ * ── Why there is no fallback to a different provider ────────────────────────
+ * There used to be one, and it was the bug. `alternateProvider` returned the
+ * first provider in the catalogue that wasn't the one that had just failed —
+ * OpenAI — so a single Inworld hiccup moved the student onto a completely
+ * different voice for the rest of the session, and marked Inworld dead so it
+ * never came back. Mid-lesson the tutor simply became someone else.
+ *
+ * The provider is a property of the subscription (Manjusha, 2026-07-29):
+ * premium is Cartesia, basic is Inworld, everywhere, end to end. So the retry
+ * is against the SAME provider, and if that fails we drop to the browser voice
+ * — audibly degraded, but honest, and it recovers on the next utterance once
+ * the cool-off passes. Switching a student to a voice their plan doesn't
+ * include is never the right answer.
+ */
 export function speakTutor(text: string, onEnd?: () => void): void {
   if (!text) { onEnd?.(); return; }
   stopTutorSpeech();
   if (!ttsApiEnabled()) { speakBrowser(text, onEnd); return; }
   const token = speakToken;
-  // Testing-only voice variant, read at call time so a change takes effect on the
-  // next reply without re-wiring callers (see lib/voiceOptions.ts).
-  // Fall back to the tier's provider when nothing is picked — sending no
-  // provider hits the backend's broken default and 502s (see
-  // defaultVoiceForTier), which is what put students on the browser voice.
-  const { ttsProvider, ttsVoice } = useNumeraStore.getState();
-  const fallback = ttsProvider ? null : defaultVoiceForTier(useAuthStore.getState().tier);
-  let provider = ttsProvider ?? fallback?.provider ?? null;
-  let voice = ttsVoice ?? fallback?.voice ?? null;
-  // Skip a provider already known to be down this session.
-  if (provider && deadProviders.has(provider)) {
-    const alt = alternateProvider(provider, deadProviders);
-    provider = alt?.provider ?? null;
-    voice = alt?.voice ?? null;
-  }
-  /**
-   * Try one provider, then a real alternative, and only then the browser.
-   *
-   * A provider can fail for reasons the frontend can't see or fix — Inworld ran
-   * out of credits on 2026-07-28 and returned 502 for every basic-tier reply,
-   * putting students on the browser's robotic voice. One retry against another
-   * configured provider keeps the tutor sounding like the tutor, and costs a
-   * single extra request only when something is actually broken.
-   */
-  const attempt = (p: string | null, v: string | null, allowRetry: boolean): void => {
-    synthesizeSpeech(text, { provider: p, voice: v })
+  const { provider, voice } = effectiveVoice();
+
+  // Don't spend a request on a provider that failed moments ago.
+  if (coolingOff(provider)) { speakBrowser(text, onEnd); return; }
+
+  const attempt = (allowRetry: boolean): void => {
+    synthesizeSpeech(text, { provider, voice })
       .then((audioBase64) => {
         if (token !== speakToken) return; // superseded while fetching
-        if (audioBase64) { playBase64Mp3(audioBase64, onEnd); return; }
-        giveUp(p, allowRetry);
+        if (audioBase64) {
+          failedAt.delete(provider ?? '');
+          playBase64Mp3(audioBase64, onEnd);
+          return;
+        }
+        giveUp(allowRetry);
       })
       .catch(() => {
         if (token !== speakToken) return;
-        giveUp(p, allowRetry);
+        giveUp(allowRetry);
       });
   };
 
-  const giveUp = (failed: string | null, allowRetry: boolean): void => {
-    if (failed) deadProviders.add(failed);
-    const alt = allowRetry ? alternateProvider(failed, deadProviders) : null;
-    if (alt) {
-      console.warn(`[tts] ${failed ?? 'default'} failed; retrying with ${alt.provider}`);
-      attempt(alt.provider, alt.voice, false);
+  const giveUp = (allowRetry: boolean): void => {
+    if (allowRetry) {
+      console.warn(`[tts] ${provider ?? 'default'} failed; retrying once`);
+      attempt(false);
       return;
     }
-    console.warn('[tts] no provider available; falling back to browser speech');
+    if (provider) failedAt.set(provider, Date.now());
+    console.warn(`[tts] ${provider ?? 'default'} unavailable; using browser speech`);
     speakBrowser(text, onEnd);
   };
 
-  attempt(provider, voice, true);
+  attempt(true);
 }
 
 function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
