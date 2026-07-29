@@ -120,6 +120,26 @@ strategy_rules:
   stuck_scaffold_min_count: 2
   scaffold_min_attempt_count: 3
   worked_example_min_attempt_count: 4
+scaffold_response_rules:
+  aliases:
+    "½":
+      - "1/2"
+      - "one half"
+      - "half"
+    "⅓":
+      - "1/3"
+      - "one third"
+    "before x":
+      - "in front of x"
+      - "before the letter"
+      - "in front of the letter"
+    "½x":
+      - "1/2 x"
+      - "one half x"
+      - "half x"
+    "⅓y":
+      - "1/3 y"
+      - "one third y"
 visual_cue_rules:
   enabled_response_strategies:
     - GUIDED_HINT
@@ -300,4 +320,5 @@ messages:
   QUESTION_COMPLETE_ACKNOWLEDGEMENT: You are welcome. This question is complete, so let us continue to the next question.
   CONTEXTUAL_ACKNOWLEDGEMENT: Exactly. Let us move to the next question.
   QUESTION_ALREADY_COMPLETE: This question is already complete. Let us continue to the next question.
+  SCAFFOLD_STEP_RETRY: "Let’s stay with this step: {step}"
   SCAFFOLD_ORIGINAL_RETRY: Now use those steps on the original question. What would you try first?

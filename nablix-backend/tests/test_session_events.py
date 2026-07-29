@@ -5,10 +5,43 @@ from app.adapters import provider, student_model
 from app.core.config import Settings
 from app.core.exceptions import AdapterError
 from app.main import app
-from app.services import session_service
+from app.ai_engine.classifier_config import load_classifier_rules
+from app.services import interaction_service, session_service
 
 
 client = TestClient(app, headers={"Authorization": "Bearer test-token"})
+
+
+def test_scaffold_response_matching_accepts_safe_variants() -> None:
+    rules = load_classifier_rules()
+    accepted = [
+        ("½", "½"),
+        ("1/2", "½"),
+        ("one half is multiplying x", "½"),
+        ("it is in front of x", "Before x"),
+        ("1/2x", "½x"),
+        ("on both sides", "Both sides"),
+    ]
+    rejected = [
+        ("1", "½"),
+        ("before x", "½"),
+        ("x/2", "½x"),
+    ]
+
+    for student_message, expected_response in accepted:
+        assert interaction_service._scaffold_response_is_correct(
+            student_message,
+            expected_response,
+            "INCORRECT",
+            rules,
+        )
+    for student_message, expected_response in rejected:
+        assert not interaction_service._scaffold_response_is_correct(
+            student_message,
+            expected_response,
+            "PARTIALLY_CORRECT",
+            rules,
+        )
 
 
 def _diagnostic_started_response() -> dict[str, object]:
@@ -499,6 +532,16 @@ def _event_response(
                     "step_id": "SCF-T02-M1-S2",
                     "prompt": "What should you subtract from both sides?",
                     "expected_response": "4",
+                },
+                {
+                    "step_id": "SCF-T02-M1-S3",
+                    "prompt": "Where should you subtract 4?",
+                    "expected_response": "Both sides",
+                },
+                {
+                    "step_id": "SCF-T02-M1-S4",
+                    "prompt": "What is the resulting value of x?",
+                    "expected_response": "x = 5",
                 }
             ],
             "retry_same_question": True,
@@ -775,6 +818,7 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
                 "Which operation should you undo first?"
             )
             assert stuck.json()["current_scaffold_step_id"] == "SCF-T02-M1-S1"
+            assert stuck.json()["message"] == "Which operation should you undo first?"
         assert "scaffold_expected_response" not in stuck.json()
         assert client.get(f"/session/{session_id}").json()["stuck_count"] == (
             expected_stuck_count
@@ -803,6 +847,9 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert wrong_scaffold_step.json()["scaffold_step_text"] == (
         "Which operation should you undo first?"
     )
+    assert wrong_scaffold_step.json()["message"] == (
+        "Let’s stay with this step: Which operation should you undo first?"
+    )
 
     next_scaffold_step = client.post(
         "/interaction",
@@ -822,12 +869,54 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert len(events) == scaffold_event_count
     assert next_scaffold_step.json()["current_scaffold_step_id"] == "SCF-T02-M1-S2"
     assert next_scaffold_step.json()["scaffold_step_number"] == 2
-    assert next_scaffold_step.json()["total_scaffold_steps"] == 2
+    assert next_scaffold_step.json()["total_scaffold_steps"] == 4
     assert next_scaffold_step.json()["scaffold_step_text"] == (
         "What should you subtract from both sides?"
     )
     assert next_scaffold_step.json()["scaffold_step_voice"] == (
         "What should you subtract from both sides?"
+    )
+
+    third_scaffold_step = client.post(
+        "/interaction",
+        json={
+            "session_id": session_id,
+            "student_id": "ST001",
+            "interaction_type": "ANSWER_SUBMISSION",
+            "input_source": "TEXT",
+            "text_input": "4",
+            "current_phase": "GUIDED_PRACTICE",
+            "concept_id": "ALG_LINEAR_ONE_STEP",
+            "question_id": "Q-T02-004",
+            "hint_count": 0,
+        },
+    )
+    assert third_scaffold_step.status_code == 200
+    assert third_scaffold_step.json()["current_scaffold_step_id"] == "SCF-T02-M1-S3"
+    assert third_scaffold_step.json()["scaffold_step_number"] == 3
+    assert third_scaffold_step.json()["scaffold_step_text"] == (
+        "Where should you subtract 4?"
+    )
+
+    fourth_scaffold_step = client.post(
+        "/interaction",
+        json={
+            "session_id": session_id,
+            "student_id": "ST001",
+            "interaction_type": "ANSWER_SUBMISSION",
+            "input_source": "TEXT",
+            "text_input": "on both sides",
+            "current_phase": "GUIDED_PRACTICE",
+            "concept_id": "ALG_LINEAR_ONE_STEP",
+            "question_id": "Q-T02-004",
+            "hint_count": 0,
+        },
+    )
+    assert fourth_scaffold_step.status_code == 200
+    assert fourth_scaffold_step.json()["current_scaffold_step_id"] == "SCF-T02-M1-S4"
+    assert fourth_scaffold_step.json()["scaffold_step_number"] == 4
+    assert fourth_scaffold_step.json()["scaffold_step_text"] == (
+        "What is the resulting value of x?"
     )
 
     completed_scaffold = client.post(
@@ -837,7 +926,7 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
             "student_id": "ST001",
             "interaction_type": "ANSWER_SUBMISSION",
             "input_source": "TEXT",
-            "text_input": "4",
+            "text_input": "x = 5",
             "current_phase": "GUIDED_PRACTICE",
             "concept_id": "ALG_LINEAR_ONE_STEP",
             "question_id": "Q-T02-004",

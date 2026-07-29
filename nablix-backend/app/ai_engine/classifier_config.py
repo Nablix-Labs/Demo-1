@@ -72,6 +72,10 @@ class StrategyRulesConfig(StrictSchema):
     worked_example_min_attempt_count: int = Field(ge=1)
 
 
+class ScaffoldResponseRulesConfig(StrictSchema):
+    aliases: dict[str, list[str]]
+
+
 class VisualCueRuleConfig(StrictSchema):
     cue_type: VisualCueType
     description: str
@@ -147,6 +151,7 @@ class MessageConfig(StrictSchema):
     QUESTION_COMPLETE_ACKNOWLEDGEMENT: str
     CONTEXTUAL_ACKNOWLEDGEMENT: str
     QUESTION_ALREADY_COMPLETE: str
+    SCAFFOLD_STEP_RETRY: str
     SCAFFOLD_ORIGINAL_RETRY: str
 
 
@@ -159,6 +164,7 @@ class ClassifierRulesConfig(StrictSchema):
     error_patterns: ErrorPatternsConfig
     diagnostic_cases: DiagnosticCasesConfig
     strategy_rules: StrategyRulesConfig
+    scaffold_response_rules: ScaffoldResponseRulesConfig
     visual_cue_rules: VisualCueRulesConfig
     answer_reveal_guardrail: AnswerRevealGuardrailConfig
     conversation_rules: ConversationRulesConfig
