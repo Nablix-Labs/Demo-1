@@ -99,7 +99,7 @@ def test_interaction_returns_session_view() -> None:
     assert body["show_visual_cue"] is False
     assert body["visual_cue"] is None
     assert body["show_scaffold_panel"] is False
-    assert body["scaffold_steps"] == []
+    assert "scaffold_steps" not in body
     assert body["allow_text_input"] is True
     assert body["allow_voice_input"] is True
     assert body["current_question"]
@@ -571,7 +571,7 @@ def test_interaction_safety_failure_short_circuits_pipeline() -> None:
     body = response.json()
     assert body["message"] == "Let's pause for a moment and come back to the maths when you're ready."
     assert body["show_visual_cue"] is False
-    assert body["scaffold_steps"] == []
+    assert "scaffold_steps" not in body
 
 
 class _FakeRAGAdapter:
@@ -760,7 +760,7 @@ def test_interaction_keeps_student_model_authoritative_for_phase(monkeypatch) ->
     assert body["show_visual_cue"] is True
     assert body["visual_cue"]["cue_type"] == "EQUATION_BALANCE"
     assert body["show_scaffold_panel"] is True
-    assert body["scaffold_steps"] == ["Divide both sides by 2."]
+    assert "scaffold_steps" not in body
     assert len(student_model.events) == 1
     assert student_model.events[0].event_type == "PARTIAL_ATTEMPT"
 

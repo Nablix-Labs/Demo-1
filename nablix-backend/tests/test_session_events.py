@@ -765,15 +765,15 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
         assert stuck.json()["attempt_count"] == 0
         if expected_stuck_count == 1:
             assert len(events) == event_count_before_stuck
-            assert stuck.json()["scaffold_steps"] == []
+            assert "scaffold_steps" not in stuck.json()
             assert stuck.json()["current_scaffold_step_id"] is None
         else:
             assert len(events) == event_count_before_stuck + 1
             assert events[-1]["event_type"] == "GUIDED_SUPPORT_ESCALATION_REQUIRED"
             assert events[-1]["micro_skill_id"] == "T02.M1"
-            assert stuck.json()["scaffold_steps"] == [
+            assert stuck.json()["scaffold_step_text"] == (
                 "Which operation should you undo first?"
-            ]
+            )
             assert stuck.json()["current_scaffold_step_id"] == "SCF-T02-M1-S1"
         assert "scaffold_expected_response" not in stuck.json()
         assert client.get(f"/session/{session_id}").json()["stuck_count"] == (
@@ -799,9 +799,10 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert len(events) == scaffold_event_count
     assert wrong_scaffold_step.json()["current_scaffold_step_id"] == "SCF-T02-M1-S1"
     assert wrong_scaffold_step.json()["scaffold_step_number"] == 1
-    assert wrong_scaffold_step.json()["scaffold_steps"] == [
+    assert "scaffold_steps" not in wrong_scaffold_step.json()
+    assert wrong_scaffold_step.json()["scaffold_step_text"] == (
         "Which operation should you undo first?"
-    ]
+    )
 
     next_scaffold_step = client.post(
         "/interaction",
@@ -821,7 +822,7 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert len(events) == scaffold_event_count
     assert next_scaffold_step.json()["current_scaffold_step_id"] == "SCF-T02-M1-S2"
     assert next_scaffold_step.json()["scaffold_step_number"] == 2
-    assert next_scaffold_step.json()["total_steps_estimated"] == 2
+    assert next_scaffold_step.json()["total_scaffold_steps"] == 2
     assert next_scaffold_step.json()["scaffold_step_text"] == (
         "What should you subtract from both sides?"
     )
@@ -847,7 +848,7 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert len(events) == scaffold_event_count
     assert completed_scaffold.json()["current_scaffold_step_id"] is None
     assert completed_scaffold.json()["show_scaffold_panel"] is False
-    assert completed_scaffold.json()["scaffold_steps"] == []
+    assert "scaffold_steps" not in completed_scaffold.json()
     assert completed_scaffold.json()["message"] == (
         "Now use those steps on the original question. What would you try first?"
     )
@@ -912,7 +913,7 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert events[-1]["event_type"] == "INCORRECT_ATTEMPT"
     assert events[-1]["micro_skill_ids"] == ["T02.M1"]
     assert guided_incorrect.json()["show_scaffold_panel"] is False
-    assert guided_incorrect.json()["scaffold_steps"] == []
+    assert "scaffold_steps" not in guided_incorrect.json()
 
     guided = client.post(
         "/interaction",

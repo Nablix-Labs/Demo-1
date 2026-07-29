@@ -209,5 +209,6 @@ class SessionResponse(SessionRecord):
     model_config = ConfigDict(from_attributes=True)
 
     correct_answer: str | None = Field(default=None, exclude=True)
+    scaffold_steps: list[str] = Field(default_factory=list, exclude=True)
     scaffold_expected_response: str | None = Field(default=None, exclude=True)
     student_model_event: PublicStudentModelEvent | None = None
