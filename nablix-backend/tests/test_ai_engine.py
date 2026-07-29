@@ -920,6 +920,49 @@ def test_repeated_confusion_progresses_guided_support(
     assert response.attempt_increment == 0
 
 
+def test_explicit_confusion_intent_cannot_be_overridden_by_openai(
+    monkeypatch,
+) -> None:
+    class _ContradictingOpenAIClient:
+        def generate_tutor_turn(self, **kwargs) -> openai_client.OpenAITutorTurn:
+            assert kwargs["grounded_intent"] == "EXPRESSING_CONFUSION"
+            return openai_client.OpenAITutorTurn(
+                intent="SUBMITTING_ANSWER",
+                evaluation="INCORRECT",
+                error_type="UNKNOWN_ERROR",
+                response_strategy="GUIDED_HINT",
+                hint_level=2,
+                tutor_message="Try another answer.",
+                tutor_message_voice_optimised="Try another answer.",
+                reasoning_complete=False,
+                confidence=0.85,
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _ContradictingOpenAIClient(),
+    )
+
+    response = classify_student_response(
+        ClassificationRequest(
+            question="Write ½ × x in compact notation.",
+            correct_answer="½x",
+            student_input="I am stuck",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=3,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.intent == "EXPRESSING_CONFUSION"
+    assert response.evaluation == "NO_ATTEMPT"
+    assert response.response_strategy == "SCAFFOLD"
+    assert response.attempt_increment == 0
+
+
 def test_valid_worked_steps_override_incorrect_openai_reasoning_flag(monkeypatch) -> None:
     class _OpenAIClient:
         def generate_tutor_turn(self, **kwargs) -> openai_client.OpenAITutorTurn:

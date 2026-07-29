@@ -341,12 +341,18 @@ def build_openai_tutor_decision(
 ) -> TutorDecision:
     intent = (
         deterministic_intent
-        if deterministic_evaluation == "CORRECT"
+        if (
+            deterministic_intent != "SUBMITTING_ANSWER"
+            or deterministic_evaluation == "CORRECT"
+        )
         else openai_turn.intent
     )
     evaluation = (
         deterministic_evaluation
-        if authoritative_verification
+        if (
+            deterministic_intent != "SUBMITTING_ANSWER"
+            or authoritative_verification
+        )
         else (
             "CORRECT"
             if deterministic_evaluation == "CORRECT"
