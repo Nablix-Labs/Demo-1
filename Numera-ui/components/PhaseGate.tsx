@@ -14,17 +14,19 @@ import { Lock, ArrowRight } from 'lucide-react';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { PHASE_META, missingPrereqs, type LearningPhase } from '@/lib/phases';
 import { Skeleton } from '@/components/PageShell';
+import { CenteredScreen, ScreenIcon } from '@/components/CenteredScreen';
+import { LockedMark } from '@/components/ScreenMarks';
 
 function GateSkeleton() {
   return (
-    <main className="flex-1 min-w-0 flex items-center justify-center bg-white p-8" aria-busy="true" aria-label="Loading">
-      <div className="w-[460px] max-w-full flex flex-col items-center gap-4">
-        <Skeleton className="w-12 h-12 rounded-xl" />
+    <CenteredScreen label="Loading" busy>
+      <div className="flex flex-col items-center gap-4">
+        <Skeleton className="w-[220px] h-[220px] rounded-3xl" />
         <Skeleton className="w-48 h-5" />
         <Skeleton className="w-72 h-3" />
         <Skeleton className="w-full h-12 rounded-md mt-2" />
       </div>
-    </main>
+    </CenteredScreen>
   );
 }
 
@@ -74,11 +76,9 @@ export default function PhaseGate({
   const here = PHASE_META[phase];
 
   return (
-    <main className="flex-1 min-w-0 flex items-center justify-center bg-white p-8" aria-label={`${here.label} locked`}>
-      <div className="w-[460px] max-w-full text-center">
-        <div className="w-12 h-12 mx-auto rounded-xl border border-muted-gray bg-reading-surface text-slate-blue flex items-center justify-center mb-4">
-          <Lock size={20} strokeWidth={1.8} />
-        </div>
+    <CenteredScreen label={`${here.label} locked`}>
+      <div>
+        <ScreenIcon mark={LockedMark} />
         <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-1">{here.label} locked</div>
         <h1 className="text-[22px] font-semibold text-ink">Finish {next.label.toLowerCase()} first</h1>
         <p className="text-[13px] text-slate-blue mt-2 leading-relaxed">{next.blurb}</p>
@@ -98,6 +98,6 @@ export default function PhaseGate({
           Continue anyway
         </button>
       </div>
-    </main>
+    </CenteredScreen>
   );
 }

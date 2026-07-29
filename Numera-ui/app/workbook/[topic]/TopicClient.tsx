@@ -48,7 +48,7 @@ export default function TopicClient({ topicId }: { topicId: string }) {
         </Link>
       }
     >
-      <div className="flex flex-col gap-7 max-w-3xl">
+      <div className="flex flex-col gap-7">
         {subtopics.length === 0 && (
           <EmptyState
             icon={<BookOpen size={20} strokeWidth={1.6} />}

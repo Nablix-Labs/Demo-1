@@ -195,7 +195,9 @@ function MockOrientation({ topicId }: { topicId: string }) {
       </header>
 
       <div className="flex-1 overflow-y-auto flex items-center justify-center p-8">
-        <div className={step === 'check' ? 'w-[900px] max-w-full' : 'w-[640px] max-w-full'}>
+        {/* Matches the backend branch below — the video and canvas are the
+            content, so they get the width. */}
+        <div className="w-[min(1180px,98vh)] max-w-full">
           {/* ── Step 2: concept check — the tutor writes, the student watches ── */}
           {step === 'check' && check && (
             <div className="lg-anim-rise">
@@ -647,8 +649,12 @@ function BackendOrientation({ topicId }: { topicId: string }) {
         </Link>
       </header>
 
+      {/* The video and the worked-example canvas are the content here, not
+          illustrations beside it — at 760px they sat in a third of a laptop
+          screen with the rest empty. Both are width-driven (16:9 video, the
+          canvas matches), so widening the column is what makes them bigger. */}
       <div className="flex-1 overflow-y-auto flex justify-center p-8">
-        <div className="w-[760px] max-w-full">
+        <div className="w-[min(1180px,98vh)] max-w-full">
           {status === 'loading' && (
             <div aria-busy="true">
               <div className="relative aspect-video w-full overflow-hidden rounded-xl border border-muted-gray">

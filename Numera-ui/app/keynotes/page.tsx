@@ -10,29 +10,23 @@ import { useCallback, useState } from 'react';
 import { Volume2, Square, Sparkles, Flag } from 'lucide-react';
 import PageShell, { Chip } from '@/components/PageShell';
 import { KEY_NOTES, noteToSpeech, type KeyNote } from '@/lib/keynotes';
-
-function speak(text: string, onEnd: () => void) {
-  if (typeof window === 'undefined' || !('speechSynthesis' in window)) { onEnd(); return; }
-  window.speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(text);
-  u.rate = 0.98;
-  u.onend = onEnd;
-  u.onerror = onEnd;
-  window.speechSynthesis.speak(u);
-}
+import { speakTutor, stopTutorSpeech } from '@/lib/tts';
 
 export default function KeyNotesPage() {
   const [speakingId, setSpeakingId] = useState<string | null>(null);
 
   const stop = useCallback(() => {
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();
+    stopTutorSpeech();
     setSpeakingId(null);
   }, []);
 
   const toggle = useCallback((n: KeyNote) => {
     if (speakingId === n.id) { stop(); return; }
     setSpeakingId(n.id);
-    speak(noteToSpeech(n), () => setSpeakingId(null));
+    // The tutor's own voice, not the browser's. This page used to call
+    // speechSynthesis directly, so revision notes were read out in a robotic
+    // voice while every other phase used the student's tier provider.
+    speakTutor(noteToSpeech(n), () => setSpeakingId(null));
   }, [speakingId, stop]);
 
   return (
@@ -41,7 +35,7 @@ export default function KeyNotesPage() {
       subtitle="Quick revision from today’s session — read before your exam."
       action={<Chip tone="outline">{KEY_NOTES.length} topics</Chip>}
     >
-      <div className="flex flex-col gap-5 max-w-3xl">
+      <div className="flex flex-col gap-5">
         {KEY_NOTES.map((n) => (
           <article key={n.id} className="rounded-xl border border-muted-gray bg-white overflow-hidden">
             {/* header */}

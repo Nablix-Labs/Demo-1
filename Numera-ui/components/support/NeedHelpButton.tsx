@@ -24,7 +24,7 @@ export default function NeedHelpButton() {
       onClick={openSupport}
       aria-label="Open Nablix Assist support"
       data-support-id="need-help"
-      className="lg-sheet lg-anim-pop group fixed bottom-24 right-4 z-[60] rounded-full pl-2 py-2 flex items-center gap-2.5
+      className="lg-sheet lg-anim-pop group fixed bottom-6 right-4 z-[60] rounded-full pl-2 py-2 flex items-center gap-2.5
                  text-ink text-[12.5px] font-semibold tracking-[0.1px]
                  transition-[transform,filter] duration-200 ease-out
                  hover:-translate-y-0.5 hover:brightness-[1.04] active:translate-y-0 active:scale-[0.97]

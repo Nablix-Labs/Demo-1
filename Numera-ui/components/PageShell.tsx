@@ -7,6 +7,16 @@
 import type { ReactNode } from 'react';
 import { cn } from '@/lib/cn';
 
+/**
+ * The measure every page on this shell shares.
+ *
+ * Wide enough that a worksheet or a topic list fills a laptop screen instead of
+ * hugging the left edge, and capped so lines of prose stay readable on a large
+ * monitor. Centred, because content stranded in the top-left corner of an
+ * otherwise empty page was the thing that made these screens look unfinished.
+ */
+const MEASURE = 'mx-auto w-full max-w-[1080px]';
+
 export default function PageShell({
   title,
   subtitle,
@@ -20,14 +30,24 @@ export default function PageShell({
 }) {
   return (
     <main className="lg-glass flex-1 min-w-0 flex flex-col rounded-2xl m-2 overflow-hidden" aria-label={title}>
-      <header className="flex items-end justify-between gap-4 px-8 py-6 border-b border-white/40 flex-shrink-0">
-        <div>
-          <h1 className="text-[22px] font-semibold text-ink leading-tight">{title}</h1>
-          {subtitle && <p className="text-[12px] text-slate-blue mt-1">{subtitle}</p>}
+      {/* Header and body share one centred measure. Previously the header ran
+          the full width while pages set their own (usually narrower) max-width,
+          so the title floated far left of the content it belonged to and the
+          whole page hung off the top-left corner of a wide screen. */}
+      <header className="border-b border-white/40 px-10 py-8 flex-shrink-0">
+        <div className={cn(MEASURE, 'flex items-end justify-between gap-4')}>
+          <div>
+            <h1 className="text-[30px] font-semibold text-ink leading-[1.15] tracking-[-0.02em]">
+              {title}
+            </h1>
+            {subtitle && <p className="text-[14px] text-slate-blue mt-1.5">{subtitle}</p>}
+          </div>
+          {action}
         </div>
-        {action}
       </header>
-      <div className="flex-1 overflow-y-auto px-8 py-7">{children}</div>
+      <div className="flex-1 overflow-y-auto px-10 py-9">
+        <div className={MEASURE}>{children}</div>
+      </div>
     </main>
   );
 }

@@ -33,6 +33,8 @@ import {
 } from '@/lib/api';
 import { speakTutor, stopTutorSpeech } from '@/lib/tts';
 import { cn } from '@/lib/cn';
+import { CenteredScreen, ScreenIcon } from '@/components/CenteredScreen';
+import { CelebrationMark, PlacementMark, ProblemMark } from '@/components/ScreenMarks';
 
 const apiEnabled = Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
@@ -256,9 +258,7 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
     return (
       <Centered>
         <div className="text-center" aria-busy="true">
-          <div className="w-12 h-12 mx-auto rounded-xl bg-focus-navy text-white flex items-center justify-center mb-4">
-            <Compass size={22} strokeWidth={1.8} />
-          </div>
+          <ScreenIcon mark={PlacementMark} />
           <h1 className="text-[20px] font-semibold text-ink">
             {status === 'submitting' ? 'Working out where to start you' : 'Getting your check ready'}
           </h1>
@@ -272,9 +272,7 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
     return (
       <Centered>
         <div className="text-center">
-          <div className="w-12 h-12 mx-auto rounded-xl border border-muted-gray bg-reading-surface text-slate-blue flex items-center justify-center mb-4">
-            <AlertTriangle size={22} strokeWidth={1.8} />
-          </div>
+          <ScreenIcon mark={ProblemMark} />
           <h1 className="text-[20px] font-semibold text-ink">Couldn&apos;t start the check</h1>
           <p className="text-[13px] text-slate-blue mt-2 leading-relaxed">{error}</p>
           <button
@@ -312,14 +310,16 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
           {question.student_view.question_text}
         </h2>
         {error && <p className="text-[12.5px] text-action-orange mb-3">{error}</p>}
-        <div className="flex flex-col gap-2.5">
+        <div className="flex flex-col gap-3.5">
           {question.student_view.options.map((opt) => (
             <button
               key={opt.option_id}
               onClick={() => choose(question, opt.option_id)}
               className={cn(
-                'flex items-center justify-between rounded-lg border px-4 py-3 text-left text-[14px] transition-colors font-[Cambria_Math,Georgia,serif]',
-                picked === opt.option_id ? 'border-focus-navy bg-reading-surface' : 'border-muted-gray hover:border-focus-navy'
+                'flex items-center justify-between rounded-xl border-[3px] bg-white px-6 py-5 text-left text-[19px] font-semibold transition-colors font-[Cambria_Math,Georgia,serif]',
+                picked === opt.option_id
+                  ? 'border-ink bg-reading-surface text-ink'
+                  : 'border-ink/85 text-ink hover:border-ink hover:bg-reading-surface'
               )}
             >
               {opt.text}
@@ -349,11 +349,7 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
 }
 
 function Centered({ children }: { children: React.ReactNode }) {
-  return (
-    <main className="flex-1 min-w-0 flex items-center justify-center bg-white p-8" aria-label="Topic check">
-      <div className="w-[460px] max-w-full">{children}</div>
-    </main>
-  );
+  return <CenteredScreen label="Topic check">{children}</CenteredScreen>;
 }
 
 // ─── Mock (no backend) ───────────────────────────────────────────────────────
@@ -384,9 +380,7 @@ function MockDiagnostic({ topicId }: { topicId: string }) {
     <Centered>
       {step === 'intro' && (
         <div className="text-center">
-          <div className="w-12 h-12 mx-auto rounded-xl bg-focus-navy text-white flex items-center justify-center mb-4">
-            <Compass size={22} strokeWidth={1.8} />
-          </div>
+          <ScreenIcon mark={PlacementMark} />
           <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-1">New topic · {topic.title}</div>
           <h1 className="text-[22px] font-semibold text-ink">Quick check before we start</h1>
           <p className="text-[13px] text-slate-blue mt-2 leading-relaxed">
@@ -407,14 +401,16 @@ function MockDiagnostic({ topicId }: { topicId: string }) {
           </div>
           <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-2">Question {i + 1} of {questions.length}</div>
           <h2 className="text-[20px] font-semibold text-ink font-[Cambria_Math,Georgia,serif] mb-5">{questions[i].prompt}</h2>
-          <div className="flex flex-col gap-2.5">
+          <div className="flex flex-col gap-3.5">
             {questions[i].options.map((opt, idx) => (
               <button
                 key={opt}
                 onClick={() => picked === null && answer(idx)}
                 className={cn(
-                  'flex items-center justify-between rounded-lg border px-4 py-3 text-left text-[14px] transition-colors font-[Cambria_Math,Georgia,serif]',
-                  picked === idx ? 'border-focus-navy bg-reading-surface' : 'border-muted-gray hover:border-muted-gray'
+                  'flex items-center justify-between rounded-xl border-[3px] bg-white px-6 py-5 text-left text-[19px] font-semibold transition-colors font-[Cambria_Math,Georgia,serif]',
+                  picked === idx
+                    ? 'border-ink bg-reading-surface text-ink'
+                    : 'border-ink/85 text-ink hover:border-ink hover:bg-reading-surface'
                 )}
               >
                 {opt}
@@ -427,9 +423,7 @@ function MockDiagnostic({ topicId }: { topicId: string }) {
 
       {step === 'result' && (
         <div className="text-center">
-          <div className="w-12 h-12 mx-auto rounded-xl bg-focus-navy text-white flex items-center justify-center mb-4">
-            <Check size={22} strokeWidth={2} />
-          </div>
+          <ScreenIcon mark={CelebrationMark} />
           <h1 className="text-[22px] font-semibold text-ink">Ready to begin</h1>
           <p className="text-[13px] text-slate-blue mt-2">
             {ready

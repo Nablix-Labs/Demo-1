@@ -24,7 +24,7 @@ export default function NotificationsPage() {
       title="Notifications"
       subtitle={unread > 0 ? `${unread} unread` : 'You’re all caught up.'}
     >
-      <div className="flex flex-col gap-2.5 max-w-2xl">
+      <div className="flex flex-col gap-2.5">
         {NOTES.map((n) => {
           const Icon = n.icon;
           return (

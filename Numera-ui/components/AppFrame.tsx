@@ -23,6 +23,22 @@ const PRE_AUTH_ROUTES = ['/login', '/onboard', '/consent', '/restricted'];
 
 const FOCUS_ROUTES = ['/onboard', '/diagnostic', '/orientation', '/teach', '/complete', '/consent', '/login', '/restricted'];
 
+/**
+ * Routes where a lesson is actually in progress.
+ *
+ * The tool rail is hidden here. Not for tidiness — it does not work. Routing
+ * follows the backend's current_phase and usePhaseRouting re-asserts it on every
+ * path change, so a student who clicks Workbook mid-lesson is pushed back to the
+ * lesson within a second. Verified live on 2026-07-29: Workbook, Key Notes and
+ * History all bounced straight back to `/`.
+ *
+ * Eleven controls that visibly do nothing are worse than no controls, so the
+ * rail now appears only where a student can genuinely go somewhere — between
+ * lessons, on the library screens. The learning flow is a flow; the rail is for
+ * the places either side of it.
+ */
+const TUTORING_ROUTES = ['/', '/practice'];
+
 const ToolRail = dynamic(() => import('./ToolRail'), { ssr: false });
 const MediaPanel = dynamic(() => import('./MediaPanel'), { ssr: false });
 const VoicePicker = dynamic(() => import('./VoicePicker'), { ssr: false });
@@ -121,10 +137,11 @@ export default function AppFrame({ children }: { children: ReactNode }) {
   // The AI tutor panel belongs to the live lesson only; every other in-app
   // route keeps the tool rail for navigation but renders content full-width.
   const isLesson = pathname === '/';
+  const tutoring = TUTORING_ROUTES.some((p) => pathname === p);
 
   return (
     <AuthGate>
-      <ToolRail />
+      {!tutoring && <ToolRail />}
       <div className="flex-1 flex min-w-0">
         {!isLesson ? (
           children

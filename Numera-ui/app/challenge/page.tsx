@@ -15,6 +15,8 @@ import PrivateCanvas from '@/components/Challenge/PrivateCanvas';
 import SharedBoard from '@/components/Challenge/SharedBoard';
 import AITutorBar from '@/components/Challenge/AITutorBar';
 import TeacherView from '@/components/Challenge/TeacherView';
+import { CenteredScreen, ScreenIcon } from '@/components/CenteredScreen';
+import { GroupMark } from '@/components/ScreenMarks';
 
 function initials(name: string) {
   return name.split(' ').map((n) => n[0]).slice(0, 2).join('').toUpperCase();
@@ -48,11 +50,9 @@ export default function ChallengePage() {
   // ── Intro / start ──
   if (!challengeActive) {
     return (
-      <main className="flex-1 min-w-0 flex items-center justify-center bg-white p-8" aria-label="Group challenge">
-        <div className="w-[420px] max-w-full text-center">
-          <div className="w-12 h-12 mx-auto rounded-xl bg-focus-navy text-white flex items-center justify-center mb-4">
-            <Users size={22} strokeWidth={1.8} />
-          </div>
+      <CenteredScreen label="Group challenge" width={560}>
+        <div>
+          <ScreenIcon mark={GroupMark} />
           <h1 className="text-[22px] font-semibold text-ink">Group Challenge</h1>
           <p className="text-[13px] text-slate-blue mt-2 leading-relaxed">
             Solve together. Everyone works on their own private canvas while one shared AI tutor watches,
@@ -68,7 +68,7 @@ export default function ChallengePage() {
             Start group challenge
           </button>
         </div>
-      </main>
+      </CenteredScreen>
     );
   }
 

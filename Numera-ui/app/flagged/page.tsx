@@ -30,7 +30,7 @@ export default function FlaggedPage() {
       subtitle="Problems you saved to come back to, grouped by module."
       action={<Chip tone="outline">{FLAGGED.length} saved</Chip>}
     >
-      <div className="flex flex-col gap-7 max-w-3xl">
+      <div className="flex flex-col gap-7">
         {Object.entries(byModule).map(([module, items]) => (
           <section key={module}>
             <div className="flex items-center gap-2 mb-2.5">

@@ -1,9 +1,12 @@
 'use client';
 
 import Link from 'next/link';
+// Practice was removed from this list: it is a PHASE, not a place. The
+// backend decides when a student is in independent practice, so offering it as
+// a destination promised something the student could never choose.
 import { usePathname } from 'next/navigation';
 import {
-  Pencil, BookOpen, Target, Users, Swords, Folder, Flag, Zap,
+  Pencil, BookOpen, Users, Swords, Folder, Flag, Zap,
   Bell, Clock, Headphones,
 } from 'lucide-react';
 import { cn } from '@/lib/cn';
@@ -12,7 +15,6 @@ import LogOutButton from '@/components/LogOutButton';
 const TOP_ITEMS = [
   { icon: Pencil,   label: 'Lesson',         href: '/', supportId: 'open-canvas' },
   { icon: BookOpen, label: 'Workbook',       href: '/workbook' },
-  { icon: Target,   label: 'Practice',       href: '/practice' },
   { icon: Swords,   label: 'Group Challenge',href: '/challenge' },
   { icon: Zap,      label: 'Key Notes',      href: '/keynotes' },
   { icon: Users,    label: 'People',         href: '/people' },

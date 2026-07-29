@@ -10,6 +10,8 @@ import { useRouter } from 'next/navigation';
 import { Check } from 'lucide-react';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { TOPICS } from '@/lib/topics';
+import { CenteredScreen, ScreenIcon } from '@/components/CenteredScreen';
+import { CelebrationMark, EncourageMark } from '@/components/ScreenMarks';
 
 export default function CompletePage() {
   const router = useRouter();
@@ -25,18 +27,29 @@ export default function CompletePage() {
   };
 
   return (
-    <main className="flex-1 min-w-0 flex items-center justify-center bg-white p-8" aria-label="Course complete">
-      <div className="w-[460px] max-w-full text-center">
-        <div className="w-12 h-12 mx-auto rounded-xl bg-focus-navy text-white flex items-center justify-center mb-4">
-          <Check size={24} strokeWidth={2.2} />
+    <CenteredScreen label="Course complete">
+      <div>
+        <ScreenIcon mark={mastered === 0 ? EncourageMark : CelebrationMark} />
+        {/* The heading and copy both depend on whether anything is actually
+            mastered. This screen is reachable with a count of zero, and it read
+            "You've mastered all 0 topics" — congratulating a student for
+            nothing, next to a list showing three dashes (2026-07-29). */}
+        <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-1">
+          {mastered === 0 ? 'Progress' : 'Course complete'}
         </div>
-        <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-1">Course complete</div>
         <h1 className="text-[24px] font-semibold text-ink leading-tight">
-          {studentName ? `Well done, ${studentName}` : 'Well done'}
+          {mastered === 0
+            ? 'Nothing finished yet'
+            : studentName
+              ? `Well done, ${studentName}`
+              : 'Well done'}
         </h1>
         <p className="text-[13px] text-slate-blue mt-2 leading-relaxed">
-          You&apos;ve mastered all {mastered} {mastered === 1 ? 'topic' : 'topics'}. Every concept checked,
-          practised, and reviewed with the tutor.
+          {mastered === 0
+            ? 'Finish a topic and it will appear here, with everything you covered.'
+            : `You’ve mastered ${mastered} of ${TOPICS.length} ${
+                TOPICS.length === 1 ? 'topic' : 'topics'
+              }. Every concept checked, practised, and reviewed with the tutor.`}
         </p>
 
         {/* Mastered-topic recap */}
@@ -73,6 +86,6 @@ export default function CompletePage() {
           </button>
         </div>
       </div>
-    </main>
+    </CenteredScreen>
   );
 }

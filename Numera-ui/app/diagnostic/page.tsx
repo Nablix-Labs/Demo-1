@@ -12,6 +12,8 @@ import { ClipboardCheck, ArrowRight, Check } from 'lucide-react';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useFlowNav } from '@/lib/useFlowNav';
 import { cn } from '@/lib/cn';
+import { CenteredScreen, ScreenIcon } from '@/components/CenteredScreen';
+import { CelebrationMark, PlacementMark } from '@/components/ScreenMarks';
 
 interface Q { prompt: string; options: string[]; answer: number }
 
@@ -65,13 +67,11 @@ export default function DiagnosticPage() {
     : { id: 'geometry', topic: 'Geometry', ks: 'KS5', note: 'Strong start — let’s stretch you.' };
 
   return (
-    <main className="flex-1 min-w-0 flex items-center justify-center bg-white p-8" aria-label="Diagnostic">
-      <div className="w-[460px] max-w-full">
+    <CenteredScreen label="Diagnostic">
+      <div>
         {step === 'intro' && (
           <div className="text-center">
-            <div className="w-12 h-12 mx-auto rounded-xl bg-focus-navy text-white flex items-center justify-center mb-4">
-              <ClipboardCheck size={22} strokeWidth={1.8} />
-            </div>
+            <ScreenIcon mark={PlacementMark} />
             <h1 className="text-[22px] font-semibold text-ink">{studentName ? `Nice to meet you, ${studentName}` : 'Quick diagnostic'}</h1>
             <p className="text-[13px] text-slate-blue mt-2 leading-relaxed">
               A one-time check so Numera knows your level and picks the right first topic. You only take this once — no pressure.
@@ -131,9 +131,7 @@ export default function DiagnosticPage() {
 
         {step === 'result' && (
           <div className="text-center">
-            <div className="w-12 h-12 mx-auto rounded-xl bg-focus-navy text-white flex items-center justify-center mb-4">
-              <Check size={22} strokeWidth={2} />
-            </div>
+            <ScreenIcon mark={CelebrationMark} />
             <h1 className="text-[22px] font-semibold text-ink">You&apos;re all set</h1>
             <p className="text-[13px] text-slate-blue mt-2">{placement.note}</p>
             <div className="mt-5 rounded-lg border border-focus-navy bg-reading-surface px-5 py-4 text-left">
@@ -146,6 +144,6 @@ export default function DiagnosticPage() {
           </div>
         )}
       </div>
-    </main>
+    </CenteredScreen>
   );
 }
