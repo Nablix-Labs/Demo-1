@@ -1,31 +1,17 @@
 'use client';
 
 /**
- * AI Tutor tile — a live 3D avatar (Avatar3d) over a fail-soft orb.
+ * AI Tutor tile — the identity mark for Numera in the tutor panel.
  *
- * The 3D head is best-effort: it loads client-side and fades in over the orb
- * once ready; if WebGL/the model fails to load, the boundary drops it and the
- * orb stays. The avatar's mouth moves while Numera is speaking (voiceStatus).
+ * The photoreal 3D head (Ready Player Me .glb) was removed on Manjusha's
+ * instruction, 2026-07-29. What remains is the orb that was already the tile's
+ * fail-soft fallback, so nothing here is newly invented — it is the state the
+ * tile already showed whenever WebGL or the model was unavailable.
+ *
+ * Dropping it also frees a WebGL context. The app runs several at once and
+ * browsers evict the oldest, which is what turned the centred screens dark
+ * earlier today (see components/ui/waves-shaders-homlu-ui.tsx).
  */
-
-import { Component, useCallback, useState, type ReactNode } from 'react';
-import dynamic from 'next/dynamic';
-
-const Avatar3d = dynamic(() => import('./Avatar3d'), { ssr: false });
-
-/** Any 3D load/render error unmounts the avatar so the orb beneath remains. */
-class AvatarBoundary extends Component<{ onError: () => void; children: ReactNode }, { failed: boolean }> {
-  state = { failed: false };
-  static getDerivedStateFromError() {
-    return { failed: true };
-  }
-  componentDidCatch() {
-    this.props.onError();
-  }
-  render() {
-    return this.state.failed ? null : this.props.children;
-  }
-}
 
 const RobotIcon = ({ size }: { size: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -39,25 +25,13 @@ const RobotIcon = ({ size }: { size: number }) => (
 );
 
 export default function TutorTile() {
-  const [ready, setReady] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const showOrb = !ready || failed;
-  const handleReady = useCallback(() => setReady(true), []);
-  const handleError = useCallback(() => setFailed(true), []);
-
   return (
     <div
       className="relative border border-muted-gray rounded-md overflow-hidden bg-reading-surface"
       style={{ aspectRatio: '4/3' }}
       aria-label="AI tutor"
     >
-      {/* Orb — shown while the 3D avatar loads, or as fallback if it fails */}
-      <div
-        className={
-          'absolute inset-0 flex items-center justify-center transition-opacity duration-500 ' +
-          (showOrb ? 'opacity-100' : 'opacity-0')
-        }
-      >
+      <div className="absolute inset-0 flex items-center justify-center">
         <div className="relative w-20 h-20 flex items-center justify-center">
           <div className="absolute inset-0 rounded-full border border-dashed border-ai-cyan animate-spin-slow" />
           <div className="absolute inset-[7px] rounded-full border border-ai-cyan animate-pulse-ring" />
@@ -66,15 +40,6 @@ export default function TutorTile() {
           </div>
         </div>
       </div>
-
-      {/* Live 3D avatar */}
-      {!failed && (
-        <div className={'absolute inset-0 transition-opacity duration-500 ' + (ready ? 'opacity-100' : 'opacity-0')}>
-          <AvatarBoundary onError={handleError}>
-            <Avatar3d onReady={handleReady} />
-          </AvatarBoundary>
-        </div>
-      )}
 
       {/* Name tag */}
       <div className="absolute left-2 bottom-2 z-10 bg-focus-navy/85 text-white text-[9.5px] px-2 py-0.5 rounded flex items-center gap-1">
