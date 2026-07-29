@@ -147,6 +147,7 @@ class MessageConfig(StrictSchema):
     QUESTION_COMPLETE_ACKNOWLEDGEMENT: str
     CONTEXTUAL_ACKNOWLEDGEMENT: str
     QUESTION_ALREADY_COMPLETE: str
+    SCAFFOLD_ORIGINAL_RETRY: str
 
 
 class ClassifierRulesConfig(StrictSchema):

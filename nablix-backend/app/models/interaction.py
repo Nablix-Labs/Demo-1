@@ -100,6 +100,9 @@ class InteractionResponse(BaseModel):
     scaffold_id: str | None = None
     current_scaffold_step_id: str | None = None
     scaffold_step_number: int = 0
+    scaffold_step_text: str | None = None
+    scaffold_step_voice: str | None = None
+    total_steps_estimated: int = 0
     allow_text_input: bool
     allow_voice_input: bool
     hint_count: int

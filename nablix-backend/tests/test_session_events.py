@@ -780,6 +780,78 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
             expected_stuck_count
         )
 
+    scaffold_event_count = len(events)
+    wrong_scaffold_step = client.post(
+        "/interaction",
+        json={
+            "session_id": session_id,
+            "student_id": "ST001",
+            "interaction_type": "ANSWER_SUBMISSION",
+            "input_source": "TEXT",
+            "text_input": "subtraction",
+            "current_phase": "GUIDED_PRACTICE",
+            "concept_id": "ALG_LINEAR_ONE_STEP",
+            "question_id": "Q-T02-004",
+            "hint_count": 0,
+        },
+    )
+    assert wrong_scaffold_step.status_code == 200
+    assert len(events) == scaffold_event_count
+    assert wrong_scaffold_step.json()["current_scaffold_step_id"] == "SCF-T02-M1-S1"
+    assert wrong_scaffold_step.json()["scaffold_step_number"] == 1
+    assert wrong_scaffold_step.json()["scaffold_steps"] == [
+        "Which operation should you undo first?"
+    ]
+
+    next_scaffold_step = client.post(
+        "/interaction",
+        json={
+            "session_id": session_id,
+            "student_id": "ST001",
+            "interaction_type": "ANSWER_SUBMISSION",
+            "input_source": "TEXT",
+            "text_input": "addition",
+            "current_phase": "GUIDED_PRACTICE",
+            "concept_id": "ALG_LINEAR_ONE_STEP",
+            "question_id": "Q-T02-004",
+            "hint_count": 0,
+        },
+    )
+    assert next_scaffold_step.status_code == 200
+    assert len(events) == scaffold_event_count
+    assert next_scaffold_step.json()["current_scaffold_step_id"] == "SCF-T02-M1-S2"
+    assert next_scaffold_step.json()["scaffold_step_number"] == 2
+    assert next_scaffold_step.json()["total_steps_estimated"] == 2
+    assert next_scaffold_step.json()["scaffold_step_text"] == (
+        "What should you subtract from both sides?"
+    )
+    assert next_scaffold_step.json()["scaffold_step_voice"] == (
+        "What should you subtract from both sides?"
+    )
+
+    completed_scaffold = client.post(
+        "/interaction",
+        json={
+            "session_id": session_id,
+            "student_id": "ST001",
+            "interaction_type": "ANSWER_SUBMISSION",
+            "input_source": "TEXT",
+            "text_input": "4",
+            "current_phase": "GUIDED_PRACTICE",
+            "concept_id": "ALG_LINEAR_ONE_STEP",
+            "question_id": "Q-T02-004",
+            "hint_count": 0,
+        },
+    )
+    assert completed_scaffold.status_code == 200
+    assert len(events) == scaffold_event_count
+    assert completed_scaffold.json()["current_scaffold_step_id"] is None
+    assert completed_scaffold.json()["show_scaffold_panel"] is False
+    assert completed_scaffold.json()["scaffold_steps"] == []
+    assert completed_scaffold.json()["message"] == (
+        "Now use those steps on the original question. What would you try first?"
+    )
+
     guided_incorrect = client.post(
         "/interaction",
         json={

@@ -7,7 +7,11 @@ from fastapi import HTTPException
 
 from app.adapters.provider import get_adapters
 from app.adapters.tutor_engine import apply_retrieved_content
-from app.ai_engine.classifier import detect_student_intent, normalize_exact_notation
+from app.ai_engine.classifier import (
+    contains_answer_reveal,
+    detect_student_intent,
+    normalize_exact_notation,
+)
 from app.ai_engine.classifier_config import ClassifierRulesConfig, load_classifier_rules
 from app.core.exceptions import QuestionFetchError
 from app.core.logger import logger
@@ -370,6 +374,20 @@ def _schema_support_steps(
     return []
 
 
+def _validate_scaffold_prompt(
+    prompt: str,
+    correct_answer: str | None,
+    rules: ClassifierRulesConfig,
+) -> None:
+    if (
+        correct_answer is not None
+        and contains_answer_reveal(prompt, correct_answer, rules)
+    ):
+        raise RuntimeError(
+            "Student Model scaffold prompt reveals the original canonical answer."
+        )
+
+
 def _schema_scaffold_state(
     event: StudentModelSessionEventResponse | None,
 ) -> dict[str, object]:
@@ -397,11 +415,83 @@ def _schema_scaffold_state(
             current_step_id if isinstance(current_step_id, str) else None
         ),
         "scaffold_step_number": step_number,
+        "scaffold_total_steps": len(steps) if isinstance(steps, list) else 0,
         "delivered_scaffold_step_ids": delivered,
         "scaffold_expected_response": (
             expected_response if isinstance(expected_response, str) else None
         ),
     }
+
+
+def _active_scaffold_steps(session: SessionRecord) -> list[dict[str, object]]:
+    event = session.student_model_event
+    if event is None or event.phase_payload is None:
+        return []
+    support = event.phase_payload.support_to_serve
+    if support is None or support.get("support_type") != "SCAFFOLD":
+        return []
+    steps = support.get("steps")
+    if not isinstance(steps, list):
+        return []
+    return [step for step in steps if isinstance(step, dict)]
+
+
+def _next_scaffold_state(
+    session: SessionRecord,
+) -> tuple[str | None, dict[str, object]]:
+    steps = _active_scaffold_steps(session)
+    current_step_id = session.current_scaffold_step_id
+    for index, step in enumerate(steps):
+        if step.get("step_id") != current_step_id:
+            continue
+        delivered = (
+            [*session.delivered_scaffold_step_ids, current_step_id]
+            if (
+                isinstance(current_step_id, str)
+                and current_step_id not in session.delivered_scaffold_step_ids
+            )
+            else session.delivered_scaffold_step_ids
+        )
+        if index + 1 == len(steps):
+            return None, {
+                "scaffold_id": None,
+                "current_scaffold_step_id": None,
+                "scaffold_step_number": 0,
+                "scaffold_total_steps": 0,
+                "delivered_scaffold_step_ids": delivered,
+                "scaffold_expected_response": None,
+            }
+        next_step = steps[index + 1]
+        next_id = next_step.get("step_id")
+        prompt = next_step.get("prompt")
+        expected = next_step.get("expected_response")
+        if not isinstance(next_id, str) or not isinstance(prompt, str):
+            raise RuntimeError("Student Model returned a malformed scaffold step.")
+        return prompt, {
+            "scaffold_id": session.scaffold_id,
+            "current_scaffold_step_id": next_id,
+            "scaffold_step_number": index + 2,
+            "scaffold_total_steps": len(steps),
+            "delivered_scaffold_step_ids": delivered,
+            "scaffold_expected_response": (
+                expected if isinstance(expected, str) else None
+            ),
+        }
+    raise RuntimeError(
+        f"Current scaffold step {current_step_id} is absent from its catalogue."
+    )
+
+
+def _scaffold_response_is_correct(
+    student_message: str,
+    expected_response: str,
+    tutor_evaluation: str,
+) -> bool:
+    normalized_student = normalize_exact_notation(student_message).casefold().strip()
+    normalized_expected = normalize_exact_notation(expected_response).casefold().strip()
+    if normalized_student == normalized_expected:
+        return True
+    return tutor_evaluation == "CORRECT"
 
 
 def _recent_conversation_history(
@@ -625,6 +715,9 @@ def _response_from(
         scaffold_id=session.scaffold_id,
         current_scaffold_step_id=session.current_scaffold_step_id,
         scaffold_step_number=session.scaffold_step_number,
+        scaffold_step_text=scaffold_steps[0] if scaffold_steps else None,
+        scaffold_step_voice=scaffold_steps[0] if scaffold_steps else None,
+        total_steps_estimated=session.scaffold_total_steps,
         allow_text_input=session.allow_text_input,
         allow_voice_input=session.allow_voice_input,
         hint_count=session.hint_count,
@@ -798,6 +891,14 @@ async def _process_interaction(
     )
     canvas_submission = get_canvas_submission(session, request.canvas_snapshot_id)
     ocr = canvas_submission.ocr if canvas_submission is not None else None
+    scaffold_turn = (
+        request.interaction_type == "ANSWER_SUBMISSION"
+        and session.current_scaffold_step_id is not None
+    )
+    if scaffold_turn and session.scaffold_expected_response is None:
+        raise RuntimeError(
+            f"Scaffold step {session.current_scaffold_step_id} has no expected response."
+        )
 
     detected_intent = detect_student_intent(student_message, rules)
     next_attempt_count = (
@@ -818,11 +919,19 @@ async def _process_interaction(
         student_id=request.student_id,
         source_turn_id=request.turn_id or f"TURN-{uuid4().hex.upper()}",
         message=student_message,
-        question=session.current_question,
+        question=(
+            session.scaffold_steps[0]
+            if scaffold_turn and session.scaffold_steps
+            else session.current_question
+        ),
         # Grade against the session's question: after a 6.7 transition swaps
         # the question, the request's id from the frontend may be stale.
-        correct_answer=session.correct_answer,
-        answer_spec=_active_answer_spec(session),
+        correct_answer=(
+            session.scaffold_expected_response
+            if scaffold_turn
+            else session.correct_answer
+        ),
+        answer_spec=None if scaffold_turn else _active_answer_spec(session),
         phase_2_prompt_context=_phase_2_prompt_context(session),
         current_phase=session.current_phase,
         input_source=request.input_source,
@@ -899,6 +1008,7 @@ async def _process_interaction(
         schema_session
         and session.current_phase in {"GUIDED_PRACTICE", "INDEPENDENT_PRACTICE"}
         and request.interaction_type == "ANSWER_SUBMISSION"
+        and not scaffold_turn
     )
     schema_event_type: Literal["CORRECT_ATTEMPT", "INCORRECT_ATTEMPT"] | None = (
         "CORRECT_ATTEMPT"
@@ -1070,9 +1180,37 @@ async def _process_interaction(
     )
     schema_hint = _schema_hint(schema_content_response)
     schema_steps = _schema_support_steps(schema_content_response)
+    for scaffold_prompt in schema_steps:
+        _validate_scaffold_prompt(scaffold_prompt, session.correct_answer, rules)
     scaffold_steps = schema_steps or tutor.scaffold_steps_delivered
     tutor_message = schema_hint or tutor.tutor_message
     tutor_message_voice = schema_hint or tutor.tutor_message_voice
+    scaffold_turn_updates: dict[str, object] = {}
+    if scaffold_turn:
+        expected_scaffold_response = turn_session.scaffold_expected_response
+        if expected_scaffold_response is None:
+            raise RuntimeError("Active scaffold step lost its expected response.")
+        if _scaffold_response_is_correct(
+            student_message,
+            expected_scaffold_response,
+            tutor.evaluation,
+        ):
+            next_prompt, scaffold_turn_updates = _next_scaffold_state(turn_session)
+            if next_prompt is None:
+                tutor_message = rules.messages.SCAFFOLD_ORIGINAL_RETRY
+                tutor_message_voice = tutor_message
+                scaffold_steps = []
+            else:
+                _validate_scaffold_prompt(
+                    next_prompt,
+                    turn_session.correct_answer,
+                    rules,
+                )
+                tutor_message = next_prompt
+                tutor_message_voice = next_prompt
+                scaffold_steps = [next_prompt]
+        else:
+            scaffold_steps = list(turn_session.scaffold_steps)
     conversation_history: list[ConversationMessage] = _updated_conversation_history(
         turn_session.conversation_history,
         student_message,
@@ -1081,7 +1219,9 @@ async def _process_interaction(
     )
 
     effective_attempt_increment: int = (
-        tutor.attempt_increment
+        0
+        if scaffold_turn
+        else tutor.attempt_increment
         if request.interaction_type == "ANSWER_SUBMISSION"
         else 0
     )
@@ -1149,13 +1289,23 @@ async def _process_interaction(
             )
         ),
         **_schema_scaffold_state(schema_content_response),
+        **scaffold_turn_updates,
     }
+    if scaffold_turn:
+        conversation_action = "ASK_QUESTION"
+        state_updates.update(
+            {
+                "question_completed": False,
+                "answer_value_confirmed": False,
+            }
+        )
     if schema_question_changed:
         state_updates["stuck_count"] = 0
     if schema_response is None:
         state_updates["last_student_model"] = student
     if (
         request.interaction_type == "ANSWER_SUBMISSION"
+        and not scaffold_turn
         and effective_attempt_increment == 1
     ):
         state_updates["per_question_history"] = [

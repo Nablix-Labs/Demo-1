@@ -183,6 +183,7 @@ class SessionRecord(BaseModel):
     scaffold_id: str | None = None
     current_scaffold_step_id: str | None = None
     scaffold_step_number: int = 0
+    scaffold_total_steps: int = 0
     delivered_scaffold_step_ids: list[str] = Field(default_factory=list)
     scaffold_expected_response: str | None = None
     rescue_mode_active: bool = False
