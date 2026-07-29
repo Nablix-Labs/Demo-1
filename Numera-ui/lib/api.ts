@@ -106,8 +106,17 @@ export function studentFacingError(err: unknown): string | null {
   // way through and will not hand back a fresh one. There is no resume path yet
   // (backend ask #3), so say what is actually true rather than blaming the
   // network and sending the student off retrying forever.
+  const backendMessage = typeof res?.data?.message === 'string' ? res.data.message.trim() : '';
   if (res?.status === 409) {
-    return 'You already have this topic in progress, and the tutor can\u2019t pick it back up yet. Ask the team to reset it for you.';
+    // Not every 409 is the resume case. On 2026-07-29 a guided-practice turn
+    // came back 409 "Student Model did not return metadata for
+    // ALG_1STEP_GP_F01" and the student was told their topic was already in
+    // progress \u2014 a confident, wrong explanation that sent the team looking in
+    // the wrong place. Only claim the resume case when the backend says so.
+    if (!backendMessage || /already|in progress|resume/i.test(backendMessage)) {
+      return 'You already have this topic in progress, and the tutor can\u2019t pick it back up yet. Ask the team to reset it for you.';
+    }
+    return `The tutor couldn\u2019t load this question. ${backendMessage}`;
   }
   const code = res?.data?.error_code;
   switch (code) {
@@ -622,6 +631,70 @@ export interface InteractionResponse {
   expected_student_response?: string;
   /** Whether voice input is currently permitted. */
   allow_voice_input?: boolean;
+
+  // ── Phase 2 scaffolding (frontend handoff, 2026-07-29) ────────────────────
+  //
+  // The backend serves ONE authorised scaffold step per turn. Deliberately no
+  // field here for the step catalogue or for `expected_response`: the Student
+  // Model holds those so the Tutor can grade, and §9 of the handoff forbids
+  // them reaching the browser at all. `SessionRecord.scaffold_steps` is the old
+  // whole-catalogue shape and must not be rendered — see ActiveScaffold below.
+  //
+  // All optional. They are inert until the Tutor Backend ships them, which is
+  // why the panel below simply does not open when they are absent.
+  /** Whether the support panel should be visible after this turn. */
+  show_scaffold_panel?: boolean;
+  /** Stable id of the running scaffold. */
+  scaffold_id?: string | null;
+  /** The one step the backend has authorised for display right now. */
+  current_scaffold_step_id?: string | null;
+  /** Human-readable position, e.g. 1. Display only. */
+  scaffold_step_number?: number | null;
+  /** The guiding question to show. */
+  scaffold_step_text?: string | null;
+  /** What to speak for this step; falls back to `message` when absent. */
+  scaffold_step_voice?: string | null;
+  /** Total steps — a progress indicator, NOT permission to reveal later ones. */
+  total_scaffold_steps?: number | null;
+}
+
+/**
+ * The scaffold state the UI renders: exactly one step, never a catalogue.
+ *
+ * Derived from the fields above by `activeScaffold`, so there is one place that
+ * decides whether a panel is open and what is in it. The frontend never
+ * computes the next step — §2 of the handoff: the backend response is the only
+ * instruction for the next visible state.
+ */
+export interface ActiveScaffold {
+  scaffoldId: string;
+  currentStepId: string;
+  stepNumber: number;
+  stepText: string;
+  stepVoice: string | null;
+  totalSteps: number;
+}
+
+/**
+ * Read the authorised scaffold step off an interaction response.
+ *
+ * Returns null when the backend has not opened a panel, has closed it
+ * (`show_scaffold_panel: false`), or has not sent a step to show — so a partial
+ * or older response can never leave a stale step on screen.
+ */
+export function activeScaffold(res: InteractionResponse | null | undefined): ActiveScaffold | null {
+  if (!res || res.show_scaffold_panel !== true) return null;
+  const stepText = res.scaffold_step_text?.trim();
+  const stepId = res.current_scaffold_step_id?.trim();
+  if (!stepText || !stepId) return null;
+  return {
+    scaffoldId: res.scaffold_id?.trim() || stepId,
+    currentStepId: stepId,
+    stepNumber: res.scaffold_step_number ?? 1,
+    stepText,
+    stepVoice: res.scaffold_step_voice?.trim() || null,
+    totalSteps: res.total_scaffold_steps ?? 1,
+  };
 }
 
 /** POST /interaction — core tutoring call. Requires a started, owned session. */

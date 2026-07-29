@@ -9,6 +9,7 @@ import TutorTile from './TutorTile';
 import VoiceBar from './VoiceBar';
 import Transcript from './Transcript';
 import ChatInput from './ChatInput';
+import ScaffoldPanel from '@/components/ScaffoldPanel';
 import { cn } from '@/lib/cn';
 
 const stateLabel: Record<string, string> = {
@@ -93,6 +94,7 @@ function PanelMenu() {
 
 export default function MediaPanel() {
   const sessionState = useNumeraStore((s) => s.sessionState);
+  const activeScaffold = useNumeraStore((s) => s.activeScaffold);
   const transcriptVisible = useNumeraStore((s) => s.transcriptVisible);
   const panelSide = useNumeraStore((s) => s.panelSide);
   const panelCollapsed = useNumeraStore((s) => s.panelCollapsed);
@@ -155,6 +157,15 @@ export default function MediaPanel() {
 
           {/* Voice controls */}
           <VoiceBar />
+
+          {/* The one authorised scaffold step, when the backend is offering
+              support. Sits directly above the input the student answers it
+              with, so the guiding question and the reply are one unit. */}
+          {activeScaffold && (
+            <div className="px-3 pb-2">
+              <ScaffoldPanel scaffold={activeScaffold} />
+            </div>
+          )}
 
           {/* Transcript (optional) + chat input */}
           {transcriptVisible
