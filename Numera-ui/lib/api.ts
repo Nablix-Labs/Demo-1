@@ -687,13 +687,20 @@ export function activeScaffold(res: InteractionResponse | null | undefined): Act
   const stepText = res.scaffold_step_text?.trim();
   const stepId = res.current_scaffold_step_id?.trim();
   if (!stepText || !stepId) return null;
+  // The backend types these as `int = 0`, not null, so 0 is its "unset" value
+  // (app/models/interaction.py:101,104 — landed in #46/#47 on 2026-07-29).
+  // `?? 1` only catches null and would render "Step 0 of 0"; `||` treats 0 as
+  // unset too. Total is floored at the step number so a partial payload can
+  // never say "Step 2 of 1".
+  const stepNumber = res.scaffold_step_number || 1;
+  const totalSteps = Math.max(res.total_scaffold_steps || 1, stepNumber);
   return {
     scaffoldId: res.scaffold_id?.trim() || stepId,
     currentStepId: stepId,
-    stepNumber: res.scaffold_step_number ?? 1,
+    stepNumber,
     stepText,
     stepVoice: res.scaffold_step_voice?.trim() || null,
-    totalSteps: res.total_scaffold_steps ?? 1,
+    totalSteps,
   };
 }
 

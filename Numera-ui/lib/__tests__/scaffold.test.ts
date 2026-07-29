@@ -136,3 +136,21 @@ describe('scaffold: nothing tutor-only reaches the student', () => {
     expect(serialised).not.toMatch(/one half|x = 8|accepted_answers|both sides|What is x/i);
   });
 });
+
+describe('scaffold: the backend uses 0 as "unset", not null', () => {
+  // app/models/interaction.py types scaffold_step_number and
+  // total_scaffold_steps as `int = 0` (landed 2026-07-29 in #46/#47). A `?? 1`
+  // fallback only catches null, so an ordinary turn with no scaffold running
+  // would have rendered "Step 0 of 0".
+  it('treats 0 as unset rather than showing step zero', () => {
+    const s = activeScaffold(stepOne({ scaffold_step_number: 0, total_scaffold_steps: 0 }))!;
+    expect(s.stepNumber).toBe(1);
+    expect(s.totalSteps).toBe(1);
+  });
+
+  it('never claims a step beyond the total', () => {
+    const s = activeScaffold(stepOne({ scaffold_step_number: 2, total_scaffold_steps: 0 }))!;
+    expect(s.stepNumber).toBe(2);
+    expect(s.totalSteps).toBe(2);
+  });
+});
