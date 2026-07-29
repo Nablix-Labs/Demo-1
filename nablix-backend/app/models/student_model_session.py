@@ -40,10 +40,13 @@ class StudentQuestionView(BaseModel):
 
 
 class AnswerSpec(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     answer_spec_id: str
     canonical_answer: str
     accepted_answers: list[str]
     verification_method: str
+    explanation_required: bool | None = None
 
 
 class TutorQuestionView(BaseModel):
@@ -51,6 +54,7 @@ class TutorQuestionView(BaseModel):
 
     answer_spec: AnswerSpec
     potential_errors: list[dict[str, object]] = Field(default_factory=list)
+    support_catalog: dict[str, object] = Field(default_factory=dict)
 
 
 class StudentModelQuestion(BaseModel):
@@ -157,6 +161,7 @@ class JourneyPhaseState(BaseModel):
     retry_required_micro_skill_ids: list[str] = Field(default_factory=list)
     highest_support_used_by_skill: dict[str, SupportUsed] = Field(default_factory=dict)
     current_question_id: str | None = None
+    current_question_target_micro_skill_ids: list[str] = Field(default_factory=list)
     used_question_ids: list[str] = Field(default_factory=list)
 
 
@@ -278,6 +283,7 @@ class GuidedAttemptEvent(SessionEventBase):
 class GuidedSupportEvent(SessionEventBase):
     event_type: Literal[
         "GUIDED_SUPPORT_ESCALATION_REQUIRED",
+        "MAXIMUM_GUIDED_SUPPORT_PARALLEL",
         "MAXIMUM_GUIDED_SUPPORT_REQUIRED",
     ]
     question_id: str

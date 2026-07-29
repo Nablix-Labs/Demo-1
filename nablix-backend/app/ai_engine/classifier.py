@@ -10,6 +10,7 @@ from pydantic import Field
 
 from app.ai_engine.canvas_math_review import review_canvas_math
 from app.ai_engine.classifier_config import ClassifierRulesConfig, load_classifier_rules
+from app.ai_engine.prompt_registry import Trigger
 from app.ai_engine.schemas import (
     CanvasAnnotationIntent,
     CanvasFeedback,
@@ -34,7 +35,12 @@ from app.ai_engine.schemas import (
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AdapterError
 from app.core.logger import logger
-from app.models.adapters import ConversationAction, ConversationMessage, ConversationState
+from app.models.adapters import (
+    ConversationAction,
+    ConversationMessage,
+    ConversationState,
+    Phase2PromptContext,
+)
 from app.models.student_model_session import AnswerSpec
 
 if TYPE_CHECKING:
@@ -49,6 +55,7 @@ class ClassificationRequest(StrictSchema):
     question: str
     correct_answer: str
     answer_spec: AnswerSpec | None = None
+    phase_2_prompt_context: Phase2PromptContext | None = None
     student_input: str
     current_phase: LearningPhase
     input_source: InputSource
@@ -264,6 +271,8 @@ def generate_tutor_turn_with_openai(
             question=request.question,
             correct_answer=request.correct_answer,
             answer_spec=request.answer_spec,
+            phase_2_prompt_context=request.phase_2_prompt_context,
+            active_triggers=detect_protocol_triggers(request, rules),
             student_input=request.student_input,
             phase=request.current_phase,
             input_source=request.input_source,
@@ -285,6 +294,28 @@ def generate_tutor_turn_with_openai(
             extra={"step": "tutor_turn", "detail": error.message},
         )
         return None
+
+
+def detect_protocol_triggers(
+    request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
+) -> list[Trigger]:
+    triggers: list[Trigger] = []
+    if (
+        request.input_source == "VOICE"
+        and is_low_confidence(request.transcript_confidence, rules)
+    ):
+        triggers.append(Trigger.VOICE_AMBIGUITY)
+    if (
+        request.input_source == "CANVAS"
+        and request.canvas_regions
+        and any(
+            region.confidence < rules.canvas_review.min_region_confidence
+            for region in request.canvas_regions
+        )
+    ):
+        triggers.append(Trigger.HANDWRITING_AMBIGUITY)
+    return triggers
 
 
 def should_use_deterministic_tutor_turn(
@@ -650,6 +681,15 @@ def select_response_strategy(
 ) -> ResponseStrategy:
     if intent == "ACKNOWLEDGEMENT":
         return "CONTINUE"
+    if (
+        intent == "EXPRESSING_CONFUSION"
+        and current_phase == rules.strategy_rules.guided_practice_phase
+    ):
+        if attempt_count >= rules.strategy_rules.worked_example_min_attempt_count:
+            return "PROVIDE_WORKED_EXAMPLE"
+        if attempt_count >= rules.strategy_rules.scaffold_min_attempt_count:
+            return "SCAFFOLD"
+        return "GUIDED_HINT"
     if intent in rules.strategy_rules.clarify_intents:
         return "CLARIFY"
     if intent == rules.strategy_rules.hint_intent:
@@ -1220,6 +1260,11 @@ def is_reasoning_required(
     request: ClassificationRequest,
     rules: ClassifierRulesConfig,
 ) -> bool:
+    if (
+        request.answer_spec is not None
+        and request.answer_spec.explanation_required is not None
+    ):
+        return request.answer_spec.explanation_required
     if uses_authoritative_verification(request):
         return False
     return request.current_phase in rules.reasoning_completion.required_phases

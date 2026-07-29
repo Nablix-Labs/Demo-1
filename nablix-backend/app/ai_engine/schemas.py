@@ -62,6 +62,7 @@ LearningPhase = Literal[
     "REVIEW",
 ]
 
+
 LearningEventType = Literal[
     "CORRECT_ATTEMPT",
     "INCORRECT_ATTEMPT",
@@ -104,6 +105,7 @@ class VisualCue(StrictSchema):
     show: StrictBool
     cue_type: VisualCueType | None
     description: str | None
+    actions: list[dict[str, object]] = Field(default_factory=list)
 
 
 class HighlightInstruction(StrictSchema):

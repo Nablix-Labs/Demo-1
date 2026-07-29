@@ -67,6 +67,7 @@ class StrategyRulesConfig(StrictSchema):
     review_phase: LearningPhase
     guided_practice_phase: LearningPhase
     independent_practice_phase: LearningPhase
+    stuck_scaffold_min_count: int = Field(ge=1)
     scaffold_min_attempt_count: int = Field(ge=1)
     worked_example_min_attempt_count: int = Field(ge=1)
 
@@ -146,6 +147,7 @@ class MessageConfig(StrictSchema):
     QUESTION_COMPLETE_ACKNOWLEDGEMENT: str
     CONTEXTUAL_ACKNOWLEDGEMENT: str
     QUESTION_ALREADY_COMPLETE: str
+    SCAFFOLD_ORIGINAL_RETRY: str
 
 
 class ClassifierRulesConfig(StrictSchema):

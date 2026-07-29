@@ -22,6 +22,8 @@ intent_phrases:
     - hint
     - help me
   EXPRESSING_CONFUSION:
+    - i don't know
+    - i do not know
     - i do not understand
     - i don't understand
     - confused
@@ -115,6 +117,7 @@ strategy_rules:
   review_phase: REVIEW
   guided_practice_phase: GUIDED_PRACTICE
   independent_practice_phase: INDEPENDENT_PRACTICE
+  stuck_scaffold_min_count: 2
   scaffold_min_attempt_count: 3
   worked_example_min_attempt_count: 4
 visual_cue_rules:
@@ -297,3 +300,4 @@ messages:
   QUESTION_COMPLETE_ACKNOWLEDGEMENT: You are welcome. This question is complete, so let us continue to the next question.
   CONTEXTUAL_ACKNOWLEDGEMENT: Exactly. Let us move to the next question.
   QUESTION_ALREADY_COMPLETE: This question is already complete. Let us continue to the next question.
+  SCAFFOLD_ORIGINAL_RETRY: Now use those steps on the original question. What would you try first?
