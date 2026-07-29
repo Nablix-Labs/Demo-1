@@ -524,6 +524,14 @@ _SUPERSCRIPT_CHARACTERS: dict[str, str] = {
     "⁸": "8",
     "⁹": "9",
 }
+_FRACTION_CHARACTERS: dict[str, str] = {
+    "½": "1/2",
+    "⅓": "1/3",
+    "¼": "1/4",
+    "¾": "3/4",
+    "⅔": "2/3",
+    "⅛": "1/8",
+}
 
 
 def uses_authoritative_verification(request: ClassificationRequest) -> bool:
@@ -555,7 +563,15 @@ def evaluate_answer_contract(
             normalize_exact_notation(answer)
             for answer in accepted_answers
         }
-        return "CORRECT" if student_notation in accepted_notation else "INCORRECT"
+        return (
+            "CORRECT"
+            if student_notation in accepted_notation
+            or contains_accepted_exact_notation(
+                request.student_input,
+                accepted_notation,
+            )
+            else "INCORRECT"
+        )
     if method == "SYMBOLIC_EQUIVALENCE":
         return (
             "CORRECT"
@@ -589,8 +605,39 @@ def normalize_exact_notation(value: str) -> str:
         result.append(character)
         index += 1
     compact = "".join(result).replace("−", "-").replace("⁄", "/")
+    for fraction, expanded in _FRACTION_CHARACTERS.items():
+        compact = compact.replace(fraction, expanded)
     compact = re.sub(r"\s+", "", compact)
+    compact = re.sub(r"\((\d+/\d+)\)(?=[A-Za-z])", r"\1", compact)
     return re.sub(r"\^\{(\d+)\}", r"^\1", compact)
+
+
+def contains_accepted_exact_notation(
+    student_input: str,
+    accepted_notation: set[str],
+) -> bool:
+    normalized_input = _normalize_superscript_notation(student_input)
+    for notation in accepted_notation:
+        if notation == "":
+            continue
+        spaced_notation = r"\s*".join(re.escape(character) for character in notation)
+        start_boundary = r"(?<!\w)" if notation[0].isalnum() else ""
+        end_boundary = r"(?!\w)" if notation[-1].isalnum() else ""
+        if re.search(
+            f"{start_boundary}{spaced_notation}{end_boundary}",
+            normalized_input,
+            flags=re.IGNORECASE,
+        ):
+            return True
+    return False
+
+
+def _normalize_superscript_notation(value: str) -> str:
+    normalized = unicodedata.normalize("NFC", value)
+    for superscript, digit in _SUPERSCRIPT_CHARACTERS.items():
+        normalized = normalized.replace(superscript, f"^{digit}")
+    normalized = normalized.replace("−", "-").replace("⁄", "/")
+    return re.sub(r"\^\{(\d+)\}", r"^\1", normalized)
 
 
 def normalize_semantic_answer(value: str) -> str:

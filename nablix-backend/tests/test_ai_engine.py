@@ -102,6 +102,78 @@ def test_exact_notation_match_accepts_caret_exponent_and_cannot_be_overridden(
     assert response.tutor_message == "Correct. Nice work explaining your answer."
 
 
+@pytest.mark.parametrize(
+    ("student_input", "canonical_answer", "accepted_answers"),
+    [
+        (
+            "1/2 is multiplying x, so it's 1/2x",
+            "½x",
+            ["½x", "(1/2)x"],
+        ),
+        ("I think the answer is p squared, so p^2q.", "p²q", ["p^2q"]),
+        ("The compact expression is 4y.", "4y", ["4y"]),
+    ],
+)
+def test_exact_notation_match_accepts_notation_inside_spoken_response(
+    student_input: str,
+    canonical_answer: str,
+    accepted_answers: list[str],
+) -> None:
+    response = classify_student_response(
+        ClassificationRequest(
+            question="Write the expression in compact notation.",
+            correct_answer=canonical_answer,
+            answer_spec=_answer_spec(
+                canonical_answer=canonical_answer,
+                accepted_answers=accepted_answers,
+                verification_method="EXACT_NOTATION_MATCH",
+            ),
+            student_input=student_input,
+            current_phase="GUIDED_PRACTICE",
+            input_source="VOICE",
+            transcript_confidence=0.95,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.evaluation == "CORRECT"
+    assert response.question_completed is True
+
+
+@pytest.mark.parametrize(
+    "student_input",
+    [
+        "I think it might be 1/2 + x.",
+        "The answer is x minus 1/2.",
+        "I can see 1/2, but I do not know the answer.",
+    ],
+)
+def test_exact_notation_match_rejects_wrong_or_incomplete_spoken_response(
+    student_input: str,
+) -> None:
+    response = classify_student_response(
+        ClassificationRequest(
+            question="Write one half times x in compact notation.",
+            correct_answer="½x",
+            answer_spec=_answer_spec(
+                canonical_answer="½x",
+                accepted_answers=["½x", "(1/2)x"],
+                verification_method="EXACT_NOTATION_MATCH",
+            ),
+            student_input=student_input,
+            current_phase="GUIDED_PRACTICE",
+            input_source="VOICE",
+            transcript_confidence=0.95,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.evaluation != "CORRECT"
+    assert response.question_completed is False
+
+
 def test_symbolic_equivalence_accepts_reordered_addition() -> None:
     response = classify_student_response(
         ClassificationRequest(
