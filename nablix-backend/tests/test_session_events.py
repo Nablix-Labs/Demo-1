@@ -980,7 +980,10 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
                 }
             ],
         }
-    assert guided_incorrect.json()["message"] == "Undo the addition first."
+    assert guided_incorrect.json()["message"] == (
+        "Let us review the equation and try the next step carefully. "
+        "Undo the addition first."
+    )
 
     for answer in ("x = 3", "x = 2"):
         guided_incorrect = client.post(
@@ -999,10 +1002,30 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
         )
         assert guided_incorrect.status_code == 200
 
-    assert events[-1]["event_type"] == "INCORRECT_ATTEMPT"
-    assert events[-1]["micro_skill_ids"] == ["T02.M1"]
-    assert guided_incorrect.json()["show_scaffold_panel"] is False
-    assert "scaffold_steps" not in guided_incorrect.json()
+    assert events[-1]["event_type"] == "GUIDED_SUPPORT_ESCALATION_REQUIRED"
+    assert events[-1]["micro_skill_id"] == "T02.M1"
+    assert guided_incorrect.json()["show_scaffold_panel"] is True
+    assert guided_incorrect.json()["current_scaffold_step_id"] == "SCF-T02-M1-S1"
+
+    for scaffold_answer in ("addition", "4", "on both sides", "x = 5"):
+        scaffold_response = client.post(
+            "/interaction",
+            json={
+                "session_id": session_id,
+                "student_id": "ST001",
+                "interaction_type": "ANSWER_SUBMISSION",
+                "input_source": "TEXT",
+                "text_input": scaffold_answer,
+                "current_phase": "GUIDED_PRACTICE",
+                "concept_id": "ALG_LINEAR_ONE_STEP",
+                "question_id": "Q-T02-004",
+                "hint_count": 0,
+            },
+        )
+        assert scaffold_response.status_code == 200
+
+    assert scaffold_response.json()["show_scaffold_panel"] is False
+    assert scaffold_response.json()["current_scaffold_step_id"] is None
 
     guided = client.post(
         "/interaction",
@@ -1024,7 +1047,7 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert events[-2]["question_id"] == "Q-T02-004"
     assert events[-2]["micro_skill_ids"] == ["T02.M1"]
     assert events[-2]["student_response"] == "x = 5"
-    assert events[-2]["support_used"] == "HINT"
+    assert events[-2]["support_used"] == "SCAFFOLD"
     assert events[-1]["event_type"] == "GUIDED_PHASE_COMPLETED"
     assert events[-1]["completed_micro_skill_ids"] == ["T02.M1"]
     assert guided.json()["current_phase"] == "INDEPENDENT_PRACTICE"

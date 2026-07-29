@@ -346,6 +346,19 @@ def _schema_hint(event: StudentModelSessionEventResponse | None) -> str | None:
     return None
 
 
+def _contextual_schema_hint(
+    schema_hint: str | None,
+    tutor_message: str,
+) -> str:
+    if schema_hint is None:
+        return tutor_message
+    if normalize_exact_notation(schema_hint).casefold() in (
+        normalize_exact_notation(tutor_message).casefold()
+    ):
+        return tutor_message
+    return f"{tutor_message.rstrip()} {schema_hint}"
+
+
 def _schema_support_steps(
     event: StudentModelSessionEventResponse | None,
 ) -> list[str]:
@@ -1046,18 +1059,20 @@ async def _process_interaction(
             else None
         )
     )
-    schema_stuck = (
+    schema_guided_support_escalation = (
         schema_managed
         and session.current_phase == "GUIDED_PRACTICE"
-        and tutor.intent == "EXPRESSING_CONFUSION"
-    )
-    schema_stuck_escalation = (
-        schema_stuck
-        and session.stuck_count + 1
-        >= rules.strategy_rules.stuck_scaffold_min_count
+        and (
+            tutor.response_strategy in {"SCAFFOLD", "PROVIDE_WORKED_EXAMPLE"}
+            or (
+                tutor.intent == "EXPRESSING_CONFUSION"
+                and session.stuck_count + 1
+                >= rules.strategy_rules.stuck_scaffold_min_count
+            )
+        )
     )
     if schema_managed and (
-        schema_event_type is not None or schema_stuck_escalation
+        schema_event_type is not None or schema_guided_support_escalation
     ):
         stored_event = session.student_model_event
         if stored_event is None or session.question_id is None:
@@ -1067,12 +1082,12 @@ async def _process_interaction(
             stored_event.journey_state.phase_3_independent_practice
             .retry_required_micro_skill_ids
         )
-        if schema_stuck_escalation:
+        if schema_guided_support_escalation:
             escalation_type: Literal[
                 "GUIDED_SUPPORT_ESCALATION_REQUIRED",
-                "MAXIMUM_GUIDED_SUPPORT_REQUIRED",
+                "MAXIMUM_GUIDED_SUPPORT_PARALLEL",
             ] = (
-                "MAXIMUM_GUIDED_SUPPORT_REQUIRED"
+                "MAXIMUM_GUIDED_SUPPORT_PARALLEL"
                 if tutor.response_strategy == "PROVIDE_WORKED_EXAMPLE"
                 else "GUIDED_SUPPORT_ESCALATION_REQUIRED"
             )
@@ -1210,8 +1225,11 @@ async def _process_interaction(
     for scaffold_prompt in schema_steps:
         _validate_scaffold_prompt(scaffold_prompt, session.correct_answer, rules)
     scaffold_steps = schema_steps or tutor.scaffold_steps_delivered
-    tutor_message = schema_hint or tutor.tutor_message
-    tutor_message_voice = schema_hint or tutor.tutor_message_voice
+    tutor_message = _contextual_schema_hint(schema_hint, tutor.tutor_message)
+    tutor_message_voice = _contextual_schema_hint(
+        schema_hint,
+        tutor.tutor_message_voice,
+    )
     if schema_steps:
         tutor_message = schema_steps[0]
         tutor_message_voice = schema_steps[0]
