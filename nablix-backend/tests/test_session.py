@@ -73,7 +73,7 @@ def test_session_start_get_and_end_flow() -> None:
     assert started["show_hint_button"] is True
     assert started["show_visual_cue"] is False
     assert started["show_scaffold_panel"] is False
-    assert started["scaffold_steps"] == []
+    assert "scaffold_steps" not in started
     assert started["allow_text_input"] is True
     assert started["allow_voice_input"] is True
     assert started["hint_count"] == 0

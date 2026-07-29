@@ -96,13 +96,12 @@ class InteractionResponse(BaseModel):
     show_visual_cue: bool
     visual_cue: VisualCue | None
     show_scaffold_panel: bool
-    scaffold_steps: list[str]
     scaffold_id: str | None = None
     current_scaffold_step_id: str | None = None
     scaffold_step_number: int = 0
     scaffold_step_text: str | None = None
     scaffold_step_voice: str | None = None
-    total_steps_estimated: int = 0
+    total_scaffold_steps: int = 0
     allow_text_input: bool
     allow_voice_input: bool
     hint_count: int
