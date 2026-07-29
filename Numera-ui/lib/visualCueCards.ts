@@ -80,12 +80,25 @@ export const VISUAL_CUE_CARDS: Record<CueType, VisualCueCard> = {
 
 /** Cards shown when the AI Engine asks for a cue but sends no (or an unknown)
  *  cue_type — e.g. a session-start `show_visual_cue` or the dev toggle. */
-const DEFAULT_CUE: CueType = 'EQUATION_BLOCK';
 
 /** Resolve a backend cue_type to a card, always returning something renderable. */
-export function resolveCueCard(cueType: string | null | undefined): VisualCueCard {
+/**
+ * The card for a backend cue_type, or null when we don't have one.
+ *
+ * Returning null matters. This used to fall back to a DEFAULT_CUE card, so an
+ * unknown or missing cue_type rendered a fixed worked example about a
+ * completely different equation — invented content, presented to the student as
+ * if the tutor had chosen it. That is what "it shows the old visual cue" looks
+ * like from the outside (Sanya, 2026-07-29), and the Phase 2 handoff §9 forbids
+ * it outright: never derive support content from hardcoded frontend examples
+ * when the backend has supplied authored content.
+ *
+ * With null, VisualCue shows the backend's own description instead, and shows
+ * nothing at all when there is neither.
+ */
+export function resolveCueCard(cueType: string | null | undefined): VisualCueCard | null {
   if (cueType && cueType in VISUAL_CUE_CARDS) {
     return VISUAL_CUE_CARDS[cueType as CueType];
   }
-  return VISUAL_CUE_CARDS[DEFAULT_CUE];
+  return null;
 }

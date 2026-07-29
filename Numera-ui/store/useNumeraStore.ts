@@ -511,11 +511,21 @@ export const useNumeraStore = create<NumeraState>()(
     set((s) => {
       const phaseChanged = phase !== s.currentPhase;
       const text = questionText?.trim() ?? '';
+      const nextQuestionId =
+        phaseChanged || questionId !== null ? questionId : s.activeQuestionId;
+      // A cue belongs to the question it was raised for. Nothing cleared it, so
+      // a cue shown on one question stayed on screen through the next one and
+      // the one after — the student reading guidance about work they had
+      // already finished (Sanya, 2026-07-29). Moving question or phase drops
+      // it; the backend re-sends a cue when the new question needs one.
+      const questionChanged = nextQuestionId !== s.activeQuestionId || phaseChanged;
       return {
         currentPhase: phase,
-        activeQuestionId:
-          phaseChanged || questionId !== null ? questionId : s.activeQuestionId,
+        activeQuestionId: nextQuestionId,
         questionText: text || (phaseChanged ? '' : s.questionText),
+        ...(questionChanged
+          ? { visualCueVisible: false, visualCueType: null, visualCueDescription: null }
+          : {}),
       };
     }),
   setQuestionNumber: (questionNumber) => set({ questionNumber }),

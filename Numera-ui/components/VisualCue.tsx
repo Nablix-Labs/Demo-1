@@ -35,7 +35,9 @@ export default function VisualCue() {
     setShown(false);
   }, [visible]);
 
-  if (!visible) return null;
+  // Nothing authored and nothing to say — show nothing, rather than a card
+  // about an equation the student isn't working on.
+  if (!visible || (!card && !description)) return null;
 
   return (
     <aside
@@ -46,11 +48,11 @@ export default function VisualCue() {
         opacity: shown ? 1 : 0,
         transform: shown ? 'translateY(0)' : 'translateY(-6px)',
       }}
-      aria-label={`Visual cue: ${card.title}`}
+      aria-label={`Visual cue: ${card?.title ?? 'guidance'}`}
     >
       <div className="flex items-center justify-between px-3 py-2 border-b border-muted-gray bg-reading-surface">
         <div className="flex items-center gap-1.5 text-[12px] font-semibold text-slate-blue">
-          <Lightbulb size={14} strokeWidth={1.9} /> Visual cue: {card.title}
+          <Lightbulb size={14} strokeWidth={1.9} /> Visual cue{card ? `: ${card.title}` : ''}
         </div>
         <button
           onClick={() => setVisible(false)}
@@ -62,26 +64,34 @@ export default function VisualCue() {
       </div>
 
       <div className="p-3 space-y-3">
-        {/* Worked example — the equation this card is guiding, not the answer. */}
-        <div className="rounded-lg bg-reading-surface border border-muted-gray py-3 px-2 text-center">
-          <span className="text-[16px] font-semibold text-ink" style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}>
-            {card.example}
-          </span>
-        </div>
-
-        {/* Steps toward the next move. */}
-        <ol className="space-y-1.5">
-          {card.steps.map((step, i) => (
-            <li key={i} className="flex gap-2 text-[12px] text-ink leading-snug">
-              <span className="flex-shrink-0 w-4 h-4 mt-[1px] rounded-full bg-slate-blue/15 text-slate-blue text-[10px] font-bold flex items-center justify-center">
-                {i + 1}
+        {/* The illustrated card, only when the backend named a cue_type we
+            actually have artwork for. Everything in here is authored on our
+            side, so it must never stand in for a cue the backend didn't ask
+            for — see resolveCueCard. */}
+        {card && (
+          <>
+            {/* Worked example — the equation this card is guiding, not the answer. */}
+            <div className="rounded-lg bg-reading-surface border border-muted-gray py-3 px-2 text-center">
+              <span className="text-[16px] font-semibold text-ink" style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}>
+                {card.example}
               </span>
-              {step}
-            </li>
-          ))}
-        </ol>
+            </div>
 
-        <p className="text-[12px] text-ink leading-snug font-medium">{card.caption}</p>
+            {/* Steps toward the next move. */}
+            <ol className="space-y-1.5">
+              {card.steps.map((step, i) => (
+                <li key={i} className="flex gap-2 text-[12px] text-ink leading-snug">
+                  <span className="flex-shrink-0 w-4 h-4 mt-[1px] rounded-full bg-slate-blue/15 text-slate-blue text-[10px] font-bold flex items-center justify-center">
+                    {i + 1}
+                  </span>
+                  {step}
+                </li>
+              ))}
+            </ol>
+
+            <p className="text-[12px] text-ink leading-snug font-medium">{card.caption}</p>
+          </>
+        )}
 
         {/* Backend's instructional description, when provided. */}
         {description && (
