@@ -486,12 +486,40 @@ def _scaffold_response_is_correct(
     student_message: str,
     expected_response: str,
     tutor_evaluation: str,
+    rules: ClassifierRulesConfig,
 ) -> bool:
-    normalized_student = normalize_exact_notation(student_message).casefold().strip()
-    normalized_expected = normalize_exact_notation(expected_response).casefold().strip()
-    if normalized_student == normalized_expected:
+    normalized_student = _normalize_scaffold_response(student_message)
+    normalized_expected = _normalize_scaffold_response(expected_response)
+    aliases = next(
+        (
+            values
+            for key, values in rules.scaffold_response_rules.aliases.items()
+            if _normalize_scaffold_response(key) == normalized_expected
+        ),
+        [],
+    )
+    accepted = {
+        normalized_expected,
+        *(_normalize_scaffold_response(alias) for alias in aliases),
+    }
+    if any(_contains_scaffold_response(normalized_student, value) for value in accepted):
         return True
     return tutor_evaluation == "CORRECT"
+
+
+def _normalize_scaffold_response(value: str) -> str:
+    normalized = value.casefold().replace("−", "-").replace("⁄", "/")
+    normalized = re.sub(r"(?<=[\d½⅓¼¾⅔⅛])(?=[a-z])", " ", normalized)
+    normalized = re.sub(r"(?<=[a-z])(?=[\d½⅓¼¾⅔⅛])", " ", normalized)
+    normalized = re.sub(r"[^\w/½⅓¼¾⅔⅛]+", " ", normalized)
+    return " ".join(normalized.split())
+
+
+def _contains_scaffold_response(student: str, expected: str) -> bool:
+    if expected == "":
+        return False
+    pattern = rf"(?<![\w/]){re.escape(expected)}(?![\w/])"
+    return re.search(pattern, student) is not None
 
 
 def _recent_conversation_history(
@@ -1184,6 +1212,9 @@ async def _process_interaction(
     scaffold_steps = schema_steps or tutor.scaffold_steps_delivered
     tutor_message = schema_hint or tutor.tutor_message
     tutor_message_voice = schema_hint or tutor.tutor_message_voice
+    if schema_steps:
+        tutor_message = schema_steps[0]
+        tutor_message_voice = schema_steps[0]
     scaffold_turn_updates: dict[str, object] = {}
     if scaffold_turn:
         expected_scaffold_response = turn_session.scaffold_expected_response
@@ -1193,6 +1224,7 @@ async def _process_interaction(
             student_message,
             expected_scaffold_response,
             tutor.evaluation,
+            rules,
         ):
             next_prompt, scaffold_turn_updates = _next_scaffold_state(turn_session)
             if next_prompt is None:
@@ -1210,6 +1242,12 @@ async def _process_interaction(
                 scaffold_steps = [next_prompt]
         else:
             scaffold_steps = list(turn_session.scaffold_steps)
+            if not scaffold_steps:
+                raise RuntimeError("Active scaffold step lost its prompt.")
+            tutor_message = rules.messages.SCAFFOLD_STEP_RETRY.format(
+                step=scaffold_steps[0]
+            )
+            tutor_message_voice = tutor_message
     conversation_history: list[ConversationMessage] = _updated_conversation_history(
         turn_session.conversation_history,
         student_message,
