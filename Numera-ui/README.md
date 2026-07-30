@@ -2,6 +2,11 @@
 
 Frontend for the Numera AI Math Tutor by Nablix. Built by **Manav Arya Singh**.
 
+> **New here, or coming back after a while? Read [`CONTEXT.md`](./CONTEXT.md)
+> first.** It covers who owns which backend service, how production is actually
+> wired, and the traps that have already cost somebody a day — none of which you
+> can work out from the code.
+
 ## Tech Stack
 
 | Layer | Technology |
