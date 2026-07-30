@@ -115,6 +115,7 @@ class TutorEngineServiceAdapter:
                     conversation_state=context.conversation_state,
                     generated_question_rubric=context.generated_question_rubric,
                     active_teaching_objective=context.active_teaching_objective,
+                    scaffold_evaluation_context=context.scaffold_evaluation_context,
                 )
             )
             return _tutor_result_from_ai_response(ai_response)
@@ -259,6 +260,7 @@ def _tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:
         selected_error_code=response.selected_error_code,
         generated_question_rubric=response.generated_question_rubric,
         active_teaching_objective=response.active_teaching_objective,
+        scaffold_original_answer_correct=response.scaffold_original_answer_correct,
     )
 
 

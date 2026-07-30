@@ -45,6 +45,8 @@ from app.models.guided_learning import (
     ActiveTeachingObjective,
     GeneratedQuestionRubric,
     GuidedEvaluation,
+    ScaffoldEvaluationContext,
+    ScaffoldStepEvaluation,
 )
 from app.models.student_model_session import AnswerSpec
 
@@ -80,6 +82,7 @@ class ClassificationRequest(StrictSchema):
     conversation_state: ConversationState | None = None
     generated_question_rubric: GeneratedQuestionRubric | None = None
     active_teaching_objective: ActiveTeachingObjective | None = None
+    scaffold_evaluation_context: ScaffoldEvaluationContext | None = None
 
 
 @dataclass(frozen=True)
@@ -126,6 +129,21 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
             request=request,
             rules=rules,
             safety_check=safety_check,
+        )
+
+    if (
+        request.scaffold_evaluation_context is not None
+        and not (
+            request.input_source == "VOICE"
+            and is_low_confidence(request.transcript_confidence, rules)
+        )
+        and openai_client is not None
+    ):
+        return classify_scaffold_response(
+            request,
+            rules,
+            safety_check,
+            openai_client,
         )
 
     evaluation: EvaluationCategory | None = evaluate_answer_attempt(request, intent, rules)
@@ -270,6 +288,88 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
             if use_openai_wording
             else None
         ),
+    )
+
+
+def classify_scaffold_response(
+    request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
+    safety_check: SafetyCheck,
+    openai_client: OpenAIAIEngineClient,
+) -> TutorResponse:
+    context = request.scaffold_evaluation_context
+    if context is None:
+        raise AdapterError(
+            "openai_ai_engine",
+            "Scaffold evaluation context is required.",
+        )
+    last_error: AdapterError | None = None
+    result: ScaffoldStepEvaluation | None = None
+    for attempt in range(rules.guided_learning.maximum_retries + 1):
+        try:
+            result = openai_client.evaluate_scaffold_step(
+                context=context,
+                student_response=request.student_input,
+                input_source=request.input_source,
+                system_prompt=rules.guided_learning.scaffold_evaluator_system_prompt,
+            )
+            break
+        except AdapterError as error:
+            last_error = error
+            logger.warning(
+                "scaffold_evaluation_retry",
+                extra={
+                    "question_id": request.question_id,
+                    "scaffold_id": context.scaffold_id,
+                    "step_id": context.step_id,
+                    "attempt": attempt + 1,
+                    "detail": error.detail,
+                },
+            )
+    if result is None:
+        raise last_error or AdapterError(
+            "openai_ai_engine",
+            f"Scaffold evaluation failed for {context.step_id}.",
+        )
+    satisfied = (
+        result.step_satisfied
+        and result.confidence >= rules.guided_learning.confidence_threshold
+    )
+    original_answer_correct = satisfied and result.original_answer_correct
+    logger.info(
+        "scaffold_step_evaluated",
+        extra={
+            "question_id": request.question_id,
+            "scaffold_id": context.scaffold_id,
+            "step_id": context.step_id,
+            "step_satisfied": satisfied,
+            "original_answer_correct": original_answer_correct,
+            "confidence": result.confidence,
+        },
+    )
+    decision = TutorDecision(
+        intent="SUBMITTING_ANSWER",
+        evaluation="CORRECT" if satisfied else "INCORRECT",
+        error_type=None if satisfied else "INSUFFICIENT_INFORMATION",
+        response_strategy="CONFIRM_CORRECT" if satisfied else "CLARIFY",
+        hint_level=None,
+        canvas_review=None,
+        reasoning_complete=satisfied,
+    )
+    response = build_tutor_response(
+        request=request,
+        rules=rules,
+        safety_check=safety_check,
+        decision=decision,
+        answer_reveal_allowed=False,
+        confidence=result.confidence,
+        tutor_message_override=None,
+        voice_message_override=None,
+    )
+    return response.model_copy(
+        update={
+            "scaffold_original_answer_correct": original_answer_correct,
+        }
     )
 
 

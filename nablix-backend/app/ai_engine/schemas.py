@@ -217,3 +217,4 @@ class TutorResponse(StrictSchema):
     selected_error_code: str | None = None
     generated_question_rubric: GeneratedQuestionRubric | None = None
     active_teaching_objective: ActiveTeachingObjective | None = None
+    scaffold_original_answer_correct: StrictBool = False

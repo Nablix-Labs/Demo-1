@@ -15,6 +15,7 @@ from app.models.guided_learning import (
     ActiveTeachingObjective,
     GeneratedQuestionRubric,
     GuidedStudentState,
+    ScaffoldEvaluationContext,
 )
 
 MasteryStatus = Literal[
@@ -112,6 +113,7 @@ class AdapterContext(BaseModel):
     conversation_state: ConversationState | None = None
     generated_question_rubric: GeneratedQuestionRubric | None = None
     active_teaching_objective: ActiveTeachingObjective | None = None
+    scaffold_evaluation_context: ScaffoldEvaluationContext | None = None
 
 
 class ConversationMessage(BaseModel):
@@ -236,6 +238,7 @@ class TutorResult(BaseModel):
     selected_error_code: str | None = None
     generated_question_rubric: GeneratedQuestionRubric | None = None
     active_teaching_objective: ActiveTeachingObjective | None = None
+    scaffold_original_answer_correct: bool = False
 
 
 class VoiceResult(BaseModel):
