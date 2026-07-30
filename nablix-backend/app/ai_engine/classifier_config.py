@@ -7,6 +7,7 @@ import yaml
 from pydantic import Field
 
 from app.ai_engine.schemas import ErrorType, IntentType, LearningPhase, ResponseStrategy, StrictSchema, VisualCueType
+from app.models.guided_learning import GuidedStudentState
 
 
 CONFIG_PATH: Path = Path("configs/classifier_rules.yaml")
@@ -155,6 +156,23 @@ class MessageConfig(StrictSchema):
     SCAFFOLD_ORIGINAL_RETRY: str
 
 
+class GuidedStateMappingConfig(StrictSchema):
+    student_model_event: str | None
+    strategy: str | None
+
+
+class GuidedLearningConfig(StrictSchema):
+    evaluation_mode: str
+    confidence_threshold: float = Field(ge=0.0, le=1.0)
+    maximum_retries: int = Field(ge=0)
+    stuck_escalation_count: int = Field(ge=1)
+    maximum_recent_history_turns: int = Field(ge=0)
+    rubric_prompt_version: str
+    evaluator_prompt_version: str
+    allowed_student_states: list[GuidedStudentState]
+    llm_state_mapping: dict[GuidedStudentState, GuidedStateMappingConfig]
+
+
 class ClassifierRulesConfig(StrictSchema):
     low_transcript_confidence_threshold: float = Field(ge=0.0, le=1.0)
     confidence: ConfidenceConfig
@@ -172,6 +190,7 @@ class ClassifierRulesConfig(StrictSchema):
     canvas_review: CanvasReviewConfig
     progressive_hint_messages: dict[ErrorType, list[str]]
     messages: MessageConfig
+    guided_learning: GuidedLearningConfig
 
 
 @lru_cache(maxsize=1)

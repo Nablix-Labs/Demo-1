@@ -41,6 +41,11 @@ from app.models.adapters import (
     ConversationState,
     Phase2PromptContext,
 )
+from app.models.guided_learning import (
+    ActiveTeachingObjective,
+    GeneratedQuestionRubric,
+    GuidedEvaluation,
+)
 from app.models.student_model_session import AnswerSpec
 
 if TYPE_CHECKING:
@@ -52,6 +57,7 @@ if TYPE_CHECKING:
 
 
 class ClassificationRequest(StrictSchema):
+    question_id: str | None = None
     question: str
     correct_answer: str
     answer_spec: AnswerSpec | None = None
@@ -72,6 +78,8 @@ class ClassificationRequest(StrictSchema):
     canvas_regions: list[CanvasTextRegion] = Field(default_factory=list)
     conversation_history: list[ConversationMessage] = Field(default_factory=list)
     conversation_state: ConversationState | None = None
+    generated_question_rubric: GeneratedQuestionRubric | None = None
+    active_teaching_objective: ActiveTeachingObjective | None = None
 
 
 @dataclass(frozen=True)
@@ -121,6 +129,29 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
         )
 
     evaluation: EvaluationCategory | None = evaluate_answer_attempt(request, intent, rules)
+    if (
+        request.current_phase == "GUIDED_PRACTICE"
+        and request.phase_2_prompt_context is not None
+        and rules.guided_learning.evaluation_mode == "LLM_STATE_MACHINE"
+        and settings.use_openai_ai_engine
+        and openai_client is None
+    ):
+        raise AdapterError(
+            "openai_ai_engine",
+            "LLM_STATE_MACHINE is enabled but the OpenAI client is unavailable.",
+        )
+    if should_use_guided_state_machine(request, rules, openai_client, evaluation):
+        if openai_client is None:
+            raise AdapterError(
+                "openai_ai_engine",
+                "LLM_STATE_MACHINE requires an enabled OpenAI client.",
+            )
+        return classify_guided_learning_response(
+            request=request,
+            rules=rules,
+            safety_check=safety_check,
+            openai_client=openai_client,
+        )
     authoritative_verification = uses_authoritative_verification(request)
     error_type: ErrorType | None = classify_student_error(request, evaluation, rules)
     response_strategy: ResponseStrategy = select_response_strategy(
@@ -236,6 +267,403 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
             if use_openai_wording
             else None
         ),
+    )
+
+
+def should_use_guided_state_machine(
+    request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
+    openai_client: OpenAIAIEngineClient | None,
+    deterministic_evaluation: EvaluationCategory | None,
+) -> bool:
+    if (
+        request.current_phase != "GUIDED_PRACTICE"
+        or request.phase_2_prompt_context is None
+        or rules.guided_learning.evaluation_mode != "LLM_STATE_MACHINE"
+        or openai_client is None
+    ):
+        return False
+    if request.input_source == "VOICE" and is_low_confidence(
+        request.transcript_confidence,
+        rules,
+    ):
+        return False
+    if request.answer_spec is None or request.question_id is None:
+        return False
+    method = request.answer_spec.verification_method
+    return not (
+        method in _AUTHORITATIVE_VERIFICATION_METHODS
+        and deterministic_evaluation is not None
+    )
+
+
+def classify_guided_learning_response(
+    request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
+    safety_check: SafetyCheck,
+    openai_client: OpenAIAIEngineClient,
+) -> TutorResponse:
+    if request.answer_spec is None or request.question_id is None:
+        raise AdapterError(
+            "openai_ai_engine",
+            "Guided Learning requires question_id and answer_spec.",
+        )
+    context = request.phase_2_prompt_context
+    if context is None:
+        raise AdapterError(
+            "openai_ai_engine",
+            "Guided Learning requires Phase 2 prompt context.",
+        )
+    allowed_errors = guided_error_definitions(context.potential_errors)
+    rubric = request.generated_question_rubric
+    if rubric is None or rubric.question_id != request.question_id:
+        rubric_error: AdapterError | None = None
+        for attempt in range(rules.guided_learning.maximum_retries + 1):
+            try:
+                rubric = openai_client.generate_guided_rubric(
+                    question_id=request.question_id,
+                    question=request.question,
+                    answer_spec=request.answer_spec,
+                    potential_errors=allowed_errors,
+                    target_micro_skill_ids=context.target_micro_skill_ids,
+                    prompt_version=rules.guided_learning.rubric_prompt_version,
+                )
+                break
+            except AdapterError as error:
+                rubric_error = error
+                logger.warning(
+                    "guided_rubric_retry",
+                    extra={
+                        "question_id": request.question_id,
+                        "attempt": attempt + 1,
+                        "detail": error.detail,
+                    },
+                )
+        if rubric is None:
+            raise rubric_error or AdapterError(
+                "openai_ai_engine",
+                f"Rubric generation failed for {request.question_id}.",
+            )
+    validate_generated_rubric(rubric, request.question_id)
+    objective = request.active_teaching_objective or initial_guided_objective(rubric)
+    evaluation: GuidedEvaluation | None = None
+    last_error: AdapterError | None = None
+    for attempt in range(rules.guided_learning.maximum_retries + 1):
+        try:
+            candidate = openai_client.evaluate_guided_turn(
+                question=request.question,
+                answer_spec=request.answer_spec,
+                generated_rubric=rubric,
+                active_objective=objective,
+                student_response=request.student_input,
+                input_source=request.input_source,
+                allowed_error_codes=allowed_errors,
+                recent_conversation=request.conversation_history[
+                    -rules.guided_learning.maximum_recent_history_turns:
+                ],
+                evaluator_prompt_version=rules.guided_learning.evaluator_prompt_version,
+            )
+            evaluation = validate_guided_evaluation(
+                candidate,
+                rubric,
+                objective,
+                allowed_errors,
+                rules,
+            )
+            break
+        except AdapterError as error:
+            last_error = error
+            logger.warning(
+                "guided_evaluation_retry",
+                extra={
+                    "question_id": request.question_id,
+                    "attempt": attempt + 1,
+                    "detail": error.detail,
+                },
+            )
+    if evaluation is None:
+        raise last_error or AdapterError(
+            "openai_ai_engine",
+            "Guided turn evaluation failed without a validated response.",
+        )
+    next_objective = normalized_guided_objective(evaluation, objective)
+    logger.info(
+        "guided_state_evaluated",
+        extra={
+            "question_id": request.question_id,
+            "generated_rubric_hash": rubric.cache_key,
+            "active_objective": (
+                next_objective.model_dump()
+                if next_objective is not None
+                else None
+            ),
+            "student_state": evaluation.student_state,
+            "confidence": evaluation.confidence,
+            "selected_error_code": evaluation.selected_error_code,
+        },
+    )
+    return build_guided_tutor_response(
+        request,
+        rules,
+        safety_check,
+        rubric,
+        evaluation,
+        next_objective,
+    )
+
+
+def guided_error_definitions(
+    potential_errors: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    definitions: list[dict[str, object]] = []
+    for potential_error in potential_errors:
+        error_code = potential_error.get("error_code")
+        description = potential_error.get("description")
+        if not isinstance(error_code, str):
+            continue
+        definitions.append(
+            {
+                "error_code": error_code,
+                "description": description if isinstance(description, str) else "",
+            }
+        )
+    return definitions
+
+
+def validate_generated_rubric(
+    rubric: GeneratedQuestionRubric,
+    question_id: str,
+) -> None:
+    concept_ids = [concept.concept_id for concept in rubric.required_concepts]
+    if rubric.question_id != question_id:
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Rubric question_id {rubric.question_id} does not match {question_id}.",
+        )
+    if not concept_ids or len(concept_ids) != len(set(concept_ids)):
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Rubric for {question_id} has empty or duplicate concept IDs.",
+        )
+
+
+def initial_guided_objective(
+    rubric: GeneratedQuestionRubric,
+) -> ActiveTeachingObjective:
+    required_ids = [
+        concept.concept_id
+        for concept in rubric.required_concepts
+        if concept.required
+    ]
+    return ActiveTeachingObjective(
+        objective_type="ANSWER_QUESTION",
+        target_concept_ids=required_ids,
+        confirmed_concept_ids=[],
+        missing_concept_ids=required_ids,
+    )
+
+
+def validate_guided_evaluation(
+    evaluation: GuidedEvaluation,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+    allowed_errors: list[dict[str, object]],
+    rules: ClassifierRulesConfig,
+) -> GuidedEvaluation:
+    concept_ids = {concept.concept_id for concept in rubric.required_concepts}
+    returned_ids = {
+        *evaluation.newly_confirmed_concept_ids,
+        *evaluation.preserved_concept_ids,
+        *evaluation.contradicted_concept_ids,
+        *evaluation.missing_concept_ids,
+    }
+    if evaluation.next_objective is not None:
+        returned_ids.update(evaluation.next_objective.target_concept_ids)
+    if not returned_ids.issubset(concept_ids):
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Guided evaluation returned unknown concept IDs: {sorted(returned_ids - concept_ids)}.",
+        )
+    allowed_error_codes = {
+        item["error_code"]
+        for item in allowed_errors
+        if isinstance(item.get("error_code"), str)
+    }
+    if (
+        evaluation.selected_error_code is not None
+        and evaluation.selected_error_code not in allowed_error_codes
+    ):
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Guided evaluation returned disallowed error code {evaluation.selected_error_code}.",
+        )
+    if evaluation.student_state not in rules.guided_learning.allowed_student_states:
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Guided evaluation returned disallowed state {evaluation.student_state}.",
+        )
+    if evaluation.confidence < rules.guided_learning.confidence_threshold:
+        return evaluation.model_copy(
+            update={
+                "student_state": "UNCLEAR",
+                "newly_confirmed_concept_ids": [],
+                "contradicted_concept_ids": [],
+                "selected_error_code": None,
+                "missing_concept_ids": objective.missing_concept_ids,
+                "next_objective": objective,
+            }
+        )
+    remaining = set(evaluation.missing_concept_ids)
+    confirmed = set(objective.confirmed_concept_ids) | set(
+        evaluation.newly_confirmed_concept_ids
+    )
+    if evaluation.student_state == "CORRECT" and remaining:
+        raise AdapterError(
+            "openai_ai_engine",
+            "CORRECT evaluation cannot leave required concepts missing.",
+        )
+    if evaluation.student_state == "PARTIAL" and (
+        not confirmed or not remaining
+    ):
+        raise AdapterError(
+            "openai_ai_engine",
+            "PARTIAL evaluation requires confirmed and missing concepts.",
+        )
+    lost_confirmed = (
+        set(objective.confirmed_concept_ids)
+        - set(evaluation.preserved_concept_ids)
+        - set(evaluation.contradicted_concept_ids)
+    )
+    if evaluation.student_state == "WRONG" and lost_confirmed:
+        raise AdapterError(
+            "openai_ai_engine",
+            f"WRONG evaluation erased confirmed concepts: {sorted(lost_confirmed)}.",
+        )
+    if evaluation.student_state in {"STUCK", "UNCLEAR"} and (
+        evaluation.newly_confirmed_concept_ids
+        or evaluation.selected_error_code is not None
+    ):
+        raise AdapterError(
+            "openai_ai_engine",
+            f"{evaluation.student_state} cannot create evidence.",
+        )
+    return evaluation
+
+
+def normalized_guided_objective(
+    evaluation: GuidedEvaluation,
+    previous: ActiveTeachingObjective,
+) -> ActiveTeachingObjective | None:
+    if evaluation.student_state == "CORRECT":
+        return None
+    contradicted = set(evaluation.contradicted_concept_ids)
+    confirmed = (
+        set(previous.confirmed_concept_ids)
+        | set(evaluation.preserved_concept_ids)
+        | set(evaluation.newly_confirmed_concept_ids)
+    ) - contradicted
+    missing = set(evaluation.missing_concept_ids) | contradicted
+    target_ids = (
+        evaluation.next_objective.target_concept_ids
+        if evaluation.next_objective is not None
+        else sorted(missing)
+    )
+    return ActiveTeachingObjective(
+        objective_type=(
+            evaluation.next_objective.objective_type
+            if evaluation.next_objective is not None
+            else "EXPLAIN_CONCEPT"
+        ),
+        target_concept_ids=target_ids,
+        confirmed_concept_ids=sorted(confirmed),
+        missing_concept_ids=sorted(missing),
+    )
+
+
+def build_guided_tutor_response(
+    request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
+    safety_check: SafetyCheck,
+    rubric: GeneratedQuestionRubric,
+    evaluation: GuidedEvaluation,
+    objective: ActiveTeachingObjective | None,
+) -> TutorResponse:
+    state = evaluation.student_state
+    response_strategy: ResponseStrategy = (
+        "CONFIRM_CORRECT"
+        if state == "CORRECT"
+        else "SCAFFOLD"
+        if state == "STUCK"
+        and request.phase_2_prompt_context is not None
+        and request.phase_2_prompt_context.consecutive_stuck_count + 1
+        >= rules.guided_learning.stuck_escalation_count
+        else "CLARIFY"
+        if state in {"PARTIAL", "STUCK", "UNCLEAR"}
+        else "ENCOURAGE_RETRY"
+    )
+    mapped_evaluation: EvaluationCategory = (
+        "CORRECT"
+        if state == "CORRECT"
+        else "PARTIALLY_CORRECT"
+        if state == "PARTIAL"
+        else "INCORRECT"
+        if state == "WRONG"
+        else "NO_ATTEMPT"
+        if state == "STUCK"
+        else "UNCLEAR"
+    )
+    response = TutorResponse(
+        evaluation=mapped_evaluation,
+        error_type="UNKNOWN_ERROR" if state == "WRONG" else None,
+        intent="EXPRESSING_CONFUSION" if state == "STUCK" else "SUBMITTING_ANSWER",
+        response_strategy=response_strategy,
+        tutor_message=evaluation.tutor_message,
+        tutor_message_voice_optimised=evaluation.tutor_message_voice,
+        voice_optimised=True,
+        hint_level=None,
+        scaffold_steps_delivered=[],
+        visual_cue=VisualCue(show=False, cue_type=None, description=None),
+        canvas_feedback=CanvasFeedback(
+            has_feedback=False,
+            step_feedback=[],
+            highlight_instruction=None,
+        ),
+        mistake_classification=None,
+        annotation_intents=[],
+        next_phase_recommendation=request.current_phase,
+        answer_reveal_allowed=False,
+        confidence=evaluation.confidence,
+        input_source=request.input_source,
+        transcript_confidence=request.transcript_confidence,
+        safety_check=safety_check,
+        guardrail_check=GuardrailCheck(
+            passed=True,
+            violation_type=None,
+            action_taken=None,
+        ),
+        student_model_events=[],
+        attempt_increment=1 if state in {"CORRECT", "WRONG"} else 0,
+        recommended_conversation_action=(
+            "ADVANCE_TO_NEXT_QUESTION"
+            if state == "CORRECT"
+            else "REQUEST_EXPLANATION"
+            if state == "PARTIAL"
+            else "REQUEST_CLARIFICATION"
+            if state == "UNCLEAR"
+            else "ASK_QUESTION"
+        ),
+        question_completed=state == "CORRECT",
+        answer_value_confirmed=state == "CORRECT",
+        reasoning_complete=state == "CORRECT",
+        guided_student_state=state,
+        selected_error_code=evaluation.selected_error_code,
+        generated_question_rubric=rubric,
+        active_teaching_objective=objective,
+    )
+    return apply_answer_reveal_guardrail(
+        response,
+        request.correct_answer,
+        rules,
     )
 
 
