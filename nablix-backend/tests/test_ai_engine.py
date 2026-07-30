@@ -752,6 +752,7 @@ def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> 
         model="gpt-test",
         timeout_seconds=1,
         prompt_cache_key_enabled=False,
+        store_responses=False,
         retry_count=0,
     )
     disabled_client.generate_tutor_turn(
@@ -781,6 +782,7 @@ def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> 
         model="gpt-test",
         timeout_seconds=1,
         prompt_cache_key_enabled=True,
+        store_responses=True,
         retry_count=0,
     )
     enabled_client.generate_tutor_turn(
@@ -811,8 +813,10 @@ def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> 
     )
 
     assert "prompt_cache_key" not in request_bodies[0]
+    assert request_bodies[0]["store"] is False
     assert len(request_bodies[1]["prompt_cache_key"]) == 64
     assert request_bodies[1]["prompt_cache_key"].isalnum()
+    assert request_bodies[1]["store"] is True
     assert "cache_control" not in json.dumps(request_bodies[1])
     assert request_bodies[1]["input"][3] == {
         "role": "assistant",

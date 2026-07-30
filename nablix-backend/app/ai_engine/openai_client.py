@@ -68,12 +68,14 @@ class OpenAIAIEngineClient:
         model: str,
         timeout_seconds: int,
         prompt_cache_key_enabled: bool,
+        store_responses: bool,
         retry_count: int,
     ) -> None:
         self._api_key = api_key
         self._model = model
         self._timeout_seconds = timeout_seconds
         self._prompt_cache_key_enabled = prompt_cache_key_enabled
+        self._store_responses = store_responses
         self._retry_count = retry_count
 
     def generate_tutor_turn(
@@ -234,7 +236,7 @@ class OpenAIAIEngineClient:
         request_body = {
             "model": self._model,
             "input": messages,
-            "store": False,
+            "store": self._store_responses,
             "text": {
                 "format": {
                     "type": "json_schema",
