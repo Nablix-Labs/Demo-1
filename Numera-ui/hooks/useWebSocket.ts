@@ -27,6 +27,7 @@ import { useAuthStore } from '@/store/useAuthStore';
 import { tutorAudioStream, effectiveVoice } from '@/lib/tts';
 import { buildVoiceStreamUrl, voiceStreamingEnabled, allowAnonTutorCalls } from '@/lib/runtimeConfig';
 import { ANON_ACCESS_TOKEN, studentId } from '@/lib/api';
+import { applyInteractionSupport, type SupportPresentation } from '@/lib/interactionPresentation';
 import { TurnWatchdog } from '@/lib/turnWatchdog';
 
 export function useWebSocket(sessionId: string | null) {
@@ -120,6 +121,21 @@ export function useWebSocket(sessionId: string | null) {
             // the audio that is about to stream in.
             watchdogRef.current?.noteTurnResolved();
             addTranscriptMessage({ role: 'ai', text: msg.text as string });
+            applyInteractionSupport({
+              message: msg.text as string,
+              show_visual_cue: msg.show_visual_cue as boolean | undefined,
+              visual_cue: msg.visual_cue as SupportPresentation['visual_cue'],
+              show_scaffold_panel: msg.show_scaffold_panel as boolean | undefined,
+              scaffold_id: msg.scaffold_id as string | null | undefined,
+              current_scaffold_step_id:
+                msg.current_scaffold_step_id as string | null | undefined,
+              scaffold_step_number:
+                msg.scaffold_step_number as number | null | undefined,
+              scaffold_step_text: msg.scaffold_step_text as string | null | undefined,
+              scaffold_step_voice: msg.scaffold_step_voice as string | null | undefined,
+              total_scaffold_steps:
+                msg.total_scaffold_steps as number | null | undefined,
+            });
             if (Array.isArray(msg.canvas_draw) && msg.canvas_draw.length > 0)
               applyCanvasDraw(msg.canvas_draw as Parameters<typeof applyCanvasDraw>[0]);
             // The voice server forwards the backend's phase state; keep the

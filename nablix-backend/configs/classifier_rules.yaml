@@ -396,5 +396,6 @@ messages:
   QUESTION_COMPLETE_ACKNOWLEDGEMENT: You are welcome. This question is complete, so let us continue to the next question.
   CONTEXTUAL_ACKNOWLEDGEMENT: Exactly. Let us move to the next question.
   QUESTION_ALREADY_COMPLETE: This question is already complete. Let us continue to the next question.
+  NEXT_QUESTION: "Here is the next question. Please solve it: {question}"
   SCAFFOLD_STEP_RETRY: "Let’s stay with this step: {step}"
   SCAFFOLD_ORIGINAL_RETRY: Now use those steps on the original question. What would you try first?

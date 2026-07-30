@@ -208,10 +208,26 @@ PHASE_FIELDS = (
     "phase_transition_voice",
 )
 
+SUPPORT_FIELDS = (
+    "show_visual_cue",
+    "visual_cue",
+    "show_scaffold_panel",
+    "scaffold_id",
+    "current_scaffold_step_id",
+    "scaffold_step_number",
+    "scaffold_step_text",
+    "scaffold_step_voice",
+    "total_scaffold_steps",
+)
+
 
 def _phase_fields_from(result: dict[str, object]) -> dict[str, object]:
     """Pass the backend's phase state through to the frontend unchanged."""
     return {key: result.get(key) for key in PHASE_FIELDS if key in result}
+
+
+def _support_fields_from(result: dict[str, object]) -> dict[str, object]:
+    return {key: result.get(key) for key in SUPPORT_FIELDS if key in result}
 
 
 def _canvas_draw_from(result: dict[str, object]) -> list[object]:
@@ -676,6 +692,7 @@ async def process_and_respond(
         "text_latency_ms": text_sent_ms,
         "canvas_draw": canvas_draw,
         **_phase_fields_from(tutor_response),
+        **_support_fields_from(tutor_response),
     })
 
     logger.info(f"[{session_id}] Text sent to frontend: {text_sent_ms}ms")

@@ -12,6 +12,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { activeScaffold, type InteractionResponse } from '@/lib/api';
+import { applyInteractionSupport } from '@/lib/interactionPresentation';
+import { useNumeraStore } from '@/store/useNumeraStore';
 
 /** A realistic first scaffold step — the worked example from §4 of the handoff. */
 function stepOne(over: Partial<InteractionResponse> = {}): InteractionResponse {
@@ -110,6 +112,32 @@ describe('scaffold: voice follows the authorised step', () => {
   it('reports no step voice when the backend omits it, so the caller speaks the message', () => {
     expect(activeScaffold(stepOne({ scaffold_step_voice: null }))!.stepVoice).toBeNull();
     expect(activeScaffold(stepOne({ scaffold_step_voice: '  ' }))!.stepVoice).toBeNull();
+  });
+
+  it('applies the same scaffold and visual cue for every interaction transport', () => {
+    useNumeraStore.setState({
+      activeScaffold: null,
+      visualCueVisible: false,
+      visualCueType: null,
+      visualCueDescription: null,
+    });
+    const response = stepOne({
+      visual_cue: {
+        show: true,
+        cue_type: 'VC-T02-COEFFICIENT-COUNT',
+        description: 'Count the repeated equal terms.',
+        actions: [],
+      },
+    });
+
+    const spoken = applyInteractionSupport(response);
+    const state = useNumeraStore.getState();
+
+    expect(spoken).toBe('Which number is multiplying x?');
+    expect(state.activeScaffold?.currentStepId).toBe('SCF-T02-FC-S1');
+    expect(state.visualCueVisible).toBe(true);
+    expect(state.visualCueType).toBe('VC-T02-COEFFICIENT-COUNT');
+    expect(state.visualCueDescription).toBe('Count the repeated equal terms.');
   });
 });
 
