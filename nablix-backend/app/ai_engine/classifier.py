@@ -1132,8 +1132,15 @@ def evaluate_answer_contract(
             else "INCORRECT"
         )
     normalized_input = normalize_semantic_answer(request.student_input)
-    if normalized_input == normalize_semantic_answer(
-        answer_spec.canonical_answer
+    concept_required_methods = {
+        "CHOICE_AND_CONCEPT_MATCH",
+        "BOOLEAN_AND_CONCEPT_MATCH",
+    }
+    if (
+        normalized_input == normalize_semantic_answer(
+            answer_spec.canonical_answer
+        )
+        and method not in concept_required_methods
     ):
         return "CORRECT"
     if (
