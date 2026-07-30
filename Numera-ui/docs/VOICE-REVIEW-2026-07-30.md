@@ -9,14 +9,13 @@ what I found reading the code. I changed nothing.
 
 Two things up front, so you can weigh the rest properly.
 
-**I have since got onto the VM and read the logs.** That changed the answer, so
-please read the next section before the rest — the code findings are all real,
-but none of them is what you hit this morning.
+**I have since got onto the VM and read three days of logs.** That changed the
+answer twice, so please read the next section before the rest.
 
-**I checked my own claims before writing this, and three of them were wrong.**
-They are listed at the bottom rather than quietly dropped, because if I only
-showed you the surviving findings the list would look more damning than the
-evidence supports.
+**Several of my own claims turned out to be wrong, and they are corrected in
+place rather than quietly dropped.** If I only showed you the surviving findings
+the list would look more damning than the evidence supports — and more
+importantly, you would not be able to tell which parts I actually verified.
 
 ---
 
@@ -93,7 +92,7 @@ That is almost certainly an Azure auto-shutdown policy left on the VM, probably
 for cost. I could not read the Azure config from inside the box, so somebody
 with portal access should confirm it.
 
-**This is the single highest-value thing to fix in this document.** Not because
+**This is the cheapest high-value fix in this document.** Not because
 it is hard, but because it costs the team an entire morning of misdirected
 debugging every time it happens, and it will keep happening at midnight IST. The
 fix is either turning the schedule off, or setting the services to start on boot
@@ -104,18 +103,21 @@ frontend.** Nobody had broken anything.
 
 ### What that means for everything below
 
-The code findings that follow are real defects I traced in source, and the log
-evidence sharpens two of them considerably. But **none of them caused this
-morning.** I had written finding 1 as the explanation for your report, on the
-reasoning that Aditya's deploy restarted the backend and wiped your session. The
-logs say otherwise: there was no deploy and no restart, because there was no
-running machine. That inference was wrong and I have corrected it in place.
+The code findings that follow are real defects I traced in source. But the thing
+that actually stopped your lesson is **0a — a bug we already documented
+yesterday and have not fixed.** Not a new mystery in the voice module.
+
+I originally offered finding 1 as the explanation, reasoning that Aditya's deploy
+restarted the backend and wiped your session. There was no deploy and no restart.
+That inference was wrong, and it was wrong in a specific way worth naming: I
+reached for a mechanism I had already found rather than going to the evidence.
 
 ---
 
 ## The short version
 
-One confirmed major problem, one probable, two medium. Not twelve bugs.
+Two things caused what you saw, and neither is new: an unfixed 409, and a
+switched-off machine. The rest below is real but did not cause it.
 
 The honest summary is not a bug count. Turn detection rests on a single 1.5
 second silence heuristic, there is no explicit end-of-turn signal, no barge-in
@@ -134,9 +136,7 @@ thin design more than it is buggy code.
 
 ---
 
-## 1. Sessions are lost on every restart — this is your "Tutor is unavailable"
-
-This is the one that matches what you saw yesterday.
+## 1. Sessions are lost on every restart
 
 Tutoring sessions live in a plain dictionary in process memory:
 
