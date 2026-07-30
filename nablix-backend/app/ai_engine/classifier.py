@@ -400,8 +400,8 @@ def should_use_guided_state_machine(
         return False
     method = request.answer_spec.verification_method
     return not (
-        method in _AUTHORITATIVE_VERIFICATION_METHODS
-        and deterministic_evaluation is not None
+        method == "EXACT_CHOICE_MATCH"
+        and deterministic_evaluation in {"CORRECT", "INCORRECT"}
     )
 
 

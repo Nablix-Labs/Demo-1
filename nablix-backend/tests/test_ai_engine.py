@@ -2020,6 +2020,63 @@ def test_guided_llm_repeated_stuck_requests_one_scaffold_escalation(
     assert response.attempt_increment == 0
 
 
+def test_guided_exact_notation_stuck_uses_question_aware_llm_message(
+    monkeypatch,
+) -> None:
+    class _GuidedClient:
+        def generate_guided_rubric(self, **kwargs):
+            return _guided_rubric().model_copy(
+                update={"question_id": "Q-T02-001"}
+            )
+
+        def evaluate_guided_turn(self, **kwargs):
+            objective = kwargs["active_objective"]
+            return GuidedEvaluation(
+                student_state="STUCK",
+                newly_confirmed_concept_ids=[],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=objective.missing_concept_ids,
+                selected_error_code=None,
+                confidence=0.95,
+                next_objective=objective,
+                tutor_message="Let’s make it smaller. Which letter is repeated?",
+                tutor_message_voice="Let’s make it smaller. Which letter is repeated?",
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _GuidedClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T02-001",
+            question="Write y + y + y + y in compact algebraic notation.",
+            correct_answer="4y",
+            answer_spec=_answer_spec(
+                "4y",
+                ["4 × y"],
+                "EXACT_NOTATION_MATCH",
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            student_input="I don't know",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.guided_student_state == "STUCK"
+    assert response.tutor_message == (
+        "Let’s make it smaller. Which letter is repeated?"
+    )
+    assert "x" not in response.tutor_message
+    assert response.attempt_increment == 0
+
+
 def test_guided_llm_wrong_uses_only_a_permitted_error_code(monkeypatch) -> None:
     class _GuidedClient:
         def generate_guided_rubric(self, **kwargs):
