@@ -152,7 +152,10 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
             safety_check=safety_check,
             openai_client=openai_client,
         )
-    authoritative_verification = uses_authoritative_verification(request)
+    authoritative_verification = (
+        uses_authoritative_verification(request)
+        or evaluate_answer_contract(request) == "CORRECT"
+    )
     error_type: ErrorType | None = classify_student_error(request, evaluation, rules)
     response_strategy: ResponseStrategy = select_response_strategy(
         intent=intent,
@@ -289,6 +292,11 @@ def should_use_guided_state_machine(
     ):
         return False
     if request.answer_spec is None or request.question_id is None:
+        return False
+    if (
+        deterministic_evaluation == "CORRECT"
+        and evaluate_answer_contract(request) == "CORRECT"
+    ):
         return False
     method = request.answer_spec.verification_method
     return not (
@@ -752,6 +760,8 @@ def should_use_deterministic_tutor_turn(
     intent: IntentType,
     rules: ClassifierRulesConfig,
 ) -> bool:
+    if evaluate_answer_contract(request) == "CORRECT":
+        return True
     if intent in {"REQUESTING_ANSWER", "ATTEMPTING_OVERRIDE"}:
         return True
     return request.input_source == "VOICE" and is_low_confidence(
@@ -1070,7 +1080,15 @@ def _normalize_superscript_notation(value: str) -> str:
 
 
 def normalize_semantic_answer(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+    normalized = unicodedata.normalize("NFKC", value).lower()
+    normalized = re.sub(
+        r"\b(?:is\s+)?multiplied\s+by\b|\btimes\b|\bmultiply\s+by\b",
+        " multiply ",
+        normalized,
+    )
+    normalized = re.sub(r"(?<=\w)\s+x\s+(?=\w)", " multiply ", normalized)
+    normalized = re.sub(r"[×·*]", " multiply ", normalized)
+    return re.sub(r"[^a-z0-9]+", " ", normalized).strip()
 
 
 def is_symbolically_equivalent(
@@ -1742,6 +1760,12 @@ def is_reasoning_required(
     request: ClassificationRequest,
     rules: ClassifierRulesConfig,
 ) -> bool:
+    if (
+        request.answer_spec is not None
+        and request.answer_spec.verification_method == "CONCEPT_TEXT_MATCH"
+        and evaluate_answer_contract(request) == "CORRECT"
+    ):
+        return False
     if (
         request.answer_spec is not None
         and request.answer_spec.explanation_required is not None

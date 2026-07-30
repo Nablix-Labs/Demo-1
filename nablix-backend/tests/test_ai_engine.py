@@ -2069,3 +2069,44 @@ def test_guided_llm_wrong_uses_only_a_permitted_error_code(monkeypatch) -> None:
     assert response.guided_student_state == "WRONG"
     assert response.selected_error_code == "ERR-T02-ADDITION"
     assert response.attempt_increment == 1
+
+
+@pytest.mark.parametrize(
+    "student_input",
+    ["c x d", "c × d", "c*d", "c · d", "c times d", "c multiplied by d"],
+)
+def test_guided_concept_notation_equivalents_cannot_be_rejected_by_llm(
+    monkeypatch,
+    student_input: str,
+) -> None:
+    class _RejectingGuidedClient:
+        def generate_guided_rubric(self, **kwargs):
+            raise AssertionError("An exact normalized match must not call the LLM.")
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _RejectingGuidedClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T02-002",
+            question="What does cd mean?",
+            correct_answer="c multiplied by d",
+            answer_spec=_answer_spec(
+                "c multiplied by d",
+                ["c times d", "c × d"],
+                "CONCEPT_TEXT_MATCH",
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            student_input=student_input,
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.evaluation == "CORRECT"
+    assert response.question_completed is True
