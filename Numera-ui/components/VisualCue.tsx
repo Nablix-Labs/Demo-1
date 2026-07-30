@@ -17,12 +17,14 @@ import { useEffect, useState } from 'react';
 import { Lightbulb, Info, X } from 'lucide-react';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { resolveCueCard } from '@/lib/visualCueCards';
+import { cn } from '@/lib/cn';
 
 export default function VisualCue() {
   const visible = useNumeraStore((s) => s.visualCueVisible);
   const setVisible = useNumeraStore((s) => s.setVisualCueVisible);
   const cueType = useNumeraStore((s) => s.visualCueType);
   const description = useNumeraStore((s) => s.visualCueDescription);
+  const panelSide = useNumeraStore((s) => s.panelSide);
   const card = resolveCueCard(cueType);
 
   // Small entrance (fade + rise) without depending on a motion library.
@@ -43,7 +45,10 @@ export default function VisualCue() {
     <aside
       // Right side (matches the design mockup: canvas left, cue right). Sits
       // below the "Explain it back" chrome so it stacks under it, not over it.
-      className="lg-glass fixed top-[84px] right-4 z-30 w-72 rounded-card overflow-hidden transition-all duration-300"
+      className={cn(
+        'lg-glass fixed top-[84px] z-30 w-72 max-w-[calc(100vw-2rem)] rounded-card overflow-hidden transition-all duration-300',
+        panelSide === 'right' ? 'left-4' : 'right-4',
+      )}
       style={{
         opacity: shown ? 1 : 0,
         transform: shown ? 'translateY(0)' : 'translateY(-6px)',

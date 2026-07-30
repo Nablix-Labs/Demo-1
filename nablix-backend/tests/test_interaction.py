@@ -439,7 +439,11 @@ def test_acknowledgement_after_correct_answer_does_not_restart_question(
 
     assert acknowledgement_response.status_code == 200
     body = acknowledgement_response.json()
-    assert body["message"] == "Exactly. Let us move to the next question."
+    assert body["message"] == (
+        "Here is the next question. Please solve it: Solve for x: x + 4 = 9"
+    )
+    assert body["message_voice"] == body["message"]
+    assert body["current_question"] == "Solve for x: x + 4 = 9"
     assert body["conversation_action"] == "ADVANCE_TO_NEXT_QUESTION"
     assert body["question_completed"] is False
     assert body["attempt_count"] == 0

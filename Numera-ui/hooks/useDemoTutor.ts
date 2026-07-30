@@ -14,7 +14,6 @@
  */
 import { useCallback } from 'react';
 import {
-  activeScaffold,
   startSession,
   submitCanvas,
   sendInteraction,
@@ -29,6 +28,7 @@ import {
   type InteractionResponse,
   type HintResponse,
 } from '@/lib/api';
+import { applyInteractionSupport } from '@/lib/interactionPresentation';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { speakTutor } from '@/lib/tts';
 
@@ -79,43 +79,6 @@ export function resetSessionStart(): void {
  */
 function hasCanvasActivity(): boolean {
   return useNumeraStore.getState().items.length > 0;
-}
-
-/** Apply the backend's visual-cue instruction from an interaction response.
- *  Prefers the richer `visual_cue.show`, falling back to the flat
- *  `show_visual_cue`. No-ops when neither is present so a response that omits the
- *  field never hides an already-shown cue. */
-/**
- * Apply the scaffold step the backend authorised on this turn.
- *
- * Returns what should be SPOKEN for the turn, because the two decisions are the
- * same decision (handoff §5.4 / §8): when a step is showing, the tutor voices
- * that step; otherwise it voices `message`. Splitting them is how the shown
- * text and the spoken text drift apart.
- *
- * A response that omits `show_scaffold_panel` entirely leaves the panel exactly
- * as it was — an older backend, or a turn that simply isn't about support, must
- * not close a panel the student is mid-way through.
- */
-function applyScaffold(res: InteractionResponse): string {
-  if (res.show_scaffold_panel === undefined) return res.message;
-  const next = activeScaffold(res);
-  useNumeraStore.getState().setActiveScaffold(next);
-  if (!next) return res.message;
-  // Prefer the step's own voice line; fall back to the message (§5.4).
-  return next.stepVoice ?? next.stepText ?? res.message;
-}
-
-function applyVisualCue(res: InteractionResponse): void {
-  const cue = res.visual_cue;
-  const show = cue?.show ?? res.show_visual_cue;
-  if (typeof show === 'boolean') {
-    useNumeraStore.getState().setVisualCue({
-      show,
-      cueType: cue?.cue_type ?? null,
-      description: cue?.description ?? null,
-    });
-  }
 }
 
 /** Pull a human-readable message out of a normalised API error, if present. */
@@ -261,8 +224,7 @@ export function useDemoTutor() {
         addTrailEntry({ kind: 'tutor', text: res.message });
         if (res.current_phase) useNumeraStore.getState().setCurrentPhase(res.current_phase); // advance phase
         if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
-        applyVisualCue(res); // backend may ask to show/hide the supporting visual
-        const spoken = applyScaffold(res); // one authorised step, and what to say
+        const spoken = applyInteractionSupport(res);
         speakTutor(spoken); // voice the reply — same words the student can read
         return res;
       } catch (err) {
@@ -452,7 +414,7 @@ export function useDemoTutor() {
         addTrailEntry({ kind: 'tutor', text: res.message });
         if (res.current_phase) useNumeraStore.getState().setCurrentPhase(res.current_phase); // advance phase
         if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
-        applyVisualCue(res); // backend may ask to show/hide the supporting visual
+        const spoken = applyInteractionSupport(res);
         // Record the tutor turn + backend gating for the next turn (contract §11).
         // Fallbacks keep the loop working before the backend sends these fields.
         useNumeraStore.getState().setTutorTurn(res.tutor_turn_id ?? null, {
@@ -464,11 +426,9 @@ export function useDemoTutor() {
         // expects another response; otherwise park in WAITING.
         useNumeraStore.getState().setVoiceStatus('speaking');
         const expectsMore = res.expects_student_response ?? true;
-        // Speak exactly what's shown in the chat. The backend's message_voice can
-        // carry the same meaning in different words ("we are close" vs "you're
-        // almost there"), which is confusing when read + heard together — so the
-        // spoken audio must match the on-screen text verbatim.
-        speakTutor(res.message, () => {
+        // A scaffold response voices its one authorised step. Ordinary turns
+        // voice the exact message shown in the transcript.
+        speakTutor(spoken, () => {
           const store = useNumeraStore.getState();
           if (store.voiceStatus !== 'speaking') return; // superseded meanwhile
           if (expectsMore) store.beginListeningTurn();

@@ -927,16 +927,18 @@ async def _process_interaction(
         and session.expected_student_response == "ACKNOWLEDGEMENT_OR_CONTINUE"
         and _is_acknowledgement(student_message, rules)
     ):
-        completion_message: str = rules.messages.CONTEXTUAL_ACKNOWLEDGEMENT
-        completed_history: list[ConversationMessage] = _updated_conversation_history(
-            session.conversation_history,
-            student_message,
-            completion_message,
-            rules.conversation_rules.max_recent_messages,
-        )
         advance = await next_question_updates(session, session.current_phase)
         if advance is None:
             raise QuestionFetchError(session.concept_id, session.current_phase)
+        next_question = advance.get("current_question")
+        if not isinstance(next_question, str) or next_question.strip() == "":
+            raise RuntimeError("Next-question update returned no question text.")
+        completion_message: str = rules.messages.NEXT_QUESTION.format(
+            question=next_question.strip()
+        )
+        completed_history = [
+            ConversationMessage(role="assistant", content=completion_message)
+        ]
         updated_session = update_interaction_state(
             request.session_id,
             request.student_id,
@@ -1556,6 +1558,27 @@ async def _process_interaction(
         advance["answer_value_confirmed"] = False
         advance["conversation_history"] = []
         state_updates.update(advance)
+
+    resulting_question_id = state_updates.get("question_id", session.question_id)
+    resulting_question = state_updates.get(
+        "current_question",
+        session.current_question,
+    )
+    question_advanced = (
+        isinstance(resulting_question_id, str)
+        and resulting_question_id != turn_session.question_id
+        and isinstance(resulting_question, str)
+        and resulting_question.strip() != ""
+    )
+    if question_advanced:
+        tutor_message = rules.messages.NEXT_QUESTION.format(
+            question=resulting_question.strip()
+        )
+        tutor_message_voice = tutor_message
+        conversation_action = "ADVANCE_TO_NEXT_QUESTION"
+        state_updates["conversation_history"] = [
+            ConversationMessage(role="assistant", content=tutor_message)
+        ]
 
     resulting_question_completed: bool = bool(
         state_updates.get("question_completed", completed)
