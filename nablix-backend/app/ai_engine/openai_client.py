@@ -155,6 +155,7 @@ class OpenAIAIEngineClient:
         potential_errors: list[dict[str, object]],
         target_micro_skill_ids: list[str],
         prompt_version: str,
+        system_prompt: str,
     ) -> GeneratedQuestionRubric:
         answer_payload = answer_spec.model_dump()
         cache_source = json.dumps(
@@ -169,18 +170,11 @@ class OpenAIAIEngineClient:
         )
         cache_key = hashlib.sha256(cache_source.encode("utf-8")).hexdigest()
         schema = GeneratedQuestionRubric.model_json_schema()
-        content = self._request_json(
+        content = self._request_guided_json(
             name="guided_question_rubric",
             schema=schema,
-            phase="GUIDED_PRACTICE",
-            active_triggers=[],
-            conversation_history=[],
+            system_prompt=system_prompt,
             user_payload={
-                "instruction": (
-                    "Infer the smallest concept rubric required to judge this question. "
-                    "Use stable uppercase concept IDs. Return every required concept, "
-                    "ALL_REQUIRED_CONCEPTS, and copy the supplied metadata fields exactly."
-                ),
                 "question_id": question_id,
                 "question": question,
                 "answer_spec": answer_payload,
@@ -216,20 +210,13 @@ class OpenAIAIEngineClient:
         allowed_error_codes: list[dict[str, object]],
         recent_conversation: list[ConversationMessage],
         evaluator_prompt_version: str,
+        system_prompt: str,
     ) -> GuidedEvaluation:
-        content = self._request_json(
+        content = self._request_guided_json(
             name="guided_turn_evaluation",
             schema=GuidedEvaluation.model_json_schema(),
-            phase="GUIDED_PRACTICE",
-            active_triggers=[],
-            conversation_history=recent_conversation,
+            system_prompt=system_prompt,
             user_payload={
-                "instruction": (
-                    "Evaluate the response against the active objective first. Preserve "
-                    "confirmed concepts unless explicitly contradicted. Select only an "
-                    "allowed error code. STUCK and UNCLEAR must not confirm negative "
-                    "evidence. Ask one focused next question and never reveal the answer."
-                ),
                 "question": question,
                 "answer_spec": answer_spec.model_dump(),
                 "generated_rubric": generated_rubric.model_dump(),
@@ -237,6 +224,10 @@ class OpenAIAIEngineClient:
                 "student_response": student_response,
                 "input_source": input_source,
                 "allowed_error_codes": allowed_error_codes,
+                "recent_conversation": [
+                    message.model_dump()
+                    for message in recent_conversation
+                ],
                 "evaluator_prompt_version": evaluator_prompt_version,
                 "answer_reveal_allowed": False,
             },
@@ -247,6 +238,71 @@ class OpenAIAIEngineClient:
             raise AdapterError(
                 "openai_ai_engine",
                 f"invalid guided evaluation: {error}",
+            ) from error
+
+    def _request_guided_json(
+        self,
+        name: str,
+        schema: dict[str, object],
+        system_prompt: str,
+        user_payload: dict[str, object],
+    ) -> dict[str, object]:
+        request_content = json.dumps(
+            {"component": name, **user_payload},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        request_body: dict[str, object] = {
+            "model": self._model,
+            "input": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": request_content},
+            ],
+            "store": self._store_responses,
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": name,
+                    "schema": schema,
+                    "strict": True,
+                }
+            },
+        }
+        if self._prompt_cache_key_enabled:
+            request_body["prompt_cache_key"] = sha256_text(system_prompt)
+        response, latency_ms = self._post_with_retries(request_body)
+        if response.status_code != 200:
+            raise AdapterError(
+                "openai_ai_engine",
+                f"status={response.status_code} body={response.text}",
+            )
+        try:
+            response_payload = response.json()
+            usage = extract_openai_usage_metrics(response_payload)
+            logger.info(
+                "openai_guided_evaluator_usage",
+                extra={
+                    "component": name,
+                    "request_id": (
+                        response_payload.get("id")
+                        if isinstance(response_payload, dict)
+                        else None
+                    ),
+                    "model": self._model,
+                    "prompt_sha256": sha256_text(system_prompt),
+                    "input_tokens": usage.input_tokens,
+                    "output_tokens": usage.output_tokens,
+                    "cached_tokens": usage.cached_tokens,
+                    "total_tokens": usage.total_tokens,
+                    "latency_ms": round(latency_ms, 3),
+                },
+            )
+            return json.loads(_extract_response_text(response_payload))
+        except (TypeError, ValueError, KeyError, ValidationError) as error:
+            raise AdapterError(
+                "openai_ai_engine",
+                f"unparseable guided response: {error}; body={response.text}",
             ) from error
 
     def build_tutor_message(

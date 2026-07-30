@@ -169,7 +169,10 @@ class GuidedLearningConfig(StrictSchema):
     maximum_recent_history_turns: int = Field(ge=0)
     rubric_prompt_version: str
     evaluator_prompt_version: str
+    rubric_system_prompt: str
+    evaluator_system_prompt: str
     allowed_student_states: list[GuidedStudentState]
+    supported_verification_methods: list[str]
     llm_state_mapping: dict[GuidedStudentState, GuidedStateMappingConfig]
 
 
