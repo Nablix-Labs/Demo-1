@@ -20,9 +20,41 @@ evidence supports.
 
 ---
 
-## What actually happened this morning: the VM was switched off
+## What actually happened: the 409, and then the VM switched off
 
-Nothing was broken. **The server was not running.**
+**Two separate things, in sequence.** I first wrote this section claiming the
+shutdown was the whole story. Manav pushed back — "it was working in the morning
+and suddenly stopped" — and he was right. The shutdown explains the silence, not
+the stop. Here is the corrected version.
+
+### Part 1 — it stopped at 23:01 IST on 29 July, and this is why
+
+The log has the exact moment:
+
+```
+Jul 29 17:30:14  [SESSION011] Pipeline complete: 6345ms      ✓ working
+Jul 29 17:30:48  [SESSION011] Pipeline complete: 5926ms      ✓ working
+Jul 29 17:31:41  [SESSION011] Pipeline complete: 7099ms      ✓ working
+Jul 29 17:31:57  [SESSION011] ERROR  status=409
+       "Student Model did not return metadata for ALG_1STEP_GP_F01."
+                                                              ✗ dead
+```
+
+In IST that is 23:00 to 23:02 on 29 July. Three good turns — the student saying
+"It's multiplication", then "p multiplied by q" — and then the 409.
+
+**This is ask #1 from `BACKEND-ASKS-2026-07-29.md`, still unfixed.** The same
+`ALG_1STEP_GP_F01`, the same 409, the one you challenged me on. It is the Tutor
+Backend serving a question from Aditya's Qdrant bank and then validating it
+against the Student Model's `question_set`, which was never going to contain it.
+
+So "voice was working till here" is literally true, and the thing that stopped it
+is a bug we already have written up and nobody has fixed yet.
+
+After that 409, SESSION011 reconnected twice — 17:36 and 18:06 — and **no audio
+flowed in either.** That is your "no voice answers for any of these."
+
+### Part 2 — then the machine went off, so the morning showed nothing at all
 
 ```
 shutdown  system down  Wed Jul 29 18:30 - 03:38  (09:07)
@@ -42,8 +74,9 @@ Three independent confirmations:
 - The first `/voice/stream` connection today is at 03:40:24, two minutes after
   boot.
 
-So there were no voice answers because there was no server. "Tutor is
-unavailable" was accurate — it just wasn't telling you why.
+So by the time you picked it up in the morning, the session was already dead from
+the 409 **and** the machine was off. From the outside those look identical, which
+is why this took logs to untangle.
 
 ### This is a schedule, not an accident
 
@@ -91,8 +124,9 @@ thin design more than it is buggy code.
 
 | # | Finding | Severity | Verified? |
 |---|---|---|---|
-| 0 | **The VM shuts down at midnight IST every night** | **Major** | Yes, from logs — caused this morning |
-| 1 | Sessions are lost on every restart — and it reboots daily | **Major** | Yes; 66 live 404s in the logs |
+| 0a | **The `ALG_1STEP_GP_F01` 409 killed the session mid-lesson** | **Major** | Yes — this is what stopped it |
+| 0b | **The VM shuts down at midnight IST every night** | **Major** | Yes — this is why the morning was dead |
+| 1 | Sessions are lost on every restart — and it reboots daily | Medium | Real, but not firing since 28 Jul |
 | 2 | Voice tutor calls time out at 15s; canvas gets 40s | ~~Probable major~~ Medium | Measured — has not fired yet |
 | 2b | **Cartesia and Inworld ran out of credits on 28 July** | **High** | Yes, from logs |
 | 3 | A fresh TLS handshake on every tutor turn | Medium | Yes |
@@ -140,16 +174,16 @@ deploy and no restart, because the machine was off (finding 0). I was fitting a
 mechanism to a symptom without evidence, which is the same habit that sent me to
 Saravanan over the 409 last week.
 
-**The logs make it worse, though, not better.** The failure is live and it is the
-single largest category in three days of logs:
+**And I overstated the log evidence too.** I wrote that this was "live and
+frequent — 66 × 404". Checking the dates, **all 66 are from 28 July**, one stale
+`SESSION001`. There are **zero** session-not-found errors on 29 or 30 July.
 
-```
-66 × status=404  {"message":"Session with ID SESSION001 was not found."}
-```
+So it is a genuine defect in the code, but it is not currently firing and it did
+not cause anything you saw. Two overstatements in one document is a pattern I
+should watch: I keep reaching for the finding I already have rather than the one
+the evidence supports.
 
-Sixty-six real voice turns lost to this.
-
-Finding 0 compounds it directly. The VM reboots **every night**, so every session
+Finding 0 still compounds it. The VM reboots **every night**, so every session
 is destroyed nightly by design. Anyone who leaves a tab open overnight, or whose
 browser restores a session id from storage, returns to a session the server has
 never heard of — 404, "tutor unavailable."
@@ -368,10 +402,21 @@ Recording these so nobody re-investigates them.
   the tutor hear itself and answer itself. We request `echoCancellation: true`
   (`useVoiceStream.ts:125`), so this is handled. Residual risk only at high
   speaker volume; the server has no barge-in guard as a backup.
-- **Deepgram idling out.** I thought a silent mic would drop the connection. It
-  does not — the browser streams silent audio continuously while unmuted, so
-  Deepgram stays fed. There is a real idle window while muted, but it self-heals
-  on the next chunk.
+- ~~**Deepgram idling out.**~~ **I was wrong to downgrade this — the logs show it
+  happening.** Four times:
+
+  ```
+  Failed to forward audio_chunk: received 1011 (internal error)
+  Deepgram did not receive audio data or a text message within the
+  timeout window. See https://dpgr.am/net0001
+  ```
+
+  My reasoning was that the browser streams silent audio continuously while
+  unmuted, so Deepgram never idles. That holds while the mic is on — but we never
+  send `stop` when it goes off (finding 4), so the socket sits open and unfed
+  until Deepgram kills it. Nothing sends Deepgram's `KeepAlive` frame. It
+  self-heals on the next chunk, so it costs an utterance rather than a session,
+  but it is real and it is live.
 - **The frontend is not the cause of the transcription outage Aditya reported.**
   It sends `audio_chunk` frames correctly — 83 frames in 8 seconds, verified on
   the live VM on 29 July — and does not use `webkitSpeechRecognition` on the
@@ -433,16 +478,44 @@ here, and nobody should be treating this as one.
 
 ---
 
+## What is actually failing right now
+
+Ignoring 28 July (a stale demo session that produced 66 one-off 404s), here is
+every tutor-call failure on **29 and 30 July**:
+
+| Count | Status | Message |
+|---|---|---|
+| 17 | 500 | `"Something went wrong. Please try again."` |
+| 5 | 409 | `student_model rejected request url=https://nablix.ai:8080/session/event` |
+| 1 | 409 | `Student Model did not return metadata for ALG_1STEP_GP_F01` |
+
+Two things stand out.
+
+**The 17 × 500 are opaque.** `"Something went wrong"` tells nobody anything. The
+real cause is in the `nablix-backend` log, not the voice log, so somebody needs
+to look there — this is the largest current failure category and it is invisible.
+
+**The 5 × 409 are the Student Model rejecting events** at `nablix.ai:8080`, which
+is a different failure from the metadata 409 and belongs to Saravanan's service.
+I have not traced these.
+
+---
+
 ## If I were picking an order
 
-1. **Turn off the nightly shutdown** (finding 0). Minutes of work, and it is the
-   only item here that actually cost us a morning. Until it is done, every
-   morning before 09:00 IST is a coin flip.
-2. **Check the Cartesia and Inworld balances and add billing alerts**
+1. **Fix the `ALG_1STEP_GP_F01` 409** (finding 0a, and ask #1 from yesterday's
+   doc). It is the thing that actually stopped the lesson, it is already written
+   up, and it kills a session outright with no recovery.
+2. **Turn off the nightly shutdown** (finding 0b). Minutes of work. Until it is
+   done, every morning before 09:00 IST is a coin flip, and it masks every other
+   bug behind the same symptom.
+3. **Find out what the 17 × 500s are.** Largest live failure category, and
+   currently undiagnosable from the voice logs.
+4. **Check the Cartesia and Inworld balances and add billing alerts**
    (finding 2b). Five minutes, removes a whole class of confusing failure.
-3. **Session persistence** (finding 1). 66 lost turns in three days, and the
-   nightly reboot guarantees more.
-4. **The 15s / 40s timeout mismatch** (finding 2). Not urgent — 12.5s worst
+5. **Session persistence** (finding 1). Not firing right now, but the nightly
+   reboot guarantees it eventually will.
+6. **The 15s / 40s timeout mismatch** (finding 2). Not urgent — 12.5s worst
    observed against a 15s limit — but the margin is thin and it will be
    misdiagnosed as finding 1 when it goes.
 5. **The two `stop` hazards**, now that finding 4 has made them reachable.
