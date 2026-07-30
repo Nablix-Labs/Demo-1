@@ -27,9 +27,11 @@ import { useAuthStore } from '@/store/useAuthStore';
 import { tutorAudioStream, effectiveVoice } from '@/lib/tts';
 import { buildVoiceStreamUrl, voiceStreamingEnabled, allowAnonTutorCalls } from '@/lib/runtimeConfig';
 import { ANON_ACCESS_TOKEN, studentId } from '@/lib/api';
+import { TurnWatchdog } from '@/lib/turnWatchdog';
 
 export function useWebSocket(sessionId: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
+  const watchdogRef = useRef<TurnWatchdog | null>(null);
   const {
     addTranscriptMessage,
     updatePartialTranscript,
@@ -37,6 +39,13 @@ export function useWebSocket(sessionId: string | null) {
     setVoiceStatus,
     applyCanvasDraw,
   } = useNumeraStore();
+
+  /** Send a control message (start/stop) to the voice server. */
+  const sendControl = useCallback((type: string, extra?: Record<string, unknown>) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type, ...extra }));
+    }
+  }, []);
 
   const connect = useCallback(() => {
     if (!sessionId || !voiceStreamingEnabled) return;
@@ -47,6 +56,12 @@ export function useWebSocket(sessionId: string | null) {
     // to its env default — a different voice mid-session.
     const ws = new WebSocket(buildVoiceStreamUrl(sessionId, studentId(), effectiveVoice()));
     wsRef.current = ws;
+
+    watchdogRef.current?.dispose();
+    watchdogRef.current = new TurnWatchdog(() => {
+      console.warn('[WS] no tutor reply for a transcribed turn — forcing finalisation');
+      sendControl('stop');
+    });
 
     ws.onopen = () => {
       // Mirror the REST interceptor: fall back to the placeholder bearer when
@@ -77,6 +92,10 @@ export function useWebSocket(sessionId: string | null) {
               role: msg.role as 'ai' | 'student',
               text: msg.text as string,
             });
+            // The student said something the server heard. From here a reply is
+            // owed, and only Deepgram's UtteranceEnd will ask for one — so start
+            // the rescue clock in case that event never arrives.
+            if (msg.role === 'student') watchdogRef.current?.noteStudentSpeech();
             break;
 
           case 'session_state':
@@ -96,6 +115,10 @@ export function useWebSocket(sessionId: string | null) {
           // Voice-server reply (:8004): text arrives first, MP3 audio streams after.
           // Keep the socket OPEN — the audio chunks follow this message.
           case 'tutor_response':
+            // The turn resolved on its own. Stand the rescue down before doing
+            // anything else, so a slow render can't let it fire late and cancel
+            // the audio that is about to stream in.
+            watchdogRef.current?.noteTurnResolved();
             addTranscriptMessage({ role: 'ai', text: msg.text as string });
             if (Array.isArray(msg.canvas_draw) && msg.canvas_draw.length > 0)
               applyCanvasDraw(msg.canvas_draw as Parameters<typeof applyCanvasDraw>[0]);
@@ -131,6 +154,9 @@ export function useWebSocket(sessionId: string | null) {
             console.log('[WS] status:', msg.message);
             break;
           case 'error':
+            // The server already gave up on this turn ("Tutor unavailable").
+            // Nothing is stuck, so there is nothing to rescue.
+            watchdogRef.current?.noteTurnResolved();
             console.error('[WS] server error:', msg.message);
             break;
 
@@ -144,6 +170,9 @@ export function useWebSocket(sessionId: string | null) {
 
     ws.onclose = (e) => {
       console.log('[WS] closed', e.code, e.reason);
+      // A `stop` sent down a dead socket goes nowhere; the reconnect below
+      // starts a fresh turn anyway.
+      watchdogRef.current?.dispose();
       setVoiceStatus('idle');
       // Simple exponential back-off reconnect (omit in production; use a library)
       if (e.code !== 1000) {
@@ -151,11 +180,13 @@ export function useWebSocket(sessionId: string | null) {
       }
     };
 
-  }, [sessionId, addTranscriptMessage, updatePartialTranscript, setSessionState, setVoiceStatus, applyCanvasDraw]);
+  }, [sessionId, sendControl, addTranscriptMessage, updatePartialTranscript, setSessionState, setVoiceStatus, applyCanvasDraw]);
 
   useEffect(() => {
     connect();
     return () => {
+      watchdogRef.current?.dispose();
+      watchdogRef.current = null;
       wsRef.current?.close(1000, 'component unmount');
     };
   }, [connect]);
@@ -178,13 +209,6 @@ export function useWebSocket(sessionId: string | null) {
   const sendCanvasSubmission = useCallback((png: string, strokes?: object[]) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'canvas_submission', png, strokes }));
-    }
-  }, []);
-
-  /** Send a control message (start/stop) to the voice server. */
-  const sendControl = useCallback((type: string, extra?: Record<string, unknown>) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type, ...extra }));
     }
   }, []);
 
