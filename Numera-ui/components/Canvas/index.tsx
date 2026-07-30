@@ -17,6 +17,7 @@ import { useAuthStore, isConsentActive } from '@/store/useAuthStore';
 import { useDemoTutor } from '@/hooks/useDemoTutor';
 import { gridBackground, GRID_OPTIONS } from '@/lib/canvasGrid';
 import { isBareEquation } from '@/lib/questionText';
+import ScaffoldPanel from '@/components/ScaffoldPanel';
 import Toolbar from './Toolbar';
 import TeachBack from './TeachBack';
 
@@ -34,6 +35,7 @@ const HELP_TIPS = [
 
 export default function CanvasStage() {
   const { questionText, questionNumber, items, setCanvasExporter, canvasGrid, setCanvasGrid } = useNumeraStore();
+  const activeScaffold = useNumeraStore((s) => s.activeScaffold);
   const canvasConsents = useAuthStore((s) => s.consents);
   const canvasAllowed = isConsentActive(canvasConsents, 'canvas_processing');
   const tutor = useDemoTutor();
@@ -106,6 +108,17 @@ export default function CanvasStage() {
           </p>
         )}
       </div>
+
+      {/* The authorised scaffold step, on the canvas rather than in the tutor
+          column. It was in the 234px chat panel, where a guiding question wrapped
+          over four lines and read as another chat bubble (Manjusha, 2026-07-29).
+          Here it sits under the question it is helping with, on the surface the
+          student is actually working on. */}
+      {activeScaffold && (
+        <div className="absolute top-[76px] left-[34px] z-10 w-[min(560px,calc(100%-68px))]">
+          <ScaffoldPanel scaffold={activeScaffold} />
+        </div>
+      )}
 
       {/* §14: canvas consent missing */}
       {!canvasAllowed && (
