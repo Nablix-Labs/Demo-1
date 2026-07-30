@@ -16,6 +16,7 @@ from app.ai_engine.prompt_registry import (
 )
 from app.ai_engine.schemas import CanvasTextRegion
 from app.core.config import Settings, get_settings
+from app.core.exceptions import AdapterError
 from app.core.logger import StructuredJsonFormatter
 from app.main import app, prompt_registry as startup_prompt_registry
 from app.models.adapters import (
@@ -2069,3 +2070,244 @@ def test_guided_llm_wrong_uses_only_a_permitted_error_code(monkeypatch) -> None:
     assert response.guided_student_state == "WRONG"
     assert response.selected_error_code == "ERR-T02-ADDITION"
     assert response.attempt_increment == 1
+
+
+@pytest.mark.parametrize(
+    "student_input",
+    ["c x d", "c × d", "c*d", "c · d", "c times d", "c multiplied by d"],
+)
+def test_guided_concept_notation_equivalents_cannot_be_rejected_by_llm(
+    monkeypatch,
+    student_input: str,
+) -> None:
+    class _RejectingGuidedClient:
+        def generate_guided_rubric(self, **kwargs):
+            raise AssertionError("An exact normalized match must not call the LLM.")
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _RejectingGuidedClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T02-002",
+            question="What does cd mean?",
+            correct_answer="c multiplied by d",
+            answer_spec=_answer_spec(
+                "c multiplied by d",
+                ["c times d", "c × d"],
+                "CONCEPT_TEXT_MATCH",
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            student_input=student_input,
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.evaluation == "CORRECT"
+    assert response.question_completed is True
+
+
+@pytest.mark.parametrize(
+    ("student_input", "canonical_answer"),
+    [
+        ("p − 2", "p - 2"),
+        ("6 / r", "6 ÷ r"),
+        ("n equals 4", "n = 4"),
+        ("6 * r", "6 × r"),
+    ],
+)
+def test_semantic_contract_normalizes_general_keyboard_math_notation(
+    student_input: str,
+    canonical_answer: str,
+) -> None:
+    request = ClassificationRequest(
+        question="Interpret the expression.",
+        correct_answer=canonical_answer,
+        answer_spec=_answer_spec(
+            canonical_answer,
+            [],
+            "CONCEPT_TEXT_MATCH",
+        ),
+        student_input=student_input,
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+    )
+
+    assert classifier.evaluate_answer_contract(request) == "CORRECT"
+
+
+def test_multi_part_accepted_fragment_is_not_treated_as_complete(
+    monkeypatch,
+) -> None:
+    class _PartialOpenAIClient:
+        def generate_tutor_turn(self, **kwargs):
+            return openai_client.OpenAITutorTurn(
+                intent="SUBMITTING_ANSWER",
+                evaluation="PARTIALLY_CORRECT",
+                error_type="INSUFFICIENT_INFORMATION",
+                response_strategy="GUIDED_HINT",
+                hint_level=1,
+                tutor_message="Yes, b can vary. What stays fixed?",
+                tutor_message_voice_optimised="Yes, b can vary. What stays fixed?",
+                reasoning_complete=False,
+                confidence=0.96,
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _PartialOpenAIClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question="What changes and what stays fixed?",
+            correct_answer="b can vary; 3 stays fixed",
+            answer_spec=_answer_spec(
+                "b can vary; 3 stays fixed",
+                ["b can vary", "3 stays fixed"],
+                "CONCEPT_TEXT_MATCH",
+            ),
+            student_input="b can vary",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.evaluation == "PARTIALLY_CORRECT"
+    assert response.question_completed is False
+
+
+def test_guided_rubric_uses_only_the_compact_specialized_prompt(
+    monkeypatch,
+) -> None:
+    request_bodies: list[dict[str, object]] = []
+
+    class _GuidedHTTPClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self) -> "_GuidedHTTPClient":
+            return self
+
+        def __exit__(self, *exc) -> bool:
+            return False
+
+        def post(self, *args, **kwargs) -> _FakeOpenAIResponse:
+            request_bodies.append(kwargs["json"])
+            return _FakeOpenAIResponse(
+                json.dumps(
+                    {
+                        "question_id": "Q-T02-002",
+                        "required_concepts": [
+                            {
+                                "concept_id": "PRODUCT_MEANING",
+                                "description": "Explains adjacent-letter multiplication.",
+                                "required": True,
+                            }
+                        ],
+                        "completion_rule": "ALL_REQUIRED_CONCEPTS",
+                        "cache_key": "model-value-is-replaced",
+                        "prompt_version": "model-value-is-replaced",
+                    }
+                )
+            )
+
+    monkeypatch.setattr(openai_client.httpx, "Client", _GuidedHTTPClient)
+    ai_client = openai_client.OpenAIAIEngineClient(
+        api_key="sk-test",
+        model="gpt-test",
+        timeout_seconds=10,
+        prompt_cache_key_enabled=False,
+        store_responses=False,
+        retry_count=0,
+    )
+    system_prompt = "Compact rubric prompt."
+    ai_client.generate_guided_rubric(
+        question_id="Q-T02-002",
+        question="What does cd mean?",
+        answer_spec=_answer_spec(
+            "c × d",
+            ["c times d"],
+            "CONCEPT_TEXT_MATCH",
+        ),
+        potential_errors=[],
+        target_micro_skill_ids=["T02.M2"],
+        prompt_version="1.0.0",
+        system_prompt=system_prompt,
+    )
+
+    assert len(request_bodies) == 1
+    messages = request_bodies[0]["input"]
+    assert isinstance(messages, list)
+    assert messages == [
+        {"role": "system", "content": system_prompt},
+        {
+            "role": "user",
+            "content": messages[1]["content"],
+        },
+    ]
+    assert "You are Numera" not in str(messages)
+
+
+def test_guided_learning_supports_every_authored_answer_verification_method() -> None:
+    rules = classifier.load_classifier_rules()
+
+    assert set(rules.guided_learning.supported_verification_methods) == {
+        "EXACT_CHOICE_MATCH",
+        "EXACT_NOTATION_MATCH",
+        "SYMBOLIC_EQUIVALENCE",
+        "CONCEPT_TEXT_MATCH",
+        "STRUCTURED_TEXT_MATCH",
+        "STRUCTURED_TEXT_AND_SYMBOLIC_MATCH",
+        "CHOICE_AND_CONCEPT_MATCH",
+        "BOOLEAN_AND_CONCEPT_MATCH",
+    }
+
+
+def test_guided_learning_rejects_an_unknown_verification_contract(
+    monkeypatch,
+) -> None:
+    class _UnusedGuidedClient:
+        pass
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _UnusedGuidedClient(),
+    )
+
+    with pytest.raises(
+        AdapterError,
+        match="Unsupported Guided Learning verification method",
+    ):
+        classify_student_response(
+            ClassificationRequest(
+                question_id="Q-UNKNOWN",
+                question="Explain this.",
+                correct_answer="An answer.",
+                answer_spec=_answer_spec(
+                    "An answer.",
+                    [],
+                    "UNKNOWN_FUTURE_METHOD",
+                ),
+                phase_2_prompt_context=_guided_context(0),
+                student_input="A response.",
+                current_phase="GUIDED_PRACTICE",
+                input_source="TEXT",
+                transcript_confidence=None,
+                attempt_count=1,
+                current_hint_level=None,
+            )
+        )

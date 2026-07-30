@@ -152,7 +152,10 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
             safety_check=safety_check,
             openai_client=openai_client,
         )
-    authoritative_verification = uses_authoritative_verification(request)
+    authoritative_verification = (
+        uses_authoritative_verification(request)
+        or evaluate_answer_contract(request) == "CORRECT"
+    )
     error_type: ErrorType | None = classify_student_error(request, evaluation, rules)
     response_strategy: ResponseStrategy = select_response_strategy(
         intent=intent,
@@ -290,6 +293,11 @@ def should_use_guided_state_machine(
         return False
     if request.answer_spec is None or request.question_id is None:
         return False
+    if (
+        deterministic_evaluation == "CORRECT"
+        and evaluate_answer_contract(request) == "CORRECT"
+    ):
+        return False
     method = request.answer_spec.verification_method
     return not (
         method in _AUTHORITATIVE_VERIFICATION_METHODS
@@ -314,6 +322,18 @@ def classify_guided_learning_response(
             "openai_ai_engine",
             "Guided Learning requires Phase 2 prompt context.",
         )
+    if (
+        request.answer_spec.verification_method
+        not in rules.guided_learning.supported_verification_methods
+    ):
+        raise AdapterError(
+            "openai_ai_engine",
+            (
+                "Unsupported Guided Learning verification method "
+                f"{request.answer_spec.verification_method} for "
+                f"{request.question_id}."
+            ),
+        )
     allowed_errors = guided_error_definitions(context.potential_errors)
     rubric = request.generated_question_rubric
     if rubric is None or rubric.question_id != request.question_id:
@@ -327,6 +347,7 @@ def classify_guided_learning_response(
                     potential_errors=allowed_errors,
                     target_micro_skill_ids=context.target_micro_skill_ids,
                     prompt_version=rules.guided_learning.rubric_prompt_version,
+                    system_prompt=rules.guided_learning.rubric_system_prompt,
                 )
                 break
             except AdapterError as error:
@@ -362,6 +383,7 @@ def classify_guided_learning_response(
                     -rules.guided_learning.maximum_recent_history_turns:
                 ],
                 evaluator_prompt_version=rules.guided_learning.evaluator_prompt_version,
+                system_prompt=rules.guided_learning.evaluator_system_prompt,
             )
             evaluation = validate_guided_evaluation(
                 candidate,
@@ -752,6 +774,8 @@ def should_use_deterministic_tutor_turn(
     intent: IntentType,
     rules: ClassifierRulesConfig,
 ) -> bool:
+    if evaluate_answer_contract(request) == "CORRECT":
+        return True
     if intent in {"REQUESTING_ANSWER", "ATTEMPTING_OVERRIDE"}:
         return True
     return request.input_source == "VOICE" and is_low_confidence(
@@ -1007,10 +1031,20 @@ def evaluate_answer_contract(
             if is_symbolically_equivalent(request.student_input, accepted_answers)
             else "INCORRECT"
         )
-    if normalize_semantic_answer(request.student_input) in {
-        normalize_semantic_answer(answer)
-        for answer in accepted_answers
-    }:
+    normalized_input = normalize_semantic_answer(request.student_input)
+    if normalized_input == normalize_semantic_answer(
+        answer_spec.canonical_answer
+    ):
+        return "CORRECT"
+    if (
+        method == "CONCEPT_TEXT_MATCH"
+        and ";" not in answer_spec.canonical_answer
+        and normalized_input
+        in {
+            normalize_semantic_answer(answer)
+            for answer in answer_spec.accepted_answers
+        }
+    ):
         return "CORRECT"
     return None
 
@@ -1070,7 +1104,25 @@ def _normalize_superscript_notation(value: str) -> str:
 
 
 def normalize_semantic_answer(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+    normalized = unicodedata.normalize("NFKC", value).lower()
+    normalized = normalized.replace("⁄", "/").replace("−", "-")
+    normalized = re.sub(
+        r"\b(?:is\s+)?multiplied\s+by\b|\btimes\b|\bmultiply\s+by\b",
+        " multiply ",
+        normalized,
+    )
+    normalized = re.sub(r"\bdivided\s+by\b|\bdivide\s+by\b", " divide ", normalized)
+    normalized = re.sub(r"\bplus\b", " add ", normalized)
+    normalized = re.sub(r"\bminus\b", " subtract ", normalized)
+    normalized = re.sub(r"\bis\s+equal\s+to\b|\bequals?\b", " equal ", normalized)
+    normalized = re.sub(r"(?<=\w)\s+x\s+(?=\w)", " multiply ", normalized)
+    normalized = re.sub(r"[×·*]", " multiply ", normalized)
+    normalized = normalized.replace("÷", " divide ")
+    normalized = normalized.replace("/", " divide ")
+    normalized = normalized.replace("+", " add ")
+    normalized = normalized.replace("-", " subtract ")
+    normalized = normalized.replace("=", " equal ")
+    return re.sub(r"[^a-z0-9]+", " ", normalized).strip()
 
 
 def is_symbolically_equivalent(
@@ -1742,6 +1794,12 @@ def is_reasoning_required(
     request: ClassificationRequest,
     rules: ClassifierRulesConfig,
 ) -> bool:
+    if (
+        request.answer_spec is not None
+        and request.answer_spec.verification_method == "CONCEPT_TEXT_MATCH"
+        and evaluate_answer_contract(request) == "CORRECT"
+    ):
+        return False
     if (
         request.answer_spec is not None
         and request.answer_spec.explanation_required is not None
