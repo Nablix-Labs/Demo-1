@@ -1,5 +1,6 @@
 import asyncio
 
+from fastapi import WebSocket
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -213,7 +214,14 @@ def test_voice_stream_forwards_session_query_param(monkeypatch) -> None:
     """Frontends have sent both ?session= and ?session_id=; both must reach voice_stream."""
     captured: dict[str, str] = {}
 
-    async def fake_voice_stream(ws, session="default", student_id="ST001"):
+    async def fake_voice_stream(
+        ws: WebSocket,
+        session: str,
+        student_id: str,
+        tts_provider: str | None,
+        tts_voice: str | None,
+    ) -> None:
+        del tts_provider, tts_voice
         captured["session"] = session
         captured["student_id"] = student_id
         await ws.accept()

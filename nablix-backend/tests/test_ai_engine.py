@@ -36,6 +36,8 @@ from app.models.guided_learning import (
     GeneratedConcept,
     GeneratedQuestionRubric,
     GuidedEvaluation,
+    ScaffoldEvaluationContext,
+    ScaffoldStepEvaluation,
 )
 
 
@@ -2018,6 +2020,63 @@ def test_guided_llm_repeated_stuck_requests_one_scaffold_escalation(
     assert response.attempt_increment == 0
 
 
+def test_guided_exact_notation_stuck_uses_question_aware_llm_message(
+    monkeypatch,
+) -> None:
+    class _GuidedClient:
+        def generate_guided_rubric(self, **kwargs):
+            return _guided_rubric().model_copy(
+                update={"question_id": "Q-T02-001"}
+            )
+
+        def evaluate_guided_turn(self, **kwargs):
+            objective = kwargs["active_objective"]
+            return GuidedEvaluation(
+                student_state="STUCK",
+                newly_confirmed_concept_ids=[],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=objective.missing_concept_ids,
+                selected_error_code=None,
+                confidence=0.95,
+                next_objective=objective,
+                tutor_message="Let’s make it smaller. Which letter is repeated?",
+                tutor_message_voice="Let’s make it smaller. Which letter is repeated?",
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _GuidedClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T02-001",
+            question="Write y + y + y + y in compact algebraic notation.",
+            correct_answer="4y",
+            answer_spec=_answer_spec(
+                "4y",
+                ["4 × y"],
+                "EXACT_NOTATION_MATCH",
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            student_input="I don't know",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.guided_student_state == "STUCK"
+    assert response.tutor_message == (
+        "Let’s make it smaller. Which letter is repeated?"
+    )
+    assert "x" not in response.tutor_message
+    assert response.attempt_increment == 0
+
+
 def test_guided_llm_wrong_uses_only_a_permitted_error_code(monkeypatch) -> None:
     class _GuidedClient:
         def generate_guided_rubric(self, **kwargs):
@@ -2311,3 +2370,112 @@ def test_guided_learning_rejects_an_unknown_verification_contract(
                 current_hint_level=None,
             )
         )
+
+
+@pytest.mark.parametrize(
+    ("student_input", "original_answer_correct"),
+    [
+        ("y", False),
+        ("y is repeated four times, so the answer is 4y", True),
+    ],
+)
+def test_scaffold_semantic_evaluator_accepts_the_requested_fact_or_full_answer(
+    monkeypatch,
+    student_input: str,
+    original_answer_correct: bool,
+) -> None:
+    class _ScaffoldClient:
+        def evaluate_scaffold_step(self, **kwargs):
+            return ScaffoldStepEvaluation(
+                step_satisfied=True,
+                original_answer_correct=original_answer_correct,
+                demonstrated_fact="The repeated term is y.",
+                confidence=0.97,
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _ScaffoldClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T02-001",
+            question="Which term or factor is repeated?",
+            correct_answer="Identify the repeated letter or base",
+            answer_spec=None,
+            phase_2_prompt_context=_guided_context(0),
+            scaffold_evaluation_context=ScaffoldEvaluationContext(
+                scaffold_id="SCF-T02-WRITE-COMPACT",
+                step_id="SCF-T02-WR-S1",
+                original_question=(
+                    "Write y + y + y + y in compact algebraic notation."
+                ),
+                canonical_answer="4y",
+                accepted_answers=["4y", "4 × y"],
+                verification_method="EXACT_NOTATION_MATCH",
+                step_prompt="Which term or factor is repeated?",
+                expected_response_criterion="Identify the repeated letter or base",
+                completed_step_ids=[],
+            ),
+            student_input=student_input,
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=2,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.evaluation == "CORRECT"
+    assert response.scaffold_original_answer_correct is original_answer_correct
+
+
+def test_scaffold_semantic_evaluator_rejects_an_unrelated_response(
+    monkeypatch,
+) -> None:
+    class _ScaffoldClient:
+        def evaluate_scaffold_step(self, **kwargs):
+            return ScaffoldStepEvaluation(
+                step_satisfied=False,
+                original_answer_correct=False,
+                demonstrated_fact=None,
+                confidence=0.96,
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _ScaffoldClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T02-001",
+            question="Which term or factor is repeated?",
+            correct_answer="Identify the repeated letter or base",
+            answer_spec=None,
+            phase_2_prompt_context=_guided_context(0),
+            scaffold_evaluation_context=ScaffoldEvaluationContext(
+                scaffold_id="SCF-T02-WRITE-COMPACT",
+                step_id="SCF-T02-WR-S1",
+                original_question=(
+                    "Write y + y + y + y in compact algebraic notation."
+                ),
+                canonical_answer="4y",
+                accepted_answers=["4y", "4 × y"],
+                verification_method="EXACT_NOTATION_MATCH",
+                step_prompt="Which term or factor is repeated?",
+                expected_response_criterion="Identify the repeated letter or base",
+                completed_step_ids=[],
+            ),
+            student_input="the operation is subtraction",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=2,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.evaluation == "INCORRECT"
+    assert response.scaffold_original_answer_correct is False

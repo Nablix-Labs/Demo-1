@@ -33,6 +33,8 @@ from app.models.guided_learning import (
     ActiveTeachingObjective,
     GeneratedQuestionRubric,
     GuidedEvaluation,
+    ScaffoldEvaluationContext,
+    ScaffoldStepEvaluation,
 )
 from app.models.student_model_session import AnswerSpec
 
@@ -238,6 +240,31 @@ class OpenAIAIEngineClient:
             raise AdapterError(
                 "openai_ai_engine",
                 f"invalid guided evaluation: {error}",
+            ) from error
+
+    def evaluate_scaffold_step(
+        self,
+        context: ScaffoldEvaluationContext,
+        student_response: str,
+        input_source: InputSource,
+        system_prompt: str,
+    ) -> ScaffoldStepEvaluation:
+        content = self._request_guided_json(
+            name="scaffold_step_evaluation",
+            schema=ScaffoldStepEvaluation.model_json_schema(),
+            system_prompt=system_prompt,
+            user_payload={
+                "scaffold": context.model_dump(),
+                "student_response": student_response,
+                "input_source": input_source,
+            },
+        )
+        try:
+            return ScaffoldStepEvaluation.model_validate(content)
+        except ValidationError as error:
+            raise AdapterError(
+                "openai_ai_engine",
+                f"invalid scaffold evaluation: {error}",
             ) from error
 
     def _request_guided_json(

@@ -32,6 +32,21 @@ guided_learning:
     interpreted safely. Ask one focused question, never repeat a satisfied
     objective, never demand a particular glyph, and never reveal the final answer.
     Return only the requested JSON schema.
+  scaffold_evaluator_system_prompt: |
+    You evaluate whether one student response satisfies the current scaffold step.
+    The expected-response field is an authored semantic criterion, not necessarily
+    a literal answer. Use the original question and canonical answer only to
+    understand the context. Mark the step satisfied when the student demonstrates
+    the requested fact, even if they also correctly answer later scaffold steps or
+    give the complete original answer. Use accepted_answers and verification_method
+    when deciding whether the original answer is correct. Do not require exact
+    wording or a particular mathematical glyph. Do not mark a step satisfied for
+    an unrelated statement, a contradiction, or an expression that does not
+    demonstrate the requested fact. Return only the requested JSON schema and
+    never include the canonical answer in demonstrated_fact. Set
+    original_answer_correct only when the response independently gives a complete
+    correct answer to the original question. When original_answer_correct is true,
+    step_satisfied must also be true.
   allowed_student_states:
     - CORRECT
     - PARTIAL

@@ -171,6 +171,7 @@ class GuidedLearningConfig(StrictSchema):
     evaluator_prompt_version: str
     rubric_system_prompt: str
     evaluator_system_prompt: str
+    scaffold_evaluator_system_prompt: str
     allowed_student_states: list[GuidedStudentState]
     supported_verification_methods: list[str]
     llm_state_mapping: dict[GuidedStudentState, GuidedStateMappingConfig]

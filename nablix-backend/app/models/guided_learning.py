@@ -42,3 +42,22 @@ class GuidedEvaluation(GuidedLearningModel):
     next_objective: ActiveTeachingObjective | None
     tutor_message: str
     tutor_message_voice: str
+
+
+class ScaffoldEvaluationContext(GuidedLearningModel):
+    scaffold_id: str
+    step_id: str
+    original_question: str
+    canonical_answer: str
+    accepted_answers: list[str]
+    verification_method: str | None
+    step_prompt: str
+    expected_response_criterion: str
+    completed_step_ids: list[str]
+
+
+class ScaffoldStepEvaluation(GuidedLearningModel):
+    step_satisfied: StrictBool
+    original_answer_correct: StrictBool
+    demonstrated_fact: str | None
+    confidence: float = Field(ge=0.0, le=1.0)

@@ -29,6 +29,7 @@ from app.models.adapters import (
     VisualCue,
 )
 from app.models.fields import Phase
+from app.models.guided_learning import ScaffoldEvaluationContext
 from app.models.interaction import (
     InteractionRequest,
     InteractionResponse,
@@ -498,6 +499,23 @@ def _next_scaffold_state(
     )
 
 
+def _completed_scaffold_state(session: SessionRecord) -> dict[str, object]:
+    delivered = list(session.delivered_scaffold_step_ids)
+    if (
+        session.current_scaffold_step_id is not None
+        and session.current_scaffold_step_id not in delivered
+    ):
+        delivered.append(session.current_scaffold_step_id)
+    return {
+        "scaffold_id": None,
+        "current_scaffold_step_id": None,
+        "scaffold_step_number": 0,
+        "scaffold_total_steps": 0,
+        "delivered_scaffold_step_ids": delivered,
+        "scaffold_expected_response": None,
+    }
+
+
 def _scaffold_response_is_correct(
     student_message: str,
     expected_response: str,
@@ -521,6 +539,40 @@ def _scaffold_response_is_correct(
     if any(_contains_scaffold_response(normalized_student, value) for value in accepted):
         return True
     return tutor_evaluation == "CORRECT"
+
+
+def _scaffold_evaluation_context(
+    session: SessionRecord,
+) -> ScaffoldEvaluationContext:
+    if (
+        session.scaffold_id is None
+        or session.current_scaffold_step_id is None
+        or session.current_question is None
+        or session.correct_answer is None
+        or session.scaffold_expected_response is None
+        or not session.scaffold_steps
+    ):
+        raise RuntimeError("Active scaffold is missing evaluation context.")
+    answer_spec = _active_answer_spec(session)
+    return ScaffoldEvaluationContext(
+        scaffold_id=session.scaffold_id,
+        step_id=session.current_scaffold_step_id,
+        original_question=session.current_question,
+        canonical_answer=session.correct_answer,
+        accepted_answers=(
+            answer_spec.accepted_answers
+            if answer_spec is not None
+            else []
+        ),
+        verification_method=(
+            answer_spec.verification_method
+            if answer_spec is not None
+            else None
+        ),
+        step_prompt=session.scaffold_steps[0],
+        expected_response_criterion=session.scaffold_expected_response,
+        completed_step_ids=session.delivered_scaffold_step_ids,
+    )
 
 
 def _normalize_scaffold_response(value: str) -> str:
@@ -991,6 +1043,11 @@ async def _process_interaction(
         conversation_state=_conversation_state_from_session(session),
         generated_question_rubric=session.generated_question_rubric,
         active_teaching_objective=session.active_teaching_objective,
+        scaffold_evaluation_context=(
+            _scaffold_evaluation_context(session)
+            if scaffold_turn
+            else None
+        ),
         detected_equation=ocr.detected_equation if ocr is not None else None,
         detected_steps=ocr.detected_steps if ocr is not None else [],
         ocr_confidence=ocr.confidence if ocr is not None else None,
@@ -1054,7 +1111,7 @@ async def _process_interaction(
         schema_session
         and session.current_phase in {"GUIDED_PRACTICE", "INDEPENDENT_PRACTICE"}
         and request.interaction_type == "ANSWER_SUBMISSION"
-        and not scaffold_turn
+        and (not scaffold_turn or tutor.scaffold_original_answer_correct)
     )
     configured_guided_event = (
         rules.guided_learning.llm_state_mapping[tutor.guided_student_state]
@@ -1289,7 +1346,10 @@ async def _process_interaction(
         tutor_message = schema_steps[0]
         tutor_message_voice = schema_steps[0]
     scaffold_turn_updates: dict[str, object] = {}
-    if scaffold_turn:
+    if scaffold_turn and tutor.scaffold_original_answer_correct:
+        scaffold_steps = []
+        scaffold_turn_updates = _completed_scaffold_state(turn_session)
+    elif scaffold_turn:
         expected_scaffold_response = turn_session.scaffold_expected_response
         if expected_scaffold_response is None:
             raise RuntimeError("Active scaffold step lost its expected response.")
@@ -1330,7 +1390,7 @@ async def _process_interaction(
 
     effective_attempt_increment: int = (
         0
-        if scaffold_turn
+        if scaffold_turn and not tutor.scaffold_original_answer_correct
         else tutor.attempt_increment
         if request.interaction_type == "ANSWER_SUBMISSION"
         else 0
@@ -1411,7 +1471,7 @@ async def _process_interaction(
         **_schema_scaffold_state(schema_content_response),
         **scaffold_turn_updates,
     }
-    if scaffold_turn:
+    if scaffold_turn and not tutor.scaffold_original_answer_correct:
         conversation_action = "ASK_QUESTION"
         state_updates.update(
             {
@@ -1427,7 +1487,7 @@ async def _process_interaction(
         state_updates["last_student_model"] = student
     if (
         request.interaction_type == "ANSWER_SUBMISSION"
-        and not scaffold_turn
+        and (not scaffold_turn or tutor.scaffold_original_answer_correct)
         and effective_attempt_increment == 1
     ):
         state_updates["per_question_history"] = [
