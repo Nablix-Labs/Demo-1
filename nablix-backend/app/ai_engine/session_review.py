@@ -416,6 +416,7 @@ def build_openai_session_review_client(settings: Settings) -> OpenAIAIEngineClie
         model=settings.openai_ai_engine_model,
         timeout_seconds=settings.openai_request_timeout_seconds,
         prompt_cache_key_enabled=settings.openai_prompt_cache_key_enabled,
+        store_responses=settings.openai_store_responses,
         retry_count=settings.adapter_request_retry_count,
     )
 
