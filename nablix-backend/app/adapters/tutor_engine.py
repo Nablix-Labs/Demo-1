@@ -92,6 +92,7 @@ class TutorEngineServiceAdapter:
         if context.question is not None and context.correct_answer is not None:
             ai_response = classify_student_response(
                 ClassificationRequest(
+                    question_id=context.question_id,
                     question=context.question,
                     correct_answer=context.correct_answer,
                     answer_spec=context.answer_spec,
@@ -112,6 +113,8 @@ class TutorEngineServiceAdapter:
                     canvas_regions=_coerce_canvas_regions(context.canvas_regions),
                     conversation_history=context.conversation_history,
                     conversation_state=context.conversation_state,
+                    generated_question_rubric=context.generated_question_rubric,
+                    active_teaching_objective=context.active_teaching_objective,
                 )
             )
             return _tutor_result_from_ai_response(ai_response)
@@ -252,6 +255,10 @@ def _tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:
         question_completed=response.question_completed,
         answer_value_confirmed=response.answer_value_confirmed,
         reasoning_complete=response.reasoning_complete,
+        guided_student_state=response.guided_student_state,
+        selected_error_code=response.selected_error_code,
+        generated_question_rubric=response.generated_question_rubric,
+        active_teaching_objective=response.active_teaching_objective,
     )
 
 

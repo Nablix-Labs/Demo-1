@@ -488,6 +488,8 @@ def _apply_schema_event(
                 ),
                 "attempt_count": 0,
                 "question_completed": next_question_id is None,
+                "generated_question_rubric": None,
+                "active_teaching_objective": None,
             }
         )
     if transition is not None:

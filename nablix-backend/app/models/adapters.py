@@ -11,6 +11,11 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.student_model_session import AnswerSpec
+from app.models.guided_learning import (
+    ActiveTeachingObjective,
+    GeneratedQuestionRubric,
+    GuidedStudentState,
+)
 
 MasteryStatus = Literal[
     "NEW_LEARNER",
@@ -83,6 +88,7 @@ class AdapterContext(BaseModel):
     session_id: str
     student_id: str
     source_turn_id: str | None = None
+    question_id: str | None = None
     message: str
     question: str | None = None
     correct_answer: str | None = None
@@ -104,6 +110,8 @@ class AdapterContext(BaseModel):
     canvas_regions: list["OCRTextRegion"] = Field(default_factory=list)
     conversation_history: list["ConversationMessage"] = Field(default_factory=list)
     conversation_state: ConversationState | None = None
+    generated_question_rubric: GeneratedQuestionRubric | None = None
+    active_teaching_objective: ActiveTeachingObjective | None = None
 
 
 class ConversationMessage(BaseModel):
@@ -224,6 +232,10 @@ class TutorResult(BaseModel):
     question_completed: bool
     answer_value_confirmed: bool = False
     reasoning_complete: bool = False
+    guided_student_state: GuidedStudentState | None = None
+    selected_error_code: str | None = None
+    generated_question_rubric: GeneratedQuestionRubric | None = None
+    active_teaching_objective: ActiveTeachingObjective | None = None
 
 
 class VoiceResult(BaseModel):

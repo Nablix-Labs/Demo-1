@@ -2,6 +2,36 @@ low_transcript_confidence_threshold: 0.7
 confidence:
   safety_response: 0.99
   standard_response: 0.95
+guided_learning:
+  evaluation_mode: LLM_STATE_MACHINE
+  confidence_threshold: 0.75
+  maximum_retries: 2
+  stuck_escalation_count: 2
+  maximum_recent_history_turns: 6
+  rubric_prompt_version: "1.0.0"
+  evaluator_prompt_version: "1.0.0"
+  allowed_student_states:
+    - CORRECT
+    - PARTIAL
+    - WRONG
+    - STUCK
+    - UNCLEAR
+  llm_state_mapping:
+    CORRECT:
+      student_model_event: CORRECT_ATTEMPT
+      strategy: null
+    PARTIAL:
+      student_model_event: null
+      strategy: AFFIRM_THEN_ISOLATE
+    WRONG:
+      student_model_event: INCORRECT_ATTEMPT
+      strategy: null
+    STUCK:
+      student_model_event: null
+      strategy: LOAD_REDUCTION
+    UNCLEAR:
+      student_model_event: null
+      strategy: REQUEST_CLARIFICATION
 safety:
   unsafe_terms:
     - hurt myself

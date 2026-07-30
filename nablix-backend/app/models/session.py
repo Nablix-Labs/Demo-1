@@ -22,6 +22,7 @@ from app.models.fields import (
     StudentId,
     TurnId,
 )
+from app.models.guided_learning import ActiveTeachingObjective, GeneratedQuestionRubric
 from app.models.session_review import SessionReviewResponse
 from app.models.student_model_session import (
     PublicStudentModelEvent,
@@ -173,6 +174,8 @@ class SessionRecord(BaseModel):
     hint_count: int
     attempt_count: int = 0
     stuck_count: int = 0
+    generated_question_rubric: GeneratedQuestionRubric | None = None
+    active_teaching_objective: ActiveTeachingObjective | None = None
     question_completed: bool = False
     answer_value_confirmed: bool = False
     conversation_history: list[ConversationMessage] = Field(default_factory=list)
@@ -212,3 +215,11 @@ class SessionResponse(SessionRecord):
     scaffold_steps: list[str] = Field(default_factory=list, exclude=True)
     scaffold_expected_response: str | None = Field(default=None, exclude=True)
     student_model_event: PublicStudentModelEvent | None = None
+    generated_question_rubric: GeneratedQuestionRubric | None = Field(
+        default=None,
+        exclude=True,
+    )
+    active_teaching_objective: ActiveTeachingObjective | None = Field(
+        default=None,
+        exclude=True,
+    )

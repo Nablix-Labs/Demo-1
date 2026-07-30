@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Collection
 from dataclasses import dataclass
@@ -28,6 +29,11 @@ from app.ai_engine.schemas import (
 from app.core.exceptions import AdapterError
 from app.core.logger import logger
 from app.models.adapters import ConversationMessage, ConversationState, Phase2PromptContext
+from app.models.guided_learning import (
+    ActiveTeachingObjective,
+    GeneratedQuestionRubric,
+    GuidedEvaluation,
+)
 from app.models.student_model_session import AnswerSpec
 
 
@@ -140,6 +146,108 @@ class OpenAIAIEngineClient:
             },
         )
         return OpenAITutorTurn.model_validate(content)
+
+    def generate_guided_rubric(
+        self,
+        question_id: str,
+        question: str,
+        answer_spec: AnswerSpec,
+        potential_errors: list[dict[str, object]],
+        target_micro_skill_ids: list[str],
+        prompt_version: str,
+    ) -> GeneratedQuestionRubric:
+        answer_payload = answer_spec.model_dump()
+        cache_source = json.dumps(
+            {
+                "question_id": question_id,
+                "answer_spec": answer_payload,
+                "prompt_version": prompt_version,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        cache_key = hashlib.sha256(cache_source.encode("utf-8")).hexdigest()
+        schema = GeneratedQuestionRubric.model_json_schema()
+        content = self._request_json(
+            name="guided_question_rubric",
+            schema=schema,
+            phase="GUIDED_PRACTICE",
+            active_triggers=[],
+            conversation_history=[],
+            user_payload={
+                "instruction": (
+                    "Infer the smallest concept rubric required to judge this question. "
+                    "Use stable uppercase concept IDs. Return every required concept, "
+                    "ALL_REQUIRED_CONCEPTS, and copy the supplied metadata fields exactly."
+                ),
+                "question_id": question_id,
+                "question": question,
+                "answer_spec": answer_payload,
+                "allowed_potential_errors": potential_errors,
+                "target_micro_skill_ids": target_micro_skill_ids,
+                "cache_key": cache_key,
+                "prompt_version": prompt_version,
+            },
+        )
+        try:
+            rubric = GeneratedQuestionRubric.model_validate(content)
+        except ValidationError as error:
+            raise AdapterError(
+                "openai_ai_engine",
+                f"invalid guided rubric: {error}",
+            ) from error
+        return rubric.model_copy(
+            update={
+                "question_id": question_id,
+                "cache_key": cache_key,
+                "prompt_version": prompt_version,
+            }
+        )
+
+    def evaluate_guided_turn(
+        self,
+        question: str,
+        answer_spec: AnswerSpec,
+        generated_rubric: GeneratedQuestionRubric,
+        active_objective: ActiveTeachingObjective,
+        student_response: str,
+        input_source: InputSource,
+        allowed_error_codes: list[dict[str, object]],
+        recent_conversation: list[ConversationMessage],
+        evaluator_prompt_version: str,
+    ) -> GuidedEvaluation:
+        content = self._request_json(
+            name="guided_turn_evaluation",
+            schema=GuidedEvaluation.model_json_schema(),
+            phase="GUIDED_PRACTICE",
+            active_triggers=[],
+            conversation_history=recent_conversation,
+            user_payload={
+                "instruction": (
+                    "Evaluate the response against the active objective first. Preserve "
+                    "confirmed concepts unless explicitly contradicted. Select only an "
+                    "allowed error code. STUCK and UNCLEAR must not confirm negative "
+                    "evidence. Ask one focused next question and never reveal the answer."
+                ),
+                "question": question,
+                "answer_spec": answer_spec.model_dump(),
+                "generated_rubric": generated_rubric.model_dump(),
+                "active_objective": active_objective.model_dump(),
+                "student_response": student_response,
+                "input_source": input_source,
+                "allowed_error_codes": allowed_error_codes,
+                "evaluator_prompt_version": evaluator_prompt_version,
+                "answer_reveal_allowed": False,
+            },
+        )
+        try:
+            return GuidedEvaluation.model_validate(content)
+        except ValidationError as error:
+            raise AdapterError(
+                "openai_ai_engine",
+                f"invalid guided evaluation: {error}",
+            ) from error
 
     def build_tutor_message(
         self,

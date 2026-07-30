@@ -5,6 +5,11 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from app.models.adapters import ConversationAction
+from app.models.guided_learning import (
+    ActiveTeachingObjective,
+    GeneratedQuestionRubric,
+    GuidedStudentState,
+)
 
 
 EvaluationCategory = Literal[
@@ -208,3 +213,7 @@ class TutorResponse(StrictSchema):
     question_completed: StrictBool
     answer_value_confirmed: StrictBool = False
     reasoning_complete: StrictBool = False
+    guided_student_state: GuidedStudentState | None = None
+    selected_error_code: str | None = None
+    generated_question_rubric: GeneratedQuestionRubric | None = None
+    active_teaching_objective: ActiveTeachingObjective | None = None

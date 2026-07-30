@@ -109,7 +109,10 @@ async def run_tutor_pipeline(
     tutor = await adapters.tutor.evaluate(context, _EMPTY_RAG, student)
 
     rag = _EMPTY_RAG
-    if tutor.response_strategy == "GUIDED_HINT":
+    if (
+        tutor.response_strategy == "GUIDED_HINT"
+        and context.phase_2_prompt_context is None
+    ):
         rag = await adapters.rag.retrieve(
             context, error_type=tutor.error_type, hint_level=tutor.hint_level
         )
@@ -958,6 +961,7 @@ async def _process_interaction(
         session_id=request.session_id,
         student_id=request.student_id,
         source_turn_id=request.turn_id or f"TURN-{uuid4().hex.upper()}",
+        question_id=session.question_id,
         message=student_message,
         question=(
             session.scaffold_steps[0]
@@ -985,6 +989,8 @@ async def _process_interaction(
         concept_id=session.concept_id,
         conversation_history=recent_history,
         conversation_state=_conversation_state_from_session(session),
+        generated_question_rubric=session.generated_question_rubric,
+        active_teaching_objective=session.active_teaching_objective,
         detected_equation=ocr.detected_equation if ocr is not None else None,
         detected_steps=ocr.detected_steps if ocr is not None else [],
         ocr_confidence=ocr.confidence if ocr is not None else None,
@@ -1050,12 +1056,26 @@ async def _process_interaction(
         and request.interaction_type == "ANSWER_SUBMISSION"
         and not scaffold_turn
     )
+    configured_guided_event = (
+        rules.guided_learning.llm_state_mapping[tutor.guided_student_state]
+        .student_model_event
+        if tutor.guided_student_state is not None
+        else None
+    )
     schema_event_type: Literal["CORRECT_ATTEMPT", "INCORRECT_ATTEMPT"] | None = (
         "CORRECT_ATTEMPT"
-        if tutor.evaluation == "CORRECT"
+        if configured_guided_event == "CORRECT_ATTEMPT"
+        or (
+            tutor.guided_student_state is None
+            and tutor.evaluation == "CORRECT"
+        )
         else (
             "INCORRECT_ATTEMPT"
-            if tutor.evaluation == "INCORRECT"
+            if configured_guided_event == "INCORRECT_ATTEMPT"
+            or (
+                tutor.guided_student_state is None
+                and tutor.evaluation == "INCORRECT"
+            )
             else None
         )
     )
@@ -1120,8 +1140,12 @@ async def _process_interaction(
                     student_response=student_message,
                     independent_success=schema_event_type == "CORRECT_ATTEMPT",
                     error_code=(
-                        _db_error_code(session, student_message)
-                        or tutor.error_type
+                        (
+                            tutor.selected_error_code
+                            if tutor.guided_student_state is not None
+                            else _db_error_code(session, student_message)
+                            or tutor.error_type
+                        )
                         if schema_event_type == "INCORRECT_ATTEMPT"
                         else None
                     ),
@@ -1150,8 +1174,12 @@ async def _process_interaction(
                         else None
                     ),
                     error_code=(
-                        _db_error_code(session, student_message)
-                        or tutor.error_type
+                        (
+                            tutor.selected_error_code
+                            if tutor.guided_student_state is not None
+                            else _db_error_code(session, student_message)
+                            or tutor.error_type
+                        )
                         if schema_event_type == "INCORRECT_ATTEMPT"
                         else None
                     ),
@@ -1159,6 +1187,33 @@ async def _process_interaction(
                 access_token,
             )
         schema_content_response = schema_response
+        support_to_serve = (
+            schema_response.phase_payload.support_to_serve
+            if schema_response.phase_payload is not None
+            else None
+        )
+        logger.info(
+            "guided_student_model_event_processed",
+            extra={
+                "session_id": session.session_id,
+                "question_id": session.question_id,
+                "student_model_event": (
+                    "GUIDED_SUPPORT_ESCALATION_REQUIRED"
+                    if schema_guided_support_escalation
+                    else schema_event_type
+                ),
+                "support_type": (
+                    support_to_serve.get("support_type")
+                    if support_to_serve is not None
+                    else None
+                ),
+                "support_id": (
+                    support_to_serve.get("support_id")
+                    if support_to_serve is not None
+                    else None
+                ),
+            },
+        )
 
         guided = schema_response.journey_state.phase_2_guided_learning
         if (
@@ -1333,6 +1388,16 @@ async def _process_interaction(
             else tutor.answer_value_confirmed
         ),
         "conversation_history": conversation_history,
+        "generated_question_rubric": (
+            tutor.generated_question_rubric
+            if tutor.generated_question_rubric is not None
+            else session.generated_question_rubric
+        ),
+        "active_teaching_objective": (
+            tutor.active_teaching_objective
+            if tutor.guided_student_state is not None
+            else session.active_teaching_objective
+        ),
         "recommended_entry_phase": recommended,
         "stuck_count": (
             session.stuck_count + 1
@@ -1356,6 +1421,8 @@ async def _process_interaction(
         )
     if schema_question_changed:
         state_updates["stuck_count"] = 0
+        state_updates["generated_question_rubric"] = None
+        state_updates["active_teaching_objective"] = None
     if schema_response is None:
         state_updates["last_student_model"] = student
     if (
@@ -1401,6 +1468,8 @@ async def _process_interaction(
                 "question_completed": False,
                 "answer_value_confirmed": False,
                 "conversation_history": [],
+                "generated_question_rubric": None,
+                "active_teaching_objective": None,
                 "phase_transitions": [
                     *session.phase_transitions,
                     PhaseTransitionRecord(

@@ -30,9 +30,54 @@ from app.models.adapters import (
     TutorEngineRequest,
 )
 from app.models.student_model_session import AnswerSpec
+from app.models.guided_learning import (
+    ActiveTeachingObjective,
+    GeneratedConcept,
+    GeneratedQuestionRubric,
+    GuidedEvaluation,
+)
 
 
 client = TestClient(app)
+
+
+def _guided_context(stuck_count: int) -> Phase2PromptContext:
+    return Phase2PromptContext(
+        target_micro_skill_ids=["T02.M8"],
+        support_state={},
+        potential_errors=[
+            {
+                "error_code": "ERR-T02-ADDITION",
+                "description": "Interprets adjacent terms as addition.",
+                "response_patterns": ["c + d"],
+            }
+        ],
+        support_catalog={"hints": [{"hint_id": "PRIVATE-FUTURE-HINT"}]},
+        current_support=None,
+        current_scaffold_step_number=0,
+        consecutive_stuck_count=stuck_count,
+    )
+
+
+def _guided_rubric() -> GeneratedQuestionRubric:
+    return GeneratedQuestionRubric(
+        question_id="Q-T02-002",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="OPERATION",
+                description="Recognises multiplication.",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="EXPANDED_MEANING",
+                description="Expands adjacent letters.",
+                required=True,
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="rubric-hash",
+        prompt_version="1.0.0",
+    )
 
 
 def _answer_spec(
@@ -1849,3 +1894,178 @@ def test_retrieved_canvas_feedback_is_guarded_before_return() -> None:
 
     assert guarded.tutor_message == "I cannot give the final answer, but I can help you with the next step."
     assert guarded.tutor_message_voice == guarded.tutor_message
+
+
+def test_guided_llm_partial_persists_only_the_missing_objective(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _GuidedClient:
+        def generate_guided_rubric(self, **kwargs):
+            captured["rubric"] = kwargs
+            return _guided_rubric()
+
+        def evaluate_guided_turn(self, **kwargs):
+            return GuidedEvaluation(
+                student_state="PARTIAL",
+                newly_confirmed_concept_ids=["OPERATION"],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=["EXPANDED_MEANING"],
+                selected_error_code=None,
+                confidence=0.96,
+                next_objective=ActiveTeachingObjective(
+                    objective_type="EXPLAIN_CONCEPT",
+                    target_concept_ids=["EXPANDED_MEANING"],
+                    confirmed_concept_ids=[],
+                    missing_concept_ids=["EXPANDED_MEANING"],
+                ),
+                tutor_message="Multiplication is the operation. What does cd expand to?",
+                tutor_message_voice="Multiplication is the operation. What does c d expand to?",
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _GuidedClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T02-002",
+            question="What does cd mean?",
+            correct_answer="c multiplied by d",
+            answer_spec=_answer_spec(
+                "c multiplied by d",
+                ["c times d"],
+                "CONCEPT_TEXT_MATCH",
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            student_input="multiplication",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.guided_student_state == "PARTIAL"
+    assert response.student_model_events == []
+    assert response.attempt_increment == 0
+    assert response.active_teaching_objective is not None
+    assert response.active_teaching_objective.confirmed_concept_ids == ["OPERATION"]
+    assert response.active_teaching_objective.missing_concept_ids == ["EXPANDED_MEANING"]
+    rubric_payload = captured["rubric"]
+    assert isinstance(rubric_payload, dict)
+    assert rubric_payload["potential_errors"] == [
+        {
+            "error_code": "ERR-T02-ADDITION",
+            "description": "Interprets adjacent terms as addition.",
+        }
+    ]
+
+
+def test_guided_llm_repeated_stuck_requests_one_scaffold_escalation(
+    monkeypatch,
+) -> None:
+    class _GuidedClient:
+        def generate_guided_rubric(self, **kwargs):
+            return _guided_rubric()
+
+        def evaluate_guided_turn(self, **kwargs):
+            objective = kwargs["active_objective"]
+            return GuidedEvaluation(
+                student_state="STUCK",
+                newly_confirmed_concept_ids=[],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=objective.missing_concept_ids,
+                selected_error_code=None,
+                confidence=0.94,
+                next_objective=objective,
+                tutor_message="Let’s make it smaller. What operation joins c and d?",
+                tutor_message_voice="Let’s make it smaller. What operation joins c and d?",
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _GuidedClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T02-002",
+            question="What does cd mean?",
+            correct_answer="c multiplied by d",
+            answer_spec=_answer_spec(
+                "c multiplied by d",
+                ["c times d"],
+                "CONCEPT_TEXT_MATCH",
+            ),
+            phase_2_prompt_context=_guided_context(1),
+            student_input="I don't know",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.guided_student_state == "STUCK"
+    assert response.response_strategy == "SCAFFOLD"
+    assert response.student_model_events == []
+    assert response.attempt_increment == 0
+
+
+def test_guided_llm_wrong_uses_only_a_permitted_error_code(monkeypatch) -> None:
+    class _GuidedClient:
+        def generate_guided_rubric(self, **kwargs):
+            return _guided_rubric()
+
+        def evaluate_guided_turn(self, **kwargs):
+            return GuidedEvaluation(
+                student_state="WRONG",
+                newly_confirmed_concept_ids=[],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=["OPERATION", "EXPANDED_MEANING"],
+                selected_error_code="ERR-T02-ADDITION",
+                confidence=0.97,
+                next_objective=ActiveTeachingObjective(
+                    objective_type="RECONSIDER_CONCEPT",
+                    target_concept_ids=["OPERATION"],
+                    confirmed_concept_ids=[],
+                    missing_concept_ids=["OPERATION", "EXPANDED_MEANING"],
+                ),
+                tutor_message="Test that idea: does writing letters together mean adding?",
+                tutor_message_voice="Test that idea: does writing letters together mean adding?",
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _GuidedClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T02-002",
+            question="What does cd mean?",
+            correct_answer="c multiplied by d",
+            answer_spec=_answer_spec(
+                "c multiplied by d",
+                ["c times d"],
+                "CONCEPT_TEXT_MATCH",
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            student_input="c plus d",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.guided_student_state == "WRONG"
+    assert response.selected_error_code == "ERR-T02-ADDITION"
+    assert response.attempt_increment == 1
