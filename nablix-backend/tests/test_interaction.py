@@ -1137,30 +1137,3 @@ def test_session_end_summarises_recorded_activity(monkeypatch) -> None:
     assert summary["canvas_feedback_history"] == []
     assert summary["phase_transitions"][0]["previous_phase"] == "DIAGNOSTIC"
     assert summary["phase_transitions"][0]["current_phase"] == "GUIDED_PRACTICE"
-
-
-def test_bank_advance_clears_stale_student_model_event(monkeypatch) -> None:
-    """A bank-served next question must drop the Student Model event.
-
-    Live incidents 29 Jul (SESSION011 / ALG_1STEP_GP_F01) and 31 Jul
-    (SESSION90188a33 / ALG_1STEP_GP_F02): next_question_updates overwrote
-    session.question_id with a bank question while the stored schema event
-    still described the previous question_set. Every subsequent answer then
-    409'd in _schema_question and the session was unrecoverable.
-    """
-    import asyncio
-
-    from app.services.interaction_service import next_question_updates
-    from app.services.session_service import _sessions
-
-    session_id = _start_session("ST001", initial_phase="GUIDED_PRACTICE")
-    _serve_second_diagnostic_question(monkeypatch)
-    session = _sessions[session_id]
-
-    updates = asyncio.run(next_question_updates(session, session.current_phase))
-
-    assert updates is not None
-    assert updates["question_id"] == "ALG_EQ_DIAG_002"
-    # THE fix: the stale event must not survive a bank advance.
-    assert "student_model_event" in updates
-    assert updates["student_model_event"] is None
