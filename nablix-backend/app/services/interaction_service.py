@@ -205,9 +205,18 @@ def _schema_question(session: SessionRecord) -> StudentModelQuestion:
         None,
     )
     if question is None:
+        # Not the Student Model's fault: session.question_id was set by the
+        # Tutor Backend (usually a bank question from next_question_updates)
+        # and simply isn't in the stored question_set. Say so, so the next
+        # person debugging this starts in the right service.
         raise HTTPException(
             status_code=409,
-            detail=f"Student Model did not return metadata for {session.question_id}.",
+            detail=(
+                f"Question {session.question_id} is not in the stored Student "
+                "Model question_set — the Tutor Backend assigned it from "
+                "another source (question bank) without clearing the schema "
+                "event."
+            ),
         )
     return question
 
@@ -838,6 +847,16 @@ async def next_question_updates(
         "stuck_count": 0,
         "hint_count": 0,
         "question_completed": False,
+        # The question now on screen came from the question bank, not from the
+        # Student Model's question_set — so the stored schema event no longer
+        # describes it. Leaving the stale event in place made every subsequent
+        # _schema_question() lookup 409 ("Student Model did not return metadata
+        # for ALG_1STEP_GP_F01/F02"), killing the session with no recovery
+        # (live incidents 29 Jul SESSION011, 31 Jul SESSION90188a33).
+        # With the event cleared, every schema reader already degrades to the
+        # plain bank-question flow, and the next phase start stores a fresh
+        # event (session_service.py:424).
+        "student_model_event": None,
     }
 
 
