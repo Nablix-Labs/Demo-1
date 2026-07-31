@@ -1963,6 +1963,27 @@ def test_guided_llm_partial_persists_only_the_missing_objective(monkeypatch) -> 
         {
             "error_code": "ERR-T02-ADDITION",
             "description": "Interprets adjacent terms as addition.",
+            "response_patterns": ["c + d"],
+        }
+    ]
+
+
+def test_guided_error_definitions_preserve_student_model_metadata() -> None:
+    definitions = classifier.guided_error_definitions(
+        [
+            {
+                "error_code": "ERR-T02-POWER-AS-COEFFICIENT",
+                "error_description": "Treats the exponent as a coefficient.",
+                "response_patterns": ["2pq", 123],
+            }
+        ]
+    )
+
+    assert definitions == [
+        {
+            "error_code": "ERR-T02-POWER-AS-COEFFICIENT",
+            "description": "Treats the exponent as a coefficient.",
+            "response_patterns": ["2pq"],
         }
     ]
 
@@ -2117,7 +2138,7 @@ def test_guided_multipart_rejects_completion_with_unconfirmed_required_parts(
     )
     with pytest.raises(
         AdapterError,
-        match="Multipart evaluation missing concepts do not match",
+        match="Guided evaluation missing concepts do not match",
     ):
         classify_student_response(
             ClassificationRequest(
@@ -2365,6 +2386,163 @@ def test_guided_llm_repeated_stuck_requests_one_scaffold_escalation(
     assert response.response_strategy == "SCAFFOLD"
     assert response.student_model_events == []
     assert response.attempt_increment == 0
+
+
+def test_guided_wrong_at_configured_confidence_requests_student_model_support(
+    monkeypatch,
+) -> None:
+    class _GuidedClient:
+        def generate_guided_rubric(self, **kwargs):
+            return _guided_rubric().model_copy(
+                update={"question_id": "Q-T02-003"}
+            )
+
+        def evaluate_guided_turn(self, **kwargs):
+            assert kwargs["deterministic_evaluation"] == "INCORRECT"
+            return GuidedEvaluation(
+                student_state="WRONG",
+                newly_confirmed_concept_ids=[],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=["OPERATION", "EXPANDED_MEANING"],
+                selected_error_code="ERR-T02-ADDITION",
+                confidence=0.5,
+                next_objective=kwargs["active_objective"],
+                tutor_message="That interpretation uses addition. What operation does cd represent?",
+                tutor_message_voice="That interpretation uses addition. What operation does c d represent?",
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _GuidedClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T02-003",
+            question="Write p × p × q in compact algebraic notation.",
+            correct_answer="p²q",
+            answer_spec=_answer_spec(
+                "p²q",
+                ["p^2q"],
+                "EXACT_NOTATION_MATCH",
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            student_input="p^q",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.guided_student_state == "WRONG"
+    assert response.selected_error_code == "ERR-T02-ADDITION"
+    assert response.attempt_increment == 1
+
+
+def test_guided_explicit_stuck_is_not_downgraded_by_semantic_confidence(
+    monkeypatch,
+) -> None:
+    class _GuidedClient:
+        def generate_guided_rubric(self, **kwargs):
+            return _guided_rubric()
+
+        def evaluate_guided_turn(self, **kwargs):
+            objective = kwargs["active_objective"]
+            return GuidedEvaluation(
+                student_state="STUCK",
+                newly_confirmed_concept_ids=[],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=objective.missing_concept_ids,
+                selected_error_code=None,
+                confidence=0.0,
+                next_objective=objective,
+                tutor_message="Let’s make it smaller. What operation joins c and d?",
+                tutor_message_voice="Let’s make it smaller. What operation joins c and d?",
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _GuidedClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T02-002",
+            question="What does cd mean?",
+            correct_answer="c multiplied by d",
+            answer_spec=_answer_spec(
+                "c multiplied by d",
+                ["c times d"],
+                "CONCEPT_TEXT_MATCH",
+            ),
+            phase_2_prompt_context=_guided_context(1),
+            student_input="I don't know",
+            current_phase="GUIDED_PRACTICE",
+            input_source="VOICE",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.guided_student_state == "STUCK"
+    assert response.response_strategy == "SCAFFOLD"
+    assert response.attempt_increment == 0
+
+
+def test_guided_correct_keeps_the_strict_confidence_threshold(
+    monkeypatch,
+) -> None:
+    class _GuidedClient:
+        def generate_guided_rubric(self, **kwargs):
+            return _guided_rubric()
+
+        def evaluate_guided_turn(self, **kwargs):
+            return GuidedEvaluation(
+                student_state="CORRECT",
+                newly_confirmed_concept_ids=["OPERATION", "EXPANDED_MEANING"],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=[],
+                selected_error_code=None,
+                confidence=0.7,
+                next_objective=None,
+                tutor_message="That explains the meaning.",
+                tutor_message_voice="That explains the meaning.",
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _GuidedClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T02-002",
+            question="What does cd mean?",
+            correct_answer="c multiplied by d",
+            answer_spec=_answer_spec(
+                "c multiplied by d",
+                ["c times d"],
+                "CONCEPT_TEXT_MATCH",
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            student_input="It indicates multiplication.",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.guided_student_state == "UNCLEAR"
+    assert response.attempt_increment == 0
+    assert response.question_completed is False
 
 
 def test_guided_exact_notation_stuck_uses_question_aware_llm_message(
