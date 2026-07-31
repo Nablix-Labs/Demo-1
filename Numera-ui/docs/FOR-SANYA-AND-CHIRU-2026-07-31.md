@@ -1,8 +1,15 @@
 # The canvas 409 on phase 3 — and a smaller fix than the one you rejected
 
-**For:** Sanya
+**For:** Sanya and Chirudeva
 **From:** Manav
 **Date:** 31 July 2026
+
+**Short version:** this is Chirudeva's critical #3 ("Canvas bypasses the
+authoritative Guided Learning flow") showing up in Manjusha's testing tonight.
+The line that raises is in Sanya's area, so there's a 3-line plaster she could
+approve — but if Chiru's state-machine work is landing this week, the plaster is
+wasted effort and we should just wait. That's the decision I need from you two,
+not from me.
 
 ---
 
@@ -96,6 +103,26 @@ the whole request.
 
 ---
 
+## Who owns which half
+
+This has bounced between people twice now, so writing it down:
+
+| Layer | Owner |
+|---|---|
+| **Root cause** — canvas runs a separate legacy state path from text/REST voice, so it advances onto bank ids the schema set never had | **Chirudeva** — critical #1 and #3 on Manjusha's list |
+| **The raising line** — `_active_answer_spec` / `_schema_question`, and what `student_model_event` means | **Sanya** — "AI-specific state definition" per Manjusha's note |
+| The `cad2484` revert decision | Sanya's, already made and correct |
+
+The proposal below is a plaster on Sanya's line. **Chiru's unification removes
+the wound entirely** — routing canvas through the same Schema 3.0 state machine
+as text means the ids can't diverge in the first place, and this whole class of
+409 dies with it.
+
+So the real question is sequencing, not ownership: is the state-machine work
+close enough that we should skip the plaster?
+
+---
+
 ## Your call — three options
 
 1. **This narrow fix.** Unblocks phase-3 canvas testing tonight. I'd ship it as
@@ -106,7 +133,12 @@ the whole request.
    This is the real answer, and Chirudeva's "one authoritative state machine"
    work would subsume it anyway. If that's landing soon, option 1 is just noise.
 3. **`git revert 72a995c`** — re-applies my original fix. I'm explicitly *not*
-   recommending this; you rejected it on principle and the principle holds.
+   recommending this; Sanya rejected it on principle and the principle holds.
+
+**My honest read:** if Chiru's state-machine work is more than a few days out,
+take option 1 so Manjusha isn't blocked in the meantime. If it's imminent, skip
+it — a plaster on a path that's about to be deleted is churn, and it's one more
+thing to unpick during the migration.
 
 ---
 
