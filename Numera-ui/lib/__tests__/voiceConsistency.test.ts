@@ -38,10 +38,12 @@ async function effectiveVoiceFor(
 describe('effectiveVoice', () => {
   beforeEach(() => vi.resetModules());
 
-  it('gives a premium student Cartesia before they touch the picker', async () => {
+  it('gives a premium student Inworld before they touch the picker', async () => {
+    // 31 Jul (Manjusha): Inworld is the product voice for EVERY tier —
+    // Cartesia ran out of credits twice in four days at ~7.5x the price.
     expect(await effectiveVoiceFor('premium')).toEqual({
-      provider: 'cartesia',
-      voice: 'db6b0ed5-d5d3-463d-ae85-518a07d3c2b4',
+      provider: 'inworld',
+      voice: 'Ashley',
     });
   });
 
@@ -75,7 +77,7 @@ describe('effectiveVoice', () => {
     const resolved = await effectiveVoiceFor('premium');
     const { buildVoiceStreamUrl } = await import('@/lib/runtimeConfig');
     const url = new URL(buildVoiceStreamUrl('SESSION005', 'ST001', resolved));
-    expect(url.searchParams.get('tts_provider')).toBe('cartesia');
+    expect(url.searchParams.get('tts_provider')).toBe('inworld');
     expect(url.searchParams.get('tts_voice')).toBe(resolved.voice);
     delete process.env.NEXT_PUBLIC_WS_URL;
   });
@@ -112,8 +114,8 @@ describe('product-voice degradation (Cartesia quota outage, 31 Jul)', () => {
 
   it('brings the real voice back after the recovery window (a top-up heals itself)', async () => {
     const tts = await ttsModuleFor('premium');
-    tts.markProviderDegraded('cartesia', Date.now() - 5 * 60_000 - 1);
-    expect(tts.effectiveVoice().provider).toBe('cartesia');
+    tts.markProviderDegraded('inworld', Date.now() - 5 * 60_000 - 1);
+    expect(tts.effectiveVoice().provider).toBe('inworld');
   });
 
   it('degrades basic-tier Inworld onto Cartesia, symmetric', async () => {

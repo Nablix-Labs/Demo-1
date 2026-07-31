@@ -111,11 +111,19 @@ export const VOICE_SAMPLE_TEXT =
  * get it (if any) and this is a one-line change. An unknown or missing tier
  * falls back to the backend default, which is the safe direction: it never
  * silently upgrades someone onto the expensive provider.
+ *
+ * ── 31 Jul: Inworld for every tier (Manjusha) ───────────────────────────────
+ * "Let's keep inworld models instead of Cartesia." Cartesia has run out of
+ * credits twice in four days (~$38/M chars vs Inworld's ~$5/M), so Inworld is
+ * now the product voice across all tiers. The server env default agrees
+ * (VOICE_TTS_PROVIDER=inworld on the VM). Cartesia stays registered as the
+ * degradation target in lib/tts.ts — if Inworld hard-fails, a topped-up
+ * Cartesia account is the backup voice, and switching back is this map again.
  */
 export const TIER_PROVIDER: Record<string, VoiceProvider['id']> = {
   basic: 'inworld',
-  premium: 'cartesia',
-  enterprise: 'cartesia',
+  premium: 'inworld',
+  enterprise: 'inworld',
 };
 
 /** The providers to offer this student. Empty = backend default only. */

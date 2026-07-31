@@ -181,8 +181,11 @@ provider+voice on **both** transports. Tier → provider:
 
 | Tier | Provider | Default voice |
 |---|---|---|
-| `premium`, `enterprise` | `cartesia` | Skylar |
-| `basic` | `inworld` | Ashley |
+| all tiers (31 Jul, Manjusha) | `inworld` | Ashley |
+
+(Cartesia was premium/enterprise until 31 Jul; it ran out of credits twice in
+four days at ~7.5x Inworld's price. It remains the degradation target in
+`lib/tts.ts` — flipping `TIER_PROVIDER` in `lib/voiceOptions.ts` switches back.)
 
 The student picks a voice within their tier's provider, never a provider. There
 is deliberately **no cross-provider fallback** — it used to silently switch to
