@@ -179,6 +179,7 @@ class GuidedLearningConfig(StrictSchema):
     rubric_system_prompt: str
     evaluator_system_prompt: str
     scaffold_evaluator_system_prompt: str
+    reconciliation_message: str
     allowed_student_states: list[GuidedStudentState]
     supported_verification_methods: list[str]
     multi_component_question_types: list[QuestionType]
