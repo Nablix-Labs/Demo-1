@@ -94,6 +94,7 @@ class AnswerRevealGuardrailConfig(StrictSchema):
     direct_request_phrases: list[str]
     override_phrases: list[str]
     reveal_phrases: list[str]
+    rewrite_feedback: str
     safe_message: str
     flag_type: str
     action_taken: str
@@ -179,6 +180,7 @@ class GuidedLearningConfig(StrictSchema):
     rubric_system_prompt: str
     evaluator_system_prompt: str
     scaffold_evaluator_system_prompt: str
+    answer_reveal_retry_feedback: str
     reconciliation_message: str
     allowed_student_states: list[GuidedStudentState]
     supported_verification_methods: list[str]

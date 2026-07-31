@@ -121,7 +121,10 @@ export function useWebSocket(sessionId: string | null) {
             // the audio that is about to stream in.
             watchdogRef.current?.noteTurnResolved();
             addTranscriptMessage({ role: 'ai', text: msg.text as string });
-            applyInteractionSupport({
+            // applyInteractionSupport returns the line the tutor should SAY —
+            // the scaffold step's voice line when a panel is open, else the
+            // message. Kept as the stream's fallback text below.
+            const spokenLine = applyInteractionSupport({
               message: msg.text as string,
               show_visual_cue: msg.show_visual_cue as boolean | undefined,
               visual_cue: msg.visual_cue as SupportPresentation['visual_cue'],
@@ -154,7 +157,13 @@ export function useWebSocket(sessionId: string | null) {
                   typeof msg.current_question === 'string' ? msg.current_question : null,
               });
             }
-            tutorAudioStream.begin(); // reset the player; chunks are coming next
+            // Reset the player; chunks are coming next. The voice line rides
+            // along so a failed stream (tutor_audio_end with error — Cartesia
+            // quota, 31 Jul) speaks through the REST fallback chain instead of
+            // leaving guided practice silent.
+            tutorAudioStream.begin(
+              (typeof msg.voice_text === 'string' && msg.voice_text) || spokenLine,
+            );
             break;
 
           case 'tutor_audio_chunk':

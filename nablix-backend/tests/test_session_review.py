@@ -157,13 +157,17 @@ def test_question_attempts_must_be_chronological() -> None:
     assert response.status_code == 422
 
 
-def test_unregistered_question_is_rejected() -> None:
+def test_unregistered_question_still_gets_a_review() -> None:
+    """Questions served from the Student Model's Schema 3.0 question_set are in
+    no local answer registry. Rejecting them meant every session that touched
+    the diagnostic 502'd at /session/end (found live, 31 Jul). An unknown
+    answer is nothing to protect — the review must still generate."""
     body = _request_body()
-    body["session_summary"]["per_question_history"][0]["question_id"] = "UNKNOWN"
+    body["session_summary"]["per_question_history"][0]["question_id"] = "Q-T01-D01"
 
     response = client.post("/session/review/generate", json=body)
 
-    assert response.status_code == 422
+    assert response.status_code == 200
 
 
 def test_openai_context_excludes_private_and_answer_fields() -> None:
@@ -317,3 +321,12 @@ def test_pressure_suppresses_b6_hook() -> None:
     result = session_review.apply_deterministic_review_rules(generated, request, config)
 
     assert result.b6_hook is None
+
+
+def test_uuid_style_session_id_is_accepted() -> None:
+    """ae25494 moved id generation to SESSION{uuid4().hex}; the hardcoded
+    pattern here was missed, so every /session/end on a real session 502'd
+    ("Session review could not be generated") — found live on 31 Jul."""
+    body = _request_body()
+    body["session_summary"]["session_id"] = "SESSIONe05740e1102e4fd5a29b3219385d17f5"
+    _validated_request(body)  # must not raise

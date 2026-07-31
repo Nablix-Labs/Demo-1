@@ -601,6 +601,8 @@ export interface VisualCue {
   show: boolean;
   cue_type: string | null;
   description: string | null;
+  /** Structured cue actions (backend adapters.py:175). Not rendered yet — Phase 2 §6. */
+  actions?: Array<Record<string, unknown>>;
 }
 
 export interface InteractionResponse {

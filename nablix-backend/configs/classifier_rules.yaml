@@ -53,8 +53,11 @@ guided_learning:
     permitted error_code with high confidence.
     Judge mathematical meaning, not typography. Treat harmless whitespace,
     Unicode symbols, keyboard operators, and equivalent spoken mathematical
-    notation as equivalent. Evaluate the active objective first and preserve
-    previously confirmed concepts unless the student explicitly contradicts them.
+    notation as equivalent. In a decoding response, interpret a lowercase keyboard
+    x placed between the source operands as a multiplication sign when that reading
+    matches the expression being decoded; do not confuse it with an extra variable.
+    Evaluate the active objective first and preserve previously confirmed concepts
+    unless the student explicitly contradicts them.
     Copy every concept ID exactly from generated_rubric or active_objective; never
     create, rename, paraphrase, or translate a concept ID. The backend derives
     preserved concepts, missing concepts, and the next objective from confirmed
@@ -64,7 +67,10 @@ guided_learning:
     demonstrated concept and at least one missing concept. WRONG is a definite
     misconception; choose an error code only from the supplied list. STUCK means
     the student says they cannot proceed. UNCLEAR means the response cannot be
-    interpreted safely. Ask one focused question, never repeat a satisfied
+    interpreted safely. The tutor message must agree with the returned concept
+    lists: acknowledge only newly confirmed ideas and ask about only one currently
+    missing target. Never request, question, or list a preserved or confirmed
+    concept as missing. Ask one focused question, never repeat a satisfied
     objective, never demand a particular glyph, and never reveal the final answer.
     Always return a non-empty tutor_message and tutor_message_voice. The text
     message must be suitable for display. The voice message must express the same
@@ -85,6 +91,12 @@ guided_learning:
     original_answer_correct only when the response independently gives a complete
     correct answer to the original question. When original_answer_correct is true,
     step_satisfied must also be true.
+  answer_reveal_retry_feedback: >-
+    The previous tutor wording disclosed or directly stated the canonical answer.
+    Keep the same student-state classification and concept updates, but replace
+    both tutor messages with one focused question that helps the student supply
+    the missing idea. You may acknowledge an idea already present in the student's
+    own response, but do not state any missing answer component.
   reconciliation_message: "I want to make sure I understood that. Please give your answer in one complete response."
   allowed_student_states:
     - CORRECT
@@ -305,6 +317,11 @@ answer_reveal_guardrail:
     - solution is
     - so x =
     - therefore x =
+  rewrite_feedback: >-
+    The previous tutor message disclosed or directly stated the answer. Rewrite it
+    as one focused, conversational question about the student's next step. Do not
+    state the final answer or any missing answer component, and do not repeat the
+    rejected wording.
   safe_message: I cannot give the final answer, but I can help you with the next step.
   flag_type: DIRECT_ANSWER_REVEALED
   action_taken: SAFE_MESSAGE_RETURNED

@@ -100,7 +100,12 @@ class PhaseTransition(StrictSchema):
 
 
 class SessionSummary(StrictSchema):
-    session_id: str = Field(pattern=r"^SESSION\d{3}$")
+    # Must accept every id session_service generates. ae25494 moved id
+    # generation to SESSION{uuid4().hex} and updated the canonical validator
+    # (config.session_id_pattern) but this hardcoded copy was missed, so every
+    # POST /session/end on a new-style id 502'd at review time ("Session
+    # review could not be generated") — found live on 31 Jul.
+    session_id: str = Field(pattern=r"^SESSION(?:\d{3}|[0-9a-fA-F]{32})$")
     student_id: str = Field(pattern=r"^ST\d{3}$")
     concept_id: str = Field(min_length=1)
     session_date: IsoTimestamp

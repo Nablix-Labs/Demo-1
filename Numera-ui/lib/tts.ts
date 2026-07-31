@@ -22,7 +22,7 @@
 
 import { useMicLevel } from '@/store/useMicLevel';
 import { useAuthStore } from '@/store/useAuthStore';
-import { defaultVoiceForTier } from '@/lib/voiceOptions';
+import { defaultVoiceForTier, providersForTier } from '@/lib/voiceOptions';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { synthesizeSpeech } from '@/lib/api';
 
@@ -72,9 +72,83 @@ const ttsApiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
  */
 export function effectiveVoice(): { provider: string | null; voice: string | null } {
   const { ttsProvider, ttsVoice } = useNumeraStore.getState();
-  if (ttsProvider) return { provider: ttsProvider, voice: ttsVoice };
-  const tierDefault = defaultVoiceForTier(useAuthStore.getState().tier);
-  return { provider: tierDefault?.provider ?? null, voice: tierDefault?.voice ?? null };
+  const tier = useAuthStore.getState().tier;
+  // A persisted picker choice only counts while its provider is one the
+  // student's tier still offers. Without this, everyone who ever picked a
+  // Cartesia voice kept getting Cartesia after the 31 Jul switch to Inworld —
+  // the stale selection outlived the product decision.
+  const offered = new Set(providersForTier(tier).map((p) => p.id as string));
+  const chosen = ttsProvider && offered.has(ttsProvider)
+    ? { provider: ttsProvider as string | null, voice: ttsVoice as string | null }
+    : (() => {
+        const tierDefault = defaultVoiceForTier(tier);
+        return { provider: tierDefault?.provider ?? null, voice: tierDefault?.voice ?? null };
+      })();
+  // Session-sticky degradation: if this student's provider has hard-failed
+  // (e.g. Cartesia out of credits, live on 31 Jul), speak in the OTHER product
+  // voice instead of flapping robot/real every cool-off cycle.
+  const downgraded = degradedReplacement(chosen.provider);
+  return downgraded ?? chosen;
+}
+
+// ── Product-voice degradation (Cartesia ⇄ Inworld) ──────────────────────────
+/**
+ * What happens when the student's own provider is genuinely down — not a
+ * hiccup, but e.g. Cartesia returning 402 quota_exceeded on every call, which
+ * has now happened twice (28 and 31 Jul).
+ *
+ * The old cross-provider fallback was removed for good reasons: it switched
+ * silently, to OpenAI (a voice in nobody's plan), and never switched back.
+ * This is the deliberate version, different on every point that made that one
+ * a bug:
+ *
+ *   • only between the two PRODUCT voices (premium Cartesia ⇄ basic Inworld —
+ *     both voices a Numera student can legitimately hear), never anything else;
+ *   • only after the same-provider retry has failed twice in one cool-off
+ *     cycle (a transient 502 still just retries);
+ *   • sticky for DEGRADE_RECOVERY_MS rather than forever, so topping up the
+ *     account brings the right voice back on its own within a few minutes;
+ *   • logged loudly, so "the voice changed" is one console line, not a mystery.
+ *
+ * Without this, a quota outage sounds like: real voice → robot → (60s) → slow
+ * robot → … in the diagnostic, and total silence in guided practice. That
+ * flip-flopping is what got reported as "Cartesia is not synced with voice".
+ */
+const PRODUCT_FALLBACK: Record<string, { provider: string; voice: string }> = {
+  cartesia: { provider: 'inworld', voice: 'Ashley' },
+  inworld: { provider: 'cartesia', voice: 'db6b0ed5-d5d3-463d-ae85-518a07d3c2b4' }, // Skylar
+};
+const DEGRADE_RECOVERY_MS = 5 * 60_000;
+const degradedAt = new Map<string, number>();
+
+/** The replacement product voice while `provider` is degraded, else null. */
+function degradedReplacement(
+  provider: string | null,
+): { provider: string; voice: string } | null {
+  if (!provider) return null;
+  const at = degradedAt.get(provider);
+  if (at === undefined) return null;
+  if (Date.now() - at >= DEGRADE_RECOVERY_MS) {
+    degradedAt.delete(provider); // window over — let the real voice try again
+    return null;
+  }
+  return PRODUCT_FALLBACK[provider] ?? null;
+}
+
+/** Test hook + the marker speakTutor uses when a provider hard-fails. */
+export function markProviderDegraded(provider: string, now = Date.now()): void {
+  if (!(provider in PRODUCT_FALLBACK)) return; // never degrade onto non-product voices
+  degradedAt.set(provider, now);
+  console.warn(
+    `[tts] ${provider} is down; speaking as ${PRODUCT_FALLBACK[provider].provider} ` +
+      `for the next ${Math.round(DEGRADE_RECOVERY_MS / 60_000)} minutes`,
+  );
+}
+
+/** Test hook. */
+export function resetVoiceDegradation(): void {
+  degradedAt.clear();
+  failedAt.clear();
 }
 
 let currentAudio: HTMLAudioElement | null = null;
@@ -166,40 +240,53 @@ export function speakTutor(text: string, onEnd?: () => void): void {
   stopTutorSpeech();
   if (!ttsApiEnabled()) { speakBrowser(text, onEnd); return; }
   const token = speakToken;
+  // effectiveVoice() already accounts for an active degradation window, so a
+  // student whose provider is down asks for the replacement voice up front.
   const { provider, voice } = effectiveVoice();
 
   // Don't spend a request on a provider that failed moments ago.
   if (coolingOff(provider)) { speakBrowser(text, onEnd); return; }
 
-  const attempt = (allowRetry: boolean): void => {
-    synthesizeSpeech(text, { provider, voice })
+  const attemptWith = (
+    p: string | null,
+    v: string | null,
+    onFail: () => void,
+  ): void => {
+    synthesizeSpeech(text, { provider: p, voice: v })
       .then((audioBase64) => {
         if (token !== speakToken) return; // superseded while fetching
         if (audioBase64) {
-          failedAt.delete(provider ?? '');
+          failedAt.delete(p ?? '');
           playBase64Mp3(audioBase64, onEnd);
           return;
         }
-        giveUp(allowRetry);
+        onFail();
       })
       .catch(() => {
         if (token !== speakToken) return;
-        giveUp(allowRetry);
+        onFail();
       });
   };
 
-  const giveUp = (allowRetry: boolean): void => {
-    if (allowRetry) {
-      console.warn(`[tts] ${provider ?? 'default'} failed; retrying once`);
-      attempt(false);
-      return;
-    }
-    if (provider) failedAt.set(provider, Date.now());
-    console.warn(`[tts] ${provider ?? 'default'} unavailable; using browser speech`);
-    speakBrowser(text, onEnd);
-  };
-
-  attempt(true);
+  // same provider → same provider once more → the OTHER product voice →
+  // browser. Each arrow is logged; nothing switches silently.
+  attemptWith(provider, voice, () => {
+    console.warn(`[tts] ${provider ?? 'default'} failed; retrying once`);
+    attemptWith(provider, voice, () => {
+      if (provider) failedAt.set(provider, Date.now());
+      const replacement = provider ? (markProviderDegraded(provider), degradedReplacement(provider)) : null;
+      if (replacement && replacement.provider !== provider) {
+        attemptWith(replacement.provider, replacement.voice, () => {
+          failedAt.set(replacement.provider, Date.now());
+          console.warn('[tts] replacement voice also unavailable; using browser speech');
+          speakBrowser(text, onEnd);
+        });
+        return;
+      }
+      console.warn(`[tts] ${provider ?? 'default'} unavailable; using browser speech`);
+      speakBrowser(text, onEnd);
+    });
+  });
 }
 
 function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
@@ -226,11 +313,15 @@ class TutorAudioStream {
   private pending = new Map<number, Uint8Array<ArrayBuffer>>(); // chunks held until their turn
   private ended = false;
   private mouthTimer: ReturnType<typeof setInterval> | null = null;
+  /** The words this stream is meant to say — spoken via speakTutor if the
+   *  server's audio never arrives (streaming TTS failed, e.g. quota). */
+  private fallbackText: string | null = null;
 
   /** A new tutor reply is starting — reset and prepare to receive audio chunks. */
-  begin(): void {
+  begin(voiceText?: string): void {
     stopTutorSpeech(); // streamed audio supersedes any browser/REST tutor voice
     this.teardown();
+    this.fallbackText = voiceText?.trim() || null;
 
     const supported =
       typeof window !== 'undefined' &&
@@ -278,11 +369,22 @@ class TutorAudioStream {
     this.pump();
   }
 
-  /** tutor_audio_end: no more chunks. total<=0 or an error means text-only (no audio). */
+  /** tutor_audio_end: no more chunks. total<=0 or an error means the server
+   *  produced no audio for this turn. */
   finishStream(totalChunks: number, error?: string): void {
     if (!this.active) return;
     if (error || totalChunks <= 0) {
-      this.finish(); // nothing to play — leave the text on screen
+      // The streamed audio never came (streaming TTS failed server-side —
+      // Cartesia quota, 31 Jul). This used to just fall silent, so guided
+      // practice lost its voice entirely while the diagnostic kept talking.
+      // If nothing has played yet, voice the same words through the REST
+      // fallback chain (own voice → other product voice → browser).
+      const speakInstead = this.nextIndex === 0 ? this.fallbackText : null;
+      this.finish();
+      if (speakInstead) {
+        console.warn('[tts] streamed audio failed; voicing the turn via fallback');
+        speakTutor(speakInstead);
+      }
       return;
     }
     this.ended = true;

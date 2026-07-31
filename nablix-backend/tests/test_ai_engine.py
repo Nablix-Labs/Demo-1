@@ -1,5 +1,6 @@
 import json
 import logging
+from typing import cast
 
 from fastapi.testclient import TestClient
 import pytest
@@ -1917,8 +1918,161 @@ def test_retrieved_canvas_feedback_is_guarded_before_return() -> None:
 
     guarded = apply_retrieved_content(result, rag, "x = 5")
 
-    assert guarded.tutor_message == "I cannot give the final answer, but I can help you with the next step."
-    assert guarded.tutor_message_voice == guarded.tutor_message
+    assert guarded.tutor_message == result.tutor_message
+    assert guarded.tutor_message_voice == result.tutor_message_voice
+
+
+def test_canvas_wording_retries_an_answer_revealing_draft() -> None:
+    captured_feedback: list[str | None] = []
+
+    class _CanvasWordingClient:
+        def build_tutor_message(
+            self,
+            **kwargs: object,
+        ) -> openai_client.OpenAITutorMessage:
+            captured_feedback.append(
+                cast(str | None, kwargs["validation_feedback"])
+            )
+            if len(captured_feedback) == 1:
+                return openai_client.OpenAITutorMessage(
+                    tutor_message="The answer is x = 5.",
+                    tutor_message_voice_optimised="The answer is x equals 5.",
+                    confidence=0.95,
+                )
+            return openai_client.OpenAITutorMessage(
+                tutor_message="Which operation would undo adding four?",
+                tutor_message_voice_optimised="Which operation would undo adding four?",
+                confidence=0.95,
+            )
+
+    message = classifier.build_tutor_message_with_openai(
+        request=ClassificationRequest(
+            question_id="Q-CANVAS",
+            question="Solve x + 4 = 9.",
+            correct_answer="x = 5",
+            student_input="x = 6",
+            current_phase="GUIDED_PRACTICE",
+            input_source="CANVAS",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        ),
+        rules=classifier.load_classifier_rules(),
+        intent="SUBMITTING_ANSWER",
+        evaluation="INCORRECT",
+        error_type="ARITHMETIC_ERROR",
+        response_strategy="GUIDED_HINT",
+        hint_level=1,
+        canvas_context={"incorrect_step": "x = 6"},
+        openai_client=_CanvasWordingClient(),
+    )
+
+    assert message is not None
+    assert message.tutor_message == "Which operation would undo adding four?"
+    assert captured_feedback[0] is None
+    assert captured_feedback[1] is not None
+
+
+def test_guided_evaluator_retries_answer_revealing_wording(monkeypatch) -> None:
+    feedback: list[str | None] = []
+
+    class _GuidedClient:
+        def generate_guided_rubric(
+            self,
+            **kwargs: object,
+        ) -> GeneratedQuestionRubric:
+            return _guided_rubric()
+
+        def evaluate_guided_turn(
+            self,
+            **kwargs: object,
+        ) -> GuidedEvaluation:
+            feedback.append(cast(str | None, kwargs["validation_feedback"]))
+            message = (
+                "The answer is c multiplied by d."
+                if len(feedback) == 1
+                else "You identified multiplication. What do the two letters represent?"
+            )
+            return GuidedEvaluation(
+                student_state="PARTIAL",
+                newly_confirmed_concept_ids=["OPERATION"],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=["EXPANDED_MEANING"],
+                selected_error_code=None,
+                confidence=0.96,
+                next_objective=ActiveTeachingObjective(
+                    objective_type="EXPLAIN_CONCEPT",
+                    target_concept_ids=["EXPANDED_MEANING"],
+                    confirmed_concept_ids=["OPERATION"],
+                    missing_concept_ids=["EXPANDED_MEANING"],
+                ),
+                tutor_message=message,
+                tutor_message_voice=message,
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _GuidedClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T02-002",
+            question="What does cd mean?",
+            correct_answer="c multiplied by d",
+            answer_spec=_answer_spec(
+                "c multiplied by d",
+                ["c times d"],
+                "CONCEPT_TEXT_MATCH",
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            student_input="multiplication",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.guided_student_state == "PARTIAL"
+    assert response.tutor_message == (
+        "You identified multiplication. What do the two letters represent?"
+    )
+    assert feedback[0] is None
+    assert feedback[1] is not None
+
+
+def test_multipart_answer_numbers_do_not_trigger_numeric_reveal_guardrail() -> None:
+    rules = classifier.load_classifier_rules()
+    canonical_answer = "4 × n; p × q; r × r; c ÷ d; 2 × (x + 1)"
+
+    assert classifier.contains_answer_reveal(
+        "You identified r times r. What does the bracket represent?",
+        canonical_answer,
+        rules,
+    ) is False
+    assert classifier.contains_answer_reveal(
+        "The answer is 4 × n; p × q; r × r; c ÷ d; 2 × (x + 1).",
+        canonical_answer,
+        rules,
+    ) is True
+
+
+def test_single_numeric_answer_still_uses_numeric_reveal_guardrail() -> None:
+    rules = classifier.load_classifier_rules()
+
+    assert classifier.contains_answer_reveal(
+        "Subtracting gives five.",
+        "x = 5",
+        rules,
+    ) is False
+    assert classifier.contains_answer_reveal(
+        "Subtracting gives 5.",
+        "x = 5",
+        rules,
+    ) is True
 
 
 def test_guided_llm_partial_persists_only_the_missing_objective(monkeypatch) -> None:

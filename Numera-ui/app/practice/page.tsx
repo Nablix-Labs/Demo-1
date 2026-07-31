@@ -144,12 +144,29 @@ export default function PracticePage() {
   // student asks and a real hint arrives.
   const hintBody = hintText ?? (tutor.apiEnabled ? null : HINTS[hintIndex]);
 
-  const finish = () => {
-    // Submit the canvas for live OCR + tutor feedback (best-effort).
-    void tutor.submitCanvasWork();
-    setDone(true);
-    setPracticeDone();
-    completePhase('practice');
+  // "Can we disable the canvas until submit returns" (Manjusha, 31 Jul).
+  // finish() used to fire-and-forget and show "Practice saved — nice work"
+  // IMMEDIATELY — so a rejected submission (her repro: three 409s in a row on
+  // a second phase-3 submission) looked identical to a successful one, and
+  // nothing stopped repeat clicks racing each other mid-OCR.
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const finish = async () => {
+    if (submitting) return; // one in-flight submission at a time
+    setSubmitting(true);
+    setSubmitError(null);
+    const res = await tutor.submitCanvasWork();
+    setSubmitting(false);
+    if (res) {
+      setDone(true);
+      setPracticeDone();
+      completePhase('practice');
+    } else {
+      // The canvas unlocks again — their work is untouched and retryable.
+      setSubmitError(
+        "The tutor couldn't take that submission. Your work is still here — try once more, or ask for a hint.",
+      );
+    }
   };
 
   return (
@@ -255,8 +272,12 @@ export default function PracticePage() {
 
         <Toolbar onCheckWork={finish} />
 
-        {/* Actions */}
-        <div className="absolute bottom-5 right-6 z-20 flex items-center gap-2">
+        {/* Actions. right-[180px] clears the fixed "Need help?" Assist pill
+            (bottom-6 right-4, ~150px wide, z-[60]) — anchored bottom-right it
+            sat exactly over "I'm done" and intercepted its clicks at EVERY
+            viewport width, so finishing practice was near-impossible. Found
+            31 Jul when automation could not click the button. */}
+        <div className="absolute bottom-5 right-[180px] z-20 flex items-center gap-2">
           {mounted && voice.supported && (
             <button
               onClick={() => (voice.active ? voice.stop() : voice.start())}
@@ -286,11 +307,37 @@ export default function PracticePage() {
           )}
           <button
             onClick={finish}
-            className="rounded-full bg-focus-navy text-white px-4 py-2 text-[12px] font-semibold hover:opacity-80 transition-opacity"
+            disabled={submitting}
+            aria-busy={submitting}
+            className="rounded-full bg-focus-navy text-white px-4 py-2 text-[12px] font-semibold hover:opacity-80 transition-opacity disabled:opacity-60 disabled:cursor-wait"
           >
-            I&apos;m done
+            {submitting ? 'Checking…' : "I'm done"}
           </button>
         </div>
+
+        {/* The canvas is locked while a submission is in flight — the student
+            cannot change work the tutor is mid-way through reading, and repeat
+            clicks cannot race each other. Unlocks on success AND on failure. */}
+        {submitting && (
+          <div
+            className="absolute inset-0 z-30 bg-white/40 cursor-wait"
+            aria-label="Checking your work"
+            aria-busy="true"
+          >
+            <span className="absolute top-5 left-6 flex items-center gap-2 bg-white border border-muted-gray rounded-full px-4 py-2 text-[12px] font-semibold text-ink shadow-sm">
+              <span className="w-3.5 h-3.5 rounded-full border-2 border-muted-gray border-t-focus-navy animate-spin" />
+              Checking your work…
+            </span>
+          </div>
+        )}
+
+        {submitError && !submitting && (
+          <div className="absolute top-5 left-6 z-20">
+            <span role="alert" className="text-[12px] font-semibold text-action-orange bg-action-orange/10 border border-action-orange/25 rounded-full px-4 py-2">
+              {submitError}
+            </span>
+          </div>
+        )}
       </main>
 
       {practiceCompleted && !done && (

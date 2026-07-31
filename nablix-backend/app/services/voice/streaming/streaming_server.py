@@ -146,6 +146,11 @@ async def evaluate_voice_transcript(
         "/voice/transcript",
         json=payload,
         headers={"Authorization": f"Bearer {access_token}"},
+        # Same budget as /canvas/submit below. This call previously inherited
+        # the client default of 15s while canvas got 40s for comparable LLM
+        # work; slowest observed voice turn was 12.5s (30 Jul, n=121), which
+        # left 17% headroom before a timeout indistinguishable from an outage.
+        timeout=40.0,
     )
     if response.status_code != 200:
         raise RuntimeError(f"status={response.status_code} body={response.text}")
@@ -339,6 +344,27 @@ async def voice_stream(
     audio_started_at = 0.0
     turn_already_processed = False  # True when UtteranceEnd auto-triggered a response
     access_token: str | None = None
+
+    async def deepgram_keepalive() -> None:
+        # Deepgram closes a stream that receives neither audio nor text for
+        # ~10s (NET-0001). That happens on every mute, because the frontend
+        # stops sending chunks while muted — 8 such kills in the 30-31 Jul
+        # logs, each costing the student an utterance mid-conversation.
+        # The documented fix is a KeepAlive text frame; it is harmless while
+        # audio is flowing and resets the idle timer while it is not.
+        # https://developers.deepgram.com/docs/keep-alive
+        while True:
+            await asyncio.sleep(5)
+            ws_now = deepgram_ws
+            if ws_now is None:
+                continue
+            try:
+                await ws_now.send(json.dumps({"type": "KeepAlive"}))
+            except Exception:
+                # Closed or resetting mid-send; the reconnect paths own recovery.
+                pass
+
+    keepalive_task = asyncio.create_task(deepgram_keepalive())
 
     deepgram_receiver_task = None
 
@@ -612,6 +638,7 @@ async def voice_stream(
     except Exception as e:
         logger.error(f"[{session_id}] Error: {e}")
     finally:
+        keepalive_task.cancel()
         if deepgram_receiver_task and not deepgram_receiver_task.done():
             deepgram_receiver_task.cancel()
         if deepgram_ws:

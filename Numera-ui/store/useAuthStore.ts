@@ -292,7 +292,7 @@ export function isConsentActive(consents: Record<ConsentPurpose, ConsentRecord>,
 
 export type AccessOutcome =
   | { allowed: true }
-  | { allowed: false; reason: AccountStatus | 'consent_pending' | 'not_student'; redirect: string };
+  | { allowed: false; reason: AccountStatus | 'consent_pending' | 'not_student' | 'session_expired'; redirect: string };
 
 /**
  * The backend access-decision chain from §13, run client-side for the demo.
@@ -304,6 +304,14 @@ export function accessDecision(
   // A valid server-issued token means the platform already authenticated and
   // authorized this user — that decision wins over the client-side mock chain.
   if (isTokenValid(s.accessToken)) return { allowed: true };
+  // A STORED token that is no longer valid means a real login has expired.
+  // Falling through to the mock chain here let yesterday's student straight
+  // into the lesson (persisted role === 'student'), where session start then
+  // 401'd into a dead-end "Couldn't start your lesson" card — reported with
+  // a screenshot on 31 Jul, and it hits everyone whose overnight token
+  // lapses. Expired login -> log in again.
+  if (s.accessToken !== null)
+    return { allowed: false, reason: 'session_expired', redirect: '/login' };
   if (s.role !== 'student') return { allowed: false, reason: 'not_student', redirect: '/login' };
   if (s.accountStatus === 'suspended' || s.accountStatus === 'locked' || s.accountStatus === 'deleted')
     return { allowed: false, reason: s.accountStatus, redirect: '/restricted' };
