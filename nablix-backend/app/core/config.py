@@ -64,7 +64,7 @@ class Settings(BaseSettings):
 
     #ID format patterns(SIMPLE REGEX FOR PATTERN MATCHING)
     student_id_pattern: str = r"^ST\d{3}$"
-    session_id_pattern: str = r"^SESSION\d{3}$"
+    session_id_pattern: str = r"^SESSION(?:\d{3}|[0-9a-fA-F]{32})$"
 
     model_config = SettingsConfigDict(
         env_file=".env",

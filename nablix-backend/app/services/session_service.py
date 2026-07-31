@@ -53,18 +53,10 @@ from app.services.student_model_session import (
 _sessions: dict[str, SessionRecord] = {}
 _interaction_locks: dict[str, asyncio.Lock] = {}
 _last_interaction_responses: dict[str, InteractionResponse] = {}
-_next_session_number: int = 1
 
 
 def _build_session_id() -> str:
-    global _next_session_number
-
-    if _next_session_number > 999:
-        raise RuntimeError("mock session id range exhausted at SESSION999.")
-
-    session_id: str = f"SESSION{_next_session_number:03d}"
-    _next_session_number += 1
-    return session_id
+    return f"SESSION{uuid4().hex}"
 
 
 def _student_model_request_id(session_id: str, event_type: str) -> str:

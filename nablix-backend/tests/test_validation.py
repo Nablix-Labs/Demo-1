@@ -55,7 +55,10 @@ def test_validation_returns_invalid_format_code() -> None:
     assert response.status_code == 422
     body = response.json()
     assert body["error_code"] == "INVALID_FORMAT"
-    assert body["message"] == "session_id must follow the format SESSION followed by three digits."
+    assert body["message"] == (
+        "session_id must follow the format SESSION followed by three digits "
+        "or a UUID hex string."
+    )
     assert body["field"] == "session_id"
     assert body["request_id"] == "REQ002"
 

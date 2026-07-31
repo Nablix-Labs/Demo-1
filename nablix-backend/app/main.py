@@ -104,7 +104,10 @@ def _validation_response_message(
     if error_code == "INVALID_FORMAT" and field == "student_id":
         return "student_id must follow the format ST followed by three digits."
     if error_code == "INVALID_FORMAT" and field == "session_id":
-        return "session_id must follow the format SESSION followed by three digits."
+        return (
+            "session_id must follow the format SESSION followed by three digits "
+            "or a UUID hex string."
+        )
     if error_code == "INPUT_TOO_LONG":
         field_name: str = field if field is not None else "input"
         return f"{field_name} must be 500 characters or fewer."
