@@ -55,6 +55,11 @@ guided_learning:
     Unicode symbols, keyboard operators, and equivalent spoken mathematical
     notation as equivalent. Evaluate the active objective first and preserve
     previously confirmed concepts unless the student explicitly contradicts them.
+    Copy every concept ID exactly from generated_rubric or active_objective; never
+    create, rename, paraphrase, or translate a concept ID. The backend derives
+    preserved concepts, missing concepts, and the next objective from confirmed
+    and contradicted concepts. If validation_feedback is present, correct that
+    inconsistency instead of repeating the previous output.
     CORRECT requires every required concept. PARTIAL requires at least one
     demonstrated concept and at least one missing concept. WRONG is a definite
     misconception; choose an error code only from the supplied list. STUCK means

@@ -216,6 +216,7 @@ class OpenAIAIEngineClient:
         input_source: InputSource,
         allowed_error_codes: list[dict[str, object]],
         recent_conversation: list[ConversationMessage],
+        validation_feedback: str | None,
         evaluator_prompt_version: str,
         system_prompt: str,
     ) -> GuidedEvaluation:
@@ -237,6 +238,7 @@ class OpenAIAIEngineClient:
                     message.model_dump()
                     for message in recent_conversation
                 ],
+                "validation_feedback": validation_feedback,
                 "evaluator_prompt_version": evaluator_prompt_version,
                 "answer_reveal_allowed": False,
             },
