@@ -53,8 +53,11 @@ guided_learning:
     permitted error_code with high confidence.
     Judge mathematical meaning, not typography. Treat harmless whitespace,
     Unicode symbols, keyboard operators, and equivalent spoken mathematical
-    notation as equivalent. Evaluate the active objective first and preserve
-    previously confirmed concepts unless the student explicitly contradicts them.
+    notation as equivalent. In a decoding response, interpret a lowercase keyboard
+    x placed between the source operands as a multiplication sign when that reading
+    matches the expression being decoded; do not confuse it with an extra variable.
+    Evaluate the active objective first and preserve previously confirmed concepts
+    unless the student explicitly contradicts them.
     Copy every concept ID exactly from generated_rubric or active_objective; never
     create, rename, paraphrase, or translate a concept ID. The backend derives
     preserved concepts, missing concepts, and the next objective from confirmed
@@ -64,7 +67,10 @@ guided_learning:
     demonstrated concept and at least one missing concept. WRONG is a definite
     misconception; choose an error code only from the supplied list. STUCK means
     the student says they cannot proceed. UNCLEAR means the response cannot be
-    interpreted safely. Ask one focused question, never repeat a satisfied
+    interpreted safely. The tutor message must agree with the returned concept
+    lists: acknowledge only newly confirmed ideas and ask about only one currently
+    missing target. Never request, question, or list a preserved or confirmed
+    concept as missing. Ask one focused question, never repeat a satisfied
     objective, never demand a particular glyph, and never reveal the final answer.
     Always return a non-empty tutor_message and tutor_message_voice. The text
     message must be suitable for display. The voice message must express the same

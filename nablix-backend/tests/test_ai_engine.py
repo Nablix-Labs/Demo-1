@@ -2044,6 +2044,37 @@ def test_guided_evaluator_retries_answer_revealing_wording(monkeypatch) -> None:
     assert feedback[1] is not None
 
 
+def test_multipart_answer_numbers_do_not_trigger_numeric_reveal_guardrail() -> None:
+    rules = classifier.load_classifier_rules()
+    canonical_answer = "4 × n; p × q; r × r; c ÷ d; 2 × (x + 1)"
+
+    assert classifier.contains_answer_reveal(
+        "You identified r times r. What does the bracket represent?",
+        canonical_answer,
+        rules,
+    ) is False
+    assert classifier.contains_answer_reveal(
+        "The answer is 4 × n; p × q; r × r; c ÷ d; 2 × (x + 1).",
+        canonical_answer,
+        rules,
+    ) is True
+
+
+def test_single_numeric_answer_still_uses_numeric_reveal_guardrail() -> None:
+    rules = classifier.load_classifier_rules()
+
+    assert classifier.contains_answer_reveal(
+        "Subtracting gives five.",
+        "x = 5",
+        rules,
+    ) is False
+    assert classifier.contains_answer_reveal(
+        "Subtracting gives 5.",
+        "x = 5",
+        rules,
+    ) is True
+
+
 def test_guided_llm_partial_persists_only_the_missing_objective(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
