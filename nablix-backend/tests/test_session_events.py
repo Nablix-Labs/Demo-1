@@ -1,6 +1,9 @@
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 
+import pytest
 from fastapi.testclient import TestClient
+
 from app.adapters import provider, student_model
 from app.core.config import Settings
 from app.core.exceptions import AdapterError
@@ -10,6 +13,10 @@ from app.services import interaction_service, session_service
 
 
 client = TestClient(app, headers={"Authorization": "Bearer test-token"})
+SessionEventPost = Callable[
+    [str, str, dict[str, object], dict[str, str], int, int],
+    Awaitable[dict[str, object]],
+]
 
 
 def test_scaffold_response_matching_accepts_safe_variants() -> None:
@@ -556,7 +563,94 @@ def _event_response(
     return response
 
 
-def test_session_start_uses_schema_3_diagnostic_contract(monkeypatch) -> None:
+def _session_opened_response(phase: str) -> dict[str, object]:
+    if phase == "PHASE_0_DIAGNOSTIC":
+        return _eight_skill_diagnostic_response()
+    if phase == "PHASE_1_ORIENTATION":
+        return _event_response("DIAGNOSTIC_COMPLETED", "")
+    if phase == "PHASE_2_GUIDED_LEARNING":
+        return _event_response("ORIENTATION_COMPLETED", "")
+    if phase == "PHASE_3_INDEPENDENT_PRACTICE":
+        return _event_response("GUIDED_PHASE_COMPLETED", "")
+    if phase == "REVIEW":
+        response = _event_response("GUIDED_PHASE_COMPLETED", "")
+        journey = response["journey_state"]
+        payload = response["phase_payload"]
+        assert isinstance(journey, dict)
+        assert isinstance(payload, dict)
+        journey["current_phase"] = "REVIEW"
+        journey["recommended_entry_phase"] = "REVIEW"
+        journey["review"] = {"status": "IN_PROGRESS", "phase_visit_no": 1}
+        payload.update(
+            {
+                "phase": "REVIEW",
+                "payload_type": "REVIEW_SUMMARY",
+                "question_set": None,
+                "review_summary": {"summary": "Review your completed work."},
+            }
+        )
+        return response
+    raise ValueError(f"Unsupported test phase: {phase}")
+
+
+def _recommended_not_started_response(phase: str) -> dict[str, object]:
+    response = _session_opened_response(phase)
+    journey = response["journey_state"]
+    assert isinstance(journey, dict)
+    if phase == "PHASE_2_GUIDED_LEARNING":
+        journey["current_phase"] = "PHASE_1_ORIENTATION"
+        phase_state = journey["phase_2_guided_learning"]
+    elif phase == "PHASE_3_INDEPENDENT_PRACTICE":
+        journey["current_phase"] = "PHASE_2_GUIDED_LEARNING"
+        phase_state = journey["phase_3_independent_practice"]
+    else:
+        raise ValueError(f"Unsupported recommended phase: {phase}")
+    assert isinstance(phase_state, dict)
+    phase_state.update(
+        {
+            "status": "NOT_STARTED",
+            "phase_visit_no": None,
+            "current_question_id": None,
+            "used_question_ids": [],
+        }
+    )
+    return response
+
+
+def _independent_rescue_response() -> dict[str, object]:
+    response = _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+    payload = response["phase_payload"]
+    journey = response["journey_state"]
+    assert isinstance(payload, dict)
+    assert isinstance(journey, dict)
+    phase_state = journey["phase_3_independent_practice"]
+    assert isinstance(phase_state, dict)
+    phase_state["status"] = "RESCUE_REQUIRED"
+    payload["payload_type"] = "RESCUE_AND_FRESH_QUESTION"
+    payload["rescue_to_serve"] = {
+        "parallel_example": {
+            "worked_steps": ["Undo the addition.", "Then divide both sides."]
+        }
+    }
+    return response
+
+
+def _use_live_student_model(
+    monkeypatch: pytest.MonkeyPatch,
+    post_json: SessionEventPost,
+) -> None:
+    settings = Settings(
+        student_model_url="https://student-model.example",
+        student_model_topic_codes={"ALG_LINEAR_ONE_STEP": "ALG-ORI-02"},
+        student_model_session_opened_enabled=True,
+        use_mock_student_model=False,
+    )
+    monkeypatch.setattr(provider, "get_settings", lambda: settings)
+    monkeypatch.setattr(session_service, "get_settings", lambda: settings)
+    monkeypatch.setattr(student_model, "post_json", post_json)
+
+
+def test_session_start_uses_schema_3_diagnostic_contract_by_default(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     async def fake_post_json(
@@ -655,6 +749,399 @@ def test_session_start_uses_schema_3_diagnostic_contract(monkeypatch) -> None:
     assert isinstance(payload["timestamp"], str)
 
 
+@pytest.mark.parametrize(
+    ("student_model_phase", "expected_phase", "expected_question_id"),
+    [
+        ("PHASE_0_DIAGNOSTIC", "DIAGNOSTIC", "Q-T02-D01"),
+        ("PHASE_1_ORIENTATION", "CONCEPT_ORIENTATION", None),
+        ("PHASE_2_GUIDED_LEARNING", "GUIDED_PRACTICE", "Q-T02-004"),
+        (
+            "PHASE_3_INDEPENDENT_PRACTICE",
+            "INDEPENDENT_PRACTICE",
+            "Q-T02-004",
+        ),
+        ("REVIEW", "REVIEW", None),
+    ],
+)
+def test_session_start_restores_each_student_model_phase(
+    monkeypatch: pytest.MonkeyPatch,
+    student_model_phase: str,
+    expected_phase: str,
+    expected_question_id: str | None,
+) -> None:
+    async def fake_post_json(
+        adapter_name: str,
+        url: str,
+        payload: dict[str, object],
+        headers: dict[str, str],
+        timeout_seconds: int,
+        retry_count: int,
+    ) -> dict[str, object]:
+        del adapter_name, url, headers, timeout_seconds, retry_count
+        response = _session_opened_response(student_model_phase)
+        response["request_id"] = payload["request_id"]
+        return response
+
+    _use_live_student_model(monkeypatch, fake_post_json)
+
+    response = client.post(
+        "/session/start",
+        json={
+            "student_id": "ST001",
+            "concept_id": "ALG_LINEAR_ONE_STEP",
+            "interaction_mode": "TEXT",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["current_phase"] == expected_phase
+    assert body["ui_state"] == expected_phase
+    assert body["question_id"] == expected_question_id
+    assert body["recommended_entry_phase"] == expected_phase
+    assert body["student_model_event"]["phase_payload"]["phase"] == student_model_phase
+
+
+def test_session_start_restores_saved_question_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_post_json(
+        adapter_name: str,
+        url: str,
+        payload: dict[str, object],
+        headers: dict[str, str],
+        timeout_seconds: int,
+        retry_count: int,
+    ) -> dict[str, object]:
+        del adapter_name, url, headers, timeout_seconds, retry_count
+        response = _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+        response["request_id"] = payload["request_id"]
+        journey = response["journey_state"]
+        phase_payload = response["phase_payload"]
+        assert isinstance(journey, dict)
+        assert isinstance(phase_payload, dict)
+        phase_state = journey["phase_3_independent_practice"]
+        question_set = phase_payload["question_set"]
+        assert isinstance(phase_state, dict)
+        assert isinstance(question_set, dict)
+        questions = question_set["questions"]
+        assert isinstance(questions, list)
+        second_question = deepcopy(questions[0])
+        assert isinstance(second_question, dict)
+        second_question["question_id"] = "Q-T02-I02"
+        second_question["question_usage_id"] = "QU-T02-I02-P3"
+        student_view = second_question["student_view"]
+        tutor_view = second_question["tutor_view"]
+        assert isinstance(student_view, dict)
+        assert isinstance(tutor_view, dict)
+        answer_spec = tutor_view["answer_spec"]
+        assert isinstance(answer_spec, dict)
+        student_view["question_text"] = "Solve for x: 2x = 14"
+        answer_spec["canonical_answer"] = "x = 7"
+        answer_spec["accepted_answers"] = ["x = 7"]
+        questions.append(second_question)
+        phase_state["current_question_id"] = "Q-T02-I02"
+        return response
+
+    _use_live_student_model(monkeypatch, fake_post_json)
+
+    response = client.post(
+        "/session/start",
+        json={
+            "student_id": "ST001",
+            "concept_id": "ALG_LINEAR_ONE_STEP",
+            "interaction_mode": "TEXT",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["current_phase"] == "INDEPENDENT_PRACTICE"
+    assert body["question_id"] == "Q-T02-I02"
+    assert body["question_number"] == 2
+    assert body["current_question"] == "Solve for x: 2x = 14"
+    assert session_service._sessions[body["session_id"]].correct_answer == "x = 7"
+
+
+def test_repeated_session_start_restores_authoritative_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_events: list[dict[str, object]] = []
+
+    async def fake_post_json(
+        adapter_name: str,
+        url: str,
+        payload: dict[str, object],
+        headers: dict[str, str],
+        timeout_seconds: int,
+        retry_count: int,
+    ) -> dict[str, object]:
+        del adapter_name, url, headers, timeout_seconds, retry_count
+        captured_events.append(payload)
+        response = _session_opened_response("PHASE_2_GUIDED_LEARNING")
+        response["request_id"] = payload["request_id"]
+        return response
+
+    _use_live_student_model(monkeypatch, fake_post_json)
+    request = {
+        "student_id": "ST001",
+        "concept_id": "ALG_LINEAR_ONE_STEP",
+        "interaction_mode": "TEXT",
+    }
+
+    first = client.post("/session/start", json=request)
+    second = client.post("/session/start", json=request)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_body = first.json()
+    second_body = second.json()
+    assert first_body["session_id"] != second_body["session_id"]
+    assert first_body["current_phase"] == second_body["current_phase"] == "GUIDED_PRACTICE"
+    assert first_body["question_id"] == second_body["question_id"] == "Q-T02-004"
+    assert first_body["student_model_event"]["journey_state"] == second_body[
+        "student_model_event"
+    ]["journey_state"]
+    assert [event["event_type"] for event in captured_events] == [
+        "SESSION_OPENED",
+        "SESSION_OPENED",
+    ]
+    restored = client.get(f"/session/{second_body['session_id']}")
+    assert restored.status_code == 200
+    assert restored.json() == second_body
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "IDENTITY_MISMATCH",
+        "INCONSISTENT_PHASE",
+        "MISMATCHED_TYPE",
+        "MISSING_CONTENT",
+    ],
+)
+def test_session_start_rejects_invalid_restore_without_local_state(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    event_types: list[object] = []
+
+    async def fake_post_json(
+        adapter_name: str,
+        url: str,
+        payload: dict[str, object],
+        headers: dict[str, str],
+        timeout_seconds: int,
+        retry_count: int,
+    ) -> dict[str, object]:
+        del adapter_name, url, headers, timeout_seconds, retry_count
+        event_types.append(payload["event_type"])
+        response = _session_opened_response("PHASE_2_GUIDED_LEARNING")
+        response["request_id"] = payload["request_id"]
+        if failure == "IDENTITY_MISMATCH":
+            journey = response["journey_state"]
+            assert isinstance(journey, dict)
+            journey["student_id"] = "ST999"
+        elif failure == "INCONSISTENT_PHASE":
+            journey = response["journey_state"]
+            assert isinstance(journey, dict)
+            journey["recommended_entry_phase"] = "PHASE_1_ORIENTATION"
+        else:
+            phase_payload = response["phase_payload"]
+            assert isinstance(phase_payload, dict)
+            if failure == "MISMATCHED_TYPE":
+                phase_payload["payload_type"] = "ORIENTATION_BUNDLE"
+            else:
+                phase_payload["question_set"] = None
+        return response
+
+    _use_live_student_model(monkeypatch, fake_post_json)
+    sessions_before = set(session_service._sessions)
+
+    response = client.post(
+        "/session/start",
+        json={
+            "student_id": "ST001",
+            "concept_id": "ALG_LINEAR_ONE_STEP",
+            "interaction_mode": "TEXT",
+        },
+    )
+
+    assert response.status_code == 503
+    assert event_types == ["SESSION_OPENED"]
+    assert set(session_service._sessions) == sessions_before
+
+
+def test_session_start_restores_guided_support_presentation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_post_json(
+        adapter_name: str,
+        url: str,
+        payload: dict[str, object],
+        headers: dict[str, str],
+        timeout_seconds: int,
+        retry_count: int,
+    ) -> dict[str, object]:
+        del adapter_name, url, headers, timeout_seconds, retry_count
+        response = _event_response("INCORRECT_ATTEMPT", str(payload["request_id"]))
+        journey = response["journey_state"]
+        assert isinstance(journey, dict)
+        phase_state = journey["phase_2_guided_learning"]
+        assert isinstance(phase_state, dict)
+        phase_state["current_attempt_sequence"] = 2
+        phase_state["current_hint_count"] = 1
+        return response
+
+    _use_live_student_model(monkeypatch, fake_post_json)
+
+    response = client.post(
+        "/session/start",
+        json={
+            "student_id": "ST001",
+            "concept_id": "ALG_LINEAR_ONE_STEP",
+            "interaction_mode": "TEXT",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["current_phase"] == "GUIDED_PRACTICE"
+    assert body["question_id"] == "Q-T02-004"
+    assert body["show_visual_cue"] is True
+    assert body["show_scaffold_panel"] is False
+    assert body["message"] == "Undo the addition first."
+    assert body["attempt_count"] == 1
+    assert body["hint_count"] == 1
+
+
+def test_session_start_restores_independent_rescue_presentation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_post_json(
+        adapter_name: str,
+        url: str,
+        payload: dict[str, object],
+        headers: dict[str, str],
+        timeout_seconds: int,
+        retry_count: int,
+    ) -> dict[str, object]:
+        del adapter_name, url, headers, timeout_seconds, retry_count
+        response = _independent_rescue_response()
+        response["request_id"] = payload["request_id"]
+        return response
+
+    _use_live_student_model(monkeypatch, fake_post_json)
+    response = client.post(
+        "/session/start",
+        json={
+            "student_id": "ST001",
+            "concept_id": "ALG_LINEAR_ONE_STEP",
+            "interaction_mode": "TEXT",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["current_phase"] == "INDEPENDENT_PRACTICE"
+    assert body["show_scaffold_panel"] is True
+    assert "scaffold_steps" not in body
+
+
+@pytest.mark.parametrize(
+    ("phase", "expected_initializer"),
+    [
+        ("PHASE_2_GUIDED_LEARNING", "GUIDED_QUESTION_SET_REQUESTED"),
+        ("PHASE_3_INDEPENDENT_PRACTICE", "INDEPENDENT_QUESTION_SET_REQUESTED"),
+    ],
+)
+def test_restored_not_started_phase_initializes_before_answer(
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+    expected_initializer: str,
+) -> None:
+    events: list[dict[str, object]] = []
+
+    async def fake_post_json(
+        adapter_name: str,
+        url: str,
+        payload: dict[str, object],
+        headers: dict[str, str],
+        timeout_seconds: int,
+        retry_count: int,
+    ) -> dict[str, object]:
+        del adapter_name, url, headers, timeout_seconds, retry_count
+        events.append(payload)
+        event_type = str(payload["event_type"])
+        if event_type == "SESSION_OPENED":
+            response = _recommended_not_started_response(phase)
+        elif event_type == expected_initializer:
+            response = _session_opened_response(phase)
+            phase_payload = response["phase_payload"]
+            assert isinstance(phase_payload, dict)
+            question_set = phase_payload["question_set"]
+            assert isinstance(question_set, dict)
+            question = question_set["questions"][0]
+            assert isinstance(question, dict)
+            question["question_id"] = "Q-T02-INITIALIZED"
+            journey = response["journey_state"]
+            assert isinstance(journey, dict)
+            phase_key = (
+                "phase_2_guided_learning"
+                if phase == "PHASE_2_GUIDED_LEARNING"
+                else "phase_3_independent_practice"
+            )
+            phase_state = journey[phase_key]
+            assert isinstance(phase_state, dict)
+            phase_state["current_question_id"] = "Q-T02-INITIALIZED"
+        elif phase == "PHASE_2_GUIDED_LEARNING":
+            response = _event_response("INCORRECT_ATTEMPT", "")
+        else:
+            response = _session_opened_response(phase)
+        response["request_id"] = payload["request_id"]
+        return response
+
+    _use_live_student_model(monkeypatch, fake_post_json)
+    started = client.post(
+        "/session/start",
+        json={
+            "student_id": "ST001",
+            "concept_id": "ALG_LINEAR_ONE_STEP",
+            "interaction_mode": "TEXT",
+        },
+    )
+    assert started.status_code == 200
+    body = started.json()
+
+    answered = client.post(
+        "/interaction",
+        json={
+            "session_id": body["session_id"],
+            "student_id": "ST001",
+            "interaction_type": "ANSWER_SUBMISSION",
+            "input_source": "TEXT",
+            "text_input": "x = 4",
+            "current_phase": body["current_phase"],
+            "concept_id": "ALG_LINEAR_ONE_STEP",
+            "question_id": body["question_id"],
+            "hint_count": 0,
+        },
+    )
+
+    assert answered.status_code == 200
+    assert [event["event_type"] for event in events[:3]] == [
+        "SESSION_OPENED",
+        expected_initializer,
+        "INCORRECT_ATTEMPT",
+    ]
+    assert events[2]["question_id"] == "Q-T02-INITIALIZED"
+    if phase == "PHASE_3_INDEPENDENT_PRACTICE":
+        assert events[1]["phase2_repair_results"] == [
+            {"micro_skill_id": "T02.M1", "highest_support_used": "NONE"}
+        ]
+        assert events[1]["used_question_ids"] == []
+    else:
+        assert events[1]["target_micro_skill_ids"] == ["T02.M1"]
 def test_student_model_request_ids_remain_unique_after_session_counter_restart() -> None:
     first = session_service._student_model_request_id(
         "SESSION001",

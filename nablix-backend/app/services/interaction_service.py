@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
+from app.adapters.base import StudentModelAdapter
 from app.adapters.provider import get_adapters
 from app.adapters.tutor_engine import apply_retrieved_content
 from app.ai_engine.classifier import (
@@ -47,7 +48,9 @@ from app.models.student_model_session import (
     GuidedPhaseCompletedEvent,
     GuidedQuestionSetRequestedEvent,
     GuidedSupportEvent,
+    IndependentQuestionSetRequestedEvent,
     IndependentRetryCompletedEvent,
+    Phase2RepairResult,
     StudentModelSessionEventResponse,
     StudentModelQuestion,
     SupportUsed,
@@ -67,6 +70,9 @@ from app.services.session_service import (
     interaction_lock_for,
     last_interaction_response_for,
     update_interaction_state,
+)
+from app.services.student_model_session import (
+    PHASE_FROM_STUDENT_MODEL,
 )
 
 
@@ -304,6 +310,93 @@ def _schema_support_used(
     return max(supports, key=_SUPPORT_RANK.index)
 
 
+async def _initialize_restored_schema_phase(
+    session: SessionRecord,
+    student_model: StudentModelAdapter,
+    access_token: str,
+) -> SessionRecord:
+    event = session.student_model_event
+    if event is None:
+        return session
+
+    if session.current_phase == "GUIDED_PRACTICE":
+        phase_state = event.journey_state.phase_2_guided_learning
+        if phase_state.status != "NOT_STARTED":
+            return session
+        if not phase_state.target_micro_skill_ids:
+            raise HTTPException(
+                status_code=503,
+                detail="Student Model returned no target skills for the restored phase.",
+            )
+        request = GuidedQuestionSetRequestedEvent(
+            request_id=(
+                f"{session.session_id}:GUIDED_QUESTION_SET_REQUESTED:"
+                f"{event.journey_state.version + 1}"
+            ),
+            event_type="GUIDED_QUESTION_SET_REQUESTED",
+            topic_id=event.journey_state.topic_id,
+            student_id=session.student_id,
+            timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            target_micro_skill_ids=phase_state.target_micro_skill_ids,
+        )
+    elif session.current_phase == "INDEPENDENT_PRACTICE":
+        phase_state = event.journey_state.phase_3_independent_practice
+        if phase_state.status != "NOT_STARTED":
+            return session
+        if not phase_state.target_micro_skill_ids:
+            raise HTTPException(
+                status_code=503,
+                detail="Student Model returned no target skills for the restored phase.",
+            )
+        support_by_skill = (
+            event.journey_state.phase_2_guided_learning.highest_support_used_by_skill
+        )
+        request = IndependentQuestionSetRequestedEvent(
+            request_id=(
+                f"{session.session_id}:INDEPENDENT_QUESTION_SET_REQUESTED:"
+                f"{event.journey_state.version + 1}"
+            ),
+            event_type="INDEPENDENT_QUESTION_SET_REQUESTED",
+            topic_id=event.journey_state.topic_id,
+            student_id=session.student_id,
+            timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            phase2_repair_results=[
+                Phase2RepairResult(
+                    micro_skill_id=micro_skill_id,
+                    highest_support_used=support_by_skill.get(micro_skill_id, "NONE"),
+                )
+                for micro_skill_id in phase_state.target_micro_skill_ids
+            ],
+            used_question_ids=phase_state.used_question_ids,
+        )
+    else:
+        return session
+
+    response = await student_model.send_session_event(request, access_token)
+    payload = response.phase_payload
+    effective_phase = (
+        response.journey_state.recommended_entry_phase
+        or response.journey_state.current_phase
+    )
+    initialized_state = (
+        response.journey_state.phase_2_guided_learning
+        if session.current_phase == "GUIDED_PRACTICE"
+        else response.journey_state.phase_3_independent_practice
+    )
+    if (
+        payload is None
+        or PHASE_FROM_STUDENT_MODEL[payload.phase] != session.current_phase
+        or payload.phase != effective_phase
+        or payload.payload_type != "QUESTION_SET"
+        or payload.question_set is None
+        or not payload.question_set.questions
+        or initialized_state.status == "NOT_STARTED"
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="Student Model did not initialize the restored phase with questions.",
+        )
+    return _apply_schema_event(session, response)
 def _schema_visual_cue(
     event: StudentModelSessionEventResponse | None,
 ) -> VisualCue | None:
@@ -1104,6 +1197,25 @@ async def _process_interaction(
                 None,
                 None,
             ),
+        )
+
+    if (
+        session.student_model_event is not None
+        and session.current_phase in {"GUIDED_PRACTICE", "INDEPENDENT_PRACTICE"}
+        and request.interaction_type == "ANSWER_SUBMISSION"
+    ):
+        session = await _initialize_restored_schema_phase(
+            session,
+            adapters.student_model,
+            access_token,
+        )
+        turn_session = session
+        context = context.model_copy(
+            update={
+                "question": session.current_question,
+                "correct_answer": session.correct_answer,
+                "question_number": session.question_number,
+            }
         )
 
     _, student, tutor = await run_tutor_pipeline(context)

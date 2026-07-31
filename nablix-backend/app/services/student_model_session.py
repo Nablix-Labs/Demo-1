@@ -1,3 +1,4 @@
+from app.models.adapters import VisualCue
 from app.models.fields import Phase
 from app.models.student_model_session import (
     JourneyPhaseState,
@@ -16,6 +17,71 @@ PHASE_FROM_STUDENT_MODEL: dict[StudentModelPhase, Phase] = {
 }
 
 
+def schema_visual_cue(
+    event: StudentModelSessionEventResponse | None,
+) -> VisualCue | None:
+    if event is None or event.phase_payload is None:
+        return None
+    support = event.phase_payload.support_to_serve
+    if support is None:
+        return None
+    items = support.get("items")
+    if not isinstance(items, list):
+        return None
+    for item in items:
+        if not isinstance(item, dict) or item.get("content_type") != "VISUAL_CUE":
+            continue
+        content_id = item.get("content_id")
+        description = item.get("description")
+        if not isinstance(content_id, str) or not isinstance(description, str):
+            raise RuntimeError("Student Model returned a malformed visual cue.")
+        return VisualCue(show=True, cue_type=content_id, description=description)
+    return None
+
+
+def schema_hint(event: StudentModelSessionEventResponse | None) -> str | None:
+    if event is None or event.phase_payload is None:
+        return None
+    support = event.phase_payload.support_to_serve
+    items = support.get("items") if support is not None else None
+    if not isinstance(items, list):
+        return None
+    for item in items:
+        if isinstance(item, dict) and item.get("content_type") == "HINT":
+            content = item.get("content")
+            return content if isinstance(content, str) else None
+    return None
+
+
+def schema_support_steps(
+    event: StudentModelSessionEventResponse | None,
+) -> list[str]:
+    if event is None or event.phase_payload is None:
+        return []
+    support = event.phase_payload.support_to_serve
+    if support is not None:
+        steps = support.get("steps")
+        if isinstance(steps, list):
+            prompts: list[str] = []
+            for step in steps:
+                if isinstance(step, dict) and isinstance(step.get("prompt"), str):
+                    prompts.append(step["prompt"])
+            return prompts
+    rescue = event.phase_payload.rescue_to_serve
+    if rescue is None:
+        return []
+    result: list[str] = []
+    parallel = rescue.get("parallel_example")
+    if isinstance(parallel, dict):
+        worked_steps = parallel.get("worked_steps")
+        if isinstance(worked_steps, list):
+            result.extend(step for step in worked_steps if isinstance(step, str))
+    solved = rescue.get("tutor_solved")
+    if isinstance(solved, dict) and isinstance(solved.get("explanation"), str):
+        result.append(solved["explanation"])
+    return result
+
+
 def _active_phase_state(
     event: StudentModelSessionEventResponse,
 ) -> JourneyPhaseState:
@@ -27,7 +93,8 @@ def _active_phase_state(
         "PHASE_3_INDEPENDENT_PRACTICE": journey.phase_3_independent_practice,
         "REVIEW": journey.review,
     }
-    return phase_states[journey.current_phase]
+    effective_phase = journey.recommended_entry_phase or journey.current_phase
+    return phase_states[effective_phase]
 
 
 def project_student_model_state(
