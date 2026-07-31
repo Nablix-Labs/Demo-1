@@ -25,6 +25,7 @@ MasteryStatus = Literal[
     "MASTERED",
     "LEARNING_GAP",
     "REVIEW_DUE",
+    "RESTART_RECOMMENDED",
 ]
 ContinuityStatus = Literal[
     "on_track",

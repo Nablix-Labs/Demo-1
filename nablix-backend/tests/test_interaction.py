@@ -25,6 +25,26 @@ client = TestClient(app, headers={"Authorization": "Bearer test-token"})
 _turn_numbers = count(1)
 
 
+def test_student_model_accepts_restart_recommended_mastery_status() -> None:
+    adapter = student_model.StudentModelServiceAdapter(Settings())
+
+    result = adapter.parse_response(
+        {
+            "mastery_status": "RESTART_RECOMMENDED",
+            "continuity_status": "on_track",
+            "recommended_entry_phase": "CONCEPT_ORIENTATION",
+            "hint_dependency_score": 0.38,
+            "intervention_required": True,
+            "intervention_reason": (
+                "Repeated targeted support did not resolve the learning gap"
+            ),
+        }
+    )
+
+    assert result.mastery_status == "RESTART_RECOMMENDED"
+    assert result.intervention_required is True
+
+
 def _start_session(student_id: str, mode: str = "TEXT", **overrides) -> str:
     body = {
         "student_id": student_id,
