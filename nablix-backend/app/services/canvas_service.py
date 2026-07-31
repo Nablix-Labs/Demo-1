@@ -25,6 +25,7 @@ from app.models.fields import Phase
 from app.models.session import PhaseTransitionRecord
 from app.services.canvas_annotations import assign_step_ids, plan_canvas_draw
 from app.services.interaction_service import (
+    _active_answer_spec,
     _current_hint_level_from,
     _independent_correct_in_session,
     next_question_updates,
@@ -111,9 +112,11 @@ async def submit_canvas(
         session_id=request.session_id,
         student_id=request.student_id,
         source_turn_id=submission_id,
+        question_id=session.question_id,
         message=message,
         question=session.current_question,
         correct_answer=session.correct_answer,
+        answer_spec=_active_answer_spec(session),
         current_phase=session.current_phase,
         input_source="CANVAS",
         transcript_confidence=request.transcript_confidence,
