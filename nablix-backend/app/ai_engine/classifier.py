@@ -1939,17 +1939,21 @@ def apply_retrieved_hint(
 def contains_answer_reveal(message: str, correct_answer: str, rules: ClassifierRulesConfig) -> bool:
     normalized_message: str = normalize_text(message)
     normalized_correct_answer: str = normalize_text(correct_answer)
-    correct_value: float | None = extract_last_number(correct_answer)
 
     if normalized_correct_answer != "" and normalized_correct_answer in normalized_message:
         return True
     if contains_any(normalized_message, rules.answer_reveal_guardrail.reveal_phrases):
         return True
-    if correct_value is None:
+    correct_numbers: list[str] = re.findall(r"-?\d+(?:\.\d+)?", correct_answer)
+    if len(correct_numbers) != 1:
         return False
 
-    correct_number: str = format_number_for_matching(correct_value)
-    return re.search(rf"(?<![\d.])-?{re.escape(correct_number)}(?![\d.])", normalized_message) is not None
+    correct_value: float = float(correct_numbers[0])
+    message_numbers: list[str] = re.findall(
+        r"-?\d+(?:\.\d+)?",
+        normalized_message,
+    )
+    return any(float(value) == correct_value for value in message_numbers)
 
 
 def message_reveals_answer(
