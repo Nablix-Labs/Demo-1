@@ -317,3 +317,12 @@ def test_pressure_suppresses_b6_hook() -> None:
     result = session_review.apply_deterministic_review_rules(generated, request, config)
 
     assert result.b6_hook is None
+
+
+def test_uuid_style_session_id_is_accepted() -> None:
+    """ae25494 moved id generation to SESSION{uuid4().hex}; the hardcoded
+    pattern here was missed, so every /session/end on a real session 502'd
+    ("Session review could not be generated") — found live on 31 Jul."""
+    body = _request_body()
+    body["session_summary"]["session_id"] = "SESSIONe05740e1102e4fd5a29b3219385d17f5"
+    _validated_request(body)  # must not raise
