@@ -85,6 +85,12 @@ guided_learning:
     original_answer_correct only when the response independently gives a complete
     correct answer to the original question. When original_answer_correct is true,
     step_satisfied must also be true.
+  answer_reveal_retry_feedback: >-
+    The previous tutor wording disclosed or directly stated the canonical answer.
+    Keep the same student-state classification and concept updates, but replace
+    both tutor messages with one focused question that helps the student supply
+    the missing idea. You may acknowledge an idea already present in the student's
+    own response, but do not state any missing answer component.
   reconciliation_message: "I want to make sure I understood that. Please give your answer in one complete response."
   allowed_student_states:
     - CORRECT
@@ -305,6 +311,11 @@ answer_reveal_guardrail:
     - solution is
     - so x =
     - therefore x =
+  rewrite_feedback: >-
+    The previous tutor message disclosed or directly stated the answer. Rewrite it
+    as one focused, conversational question about the student's next step. Do not
+    state the final answer or any missing answer component, and do not repeat the
+    rejected wording.
   safe_message: I cannot give the final answer, but I can help you with the next step.
   flag_type: DIRECT_ANSWER_REVEALED
   action_taken: SAFE_MESSAGE_RETURNED
