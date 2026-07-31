@@ -97,7 +97,7 @@ async def submit_canvas(
     session = _get_owned_session(request.session_id, request.student_id)
     previous_session = session
 
-    submission_id = uuid4().hex
+    submission_id = request.turn_id or uuid4().hex
     snapshot_reference = build_reference(submission_id)
     store_snapshot(snapshot_reference, request.snapshot_data_url)
 
@@ -173,7 +173,7 @@ async def submit_canvas(
         student_result = None
         updated_session = session
     else:
-        student_result, tutor, _schema_response, updated_session = (
+        student_result, tutor, _schema_content, _schema_response, updated_session = (
             await process_answer_with_session_event(
                 context,
                 session,
@@ -223,6 +223,7 @@ async def submit_canvas(
         updated_session = await record_canvas_submission(
             request.session_id,
             request.student_id,
+            updated_session,
             record,
             updated_history,
             student_result,

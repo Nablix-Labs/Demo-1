@@ -55,6 +55,8 @@ class AdapterRequestRejected(HTTPException):
             f"body={body} payload={payload}"
         )
         super().__init__(status_code=status_code, detail=detail)
+        self.response_body = body
+        self.request_payload = payload
         self.error_code = (
             "AUTHENTICATION_FAILED"
             if status_code in (401, 403)
@@ -70,3 +72,11 @@ class AdapterRequestRejected(HTTPException):
                 "payload": payload,
             },
         )
+
+
+class JourneyVersionConflict(HTTPException):
+    """The Student Model rejected a stale journey write."""
+
+    def __init__(self, detail: object) -> None:
+        super().__init__(status_code=409, detail=str(detail))
+        self.error_code = "JOURNEY_VERSION_CONFLICT"

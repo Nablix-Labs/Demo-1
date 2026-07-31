@@ -1,10 +1,16 @@
 """Student Model adapter backed by Saravanan's HTTP contract."""
 
+import json
+
 from pydantic import ValidationError
 
 from app.adapters.http_utils import post_json
 from app.core.config import Settings
-from app.core.exceptions import AdapterError
+from app.core.exceptions import (
+    AdapterError,
+    AdapterRequestRejected,
+    JourneyVersionConflict,
+)
 from app.models.adapters import AdapterContext, StudentModelResult
 from app.models.student_model_session import (
     StudentModelSessionEvent,
@@ -54,14 +60,27 @@ class StudentModelServiceAdapter:
                 "student_model",
                 "NABLIX_STUDENT_MODEL_URL is required for Schema 3.0 session events",
             )
-        response = await post_json(
-            "student_model",
-            f"{self._settings.student_model_url.rstrip('/')}/session/event",
-            event.model_dump(exclude_none=True),
-            {"Authorization": f"Bearer {access_token}"},
-            self._settings.adapter_request_timeout_seconds,
-            self._settings.adapter_request_retry_count,
-        )
+        try:
+            response = await post_json(
+                "student_model",
+                f"{self._settings.student_model_url.rstrip('/')}/session/event",
+                event.model_dump(exclude_none=True),
+                {"Authorization": f"Bearer {access_token}"},
+                self._settings.adapter_request_timeout_seconds,
+                self._settings.adapter_request_retry_count,
+            )
+        except AdapterRequestRejected as error:
+            if error.status_code != 409:
+                raise
+            try:
+                conflict_body: object = json.loads(error.response_body)
+            except json.JSONDecodeError:
+                raise error
+            if not isinstance(conflict_body, dict) or conflict_body.get(
+                "error_code"
+            ) != "JOURNEY_VERSION_CONFLICT":
+                raise
+            raise JourneyVersionConflict(conflict_body) from error
         try:
             parsed = StudentModelSessionEventResponse.model_validate(response)
         except ValidationError as error:
@@ -83,6 +102,8 @@ class StudentModelServiceAdapter:
                     f"topic_id={parsed.journey_state.topic_id} body={response}"
                 ),
             )
+        if parsed.status.status_code == "JOURNEY_VERSION_CONFLICT":
+            raise JourneyVersionConflict(response)
         if not parsed.status.success:
             raise AdapterError(
                 "student_model",

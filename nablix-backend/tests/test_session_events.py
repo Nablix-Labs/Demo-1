@@ -642,7 +642,6 @@ def _use_live_student_model(
     settings = Settings(
         student_model_url="https://student-model.example",
         student_model_topic_codes={"ALG_LINEAR_ONE_STEP": "ALG-ORI-02"},
-        student_model_session_opened_enabled=True,
         use_mock_student_model=False,
     )
     monkeypatch.setattr(provider, "get_settings", lambda: settings)
@@ -743,7 +742,7 @@ def test_session_start_uses_schema_3_diagnostic_contract_by_default(monkeypatch)
     assert captured["headers"] == {"Authorization": "Bearer test-token"}
     payload = captured["payload"]
     assert isinstance(payload, dict)
-    assert payload["event_type"] == "DIAGNOSTIC_QUESTION_SET_REQUESTED"
+    assert payload["event_type"] == "SESSION_OPENED"
     assert payload["topic_id"] == "ALG-ORI-02"
     assert payload["student_id"] == "ST001"
     assert isinstance(payload["timestamp"], str)
@@ -1142,19 +1141,19 @@ def test_restored_not_started_phase_initializes_before_answer(
         assert events[1]["used_question_ids"] == []
     else:
         assert events[1]["target_micro_skill_ids"] == ["T02.M1"]
-def test_student_model_request_ids_remain_unique_after_session_counter_restart() -> None:
+def test_student_model_request_ids_are_stable_across_retries() -> None:
     first = session_service._student_model_request_id(
         "SESSION001",
+        "TURN001",
         "DIAGNOSTIC_QUESTION_SET_REQUESTED",
     )
     second = session_service._student_model_request_id(
         "SESSION001",
+        "TURN001",
         "DIAGNOSTIC_QUESTION_SET_REQUESTED",
     )
 
-    assert first != second
-    assert first.startswith("SESSION001:DIAGNOSTIC_QUESTION_SET_REQUESTED:")
-    assert second.startswith("SESSION001:DIAGNOSTIC_QUESTION_SET_REQUESTED:")
+    assert first == second == "SESSION001:TURN001:DIAGNOSTIC_QUESTION_SET_REQUESTED"
 
 
 def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> None:
@@ -1269,7 +1268,7 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert completed["student_model_state"]["target_micro_skill_ids"] == ["T02.M1"]
     assert completed["message"] == "Now let’s use this idea together in a question."
     assert [event["event_type"] for event in events] == [
-        "DIAGNOSTIC_QUESTION_SET_REQUESTED",
+        "SESSION_OPENED",
         "DIAGNOSTIC_COMPLETED",
         "WORKED_EXAMPLE_REQUESTED",
         "ORIENTATION_COMPLETED",
@@ -1652,7 +1651,7 @@ def test_diagnostic_requires_every_mapping_for_one_skill_to_be_correct(monkeypat
     ) -> dict[str, object]:
         del adapter_name, url, headers, timeout_seconds, retry_count
         captured.update(payload)
-        if payload["event_type"] == "DIAGNOSTIC_QUESTION_SET_REQUESTED":
+        if payload["event_type"] == "SESSION_OPENED":
             response = _diagnostic_started_response()
             phase_payload = response["phase_payload"]
             assert isinstance(phase_payload, dict)
@@ -1961,7 +1960,7 @@ def test_session_start_fails_without_topic_mapping_or_remote_service(
     assert set(session_service._sessions) == sessions_before
 
 
-def test_legacy_session_keeps_legacy_student_model_interaction(monkeypatch) -> None:
+def test_legacy_initial_phase_session_is_rejected(monkeypatch) -> None:
     captured: dict[str, object] = {}
     settings = Settings(
         student_model_url="https://student-model.example",
@@ -2002,24 +2001,6 @@ def test_legacy_session_keeps_legacy_student_model_interaction(monkeypatch) -> N
             "initial_phase": "GUIDED_PRACTICE",
         },
     )
-    assert started.status_code == 200
-    session_id = started.json()["session_id"]
-    assert started.json()["student_model_event"] is None
-
-    interaction = client.post(
-        "/interaction",
-        json={
-            "session_id": session_id,
-            "student_id": "ST001",
-            "interaction_type": "ANSWER_SUBMISSION",
-            "input_source": "TEXT",
-            "text_input": "x = 3",
-            "current_phase": "GUIDED_PRACTICE",
-            "concept_id": "ALG_LINEAR_ONE_STEP",
-            "question_id": "ALG_EQ_GP_001",
-            "hint_count": 0,
-        },
-    )
-    assert interaction.status_code == 200
-    assert captured["url"] == "https://student-model.example/interaction"
-    assert captured["headers"] == {"Authorization": "Bearer test-token"}
+    assert started.status_code == 409
+    assert "Legacy initial_phase sessions are not supported" in started.json()["message"]
+    assert captured == {}

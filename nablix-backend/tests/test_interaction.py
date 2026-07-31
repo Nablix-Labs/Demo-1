@@ -19,7 +19,7 @@ from app.models.adapters import (
     VisualCue,
 )
 from app.main import app
-from app.services import hint_service, interaction_service, session_service
+from app.services import interaction_service, session_service
 
 client = TestClient(app, headers={"Authorization": "Bearer test-token"})
 _turn_numbers = count(1)
@@ -1064,7 +1064,6 @@ def test_session_end_summarises_recorded_activity(monkeypatch) -> None:
     tutor = _FakeTutorAdapter(next_phase_recommendation=None)
     adapters = _FakeAdapters(student_model, tutor)
     monkeypatch.setattr(interaction_service, "get_adapters", lambda: adapters)
-    monkeypatch.setattr(hint_service, "get_adapters", lambda: adapters)
 
     first_attempt = client.post(
         "/interaction",
@@ -1079,19 +1078,6 @@ def test_session_end_summarises_recorded_activity(monkeypatch) -> None:
         json=_interaction_body(session_id, "ST031", current_phase="DIAGNOSTIC"),
     )
     assert second_attempt.status_code == 200
-
-    hint = client.post(
-        "/hint/request",
-        json={
-            "session_id": session_id,
-            "student_id": "ST031",
-            "current_phase": "GUIDED_PRACTICE",
-            "current_hint_count": 0,
-            "concept_id": "ALG_LINEAR_ONE_STEP",
-            "question_id": "ALG_EQ_GP_001",
-        },
-    )
-    assert hint.status_code == 200
 
     student_model.recommended_entry_phase = "INDEPENDENT_PRACTICE"
     independent_attempt = client.post(
@@ -1123,8 +1109,8 @@ def test_session_end_summarises_recorded_activity(monkeypatch) -> None:
         "total_attempts": 3,
         "correct_attempts": 2,
         "incorrect_attempts": 1,
-        "hints_used": 1,
-        "hint_levels_used": [1],
+        "hints_used": 0,
+        "hint_levels_used": [],
         "scaffold_steps_delivered": None,
         "canvas_submissions": 0,
     }

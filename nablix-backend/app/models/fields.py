@@ -82,4 +82,4 @@ InteractionType = Literal[
     "SESSION_START",
     "SESSION_END",
 ]
-InputSource = Literal["TEXT", "VOICE"]
+InputSource = Literal["TEXT", "VOICE", "CANVAS"]

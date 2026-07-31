@@ -264,27 +264,32 @@ class SessionOpenedEvent(SessionEventBase):
     event_type: Literal["SESSION_OPENED"]
 
 
+class MutatingSessionEventBase(SessionEventBase):
+    source_turn_id: str
+    expected_journey_version: int
+
+
 class MicroSkillResult(BaseModel):
     micro_skill_id: str
     result: DiagnosticResult
 
 
-class DiagnosticCompletedEvent(SessionEventBase):
+class DiagnosticCompletedEvent(MutatingSessionEventBase):
     event_type: Literal["DIAGNOSTIC_COMPLETED"]
     micro_skill_results: list[MicroSkillResult]
 
 
-class WorkedExampleRequestedEvent(SessionEventBase):
+class WorkedExampleRequestedEvent(MutatingSessionEventBase):
     event_type: Literal["WORKED_EXAMPLE_REQUESTED"]
     target_micro_skill_ids: list[str]
 
 
-class OrientationCompletedEvent(SessionEventBase):
+class OrientationCompletedEvent(MutatingSessionEventBase):
     event_type: Literal["ORIENTATION_COMPLETED"]
     target_micro_skill_ids: list[str]
 
 
-class GuidedAttemptEvent(SessionEventBase):
+class GuidedAttemptEvent(MutatingSessionEventBase):
     event_type: Literal["CORRECT_ATTEMPT", "INCORRECT_ATTEMPT"]
     question_id: str
     micro_skill_ids: list[str]
@@ -293,7 +298,7 @@ class GuidedAttemptEvent(SessionEventBase):
     error_code: str | None = None
 
 
-class GuidedSupportEvent(SessionEventBase):
+class GuidedSupportEvent(MutatingSessionEventBase):
     event_type: Literal[
         "GUIDED_SUPPORT_ESCALATION_REQUIRED",
         "MAXIMUM_GUIDED_SUPPORT_PARALLEL",
@@ -303,12 +308,12 @@ class GuidedSupportEvent(SessionEventBase):
     micro_skill_id: str
 
 
-class GuidedPhaseCompletedEvent(SessionEventBase):
+class GuidedPhaseCompletedEvent(MutatingSessionEventBase):
     event_type: Literal["GUIDED_PHASE_COMPLETED"]
     completed_micro_skill_ids: list[str]
 
 
-class IndependentRetryCompletedEvent(SessionEventBase):
+class IndependentRetryCompletedEvent(MutatingSessionEventBase):
     event_type: Literal["INDEPENDENT_RETRY_COMPLETED"]
     question_id: str
     micro_skill_ids: list[str]
@@ -317,7 +322,7 @@ class IndependentRetryCompletedEvent(SessionEventBase):
     error_code: str | None = None
 
 
-class GuidedQuestionSetRequestedEvent(SessionEventBase):
+class GuidedQuestionSetRequestedEvent(MutatingSessionEventBase):
     event_type: Literal["GUIDED_QUESTION_SET_REQUESTED"]
     target_micro_skill_ids: list[str]
 
@@ -327,7 +332,7 @@ class Phase2RepairResult(BaseModel):
     highest_support_used: SupportUsed
 
 
-class IndependentQuestionSetRequestedEvent(SessionEventBase):
+class IndependentQuestionSetRequestedEvent(MutatingSessionEventBase):
     event_type: Literal["INDEPENDENT_QUESTION_SET_REQUESTED"]
     phase2_repair_results: list[Phase2RepairResult]
     used_question_ids: list[str]

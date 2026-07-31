@@ -4,7 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.adapters import TutorResult, VisionOCRResult
-from app.models.fields import Phase, SessionId, SnapshotDataUrl, StudentId
+from app.models.fields import Phase, SessionId, SnapshotDataUrl, StudentId, TurnId
 
 TutorElementKind = Literal[
     "text", "math", "line", "arrow", "rect", "ellipse", "freehand", "highlight"
@@ -90,6 +90,7 @@ class CanvasSubmitRequest(BaseModel):
 
     session_id: SessionId
     student_id: StudentId
+    turn_id: TurnId | None = None
     snapshot_data_url: SnapshotDataUrl
     # Optional spoken transcript to grade alongside the canvas (VAD turn). Omitted by
     # the Check button, which stays canvas-only.

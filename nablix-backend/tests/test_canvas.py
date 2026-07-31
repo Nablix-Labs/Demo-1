@@ -1,25 +1,63 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from app.adapters import provider
 from app.adapters.student_model import StudentModelServiceAdapter
 from app.adapters.tutor_engine import TutorEngineServiceAdapter
 from app.adapters.vision_ocr import MockVisionOCRAdapter
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.main import app
 from app.models.adapters import (
     AdapterContext,
     RAGResult,
-    StudentModelEvent,
     StudentModelResult,
     TutorResult,
     VisionOCRResult,
 )
-from app.services import canvas_service, session_service
+from app.services import canvas_service, interaction_service, session_service
 from app.services.snapshot_store import get_snapshot
+from app.models.student_model_session import (
+    GuidedAttemptEvent,
+    StudentModelSessionEvent,
+    StudentModelSessionEventResponse,
+)
+from tests.test_session_events import _event_response, _session_opened_response
 
 client = TestClient(app, headers={"Authorization": "Bearer test-token"})
 
 VALID_SNAPSHOT_DATA_URL = "data:image/png;base64,aGVsbG8="
+
+
+@pytest.fixture(autouse=True)
+def schema_student_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(
+        student_model_url="https://student-model.test",
+        student_model_topic_codes={"ALG_LINEAR_ONE_STEP": "ALG-ORI-02"},
+        use_mock_student_model=False,
+        use_mock_voice=True,
+        use_mock_vision=True,
+        use_openai_ai_engine=False,
+        qdrant_url="https://qdrant.test",
+        qdrant_api_key="test-key",
+    )
+
+    async def send_session_event(
+        adapter: StudentModelServiceAdapter,
+        event: StudentModelSessionEvent,
+        access_token: str,
+    ) -> StudentModelSessionEventResponse:
+        del adapter, access_token
+        body = (
+            _session_opened_response("PHASE_2_GUIDED_LEARNING")
+            if event.event_type == "SESSION_OPENED"
+            else _event_response(event.event_type, event.request_id)
+        )
+        body["request_id"] = event.request_id
+        return StudentModelSessionEventResponse.model_validate(body)
+
+    monkeypatch.setattr(provider, "get_settings", lambda: settings)
+    monkeypatch.setattr(session_service, "get_settings", lambda: settings)
+    monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", send_session_event)
 
 
 def _start_session(student_id: str) -> str:
@@ -29,21 +67,10 @@ def _start_session(student_id: str) -> str:
             "student_id": student_id,
             "concept_id": "ALG_LINEAR_ONE_STEP",
             "interaction_mode": "TEXT",
-            "initial_phase": "GUIDED_PRACTICE",
         },
     )
     assert response.status_code == 200
     session_id = response.json()["session_id"]
-    # The mock OCR fixture shows work for the diagnostic question; pin the
-    # session to it since guided sessions now start on the GP question.
-    session = session_service._sessions[session_id]
-    session_service._sessions[session_id] = session.model_copy(
-        update={
-            "current_question": "Solve for x: x + 4 = 9",
-            "question_id": "ALG_EQ_DIAG_001",
-            "correct_answer": "x = 5",
-        }
-    )
     return session_id
 
 
@@ -106,8 +133,10 @@ def test_canvas_submit_sends_full_ocr_context_and_forwards_events(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured_contexts: list[AdapterContext] = []
-    captured_events: list[StudentModelEvent] = []
+    captured_events: list[StudentModelSessionEvent] = []
+    captured_responses: list[StudentModelSessionEventResponse] = []
     original_evaluate = TutorEngineServiceAdapter.evaluate
+    original_send = StudentModelServiceAdapter.send_session_event
 
     async def capture_evaluate(
         adapter: TutorEngineServiceAdapter,
@@ -120,21 +149,16 @@ def test_canvas_submit_sends_full_ocr_context_and_forwards_events(
 
     async def capture_event(
         adapter: StudentModelServiceAdapter,
-        event: StudentModelEvent,
-        context: AdapterContext,
+        event: StudentModelSessionEvent,
         access_token: str,
-    ) -> StudentModelResult:
+    ) -> StudentModelSessionEventResponse:
         captured_events.append(event)
-        return StudentModelResult(
-            mastery_status="DEVELOPING",
-            continuity_status="on_track",
-            recommended_entry_phase=context.current_phase or "GUIDED_PRACTICE",
-            hint_dependency_score=0.0,
-            intervention_required=False,
-        )
+        result = await original_send(adapter, event, access_token)
+        captured_responses.append(result)
+        return result
 
     monkeypatch.setattr(TutorEngineServiceAdapter, "evaluate", capture_evaluate)
-    monkeypatch.setattr(StudentModelServiceAdapter, "update_from_event", capture_event)
+    monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", capture_event)
     session_id = _start_session("ST011")
 
     response = client.post(
@@ -161,23 +185,41 @@ def test_canvas_submit_sends_full_ocr_context_and_forwards_events(
         "step-2",
         "step-3",
     ]
-    assert len(captured_events) == 1
-    assert client.get(f"/session/{session_id}").json()["attempt_count"] == 1
+    assert [event.event_type for event in captured_events] == [
+        "SESSION_OPENED",
+        "INCORRECT_ATTEMPT",
+    ]
+    attempt_event = captured_events[1]
+    assert isinstance(attempt_event, GuidedAttemptEvent)
+    assert attempt_event.source_turn_id == context.source_turn_id
+    assert attempt_event.request_id == (
+        f"{session_id}:{context.source_turn_id}:INCORRECT_ATTEMPT"
+    )
+    assert attempt_event.expected_journey_version > 0
+    stored = client.get(f"/session/{session_id}").json()
+    assert stored["attempt_count"] == 0
+    assert len(stored["per_question_history"]) == 1
+    persisted_session = session_service._get_owned_session(session_id, "ST011")
+    assert persisted_session.student_model_event is not None
+    assert persisted_session.student_model_event.journey_state.version == (
+        captured_responses[-1].journey_state.version
+    )
 
 
 def test_voice_canvas_attachment_does_not_record_a_second_attempt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    session_id = _start_session("ST013")
+    original_send = StudentModelServiceAdapter.send_session_event
+
     async def unexpected_event(
         adapter: StudentModelServiceAdapter,
-        event: StudentModelEvent,
-        context: AdapterContext,
+        event: StudentModelSessionEvent,
         access_token: str,
-    ) -> StudentModelResult:
+    ) -> StudentModelSessionEventResponse:
         raise AssertionError(f"Voice attachment forwarded duplicate event: {event}")
 
-    monkeypatch.setattr(StudentModelServiceAdapter, "update_from_event", unexpected_event)
-    session_id = _start_session("ST013")
+    monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", unexpected_event)
 
     response = client.post(
         "/canvas/submit",
@@ -211,13 +253,15 @@ def test_canvas_submit_stops_before_tutor_when_ocr_needs_clarification(
             needs_clarification=True,
         )
 
-    async def unexpected_tutor_call(
-        context: AdapterContext,
-    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
-        raise AssertionError(f"Tutor Engine received low-confidence OCR: {context}")
+    async def unexpected_tutor_call(*args: object) -> object:
+        raise AssertionError(f"Tutor Engine received low-confidence OCR: {args}")
 
     monkeypatch.setattr(MockVisionOCRAdapter, "recognize", low_confidence_ocr)
-    monkeypatch.setattr(canvas_service, "run_tutor_pipeline", unexpected_tutor_call)
+    monkeypatch.setattr(
+        canvas_service,
+        "process_answer_with_session_event",
+        unexpected_tutor_call,
+    )
     session_id = _start_session("ST012")
 
     response = client.post(
@@ -287,7 +331,7 @@ def test_canvas_submit_stores_ocr_without_serializing_snapshot() -> None:
     assert get_snapshot(reference) == VALID_SNAPSHOT_DATA_URL
 
 
-def test_canvas_submit_recovers_demo_session_after_memory_loss() -> None:
+def test_canvas_submit_rejects_missing_session_after_memory_loss() -> None:
     session_id = _start_session("ST001")
     session_service._sessions.clear()
 
@@ -300,8 +344,7 @@ def test_canvas_submit_recovers_demo_session_after_memory_loss() -> None:
         },
     )
 
-    assert response.status_code == 200
-    assert response.json()["session_id"] == session_id
+    assert response.status_code == 404
 
 
 def test_canvas_submit_rejects_malformed_snapshot() -> None:
@@ -415,15 +458,8 @@ def test_canvas_correct_same_phase_routes_next_question(
         )
         return RAGResult(documents=[], retrieval_confidence=0.0), student, tutor
 
-    monkeypatch.setattr(canvas_service, "run_tutor_pipeline", fake_pipeline)
+    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", fake_pipeline)
     session_id = _start_session("ST012")
-    # The test bank serves one question per phase; free the GP question that
-    # /session/start consumed so the advance has something to fetch.
-    session = session_service._sessions[session_id]
-    session_service._sessions[session_id] = session.model_copy(
-        update={"served_question_ids": ["ALG_EQ_DIAG_001"]}
-    )
-
     response = client.post(
         "/canvas/submit",
         json={
@@ -435,13 +471,12 @@ def test_canvas_correct_same_phase_routes_next_question(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["phase_changed"] is False
-    assert body["current_phase"] == "GUIDED_PRACTICE"
-    assert body["question_id"] == "ALG_EQ_GP_001"
-    assert body["current_question"] == "Solve for x: x + 6 = 10"
+    assert body["phase_changed"] is True
+    assert body["current_phase"] == "INDEPENDENT_PRACTICE"
+    assert body["question_id"] == "Q-T02-004"
 
     stored = session_service._sessions[session_id]
-    assert stored.question_id == "ALG_EQ_GP_001"
+    assert stored.question_id == "Q-T02-004"
     assert stored.attempt_count == 0
     assert stored.question_completed is False
-    assert stored.question_number == 2
+    assert stored.question_number == 1

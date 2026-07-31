@@ -15,7 +15,6 @@ class Settings(BaseSettings):
     student_model_url: str = ""
     student_model_topic_ids: dict[str, int] = Field(default_factory=dict)
     student_model_topic_codes: dict[str, str] = Field(default_factory=dict)
-    student_model_session_opened_enabled: bool = True
     cors_allowed_origins: list[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",

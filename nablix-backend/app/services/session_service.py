@@ -74,8 +74,12 @@ def _build_session_id() -> str:
     return f"SESSION{uuid4().hex}"
 
 
-def _student_model_request_id(session_id: str, event_type: str) -> str:
-    return f"{session_id}:{event_type}:{uuid4().hex}"
+def _student_model_request_id(
+    session_id: str,
+    source_turn_id: str,
+    event_type: str,
+) -> str:
+    return f"{session_id}:{source_turn_id}:{event_type}"
 
 
 def _session_not_found(session_id: str) -> HTTPException:
@@ -170,11 +174,6 @@ async def start_session(
         )
 
     settings = get_settings()
-    if not settings.student_model_session_opened_enabled:
-        raise HTTPException(
-            status_code=503,
-            detail="SESSION_OPENED is required for Schema 3.0 session startup.",
-        )
     topic_id = settings.student_model_topic_codes.get(request.concept_id)
     if topic_id is None:
         raise HTTPException(
@@ -186,7 +185,11 @@ async def start_session(
     started_at = datetime.now(timezone.utc)
     timestamp = started_at.isoformat().replace("+00:00", "Z")
     session_event = SessionOpenedEvent(
-        request_id=_student_model_request_id(session_id, "SESSION_OPENED"),
+        request_id=_student_model_request_id(
+            session_id,
+            session_id,
+            "SESSION_OPENED",
+        ),
         event_type="SESSION_OPENED",
         topic_id=topic_id,
         student_id=request.student_id,
@@ -362,10 +365,14 @@ def _schema_session(session_id: str, student_id: str) -> SessionRecord:
     return session
 
 
-def _schema_request_id(session: SessionRecord, event_type: str) -> str:
+def _schema_request_id(
+    session: SessionRecord,
+    source_turn_id: str,
+    event_type: str,
+) -> str:
     if session.student_model_event is None:
         raise RuntimeError("Schema 3.0 request id requires a stored Student Model event.")
-    return _student_model_request_id(session.session_id, event_type)
+    return _student_model_request_id(session.session_id, source_turn_id, event_type)
 
 
 def _schema_timestamp() -> str:
@@ -660,8 +667,14 @@ async def complete_diagnostic(
         raise RuntimeError("Schema 3.0 session is missing its stored event.")
     event = await get_adapters().student_model.send_session_event(
         DiagnosticCompletedEvent(
-            request_id=_schema_request_id(session, "DIAGNOSTIC_COMPLETED"),
+            request_id=_schema_request_id(
+                session,
+                "DIAGNOSTIC_COMPLETED",
+                "DIAGNOSTIC_COMPLETED",
+            ),
             event_type="DIAGNOSTIC_COMPLETED",
+            source_turn_id="DIAGNOSTIC_COMPLETED",
+            expected_journey_version=stored_event.journey_state.version,
             topic_id=stored_event.journey_state.topic_id,
             student_id=session.student_id,
             timestamp=_schema_timestamp(),
@@ -808,8 +821,14 @@ async def start_orientation(
         raise RuntimeError("Schema 3.0 session is missing its stored event.")
     response = await get_adapters().student_model.send_session_event(
         WorkedExampleRequestedEvent(
-            request_id=_schema_request_id(session, "WORKED_EXAMPLE_REQUESTED"),
+            request_id=_schema_request_id(
+                session,
+                "WORKED_EXAMPLE_REQUESTED",
+                "WORKED_EXAMPLE_REQUESTED",
+            ),
             event_type="WORKED_EXAMPLE_REQUESTED",
+            source_turn_id="WORKED_EXAMPLE_REQUESTED",
+            expected_journey_version=event.journey_state.version,
             topic_id=event.journey_state.topic_id,
             student_id=session.student_id,
             timestamp=_schema_timestamp(),
@@ -851,8 +870,14 @@ async def complete_orientation(
     _validate_orientation_completion(session, request)
     response = await get_adapters().student_model.send_session_event(
         OrientationCompletedEvent(
-            request_id=_schema_request_id(session, "ORIENTATION_COMPLETED"),
+            request_id=_schema_request_id(
+                session,
+                "ORIENTATION_COMPLETED",
+                "ORIENTATION_COMPLETED",
+            ),
             event_type="ORIENTATION_COMPLETED",
+            source_turn_id="ORIENTATION_COMPLETED",
+            expected_journey_version=event.journey_state.version,
             topic_id=event.journey_state.topic_id,
             student_id=session.student_id,
             timestamp=_schema_timestamp(),
@@ -1136,13 +1161,15 @@ def start_voice_stream(session_id: str, student_id: str) -> SessionRecord:
 async def record_canvas_submission(
     session_id: str,
     student_id: str,
+    session: SessionRecord,
     record: CanvasSubmissionRecord,
     conversation_history: list[ConversationMessage],
     last_student_model: StudentModelResult | None,
 ) -> SessionRecord:
     """Append a reviewed canvas submission without replacing Schema 3.0 state."""
 
-    session: SessionRecord = _get_owned_session(session_id, student_id)
+    if session.session_id != session_id or session.student_id != student_id:
+        raise ValueError("Canvas session identity does not match the request.")
     if session.status == "ended":
         raise HTTPException(
             status_code=409,
@@ -1233,6 +1260,7 @@ def get_canvas_submission(
 def update_interaction_state(
     session_id: str,
     student_id: str,
+    session: SessionRecord,
     current_phase: Phase,
     hint_count: int,
     ui_state: str,
@@ -1251,7 +1279,8 @@ def update_interaction_state(
     last so it wins.
     """
 
-    session: SessionRecord = _get_owned_session(session_id, student_id)
+    if session.session_id != session_id or session.student_id != student_id:
+        raise ValueError("Interaction session identity does not match the request.")
     voice_state: VoiceState = session.voice_state.model_copy(
         update={"last_transcript_confidence": transcript_confidence}
     )
