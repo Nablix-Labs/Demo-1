@@ -15,7 +15,9 @@ import ContinuityCheck from '@/components/ContinuityCheck';
 import FloatingMicButton from '@/components/FloatingMicButton';
 import VisualCue from '@/components/VisualCue';
 import { useFlowNav } from '@/lib/useFlowNav';
+import { useRouter } from 'next/navigation';
 import { useNumeraStore } from '@/store/useNumeraStore';
+import { useAuthStore } from '@/store/useAuthStore';
 import { useDemoTutor, resetSessionStart, sessionStartError } from '@/hooks/useDemoTutor';
 import { useVoiceTurn } from '@/hooks/useVoiceTurn';
 import { useVoiceStream } from '@/hooks/useVoiceStream';
@@ -34,6 +36,7 @@ if (typeof window !== 'undefined' && !process.env.NEXT_PUBLIC_VOICE_TRANSPORT) {
 }
 
 export default function LessonPage() {
+  const router = useRouter();
   const { currentTopicId } = useFlowNav();
   const setQuestionText = useNumeraStore((s) => s.setQuestionText);
   const setQuestionNumber = useNumeraStore((s) => s.setQuestionNumber);
@@ -155,16 +158,29 @@ export default function LessonPage() {
   // the session's current_phase), so the lesson chrome carries no manual
   // stage buttons.
   if (startError) {
+    // An auth failure can't be fixed by retrying — the token is expired or
+    // rejected. Send the student to log in (and clear the stale login so the
+    // AuthGate doesn't bounce them straight back here). Screenshot report,
+    // 31 Jul: "why is it opening this instead of login".
+    const needsLogin = startError.includes('signed in');
     return (
       <main className="flex-1 min-w-0 flex items-center justify-center bg-white p-8" aria-label="Lesson unavailable">
         <div className="w-[420px] max-w-full text-center">
           <h1 className="text-[18px] font-semibold text-ink">Couldn&apos;t start your lesson</h1>
           <p className="text-[13px] text-slate-blue mt-2 leading-relaxed">{startError}</p>
           <button
-            onClick={() => { resetSessionStart(); setStartError(null); useNumeraStore.getState().clearSessionId(); }}
+            onClick={() => {
+              resetSessionStart();
+              setStartError(null);
+              useNumeraStore.getState().clearSessionId();
+              if (needsLogin) {
+                useAuthStore.getState().logout();
+                router.replace('/login'); // Next router applies the /app basePath
+              }
+            }}
             className="mt-5 inline-flex items-center gap-1.5 rounded-md border border-focus-navy px-4 py-2.5 text-[12.5px] font-semibold text-ink hover:bg-focus-navy hover:text-white transition-colors"
           >
-            Try again
+            {needsLogin ? 'Log in' : 'Try again'}
           </button>
         </div>
       </main>
