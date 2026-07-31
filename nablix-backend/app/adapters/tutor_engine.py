@@ -93,6 +93,7 @@ class TutorEngineServiceAdapter:
             ai_response = classify_student_response(
                 ClassificationRequest(
                     question_id=context.question_id,
+                    question_type=context.question_type,
                     question=context.question,
                     correct_answer=context.correct_answer,
                     answer_spec=context.answer_spec,

@@ -10,7 +10,7 @@ from app.ai_engine.schemas import (
     TutorResponse,
 )
 from app.models.adapters import ConversationMessage, ConversationState, Phase2PromptContext
-from app.models.student_model_session import AnswerSpec
+from app.models.student_model_session import AnswerSpec, QuestionType
 
 
 router = APIRouter()
@@ -20,6 +20,7 @@ class AiEngineClassifyRequest(BaseModel):
     student_input: str
     current_phase: LearningPhase
     question: str
+    question_type: QuestionType | None = None
     correct_answer: str
     answer_spec: AnswerSpec | None = None
     phase_2_prompt_context: Phase2PromptContext | None = None
@@ -66,6 +67,7 @@ def _combined_student_input(request: AiEngineClassifyRequest) -> str:
 
 def _classification_request_from(request: AiEngineClassifyRequest) -> ClassificationRequest:
     return ClassificationRequest(
+        question_type=request.question_type,
         question=request.question,
         correct_answer=request.correct_answer,
         answer_spec=request.answer_spec,

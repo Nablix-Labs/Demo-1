@@ -595,6 +595,7 @@ def test_session_start_uses_schema_3_diagnostic_contract(monkeypatch) -> None:
     body = response.json()
     assert body["current_phase"] == "DIAGNOSTIC"
     assert body["current_question"] == "What does 4y mean?"
+    assert body["question_type"] == "SINGLE_CHOICE"
     assert body["question_id"] == "Q-T02-D01"
     assert body["show_canvas"] is False
     assert body["show_hint_button"] is False

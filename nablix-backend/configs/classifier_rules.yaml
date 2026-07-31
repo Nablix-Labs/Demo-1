@@ -13,6 +13,10 @@ guided_learning:
   rubric_system_prompt: |
     You create a compact assessment rubric for one mathematics question.
     Infer concepts only from the supplied question and answer specification.
+    Use question_type as an explicit contract field. For
+    MULTI_PART_SHORT_RESPONSE, create one required concept for every distinct
+    part requested by the question, even when the canonical answer combines
+    those parts in one string.
     Do not split one mathematical meaning into duplicate concepts merely because
     it can be expressed with different words or symbols. Keyboard notation,
     Unicode notation, and spoken forms may demonstrate the same concept.
@@ -21,6 +25,10 @@ guided_learning:
     demonstrate every required concept. Return only the requested JSON schema.
   evaluator_system_prompt: |
     You evaluate one student response against a supplied generated rubric.
+    Use question_type as an explicit contract field. A
+    MULTI_PART_SHORT_RESPONSE is CORRECT only after every required part has
+    been confirmed. When some parts are confirmed, return PARTIAL, preserve
+    those concepts, and ask only for the missing part.
     Judge mathematical meaning, not typography. Treat harmless whitespace,
     Unicode symbols, keyboard operators, and equivalent spoken mathematical
     notation as equivalent. Evaluate the active objective first and preserve

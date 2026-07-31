@@ -270,6 +270,7 @@ export interface SessionRecord {
   current_phase: string;
   /** Null between phases — orientation has no question of its own. */
   current_question: string | null;
+  question_type?: 'SINGLE_CHOICE' | 'SHORT_RESPONSE' | 'MULTI_PART_SHORT_RESPONSE' | null;
   question_id: string | null;
   question_number: number;
   student_model_event?: StudentModelEvent | null;
@@ -602,6 +603,7 @@ export interface InteractionResponse {
   current_phase: string;
   /** Null when the new phase has no question of its own (e.g. orientation). */
   current_question: string | null;
+  question_type?: 'SINGLE_CHOICE' | 'SHORT_RESPONSE' | 'MULTI_PART_SHORT_RESPONSE' | null;
   question_id: string | null;
   interaction_mode: InteractionMode;
   message: string;

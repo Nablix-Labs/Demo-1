@@ -32,9 +32,16 @@ class QuestionOption(BaseModel):
     text: str
 
 
+QuestionType = Literal[
+    "SINGLE_CHOICE",
+    "SHORT_RESPONSE",
+    "MULTI_PART_SHORT_RESPONSE",
+]
+
+
 class StudentQuestionView(BaseModel):
     question_text: str
-    question_type: str
+    question_type: QuestionType
     options: list[QuestionOption]
     requires_student_response: bool
 

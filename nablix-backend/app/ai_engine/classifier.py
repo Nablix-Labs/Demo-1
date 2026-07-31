@@ -48,7 +48,7 @@ from app.models.guided_learning import (
     ScaffoldEvaluationContext,
     ScaffoldStepEvaluation,
 )
-from app.models.student_model_session import AnswerSpec
+from app.models.student_model_session import AnswerSpec, QuestionType
 
 if TYPE_CHECKING:
     from app.ai_engine.openai_client import (
@@ -60,6 +60,7 @@ if TYPE_CHECKING:
 
 class ClassificationRequest(StrictSchema):
     question_id: str | None = None
+    question_type: QuestionType | None = None
     question: str
     correct_answer: str
     answer_spec: AnswerSpec | None = None
@@ -442,6 +443,7 @@ def classify_guided_learning_response(
             try:
                 rubric = openai_client.generate_guided_rubric(
                     question_id=request.question_id,
+                    question_type=request.question_type,
                     question=request.question,
                     answer_spec=request.answer_spec,
                     potential_errors=allowed_errors,
@@ -472,6 +474,7 @@ def classify_guided_learning_response(
     for attempt in range(rules.guided_learning.maximum_retries + 1):
         try:
             candidate = openai_client.evaluate_guided_turn(
+                question_type=request.question_type,
                 question=request.question,
                 answer_spec=request.answer_spec,
                 generated_rubric=rubric,
@@ -491,6 +494,7 @@ def classify_guided_learning_response(
                 objective,
                 allowed_errors,
                 rules,
+                request.question_type,
             )
             break
         except AdapterError as error:
@@ -591,6 +595,7 @@ def validate_guided_evaluation(
     objective: ActiveTeachingObjective,
     allowed_errors: list[dict[str, object]],
     rules: ClassifierRulesConfig,
+    question_type: QuestionType | None,
 ) -> GuidedEvaluation:
     concept_ids = {concept.concept_id for concept in rubric.required_concepts}
     returned_ids = {
@@ -635,10 +640,31 @@ def validate_guided_evaluation(
                 "next_objective": objective,
             }
         )
+    contradicted = set(evaluation.contradicted_concept_ids)
+    confirmed = (
+        set(objective.confirmed_concept_ids)
+        | set(evaluation.preserved_concept_ids)
+        | set(evaluation.newly_confirmed_concept_ids)
+    ) - contradicted
+    required_ids = {
+        concept.concept_id
+        for concept in rubric.required_concepts
+        if concept.required
+    }
+    expected_missing = required_ids - confirmed
     remaining = set(evaluation.missing_concept_ids)
-    confirmed = set(objective.confirmed_concept_ids) | set(
-        evaluation.newly_confirmed_concept_ids
-    )
+    if (
+        question_type == "MULTI_PART_SHORT_RESPONSE"
+        and remaining != expected_missing
+    ):
+        raise AdapterError(
+            "openai_ai_engine",
+            (
+                "Multipart evaluation missing concepts do not match the "
+                f"confirmed rubric state: expected {sorted(expected_missing)}, "
+                f"received {sorted(remaining)}."
+            ),
+        )
     if evaluation.student_state == "CORRECT" and remaining:
         raise AdapterError(
             "openai_ai_engine",
