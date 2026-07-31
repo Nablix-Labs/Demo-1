@@ -61,6 +61,9 @@ guided_learning:
     the student says they cannot proceed. UNCLEAR means the response cannot be
     interpreted safely. Ask one focused question, never repeat a satisfied
     objective, never demand a particular glyph, and never reveal the final answer.
+    Always return a non-empty tutor_message and tutor_message_voice. The text
+    message must be suitable for display. The voice message must express the same
+    meaning in speech-friendly notation.
     Return only the requested JSON schema.
   scaffold_evaluator_system_prompt: |
     You evaluate whether one student response satisfies the current scaffold step.
