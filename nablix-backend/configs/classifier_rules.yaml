@@ -85,6 +85,7 @@ guided_learning:
     original_answer_correct only when the response independently gives a complete
     correct answer to the original question. When original_answer_correct is true,
     step_satisfied must also be true.
+  reconciliation_message: "I want to make sure I understood that. Please give your answer in one complete response."
   allowed_student_states:
     - CORRECT
     - PARTIAL

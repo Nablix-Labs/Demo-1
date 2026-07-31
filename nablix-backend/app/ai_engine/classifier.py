@@ -661,9 +661,11 @@ def validate_guided_evaluation(
         *evaluation.contradicted_concept_ids,
     }
     if not returned_ids.issubset(concept_ids):
-        raise AdapterError(
-            "openai_ai_engine",
-            f"Guided evaluation returned unknown concept IDs: {sorted(returned_ids - concept_ids)}.",
+        return reconcile_guided_evaluation(
+            evaluation,
+            objective,
+            rules,
+            f"unknown concept IDs: {sorted(returned_ids - concept_ids)}",
         )
     allowed_error_codes = {
         item["error_code"]
@@ -674,9 +676,11 @@ def validate_guided_evaluation(
         evaluation.selected_error_code is not None
         and evaluation.selected_error_code not in allowed_error_codes
     ):
-        raise AdapterError(
-            "openai_ai_engine",
-            f"Guided evaluation returned disallowed error code {evaluation.selected_error_code}.",
+        return reconcile_guided_evaluation(
+            evaluation,
+            objective,
+            rules,
+            f"disallowed error code: {evaluation.selected_error_code}",
         )
     if evaluation.student_state not in rules.guided_learning.allowed_student_states:
         raise AdapterError(
@@ -695,16 +699,14 @@ def validate_guided_evaluation(
             ),
         )
     if evaluation.confidence < state_threshold:
-        return evaluation.model_copy(
-            update={
-                "student_state": "UNCLEAR",
-                "newly_confirmed_concept_ids": [],
-                "preserved_concept_ids": objective.confirmed_concept_ids,
-                "contradicted_concept_ids": [],
-                "selected_error_code": None,
-                "missing_concept_ids": objective.missing_concept_ids,
-                "next_objective": objective,
-            }
+        return reconcile_guided_evaluation(
+            evaluation,
+            objective,
+            rules,
+            (
+                f"confidence {evaluation.confidence} below "
+                f"{evaluation.student_state} threshold {state_threshold}"
+            ),
         )
     contradicted = set(evaluation.contradicted_concept_ids)
     confirmed = (
@@ -727,24 +729,37 @@ def validate_guided_evaluation(
             "Guided evaluation must return non-empty text and voice messages.",
         )
     if evaluation.student_state == "CORRECT" and remaining:
-        raise AdapterError(
-            "openai_ai_engine",
-            "CORRECT evaluation cannot leave required concepts missing.",
+        return reconcile_guided_evaluation(
+            evaluation,
+            objective,
+            rules,
+            "CORRECT left required concepts missing",
         )
     if evaluation.student_state == "PARTIAL" and (
         not confirmed or not remaining
     ):
-        raise AdapterError(
-            "openai_ai_engine",
-            "PARTIAL evaluation requires confirmed and missing concepts.",
+        return reconcile_guided_evaluation(
+            evaluation,
+            objective,
+            rules,
+            "PARTIAL did not contain both confirmed and missing concepts",
+        )
+    if evaluation.student_state == "WRONG" and not remaining:
+        return reconcile_guided_evaluation(
+            evaluation,
+            objective,
+            rules,
+            "WRONG confirmed every required concept",
         )
     if evaluation.student_state in {"STUCK", "UNCLEAR"} and (
         evaluation.newly_confirmed_concept_ids
         or evaluation.selected_error_code is not None
     ):
-        raise AdapterError(
-            "openai_ai_engine",
-            f"{evaluation.student_state} cannot create evidence.",
+        return reconcile_guided_evaluation(
+            evaluation,
+            objective,
+            rules,
+            f"{evaluation.student_state} attempted to create evidence",
         )
     next_objective = (
         None
@@ -767,6 +782,36 @@ def validate_guided_evaluation(
             ),
             "missing_concept_ids": sorted(remaining),
             "next_objective": next_objective,
+        }
+    )
+
+
+def reconcile_guided_evaluation(
+    evaluation: GuidedEvaluation,
+    objective: ActiveTeachingObjective,
+    rules: ClassifierRulesConfig,
+    reason: str,
+) -> GuidedEvaluation:
+    logger.warning(
+        "guided_state_reconciled",
+        extra={
+            "raw_student_state": evaluation.student_state,
+            "raw_confidence": evaluation.confidence,
+            "reason": reason,
+        },
+    )
+    message = rules.guided_learning.reconciliation_message
+    return evaluation.model_copy(
+        update={
+            "student_state": "UNCLEAR",
+            "newly_confirmed_concept_ids": [],
+            "preserved_concept_ids": objective.confirmed_concept_ids,
+            "contradicted_concept_ids": [],
+            "missing_concept_ids": objective.missing_concept_ids,
+            "selected_error_code": None,
+            "next_objective": objective,
+            "tutor_message": message,
+            "tutor_message_voice": message,
         }
     )
 

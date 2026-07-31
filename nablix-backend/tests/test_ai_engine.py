@@ -1990,6 +1990,62 @@ def test_guided_llm_partial_persists_only_the_missing_objective(monkeypatch) -> 
     ]
 
 
+def test_guided_partial_without_confirmed_concepts_becomes_safe_unclear(
+    monkeypatch,
+) -> None:
+    class _InconsistentGuidedClient:
+        def generate_guided_rubric(self, **kwargs):
+            return _guided_rubric()
+
+        def evaluate_guided_turn(self, **kwargs):
+            return GuidedEvaluation(
+                student_state="PARTIAL",
+                newly_confirmed_concept_ids=[],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=["OPERATION", "EXPANDED_MEANING"],
+                selected_error_code=None,
+                confidence=0.92,
+                next_objective=kwargs["active_objective"],
+                tutor_message="You have part of the idea.",
+                tutor_message_voice="You have part of the idea.",
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _InconsistentGuidedClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T02-002",
+            question="What does cd mean?",
+            correct_answer="c multiplied by d",
+            answer_spec=_answer_spec(
+                "c multiplied by d",
+                ["c times d"],
+                "CONCEPT_TEXT_MATCH",
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            student_input="multiplication",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.guided_student_state == "UNCLEAR"
+    assert response.student_model_events == []
+    assert response.attempt_increment == 0
+    assert response.question_completed is False
+    assert response.tutor_message == (
+        "I want to make sure I understood that. "
+        "Please give your answer in one complete response."
+    )
+
+
 def test_guided_error_definitions_preserve_student_model_metadata() -> None:
     definitions = classifier.guided_error_definitions(
         [
@@ -2108,7 +2164,7 @@ def test_guided_multipart_preserves_completed_parts_and_requests_the_missing_par
     ]
 
 
-def test_guided_multipart_rejects_completion_with_unconfirmed_required_parts(
+def test_guided_multipart_reconciles_completion_with_unconfirmed_required_parts(
     monkeypatch,
 ) -> None:
     rubric = GeneratedQuestionRubric(
@@ -2158,33 +2214,41 @@ def test_guided_multipart_rejects_completion_with_unconfirmed_required_parts(
         "build_openai_ai_engine_client",
         lambda settings: _InvalidGuidedClient(),
     )
-    with pytest.raises(
-        AdapterError,
-        match="CORRECT evaluation cannot leave required concepts missing",
-    ):
-        classify_student_response(
-            ClassificationRequest(
-                question_id="Q-T01-006",
-                question=(
-                    "A counter starts at any value c and increases by 4. "
-                    "Write the general rule and state what changes and what stays fixed."
-                ),
-                question_type="MULTI_PART_SHORT_RESPONSE",
-                correct_answer="c + 4; c changes; +4 stays fixed",
-                answer_spec=_answer_spec(
-                    "c + 4; c changes; +4 stays fixed",
-                    ["c+4", "c is changing", "add 4 stays fixed"],
-                    "STRUCTURED_TEXT_AND_SYMBOLIC_MATCH",
-                ),
-                phase_2_prompt_context=_guided_context(0),
-                student_input="c + 4",
-                current_phase="GUIDED_PRACTICE",
-                input_source="TEXT",
-                transcript_confidence=None,
-                attempt_count=1,
-                current_hint_level=None,
-            )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T01-006",
+            question=(
+                "A counter starts at any value c and increases by 4. "
+                "Write the general rule and state what changes and what stays fixed."
+            ),
+            question_type="MULTI_PART_SHORT_RESPONSE",
+            correct_answer="c + 4; c changes; +4 stays fixed",
+            answer_spec=_answer_spec(
+                "c + 4; c changes; +4 stays fixed",
+                ["c+4", "c is changing", "add 4 stays fixed"],
+                "STRUCTURED_TEXT_AND_SYMBOLIC_MATCH",
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            student_input="c + 4",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
         )
+    )
+
+    assert response.guided_student_state == "UNCLEAR"
+    assert response.student_model_events == []
+    assert response.attempt_increment == 0
+    assert response.question_completed is False
+    assert response.active_teaching_objective is not None
+    assert response.active_teaching_objective.confirmed_concept_ids == []
+    assert response.active_teaching_objective.missing_concept_ids == [
+        "CHANGING_VALUE",
+        "FIXED_INCREMENT",
+        "GENERAL_RULE",
+    ]
 
 
 @pytest.mark.parametrize(
