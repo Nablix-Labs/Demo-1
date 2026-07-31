@@ -847,6 +847,7 @@ async def next_question_updates(
         "stuck_count": 0,
         "hint_count": 0,
         "question_completed": False,
+        "explanation_request_count": 0,
         # The question now on screen came from the question bank, not from the
         # Student Model's question_set — so the stored schema event no longer
         # describes it. Leaving the stale event in place made every subsequent
@@ -1618,6 +1619,30 @@ async def _process_interaction(
         state_updates["stuck_count"] = 0
         state_updates["generated_question_rubric"] = None
         state_updates["active_teaching_objective"] = None
+        state_updates["explanation_request_count"] = 0
+
+    # A rejected explanation must not loop forever. The evaluator accepts
+    # concrete wordings ("I subtracted 6 from both sides") but can reject a
+    # child's generic-but-honest ones ("I moved it to the other side") — and
+    # PARTIAL turns carry attempt_increment=0, so no counter ever advanced and
+    # no support ever escalated. Live on 31 Jul: 29 consecutive
+    # REQUEST_EXPLANATION turns on one question; the session was unwinnable.
+    # After two rejected asks the third would start the loop, so accept the
+    # student's reasoning and move on — the answer VALUE was already right, and
+    # the question_advanced block below supplies the next-question message.
+    # Schema-managed turns are untouched: there the Student Model owns
+    # progression.
+    if conversation_action == "REQUEST_EXPLANATION" and schema_response is None:
+        if session.explanation_request_count >= 2:
+            conversation_action = "ADVANCE_TO_NEXT_QUESTION"
+            state_updates["explanation_request_count"] = 0
+            state_updates["question_completed"] = True
+        else:
+            state_updates["explanation_request_count"] = (
+                session.explanation_request_count + 1
+            )
+    elif session.explanation_request_count:
+        state_updates["explanation_request_count"] = 0
     if schema_response is None:
         state_updates["last_student_model"] = student
     if (

@@ -176,6 +176,11 @@ class SessionRecord(BaseModel):
     hint_count: int
     attempt_count: int = 0
     stuck_count: int = 0
+    # Consecutive REQUEST_EXPLANATION turns on the current question. PARTIAL
+    # explanation turns carry attempt_increment=0, so without this nothing
+    # counts them and nothing can cap them (31 Jul: 29 consecutive rejections
+    # of a reasonable explanation, session unwinnable).
+    explanation_request_count: int = 0
     generated_question_rubric: GeneratedQuestionRubric | None = None
     active_teaching_objective: ActiveTeachingObjective | None = None
     question_completed: bool = False
