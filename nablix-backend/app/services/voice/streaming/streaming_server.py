@@ -345,6 +345,27 @@ async def voice_stream(
     turn_already_processed = False  # True when UtteranceEnd auto-triggered a response
     access_token: str | None = None
 
+    async def deepgram_keepalive() -> None:
+        # Deepgram closes a stream that receives neither audio nor text for
+        # ~10s (NET-0001). That happens on every mute, because the frontend
+        # stops sending chunks while muted — 8 such kills in the 30-31 Jul
+        # logs, each costing the student an utterance mid-conversation.
+        # The documented fix is a KeepAlive text frame; it is harmless while
+        # audio is flowing and resets the idle timer while it is not.
+        # https://developers.deepgram.com/docs/keep-alive
+        while True:
+            await asyncio.sleep(5)
+            ws_now = deepgram_ws
+            if ws_now is None:
+                continue
+            try:
+                await ws_now.send(json.dumps({"type": "KeepAlive"}))
+            except Exception:
+                # Closed or resetting mid-send; the reconnect paths own recovery.
+                pass
+
+    keepalive_task = asyncio.create_task(deepgram_keepalive())
+
     deepgram_receiver_task = None
 
     async def forward_deepgram_results(dg_ws):
@@ -617,6 +638,7 @@ async def voice_stream(
     except Exception as e:
         logger.error(f"[{session_id}] Error: {e}")
     finally:
+        keepalive_task.cancel()
         if deepgram_receiver_task and not deepgram_receiver_task.done():
             deepgram_receiver_task.cancel()
         if deepgram_ws:
