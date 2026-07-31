@@ -83,6 +83,28 @@ def _guided_rubric() -> GeneratedQuestionRubric:
     )
 
 
+def test_guided_evaluation_schema_rejects_blank_tutor_messages() -> None:
+    payload = {
+        "student_state": "WRONG",
+        "newly_confirmed_concept_ids": [],
+        "preserved_concept_ids": [],
+        "contradicted_concept_ids": [],
+        "missing_concept_ids": ["OPERATION", "EXPANDED_MEANING"],
+        "selected_error_code": "ERR-T02-ADDITION",
+        "confidence": 0.95,
+        "next_objective": None,
+        "tutor_message": "",
+        "tutor_message_voice": "",
+    }
+
+    with pytest.raises(ValueError):
+        GuidedEvaluation.model_validate(payload)
+
+    schema = GuidedEvaluation.model_json_schema()
+    assert schema["properties"]["tutor_message"]["minLength"] == 1
+    assert schema["properties"]["tutor_message_voice"]["minLength"] == 1
+
+
 def _answer_spec(
     canonical_answer: str,
     accepted_answers: list[str],

@@ -40,8 +40,8 @@ class GuidedEvaluation(GuidedLearningModel):
     selected_error_code: str | None
     confidence: float = Field(ge=0.0, le=1.0)
     next_objective: ActiveTeachingObjective | None
-    tutor_message: str
-    tutor_message_voice: str
+    tutor_message: str = Field(min_length=1)
+    tutor_message_voice: str = Field(min_length=1)
 
 
 class ScaffoldEvaluationContext(GuidedLearningModel):
