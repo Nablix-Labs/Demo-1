@@ -255,8 +255,12 @@ export default function PracticePage() {
 
         <Toolbar onCheckWork={finish} />
 
-        {/* Actions */}
-        <div className="absolute bottom-5 right-6 z-20 flex items-center gap-2">
+        {/* Actions. right-[180px] clears the fixed "Need help?" Assist pill
+            (bottom-6 right-4, ~150px wide, z-[60]) — anchored bottom-right it
+            sat exactly over "I'm done" and intercepted its clicks at EVERY
+            viewport width, so finishing practice was near-impossible. Found
+            31 Jul when automation could not click the button. */}
+        <div className="absolute bottom-5 right-[180px] z-20 flex items-center gap-2">
           {mounted && voice.supported && (
             <button
               onClick={() => (voice.active ? voice.stop() : voice.start())}

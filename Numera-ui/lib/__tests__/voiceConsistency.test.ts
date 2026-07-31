@@ -80,3 +80,62 @@ describe('effectiveVoice', () => {
     delete process.env.NEXT_PUBLIC_WS_URL;
   });
 });
+
+/** Load lib/tts with stubbed stores and return its full module surface. */
+async function ttsModuleFor(
+  tier: string | null,
+  selection: { ttsProvider: string | null; ttsVoice: string | null } = {
+    ttsProvider: null,
+    ttsVoice: null,
+  },
+) {
+  vi.resetModules();
+  vi.doMock('@/store/useAuthStore', () => ({
+    useAuthStore: { getState: () => ({ tier }) },
+  }));
+  vi.doMock('@/store/useNumeraStore', () => ({
+    useNumeraStore: { getState: () => selection },
+  }));
+  vi.doMock('@/store/useMicLevel', () => ({
+    useMicLevel: { getState: () => ({ setAiSpeaking: vi.fn(), markBoundary: vi.fn() }) },
+  }));
+  vi.doMock('@/lib/api', () => ({ synthesizeSpeech: vi.fn() }));
+  return import('@/lib/tts');
+}
+
+describe('product-voice degradation (Cartesia quota outage, 31 Jul)', () => {
+  it('speaks as Inworld while Cartesia is degraded — not a robot, not OpenAI', async () => {
+    const tts = await ttsModuleFor('premium');
+    tts.markProviderDegraded('cartesia');
+    expect(tts.effectiveVoice()).toEqual({ provider: 'inworld', voice: 'Ashley' });
+  });
+
+  it('brings the real voice back after the recovery window (a top-up heals itself)', async () => {
+    const tts = await ttsModuleFor('premium');
+    tts.markProviderDegraded('cartesia', Date.now() - 5 * 60_000 - 1);
+    expect(tts.effectiveVoice().provider).toBe('cartesia');
+  });
+
+  it('degrades basic-tier Inworld onto Cartesia, symmetric', async () => {
+    const tts = await ttsModuleFor('basic');
+    tts.markProviderDegraded('inworld');
+    expect(tts.effectiveVoice().provider).toBe('cartesia');
+  });
+
+  it('never degrades onto anything outside the two product voices', async () => {
+    const tts = await ttsModuleFor('premium', { ttsProvider: 'openai', ttsVoice: 'shimmer' });
+    tts.markProviderDegraded('openai'); // not a product voice — must be a no-op
+    expect(tts.effectiveVoice().provider).toBe('openai');
+  });
+
+  it('an explicit picker choice on the degraded provider still degrades', async () => {
+    // Teacher Lady is a Cartesia voice; if Cartesia is down her audio cannot
+    // exist, so the session speaks Inworld until recovery rather than robot.
+    const tts = await ttsModuleFor('premium', {
+      ttsProvider: 'cartesia',
+      ttsVoice: '573e3144-a684-4e72-ac2b-9b2063a50b53',
+    });
+    tts.markProviderDegraded('cartesia');
+    expect(tts.effectiveVoice()).toEqual({ provider: 'inworld', voice: 'Ashley' });
+  });
+});
