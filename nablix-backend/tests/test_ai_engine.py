@@ -2144,6 +2144,176 @@ def test_guided_multipart_rejects_completion_with_unconfirmed_required_parts(
         )
 
 
+@pytest.mark.parametrize(
+    (
+        "question_type",
+        "question",
+        "canonical_answer",
+        "verification_method",
+        "student_input",
+    ),
+    [
+        (
+            "CHOICE_WITH_EXPLANATION",
+            "Which statement is correct? Select one and explain why.",
+            "B",
+            "EXACT_CHOICE_MATCH",
+            "B",
+        ),
+        (
+            "TRUE_FALSE_WITH_EXPLANATION",
+            "True or false: In 4x, 4 is added to x. Explain.",
+            "false",
+            "BOOLEAN_AND_CONCEPT_MATCH",
+            "false",
+        ),
+    ],
+)
+def test_explanation_question_does_not_complete_from_the_answer_alone(
+    monkeypatch,
+    question_type,
+    question,
+    canonical_answer,
+    verification_method,
+    student_input,
+) -> None:
+    captured: dict[str, object] = {}
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-EXPLANATION",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="ANSWER",
+                description="Selects the correct answer.",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="EXPLANATION",
+                description="Explains the mathematical reason.",
+                required=True,
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="explanation-rubric",
+        prompt_version="1.1.0",
+    )
+
+    class _GuidedClient:
+        def generate_guided_rubric(self, **kwargs):
+            captured["rubric_question_type"] = kwargs["question_type"]
+            return rubric
+
+        def evaluate_guided_turn(self, **kwargs):
+            captured["evaluation_question_type"] = kwargs["question_type"]
+            return GuidedEvaluation(
+                student_state="PARTIAL",
+                newly_confirmed_concept_ids=["ANSWER"],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=["EXPLANATION"],
+                selected_error_code=None,
+                confidence=0.98,
+                next_objective=ActiveTeachingObjective(
+                    objective_type="EXPLAIN_REASONING",
+                    target_concept_ids=["EXPLANATION"],
+                    confirmed_concept_ids=[],
+                    missing_concept_ids=["EXPLANATION"],
+                ),
+                tutor_message="That answer is selected. What mathematical reason supports it?",
+                tutor_message_voice="That answer is selected. What mathematical reason supports it?",
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _GuidedClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-EXPLANATION",
+            question_type=question_type,
+            question=question,
+            correct_answer=canonical_answer,
+            answer_spec=AnswerSpec(
+                answer_spec_id="ANS-EXPLANATION",
+                canonical_answer=canonical_answer,
+                accepted_answers=[canonical_answer],
+                verification_method=verification_method,
+                explanation_required=True,
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            student_input=student_input,
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert captured == {
+        "rubric_question_type": question_type,
+        "evaluation_question_type": question_type,
+    }
+    assert response.guided_student_state == "PARTIAL"
+    assert response.question_completed is False
+    assert response.student_model_events == []
+    assert response.active_teaching_objective is not None
+    assert response.active_teaching_objective.confirmed_concept_ids == ["ANSWER"]
+    assert response.active_teaching_objective.missing_concept_ids == ["EXPLANATION"]
+
+
+def test_explanation_question_rejects_a_single_component_rubric(
+    monkeypatch,
+) -> None:
+    class _InvalidGuidedClient:
+        def generate_guided_rubric(self, **kwargs):
+            return GeneratedQuestionRubric(
+                question_id="Q-EXPLANATION",
+                required_concepts=[
+                    GeneratedConcept(
+                        concept_id="ANSWER",
+                        description="Selects the correct answer.",
+                        required=True,
+                    )
+                ],
+                completion_rule="ALL_REQUIRED_CONCEPTS",
+                cache_key="invalid-explanation-rubric",
+                prompt_version="1.1.0",
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _InvalidGuidedClient(),
+    )
+    with pytest.raises(
+        AdapterError,
+        match="separate required concepts for every answer component",
+    ):
+        classify_student_response(
+            ClassificationRequest(
+                question_id="Q-EXPLANATION",
+                question_type="CHOICE_WITH_EXPLANATION",
+                question="Which statement is correct? Select one and explain why.",
+                correct_answer="B",
+                answer_spec=AnswerSpec(
+                    answer_spec_id="ANS-EXPLANATION",
+                    canonical_answer="B",
+                    accepted_answers=["B"],
+                    verification_method="EXACT_CHOICE_MATCH",
+                    explanation_required=True,
+                ),
+                phase_2_prompt_context=_guided_context(0),
+                student_input="B",
+                current_phase="GUIDED_PRACTICE",
+                input_source="TEXT",
+                transcript_confidence=None,
+                attempt_count=1,
+                current_hint_level=None,
+            )
+        )
+
+
 def test_guided_llm_repeated_stuck_requests_one_scaffold_escalation(
     monkeypatch,
 ) -> None:
