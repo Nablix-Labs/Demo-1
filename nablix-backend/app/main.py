@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.api import ai_engine, canvas, health, hint, interaction, session, voice
+from app.api import ai_engine, canvas, health, interaction, session, voice
 from app.ai_engine.prompt_registry import load_prompt_registry
 from app.core.config import get_settings
 from app.core.logger import logger
@@ -44,7 +44,6 @@ app.include_router(health.router, tags=["Health"])
 app.include_router(ai_engine.router, prefix="/ai-engine", tags=["AI Engine"])
 app.include_router(session.router, prefix="/session", tags=["Session"])
 app.include_router(interaction.router, tags=["Interaction"])
-app.include_router(hint.router, prefix="/hint", tags=["Hints"])
 app.include_router(canvas.router, prefix="/canvas", tags=["Canvas"])
 app.include_router(voice.router, prefix="/voice", tags=["Voice"])
 
@@ -113,8 +112,8 @@ def _validation_response_message(
         return f"{field_name} must be 500 characters or fewer."
     if field == "interaction_type":
         return (
-            "interaction_type must be one of ANSWER_SUBMISSION, HINT_REQUEST, "
-            "CANVAS_SUBMISSION, SESSION_START, SESSION_END."
+            "interaction_type must be one of ANSWER_SUBMISSION, CANVAS_SUBMISSION, "
+            "SESSION_START, SESSION_END."
         )
     if field == "current_phase":
         return (
@@ -162,7 +161,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
-    # Typed exceptions (e.g. QuestionFetchError) carry their own error_code.
+    # Typed application exceptions carry their own error_code.
     return _error_response(
         request, exc.status_code, getattr(exc, "error_code", "HTTP_ERROR"), str(exc.detail)
     )

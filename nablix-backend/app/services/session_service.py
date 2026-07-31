@@ -7,9 +7,7 @@ from fastapi import HTTPException
 from typing_extensions import NotRequired
 
 from app.adapters.provider import get_adapters
-from app.adapters.question_bank import fetch_question
 from app.core.config import get_settings
-from app.core.exceptions import QuestionFetchError
 from app.models.adapters import ConversationMessage, StudentModelResult, VisionOCRResult
 from app.models.canvas import CanvasSubmissionRecord
 from app.models.fields import Phase
@@ -109,9 +107,8 @@ def cache_interaction_response(
     _last_interaction_responses[session_id] = response
 
 
-# Single source of truth for demo questions: question_id -> (question, answer, number).
-# Adding one here feeds both the prompt (start_session) and grading (correct_answer_for),
-# so the two can't drift. Replace with a real question bank when one exists.
+# Retained only for legacy session-review fixtures; active sessions use the
+# question and answer specification returned by Student Model Schema 3.0.
 _DEMO_QUESTIONS: dict[str, tuple[str, str, int]] = {
     "ALG_EQ_DIAG_001": ("Solve for x: x + 4 = 9", "x = 5", 1),
     "ALG_EQ_CO_001": ("Solve for x: x - 3 = 7", "x = 10", 1),
@@ -119,65 +116,16 @@ _DEMO_QUESTIONS: dict[str, tuple[str, str, int]] = {
     "ALG_EQ_IP_001": ("Solve for x: 3x + 2 = 11", "x = 3", 1),
     "ALG_EQ_REV_001": ("Solve for x: x / 2 = 8", "x = 16", 1),
 }
-_DEFAULT_QUESTION_ID = "ALG_EQ_DIAG_001"
-_DEMO_STUDENT_ID = "ST001"
-
-# Answers of knowledge-base questions served this process, so lookups by bare
-# question_id (e.g. session review) keep working for non-demo questions.
-_served_answers: dict[str, str] = {}
-
 
 def correct_answer_for(question_id: str) -> str | None:
     """Return the expected answer for a question_id, or None if unknown."""
 
-    served = _served_answers.get(question_id)
-    if served is not None:
-        return served
     entry = _DEMO_QUESTIONS.get(question_id)
     return entry[1] if entry else None
 
 
-def _mock_diagnostic_question() -> tuple[str, str, int]:
-    """Return the first diagnostic question as (question, question_id, number).
-
-    Placeholder for Aditya's POST /diagnostic/question.
-    """
-
-    question, _answer, number = _DEMO_QUESTIONS[_DEFAULT_QUESTION_ID]
-    return (question, _DEFAULT_QUESTION_ID, number)
-
-
-async def get_next_question(
-    concept_id: str,
-    phase: Phase,
-    served_question_ids: list[str] | None = None,
-    difficulty: str = "FOUNDATION",
-) -> tuple[str, str, str] | None:
-    """Return (question_text, correct_answer, question_id) or None when exhausted.
-
-    Questions come directly from the Qdrant knowledge base. None means the
-    caller must fail loudly, never continue silently.
-    """
-
-    settings = get_settings()
-    if settings.qdrant_url == "" or settings.qdrant_api_key == "":
-        raise QuestionFetchError(concept_id, phase)
-    fetched = await fetch_question(concept_id, phase, served_question_ids, difficulty)
-    if fetched is not None:
-        _served_answers[fetched[2]] = fetched[1]
-    return fetched
-
-
 def _diagnostic_start_message() -> str:
     return load_phase0_tutor_config().intro_message
-
-
-def _legacy_start_message(question: str) -> str:
-    spoken_question: str = question.replace("+", "plus").replace("=", "equals")
-    return (
-        "Let us start with a quick question to see where you are. "
-        f"{spoken_question}."
-    )
 
 
 def _get_owned_session(session_id: str, student_id: str) -> SessionRecord:
@@ -197,105 +145,16 @@ def _get_owned_session_for_turn(
     current_phase: Phase,
     hint_count: int,
 ) -> SessionRecord:
-    """Recover request-carried demo state when Vercel starts a new instance."""
+    """Return an in-process Schema 3.0 session for the current turn."""
 
     session: SessionRecord | None = _sessions.get(session_id)
-    if session is None and student_id == _DEMO_STUDENT_ID:
-        session = _recover_demo_session(session_id, student_id, current_phase, hint_count)
     if session is None or session.student_id != student_id:
         raise _session_not_found(session_id)
-    return session
-
-
-def _recover_demo_session(
-    session_id: str,
-    student_id: str,
-    current_phase: Phase,
-    hint_count: int,
-) -> SessionRecord:
-    """Rebuild the fixed demo session after Vercel drops in-memory state."""
-
-    question, question_id, question_number = _mock_diagnostic_question()
-    # ponytail: demo-only stateless recovery; replace _sessions with real storage for multi-user deploys.
-    session = SessionRecord(
-        session_id=session_id,
-        student_id=student_id,
-        concept_id="ALG_LINEAR_ONE_STEP",
-        started_at=datetime.now(timezone.utc),
-        interaction_mode="VOICE",
-        current_phase=current_phase,
-        current_question=question,
-        question_id=question_id,
-        question_number=question_number,
-        correct_answer=correct_answer_for(question_id),
-        served_question_ids=[question_id],
-        ui_state=current_phase,
-        hint_count=hint_count,
-        status="started",
-        message=(
-            _diagnostic_start_message()
-            if current_phase == "DIAGNOSTIC"
-            else _legacy_start_message(question)
-        ),
-        diagnostic_transition_message=(
-            load_phase0_tutor_config().neutral_transition_message
-            if current_phase == "DIAGNOSTIC"
-            else None
-        ),
-        diagnostic_transition_messages=(
-            load_phase0_tutor_config().neutral_transition_messages
-            if current_phase == "DIAGNOSTIC"
-            else []
-        ),
-        show_canvas=UI_STATE_FLAGS[current_phase]["show_canvas"],
-        show_hint_button=UI_STATE_FLAGS[current_phase]["show_hint_button"],
-    )
-    _sessions[session_id] = session
-    return session
-
-
-async def _start_legacy_session(
-    request: SessionStartRequest,
-    initial_phase: Phase,
-) -> SessionRecord:
-    fetched = await get_next_question(request.concept_id, initial_phase)
-    if fetched is None:
-        raise QuestionFetchError(request.concept_id, initial_phase)
-    question, correct_answer, question_id = fetched
-    session: SessionRecord = SessionRecord(
-        session_id=_build_session_id(),
-        student_id=request.student_id,
-        concept_id=request.concept_id,
-        started_at=datetime.now(timezone.utc),
-        interaction_mode=request.interaction_mode,
-        current_phase=initial_phase,
-        current_question=question,
-        question_id=question_id,
-        question_number=1,
-        correct_answer=correct_answer,
-        served_question_ids=[question_id],
-        ui_state=initial_phase,
-        hint_count=0,
-        status="started",
-        message=(
-            _diagnostic_start_message()
-            if initial_phase == "DIAGNOSTIC"
-            else _legacy_start_message(question)
-        ),
-        diagnostic_transition_message=(
-            load_phase0_tutor_config().neutral_transition_message
-            if initial_phase == "DIAGNOSTIC"
-            else None
-        ),
-        diagnostic_transition_messages=(
-            load_phase0_tutor_config().neutral_transition_messages
-            if initial_phase == "DIAGNOSTIC"
-            else []
-        ),
-        show_canvas=UI_STATE_FLAGS[initial_phase]["show_canvas"],
-        show_hint_button=UI_STATE_FLAGS[initial_phase]["show_hint_button"],
-    )
-    _sessions[session.session_id] = session
+    if session.student_model_event is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Schema 3.0 session state is required.",
+        )
     return session
 
 
@@ -303,10 +162,13 @@ async def start_session(
     request: SessionStartRequest,
     access_token: str,
 ) -> SessionRecord:
-    """Open the authoritative Schema 3.0 journey unless a legacy phase was requested."""
+    """Open the authoritative Schema 3.0 journey."""
 
     if request.initial_phase is not None:
-        return await _start_legacy_session(request, request.initial_phase)
+        raise HTTPException(
+            status_code=409,
+            detail="Legacy initial_phase sessions are not supported; use Schema 3.0.",
+        )
 
     settings = get_settings()
     topic_id = settings.student_model_topic_codes.get(request.concept_id)
@@ -1302,13 +1164,10 @@ async def record_canvas_submission(
     session_id: str,
     student_id: str,
     record: CanvasSubmissionRecord,
-    attempt_count: int,
-    question_completed: bool,
     conversation_history: list[ConversationMessage],
-    recommended_entry_phase: str | None,
-    last_student_model: StudentModelResult | None = None,
+    last_student_model: StudentModelResult | None,
 ) -> SessionRecord:
-    """Append a reviewed canvas submission and persist its attempt count."""
+    """Append a reviewed canvas submission without replacing Schema 3.0 state."""
 
     session: SessionRecord = _get_owned_session(session_id, student_id)
     if session.status == "ended":
@@ -1344,12 +1203,14 @@ async def record_canvas_submission(
     updated_session: SessionRecord = session.model_copy(
         update={
             "canvas_submissions": [*session.canvas_submissions, record],
-            "attempt_count": attempt_count,
-            "question_completed": question_completed,
-            "answer_value_confirmed": record.tutor.answer_value_confirmed,
+            # Schema 3.0 state was applied before this canvas record is stored.
+            # Keep those fields authoritative; the tutor result is descriptive.
+            "attempt_count": session.attempt_count,
+            "question_completed": session.question_completed,
+            "answer_value_confirmed": session.answer_value_confirmed,
             "conversation_history": conversation_history,
             "per_question_history": per_question_history,
-            "recommended_entry_phase": recommended_entry_phase,
+            "recommended_entry_phase": session.recommended_entry_phase,
             "last_student_model": last_student_model or session.last_student_model,
         }
     )
@@ -1394,22 +1255,6 @@ def get_canvas_submission(
         ),
         None,
     )
-
-
-def increment_hint_count(session_id: str) -> int:
-    """Bump the stored hint count for a session and return the new value."""
-
-    session: SessionRecord | None = _sessions.get(session_id)
-    if session is None:
-        raise _session_not_found(session_id)
-    new_count = session.hint_count + 1
-    _sessions[session_id] = session.model_copy(
-        update={
-            "hint_count": new_count,
-            "hint_levels_used": [*session.hint_levels_used, new_count],
-        }
-    )
-    return new_count
 
 
 def update_interaction_state(
