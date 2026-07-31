@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 
 import yaml
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from app.ai_engine.schemas import ErrorType, IntentType, LearningPhase, ResponseStrategy, StrictSchema, VisualCueType
 from app.models.guided_learning import GuidedStudentState
@@ -166,6 +167,10 @@ class GuidedStateMappingConfig(StrictSchema):
 class GuidedLearningConfig(StrictSchema):
     evaluation_mode: str
     confidence_threshold: float = Field(ge=0.0, le=1.0)
+    state_confidence_thresholds: dict[
+        GuidedStudentState,
+        Annotated[float, Field(ge=0.0, le=1.0)],
+    ]
     maximum_retries: int = Field(ge=0)
     stuck_escalation_count: int = Field(ge=1)
     maximum_recent_history_turns: int = Field(ge=0)
@@ -178,6 +183,18 @@ class GuidedLearningConfig(StrictSchema):
     supported_verification_methods: list[str]
     multi_component_question_types: list[QuestionType]
     llm_state_mapping: dict[GuidedStudentState, GuidedStateMappingConfig]
+
+    @model_validator(mode="after")
+    def require_state_confidence_thresholds(self) -> "GuidedLearningConfig":
+        missing_states = set(self.allowed_student_states) - set(
+            self.state_confidence_thresholds
+        )
+        if missing_states:
+            raise ValueError(
+                "Missing Guided Learning confidence thresholds for "
+                f"{sorted(missing_states)}."
+            )
+        return self
 
 
 class ClassifierRulesConfig(StrictSchema):

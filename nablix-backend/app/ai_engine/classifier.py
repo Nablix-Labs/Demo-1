@@ -45,6 +45,7 @@ from app.models.guided_learning import (
     ActiveTeachingObjective,
     GeneratedQuestionRubric,
     GuidedEvaluation,
+    GuidedStudentState,
     ScaffoldEvaluationContext,
     ScaffoldStepEvaluation,
 )
@@ -485,6 +486,8 @@ def classify_guided_learning_response(
     )
     objective = request.active_teaching_objective or initial_guided_objective(rubric)
     evaluation: GuidedEvaluation | None = None
+    raw_student_state: GuidedStudentState | None = None
+    raw_confidence: float | None = None
     last_error: AdapterError | None = None
     for attempt in range(rules.guided_learning.maximum_retries + 1):
         try:
@@ -492,6 +495,7 @@ def classify_guided_learning_response(
                 question_type=request.question_type,
                 question=request.question,
                 answer_spec=request.answer_spec,
+                deterministic_evaluation=evaluate_answer_contract(request),
                 generated_rubric=rubric,
                 active_objective=objective,
                 student_response=request.student_input,
@@ -503,14 +507,14 @@ def classify_guided_learning_response(
                 evaluator_prompt_version=rules.guided_learning.evaluator_prompt_version,
                 system_prompt=rules.guided_learning.evaluator_system_prompt,
             )
+            raw_student_state = candidate.student_state
+            raw_confidence = candidate.confidence
             evaluation = validate_guided_evaluation(
                 candidate,
                 rubric,
                 objective,
                 allowed_errors,
                 rules,
-                request.question_type,
-                request.answer_spec.explanation_required is True,
             )
             break
         except AdapterError as error:
@@ -541,6 +545,8 @@ def classify_guided_learning_response(
             ),
             "student_state": evaluation.student_state,
             "confidence": evaluation.confidence,
+            "raw_student_state": raw_student_state,
+            "raw_confidence": raw_confidence,
             "selected_error_code": evaluation.selected_error_code,
         },
     )
@@ -560,13 +566,26 @@ def guided_error_definitions(
     definitions: list[dict[str, object]] = []
     for potential_error in potential_errors:
         error_code = potential_error.get("error_code")
-        description = potential_error.get("description")
+        description = (
+            potential_error.get("description")
+            or potential_error.get("error_description")
+        )
+        response_patterns = potential_error.get("response_patterns")
         if not isinstance(error_code, str):
             continue
         definitions.append(
             {
                 "error_code": error_code,
                 "description": description if isinstance(description, str) else "",
+                "response_patterns": (
+                    [
+                        pattern
+                        for pattern in response_patterns
+                        if isinstance(pattern, str)
+                    ]
+                    if isinstance(response_patterns, list)
+                    else []
+                ),
             }
         )
     return definitions
@@ -632,8 +651,6 @@ def validate_guided_evaluation(
     objective: ActiveTeachingObjective,
     allowed_errors: list[dict[str, object]],
     rules: ClassifierRulesConfig,
-    question_type: QuestionType | None,
-    explanation_required: bool,
 ) -> GuidedEvaluation:
     concept_ids = {concept.concept_id for concept in rubric.required_concepts}
     returned_ids = {
@@ -667,7 +684,18 @@ def validate_guided_evaluation(
             "openai_ai_engine",
             f"Guided evaluation returned disallowed state {evaluation.student_state}.",
         )
-    if evaluation.confidence < rules.guided_learning.confidence_threshold:
+    state_threshold = rules.guided_learning.state_confidence_thresholds.get(
+        evaluation.student_state
+    )
+    if state_threshold is None:
+        raise AdapterError(
+            "openai_ai_engine",
+            (
+                "No confidence threshold is configured for Guided Learning "
+                f"state {evaluation.student_state}."
+            ),
+        )
+    if evaluation.confidence < state_threshold:
         return evaluation.model_copy(
             update={
                 "student_state": "UNCLEAR",
@@ -691,21 +719,22 @@ def validate_guided_evaluation(
     }
     expected_missing = required_ids - confirmed
     remaining = set(evaluation.missing_concept_ids)
-    if (
-        (
-            question_type
-            in rules.guided_learning.multi_component_question_types
-            or explanation_required
-        )
-        and remaining != expected_missing
-    ):
+    if remaining != expected_missing:
         raise AdapterError(
             "openai_ai_engine",
             (
-                "Multipart evaluation missing concepts do not match the "
+                "Guided evaluation missing concepts do not match the "
                 f"confirmed rubric state: expected {sorted(expected_missing)}, "
                 f"received {sorted(remaining)}."
             ),
+        )
+    if (
+        not evaluation.tutor_message.strip()
+        or not evaluation.tutor_message_voice.strip()
+    ):
+        raise AdapterError(
+            "openai_ai_engine",
+            "Guided evaluation must return non-empty text and voice messages.",
         )
     if evaluation.student_state == "CORRECT" and remaining:
         raise AdapterError(

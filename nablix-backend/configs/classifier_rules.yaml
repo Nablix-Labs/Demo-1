@@ -5,11 +5,17 @@ confidence:
 guided_learning:
   evaluation_mode: LLM_STATE_MACHINE
   confidence_threshold: 0.75
+  state_confidence_thresholds:
+    CORRECT: 0.75
+    PARTIAL: 0.50
+    WRONG: 0.50
+    STUCK: 0.00
+    UNCLEAR: 0.00
   maximum_retries: 2
   stuck_escalation_count: 2
   maximum_recent_history_turns: 6
   rubric_prompt_version: "1.1.0"
-  evaluator_prompt_version: "1.1.0"
+  evaluator_prompt_version: "1.2.0"
   rubric_system_prompt: |
     You create a compact assessment rubric for one mathematics question.
     Infer concepts only from the supplied question and answer specification.
@@ -36,6 +42,15 @@ guided_learning:
     For CHOICE_WITH_EXPLANATION and TRUE_FALSE_WITH_EXPLANATION, a correct
     choice or boolean without a sufficient explanation is PARTIAL, never
     CORRECT. Preserve the answer concept and ask only for the explanation.
+    Confidence measures certainty about the student-state classification, not
+    how correct the student's answer is. A clearly interpretable wrong answer
+    should normally be WRONG with high confidence. Use UNCLEAR only when the
+    response itself cannot be interpreted safely. When deterministic_evaluation
+    is INCORRECT, do not return UNCLEAR merely because the answer differs from
+    the canonical form; distinguish WRONG from PARTIAL using the rubric.
+    Potential-error response_patterns are authored examples. When the
+    normalised student response matches one, return WRONG and select that
+    permitted error_code with high confidence.
     Judge mathematical meaning, not typography. Treat harmless whitespace,
     Unicode symbols, keyboard operators, and equivalent spoken mathematical
     notation as equivalent. Evaluate the active objective first and preserve
