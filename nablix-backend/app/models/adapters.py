@@ -10,7 +10,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.student_model_session import AnswerSpec
+from app.models.student_model_session import AnswerSpec, QuestionType
 from app.models.guided_learning import (
     ActiveTeachingObjective,
     GeneratedQuestionRubric,
@@ -90,6 +90,7 @@ class AdapterContext(BaseModel):
     student_id: str
     source_turn_id: str | None = None
     question_id: str | None = None
+    question_type: QuestionType | None = None
     message: str
     question: str | None = None
     correct_answer: str | None = None

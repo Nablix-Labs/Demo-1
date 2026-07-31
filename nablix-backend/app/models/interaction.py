@@ -23,6 +23,7 @@ from app.models.fields import (
 from app.models.session import CanvasState, SessionSummary, VoiceState
 from app.models.student_model_session import (
     PublicStudentModelEvent,
+    QuestionType,
     StudentModelCoreState,
 )
 
@@ -84,6 +85,7 @@ class InteractionResponse(BaseModel):
     phase_transition_voice: str | None = None
     current_phase: Phase
     current_question: str | None
+    question_type: QuestionType | None = None
     question_id: str | None = None
     interaction_mode: InteractionMode
     voice_state: VoiceState

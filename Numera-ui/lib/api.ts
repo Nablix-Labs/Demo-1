@@ -168,10 +168,16 @@ export interface SchemaQuestionOption {
   text: string;
 }
 
+export type QuestionType =
+  | 'SINGLE_CHOICE'
+  | 'SHORT_RESPONSE'
+  | 'MULTI_PART_SHORT_RESPONSE'
+  | 'CHOICE_WITH_EXPLANATION'
+  | 'TRUE_FALSE_WITH_EXPLANATION';
+
 export interface SchemaStudentQuestionView {
   question_text: string;
-  /** e.g. 'MCQ' | 'SHORT_ANSWER' — drives how the question is rendered. */
-  question_type: string;
+  question_type: QuestionType;
   /** Empty for free-response questions. */
   options: SchemaQuestionOption[];
   requires_student_response: boolean;
@@ -270,6 +276,7 @@ export interface SessionRecord {
   current_phase: string;
   /** Null between phases — orientation has no question of its own. */
   current_question: string | null;
+  question_type?: QuestionType | null;
   question_id: string | null;
   question_number: number;
   student_model_event?: StudentModelEvent | null;
@@ -602,6 +609,7 @@ export interface InteractionResponse {
   current_phase: string;
   /** Null when the new phase has no question of its own (e.g. orientation). */
   current_question: string | null;
+  question_type?: QuestionType | null;
   question_id: string | null;
   interaction_mode: InteractionMode;
   message: string;

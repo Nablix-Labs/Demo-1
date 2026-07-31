@@ -344,6 +344,7 @@ async def start_session(
         started_at=started_at,
         current_phase=phase,
         current_question=first.student_view.question_text,
+        question_type=first.student_view.question_type,
         question_id=first.question_id,
         question_number=1,
         correct_answer=first.tutor_view.answer_spec.canonical_answer,
@@ -400,12 +401,14 @@ def _question_updates(
     if payload is None or payload.question_set is None or not payload.question_set.questions:
         return {
             "current_question": None,
+            "question_type": None,
             "question_id": None,
             "correct_answer": None,
         }
     first = payload.question_set.questions[0]
     return {
         "current_question": first.student_view.question_text,
+        "question_type": first.student_view.question_type,
         "question_id": first.question_id,
         "correct_answer": first.tutor_view.answer_spec.canonical_answer,
         "served_question_ids": [

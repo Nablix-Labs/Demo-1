@@ -8,6 +8,7 @@ from pydantic import Field
 
 from app.ai_engine.schemas import ErrorType, IntentType, LearningPhase, ResponseStrategy, StrictSchema, VisualCueType
 from app.models.guided_learning import GuidedStudentState
+from app.models.student_model_session import QuestionType
 
 
 CONFIG_PATH: Path = Path("configs/classifier_rules.yaml")
@@ -175,6 +176,7 @@ class GuidedLearningConfig(StrictSchema):
     scaffold_evaluator_system_prompt: str
     allowed_student_states: list[GuidedStudentState]
     supported_verification_methods: list[str]
+    multi_component_question_types: list[QuestionType]
     llm_state_mapping: dict[GuidedStudentState, GuidedStateMappingConfig]
 
 

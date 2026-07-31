@@ -36,7 +36,7 @@ from app.models.guided_learning import (
     ScaffoldEvaluationContext,
     ScaffoldStepEvaluation,
 )
-from app.models.student_model_session import AnswerSpec
+from app.models.student_model_session import AnswerSpec, QuestionType
 
 
 _OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
@@ -152,6 +152,7 @@ class OpenAIAIEngineClient:
     def generate_guided_rubric(
         self,
         question_id: str,
+        question_type: QuestionType | None,
         question: str,
         answer_spec: AnswerSpec,
         potential_errors: list[dict[str, object]],
@@ -163,6 +164,7 @@ class OpenAIAIEngineClient:
         cache_source = json.dumps(
             {
                 "question_id": question_id,
+                "question_type": question_type,
                 "answer_spec": answer_payload,
                 "prompt_version": prompt_version,
             },
@@ -178,6 +180,7 @@ class OpenAIAIEngineClient:
             system_prompt=system_prompt,
             user_payload={
                 "question_id": question_id,
+                "question_type": question_type,
                 "question": question,
                 "answer_spec": answer_payload,
                 "allowed_potential_errors": potential_errors,
@@ -203,6 +206,7 @@ class OpenAIAIEngineClient:
 
     def evaluate_guided_turn(
         self,
+        question_type: QuestionType | None,
         question: str,
         answer_spec: AnswerSpec,
         generated_rubric: GeneratedQuestionRubric,
@@ -219,6 +223,7 @@ class OpenAIAIEngineClient:
             schema=GuidedEvaluation.model_json_schema(),
             system_prompt=system_prompt,
             user_payload={
+                "question_type": question_type,
                 "question": question,
                 "answer_spec": answer_spec.model_dump(),
                 "generated_rubric": generated_rubric.model_dump(),

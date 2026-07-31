@@ -26,6 +26,7 @@ from app.models.guided_learning import ActiveTeachingObjective, GeneratedQuestio
 from app.models.session_review import SessionReviewResponse
 from app.models.student_model_session import (
     PublicStudentModelEvent,
+    QuestionType,
     StudentModelCoreState,
     StudentModelSessionEventResponse,
 )
@@ -150,6 +151,7 @@ class SessionRecord(BaseModel):
     current_phase: Phase
     previous_phase: Phase | None = None
     current_question: str | None
+    question_type: QuestionType | None = None
     question_id: QuestionId | None
     question_number: int
     # Answer key served with the question (Qdrant payload or demo stub).

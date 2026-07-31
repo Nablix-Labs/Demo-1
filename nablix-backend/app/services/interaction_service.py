@@ -796,6 +796,7 @@ def _response_from(
         current_phase=session.current_phase,
         question_id=session.question_id,
         current_question=session.current_question,
+        question_type=session.question_type,
         interaction_mode=session.interaction_mode,
         voice_state=session.voice_state,
         canvas_state=session.canvas_state,
@@ -1016,6 +1017,7 @@ async def _process_interaction(
         student_id=request.student_id,
         source_turn_id=request.turn_id or f"TURN-{uuid4().hex.upper()}",
         question_id=session.question_id,
+        question_type=None if scaffold_turn else session.question_type,
         message=student_message,
         question=(
             session.scaffold_steps[0]

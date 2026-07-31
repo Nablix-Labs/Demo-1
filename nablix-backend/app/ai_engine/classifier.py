@@ -48,7 +48,7 @@ from app.models.guided_learning import (
     ScaffoldEvaluationContext,
     ScaffoldStepEvaluation,
 )
-from app.models.student_model_session import AnswerSpec
+from app.models.student_model_session import AnswerSpec, QuestionType
 
 if TYPE_CHECKING:
     from app.ai_engine.openai_client import (
@@ -60,6 +60,7 @@ if TYPE_CHECKING:
 
 class ClassificationRequest(StrictSchema):
     question_id: str | None = None
+    question_type: QuestionType | None = None
     question: str
     correct_answer: str
     answer_spec: AnswerSpec | None = None
@@ -396,12 +397,14 @@ def should_use_guided_state_machine(
     if (
         deterministic_evaluation == "CORRECT"
         and evaluate_answer_contract(request) == "CORRECT"
+        and not requires_multi_component_completion(request, rules)
     ):
         return False
     method = request.answer_spec.verification_method
     return not (
         method == "EXACT_CHOICE_MATCH"
         and deterministic_evaluation in {"CORRECT", "INCORRECT"}
+        and not requires_multi_component_completion(request, rules)
     )
 
 
@@ -442,12 +445,20 @@ def classify_guided_learning_response(
             try:
                 rubric = openai_client.generate_guided_rubric(
                     question_id=request.question_id,
+                    question_type=request.question_type,
                     question=request.question,
                     answer_spec=request.answer_spec,
                     potential_errors=allowed_errors,
                     target_micro_skill_ids=context.target_micro_skill_ids,
                     prompt_version=rules.guided_learning.rubric_prompt_version,
                     system_prompt=rules.guided_learning.rubric_system_prompt,
+                )
+                validate_generated_rubric(
+                    rubric,
+                    request.question_id,
+                    request.question_type,
+                    request.answer_spec,
+                    rules,
                 )
                 break
             except AdapterError as error:
@@ -465,13 +476,20 @@ def classify_guided_learning_response(
                 "openai_ai_engine",
                 f"Rubric generation failed for {request.question_id}.",
             )
-    validate_generated_rubric(rubric, request.question_id)
+    validate_generated_rubric(
+        rubric,
+        request.question_id,
+        request.question_type,
+        request.answer_spec,
+        rules,
+    )
     objective = request.active_teaching_objective or initial_guided_objective(rubric)
     evaluation: GuidedEvaluation | None = None
     last_error: AdapterError | None = None
     for attempt in range(rules.guided_learning.maximum_retries + 1):
         try:
             candidate = openai_client.evaluate_guided_turn(
+                question_type=request.question_type,
                 question=request.question,
                 answer_spec=request.answer_spec,
                 generated_rubric=rubric,
@@ -491,6 +509,8 @@ def classify_guided_learning_response(
                 objective,
                 allowed_errors,
                 rules,
+                request.question_type,
+                request.answer_spec.explanation_required is True,
             )
             break
         except AdapterError as error:
@@ -555,6 +575,9 @@ def guided_error_definitions(
 def validate_generated_rubric(
     rubric: GeneratedQuestionRubric,
     question_id: str,
+    question_type: QuestionType | None,
+    answer_spec: AnswerSpec,
+    rules: ClassifierRulesConfig,
 ) -> None:
     concept_ids = [concept.concept_id for concept in rubric.required_concepts]
     if rubric.question_id != question_id:
@@ -566,6 +589,24 @@ def validate_generated_rubric(
         raise AdapterError(
             "openai_ai_engine",
             f"Rubric for {question_id} has empty or duplicate concept IDs.",
+        )
+    if (
+        requires_multi_component_rubric(question_type, answer_spec, rules)
+        and len(
+            [
+                concept
+                for concept in rubric.required_concepts
+                if concept.required
+            ]
+        )
+        < 2
+    ):
+        raise AdapterError(
+            "openai_ai_engine",
+            (
+                f"Rubric for {question_id} must contain separate required "
+                "concepts for every answer component."
+            ),
         )
 
 
@@ -591,6 +632,8 @@ def validate_guided_evaluation(
     objective: ActiveTeachingObjective,
     allowed_errors: list[dict[str, object]],
     rules: ClassifierRulesConfig,
+    question_type: QuestionType | None,
+    explanation_required: bool,
 ) -> GuidedEvaluation:
     concept_ids = {concept.concept_id for concept in rubric.required_concepts}
     returned_ids = {
@@ -635,10 +678,35 @@ def validate_guided_evaluation(
                 "next_objective": objective,
             }
         )
+    contradicted = set(evaluation.contradicted_concept_ids)
+    confirmed = (
+        set(objective.confirmed_concept_ids)
+        | set(evaluation.preserved_concept_ids)
+        | set(evaluation.newly_confirmed_concept_ids)
+    ) - contradicted
+    required_ids = {
+        concept.concept_id
+        for concept in rubric.required_concepts
+        if concept.required
+    }
+    expected_missing = required_ids - confirmed
     remaining = set(evaluation.missing_concept_ids)
-    confirmed = set(objective.confirmed_concept_ids) | set(
-        evaluation.newly_confirmed_concept_ids
-    )
+    if (
+        (
+            question_type
+            in rules.guided_learning.multi_component_question_types
+            or explanation_required
+        )
+        and remaining != expected_missing
+    ):
+        raise AdapterError(
+            "openai_ai_engine",
+            (
+                "Multipart evaluation missing concepts do not match the "
+                f"confirmed rubric state: expected {sorted(expected_missing)}, "
+                f"received {sorted(remaining)}."
+            ),
+        )
     if evaluation.student_state == "CORRECT" and remaining:
         raise AdapterError(
             "openai_ai_engine",
@@ -670,6 +738,30 @@ def validate_guided_evaluation(
             f"{evaluation.student_state} cannot create evidence.",
         )
     return evaluation
+
+
+def requires_multi_component_rubric(
+    question_type: QuestionType | None,
+    answer_spec: AnswerSpec,
+    rules: ClassifierRulesConfig,
+) -> bool:
+    return (
+        question_type in rules.guided_learning.multi_component_question_types
+        or answer_spec.explanation_required is True
+    )
+
+
+def requires_multi_component_completion(
+    request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
+) -> bool:
+    if request.answer_spec is None:
+        return False
+    return requires_multi_component_rubric(
+        request.question_type,
+        request.answer_spec,
+        rules,
+    )
 
 
 def normalized_guided_objective(

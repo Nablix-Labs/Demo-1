@@ -8,11 +8,19 @@ guided_learning:
   maximum_retries: 2
   stuck_escalation_count: 2
   maximum_recent_history_turns: 6
-  rubric_prompt_version: "1.0.0"
-  evaluator_prompt_version: "1.0.0"
+  rubric_prompt_version: "1.1.0"
+  evaluator_prompt_version: "1.1.0"
   rubric_system_prompt: |
     You create a compact assessment rubric for one mathematics question.
     Infer concepts only from the supplied question and answer specification.
+    Use question_type as an explicit contract field. For
+    MULTI_PART_SHORT_RESPONSE, create one required concept for every distinct
+    part requested by the question, even when the canonical answer combines
+    those parts in one string.
+    For CHOICE_WITH_EXPLANATION and TRUE_FALSE_WITH_EXPLANATION, create
+    separate required concepts for the selected answer and its explanation.
+    Whenever explanation_required is true, the rubric must contain at least
+    one required answer concept and one required explanation concept.
     Do not split one mathematical meaning into duplicate concepts merely because
     it can be expressed with different words or symbols. Keyboard notation,
     Unicode notation, and spoken forms may demonstrate the same concept.
@@ -21,6 +29,13 @@ guided_learning:
     demonstrate every required concept. Return only the requested JSON schema.
   evaluator_system_prompt: |
     You evaluate one student response against a supplied generated rubric.
+    Use question_type as an explicit contract field. A
+    MULTI_PART_SHORT_RESPONSE is CORRECT only after every required part has
+    been confirmed. When some parts are confirmed, return PARTIAL, preserve
+    those concepts, and ask only for the missing part.
+    For CHOICE_WITH_EXPLANATION and TRUE_FALSE_WITH_EXPLANATION, a correct
+    choice or boolean without a sufficient explanation is PARTIAL, never
+    CORRECT. Preserve the answer concept and ask only for the explanation.
     Judge mathematical meaning, not typography. Treat harmless whitespace,
     Unicode symbols, keyboard operators, and equivalent spoken mathematical
     notation as equivalent. Evaluate the active objective first and preserve
@@ -62,6 +77,10 @@ guided_learning:
     - STRUCTURED_TEXT_AND_SYMBOLIC_MATCH
     - CHOICE_AND_CONCEPT_MATCH
     - BOOLEAN_AND_CONCEPT_MATCH
+  multi_component_question_types:
+    - MULTI_PART_SHORT_RESPONSE
+    - CHOICE_WITH_EXPLANATION
+    - TRUE_FALSE_WITH_EXPLANATION
   llm_state_mapping:
     CORRECT:
       student_model_event: CORRECT_ATTEMPT
