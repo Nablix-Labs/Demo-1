@@ -131,6 +131,10 @@ async def evaluate_voice_transcript(
     confidence: float,
     audio_duration_seconds: float,
     access_token: str,
+    turn_id: str | None,
+    previous_tutor_turn_id: str | None,
+    transcript_final: bool | None,
+    canvas_snapshot_id: str | None,
 ) -> dict[str, object]:
     payload = {
         "session_id": session_id,
@@ -140,6 +144,10 @@ async def evaluate_voice_transcript(
         "audio_duration_seconds": audio_duration_seconds,
         "turn": "STUDENT",
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "turn_id": turn_id,
+        "previous_tutor_turn_id": previous_tutor_turn_id,
+        "transcript_final": transcript_final,
+        "canvas_snapshot_id": canvas_snapshot_id,
     }
     logger.info(f"[{session_id}] POST /voice/transcript")
     response = await get_backend_http_client().post(
@@ -171,6 +179,7 @@ async def submit_canvas_work(
         "snapshot_data_url": snapshot_data_url,
         "transcript": transcript or None,
         "transcript_confidence": confidence,
+        "submission_role": "VOICE_ATTACHMENT",
     }
     logger.info(f"[{session_id}] POST {MAIN_BACKEND_URL}/canvas/submit")
     response = await get_backend_http_client().post(
@@ -182,57 +191,6 @@ async def submit_canvas_work(
     if response.status_code != 200:
         raise RuntimeError(f"status={response.status_code} body={response.text}")
     return response.json()
-
-
-def _tutor_response_from_canvas(result: dict[str, object]) -> dict[str, object]:
-    tutor = result.get("tutor")
-    if not isinstance(tutor, dict):
-        raise RuntimeError("canvas response missing tutor object")
-
-    tutor_message = tutor.get("tutor_message")
-    if not isinstance(tutor_message, str) or tutor_message == "":
-        raise RuntimeError("canvas tutor response missing tutor_message")
-
-    tutor_message_voice = tutor.get("tutor_message_voice")
-    return {
-        **_phase_fields_from(result),
-        "message": tutor_message,
-        "message_voice": tutor_message_voice if isinstance(tutor_message_voice, str) else tutor_message,
-    }
-
-
-PHASE_FIELDS = (
-    "phase_changed",
-    "previous_phase",
-    "current_phase",
-    "current_question",
-    "question_id",
-    "ui_state",
-    "recommended_entry_phase",
-    "phase_transition_message",
-    "phase_transition_voice",
-)
-
-SUPPORT_FIELDS = (
-    "show_visual_cue",
-    "visual_cue",
-    "show_scaffold_panel",
-    "scaffold_id",
-    "current_scaffold_step_id",
-    "scaffold_step_number",
-    "scaffold_step_text",
-    "scaffold_step_voice",
-    "total_scaffold_steps",
-)
-
-
-def _phase_fields_from(result: dict[str, object]) -> dict[str, object]:
-    """Pass the backend's phase state through to the frontend unchanged."""
-    return {key: result.get(key) for key in PHASE_FIELDS if key in result}
-
-
-def _support_fields_from(result: dict[str, object]) -> dict[str, object]:
-    return {key: result.get(key) for key in SUPPORT_FIELDS if key in result}
 
 
 def _canvas_draw_from(result: dict[str, object]) -> list[object]:
@@ -344,6 +302,9 @@ async def voice_stream(
     audio_started_at = 0.0
     turn_already_processed = False  # True when UtteranceEnd auto-triggered a response
     access_token: str | None = None
+    turn_id: str | None = None
+    previous_tutor_turn_id: str | None = None
+    transcript_final: bool | None = None
 
     async def deepgram_keepalive() -> None:
         # Deepgram closes a stream that receives neither audio nor text for
@@ -370,6 +331,7 @@ async def voice_stream(
 
     async def forward_deepgram_results(dg_ws):
         nonlocal final_transcript, final_confidence, final_segment_count, audio_started_at, turn_already_processed
+        nonlocal turn_id, previous_tutor_turn_id, transcript_final
 
         try:
             async for msg in dg_ws:
@@ -444,9 +406,15 @@ async def voice_stream(
                                 transcript_to_process, confidence_to_process,
                                 duration, access_token, None,
                                 tts_provider, tts_voice,
+                                turn_id, previous_tutor_turn_id, transcript_final,
                             )
                         except Exception as e:
+                            turn_already_processed = False
                             logger.error(f"[{session_id}] Auto-process failed: {e}")
+                        finally:
+                            turn_id = None
+                            previous_tutor_turn_id = None
+                            transcript_final = None
 
         except websockets.exceptions.ConnectionClosed:
             logger.info(f"[{session_id}] Deepgram connection closed")
@@ -462,6 +430,12 @@ async def voice_stream(
             if "text" in message:
                 data = json.loads(message["text"])
                 msg_type = data.get("type", "")
+                if "turn_id" in data:
+                    turn_id = data.get("turn_id")
+                if "previous_tutor_turn_id" in data:
+                    previous_tutor_turn_id = data.get("previous_tutor_turn_id")
+                if "transcript_final" in data:
+                    transcript_final = data.get("transcript_final")
 
                 if msg_type == "authenticate":
                     candidate = data.get("access_token")
@@ -562,11 +536,17 @@ async def voice_stream(
                     if final_transcript:
                         logger.info(f"[{session_id}] Processing on stop: '{final_transcript}'")
                         audio_duration_seconds = max(time.time() - audio_started_at, 0.001)
-                        await process_and_respond(
-                            ws, session_id, student_id, final_transcript,
-                            final_confidence, audio_duration_seconds, access_token, canvas_snapshot,
-                            tts_provider, tts_voice,
-                        )
+                        try:
+                            await process_and_respond(
+                                ws, session_id, student_id, final_transcript,
+                                final_confidence, audio_duration_seconds, access_token, canvas_snapshot,
+                                tts_provider, tts_voice,
+                                turn_id, previous_tutor_turn_id, transcript_final,
+                            )
+                        finally:
+                            turn_id = None
+                            previous_tutor_turn_id = None
+                            transcript_final = None
                     elif not turn_already_processed:
                         logger.info(f"[{session_id}] Stop: no speech detected")
 
@@ -656,9 +636,12 @@ async def process_and_respond(
     confidence: float,
     audio_duration_seconds: float,
     access_token: str,
-    canvas_snapshot: str | None = None,
-    tts_provider: str | None = None,
-    tts_voice: str | None = None,
+    canvas_snapshot: str | None,
+    tts_provider: str | None,
+    tts_voice: str | None,
+    turn_id: str | None,
+    previous_tutor_turn_id: str | None,
+    transcript_final: bool | None,
 ):
     pipeline_start = time.time()
 
@@ -678,17 +661,22 @@ async def process_and_respond(
                 confidence,
                 access_token,
             )
-            tutor_response = _tutor_response_from_canvas(canvas_response)
             canvas_draw = _canvas_draw_from(canvas_response)
+            canvas_snapshot_id = str(canvas_response["submission_id"])
         else:
-            tutor_response = await evaluate_voice_transcript(
-                session_id,
-                student_id,
-                transcript,
-                confidence,
-                audio_duration_seconds,
-                access_token,
-            )
+            canvas_snapshot_id = None
+        tutor_response = await evaluate_voice_transcript(
+            session_id,
+            student_id,
+            transcript,
+            confidence,
+            audio_duration_seconds,
+            access_token,
+            turn_id,
+            previous_tutor_turn_id,
+            transcript_final,
+            canvas_snapshot_id,
+        )
         tutor_ms = int((time.time() - tutor_start) * 1000)
         logger.info(f"[{session_id}] Backend tutor call took {tutor_ms}ms")
     except Exception as e:
@@ -709,6 +697,7 @@ async def process_and_respond(
     text_sent_ms = int((time.time() - pipeline_start) * 1000)
 
     await ws.send_json({
+        **tutor_response,
         "type": "tutor_response",
         "transcript": transcript,
         "normalized_expression": normalized,
@@ -718,8 +707,6 @@ async def process_and_respond(
         "needs_clarification": confidence < voice_config.CONFIDENCE_THRESHOLD,
         "text_latency_ms": text_sent_ms,
         "canvas_draw": canvas_draw,
-        **_phase_fields_from(tutor_response),
-        **_support_fields_from(tutor_response),
     })
 
     logger.info(f"[{session_id}] Text sent to frontend: {text_sent_ms}ms")

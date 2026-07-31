@@ -2,11 +2,9 @@ from uuid import uuid4
 
 from app.adapters.provider import AdapterSet, get_adapters
 from app.models.adapters import VoiceResult
-from app.models.interaction import (
-    InteractionRequest,
-    InteractionResponse,
-    StaleTurnResponse,
-)
+from fastapi import HTTPException
+
+from app.models.interaction import InteractionRequest, InteractionResponse, StaleTurnResponse
 from app.models.session import SessionRecord
 from app.models.voice import (
     VoiceRequest,
@@ -71,10 +69,18 @@ async def process_voice_transcript(
         text_input=None,
         voice_transcript=request.transcript,
         transcript_confidence=request.confidence,
-        turn_id=f"TURN-{uuid4().hex.upper()}",
-        previous_tutor_turn_id=session.last_tutor_turn_id,
-        transcript_final=True,
-        canvas_snapshot_id=None,
+        turn_id=request.turn_id or f"TURN-{uuid4().hex.upper()}",
+        previous_tutor_turn_id=(
+            request.previous_tutor_turn_id
+            if request.previous_tutor_turn_id is not None
+            else session.last_tutor_turn_id
+        ),
+        transcript_final=(
+            request.transcript_final
+            if request.transcript_final is not None
+            else True
+        ),
+        canvas_snapshot_id=request.canvas_snapshot_id,
         current_phase=session.current_phase,
         concept_id=session.concept_id,
         question_id=session.question_id,
@@ -83,7 +89,11 @@ async def process_voice_transcript(
     )
     response = await process_interaction(interaction_request, access_token)
     if isinstance(response, StaleTurnResponse):
-        raise RuntimeError(
-            f"generated voice turn was stale session_id={request.session_id}"
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Voice turn lineage is stale; resend with the latest "
+                f"previous_tutor_turn_id for session {request.session_id}."
+            ),
         )
     return response

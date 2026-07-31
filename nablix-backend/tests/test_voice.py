@@ -12,6 +12,7 @@ client = TestClient(app, headers={"Authorization": "Bearer test-token"})
 
 def test_streaming_tutor_call_forwards_bearer_token(monkeypatch) -> None:
     captured_headers: dict[str, str] = {}
+    captured_payload: dict[str, object] = {}
 
     class FakeResponse:
         status_code = 200
@@ -33,6 +34,7 @@ def test_streaming_tutor_call_forwards_bearer_token(monkeypatch) -> None:
             # they inherited a 15s default while canvas got 40s.
             assert timeout == 40.0
             captured_headers.update(headers)
+            captured_payload.update(json)
             return FakeResponse()
 
     monkeypatch.setattr(streaming_server, "get_backend_http_client", FakeClient)
@@ -45,10 +47,18 @@ def test_streaming_tutor_call_forwards_bearer_token(monkeypatch) -> None:
             0.94,
             1.0,
             "test-token",
+            "TURN-BROWSER-1",
+            "TURN-TUTOR-0",
+            True,
+            "canvas-1",
         )
     )
 
     assert captured_headers == {"Authorization": "Bearer test-token"}
+    assert captured_payload["turn_id"] == "TURN-BROWSER-1"
+    assert captured_payload["previous_tutor_turn_id"] == "TURN-TUTOR-0"
+    assert captured_payload["transcript_final"] is True
+    assert captured_payload["canvas_snapshot_id"] == "canvas-1"
 
 
 def _start_session(student_id: str) -> str:
@@ -138,6 +148,8 @@ def test_voice_transcript_routes_through_interaction_flow() -> None:
             "audio_duration_seconds": 3.2,
             "turn": "STUDENT",
             "timestamp": "2026-06-10T10:00:00Z",
+            "turn_id": "TURN-BROWSER-1",
+            "transcript_final": True,
         },
     )
 
@@ -151,6 +163,8 @@ def test_voice_transcript_routes_through_interaction_flow() -> None:
     assert body["voice_state"]["current_turn"] == "STUDENT"
     assert body["voice_state"]["last_transcript_confidence"] == 0.94
     assert body["interaction_mode"] == "VOICE"
+    assert body["accepted_turn_id"] == "TURN-BROWSER-1"
+    assert isinstance(body["tutor_turn_id"], str)
 
 
 def test_voice_transcript_normalizes_spoken_correct_answer(monkeypatch) -> None:
