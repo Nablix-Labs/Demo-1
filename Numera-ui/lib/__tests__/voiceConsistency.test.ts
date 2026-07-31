@@ -61,13 +61,13 @@ describe('effectiveVoice', () => {
     expect(await effectiveVoiceFor(null)).toEqual({ provider: null, voice: null });
   });
 
-  it('honours an explicit pick over the tier default', async () => {
+  it('honours an explicit pick over the tier default — within the offered provider', async () => {
     expect(
       await effectiveVoiceFor('premium', {
-        ttsProvider: 'cartesia',
-        ttsVoice: '573e3144-a684-4e72-ac2b-9b2063a50b53', // Teacher Lady
+        ttsProvider: 'inworld',
+        ttsVoice: 'Olivia',
       }),
-    ).toEqual({ provider: 'cartesia', voice: '573e3144-a684-4e72-ac2b-9b2063a50b53' });
+    ).toEqual({ provider: 'inworld', voice: 'Olivia' });
   });
 
   it('resolves to one voice for the REST body and the WS query alike', async () => {
@@ -125,9 +125,9 @@ describe('product-voice degradation (Cartesia quota outage, 31 Jul)', () => {
   });
 
   it('never degrades onto anything outside the two product voices', async () => {
-    const tts = await ttsModuleFor('premium', { ttsProvider: 'openai', ttsVoice: 'shimmer' });
+    const tts = await ttsModuleFor('premium');
     tts.markProviderDegraded('openai'); // not a product voice — must be a no-op
-    expect(tts.effectiveVoice().provider).toBe('openai');
+    expect(tts.effectiveVoice()).toEqual({ provider: 'inworld', voice: 'Ashley' });
   });
 
   it('an explicit picker choice on the degraded provider still degrades', async () => {
@@ -139,5 +139,22 @@ describe('product-voice degradation (Cartesia quota outage, 31 Jul)', () => {
     });
     tts.markProviderDegraded('cartesia');
     expect(tts.effectiveVoice()).toEqual({ provider: 'inworld', voice: 'Ashley' });
+  });
+});
+
+describe('stale picker selections after the 31 Jul Inworld switch', () => {
+  it('ignores a persisted Cartesia pick now that no tier offers Cartesia', async () => {
+    // Real case: testers had "Teacher Lady" (Cartesia) persisted from the
+    // picker; honouring it kept them on the credit-dead provider forever.
+    const tts = await ttsModuleFor('premium', {
+      ttsProvider: 'cartesia',
+      ttsVoice: '573e3144-a684-4e72-ac2b-9b2063a50b53',
+    });
+    expect(tts.effectiveVoice()).toEqual({ provider: 'inworld', voice: 'Ashley' });
+  });
+
+  it('still honours a picker choice within the offered provider', async () => {
+    const tts = await ttsModuleFor('premium', { ttsProvider: 'inworld', ttsVoice: 'Olivia' });
+    expect(tts.effectiveVoice()).toEqual({ provider: 'inworld', voice: 'Olivia' });
   });
 });

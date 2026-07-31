@@ -22,7 +22,7 @@
 
 import { useMicLevel } from '@/store/useMicLevel';
 import { useAuthStore } from '@/store/useAuthStore';
-import { defaultVoiceForTier } from '@/lib/voiceOptions';
+import { defaultVoiceForTier, providersForTier } from '@/lib/voiceOptions';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { synthesizeSpeech } from '@/lib/api';
 
@@ -72,10 +72,16 @@ const ttsApiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
  */
 export function effectiveVoice(): { provider: string | null; voice: string | null } {
   const { ttsProvider, ttsVoice } = useNumeraStore.getState();
-  const chosen = ttsProvider
+  const tier = useAuthStore.getState().tier;
+  // A persisted picker choice only counts while its provider is one the
+  // student's tier still offers. Without this, everyone who ever picked a
+  // Cartesia voice kept getting Cartesia after the 31 Jul switch to Inworld —
+  // the stale selection outlived the product decision.
+  const offered = new Set(providersForTier(tier).map((p) => p.id as string));
+  const chosen = ttsProvider && offered.has(ttsProvider)
     ? { provider: ttsProvider as string | null, voice: ttsVoice as string | null }
     : (() => {
-        const tierDefault = defaultVoiceForTier(useAuthStore.getState().tier);
+        const tierDefault = defaultVoiceForTier(tier);
         return { provider: tierDefault?.provider ?? null, voice: tierDefault?.voice ?? null };
       })();
   // Session-sticky degradation: if this student's provider has hard-failed
