@@ -27,18 +27,22 @@
  * The window must therefore outlast the slowest reply the server can produce:
  *
  *     1.5s   UtteranceEnd silence threshold
- *  + 15.0s   the tutor HTTP call's timeout (streaming_server.py:107)
- *  = 16.5s   after which the server has sent either `tutor_response` or `error`
+ *  + 40.0s   the tutor HTTP call's timeout (streaming_server.py, raised from
+ *            15s to match /canvas/submit on 31 Jul — commit 514f628)
+ *  = 41.5s   after which the server has sent either `tutor_response` or `error`
  *
- * Both of those disarm us. 20s leaves 3.5s of margin, so by the time we fire,
+ * Both of those disarm us. 45s leaves 3.5s of margin, so by the time we fire,
  * nothing can still be in flight and the cancel is harmless.
+ *
+ * If the backend timeout changes again, this window moves with it — the
+ * "outlasts the slowest reply" test below the fold is what enforces that.
  *
  * This is a rescue, not a turn-taking mechanism. In the normal case UtteranceEnd
  * fires, the tutor replies, and this never runs.
  */
 
 /** See the derivation above before changing this. */
-export const TURN_RESCUE_MS = 20_000;
+export const TURN_RESCUE_MS = 45_000;
 
 export class TurnWatchdog {
   private timer: ReturnType<typeof setTimeout> | null = null;

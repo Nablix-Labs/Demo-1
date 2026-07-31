@@ -66,11 +66,12 @@ describe('TurnWatchdog: never cancels a reply that is still coming', () => {
   });
 
   it('outlasts the slowest reply the server can produce', () => {
-    // UtteranceEnd's 1.5s silence threshold plus the tutor call's own 15s
-    // timeout. By then the server has sent either tutor_response or error, and
-    // both disarm us. If this ever fails, the window is too short and the
-    // rescue can cancel a working response.
-    const SLOWEST_SERVER_REPLY_MS = 1_500 + 15_000;
+    // UtteranceEnd's 1.5s silence threshold plus the tutor call's own timeout
+    // (40s since 31 Jul, matching /canvas/submit — backend commit 514f628).
+    // By then the server has sent either tutor_response or error, and both
+    // disarm us. If this ever fails, the window is too short and the rescue
+    // can cancel a working response.
+    const SLOWEST_SERVER_REPLY_MS = 1_500 + 40_000;
     expect(TURN_RESCUE_MS).toBeGreaterThan(SLOWEST_SERVER_REPLY_MS);
   });
 
