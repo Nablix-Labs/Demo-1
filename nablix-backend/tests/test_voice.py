@@ -26,8 +26,12 @@ def test_streaming_tutor_call_forwards_bearer_token(monkeypatch) -> None:
             *,
             json: dict[str, object],
             headers: dict[str, str],
+            timeout: float | None = None,
         ) -> FakeResponse:
             assert path == "/voice/transcript"
+            # Voice turns get the same explicit budget as /canvas/submit —
+            # they inherited a 15s default while canvas got 40s.
+            assert timeout == 40.0
             captured_headers.update(headers)
             return FakeResponse()
 

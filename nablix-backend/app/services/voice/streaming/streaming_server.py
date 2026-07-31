@@ -146,6 +146,11 @@ async def evaluate_voice_transcript(
         "/voice/transcript",
         json=payload,
         headers={"Authorization": f"Bearer {access_token}"},
+        # Same budget as /canvas/submit below. This call previously inherited
+        # the client default of 15s while canvas got 40s for comparable LLM
+        # work; slowest observed voice turn was 12.5s (30 Jul, n=121), which
+        # left 17% headroom before a timeout indistinguishable from an outage.
+        timeout=40.0,
     )
     if response.status_code != 200:
         raise RuntimeError(f"status={response.status_code} body={response.text}")
