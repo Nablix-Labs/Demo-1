@@ -29,7 +29,6 @@ from app.models.session import (
 from app.models.student_model_session import (
     DiagnosticResult,
     DiagnosticCompletedEvent,
-    DiagnosticQuestionSetRequestedEvent,
     JourneyPhaseState,
     MicroSkillResult,
     OrientationCompletedEvent,
@@ -171,6 +170,11 @@ async def start_session(
         )
 
     settings = get_settings()
+    if not settings.student_model_session_opened_enabled:
+        raise HTTPException(
+            status_code=503,
+            detail="SESSION_OPENED is required for Schema 3.0 session startup.",
+        )
     topic_id = settings.student_model_topic_codes.get(request.concept_id)
     if topic_id is None:
         raise HTTPException(
@@ -181,54 +185,23 @@ async def start_session(
     session_id = _build_session_id()
     started_at = datetime.now(timezone.utc)
     timestamp = started_at.isoformat().replace("+00:00", "Z")
-    session_event = (
-        SessionOpenedEvent(
-            request_id=_student_model_request_id(session_id, "SESSION_OPENED"),
-            event_type="SESSION_OPENED",
-            topic_id=topic_id,
-            student_id=request.student_id,
-            timestamp=timestamp,
-        )
-        if settings.student_model_session_opened_enabled
-        else DiagnosticQuestionSetRequestedEvent(
-            request_id=_student_model_request_id(
-                session_id,
-                "DIAGNOSTIC_QUESTION_SET_REQUESTED",
-            ),
-            event_type="DIAGNOSTIC_QUESTION_SET_REQUESTED",
-            topic_id=topic_id,
-            student_id=request.student_id,
-            timestamp=timestamp,
-        )
+    session_event = SessionOpenedEvent(
+        request_id=_student_model_request_id(session_id, "SESSION_OPENED"),
+        event_type="SESSION_OPENED",
+        topic_id=topic_id,
+        student_id=request.student_id,
+        timestamp=timestamp,
     )
     event = await get_adapters().student_model.send_session_event(
         session_event,
         access_token,
     )
-    if settings.student_model_session_opened_enabled:
-        payload = _validate_session_opened_payload(event)
-    else:
-        _require_schema_phase(event, ("PHASE_0_DIAGNOSTIC",))
-        payload = event.phase_payload
-        if (
-            payload is None
-            or payload.payload_type != "QUESTION_SET"
-            or payload.question_set is None
-            or not payload.question_set.questions
-        ):
-            raise HTTPException(
-                status_code=503,
-                detail="Student Model returned no diagnostic questions.",
-            )
+    payload = _validate_session_opened_payload(event)
     phase = PHASE_FROM_STUDENT_MODEL[payload.phase]
     flags = UI_STATE_FLAGS[phase]
     question_updates = _question_updates(event)
     current_question = question_updates["current_question"]
-    recommended_phase = (
-        event.journey_state.recommended_entry_phase
-        if settings.student_model_session_opened_enabled
-        else payload.phase
-    )
+    recommended_phase = event.journey_state.recommended_entry_phase or payload.phase
     visual_cue = schema_visual_cue(event)
     support_steps = schema_support_steps(event)
     support_hint = schema_hint(event)
