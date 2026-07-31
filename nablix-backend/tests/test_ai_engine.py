@@ -1935,14 +1935,14 @@ def test_guided_llm_partial_persists_only_the_missing_objective(monkeypatch) -> 
                 newly_confirmed_concept_ids=["OPERATION"],
                 preserved_concept_ids=[],
                 contradicted_concept_ids=[],
-                missing_concept_ids=["EXPANDED_MEANING"],
+                missing_concept_ids=["CONCEPT_EXPLANATION_OF_OPERATION"],
                 selected_error_code=None,
                 confidence=0.96,
                 next_objective=ActiveTeachingObjective(
                     objective_type="EXPLAIN_CONCEPT",
-                    target_concept_ids=["EXPANDED_MEANING"],
+                    target_concept_ids=["CONCEPT_EXPLANATION_OF_OPERATION"],
                     confirmed_concept_ids=[],
-                    missing_concept_ids=["EXPANDED_MEANING"],
+                    missing_concept_ids=["CONCEPT_EXPLANATION_OF_OPERATION"],
                 ),
                 tutor_message="Multiplication is the operation. What does cd expand to?",
                 tutor_message_voice="Multiplication is the operation. What does c d expand to?",
@@ -2160,7 +2160,7 @@ def test_guided_multipart_rejects_completion_with_unconfirmed_required_parts(
     )
     with pytest.raises(
         AdapterError,
-        match="Guided evaluation missing concepts do not match",
+        match="CORRECT evaluation cannot leave required concepts missing",
     ):
         classify_student_response(
             ClassificationRequest(
@@ -2426,7 +2426,7 @@ def test_guided_wrong_at_configured_confidence_requests_student_model_support(
                 newly_confirmed_concept_ids=[],
                 preserved_concept_ids=[],
                 contradicted_concept_ids=[],
-                missing_concept_ids=["OPERATION", "EXPANDED_MEANING"],
+                missing_concept_ids=[],
                 selected_error_code="ERR-T02-ADDITION",
                 confidence=0.5,
                 next_objective=kwargs["active_objective"],

@@ -489,6 +489,7 @@ def classify_guided_learning_response(
     raw_student_state: GuidedStudentState | None = None
     raw_confidence: float | None = None
     last_error: AdapterError | None = None
+    validation_feedback: str | None = None
     for attempt in range(rules.guided_learning.maximum_retries + 1):
         try:
             candidate = openai_client.evaluate_guided_turn(
@@ -504,6 +505,7 @@ def classify_guided_learning_response(
                 recent_conversation=request.conversation_history[
                     -rules.guided_learning.maximum_recent_history_turns:
                 ],
+                validation_feedback=validation_feedback,
                 evaluator_prompt_version=rules.guided_learning.evaluator_prompt_version,
                 system_prompt=rules.guided_learning.evaluator_system_prompt,
             )
@@ -519,6 +521,7 @@ def classify_guided_learning_response(
             break
         except AdapterError as error:
             last_error = error
+            validation_feedback = error.detail
             logger.warning(
                 "guided_evaluation_retry",
                 extra={
@@ -655,12 +658,8 @@ def validate_guided_evaluation(
     concept_ids = {concept.concept_id for concept in rubric.required_concepts}
     returned_ids = {
         *evaluation.newly_confirmed_concept_ids,
-        *evaluation.preserved_concept_ids,
         *evaluation.contradicted_concept_ids,
-        *evaluation.missing_concept_ids,
     }
-    if evaluation.next_objective is not None:
-        returned_ids.update(evaluation.next_objective.target_concept_ids)
     if not returned_ids.issubset(concept_ids):
         raise AdapterError(
             "openai_ai_engine",
@@ -700,6 +699,7 @@ def validate_guided_evaluation(
             update={
                 "student_state": "UNCLEAR",
                 "newly_confirmed_concept_ids": [],
+                "preserved_concept_ids": objective.confirmed_concept_ids,
                 "contradicted_concept_ids": [],
                 "selected_error_code": None,
                 "missing_concept_ids": objective.missing_concept_ids,
@@ -709,7 +709,6 @@ def validate_guided_evaluation(
     contradicted = set(evaluation.contradicted_concept_ids)
     confirmed = (
         set(objective.confirmed_concept_ids)
-        | set(evaluation.preserved_concept_ids)
         | set(evaluation.newly_confirmed_concept_ids)
     ) - contradicted
     required_ids = {
@@ -718,16 +717,7 @@ def validate_guided_evaluation(
         if concept.required
     }
     expected_missing = required_ids - confirmed
-    remaining = set(evaluation.missing_concept_ids)
-    if remaining != expected_missing:
-        raise AdapterError(
-            "openai_ai_engine",
-            (
-                "Guided evaluation missing concepts do not match the "
-                f"confirmed rubric state: expected {sorted(expected_missing)}, "
-                f"received {sorted(remaining)}."
-            ),
-        )
+    remaining = set(expected_missing)
     if (
         not evaluation.tutor_message.strip()
         or not evaluation.tutor_message_voice.strip()
@@ -748,16 +738,6 @@ def validate_guided_evaluation(
             "openai_ai_engine",
             "PARTIAL evaluation requires confirmed and missing concepts.",
         )
-    lost_confirmed = (
-        set(objective.confirmed_concept_ids)
-        - set(evaluation.preserved_concept_ids)
-        - set(evaluation.contradicted_concept_ids)
-    )
-    if evaluation.student_state == "WRONG" and lost_confirmed:
-        raise AdapterError(
-            "openai_ai_engine",
-            f"WRONG evaluation erased confirmed concepts: {sorted(lost_confirmed)}.",
-        )
     if evaluation.student_state in {"STUCK", "UNCLEAR"} and (
         evaluation.newly_confirmed_concept_ids
         or evaluation.selected_error_code is not None
@@ -766,7 +746,29 @@ def validate_guided_evaluation(
             "openai_ai_engine",
             f"{evaluation.student_state} cannot create evidence.",
         )
-    return evaluation
+    next_objective = (
+        None
+        if evaluation.student_state == "CORRECT"
+        else ActiveTeachingObjective(
+            objective_type=(
+                evaluation.next_objective.objective_type
+                if evaluation.next_objective is not None
+                else objective.objective_type
+            ),
+            target_concept_ids=sorted(remaining),
+            confirmed_concept_ids=sorted(confirmed),
+            missing_concept_ids=sorted(remaining),
+        )
+    )
+    return evaluation.model_copy(
+        update={
+            "preserved_concept_ids": sorted(
+                set(objective.confirmed_concept_ids) - contradicted
+            ),
+            "missing_concept_ids": sorted(remaining),
+            "next_objective": next_objective,
+        }
+    )
 
 
 def requires_multi_component_rubric(
