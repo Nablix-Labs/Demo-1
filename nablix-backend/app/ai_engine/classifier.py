@@ -206,6 +206,7 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
         )
         openai_message: OpenAITutorMessage | None = build_tutor_message_with_openai(
             request=request,
+            rules=rules,
             intent=deterministic_decision.intent,
             evaluation=deterministic_decision.evaluation,
             error_type=deterministic_decision.error_type,
@@ -489,6 +490,7 @@ def classify_guided_learning_response(
     raw_student_state: GuidedStudentState | None = None
     raw_confidence: float | None = None
     last_error: AdapterError | None = None
+    rejected_evaluation: GuidedEvaluation | None = None
     validation_feedback: str | None = None
     for attempt in range(rules.guided_learning.maximum_retries + 1):
         try:
@@ -518,6 +520,29 @@ def classify_guided_learning_response(
                 allowed_errors,
                 rules,
             )
+            if (
+                evaluation.student_state != "CORRECT"
+                and message_reveals_answer(
+                    evaluation.tutor_message,
+                    evaluation.tutor_message_voice,
+                    request.correct_answer,
+                    rules,
+                )
+            ):
+                validation_feedback = (
+                    rules.guided_learning.answer_reveal_retry_feedback
+                )
+                logger.warning(
+                    "guided_answer_reveal_retry",
+                    extra={
+                        "question_id": request.question_id,
+                        "attempt": attempt + 1,
+                        "student_state": evaluation.student_state,
+                    },
+                )
+                rejected_evaluation = evaluation
+                evaluation = None
+                continue
             break
         except AdapterError as error:
             last_error = error
@@ -531,10 +556,25 @@ def classify_guided_learning_response(
                 },
             )
     if evaluation is None:
-        raise last_error or AdapterError(
-            "openai_ai_engine",
-            "Guided turn evaluation failed without a validated response.",
-        )
+        if rejected_evaluation is not None:
+            logger.warning(
+                "guided_answer_reveal_safe_message",
+                extra={
+                    "question_id": request.question_id,
+                    "student_state": rejected_evaluation.student_state,
+                },
+            )
+            evaluation = rejected_evaluation.model_copy(
+                update={
+                    "tutor_message": rules.guided_learning.reconciliation_message,
+                    "tutor_message_voice": rules.guided_learning.reconciliation_message,
+                }
+            )
+        else:
+            raise last_error or AdapterError(
+                "openai_ai_engine",
+                "Guided turn evaluation failed without a validated response.",
+            )
     next_objective = normalized_guided_objective(evaluation, objective)
     logger.info(
         "guided_state_evaluated",
@@ -1130,6 +1170,7 @@ def build_openai_tutor_decision(
 
 def build_tutor_message_with_openai(
     request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
     intent: IntentType,
     evaluation: EvaluationCategory | None,
     error_type: ErrorType | None,
@@ -1147,24 +1188,47 @@ def build_tutor_message_with_openai(
     if request.input_source == "CANVAS" and canvas_context is None:
         return None
 
-    try:
-        return openai_client.build_tutor_message(
-            question=request.question,
-            student_input=request.student_input,
-            evaluation=evaluation,
-            error_type=error_type,
-            response_strategy=response_strategy,
-            hint_level=hint_level,
-            phase=request.current_phase,
-            conversation_history=request.conversation_history,
-            canvas_context=canvas_context,
-        )
-    except AdapterError as error:
+    rejected_message: str | None = None
+    validation_feedback: str | None = None
+    for attempt in range(rules.guided_learning.maximum_retries + 1):
+        try:
+            message = openai_client.build_tutor_message(
+                question=request.question,
+                student_input=request.student_input,
+                evaluation=evaluation,
+                error_type=error_type,
+                response_strategy=response_strategy,
+                hint_level=hint_level,
+                phase=request.current_phase,
+                conversation_history=request.conversation_history,
+                canvas_context=canvas_context,
+                rejected_tutor_message=rejected_message,
+                validation_feedback=validation_feedback,
+            )
+        except AdapterError as error:
+            logger.warning(
+                "openai_ai_engine_fallback",
+                extra={"step": "tutor_message", "detail": error.message},
+            )
+            return None
+        if not message_reveals_answer(
+            message.tutor_message,
+            message.tutor_message_voice_optimised,
+            request.correct_answer,
+            rules,
+        ):
+            return message
+        rejected_message = message.tutor_message
+        validation_feedback = rules.answer_reveal_guardrail.rewrite_feedback
         logger.warning(
-            "openai_ai_engine_fallback",
-            extra={"step": "tutor_message", "detail": error.message},
+            "tutor_message_answer_reveal_retry",
+            extra={
+                "question_id": request.question_id,
+                "attempt": attempt + 1,
+                "input_source": request.input_source,
+            },
         )
-        return None
+    return None
 
 
 def check_student_message_safety(student_input: str, rules: ClassifierRulesConfig) -> SafetyCheck:
@@ -1814,7 +1878,12 @@ def apply_answer_reveal_guardrail(
 ) -> TutorResponse:
     if response.answer_reveal_allowed is True:
         return response
-    if contains_answer_reveal(response.tutor_message, correct_answer, rules) is False:
+    if not message_reveals_answer(
+        response.tutor_message,
+        response.tutor_message_voice_optimised,
+        correct_answer,
+        rules,
+    ):
         return response
 
     if response.evaluation == "CORRECT":
@@ -1881,6 +1950,23 @@ def contains_answer_reveal(message: str, correct_answer: str, rules: ClassifierR
 
     correct_number: str = format_number_for_matching(correct_value)
     return re.search(rf"(?<![\d.])-?{re.escape(correct_number)}(?![\d.])", normalized_message) is not None
+
+
+def message_reveals_answer(
+    message: str,
+    voice_message: str,
+    correct_answer: str,
+    rules: ClassifierRulesConfig,
+) -> bool:
+    return contains_answer_reveal(
+        message,
+        correct_answer,
+        rules,
+    ) or contains_answer_reveal(
+        voice_message,
+        correct_answer,
+        rules,
+    )
 
 
 def detects_direct_answer_request(normalized_input: str, rules: ClassifierRulesConfig) -> bool:

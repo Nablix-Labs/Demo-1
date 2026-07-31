@@ -296,11 +296,5 @@ def apply_retrieved_content(
         correct_answer,
         rules,
     ):
-        safe_message: str = rules.answer_reveal_guardrail.safe_message
-        return updated_result.model_copy(
-            update={
-                "tutor_message": safe_message,
-                "tutor_message_voice": safe_message,
-            }
-        )
+        return result
     return updated_result
