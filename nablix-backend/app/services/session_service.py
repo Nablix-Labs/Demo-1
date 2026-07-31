@@ -1,9 +1,10 @@
 import asyncio
 from datetime import datetime, timezone
-from typing import NotRequired, TypedDict
+from typing import TypedDict
 from uuid import uuid4
 
 from fastapi import HTTPException
+from typing_extensions import NotRequired
 
 from app.adapters.provider import get_adapters
 from app.adapters.question_bank import fetch_question
