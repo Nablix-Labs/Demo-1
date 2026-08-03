@@ -4,6 +4,7 @@ from app.main import app
 
 
 client = TestClient(app, headers={"Authorization": "Bearer test-token"})
+SESSION_ID = "SESSION101"
 
 
 def _valid_interaction_body(session_id: str) -> dict[str, object]:
@@ -18,20 +19,6 @@ def _valid_interaction_body(session_id: str) -> dict[str, object]:
         "question_id": "ALG_EQ_DIAG_001",
         "hint_count": 0,
     }
-
-
-def _start_session() -> str:
-    response = client.post(
-        "/session/start",
-        json={
-            "student_id": "ST101",
-            "concept_id": "ALG_LINEAR_ONE_STEP",
-            "interaction_mode": "TEXT",
-            "initial_phase": "GUIDED_PRACTICE",
-        },
-    )
-    assert response.status_code == 200
-    return response.json()["session_id"]
 
 
 def test_validation_returns_missing_field_code() -> None:
@@ -64,8 +51,7 @@ def test_validation_returns_invalid_format_code() -> None:
 
 
 def test_validation_returns_input_too_long_code() -> None:
-    session_id = _start_session()
-    body = _valid_interaction_body(session_id)
+    body = _valid_interaction_body(SESSION_ID)
     body["text_input"] = "x" * 501
 
     response = client.post("/interaction", json=body)
@@ -78,8 +64,7 @@ def test_validation_returns_input_too_long_code() -> None:
 
 
 def test_validation_returns_invalid_value_for_interaction_type() -> None:
-    session_id = _start_session()
-    body = _valid_interaction_body(session_id)
+    body = _valid_interaction_body(SESSION_ID)
     body["interaction_type"] = "WRONG"
 
     response = client.post("/interaction", json=body)
@@ -91,8 +76,7 @@ def test_validation_returns_invalid_value_for_interaction_type() -> None:
 
 
 def test_validation_returns_invalid_value_for_current_phase() -> None:
-    session_id = _start_session()
-    body = _valid_interaction_body(session_id)
+    body = _valid_interaction_body(SESSION_ID)
     body["current_phase"] = "WRONG"
 
     response = client.post("/interaction", json=body)
