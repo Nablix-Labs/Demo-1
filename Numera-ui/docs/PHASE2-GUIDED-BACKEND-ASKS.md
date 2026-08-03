@@ -1,14 +1,21 @@
-# Topic 1 Phase 2 (Guided Learning) — what the backend still needs to expose
+# Topic 1 Phase 2 (Guided Learning) — frontend behaviour + what the backend needs to expose
 
 **Written by:** Manav (frontend) · 3 Aug 2026
 **Against:** `main` @ `9b08e78` (Chiru's Schema 3.0 refactor, merged 1–3 Aug)
 **For:** Chirudeva (tutor backend), Sanya (content), Manjusha (visibility)
+**Frontend status:** implemented and merged as `cb5bc7b` — see Part F
 
 This is a read of the Phase 2 Guided Learning spec against the backend as it
 stands today. Most of the spec's *concepts* already exist server-side — the gap
 is almost entirely about **what reaches the frontend on the `/interaction`
 response**. Several asks below are pass-throughs of data the backend already
 computes and then drops.
+
+**Read Part F first if you are planning the Demo-4 backend work.** It is the
+per-field contract: what the frontend already does with every response field it
+receives, so you can see exactly which behaviour switches on when a field starts
+arriving. Nothing in Part F needs a frontend change to activate — the handling is
+merged and inert until the data shows up.
 
 ---
 
@@ -62,19 +69,27 @@ VM, not from here.
 
 ## Part B — What is broken right now
 
-### B1. "Need help?" is dead — blocks the entire support ladder
+### B1. "Need help?" cannot request new support — partially worked around
 
-`hooks/useDemoTutor.ts:291` calls `POST /hint/request`. That endpoint was
-deleted. Every press now 404s and the student sees "no hint available".
+`hooks/useDemoTutor.ts` called `POST /hint/request`. That endpoint was deleted.
+Every press 404'd and the student saw "no hint available" regardless of what
+support the tutor had actually authorised.
 
-It fails gracefully rather than crashing, so it hasn't shown up as a red screen —
-but **rung 1 of the spec's support ladder does not work**, and Hint L1 / L2 are
-where most of the Phase 2 script lives.
+**Worked around in `cb5bc7b`, but only halfway.** The frontend now climbs the
+rungs the turn response already carries — the GIVE_HINT message, the visual cue,
+the scaffold step — one at a time, resetting per question. The dead endpoint
+client is deleted. So the button no longer lies.
 
-**Ask:** one way to request the next approved support item without submitting an
-answer. Either bring back `HINT_REQUEST` as an `interaction_type` on
-`/interaction`, or add a small `POST /support/next`. Either is fine — the
-frontend adapts in an hour once the shape is agreed. What we can't do is guess.
+What it still cannot do is **ask for support the backend hasn't already sent**.
+Escalating a student up the ladder is the Tutor Backend's decision — it depends
+on attempt history and the Student Model — and there is no longer any way for the
+student to trigger that decision without submitting an answer, which costs them
+an attempt.
+
+**Ask:** one request meaning "give me the next approved support item", carrying
+no answer. Either `HINT_REQUEST` back as an `interaction_type` on `/interaction`,
+or a small `POST /support/next`. Either shape is fine. It should return
+`attempt_increment: 0` and whichever rung it authorised.
 
 ---
 
@@ -215,6 +230,63 @@ shape — normalised coordinates, `highlight` and `math` kinds, `append` vs
 
 ---
 
+## Part F — Frontend behaviour contract (start here for Demo-4 planning)
+
+What the frontend does with each field today. Everything marked **live** is
+merged in `cb5bc7b` and working; everything marked **inert** is written, tested
+and waiting for the field to start arriving — no frontend change needed to
+switch it on.
+
+### Fields we consume today
+
+| Response field | What the frontend does | State |
+|---|---|---|
+| `message` / `message_voice` | Shown in the transcript and spoken. Speech is dropped (not queued) if the student is mid-stroke. | live |
+| `conversation_action == "GIVE_HINT"` | The message is stored as rung 1 of the support ladder, so "Need help?" can re-open it. | live |
+| `canvas_draw[]` | Rendered on a separate non-erasable tutor layer, revealed like handwriting. When present, speech is delayed ~700 ms so the mark lands before it is described. | live |
+| `show_visual_cue` / `visual_cue` | Opens the cue card; also becomes rung 2 of the ladder and the source for "Explain again". | live |
+| `show_scaffold_panel` + `scaffold_step_*` | Renders the one authorised step on the canvas. Rung 3 of the ladder. | live |
+| `current_question` / `question_id` | Drives the question strip. A null question on a phase change clears it; a null mid-phase does not. | live |
+| `question_set` on the session record | Denominator for the progress rail. Hides if absent — it will not invent a position. | live |
+| `turn_id` / `tutor_turn_id` / `status` | Full turn-sync contract: stale and duplicate turns are dropped without appending or speaking. | live |
+| `expects_student_response` / `allow_voice_input` | Half-duplex mic gating. The mic reopens from the speech-end callback, which fires even when speech was silenced. | live |
+| `attempt_increment` | Read, but nothing sends a request that would produce `0` yet (see C3). | live |
+
+### Behaviour that is written and waiting on a field
+
+| Behaviour | Switches on when we receive | Ask |
+|---|---|---|
+| AFFIRM-THEN-ISOLATE (`✓ ? ✓` under a partial answer) | `guided_student_state` + `active_teaching_objective.{confirmed,missing}_concept_ids` | C1 |
+| Ladder rung shown in the UI, Phase 3 difficulty carry-over | `current_support_level` / `highest_support_used` | C2 |
+| Explain Again as a real replay rather than a local re-show | an `EXPLAIN_AGAIN` request returning `attempt_increment: 0` | C3 |
+| STUCK 1 → 2 → 3 routing and prerequisite repair | `consecutive_stuck_count`, `prerequisite_repair` | C4 |
+| Build-strip slots and operation tiles | `response_kind` + options per scaffold step | C5 |
+| Cue animations (cycling, pulsing, dimming) | a typed `visual_cue.actions` vocabulary | C6 |
+| Parallel example (split canvas) | any field at all — nothing exists today | C7 |
+
+### Rules the frontend enforces on its own
+
+No backend involvement needed; listed so nothing double-implements them.
+
+- Tutor speech stops the moment the student starts writing, and is **not**
+  replayed when they stop — the spec says wait for them to submit or ask.
+- Tutor marks are drawn on a layer the student cannot erase; student work is
+  never auto-erased, and corrections are drawn beside the attempt.
+- The canvas locks while a submission is in flight, and unlocks on failure with
+  the student's work intact.
+- The support ladder never walks backwards, and resets per question.
+- The progress rail is read-only — it reports progress, it does not let a
+  student skip ahead of the phase the backend has them in.
+
+### One thing to be careful of
+
+If you add the `/support/next` request (B1), it must **not** be routed through
+the same path as an answer submission. The whole point of the Need Help control
+is that it does not cost an attempt, and the spec is explicit that Explain Again
+doesn't either. `attempt_increment: 0` on both.
+
+---
+
 ## Part E — Content, not code (Sanya)
 
 Section 8 of the spec lists these itself:
@@ -229,17 +301,28 @@ Section 8 of the spec lists these itself:
 
 | # | Ask | Effort | Unblocks |
 |---|---|---|---|
-| B1 | A way to request the next support item | Small | The whole support ladder — **broken today** |
 | C1 | `guided_student_state` + `active_teaching_objective` + `selected_error_code` | Small (pass-through) | AFFIRM-THEN-ISOLATE, most of the spec |
+| B1 | A request for the next support item, `attempt_increment: 0` | Small | Asking for help without spending an attempt |
 | C2 | `current_support_level` / `highest_support_used` | Small | Ladder UI, Phase 3 difficulty |
-| C3 | `EXPLAIN_AGAIN` with `attempt_increment: 0` | Small | Explain Again button |
+| C3 | `EXPLAIN_AGAIN` with `attempt_increment: 0` | Small | Explain Again as a real replay |
+| C6 | Typed visual cue action vocabulary | Small | Section 3C animations |
 | C4 | `consecutive_stuck_count` + `prerequisite_repair` | Medium | STUCK 1→2→3 routing |
 | C5 | Typed scaffold slots and tiles | Medium | Build strip |
-| C6 | Typed visual cue action vocabulary | Small | Section 3C animations |
 | C7 | Parallel example surface | Medium | Ladder rung 5 |
 
-**B1 and C1 together unblock most of this spec.** If only two things get done,
-those are the two.
+**C1 is the one to do first.** It is a pass-through of values
+`run_tutor_pipeline` already computes and discards, and it unblocks
+AFFIRM-THEN-ISOLATE — which is most of sections 3B, 4B and 7 of the spec, and the
+single biggest difference between "wrong, try again" and the tutor the spec
+describes. B1 is next, and cheap.
+
+The frontend handling for every row above is already merged and tested, so each
+one lights up as soon as the field arrives — no coordinated release needed, and
+they can land in any order.
+
+Anything ambiguous here, ping me and I'll adjust the frontend to whatever shape
+suits the backend — the shapes above are suggestions, not requirements. The only
+hard constraint is the one in Part F: help and replay must not cost an attempt.
 
 Also worth doing regardless: fixing the 28 stale `initial_phase` fixtures so the
 suite is green again and can catch the next regression.
