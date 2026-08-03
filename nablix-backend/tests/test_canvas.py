@@ -21,7 +21,11 @@ from app.models.student_model_session import (
     StudentModelSessionEvent,
     StudentModelSessionEventResponse,
 )
-from tests.test_session_events import _event_response, _session_opened_response
+from tests.test_session_events import (
+    _event_response,
+    _recommended_not_started_response,
+    _session_opened_response,
+)
 
 client = TestClient(app, headers={"Authorization": "Bearer test-token"})
 
@@ -127,6 +131,45 @@ def test_canvas_submit_returns_mock_ocr_result() -> None:
     assert summary["session_performance"]["total_attempts"] == 1
     assert summary["session_performance"]["canvas_submissions"] == 1
     assert len(summary["canvas_feedback_history"]) == 1
+
+
+def test_canvas_initializes_recommended_phase_before_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_types: list[str] = []
+
+    async def send_session_event(
+        adapter: StudentModelServiceAdapter,
+        event: StudentModelSessionEvent,
+        access_token: str,
+    ) -> StudentModelSessionEventResponse:
+        del adapter, access_token
+        event_types.append(event.event_type)
+        body = (
+            _recommended_not_started_response("PHASE_3_INDEPENDENT_PRACTICE")
+            if event.event_type == "SESSION_OPENED"
+            else _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+        )
+        body["request_id"] = event.request_id
+        return StudentModelSessionEventResponse.model_validate(body)
+
+    monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", send_session_event)
+    session_id = _start_session("ST013")
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST013",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+        },
+    )
+
+    assert response.status_code == 200
+    assert event_types[:2] == [
+        "SESSION_OPENED",
+        "INDEPENDENT_QUESTION_SET_REQUESTED",
+    ]
 
 
 def test_canvas_submit_sends_full_ocr_context_and_forwards_events(

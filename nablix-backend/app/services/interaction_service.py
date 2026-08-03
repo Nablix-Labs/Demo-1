@@ -125,6 +125,19 @@ async def process_answer_with_session_event(
 ]:
     """Evaluate one answer and apply its authoritative Schema 3.0 event."""
 
+    adapters = get_adapters()
+    session = await _initialize_restored_schema_phase(
+        session,
+        adapters.student_model,
+        access_token,
+    )
+    context = context.model_copy(
+        update={
+            "question": session.current_question,
+            "correct_answer": session.correct_answer,
+            "question_number": session.question_number,
+        }
+    )
     stored_event = session.student_model_event
     if stored_event is None:
         raise HTTPException(
@@ -132,7 +145,6 @@ async def process_answer_with_session_event(
             detail="Schema 3.0 session state is required for answer processing.",
         )
 
-    adapters = get_adapters()
     _, student, tutor = await run_tutor_pipeline(context)
     scaffold_turn = session.current_scaffold_step_id is not None
     rules = load_classifier_rules()
