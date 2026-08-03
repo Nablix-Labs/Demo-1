@@ -16,8 +16,8 @@ import { useDemoTutor, resetSessionStart, sessionStartError } from '@/hooks/useD
 import { useVoiceTurn } from '@/hooks/useVoiceTurn';
 import { DEMO_CONCEPT_ID, DEMO_PHASE } from '@/lib/api';
 import { demoFor } from '@/lib/demoContent';
-import { isBareEquation } from '@/lib/questionText';
 import { LADDER_EXHAUSTED } from '@/lib/supportLadder';
+import QuestionDisplay from '@/components/QuestionDisplay';
 import PhaseGate from '@/components/PhaseGate';
 import Toolbar from '@/components/Canvas/Toolbar';
 import { cn } from '@/lib/cn';
@@ -189,12 +189,8 @@ export default function PracticePage() {
             </div>
           ) : !QUESTION ? (
             <div className="text-[16px] font-semibold text-ink">Loading question…</div>
-          ) : isBareEquation(QUESTION) ? (
-            <div className="text-[16px] font-semibold text-ink font-[Cambria_Math,Georgia,serif]">
-              Solve {QUESTION}
-            </div>
           ) : (
-            <p className="text-[14px] font-semibold text-ink leading-snug max-w-[70ch]">{QUESTION}</p>
+            <QuestionDisplay question={QUESTION} size="compact" />
           )}
         </div>
         <div className="ml-auto flex items-center gap-2">

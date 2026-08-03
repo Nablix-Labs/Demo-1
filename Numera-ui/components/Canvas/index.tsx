@@ -16,8 +16,8 @@ import { useNumeraStore } from '@/store/useNumeraStore';
 import { useAuthStore, isConsentActive } from '@/store/useAuthStore';
 import { useDemoTutor } from '@/hooks/useDemoTutor';
 import { gridBackground, GRID_OPTIONS } from '@/lib/canvasGrid';
-import { isBareEquation } from '@/lib/questionText';
 import { tutorSay } from '@/lib/tutorSpeech';
+import QuestionDisplay from '@/components/QuestionDisplay';
 import ScaffoldPanel from '@/components/ScaffoldPanel';
 import Toolbar from './Toolbar';
 import TeachBack from './TeachBack';
@@ -110,17 +110,7 @@ export default function CanvasStage() {
         <div className="w-[30px] h-[30px] rounded-md border border-muted-gray bg-reading-surface flex items-center justify-center text-xs font-semibold text-slate-blue flex-shrink-0">
           {questionNumber}
         </div>
-        {isBareEquation(questionText) ? (
-          <div className="text-[22px] font-semibold text-ink">
-            Solve for{' '}
-            <span className="italic font-[Cambria_Math,Georgia,serif]">x</span>:{' '}
-            <span className="font-[Cambria_Math,Georgia,serif]">{questionText}</span>
-          </div>
-        ) : (
-          <p className="text-[17px] font-semibold text-ink leading-snug max-w-[62ch]">
-            {questionText}
-          </p>
-        )}
+        <QuestionDisplay question={questionText} size="lesson" />
         {/* §2: "Explain Again — replays the current concept visually without
             counting as an attempt." It deliberately makes no request: replaying
             what the tutor already showed cannot be graded, so there is no way
