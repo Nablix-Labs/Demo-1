@@ -17,20 +17,25 @@ import {
   startSession,
   submitCanvas,
   sendInteraction,
-  requestHint,
   endSession,
   toSessionSummary,
   studentId,
+  questionProgress,
   type SessionRecord,
   type SessionSummary,
   type CanvasSubmissionResult,
   studentFacingError,
   type InteractionResponse,
-  type HintResponse,
 } from '@/lib/api';
 import { applyInteractionSupport } from '@/lib/interactionPresentation';
 import { useNumeraStore } from '@/store/useNumeraStore';
-import { speakTutor } from '@/lib/tts';
+import { tutorSay, setStudentWriting } from '@/lib/tutorSpeech';
+import {
+  availableSupport,
+  nextSupport,
+  LADDER_EXHAUSTED,
+  type SupportRung,
+} from '@/lib/supportLadder';
 
 const apiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
@@ -93,7 +98,6 @@ function errorMessage(err: unknown, fallback: string): string {
 // Shown in the chat when a tutor call fails (e.g. backend 5xx), so a failure is
 // visible to the student instead of the chat silently freezing.
 const TUTOR_UNAVAILABLE = "Sorry — I couldn't reach the tutor just now. Please try again in a moment.";
-const HINT_UNAVAILABLE = "Sorry — I couldn't fetch a hint right now. Please try again in a moment.";
 
 /**
  * What the student sees in the chat when a tutor call fails.
@@ -129,11 +133,17 @@ function syncBackendSession(response: {
   //
   // Whether a null question clears the current one depends on the phase; see
   // applyBackendPhase, which both transports share.
-  useNumeraStore.getState().applyBackendPhase({
+  const store = useNumeraStore.getState();
+  store.applyBackendPhase({
     phase: response.current_phase,
     questionId: response.question_id,
     questionText: response.current_question,
   });
+
+  // Progress rail (§2). The denominator only exists on the session record's
+  // question set, so this is the one place both halves are known at once.
+  const { index, total } = questionProgress(store.backendSession, response.question_id);
+  store.setQuestionProgress(index, total);
 }
 
 /**
@@ -223,9 +233,12 @@ export function useDemoTutor() {
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message });
         if (res.current_phase) useNumeraStore.getState().setCurrentPhase(res.current_phase); // advance phase
-        if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
+        const drew = Boolean(res.canvas_draw?.length);
+        if (drew) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw!);
         const spoken = applyInteractionSupport(res);
-        speakTutor(spoken); // voice the reply — same words the student can read
+        // §1: highlight first, pause, then speak. When the turn also drew, the
+        // mark lands before it is described; when it didn't, this speaks at once.
+        tutorSay(spoken, { afterMarks: drew });
         return res;
       } catch (err) {
         addTranscriptMessage({ role: 'ai', text: chatError(err, TUTOR_UNAVAILABLE) }); // surface the failure in the chat
@@ -268,8 +281,13 @@ export function useDemoTutor() {
         text: res.tutor.tutor_message,
         meta: res.tutor.evaluation,
       });
-      if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
-      speakTutor(res.tutor.tutor_message); // voice the reply — same verbatim text shown in chat
+      const drew = Boolean(res.canvas_draw?.length);
+      if (drew) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw!);
+      // The work has been read, so the student no longer holds the floor —
+      // otherwise the tutor's response to a submission would be silently dropped
+      // by the very rule that kept it quiet while they were writing.
+      setStudentWriting(false);
+      tutorSay(res.tutor.tutor_message, { afterMarks: drew });
       return res;
     } catch (err) {
       addTranscriptMessage({ role: 'ai', text: chatError(err, TUTOR_UNAVAILABLE) }); // surface the failure in the chat
@@ -278,36 +296,53 @@ export function useDemoTutor() {
     }
   }, [sessionId, canvasExporter, addTranscriptMessage, addTrailEntry]);
 
-  /** Ask for the next hint. */
-  const hint = useCallback(
-    async (
-      ctx: { concept_id: string; current_phase: string; current_hint_count: number }
-    ): Promise<HintResponse | null> => {
-      if (!apiEnabled() || !sessionId) return null;
-      const questionId = useNumeraStore.getState().activeQuestionId;
-      if (!questionId) return null; // nothing to hint at between questions
-      try {
-        const state = useNumeraStore.getState();
-        const res = await requestHint({
-          session_id: sessionId,
-          student_id: studentId(),
-          current_phase: state.currentPhase,
-          current_hint_count: ctx.current_hint_count,
-          concept_id: ctx.concept_id,
-          question_id: questionId,
-        });
-        addTranscriptMessage({ role: 'ai', text: res.hint });
-        addTrailEntry({ kind: 'hint', text: res.hint, meta: `Hint ${res.hint_level}` });
-        speakTutor(res.hint); // voice the hint — same verbatim text shown in chat
-        return res;
-      } catch (err) {
-        addTranscriptMessage({ role: 'ai', text: chatError(err, HINT_UNAVAILABLE) }); // surface the failure in the chat
-        addTrailEntry({ kind: 'hint', text: errorMessage(err, 'No hint available.') });
-        return null;
-      }
-    },
-    [sessionId, addTranscriptMessage, addTrailEntry]
-  );
+  /**
+   * Reveal the next rung of the support ladder (§6).
+   *
+   * This used to POST /hint/request. That endpoint was deleted in the backend's
+   * Schema 3.0 refactor (3 Aug 2026), so every press 404'd and the student was
+   * told "no hint available" no matter what support the tutor had actually
+   * authorised — the ladder looked broken when it was only unreachable.
+   *
+   * The rungs still arrive; they just arrive on the normal turn response now. So
+   * this climbs what the backend has already authorised for the current question
+   * instead of asking an endpoint that no longer exists.
+   *
+   * It is deliberately NOT a request for new support: only the Tutor Backend can
+   * escalate a student up the ladder, and it needs an endpoint to do that (ask B1
+   * in docs/PHASE2-GUIDED-BACKEND-ASKS.md). Until then this surfaces what is
+   * there and says so plainly when there is nothing left.
+   */
+  const hint = useCallback(async (): Promise<SupportRung | null> => {
+    const s = useNumeraStore.getState();
+    const rung = nextSupport(
+      s.supportShown,
+      availableSupport({
+        hintText: s.lastHintText,
+        showVisualCue: Boolean(s.visualCueType ?? s.visualCueDescription),
+        showScaffoldPanel: Boolean(s.activeScaffold),
+        hasScaffoldStep: Boolean(s.activeScaffold?.stepText),
+      }),
+    );
+
+    if (!rung) {
+      addTranscriptMessage({ role: 'ai', text: LADDER_EXHAUSTED });
+      return null;
+    }
+
+    s.setSupportShown(rung);
+    if (rung === 'HINT' && s.lastHintText) {
+      addTranscriptMessage({ role: 'ai', text: s.lastHintText });
+      addTrailEntry({ kind: 'hint', text: s.lastHintText, meta: 'Hint' });
+      tutorSay(s.lastHintText);
+    } else if (rung === 'VISUAL_CUE') {
+      s.setVisualCueVisible(true);
+      if (s.visualCueDescription) tutorSay(s.visualCueDescription, { afterMarks: true });
+    }
+    // SCAFFOLD needs no reveal step: ScaffoldPanel renders whenever the backend
+    // has authorised a step, so it is already on screen by the time we get here.
+    return rung;
+  }, [addTranscriptMessage, addTrailEntry]);
 
   /**
    * Fire one completed voice turn to the backend: snapshot the canvas, then send
@@ -428,11 +463,13 @@ export function useDemoTutor() {
         const expectsMore = res.expects_student_response ?? true;
         // A scaffold response voices its one authorised step. Ordinary turns
         // voice the exact message shown in the transcript.
-        speakTutor(spoken, () => {
-          const store = useNumeraStore.getState();
-          if (store.voiceStatus !== 'speaking') return; // superseded meanwhile
-          if (expectsMore) store.beginListeningTurn();
-          else store.setVoiceStatus('waiting');
+        tutorSay(spoken, {
+          onEnd: () => {
+            const store = useNumeraStore.getState();
+            if (store.voiceStatus !== 'speaking') return; // superseded meanwhile
+            if (expectsMore) store.beginListeningTurn();
+            else store.setVoiceStatus('waiting');
+          },
         });
         return res;
       } catch (err) {

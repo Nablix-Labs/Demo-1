@@ -12,6 +12,7 @@ import type { FlowStage } from '@/lib/flow';
 import { TOPICS } from '@/lib/topics';
 import { DEMO_CONCEPT_ID, type ActiveScaffold, type SessionRecord, type SessionReview, type SessionSummary } from '@/lib/api';
 import { uid } from '@/lib/uid';
+import type { SupportRung } from '@/lib/supportLadder';
 
 // Sequential, human-readable student turn ids (voice contract §3): TURN-0001, …
 // One per LISTENING turn; kept sequential (not uuid) so logs read cleanly.
@@ -214,6 +215,14 @@ export interface NumeraState {
   visualCueType: string | null;
   visualCueDescription: string | null;
 
+  // Support ladder (§6 of the Phase 2 spec). `supportShown` is the highest rung
+  // revealed for the CURRENT question, so "Need help?" climbs rather than
+  // repeating itself; `lastHintText` is the tutor message from the most recent
+  // GIVE_HINT turn, which is the only hint source left now that /hint/request
+  // has been removed from the backend. Both reset when the question changes.
+  supportShown: SupportRung | null;
+  lastHintText: string | null;
+
   // Transcript
   transcript: TranscriptMessage[];
 
@@ -317,6 +326,10 @@ export interface NumeraState {
   setActiveScaffold: (s: ActiveScaffold | null) => void;
 
   setVisualCue: (cue: { show: boolean; cueType?: string | null; description?: string | null }) => void;
+  setSupportShown: (rung: SupportRung | null) => void;
+  setLastHintText: (text: string | null) => void;
+  /** Position within this phase's question set, for the progress rail. */
+  setQuestionProgress: (index: number, total: number) => void;
   toggleVisualCue: () => void;
   addTranscriptMessage: (msg: Omit<TranscriptMessage, 'id' | 'timestamp'>) => void;
   setTranscript: (msgs: Pick<TranscriptMessage, 'role' | 'text'>[]) => void;
@@ -381,6 +394,7 @@ const initial: Omit<
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
   | 'setQuestionText' | 'applyBackendPhase' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'setTutorTurn'
   | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue'
+  | 'setSupportShown' | 'setLastHintText' | 'setQuestionProgress'
   | 'addTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript' | 'commitPartialTranscript'
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
   | 'setShapeKind' | 'setEraserMode'
@@ -399,8 +413,13 @@ const initial: Omit<
 > = {
   sessionId: null,
   sessionState: 'idle',
-  activeSlide: 2,
-  totalSlides: 9,
+  // Progress rail position. Both zero until a session reports a question set —
+  // they used to default to 2 and 9 and were never assigned by anything, so
+  // every student saw "step 3 of 9" for the whole lesson no matter where they
+  // actually were. The rail now hides itself until it knows something true
+  // (§2: "Progress rail — shows question progress, not mastery labels").
+  activeSlide: 0,
+  totalSlides: 0,
   // No hardcoded equation: the backend session drives the question. Empty until
   // it loads so a stale demo equation never flashes on the live build.
   questionText: '',
@@ -427,6 +446,8 @@ const initial: Omit<
   visualCueVisible: false,
   visualCueType: null,
   visualCueDescription: null,
+  supportShown: null as SupportRung | null,
+  lastHintText: null as string | null,
   // Empty. This used to seed a three-message demo conversation about
   // "2x + 5 = 13", which rendered for every student before the backend had said
   // anything — a real tester reported it as "I am getting my old questions"
@@ -523,8 +544,18 @@ export const useNumeraStore = create<NumeraState>()(
         currentPhase: phase,
         activeQuestionId: nextQuestionId,
         questionText: text || (phaseChanged ? '' : s.questionText),
+        // The support ladder is per-question too (§6: support is requested one
+        // rung at a time for the question being worked on). Carrying `supportShown`
+        // across a question boundary would leave the next question's "Need help?"
+        // starting at the scaffold, skipping the hint the student should get first.
         ...(questionChanged
-          ? { visualCueVisible: false, visualCueType: null, visualCueDescription: null }
+          ? {
+              visualCueVisible: false,
+              visualCueType: null,
+              visualCueDescription: null,
+              supportShown: null,
+              lastHintText: null,
+            }
           : {}),
       };
     }),
@@ -572,6 +603,10 @@ export const useNumeraStore = create<NumeraState>()(
 
   setVisualCue: ({ show, cueType = null, description = null }) =>
     set({ visualCueVisible: show, visualCueType: cueType, visualCueDescription: description }),
+  setSupportShown: (supportShown) => set({ supportShown }),
+  setLastHintText: (lastHintText) => set({ lastHintText }),
+  setQuestionProgress: (index, total) =>
+    set({ activeSlide: Math.max(0, index), totalSlides: Math.max(0, total) }),
   toggleVisualCue: () => set((s) => ({ visualCueVisible: !s.visualCueVisible })),
 
   addTranscriptMessage: (msg) =>

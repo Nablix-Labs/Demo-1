@@ -17,6 +17,7 @@ import { useVoiceTurn } from '@/hooks/useVoiceTurn';
 import { DEMO_CONCEPT_ID, DEMO_PHASE } from '@/lib/api';
 import { demoFor } from '@/lib/demoContent';
 import { isBareEquation } from '@/lib/questionText';
+import { LADDER_EXHAUSTED } from '@/lib/supportLadder';
 import PhaseGate from '@/components/PhaseGate';
 import Toolbar from '@/components/Canvas/Toolbar';
 import { cn } from '@/lib/cn';
@@ -128,15 +129,13 @@ export default function PracticePage() {
       return;
     }
     setHintText(null);
-    const res = await tutor.hint({
-      concept_id: DEMO_CONCEPT_ID,
-      current_phase: PHASE,
-      current_hint_count: hintIndex,
-    });
-    // tutor.hint() swallows failures (it reports them into the transcript, which
-    // this screen doesn't render) — so say so here instead of showing nothing.
-    setHintText(res ? res.hint : "Sorry — I couldn't fetch a hint right now. Please try again in a moment.");
-    if (res) setHintIndex((i) => i + 1);
+    // Climbs the support ladder over what the backend has already authorised.
+    // It used to POST /hint/request, which the backend deleted on 3 Aug 2026 —
+    // so every press 404'd and this card showed a fetch error regardless of
+    // what support the tutor had actually granted.
+    const rung = await tutor.hint();
+    setHintText(rung ? useNumeraStore.getState().lastHintText ?? null : LADDER_EXHAUSTED);
+    if (rung) setHintIndex((i) => i + 1);
   };
 
   // The idle observer flips to 'hint' without fetching, so in mock mode the card

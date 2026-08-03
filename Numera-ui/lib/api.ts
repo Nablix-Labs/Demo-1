@@ -332,6 +332,30 @@ export function diagnosticQuestions(record: SessionRecord | null | undefined): S
   return payload.question_set.questions.filter((q) => q.student_view?.question_text);
 }
 
+/**
+ * Where a question sits in the phase's question set, for the progress rail.
+ *
+ * The rail is supposed to show question progress (§2 of the Phase 2 spec), and
+ * this is the only place the frontend can learn the denominator: the Student
+ * Model ships the whole set on the session record, while `/interaction` replies
+ * only ever name the current question.
+ *
+ * Returns `{ index: 0, total: 0 }` when the set is absent or the id isn't in it
+ * — the rail treats a zero total as "nothing true to show yet" and hides,
+ * rather than inventing a position.
+ */
+export function questionProgress(
+  record: SessionRecord | null | undefined,
+  questionId: string | null | undefined,
+): { index: number; total: number } {
+  const questions = record?.student_model_event?.phase_payload?.question_set?.questions ?? [];
+  if (questions.length === 0) return { index: 0, total: 0 };
+  const index = questions.findIndex((q) => q.question_id === questionId);
+  return index < 0
+    ? { index: 0, total: 0 }
+    : { index, total: questions.length };
+}
+
 /** The orientation bundle for this session, or null when there isn't one. */
 export function orientationBundle(
   record: SessionRecord | null | undefined,
@@ -720,29 +744,18 @@ export async function sendInteraction(payload: InteractionPayload) {
   return res.data;
 }
 
-// ── /hint/request ─────────────────────────────────────────────────────────────
-export interface HintPayload {
-  session_id: string;
-  student_id: string;
-  current_phase: string;
-  current_hint_count: number;
-  concept_id: string;
-  question_id: string;
-}
-
-export interface HintResponse {
-  session_id: string;
-  student_id: string;
-  hint_level: number;
-  hint: string;
-  response_strategy: string;
-}
-
-/** POST /hint/request */
-export async function requestHint(payload: HintPayload) {
-  const res = await api.post<HintResponse>('/hint/request', payload);
-  return res.data;
-}
+// ── /hint/request — REMOVED ───────────────────────────────────────────────────
+//
+// The backend deleted this endpoint in the Schema 3.0 refactor on 3 Aug 2026
+// (app/api/hint.py, hint_service.py and models/hint.py are all gone, and
+// HINT_REQUEST was dropped from InteractionType). The client is removed rather
+// than left in place, because a dead endpoint that still type-checks is an
+// invitation to call it, and calling it 404s.
+//
+// Hints have not disappeared — they arrive as the turn message when
+// `conversation_action` is GIVE_HINT. lib/supportLadder.ts reads them from
+// there. An explicit "ask for the next support item" request needs a new
+// endpoint; that is ask B1 in docs/PHASE2-GUIDED-BACKEND-ASKS.md.
 
 // ── /canvas/submit (live OCR) ─────────────────────────────────────────────────
 export interface OcrResult {

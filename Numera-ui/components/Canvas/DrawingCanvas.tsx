@@ -19,6 +19,7 @@ import { Stage, Layer, Line, Rect, Ellipse, Group, Text } from 'react-konva';
 import type Konva from 'konva';
 import { useNumeraStore, type DrawnItem } from '@/store/useNumeraStore';
 import { uid } from '@/lib/uid';
+import { setStudentWriting } from '@/lib/tutorSpeech';
 import TutorLayer from './TutorLayer';
 import TutorMathOverlay from './TutorMathOverlay';
 import { useTutorRevealSync } from '@/store/useTutorReveal';
@@ -96,6 +97,11 @@ export default function DrawingCanvas({ onExportReady, tutorOnly = false }: Draw
       const pos = e.target.getStage()?.getPointerPosition();
       if (!pos) return;
       isDrawing.current = true;
+      // §1: "Remain silent while the student writes." The pen touching down is
+      // the earliest honest signal that the student has the floor, and it stops
+      // the tutor mid-sentence rather than at the end of it. The floor goes back
+      // when the work is submitted (see useDemoTutor.submitCanvasWork).
+      setStudentWriting(true);
       startPos.current = { x: pos.x, y: pos.y };
       const id = uid();
 

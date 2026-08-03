@@ -17,6 +17,7 @@ import { useAuthStore, isConsentActive } from '@/store/useAuthStore';
 import { useDemoTutor } from '@/hooks/useDemoTutor';
 import { gridBackground, GRID_OPTIONS } from '@/lib/canvasGrid';
 import { isBareEquation } from '@/lib/questionText';
+import { tutorSay } from '@/lib/tutorSpeech';
 import ScaffoldPanel from '@/components/ScaffoldPanel';
 import Toolbar from './Toolbar';
 import TeachBack from './TeachBack';
@@ -36,9 +37,21 @@ const HELP_TIPS = [
 export default function CanvasStage() {
   const { questionText, questionNumber, items, setCanvasExporter, canvasGrid, setCanvasGrid } = useNumeraStore();
   const activeScaffold = useNumeraStore((s) => s.activeScaffold);
+  const visualCueType = useNumeraStore((s) => s.visualCueType);
+  const visualCueDescription = useNumeraStore((s) => s.visualCueDescription);
+  const setVisualCueVisible = useNumeraStore((s) => s.setVisualCueVisible);
   const canvasConsents = useAuthStore((s) => s.consents);
   const canvasAllowed = isConsentActive(canvasConsents, 'canvas_processing');
   const tutor = useDemoTutor();
+
+  // Explain Again replays the cue the backend already sent for this question.
+  // There is nothing to replay before one arrives, so the control stays hidden
+  // rather than appearing and doing nothing.
+  const canReplayCue = Boolean(visualCueType ?? visualCueDescription);
+  const replayCue = useCallback(() => {
+    setVisualCueVisible(true);
+    if (visualCueDescription) tutorSay(visualCueDescription, { afterMarks: true });
+  }, [setVisualCueVisible, visualCueDescription]);
 
   const exportRef = useRef<(() => string | null) | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -89,9 +102,10 @@ export default function CanvasStage() {
       aria-label="Canvas workspace"
       style={gridBackground(canvasGrid)}
     >
-      {/* Question header — a bare equation gets the "Solve for x:" lead-in and
-          maths type; anything with its own wording (e.g. a word problem) is shown
-          verbatim as prose that wraps. See lib/questionText.ts. */}
+      {/* Question strip (§2) — question number, the task, and Explain Again.
+          A bare equation gets the "Solve for x:" lead-in and maths type; anything
+          with its own wording (e.g. a word problem) is shown verbatim as prose
+          that wraps. See lib/questionText.ts. */}
       <div className="absolute top-[26px] left-[34px] right-[34px] flex items-start gap-3 z-10">
         <div className="w-[30px] h-[30px] rounded-md border border-muted-gray bg-reading-surface flex items-center justify-center text-xs font-semibold text-slate-blue flex-shrink-0">
           {questionNumber}
@@ -106,6 +120,19 @@ export default function CanvasStage() {
           <p className="text-[17px] font-semibold text-ink leading-snug max-w-[62ch]">
             {questionText}
           </p>
+        )}
+        {/* §2: "Explain Again — replays the current concept visually without
+            counting as an attempt." It deliberately makes no request: replaying
+            what the tutor already showed cannot be graded, so there is no way
+            for it to cost the student an attempt. Only shown when there is
+            something to replay. */}
+        {canReplayCue && (
+          <button
+            onClick={replayCue}
+            className="ml-auto flex-shrink-0 rounded-full border border-muted-gray bg-white px-3.5 py-1.5 text-[12px] font-semibold text-slate-blue hover:text-ink hover:bg-reading-surface transition-colors"
+          >
+            Explain again
+          </button>
         )}
       </div>
 

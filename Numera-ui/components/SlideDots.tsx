@@ -18,6 +18,11 @@ import { cn } from '@/lib/cn';
 export default function SlideDots() {
   const { activeSlide, totalSlides } = useNumeraStore();
 
+  // Nothing true to show yet. The rail used to default to "step 3 of 9" and
+  // nothing ever assigned it, so every student saw the same invented position
+  // for the whole lesson; an absent rail is more honest than a wrong one.
+  if (totalSlides <= 0) return null;
+
   return (
     <div
       className="lg-glass flex flex-col items-center flex-shrink-0 rounded-full my-2 mx-1.5 py-4 overflow-y-auto"
