@@ -1,13 +1,54 @@
 import asyncio
 
+import pytest
 from fastapi import WebSocket
 from fastapi.testclient import TestClient
 
+from app.adapters import provider
+from app.adapters.student_model import StudentModelServiceAdapter
+from app.core.config import Settings
 from app.main import app
-from app.services import interaction_service
+from app.models.student_model_session import (
+    StudentModelSessionEvent,
+    StudentModelSessionEventResponse,
+)
+from app.services import session_service
 from app.services.voice.streaming import streaming_server
+from tests.test_session_events import _event_response, _session_opened_response
 
 client = TestClient(app, headers={"Authorization": "Bearer test-token"})
+
+
+@pytest.fixture(autouse=True)
+def schema_student_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(
+        student_model_url="https://student-model.test",
+        student_model_topic_codes={"ALG_LINEAR_ONE_STEP": "ALG-ORI-02"},
+        use_mock_student_model=False,
+        use_mock_voice=True,
+        use_mock_vision=True,
+        use_openai_ai_engine=False,
+        qdrant_url="https://qdrant.test",
+        qdrant_api_key="test-key",
+    )
+
+    async def send_session_event(
+        adapter: StudentModelServiceAdapter,
+        event: StudentModelSessionEvent,
+        access_token: str,
+    ) -> StudentModelSessionEventResponse:
+        del adapter, access_token
+        body = (
+            _session_opened_response("PHASE_2_GUIDED_LEARNING")
+            if event.event_type == "SESSION_OPENED"
+            else _event_response(event.event_type, event.request_id)
+        )
+        body["request_id"] = event.request_id
+        return StudentModelSessionEventResponse.model_validate(body)
+
+    monkeypatch.setattr(provider, "get_settings", lambda: settings)
+    monkeypatch.setattr(session_service, "get_settings", lambda: settings)
+    monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", send_session_event)
 
 
 def test_streaming_tutor_call_forwards_bearer_token(monkeypatch) -> None:
@@ -68,7 +109,6 @@ def _start_session(student_id: str) -> str:
             "student_id": student_id,
             "concept_id": "ALG_LINEAR_ONE_STEP",
             "interaction_mode": "VOICE",
-            "initial_phase": "DIAGNOSTIC",
         },
     )
     assert response.status_code == 200
@@ -157,8 +197,11 @@ def test_voice_transcript_routes_through_interaction_flow() -> None:
     body = response.json()
     assert body["session_id"] == session_id
     assert body["student_id"] == "ST011"
-    assert body["message"] == "Let us review the equation and try the next step carefully."
-    assert body["message_voice"] == "Let us review the equation and try the next step carefully."
+    assert body["message"] == (
+        "Let us review the equation and try the next step carefully. "
+        "Undo the addition first."
+    )
+    assert body["message_voice"] == body["message"]
     assert body["voice_state"]["stream_active"] is True
     assert body["voice_state"]["current_turn"] == "STUDENT"
     assert body["voice_state"]["last_transcript_confidence"] == 0.94
@@ -167,18 +210,8 @@ def test_voice_transcript_routes_through_interaction_flow() -> None:
     assert isinstance(body["tutor_turn_id"], str)
 
 
-def test_voice_transcript_normalizes_spoken_correct_answer(monkeypatch) -> None:
+def test_voice_transcript_normalizes_spoken_correct_answer() -> None:
     session_id = _start_session("ST013")
-
-    async def get_second_question(
-        concept_id: str,
-        phase: str,
-        served_question_ids: list[str] | None,
-    ) -> tuple[str, str, str]:
-        del concept_id, phase, served_question_ids
-        return ("Solve for x: x + 4 = 9", "x = 5", "ALG_EQ_DIAG_002")
-
-    monkeypatch.setattr(interaction_service, "get_next_question", get_second_question)
 
     response = client.post(
         "/voice/transcript",
@@ -195,10 +228,10 @@ def test_voice_transcript_normalizes_spoken_correct_answer(monkeypatch) -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["message"] == "Your value is correct. How did you work it out?"
-    assert body["message_voice"] == "Your value is correct. How did you work it out?"
+    assert body["message"] == "Correct. Nice work explaining your answer."
+    assert body["message_voice"] == body["message"]
     assert body["answer_value_confirmed"] is True
-    assert body["question_completed"] is False
+    assert body["question_completed"] is True
 
 
 def test_voice_transcript_rejects_invalid_confidence() -> None:
