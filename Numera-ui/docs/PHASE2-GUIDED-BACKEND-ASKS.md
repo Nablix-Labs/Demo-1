@@ -203,6 +203,42 @@ changed a name.
 `{ op: "cycle" | "pulse" | "dim" | "highlight", target: string, values?: string[] }`.
 Three or four verbs covers everything in this spec. Happy to draft it.
 
+### C8. Display instructions alongside the question — mostly NOT needed
+
+Manjusha asked (2 Aug) whether the question could carry instructions about how it
+should be displayed, with the vertical alignment of the three cases as the
+example.
+
+**The alignment case is fixed and needs nothing from the backend** (`415df20`).
+The bug was ours: the question was rendered inside a `<p>`, where CSS collapses
+newlines to spaces, so `"3 + 5\n9 + 5\n14 + 5"` arrived on the canvas as one
+flat line. Line breaks are now preserved, and a stack of pure-maths lines is laid
+out as an aligned grid with right-aligned columns.
+
+So: **send the cases separated by newlines and they will render stacked and
+aligned.** No padding needed — columns are derived by splitting on whitespace, so
+`"3 + 5\n9 + 5"` and `"  3  +  5\n 9 + 5"` produce identical output.
+
+What the frontend decides on its own, and the rule it uses:
+
+| Question | Rendered as |
+|---|---|
+| `x + 4 = 9` | equation, with the "Solve for x:" lead-in |
+| `3 + 5\n9 + 5\n14 + 5` | aligned grid of cases |
+| `Look at these:\n3 + 5\n9 + 5` | prose, line breaks kept (a line has words) |
+| `3 + 5\n9 + 5 + 2` | prose (rows are ragged — a grid would misalign it) |
+
+**Open question for Manjusha:** is alignment the only display instruction you
+need, or are there others coming (colour, emphasis, revealing cases one at a
+time)? If it's just alignment, this is done and no schema change is warranted.
+If there are more, tell me the list and we'll add one small `display` object to
+the question rather than a field per instruction. I'd rather not invent a
+general mechanism for a single case.
+
+Note that "reveal the cases one at a time" — which §3A of the spec does ask for
+— is genuinely a different thing, and better expressed as tutor `canvas_draw`
+elements than as a display instruction on the question. That already works.
+
 ### C7. Parallel example — no support at all
 
 Rung 5 of the ladder (split canvas, structurally similar problem) has no
