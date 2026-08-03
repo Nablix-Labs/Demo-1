@@ -1248,6 +1248,18 @@ async def _process_interaction(
             ),
         )
 
+    adapters = get_adapters()
+    if (
+        session.student_model_event is not None
+        and session.current_phase in {"GUIDED_PRACTICE", "INDEPENDENT_PRACTICE"}
+        and request.interaction_type == "ANSWER_SUBMISSION"
+    ):
+        session = await _initialize_restored_schema_phase(
+            session,
+            adapters.student_model,
+            access_token,
+        )
+
     if session.current_question is None or session.question_id is None:
         raise HTTPException(
             status_code=409,
@@ -1329,7 +1341,6 @@ async def _process_interaction(
         ocr_confidence=ocr.confidence if ocr is not None else None,
         canvas_regions=ocr.detected_regions if ocr is not None else [],
     )
-    adapters = get_adapters()
     safety_check = await adapters.safety.check(context)
     if not safety_check.passed:
         fallback = safety_check.safe_fallback_message or "Let's pause for a moment."
@@ -1377,25 +1388,6 @@ async def _process_interaction(
                 None,
                 None,
             ),
-        )
-
-    if (
-        session.student_model_event is not None
-        and session.current_phase in {"GUIDED_PRACTICE", "INDEPENDENT_PRACTICE"}
-        and request.interaction_type == "ANSWER_SUBMISSION"
-    ):
-        session = await _initialize_restored_schema_phase(
-            session,
-            adapters.student_model,
-            access_token,
-        )
-        turn_session = session
-        context = context.model_copy(
-            update={
-                "question": session.current_question,
-                "correct_answer": session.correct_answer,
-                "question_number": session.question_number,
-            }
         )
 
     schema_session = session.student_model_event is not None

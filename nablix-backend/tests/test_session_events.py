@@ -1111,6 +1111,15 @@ def test_restored_not_started_phase_initializes_before_answer(
     )
     assert started.status_code == 200
     body = started.json()
+    session = session_service._sessions[body["session_id"]]
+    session_service._sessions[body["session_id"]] = session.model_copy(
+        update={
+            "current_question": None,
+            "question_type": None,
+            "question_id": None,
+            "correct_answer": None,
+        }
+    )
 
     answered = client.post(
         "/interaction",
