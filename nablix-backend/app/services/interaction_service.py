@@ -1073,12 +1073,11 @@ def _duplicate_turn_response(
     request: InteractionRequest,
     session: SessionRecord,
 ) -> InteractionResponse | None:
-    if (
-        request.turn_id is None
-        or request.turn_id != session.last_processed_turn_id
-    ):
+    if request.turn_id is None:
         return None
     response = last_interaction_response_for(session.session_id, request.turn_id)
+    if response is None and request.turn_id != session.last_processed_turn_id:
+        return None
     if response is None:
         raise RuntimeError(
             f"cached response is missing for duplicate session_id={session.session_id} "
@@ -1283,10 +1282,19 @@ def _non_graded_response(
     message: str,
     conversation_action: ConversationAction,
 ) -> InteractionResponse:
-    state_updates = _turn_updates(request, "GAVE_HINT", "ANSWER")
-    if request.interaction_type == "INACTIVITY_NUDGE":
+    is_nudge = request.interaction_type in {"INACTIVITY_NUDGE", "NUDGE_PRESENTED"}
+    state_updates = (
+        {
+            "last_processed_turn_id": request.turn_id,
+            "last_tutor_action": session.last_tutor_action,
+            "expected_student_response": session.expected_student_response,
+        }
+        if is_nudge
+        else _turn_updates(request, "GAVE_HINT", "ANSWER")
+    )
+    if request.interaction_type == "INACTIVITY_NUDGE" and session.nudge_generated_count < 4:
         state_updates["nudge_generated_count"] = session.nudge_generated_count + 1
-    if request.interaction_type == "NUDGE_PRESENTED":
+    if request.interaction_type == "NUDGE_PRESENTED" and session.nudge_presented_count < 2:
         state_updates["nudge_presented_count"] = session.nudge_presented_count + 1
     updated_session = update_interaction_state(
         request.session_id,
@@ -1303,22 +1311,20 @@ def _non_graded_response(
         session.scaffold_steps,
         state_updates,
     )
-    return _cache_response(
+    response = _response_from(
         request,
-        _response_from(
-            request,
-            updated_session,
-            message,
-            message,
-            None,
-            updated_session.scaffold_steps,
-            None,
-            conversation_action,
-            0,
-            None,
-            True,
-        ),
+        updated_session,
+        message,
+        message,
+        None,
+        updated_session.scaffold_steps,
+        None,
+        conversation_action,
+        0,
+        None,
+        True,
     )
+    return _cache_response(request, response)
 
 
 async def _process_interaction(
@@ -1357,12 +1363,14 @@ async def _process_interaction(
             support_message,
             "GIVE_HINT",
         )
+    if request.interaction_type == "EXPLAIN_AGAIN":
+        return _non_graded_response(
+            request,
+            session,
+            f"Let's look at it another way. {session.message}",
+            "ASK_QUESTION",
+        )
     if request.interaction_type == "INACTIVITY_NUDGE":
-        if session.nudge_generated_count >= 4:
-            raise HTTPException(
-                status_code=429,
-                detail="INACTIVITY_NUDGE generation limit reached for this tutor turn.",
-            )
         return _non_graded_response(
             request,
             session,
@@ -1370,11 +1378,6 @@ async def _process_interaction(
             "WAIT_FOR_STUDENT",
         )
     if request.interaction_type == "NUDGE_PRESENTED":
-        if session.nudge_presented_count >= 2:
-            raise HTTPException(
-                status_code=429,
-                detail="INACTIVITY_NUDGE presentation limit reached for this tutor turn.",
-            )
         return _non_graded_response(
             request,
             session,
@@ -1840,20 +1843,42 @@ async def _process_interaction(
         state_updates,
     )
 
-    return _cache_response(
+    response = _response_from(
         request,
-        _response_from(
-            request,
-            updated_session,
-            tutor_message,
-            tutor_message_voice,
-            visual_cue,
-            scaffold_steps,
-            None,
-            conversation_action,
-            effective_attempt_increment,
-            None,
-            None,
-            previous_phase=session.current_phase if new_phase is not None else None,
-        ),
+        updated_session,
+        tutor_message,
+        tutor_message_voice,
+        visual_cue,
+        scaffold_steps,
+        None,
+        conversation_action,
+        effective_attempt_increment,
+        None,
+        None,
+        previous_phase=session.current_phase if new_phase is not None else None,
     )
+    support_served = (
+        response.active_support_level
+        if schema_content_response is not None
+        and schema_content_response.phase_payload is not None
+        and schema_content_response.phase_payload.support_to_serve is not None
+        else None
+    )
+    response = response.model_copy(
+        update={
+            "guided_student_state": tutor.guided_student_state,
+            "selected_error_code": tutor.selected_error_code,
+            "evaluation_reason_code": (
+                f"GUIDED_{tutor.guided_student_state}"
+                if tutor.guided_student_state is not None
+                else None
+            ),
+            "support_reason_code": (
+                schema_content_response.routing.reason
+                if support_served is not None
+                else None
+            ),
+            "support_served_this_turn": support_served,
+        }
+    )
+    return _cache_response(request, response)

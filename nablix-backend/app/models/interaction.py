@@ -62,11 +62,12 @@ class InteractionRequest(BaseModel):
     def validate_turn(self) -> "InteractionRequest":
         if self.input_source == "VOICE" and self.transcript_final is not True:
             raise ValueError("transcript_final must be true for VOICE interactions.")
+        system_interactions = {"INACTIVITY_NUDGE", "NUDGE_PRESENTED"}
         if (self.input_source == "SYSTEM") != (
-            self.interaction_type == "INACTIVITY_NUDGE"
+            self.interaction_type in system_interactions
         ):
             raise ValueError(
-                "SYSTEM input_source is only valid for INACTIVITY_NUDGE interactions."
+                "SYSTEM input_source is only valid for inactivity nudge interactions."
             )
         return self
 
