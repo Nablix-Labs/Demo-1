@@ -575,6 +575,8 @@ def classify_guided_learning_response(
                 "openai_ai_engine",
                 "Guided turn evaluation failed without a validated response.",
             )
+    if is_authoritative_guided_completion(request):
+        evaluation = authoritative_guided_completion(evaluation, rules)
     next_objective = normalized_guided_objective(evaluation, objective)
     logger.info(
         "guided_state_evaluated",
@@ -600,6 +602,38 @@ def classify_guided_learning_response(
         rubric,
         evaluation,
         next_objective,
+    )
+
+
+def authoritative_guided_completion(
+    evaluation: GuidedEvaluation,
+    rules: ClassifierRulesConfig,
+) -> GuidedEvaluation:
+    """Keep a proven answer correct without inventing component evidence."""
+    return evaluation.model_copy(
+        update={
+            "student_state": "CORRECT",
+            "newly_confirmed_concept_ids": [],
+            "preserved_concept_ids": [],
+            "contradicted_concept_ids": [],
+            "missing_concept_ids": [],
+            "selected_error_code": None,
+            "next_objective": None,
+            "tutor_message": rules.messages.CORRECT,
+            "tutor_message_voice": rules.messages.CORRECT,
+        }
+    )
+
+
+def is_authoritative_guided_completion(
+    request: ClassificationRequest,
+) -> bool:
+    """Return whether the contract has proven the whole requested response."""
+    if evaluate_answer_contract(request) != "CORRECT" or request.answer_spec is None:
+        return False
+    return not (
+        request.answer_spec.explanation_required
+        and request.answer_spec.verification_method == "EXACT_CHOICE_MATCH"
     )
 
 

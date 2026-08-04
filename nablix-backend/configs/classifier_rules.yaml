@@ -97,7 +97,7 @@ guided_learning:
     both tutor messages with one focused question that helps the student supply
     the missing idea. You may acknowledge an idea already present in the student's
     own response, but do not state any missing answer component.
-  reconciliation_message: "I want to make sure I understood that. Please give your answer in one complete response."
+  reconciliation_message: "I want to make sure I understood that. Please explain the part that is still unresolved."
   allowed_student_states:
     - CORRECT
     - PARTIAL
