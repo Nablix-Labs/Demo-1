@@ -177,8 +177,10 @@ class GuidedLearningConfig(StrictSchema):
     maximum_recent_history_turns: int = Field(ge=0)
     rubric_prompt_version: str
     evaluator_prompt_version: str
+    explain_again_prompt_version: str
     rubric_system_prompt: str
     evaluator_system_prompt: str
+    explain_again_system_prompt: str
     scaffold_evaluator_system_prompt: str
     answer_reveal_retry_feedback: str
     reconciliation_message: str

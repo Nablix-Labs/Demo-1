@@ -4,12 +4,13 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
-from app.models.adapters import ConversationAction
+from app.models.adapters import ConversationAction, ConversationMessage
 from app.models.guided_learning import (
     ActiveTeachingObjective,
     GeneratedQuestionRubric,
     GuidedStudentState,
 )
+from app.models.student_model_session import SupportUsed
 
 
 EvaluationCategory = Literal[
@@ -218,3 +219,75 @@ class TutorResponse(StrictSchema):
     generated_question_rubric: GeneratedQuestionRubric | None = None
     active_teaching_objective: ActiveTeachingObjective | None = None
     scaffold_original_answer_correct: StrictBool = False
+
+
+class AuthoredRequiredComponent(StrictSchema):
+    component_id: str = Field(min_length=1)
+    sequence_no: int = Field(ge=1)
+    required: StrictBool
+    evaluation_criterion: str = Field(min_length=1)
+
+
+class RecordedMisconception(StrictSchema):
+    error_code: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+
+
+class ActiveScaffoldState(StrictSchema):
+    scaffold_id: str = Field(min_length=1)
+    current_step_id: str = Field(min_length=1)
+    step_number: int = Field(ge=1)
+    total_steps: int = Field(ge=1)
+    step_text: str = Field(min_length=1)
+    step_voice: str | None
+
+
+class AuthoredAnswerSpec(StrictSchema):
+    answer_spec_id: str = Field(min_length=1)
+    canonical_answer: str = Field(min_length=1)
+    accepted_answers: list[str]
+    verification_method: str = Field(min_length=1)
+    explanation_required: StrictBool | None
+    required_components: list[AuthoredRequiredComponent] = Field(min_length=1)
+
+
+class ExplainAgainRequest(StrictSchema):
+    question_id: str = Field(min_length=1)
+    question: str = Field(min_length=1)
+    answer_spec: AuthoredAnswerSpec
+    active_teaching_objective: ActiveTeachingObjective
+    first_unresolved_concept_id: str = Field(min_length=1)
+    guided_student_state: GuidedStudentState
+    selected_error_code: str | None
+    recorded_misconception: RecordedMisconception | None
+    recent_conversation: list[ConversationMessage]
+    active_support_level: SupportUsed
+    highest_support_used: SupportUsed
+    visible_visual_cue: VisualCue | None
+    active_scaffold: ActiveScaffoldState | None
+    answer_reveal_allowed: StrictBool
+
+
+class OpenAIExplainAgainMessage(StrictSchema):
+    tutor_message: str = Field(min_length=1)
+    tutor_message_voice_optimised: str = Field(min_length=1)
+    answer_reveal_risk: StrictBool
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class ExplainAgainResult(StrictSchema):
+    interaction_type: Literal["EXPLAIN_AGAIN"]
+    tutor_message: str = Field(min_length=1)
+    tutor_message_voice_optimised: str = Field(min_length=1)
+    confidence: float = Field(ge=0.0, le=1.0)
+    attempt_increment: Literal[0]
+    evaluation_reason_code: Literal["EXPLAIN_AGAIN_REEXPRESSION"]
+    guided_student_state: GuidedStudentState
+    active_teaching_objective: ActiveTeachingObjective
+    first_unresolved_concept_id: str = Field(min_length=1)
+    selected_error_code: str | None
+    support_served_this_turn: None
+    active_support_level: SupportUsed
+    highest_support_used: SupportUsed
+    active_scaffold: ActiveScaffoldState | None
+    progression_change_requested: Literal[False]
