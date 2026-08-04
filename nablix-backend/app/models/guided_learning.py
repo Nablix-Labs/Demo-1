@@ -31,6 +31,20 @@ class ActiveTeachingObjective(GuidedLearningModel):
     missing_concept_ids: list[str]
 
 
+class ActiveScaffold(GuidedLearningModel):
+    scaffold_id: str
+    current_step_id: str
+    step_number: int = Field(ge=1)
+    total_steps: int = Field(ge=1)
+    step_text: str
+    step_voice: str | None
+
+
+class PrerequisiteRepair(GuidedLearningModel):
+    prerequisite_micro_skill_ids: list[str]
+    reason_code: str
+
+
 class GuidedEvaluation(GuidedLearningModel):
     student_state: GuidedStudentState
     newly_confirmed_concept_ids: list[str]

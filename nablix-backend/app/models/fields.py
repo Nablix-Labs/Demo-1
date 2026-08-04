@@ -79,7 +79,13 @@ InteractionMode = Literal["VOICE", "TEXT"]
 InteractionType = Literal[
     "ANSWER_SUBMISSION",
     "CANVAS_SUBMISSION",
+    "EXPLAIN_AGAIN",
+    "INACTIVITY_NUDGE",
+    "NUDGE_PRESENTED",
+    "HELP_REQUEST",
+    "SUPPORT_REPLAY",
+    "CLARIFICATION",
     "SESSION_START",
     "SESSION_END",
 ]
-InputSource = Literal["TEXT", "VOICE", "CANVAS"]
+InputSource = Literal["TEXT", "VOICE", "CANVAS", "SYSTEM"]

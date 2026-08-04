@@ -1017,7 +1017,7 @@ def _schema_interaction_request_id(
     return f"{session.session_id}:{source_turn_id}:{event_type}"
 
 
-def _voice_turn_updates(
+def _turn_updates(
     request: InteractionRequest,
     last_tutor_action: TutorAction,
     expected_student_response: ExpectedStudentResponse,
@@ -1026,10 +1026,8 @@ def _voice_turn_updates(
         "last_tutor_action": last_tutor_action,
         "expected_student_response": expected_student_response,
     }
-    if request.input_source != "VOICE":
-        return updates
     if request.turn_id is None:
-        raise RuntimeError("validated VOICE interaction is missing turn_id")
+        raise RuntimeError("validated interaction is missing turn_id")
     updates.update(
         {
             "last_processed_turn_id": request.turn_id,
@@ -1076,11 +1074,11 @@ def _duplicate_turn_response(
     session: SessionRecord,
 ) -> InteractionResponse | None:
     if (
-        request.input_source != "VOICE"
+        request.turn_id is None
         or request.turn_id != session.last_processed_turn_id
     ):
         return None
-    response = last_interaction_response_for(session.session_id)
+    response = last_interaction_response_for(session.session_id, request.turn_id)
     if response is None:
         raise RuntimeError(
             f"cached response is missing for duplicate session_id={session.session_id} "
@@ -1097,11 +1095,15 @@ def _duplicate_turn_response(
 
 
 def _turn_is_stale(request: InteractionRequest, session: SessionRecord) -> bool:
-    if request.input_source != "VOICE":
-        return False
     return (
-        request.previous_tutor_turn_id != session.last_tutor_turn_id
-        or request.question_id != session.question_id
+        (
+            request.previous_tutor_turn_id is not None
+            and request.previous_tutor_turn_id != session.last_tutor_turn_id
+        )
+        or (
+            session.question_id is not None
+            and request.question_id != session.question_id
+        )
     )
 
 
@@ -1128,18 +1130,42 @@ def _response_from(
         if previous_phase is not None
         else None
     )
+    stored_event = session.student_model_event
+    guided = (
+        stored_event.journey_state.phase_2_guided_learning
+        if stored_event is not None
+        else None
+    )
+    support = (
+        stored_event.phase_payload.support_to_serve
+        if stored_event is not None and stored_event.phase_payload is not None
+        else None
+    )
+    support_type = support.get("support_type") if support is not None else None
+    active_support_level = (
+        support_type
+        if support_type in _SUPPORT_RANK
+        else "VISUAL_CUE"
+        if support_type == "HINT_AND_VISUAL_CUE"
+        else "NONE"
+    )
+    highest_support_used = (
+        max(
+            guided.highest_support_used_by_skill.values(),
+            key=_SUPPORT_RANK.index,
+            default="NONE",
+        )
+        if guided is not None
+        else "NONE"
+    )
+    active_objective = session.active_teaching_objective
     return InteractionResponse(
         session_id=request.session_id,
         student_id=request.student_id,
         status=status,
-        accepted_turn_id=(
-            session.last_processed_turn_id
-            if request.input_source == "VOICE"
-            else None
-        ),
-        tutor_turn_id=(
-            session.last_tutor_turn_id if request.input_source == "VOICE" else None
-        ),
+        accepted_turn_id=session.last_processed_turn_id,
+        interaction_state_version=session.interaction_state_version,
+        tutor_turn_id=session.last_tutor_turn_id,
         conversation_action=conversation_action,
         expects_student_response=session.expected_student_response != "NONE",
         expected_student_response=session.expected_student_response,
@@ -1182,15 +1208,42 @@ def _response_from(
         session_summary=session_summary,
         student_model_event=session.student_model_event,
         student_model_state=session.student_model_state,
+        active_teaching_objective=active_objective,
+        first_unresolved_concept_id=(
+            active_objective.missing_concept_ids[0]
+            if active_objective is not None
+            and active_objective.missing_concept_ids
+            else None
+        ),
+        active_support_level=active_support_level,
+        highest_support_used=highest_support_used,
+        consecutive_stuck_count=session.stuck_count,
+        active_scaffold=(
+            {
+                "scaffold_id": session.scaffold_id,
+                "current_step_id": session.current_scaffold_step_id,
+                "step_number": session.scaffold_step_number,
+                "total_steps": session.scaffold_total_steps,
+                "step_text": session.scaffold_steps[0],
+                "step_voice": session.scaffold_steps[0],
+            }
+            if session.scaffold_id is not None
+            and session.current_scaffold_step_id is not None
+            and session.scaffold_step_number > 0
+            and session.scaffold_total_steps > 0
+            and session.scaffold_steps
+            else None
+        ),
     )
 
 
-def _cache_voice_response(
+def _cache_response(
     request: InteractionRequest,
     response: InteractionResponse,
 ) -> InteractionResponse:
-    if request.input_source == "VOICE":
-        cache_interaction_response(request.session_id, response)
+    if request.turn_id is None:
+        raise RuntimeError("validated interaction is missing turn_id")
+    cache_interaction_response(request.session_id, request.turn_id, response)
     return response
 
 
@@ -1199,7 +1252,73 @@ async def process_interaction(
     access_token: str,
 ) -> InteractionResponse | StaleTurnResponse:
     async with interaction_lock_for(request.session_id):
-        return await _process_interaction(request, access_token)
+        response = await _process_interaction(request, access_token)
+    logger.info(
+        "interaction_turn_completed",
+        extra={
+            "session_id": request.session_id,
+            "turn_id": request.turn_id,
+            "input_source": request.input_source,
+            "interaction_type": request.interaction_type,
+            "status": response.status,
+            "state_version": getattr(response, "interaction_state_version", None),
+        },
+    )
+    return response
+
+
+def _active_support_message(session: SessionRecord) -> str | None:
+    event = session.student_model_event
+    if event is None:
+        return None
+    steps = _schema_support_steps(event)
+    if steps:
+        return steps[0]
+    return _schema_hint(event)
+
+
+def _non_graded_response(
+    request: InteractionRequest,
+    session: SessionRecord,
+    message: str,
+    conversation_action: ConversationAction,
+) -> InteractionResponse:
+    state_updates = _turn_updates(request, "GAVE_HINT", "ANSWER")
+    if request.interaction_type == "INACTIVITY_NUDGE":
+        state_updates["nudge_generated_count"] = session.nudge_generated_count + 1
+    if request.interaction_type == "NUDGE_PRESENTED":
+        state_updates["nudge_presented_count"] = session.nudge_presented_count + 1
+    updated_session = update_interaction_state(
+        request.session_id,
+        request.student_id,
+        session,
+        session.current_phase,
+        session.hint_count,
+        session.current_phase,
+        request.transcript_confidence,
+        request.canvas_snapshot_id,
+        None,
+        session.show_visual_cue,
+        session.show_scaffold_panel,
+        session.scaffold_steps,
+        state_updates,
+    )
+    return _cache_response(
+        request,
+        _response_from(
+            request,
+            updated_session,
+            message,
+            message,
+            None,
+            updated_session.scaffold_steps,
+            None,
+            conversation_action,
+            0,
+            None,
+            True,
+        ),
+    )
 
 
 async def _process_interaction(
@@ -1224,6 +1343,44 @@ async def _process_interaction(
         return duplicate_response
     if _turn_is_stale(request, session):
         return _stale_turn_response(session)
+
+    if request.interaction_type in {"HELP_REQUEST", "SUPPORT_REPLAY"}:
+        support_message = _active_support_message(session)
+        if support_message is None:
+            raise HTTPException(
+                status_code=409,
+                detail="NO_ACTIVE_SUPPORT: this session has no support to replay.",
+            )
+        return _non_graded_response(
+            request,
+            session,
+            support_message,
+            "GIVE_HINT",
+        )
+    if request.interaction_type == "INACTIVITY_NUDGE":
+        if session.nudge_generated_count >= 4:
+            raise HTTPException(
+                status_code=429,
+                detail="INACTIVITY_NUDGE generation limit reached for this tutor turn.",
+            )
+        return _non_graded_response(
+            request,
+            session,
+            "Are you still with me? Take your time and continue when you're ready.",
+            "WAIT_FOR_STUDENT",
+        )
+    if request.interaction_type == "NUDGE_PRESENTED":
+        if session.nudge_presented_count >= 2:
+            raise HTTPException(
+                status_code=429,
+                detail="INACTIVITY_NUDGE presentation limit reached for this tutor turn.",
+            )
+        return _non_graded_response(
+            request,
+            session,
+            "Take your time and continue when you're ready.",
+            "WAIT_FOR_STUDENT",
+        )
 
     student_message = _student_message_from(request)
     rules: ClassifierRulesConfig = load_classifier_rules()
@@ -1256,14 +1413,14 @@ async def _process_interaction(
                 "attempt_count": session.attempt_count,
                 "question_completed": session.question_completed,
                 "conversation_history": clarification_history,
-                **_voice_turn_updates(
+                **_turn_updates(
                     request,
                     "REQUESTED_CLARIFICATION",
                     "CLARIFICATION",
                 ),
             },
         )
-        return _cache_voice_response(
+        return _cache_response(
             request,
             _response_from(
                 request,
@@ -1331,7 +1488,7 @@ async def _process_interaction(
     context = AdapterContext(
         session_id=request.session_id,
         student_id=request.student_id,
-        source_turn_id=request.turn_id or f"TURN-{uuid4().hex.upper()}",
+        source_turn_id=request.turn_id,
         question_id=session.question_id,
         question_type=None if scaffold_turn else session.question_type,
         message=student_message,
@@ -1398,14 +1555,14 @@ async def _process_interaction(
                     fallback,
                     rules.conversation_rules.max_recent_messages,
                 ),
-                **_voice_turn_updates(
+                **_turn_updates(
                     request,
                     session.last_tutor_action,
                     session.expected_student_response,
                 ),
             },
         )
-        return _cache_voice_response(
+        return _cache_response(
             request,
             _response_from(
                 request,
@@ -1535,6 +1692,9 @@ async def _process_interaction(
         schema_response is not None and session.question_id != turn_session.question_id
     )
     state_updates: dict[str, object] = {
+        "interaction_state_version": session.interaction_state_version + 1,
+        "nudge_generated_count": 0,
+        "nudge_presented_count": 0,
         "attempt_count": (
             session.attempt_count if schema_question_changed else applied_attempt_count
         ),
@@ -1656,7 +1816,7 @@ async def _process_interaction(
         tutor.evaluation,
     )
     state_updates.update(
-        _voice_turn_updates(
+        _turn_updates(
             request,
             last_tutor_action,
             expected_student_response,
@@ -1680,7 +1840,7 @@ async def _process_interaction(
         state_updates,
     )
 
-    return _cache_voice_response(
+    return _cache_response(
         request,
         _response_from(
             request,

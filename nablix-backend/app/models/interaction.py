@@ -20,11 +20,18 @@ from app.models.fields import (
     StudentId,
     TurnId,
 )
+from app.models.guided_learning import (
+    ActiveScaffold,
+    ActiveTeachingObjective,
+    GuidedStudentState,
+    PrerequisiteRepair,
+)
 from app.models.session import CanvasState, SessionSummary, VoiceState
 from app.models.student_model_session import (
     PublicStudentModelEvent,
     QuestionType,
     StudentModelCoreState,
+    SupportUsed,
 )
 
 
@@ -38,7 +45,7 @@ class InteractionRequest(BaseModel):
     text_input: BoundedText | None = None
     voice_transcript: str | None = None
     transcript_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
-    turn_id: TurnId | None = None
+    turn_id: TurnId
     previous_tutor_turn_id: TurnId | None = None
     transcript_final: bool | None = None
     canvas_snapshot_id: str | None = None
@@ -52,13 +59,15 @@ class InteractionRequest(BaseModel):
     timestamp: str | None = None
 
     @model_validator(mode="after")
-    def validate_voice_turn(self) -> "InteractionRequest":
-        if self.input_source != "VOICE":
-            return self
-        if self.turn_id is None:
-            raise ValueError("turn_id is required for VOICE interactions.")
-        if self.transcript_final is not True:
+    def validate_turn(self) -> "InteractionRequest":
+        if self.input_source == "VOICE" and self.transcript_final is not True:
             raise ValueError("transcript_final must be true for VOICE interactions.")
+        if (self.input_source == "SYSTEM") != (
+            self.interaction_type == "INACTIVITY_NUDGE"
+        ):
+            raise ValueError(
+                "SYSTEM input_source is only valid for INACTIVITY_NUDGE interactions."
+            )
         return self
 
 
@@ -72,6 +81,7 @@ class InteractionResponse(BaseModel):
         "CLARIFICATION_REQUIRED",
     ] | None = None
     accepted_turn_id: TurnId | None = None
+    interaction_state_version: int = Field(default=0, ge=0)
     tutor_turn_id: TurnId | None = None
     conversation_action: ConversationAction
     expects_student_response: bool
@@ -115,6 +125,18 @@ class InteractionResponse(BaseModel):
     session_summary: SessionSummary | None
     student_model_event: PublicStudentModelEvent | None = None
     student_model_state: StudentModelCoreState | None = None
+    guided_student_state: GuidedStudentState | None = None
+    active_teaching_objective: ActiveTeachingObjective | None = None
+    first_unresolved_concept_id: str | None = None
+    selected_error_code: str | None = None
+    evaluation_reason_code: str | None = None
+    support_reason_code: str | None = None
+    support_served_this_turn: SupportUsed | None = None
+    active_support_level: SupportUsed = "NONE"
+    highest_support_used: SupportUsed = "NONE"
+    consecutive_stuck_count: int = Field(default=0, ge=0)
+    active_scaffold: ActiveScaffold | None = None
+    prerequisite_repair: PrerequisiteRepair | None = None
 
 
 class StaleTurnResponse(BaseModel):

@@ -136,6 +136,10 @@ async def evaluate_voice_transcript(
     transcript_final: bool | None,
     canvas_snapshot_id: str | None,
 ) -> dict[str, object]:
+    if turn_id is None:
+        raise ValueError("turn_id is required for voice interactions")
+    if transcript_final is not True:
+        raise ValueError("transcript_final must be true for voice interactions")
     payload = {
         "session_id": session_id,
         "student_id": student_id,

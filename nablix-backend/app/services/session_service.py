@@ -58,7 +58,7 @@ from app.services.student_model_session import (
 
 _sessions: dict[str, SessionRecord] = {}
 _interaction_locks: dict[str, asyncio.Lock] = {}
-_last_interaction_responses: dict[str, InteractionResponse] = {}
+_last_interaction_responses: dict[tuple[str, str], InteractionResponse] = {}
 
 
 class QuestionUpdates(TypedDict):
@@ -99,15 +99,19 @@ def interaction_lock_for(session_id: str) -> asyncio.Lock:
     return lock
 
 
-def last_interaction_response_for(session_id: str) -> InteractionResponse | None:
-    return _last_interaction_responses.get(session_id)
+def last_interaction_response_for(
+    session_id: str,
+    turn_id: str,
+) -> InteractionResponse | None:
+    return _last_interaction_responses.get((session_id, turn_id))
 
 
 def cache_interaction_response(
     session_id: str,
+    turn_id: str,
     response: InteractionResponse,
 ) -> None:
-    _last_interaction_responses[session_id] = response
+    _last_interaction_responses[(session_id, turn_id)] = response
 
 
 # Retained only for legacy session-review fixtures; active sessions use the

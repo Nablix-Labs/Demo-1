@@ -13,6 +13,7 @@ def _valid_interaction_body(session_id: str) -> dict[str, object]:
         "student_id": "ST101",
         "interaction_type": "ANSWER_SUBMISSION",
         "input_source": "TEXT",
+        "turn_id": "TURN-VALIDATION-1",
         "text_input": "I think x equals 5",
         "current_phase": "GUIDED_PRACTICE",
         "concept_id": "ALG_LINEAR_ONE_STEP",
@@ -85,6 +86,16 @@ def test_validation_returns_invalid_value_for_current_phase() -> None:
     body = response.json()
     assert body["error_code"] == "INVALID_VALUE"
     assert body["field"] == "current_phase"
+
+
+def test_validation_requires_stable_turn_id() -> None:
+    body = _valid_interaction_body(SESSION_ID)
+    del body["turn_id"]
+
+    response = client.post("/interaction", json=body)
+
+    assert response.status_code == 422
+    assert response.json()["field"] == "turn_id"
 
 
 def test_validation_returns_invalid_json_code() -> None:

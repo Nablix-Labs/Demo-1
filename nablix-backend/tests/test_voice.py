@@ -102,6 +102,37 @@ def test_streaming_tutor_call_forwards_bearer_token(monkeypatch) -> None:
     assert captured_payload["canvas_snapshot_id"] == "canvas-1"
 
 
+@pytest.mark.parametrize(
+    ("turn_id", "transcript_final"),
+    [(None, True), ("TURN-BROWSER-1", False), ("TURN-BROWSER-1", None)],
+)
+def test_streaming_rejects_non_final_or_unidentified_turns(
+    monkeypatch: pytest.MonkeyPatch,
+    turn_id: str | None,
+    transcript_final: bool | None,
+) -> None:
+    async def unexpected_client() -> None:
+        raise AssertionError("invalid voice turn reached the backend client")
+
+    monkeypatch.setattr(streaming_server, "get_backend_http_client", unexpected_client)
+
+    with pytest.raises(ValueError):
+        asyncio.run(
+            streaming_server.evaluate_voice_transcript(
+                "SESSION001",
+                "ST001",
+                "x equals five",
+                0.94,
+                1.0,
+                "test-token",
+                turn_id,
+                None,
+                transcript_final,
+                None,
+            )
+        )
+
+
 def _start_session(student_id: str) -> str:
     response = client.post(
         "/session/start",
@@ -223,6 +254,8 @@ def test_voice_transcript_normalizes_spoken_correct_answer() -> None:
             "audio_duration_seconds": 3.2,
             "turn": "STUDENT",
             "timestamp": "2026-06-10T10:00:00Z",
+            "turn_id": "TURN-BROWSER-2",
+            "transcript_final": True,
         },
     )
 
@@ -232,6 +265,37 @@ def test_voice_transcript_normalizes_spoken_correct_answer() -> None:
     assert body["message_voice"] == body["message"]
     assert body["answer_value_confirmed"] is True
     assert body["question_completed"] is True
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("turn_id", None), ("transcript_final", False)],
+)
+def test_voice_transcript_requires_stable_final_turn(
+    field: str,
+    value: str | bool | None,
+) -> None:
+    session_id = _start_session("ST014")
+    payload: dict[str, object] = {
+        "session_id": session_id,
+        "student_id": "ST014",
+        "transcript": "x equals five",
+        "confidence": 0.94,
+        "audio_duration_seconds": 3.2,
+        "turn": "STUDENT",
+        "timestamp": "2026-06-10T10:00:00Z",
+        "turn_id": "TURN-BROWSER-3",
+        "transcript_final": True,
+    }
+    if value is None:
+        payload.pop(field)
+    else:
+        payload[field] = value
+
+    response = client.post("/voice/transcript", json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["field"] == field
 
 
 def test_voice_transcript_rejects_invalid_confidence() -> None:

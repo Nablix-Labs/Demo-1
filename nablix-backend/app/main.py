@@ -113,7 +113,8 @@ def _validation_response_message(
     if field == "interaction_type":
         return (
             "interaction_type must be one of ANSWER_SUBMISSION, CANVAS_SUBMISSION, "
-            "SESSION_START, SESSION_END."
+            "EXPLAIN_AGAIN, INACTIVITY_NUDGE, NUDGE_PRESENTED, HELP_REQUEST, "
+            "SUPPORT_REPLAY, CLARIFICATION, SESSION_START, SESSION_END."
         )
     if field == "current_phase":
         return (

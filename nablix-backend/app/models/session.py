@@ -175,6 +175,9 @@ class SessionRecord(BaseModel):
     allow_voice_input: bool = True
     hint_count: int
     attempt_count: int = 0
+    interaction_state_version: int = 0
+    nudge_generated_count: int = 0
+    nudge_presented_count: int = 0
     stuck_count: int = 0
     # Consecutive REQUEST_EXPLANATION turns on the current question. PARTIAL
     # explanation turns carry attempt_increment=0, so without this nothing

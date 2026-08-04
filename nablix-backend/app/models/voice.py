@@ -65,9 +65,9 @@ class VoiceTranscriptRequest(BaseModel):
     audio_duration_seconds: float
     turn: Literal["STUDENT"]
     timestamp: datetime
-    turn_id: TurnId | None = None
+    turn_id: TurnId
     previous_tutor_turn_id: TurnId | None = None
-    transcript_final: bool | None = None
+    transcript_final: Literal[True]
     canvas_snapshot_id: str | None = None
 
     @field_validator("confidence")

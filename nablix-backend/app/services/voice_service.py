@@ -1,5 +1,3 @@
-from uuid import uuid4
-
 from app.adapters.provider import AdapterSet, get_adapters
 from app.models.adapters import VoiceResult
 from fastapi import HTTPException
@@ -69,17 +67,9 @@ async def process_voice_transcript(
         text_input=None,
         voice_transcript=request.transcript,
         transcript_confidence=request.confidence,
-        turn_id=request.turn_id or f"TURN-{uuid4().hex.upper()}",
-        previous_tutor_turn_id=(
-            request.previous_tutor_turn_id
-            if request.previous_tutor_turn_id is not None
-            else session.last_tutor_turn_id
-        ),
-        transcript_final=(
-            request.transcript_final
-            if request.transcript_final is not None
-            else True
-        ),
+        turn_id=request.turn_id,
+        previous_tutor_turn_id=request.previous_tutor_turn_id,
+        transcript_final=request.transcript_final,
         canvas_snapshot_id=request.canvas_snapshot_id,
         current_phase=session.current_phase,
         concept_id=session.concept_id,
