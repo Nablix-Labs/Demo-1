@@ -87,12 +87,25 @@ function hasCanvasActivity(): boolean {
 }
 
 /** Pull a human-readable message out of a normalised API error, if present. */
+/**
+ * The developer-facing line that goes into the session trail.
+ *
+ * Prefixed with the HTTP status and error code when the request actually
+ * reached a server. A trail entry reading "Tutor unavailable." is the same
+ * sentence whether the socket never opened or the backend returned a 500 with a
+ * detailed reason — and the two need completely different people to look at
+ * them. This makes a screenshot of the trail enough to tell them apart.
+ */
 function errorMessage(err: unknown, fallback: string): string {
-  if (err && typeof err === 'object' && 'response' in err) {
-    const data = (err as { response?: { data?: { message?: string } } }).response?.data;
-    if (data?.message) return data.message;
+  const res = (err as { response?: { status?: number; data?: { message?: string; error_code?: string } } })?.response;
+  if (res) {
+    const parts = [`HTTP ${res.status ?? '?'}`];
+    if (res.data?.error_code) parts.push(res.data.error_code);
+    const detail = res.data?.message?.trim();
+    return `${parts.join(' ')}${detail ? ` — ${detail}` : ''}`;
   }
-  return err instanceof Error ? err.message : fallback;
+  // No response object: the request genuinely never completed.
+  return err instanceof Error ? `No response — ${err.message}` : fallback;
 }
 
 // Shown in the chat when a tutor call fails (e.g. backend 5xx), so a failure is

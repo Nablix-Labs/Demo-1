@@ -124,9 +124,56 @@ export function studentFacingError(err: unknown): string | null {
       return 'Your session needs to be signed in again before I can mark that. Please log in and retry.';
     case 'INTERNAL_ERROR':
       return 'The tutor hit a problem on its side. Please try that again in a moment.';
-    default:
-      return null;
   }
+
+  /**
+   * Attribute the failure to whatever actually failed.
+   *
+   * Everything that reached this point used to return null, so the caller fell
+   * back to "Sorry — I couldn't reach the tutor just now." That sentence
+   * describes a network problem. A 500, 502 or 422 is not a network problem —
+   * the request arrived and the server rejected or broke on it — and describing
+   * it as unreachable sends whoever is testing to look at the frontend and the
+   * wifi while the actual fault sits in a service log nobody opened.
+   *
+   * Naming the source is not about deflecting blame; it is about the next
+   * person spending their time in the right place. A student still gets one
+   * plain sentence and something to do.
+   */
+  const status = res?.status;
+
+  // No response at all: request never completed. This is the only case where
+  // "couldn't reach" is the true story.
+  if (status === undefined) return null;
+
+  // Timeouts first: 504 is also a 5xx, and "took too long" is more actionable
+  // than "hit an error" — it tells the student retrying is worth it.
+  if (status === 408 || status === 504) {
+    return 'The tutor took too long to answer that one. Try sending it again.';
+  }
+  if (status >= 500) {
+    return backendMessage
+      ? `The tutor service hit an error. ${backendMessage}`
+      : 'The tutor service hit an error on its side. Nothing you did — try again in a moment.';
+  }
+  if (status === 429) {
+    return 'The tutor is handling a lot right now. Give it a few seconds and try again.';
+  }
+  if (status === 422) {
+    // A contract mismatch between frontend and backend. The student cannot fix
+    // it and retrying will fail identically, so say so rather than inviting a
+    // loop of futile retries.
+    return 'The tutor could not accept that submission — this one needs the team to look at it.';
+  }
+  if (status === 403) {
+    return 'This session belongs to a different student, so the tutor will not mark it.';
+  }
+  if (status >= 400) {
+    return backendMessage
+      ? `The tutor could not process that. ${backendMessage}`
+      : 'The tutor could not process that request.';
+  }
+  return null;
 }
 
 // ── Shared enums ──────────────────────────────────────────────────────────────
