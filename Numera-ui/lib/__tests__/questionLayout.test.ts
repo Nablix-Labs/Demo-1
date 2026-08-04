@@ -52,6 +52,52 @@ describe('stacked cases (Manjusha, 2 Aug)', () => {
   });
 });
 
+describe('inline comma-separated cases — what the live backend actually sends', () => {
+  // Captured from https://nablix.ai/api on 4 Aug 2026, Q-T01-001.
+  const LIVE = '3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number. Write the general rule.';
+
+  it('stacks the cases and keeps the task as the instruction', () => {
+    expect(questionLayout(LIVE)).toEqual({
+      kind: 'cases',
+      rows: [
+        ['3', '+', '5'],
+        ['9', '+', '5'],
+        ['14', '+', '5'],
+      ],
+      instruction: 'Use n for the changing starting number. Write the general rule.',
+    });
+  });
+
+  it('handles a run with no trailing instruction', () => {
+    expect(questionLayout('3 + 5, 9 + 5, 14 + 5')).toMatchObject({
+      kind: 'cases',
+      rows: [['3', '+', '5'], ['9', '+', '5'], ['14', '+', '5']],
+    });
+  });
+
+  it('leaves ordinary prose containing a comma alone', () => {
+    const q = 'A box starts with four counters, then receives five more.';
+    expect(questionLayout(q)).toEqual({ kind: 'prose', text: q });
+  });
+
+  it('does not stack when the parts are not all maths', () => {
+    const q = 'Look at 3 + 5, then think about it.';
+    expect(questionLayout(q).kind).toBe('prose');
+  });
+
+  it('does not stack a single item', () => {
+    expect(questionLayout('3 + 5. Write the rule.').kind).toBe('prose');
+  });
+
+  it('does not stack ragged rows', () => {
+    expect(questionLayout('3 + 5, 9 + 5 + 2. Write the rule.').kind).toBe('prose');
+  });
+
+  it('handles a question-mark ending', () => {
+    expect(questionLayout('2 + 6, 7 + 6? What is the rule.').kind).toBe('cases');
+  });
+});
+
 describe('single-line questions are unchanged', () => {
   it('still recognises a bare equation', () => {
     expect(questionLayout('x + 4 = 9')).toEqual({ kind: 'equation', text: 'x + 4 = 9' });

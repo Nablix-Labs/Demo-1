@@ -35,6 +35,44 @@ function isMathsLine(line: string): boolean {
   return line.trim().length > 0 && !/[A-Za-z]{2,}/.test(line);
 }
 
+/**
+ * Cases the Student Model sends inline, comma-separated.
+ *
+ * Verified against the live backend on 4 Aug: Q-T01-001 arrives as
+ *
+ *   "3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number. Write the
+ *    general rule."
+ *
+ * — one line, commas, no line breaks. So preserving newlines was not enough on
+ * its own: there are none to preserve, and the cases rendered as flat prose,
+ * which is exactly what Manjusha reported.
+ *
+ * This splits a LEADING run of comma-separated pure-maths expressions off the
+ * front and stacks it, leaving the rest as the instruction. That is also the
+ * split the spec's layout asks for: the cases are evidence, the sentence after
+ * them is the task.
+ *
+ * Deliberately only the leading run, and only when every part is pure maths —
+ * a question that merely contains a comma is prose and must stay prose.
+ */
+function splitInlineCases(text: string): { rows: string[][]; instruction: string } | null {
+  // [\s\S] rather than the `s` flag: the build targets below es2018.
+  const match = /^([^.?!]+)[.?!]\s*([\s\S]*)$/.exec(text);
+  // No trailing sentence: the whole thing may still be a comma-separated run.
+  const head = match ? match[1] : text;
+  const instruction = match ? match[2].trim() : '';
+
+  const parts = head.split(',').map((p) => p.trim()).filter(Boolean);
+  if (parts.length < 2) return null;
+  if (!parts.every(isMathsLine)) return null;
+
+  const rows = parts.map((p) => p.split(/\s+/));
+  const width = rows[0].length;
+  if (!rows.every((r) => r.length === width)) return null;
+
+  return { rows, instruction };
+}
+
 export type QuestionLayout =
   /** A bare equation: gets the "Solve for x:" lead-in and maths type. */
   | { kind: 'equation'; text: string }
@@ -46,7 +84,7 @@ export type QuestionLayout =
    * itself should reveal that the left values change while +5 remains fixed."
    * Read as one wrapped line, the question teaches nothing.
    */
-  | { kind: 'cases'; rows: string[][] }
+  | { kind: 'cases'; rows: string[][]; instruction?: string }
   /** Anything with its own wording. Shown verbatim, line breaks preserved. */
   | { kind: 'prose'; text: string };
 
@@ -84,5 +122,12 @@ export function questionLayout(question: string): QuestionLayout {
   }
 
   if (isBareEquation(text)) return { kind: 'equation', text };
+
+  // Cases sent inline, comma-separated — what the live backend actually sends.
+  const inline = splitInlineCases(text);
+  if (inline) {
+    return { kind: 'cases', rows: inline.rows, instruction: inline.instruction || undefined };
+  }
+
   return { kind: 'prose', text };
 }

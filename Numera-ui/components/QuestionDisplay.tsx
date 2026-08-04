@@ -46,18 +46,27 @@ export default function QuestionDisplay({
     // keep every digit the same width regardless of the glyphs involved.
     const columns = layout.rows[0].length;
     return (
-      <div
-        className={`${equationSize} font-semibold text-ink inline-grid gap-x-4 gap-y-1 tabular-nums`}
-        style={{ ...MATHS_FONT, gridTemplateColumns: `repeat(${columns}, auto)` }}
-        role="group"
-        aria-label="Cases to compare"
-      >
-        {layout.rows.map((row, r) =>
-          row.map((cell, c) => (
-            <span key={`${r}-${c}`} className="text-right">
-              {cell}
-            </span>
-          )),
+      <div className="flex flex-col gap-2">
+        <div
+          className={`${equationSize} font-semibold text-ink inline-grid gap-x-4 gap-y-1 tabular-nums`}
+          style={{ ...MATHS_FONT, gridTemplateColumns: `repeat(${columns}, auto)` }}
+          role="group"
+          aria-label="Cases to compare"
+        >
+          {layout.rows.map((row, r) =>
+            row.map((cell, c) => (
+              <span key={`${r}-${c}`} className="text-right">
+                {cell}
+              </span>
+            )),
+          )}
+        </div>
+        {/* The task, kept below the evidence it refers to — the spec's question
+            strip / evidence area split. */}
+        {layout.instruction && (
+          <p className={`${proseSize} font-medium text-ink leading-snug max-w-[62ch]`}>
+            {layout.instruction}
+          </p>
         )}
       </div>
     );
