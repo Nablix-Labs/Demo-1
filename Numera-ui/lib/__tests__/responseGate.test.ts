@@ -35,10 +35,24 @@ describe('version ordering (handoff item 2)', () => {
     expect(shouldApply({ interaction_state_version: 7, accepted_turn_id: 'a' }, applied)).toBe(false);
   });
 
-  it('rejects an equal-version response with no turn id', () => {
-    // Nothing identifies it, so it cannot be shown to be a distinct replay.
+  it('APPLIES an equal-version response with no turn id — fails open', () => {
+    // The backend only increments the version on mutating turns, and
+    // accepted_turn_id is nullable, so two consecutive real responses can share
+    // a version with nothing to tell them apart. Rejecting them would freeze
+    // the lesson: the student answers and the UI never updates, with no error
+    // and no way out. A duplicate render is visible and recoverable.
     const applied = noteApplied({ interaction_state_version: 7, accepted_turn_id: 'a' }, EMPTY_APPLIED);
-    expect(shouldApply({ interaction_state_version: 7 }, applied)).toBe(false);
+    expect(shouldApply({ interaction_state_version: 7 }, applied)).toBe(true);
+  });
+
+  it('never freezes across a run of unversioned, unidentified turns', () => {
+    // The realistic TEXT-answer case: version pinned at its default, no turn id.
+    let applied = EMPTY_APPLIED;
+    for (let i = 0; i < 10; i++) {
+      const res = { interaction_state_version: 0 };
+      expect(shouldApply(res, applied)).toBe(true);
+      applied = noteApplied(res, applied);
+    }
   });
 
   it('still works against a backend that does not send the field yet', () => {

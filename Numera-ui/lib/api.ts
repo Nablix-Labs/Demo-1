@@ -655,12 +655,16 @@ export interface GuidedStateFields {
   selected_error_code?: string | null;
   evaluation_reason_code?: string | null;
   support_reason_code?: string | null;
-  /** Newly served support for THIS accepted turn; null when nothing new. */
-  support_served_this_turn?: { level?: string } | null;
-  /** Persisted currently-active support level; 'NONE' when absent. */
-  active_support_level?: string | null;
+  /**
+   * Newly served support for THIS accepted turn; null when nothing new.
+   * A bare SupportUsed value, not an object — matches the backend
+   * (models/interaction.py: `SupportUsed | None`).
+   */
+  support_served_this_turn?: SupportLevel | null;
+  /** Persisted currently-active support level. Defaults to 'NONE', never null. */
+  active_support_level?: SupportLevel;
   /** Persisted maximum for the question's mapped micro-skills. */
-  highest_support_used?: string | null;
+  highest_support_used?: SupportLevel;
   /** Persisted scaffold + authorised current step, independent of this turn. */
   active_scaffold?: {
     scaffold_id: string;
@@ -670,14 +674,30 @@ export interface GuidedStateFields {
     step_voice?: string | null;
     total_steps: number;
   } | null;
-  consecutive_stuck_count?: number | null;
+  consecutive_stuck_count?: number;
+  /** Matches models/guided_learning.py:PrerequisiteRepair. */
   prerequisite_repair?: {
-    micro_skill_id: string;
-    return_to_question_id: string;
+    prerequisite_micro_skill_ids: string[];
+    reason_code: string;
   } | null;
-  /** Monotonic per accepted response. Cached replays keep their original. */
-  interaction_state_version?: number | null;
+  /**
+   * Monotonic per accepted response, defaulting to 0.
+   *
+   * Only incremented on turns that mutate pedagogical state, so consecutive
+   * responses CAN share a version — see lib/responseGate.ts for why that case
+   * fails open rather than dropping the response.
+   */
+  interaction_state_version?: number;
 }
+
+/** The support ladder rung, as the backend spells it (SupportUsed). */
+export type SupportLevel =
+  | 'NONE'
+  | 'HINT'
+  | 'VISUAL_CUE'
+  | 'SCAFFOLD'
+  | 'PARALLEL_EXAMPLE'
+  | 'TUTOR_SOLVED';
 
 export interface InteractionResponse extends GuidedStateFields {
   session_id: string;

@@ -49,9 +49,18 @@ export function shouldApply(response: VersionedResponse, applied: AppliedState):
   if (version > applied.version) return true;
   if (version < applied.version) return false;
 
-  // Equal version — a replay. Apply once per accepted turn, never twice.
+  // Equal version — either a cached replay, or a turn that did not advance
+  // pedagogical state (the backend only increments on mutating turns, and
+  // `accepted_turn_id` is nullable).
+  //
+  // With a turn id we can tell those apart: apply once per accepted turn.
+  // Without one there is nothing to match on, so we cannot PROVE it is a
+  // replay — and this fails open deliberately. Rejecting an unidentifiable
+  // response means a student sends an answer and the UI never updates, with no
+  // error and no way out. Applying a duplicate is visible and recoverable;
+  // freezing the lesson is neither.
   const turnId = response.accepted_turn_id;
-  if (!turnId) return false;
+  if (!turnId) return true;
   return !applied.appliedTurnIds.has(turnId);
 }
 
