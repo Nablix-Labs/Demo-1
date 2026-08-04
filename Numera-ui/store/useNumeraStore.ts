@@ -13,6 +13,7 @@ import { TOPICS } from '@/lib/topics';
 import { DEMO_CONCEPT_ID, type ActiveScaffold, type SessionRecord, type SessionReview, type SessionSummary } from '@/lib/api';
 import { uid } from '@/lib/uid';
 import type { SupportRung } from '@/lib/supportLadder';
+import { EMPTY_APPLIED, type AppliedState } from '@/lib/responseGate';
 
 // Sequential, human-readable student turn ids (voice contract §3): TURN-0001, …
 // One per LISTENING turn; kept sequential (not uuid) so logs read cleanly.
@@ -223,6 +224,13 @@ export interface NumeraState {
   supportShown: SupportRung | null;
   lastHintText: string | null;
 
+  // Ordering guard for interaction responses (Phase 2 handoff item 2). Holds the
+  // highest interaction_state_version applied and the accepted_turn_ids already
+  // rendered at it, so an out-of-order reply cannot overwrite newer state and a
+  // cached replay is applied exactly once. Never persisted — it describes what
+  // is on screen right now, not the lesson.
+  appliedResponse: AppliedState;
+
   // Transcript
   transcript: TranscriptMessage[];
 
@@ -327,6 +335,7 @@ export interface NumeraState {
 
   setVisualCue: (cue: { show: boolean; cueType?: string | null; description?: string | null }) => void;
   setSupportShown: (rung: SupportRung | null) => void;
+  setAppliedResponse: (a: AppliedState) => void;
   setLastHintText: (text: string | null) => void;
   /** Position within this phase's question set, for the progress rail. */
   setQuestionProgress: (index: number, total: number) => void;
@@ -394,7 +403,7 @@ const initial: Omit<
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
   | 'setQuestionText' | 'applyBackendPhase' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'setTutorTurn'
   | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue'
-  | 'setSupportShown' | 'setLastHintText' | 'setQuestionProgress'
+  | 'setSupportShown' | 'setLastHintText' | 'setQuestionProgress' | 'setAppliedResponse'
   | 'addTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript' | 'commitPartialTranscript'
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
   | 'setShapeKind' | 'setEraserMode'
@@ -448,6 +457,7 @@ const initial: Omit<
   visualCueDescription: null,
   supportShown: null as SupportRung | null,
   lastHintText: null as string | null,
+  appliedResponse: EMPTY_APPLIED,
   // Empty. This used to seed a three-message demo conversation about
   // "2x + 5 = 13", which rendered for every student before the backend had said
   // anything — a real tester reported it as "I am getting my old questions"
@@ -604,6 +614,7 @@ export const useNumeraStore = create<NumeraState>()(
   setVisualCue: ({ show, cueType = null, description = null }) =>
     set({ visualCueVisible: show, visualCueType: cueType, visualCueDescription: description }),
   setSupportShown: (supportShown) => set({ supportShown }),
+  setAppliedResponse: (appliedResponse) => set({ appliedResponse }),
   setLastHintText: (lastHintText) => set({ lastHintText }),
   setQuestionProgress: (index, total) =>
     set({ activeSlide: Math.max(0, index), totalSlides: Math.max(0, total) }),

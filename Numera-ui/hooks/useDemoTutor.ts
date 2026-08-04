@@ -27,7 +27,7 @@ import {
   studentFacingError,
   type InteractionResponse,
 } from '@/lib/api';
-import { applyInteractionSupport } from '@/lib/interactionPresentation';
+import { applyInteractionSupport, acceptResponse } from '@/lib/interactionPresentation';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { tutorSay, setStudentWriting } from '@/lib/tutorSpeech';
 import {
@@ -229,6 +229,9 @@ export function useDemoTutor() {
           question_id: questionId,
           hint_count: ctx.hint_count,
         });
+        // Ordering guard (handoff item 2): a response older than what is on
+        // screen is dropped, and a cached replay is applied exactly once.
+        if (!acceptResponse(res)) return res;
         syncBackendSession(res);
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message });
@@ -295,6 +298,56 @@ export function useDemoTutor() {
       return null;
     }
   }, [sessionId, canvasExporter, addTranscriptMessage, addTrailEntry]);
+
+  /**
+   * Explain Again — replay the current explanation.
+   *
+   * Neither an answer nor a help escalation (Phase 2 handoff, Manav — Frontend,
+   * Explain Again 2). The frontend computes nothing: no attempts, no components,
+   * no support progression, no scaffold changes. It sends the request and
+   * renders exactly what comes back.
+   *
+   * `EXPLAIN_AGAIN` does not exist on the backend yet, so a 4xx falls back to
+   * re-showing the cue we already hold. That fallback is safe for the same
+   * reason the control is: replaying what the tutor already said cannot be
+   * graded, so it cannot cost the student an attempt either way.
+   */
+  const explainAgain = useCallback(async (): Promise<InteractionResponse | null> => {
+    const s = useNumeraStore.getState();
+    const replayLocally = () => {
+      s.setVisualCueVisible(true);
+      if (s.visualCueDescription) tutorSay(s.visualCueDescription, { afterMarks: true });
+    };
+
+    if (!apiEnabled() || !sessionId || !s.activeQuestionId) {
+      replayLocally();
+      return null;
+    }
+
+    try {
+      const res = await sendInteraction({
+        session_id: sessionId,
+        student_id: studentId(),
+        interaction_type: 'EXPLAIN_AGAIN',
+        input_source: 'TEXT',
+        current_phase: s.currentPhase,
+        concept_id: s.activeConceptId,
+        question_id: s.activeQuestionId,
+        hint_count: s.lastHintText ? 1 : 0,
+        previous_tutor_turn_id: s.lastTutorTurnId ?? null,
+      });
+      // Present the returned wording once; preserve cue and scaffold as sent.
+      addTranscriptMessage({ role: 'ai', text: res.message });
+      const spoken = applyInteractionSupport(res);
+      tutorSay(spoken, { afterMarks: Boolean(res.canvas_draw?.length) });
+      if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
+      return res;
+    } catch {
+      console.warn('[explain-again] backend has no EXPLAIN_AGAIN yet — replaying the held cue');
+      replayLocally();
+      return null;
+    }
+  }, [sessionId, addTranscriptMessage]);
 
   /**
    * Reveal the next rung of the support ladder (§6).
@@ -443,6 +496,15 @@ export function useDemoTutor() {
           useNumeraStore.getState().beginListeningTurn();
           return null;
         }
+        // Ordering guard (handoff item 2), applied after the transport's own
+        // stale/duplicate check: that one is about turn identity, this one is
+        // about response ordering, and a reply can be fresh by one and stale by
+        // the other.
+        if (!acceptResponse(res)) {
+          console.groupEnd();
+          useNumeraStore.getState().beginListeningTurn();
+          return null;
+        }
         syncBackendSession(res);
         console.groupEnd();
         addTranscriptMessage({ role: 'ai', text: res.message });
@@ -516,6 +578,7 @@ export function useDemoTutor() {
     submitCanvasWork,
     submitVoiceTurn,
     hint,
+    explainAgain,
     end,
   };
 }

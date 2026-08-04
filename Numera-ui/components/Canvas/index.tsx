@@ -48,10 +48,8 @@ export default function CanvasStage() {
   // There is nothing to replay before one arrives, so the control stays hidden
   // rather than appearing and doing nothing.
   const canReplayCue = Boolean(visualCueType ?? visualCueDescription);
-  const replayCue = useCallback(() => {
-    setVisualCueVisible(true);
-    if (visualCueDescription) tutorSay(visualCueDescription, { afterMarks: true });
-  }, [setVisualCueVisible, visualCueDescription]);
+  const { explainAgain } = tutor;
+  const replayCue = useCallback(() => { void explainAgain(); }, [explainAgain]);
 
   const exportRef = useRef<(() => string | null) | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);

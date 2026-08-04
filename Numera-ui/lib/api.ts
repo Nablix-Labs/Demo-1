@@ -134,6 +134,10 @@ export type InteractionMode = 'VOICE' | 'TEXT';
 export type InputSource = 'TEXT' | 'VOICE';
 export type InteractionType =
   | 'ANSWER_SUBMISSION'
+  // Replay the current explanation. Neither an answer nor a help escalation:
+  // the backend returns attempt_increment 0 and emits no Student Model event
+  // (Phase 2 handoff, Chirudeva — Explain Again).
+  | 'EXPLAIN_AGAIN'
   | 'HINT_REQUEST'
   | 'CANVAS_SUBMISSION'
   | 'SESSION_START'
@@ -629,7 +633,53 @@ export interface VisualCue {
   actions?: Array<Record<string, unknown>>;
 }
 
-export interface InteractionResponse {
+/**
+ * Guided-practice state the backend owns (Phase 2 handoff, Chirudeva —
+ * "Response contract"). Every field is optional because none of them exist on
+ * the backend yet; the frontend handling for each is written and inert, and
+ * lights up the moment the field starts arriving.
+ *
+ * Nothing here is ever shown to a learner verbatim — component ids, error codes,
+ * STUCK counts and reason codes are diagnostic, and handoff item 6 forbids
+ * putting them on screen.
+ */
+export interface GuidedStateFields {
+  guided_student_state?: 'CORRECT' | 'PARTIAL' | 'WRONG' | 'STUCK' | 'UNCLEAR' | null;
+  active_teaching_objective?: {
+    target_concept_ids?: string[];
+    confirmed_concept_ids?: string[];
+    missing_concept_ids?: string[];
+  } | null;
+  /** The component the student still has to resolve — drives AFFIRM-THEN-ISOLATE. */
+  first_unresolved_concept_id?: string | null;
+  selected_error_code?: string | null;
+  evaluation_reason_code?: string | null;
+  support_reason_code?: string | null;
+  /** Newly served support for THIS accepted turn; null when nothing new. */
+  support_served_this_turn?: { level?: string } | null;
+  /** Persisted currently-active support level; 'NONE' when absent. */
+  active_support_level?: string | null;
+  /** Persisted maximum for the question's mapped micro-skills. */
+  highest_support_used?: string | null;
+  /** Persisted scaffold + authorised current step, independent of this turn. */
+  active_scaffold?: {
+    scaffold_id: string;
+    current_step_id: string;
+    step_number: number;
+    step_text: string;
+    step_voice?: string | null;
+    total_steps: number;
+  } | null;
+  consecutive_stuck_count?: number | null;
+  prerequisite_repair?: {
+    micro_skill_id: string;
+    return_to_question_id: string;
+  } | null;
+  /** Monotonic per accepted response. Cached replays keep their original. */
+  interaction_state_version?: number | null;
+}
+
+export interface InteractionResponse extends GuidedStateFields {
   session_id: string;
   student_id: string;
   current_phase: string;
