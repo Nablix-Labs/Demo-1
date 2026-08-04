@@ -19,6 +19,8 @@ from app.ai_engine.schemas import (
     CanvasTextRegion,
     ErrorType,
     EvaluationCategory,
+    ExplainAgainRequest,
+    ExplainAgainResult,
     GuardrailCheck,
     HintLevel,
     InputSource,
@@ -1046,6 +1048,198 @@ def build_openai_ai_engine_client(settings: Settings) -> OpenAIAIEngineClient | 
         store_responses=settings.openai_store_responses,
         retry_count=settings.adapter_request_retry_count,
     )
+
+
+def generate_explain_again_response(
+    request: ExplainAgainRequest,
+) -> ExplainAgainResult:
+    """Generate wording for an explicit Explain Again turn without changing state."""
+
+    rules = load_classifier_rules()
+    validate_explain_again_request(request)
+    openai_client = build_openai_ai_engine_client(get_settings())
+    if openai_client is None:
+        raise AdapterError(
+            "openai_ai_engine",
+            "Explain Again requires an enabled OpenAI AI-engine client.",
+        )
+
+    last_error: AdapterError | None = None
+    validation_feedback: str | None = None
+    for attempt in range(rules.guided_learning.maximum_retries + 1):
+        recent_conversation = request.recent_conversation[
+            -rules.guided_learning.maximum_recent_history_turns:
+        ] if rules.guided_learning.maximum_recent_history_turns > 0 else []
+        prompt_request = request.model_copy(
+            update={"recent_conversation": recent_conversation}
+        )
+        try:
+            message = openai_client.generate_explain_again_message(
+                request=prompt_request,
+                validation_feedback=validation_feedback,
+                prompt_version=rules.guided_learning.explain_again_prompt_version,
+                system_prompt=rules.guided_learning.explain_again_system_prompt,
+            )
+        except AdapterError as error:
+            last_error = error
+            logger.warning(
+                "explain_again_generation_retry",
+                extra={
+                    "question_id": request.question_id,
+                    "attempt": attempt + 1,
+                    "detail": error.detail,
+                },
+            )
+            continue
+        if request.answer_reveal_allowed or (
+            message.answer_reveal_risk is False
+            and not message_reveals_answer(
+            message.tutor_message,
+            message.tutor_message_voice_optimised,
+            request.answer_spec.canonical_answer,
+            rules,
+            )
+        ):
+            return ExplainAgainResult(
+                interaction_type="EXPLAIN_AGAIN",
+                tutor_message=message.tutor_message,
+                tutor_message_voice_optimised=message.tutor_message_voice_optimised,
+                confidence=message.confidence,
+                attempt_increment=0,
+                evaluation_reason_code="EXPLAIN_AGAIN_REEXPRESSION",
+                guided_student_state=request.guided_student_state,
+                active_teaching_objective=request.active_teaching_objective,
+                first_unresolved_concept_id=request.first_unresolved_concept_id,
+                selected_error_code=request.selected_error_code,
+                support_served_this_turn=None,
+                active_support_level=request.active_support_level,
+                highest_support_used=request.highest_support_used,
+                active_scaffold=request.active_scaffold,
+                progression_change_requested=False,
+            )
+        validation_feedback = rules.answer_reveal_guardrail.rewrite_feedback
+        last_error = AdapterError(
+            "openai_ai_engine",
+            (
+                "Explain Again response disclosed the final answer for "
+                f"question_id={request.question_id}."
+            ),
+        )
+        logger.warning(
+            "explain_again_answer_reveal_retry",
+            extra={"question_id": request.question_id, "attempt": attempt + 1},
+        )
+    raise last_error or AdapterError(
+        "openai_ai_engine",
+        f"Explain Again generation failed for question_id={request.question_id}.",
+    )
+
+
+def validate_explain_again_request(request: ExplainAgainRequest) -> None:
+    required_components = [
+        component for component in request.answer_spec.required_components if component.required
+    ]
+    authored_ids = [
+        component.component_id for component in request.answer_spec.required_components
+    ]
+    sequence_numbers = [
+        component.sequence_no for component in request.answer_spec.required_components
+    ]
+    if len(authored_ids) != len(set(authored_ids)) or len(sequence_numbers) != len(
+        set(sequence_numbers)
+    ):
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Explain Again requires unique authored component IDs and order for {request.question_id}.",
+        )
+    required_ids = {component.component_id for component in required_components}
+    if not required_ids:
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Explain Again requires at least one authored required component for {request.question_id}.",
+        )
+    active_ids = {
+        *request.active_teaching_objective.target_concept_ids,
+        *request.active_teaching_objective.confirmed_concept_ids,
+        *request.active_teaching_objective.missing_concept_ids,
+    }
+    if not active_ids.issubset(required_ids):
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Explain Again objective has unknown authored component IDs for {request.question_id}.",
+        )
+    if set(request.active_teaching_objective.confirmed_concept_ids) & set(
+        request.active_teaching_objective.missing_concept_ids
+    ):
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Explain Again objective overlaps confirmed and missing components for {request.question_id}.",
+        )
+    if request.first_unresolved_concept_id not in set(
+        request.active_teaching_objective.missing_concept_ids
+    ):
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Explain Again first unresolved component is not missing for {request.question_id}.",
+        )
+    objective_ids = {
+        *request.active_teaching_objective.confirmed_concept_ids,
+        *request.active_teaching_objective.missing_concept_ids,
+    }
+    if objective_ids != required_ids:
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Explain Again objective omits authored required components for {request.question_id}.",
+        )
+    first_missing = min(
+        (
+            component
+            for component in required_components
+            if component.component_id in request.active_teaching_objective.missing_concept_ids
+        ),
+        key=lambda component: component.sequence_no,
+    )
+    if request.first_unresolved_concept_id != first_missing.component_id:
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Explain Again first unresolved component is out of authored order for {request.question_id}.",
+        )
+    if (request.selected_error_code is None) != (
+        request.recorded_misconception is None
+    ):
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Explain Again selected error and recorded misconception must both be present or absent for {request.question_id}.",
+        )
+    if request.recorded_misconception is not None and (
+        request.recorded_misconception.error_code != request.selected_error_code
+    ):
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Explain Again misconception does not match selected error for {request.question_id}.",
+        )
+    support_rank = {
+        "NONE": 0,
+        "HINT": 1,
+        "VISUAL_CUE": 2,
+        "SCAFFOLD": 3,
+        "PARALLEL_EXAMPLE": 4,
+        "TUTOR_SOLVED": 5,
+    }
+    if support_rank[request.active_support_level] > support_rank[
+        request.highest_support_used
+    ]:
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Explain Again active support exceeds highest support for {request.question_id}.",
+        )
+    if request.active_scaffold is not None and (
+        request.active_scaffold.step_number > request.active_scaffold.total_steps
+    ):
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Explain Again scaffold step exceeds total steps for {request.question_id}.",
+        )
 
 
 def generate_tutor_turn_with_openai(

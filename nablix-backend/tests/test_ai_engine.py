@@ -15,7 +15,16 @@ from app.ai_engine.prompt_registry import (
     load_prompt_registry,
     serialize_session_context,
 )
-from app.ai_engine.schemas import CanvasTextRegion
+from app.ai_engine.schemas import (
+    ActiveScaffoldState,
+    AuthoredAnswerSpec,
+    AuthoredRequiredComponent,
+    CanvasTextRegion,
+    ExplainAgainRequest,
+    OpenAIExplainAgainMessage,
+    RecordedMisconception,
+    VisualCue,
+)
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AdapterError
 from app.core.logger import StructuredJsonFormatter
@@ -108,6 +117,354 @@ def _multipart_guided_rubric() -> GeneratedQuestionRubric:
         cache_key="multipart-rubric",
         prompt_version="1.0.0",
     )
+
+
+def _explain_again_request() -> ExplainAgainRequest:
+    return ExplainAgainRequest(
+        question_id="Q-T01-006",
+        question="A counter starts at c and increases by 4. State the general rule and explain what changes and stays fixed.",
+        answer_spec=AuthoredAnswerSpec(
+            answer_spec_id="ANS-T01-006",
+            canonical_answer="c + 4; c changes; add 4 stays fixed",
+            accepted_answers=["c + 4"],
+            verification_method="STRUCTURED_TEXT_AND_SYMBOLIC_MATCH",
+            explanation_required=True,
+            required_components=[
+                AuthoredRequiredComponent(
+                    component_id="GENERAL_RULE",
+                    sequence_no=1,
+                    required=True,
+                    evaluation_criterion="States c + 4 or an equivalent rule.",
+                ),
+                AuthoredRequiredComponent(
+                    component_id="CHANGING_VALUE",
+                    sequence_no=2,
+                    required=True,
+                    evaluation_criterion="Explains that c can be different starting values.",
+                ),
+                AuthoredRequiredComponent(
+                    component_id="FIXED_INCREMENT",
+                    sequence_no=3,
+                    required=True,
+                    evaluation_criterion="Explains that adding four remains fixed.",
+                ),
+            ],
+        ),
+        active_teaching_objective=ActiveTeachingObjective(
+            objective_type="EXPLAIN_CONCEPT",
+            target_concept_ids=["CHANGING_VALUE", "FIXED_INCREMENT"],
+            confirmed_concept_ids=["GENERAL_RULE"],
+            missing_concept_ids=["CHANGING_VALUE", "FIXED_INCREMENT"],
+        ),
+        first_unresolved_concept_id="CHANGING_VALUE",
+        guided_student_state="PARTIAL",
+        selected_error_code="ERR-T01-COUNTER-RULE",
+        recorded_misconception=RecordedMisconception(
+            error_code="ERR-T01-COUNTER-RULE",
+            description="Treats c as fixed rather than a starting value.",
+        ),
+        recent_conversation=[
+            ConversationMessage(role="user", content="The rule is c + 4."),
+            ConversationMessage(role="assistant", content="What can c represent?"),
+        ],
+        active_support_level="SCAFFOLD",
+        highest_support_used="SCAFFOLD",
+        visible_visual_cue=VisualCue(
+            show=True,
+            cue_type="CONCEPT_CARD",
+            description="A counter can start at different values.",
+            actions=[],
+        ),
+        active_scaffold=ActiveScaffoldState(
+            scaffold_id="SCF-T01-COUNTER-RULE",
+            current_step_id="SCF-T01-CTR-S1",
+            step_number=1,
+            total_steps=4,
+            step_text="Which quantity can change?",
+            step_voice="Which quantity can change?",
+        ),
+        answer_reveal_allowed=False,
+    )
+
+
+def test_explain_again_reexpresses_the_unresolved_component_without_progression_change(
+    monkeypatch,
+) -> None:
+    captured_requests: list[ExplainAgainRequest] = []
+
+    class _ExplainAgainClient:
+        def generate_explain_again_message(
+            self,
+            request: ExplainAgainRequest,
+            **kwargs: object,
+        ) -> OpenAIExplainAgainMessage:
+            captured_requests.append(request)
+            messages = [
+                "Look at the counter card: c is the starting value, so what could make it different each time?",
+                "Use the first scaffold question again: how could the counter begin at one value today and another tomorrow?",
+            ]
+            message = messages[len(captured_requests) - 1]
+            return OpenAIExplainAgainMessage(
+                tutor_message=message,
+                tutor_message_voice_optimised=message,
+                answer_reveal_risk=False,
+                confidence=0.96,
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _ExplainAgainClient(),
+    )
+
+    first = classifier.generate_explain_again_response(_explain_again_request())
+    second = classifier.generate_explain_again_response(_explain_again_request())
+
+    assert len(captured_requests) == 2
+    assert captured_requests[0].answer_spec.required_components[1].component_id == "CHANGING_VALUE"
+    assert captured_requests[0].active_scaffold is not None
+    assert captured_requests[0].visible_visual_cue is not None
+    assert first.tutor_message != second.tutor_message
+    assert first.attempt_increment == 0
+    assert first.progression_change_requested is False
+    assert first.support_served_this_turn is None
+    assert first.guided_student_state == "PARTIAL"
+    assert first.active_teaching_objective.confirmed_concept_ids == ["GENERAL_RULE"]
+    assert first.first_unresolved_concept_id == "CHANGING_VALUE"
+    assert first.active_support_level == "SCAFFOLD"
+    assert first.highest_support_used == "SCAFFOLD"
+    assert first.active_scaffold is not None
+
+
+def test_explain_again_retries_a_revealing_llm_response_without_canned_wording(
+    monkeypatch,
+) -> None:
+    validation_feedback: list[str | None] = []
+
+    class _ExplainAgainClient:
+        def generate_explain_again_message(
+            self,
+            **kwargs: object,
+        ) -> OpenAIExplainAgainMessage:
+            validation_feedback.append(cast(str | None, kwargs["validation_feedback"]))
+            if len(validation_feedback) == 1:
+                return OpenAIExplainAgainMessage(
+                    tutor_message="A counter can begin with any c and always moves on by four.",
+                    tutor_message_voice_optimised="A counter can begin with any c and always moves on by four.",
+                    answer_reveal_risk=True,
+                    confidence=0.99,
+                )
+            return OpenAIExplainAgainMessage(
+                tutor_message="Think about the starting value: could it be the same every time?",
+                tutor_message_voice_optimised="Think about the starting value: could it be the same every time?",
+                answer_reveal_risk=False,
+                confidence=0.98,
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _ExplainAgainClient(),
+    )
+
+    response = classifier.generate_explain_again_response(_explain_again_request())
+
+    assert len(validation_feedback) == 2
+    assert validation_feedback[0] is None
+    assert validation_feedback[1] == classifier.load_classifier_rules().answer_reveal_guardrail.rewrite_feedback
+    assert response.tutor_message == "Think about the starting value: could it be the same every time?"
+    assert response.attempt_increment == 0
+    assert response.progression_change_requested is False
+
+
+@pytest.mark.parametrize(
+    ("request_update", "expected_message"),
+    [
+        (
+            {
+                "first_unresolved_concept_id": "FIXED_INCREMENT",
+            },
+            "out of authored order",
+        ),
+        (
+            {
+                "active_teaching_objective": ActiveTeachingObjective(
+                    objective_type="EXPLAIN_CONCEPT",
+                    target_concept_ids=["CHANGING_VALUE"],
+                    confirmed_concept_ids=["GENERAL_RULE"],
+                    missing_concept_ids=["CHANGING_VALUE"],
+                )
+            },
+            "omits authored required components",
+        ),
+        (
+            {
+                "active_teaching_objective": ActiveTeachingObjective(
+                    objective_type="EXPLAIN_CONCEPT",
+                    target_concept_ids=["CHANGING_VALUE", "FIXED_INCREMENT"],
+                    confirmed_concept_ids=["GENERAL_RULE", "CHANGING_VALUE"],
+                    missing_concept_ids=["CHANGING_VALUE", "FIXED_INCREMENT"],
+                )
+            },
+            "overlaps confirmed and missing",
+        ),
+        (
+            {
+                "selected_error_code": None,
+            },
+            "must both be present or absent",
+        ),
+        (
+            {
+                "recorded_misconception": None,
+            },
+            "must both be present or absent",
+        ),
+        (
+            {
+                "recorded_misconception": RecordedMisconception(
+                    error_code="ERR-OTHER",
+                    description="A different recorded misconception.",
+                ),
+            },
+            "does not match selected error",
+        ),
+        (
+            {
+                "active_support_level": "SCAFFOLD",
+                "highest_support_used": "HINT",
+            },
+            "active support exceeds highest support",
+        ),
+        (
+            {
+                "active_scaffold": ActiveScaffoldState(
+                    scaffold_id="SCF-T01-COUNTER-RULE",
+                    current_step_id="SCF-T01-CTR-S4",
+                    step_number=5,
+                    total_steps=4,
+                    step_text="Which quantity can change?",
+                    step_voice="Which quantity can change?",
+                )
+            },
+            "scaffold step exceeds total steps",
+        ),
+    ],
+)
+def test_explain_again_rejects_invalid_persisted_state_contract(
+    request_update: dict[str, object],
+    expected_message: str,
+) -> None:
+    request = _explain_again_request().model_copy(update=request_update)
+
+    with pytest.raises(AdapterError, match=expected_message):
+        classifier.validate_explain_again_request(request)
+
+
+@pytest.mark.parametrize(
+    "required_components",
+    [
+        [
+            AuthoredRequiredComponent(
+                component_id="GENERAL_RULE",
+                sequence_no=1,
+                required=True,
+                evaluation_criterion="States the general rule.",
+            ),
+            AuthoredRequiredComponent(
+                component_id="GENERAL_RULE",
+                sequence_no=2,
+                required=True,
+                evaluation_criterion="Explains the changing value.",
+            ),
+        ],
+        [
+            AuthoredRequiredComponent(
+                component_id="GENERAL_RULE",
+                sequence_no=1,
+                required=True,
+                evaluation_criterion="States the general rule.",
+            ),
+            AuthoredRequiredComponent(
+                component_id="CHANGING_VALUE",
+                sequence_no=1,
+                required=True,
+                evaluation_criterion="Explains the changing value.",
+            ),
+        ],
+    ],
+)
+def test_explain_again_rejects_duplicate_authored_component_contract(
+    required_components: list[AuthoredRequiredComponent],
+) -> None:
+    request = _explain_again_request().model_copy(
+        update={
+            "answer_spec": _explain_again_request().answer_spec.model_copy(
+                update={"required_components": required_components}
+            )
+        }
+    )
+
+    with pytest.raises(AdapterError, match="unique authored component IDs and order"):
+        classifier.validate_explain_again_request(request)
+
+
+def test_explain_again_rejects_optional_component_in_active_objective() -> None:
+    request = _explain_again_request()
+    components = [
+        component.model_copy(update={"required": False})
+        if component.component_id == "FIXED_INCREMENT"
+        else component
+        for component in request.answer_spec.required_components
+    ]
+    invalid = request.model_copy(
+        update={"answer_spec": request.answer_spec.model_copy(update={"required_components": components})}
+    )
+
+    with pytest.raises(AdapterError, match="unknown authored component IDs"):
+        classifier.validate_explain_again_request(invalid)
+
+
+def test_explain_again_limits_typed_conversation_history(monkeypatch) -> None:
+    captured_history: list[ConversationMessage] = []
+
+    class _ExplainAgainClient:
+        def generate_explain_again_message(
+            self,
+            request: ExplainAgainRequest,
+            **kwargs: object,
+        ) -> OpenAIExplainAgainMessage:
+            captured_history.extend(request.recent_conversation)
+            return OpenAIExplainAgainMessage(
+                tutor_message="Could the counter start at the same value every time?",
+                tutor_message_voice_optimised="Could the counter start at the same value every time?",
+                answer_reveal_risk=False,
+                confidence=0.96,
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _ExplainAgainClient(),
+    )
+    request = _explain_again_request().model_copy(
+        update={
+            "recent_conversation": [
+                ConversationMessage(role="user", content=f"turn {index}")
+                for index in range(8)
+            ]
+        }
+    )
+
+    classifier.generate_explain_again_response(request)
+
+    assert len(captured_history) == classifier.load_classifier_rules().guided_learning.maximum_recent_history_turns
+    assert captured_history[0].content == "turn 2"
+
+
+def test_explain_again_requires_an_enabled_llm_client() -> None:
+    with pytest.raises(AdapterError, match="Explain Again requires an enabled OpenAI"):
+        classifier.generate_explain_again_response(_explain_again_request())
 
 
 def test_guided_evaluation_schema_rejects_blank_tutor_messages() -> None:
