@@ -481,7 +481,7 @@ def _apply_schema_event(
     if payload is None:
         raise HTTPException(
             status_code=503,
-            detail="Student Model returned no phase payload.",
+            detail="Student Model returned no phase payload for the active phase.",
         )
     next_phase = PHASE_FROM_STUDENT_MODEL[payload.phase]
     transition = resolve_transition(session.current_phase, next_phase)
@@ -494,9 +494,67 @@ def _apply_schema_event(
             ),
         )
 
+    has_questions = (
+        payload.question_set is not None and bool(payload.question_set.questions)
+    )
+    if payload.payload_type in {
+        "QUESTION_SET",
+        "SUPPORT_AND_RETRY",
+        "SCAFFOLD",
+        "RESCUE_AND_FRESH_QUESTION",
+    } and not has_questions:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Student Model returned no active question for "
+                f"{payload.phase}."
+            ),
+        )
+
+    preserve_active_question = (
+        next_phase == session.current_phase
+        and next_phase in {"GUIDED_PRACTICE", "INDEPENDENT_PRACTICE"}
+        and payload.payload_type == "RESCUE"
+        and not has_questions
+    )
+    stored_event = event
+    if preserve_active_question:
+        previous_payload = (
+            session.student_model_event.phase_payload
+            if session.student_model_event is not None
+            else None
+        )
+        previous_question_set = (
+            previous_payload.question_set if previous_payload is not None else None
+        )
+        if (
+            previous_question_set is None
+            or session.question_id is None
+            or not any(
+                question.question_id == session.question_id
+                for question in previous_question_set.questions
+            )
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Student Model returned rescue without recoverable active "
+                    "question metadata."
+                ),
+            )
+        stored_event = event.model_copy(
+            update={
+                "phase_payload": payload.model_copy(
+                    update={"question_set": previous_question_set}
+                )
+            }
+        )
+
     flags = UI_STATE_FLAGS[next_phase]
     phase1_messages = load_phase1_tutor_messages()
-    question_updates = _question_updates(event)
+    question_updates: QuestionUpdates | None = (
+        None if preserve_active_question else _question_updates(event)
+    )
     updates: dict[str, object] = {
         "current_phase": next_phase,
         "ui_state": next_phase,
@@ -506,7 +564,7 @@ def _apply_schema_event(
             if event.journey_state.recommended_entry_phase is not None
             else None
         ),
-        "student_model_event": event,
+        "student_model_event": stored_event,
         "student_model_state": project_student_model_state(event),
         "show_canvas": flags["show_canvas"],
         "show_hint_button": flags["show_hint_button"],
@@ -514,13 +572,18 @@ def _apply_schema_event(
         "show_scaffold_panel": flags["show_scaffold_panel"],
         "allow_text_input": flags["allow_text_input"],
         "allow_voice_input": flags["allow_voice_input"],
-        **question_updates,
     }
+    if question_updates is not None:
+        updates.update(question_updates)
     if next_phase == "CONCEPT_ORIENTATION":
         updates["orientation_messages"] = phase1_messages
         if next_phase == session.current_phase:
             updates["message"] = phase1_messages.before_video_message
-    next_question_id = question_updates["question_id"]
+    next_question_id = (
+        session.question_id
+        if question_updates is None
+        else question_updates["question_id"]
+    )
     if next_question_id != session.question_id:
         updates.update(
             {

@@ -172,6 +172,227 @@ def test_canvas_initializes_recommended_phase_before_answer(
     ]
 
 
+@pytest.mark.parametrize(
+    (
+        "phase",
+        "expected_initializer",
+        "student_id",
+        "remaining_skills",
+        "expected_status",
+    ),
+    [
+        (
+            "PHASE_2_GUIDED_LEARNING",
+            "GUIDED_QUESTION_SET_REQUESTED",
+            "ST014",
+            None,
+            200,
+        ),
+        (
+            "PHASE_3_INDEPENDENT_PRACTICE",
+            "INDEPENDENT_QUESTION_SET_REQUESTED",
+            "ST017",
+            None,
+            200,
+        ),
+        (
+            "PHASE_3_INDEPENDENT_PRACTICE",
+            None,
+            "ST018",
+            [],
+            503,
+        ),
+    ],
+)
+def test_canvas_repairs_in_progress_question_before_building_answer_context(
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+    expected_initializer: str | None,
+    student_id: str,
+    remaining_skills: list[str] | None,
+    expected_status: int,
+) -> None:
+    event_types: list[str] = []
+
+    async def send_session_event(
+        adapter: StudentModelServiceAdapter,
+        event: StudentModelSessionEvent,
+        access_token: str,
+    ) -> StudentModelSessionEventResponse:
+        del adapter, access_token
+        event_types.append(event.event_type)
+        body = (
+            _recommended_not_started_response(phase)
+            if event.event_type == "SESSION_OPENED"
+            else _session_opened_response(phase)
+        )
+        body["request_id"] = event.request_id
+        return StudentModelSessionEventResponse.model_validate(body)
+
+    monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", send_session_event)
+    session_id = _start_session(student_id)
+    stored = session_service._get_owned_session(session_id, student_id)
+    assert stored.student_model_event is not None
+    stale_event = stored.student_model_event
+    phase_state = (
+        stale_event.journey_state.phase_2_guided_learning
+        if phase == "PHASE_2_GUIDED_LEARNING"
+        else stale_event.journey_state.phase_3_independent_practice
+    )
+    phase_updates: dict[str, object] = {
+        "status": "IN_PROGRESS",
+        "current_question_id": None,
+    }
+    if remaining_skills is not None:
+        phase_updates["remaining_micro_skill_ids"] = remaining_skills
+    stale_phase = phase_state.model_copy(update=phase_updates)
+    phase_field = (
+        "phase_2_guided_learning"
+        if phase == "PHASE_2_GUIDED_LEARNING"
+        else "phase_3_independent_practice"
+    )
+    stale_journey = stale_event.journey_state.model_copy(
+        update={phase_field: stale_phase}
+    )
+    assert stale_event.phase_payload is not None
+    assert stale_event.phase_payload.question_set is not None
+    empty_question_set = stale_event.phase_payload.question_set.model_copy(
+        update={"questions": []}
+    )
+    stale_payload = stale_event.phase_payload.model_copy(
+        update={"question_set": empty_question_set}
+    )
+    session_service._sessions[session_id] = stored.model_copy(
+        update={
+            "current_question": None,
+            "question_id": None,
+            "student_model_event": stale_event.model_copy(
+                update={"journey_state": stale_journey, "phase_payload": stale_payload}
+            ),
+        }
+    )
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": student_id,
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+        },
+    )
+
+    assert response.status_code == expected_status, response.text
+    if expected_initializer is None:
+        assert event_types == ["SESSION_OPENED"]
+        assert response.json()["message"] == (
+            "Student Model returned an active Independent Practice journey "
+            "without a question or remaining target skills."
+        )
+    else:
+        assert event_types[:3] == [
+            "SESSION_OPENED",
+            expected_initializer,
+            "INCORRECT_ATTEMPT",
+        ]
+
+
+def test_canvas_rejects_empty_question_response_without_erasing_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = _start_session("ST015")
+    before = session_service._get_owned_session(session_id, "ST015")
+
+    async def send_session_event(
+        adapter: StudentModelServiceAdapter,
+        event: StudentModelSessionEvent,
+        access_token: str,
+    ) -> StudentModelSessionEventResponse:
+        del adapter, access_token
+        response = StudentModelSessionEventResponse.model_validate(
+            _event_response(event.event_type, event.request_id)
+        )
+        assert response.phase_payload is not None
+        assert response.phase_payload.question_set is not None
+        empty_question_set = response.phase_payload.question_set.model_copy(
+            update={"questions": []}
+        )
+        return response.model_copy(
+            update={
+                "phase_payload": response.phase_payload.model_copy(
+                    update={"question_set": empty_question_set}
+                )
+            }
+        )
+
+    monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", send_session_event)
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST015",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json()["message"] == (
+        "Student Model returned no active question for PHASE_2_GUIDED_LEARNING."
+    )
+    after = session_service._get_owned_session(session_id, "ST015")
+    assert after.question_id == before.question_id
+    assert after.current_question == before.current_question
+    assert after.student_model_event == before.student_model_event
+
+
+def test_canvas_preserves_question_metadata_for_guided_rescue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = _start_session("ST016")
+    before = session_service._get_owned_session(session_id, "ST016")
+
+    async def send_session_event(
+        adapter: StudentModelServiceAdapter,
+        event: StudentModelSessionEvent,
+        access_token: str,
+    ) -> StudentModelSessionEventResponse:
+        del adapter, access_token
+        response = StudentModelSessionEventResponse.model_validate(
+            _event_response(event.event_type, event.request_id)
+        )
+        assert response.phase_payload is not None
+        return response.model_copy(
+            update={
+                "phase_payload": response.phase_payload.model_copy(
+                    update={
+                        "payload_type": "RESCUE",
+                        "question_set": None,
+                        "rescue_to_serve": {"tutor_solved": {"steps": []}},
+                    }
+                )
+            }
+        )
+
+    monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", send_session_event)
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST016",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    after = session_service._get_owned_session(session_id, "ST016")
+    assert after.question_id == before.question_id
+    assert after.current_question == before.current_question
+    assert after.student_model_event is not None
+    assert after.student_model_event.phase_payload is not None
+    assert after.student_model_event.phase_payload.question_set is not None
+
+
 def test_canvas_submit_sends_full_ocr_context_and_forwards_events(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

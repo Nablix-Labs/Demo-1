@@ -22,10 +22,11 @@ from app.models.canvas import (
 )
 from app.services.canvas_annotations import assign_step_ids, plan_canvas_draw
 from app.services.interaction_service import (
-    _active_answer_spec,
     _current_hint_level_from,
     _independent_correct_in_session,
+    _initialize_restored_schema_phase,
     _phase_2_prompt_context,
+    _schema_question,
     _scaffold_evaluation_context,
     process_answer_with_session_event,
 )
@@ -95,6 +96,12 @@ async def submit_canvas(
 
     # Load the session up front so a stale/unknown session 404s before we pay for OCR.
     session = _get_owned_session(request.session_id, request.student_id)
+    session = await _initialize_restored_schema_phase(
+        session,
+        get_adapters().student_model,
+        access_token,
+    )
+    schema_question = _schema_question(session)
     previous_session = session
 
     submission_id = request.turn_id or uuid4().hex
@@ -139,7 +146,9 @@ async def submit_canvas(
             if scaffold_turn
             else session.correct_answer
         ),
-        answer_spec=None if scaffold_turn else _active_answer_spec(session),
+        answer_spec=(
+            None if scaffold_turn else schema_question.tutor_view.answer_spec
+        ),
         phase_2_prompt_context=_phase_2_prompt_context(session),
         current_phase=session.current_phase,
         input_source="CANVAS",

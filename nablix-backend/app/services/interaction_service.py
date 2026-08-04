@@ -437,15 +437,20 @@ def _updated_conversation_history(
 
 def _schema_question(session: SessionRecord) -> StudentModelQuestion:
     event = session.student_model_event
-    if (
-        event is None
-        or event.phase_payload is None
-        or event.phase_payload.question_set is None
-        or session.question_id is None
-    ):
+    if event is None:
         raise HTTPException(
             status_code=409,
-            detail="The active Schema 3.0 question is missing its micro-skill mapping.",
+            detail="Schema 3.0 session state is missing.",
+        )
+    if event.phase_payload is None or event.phase_payload.question_set is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Student Model returned no active question set.",
+        )
+    if session.question_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="The current phase has no active question.",
         )
     question: StudentModelQuestion | None = next(
         (
@@ -570,14 +575,32 @@ async def _initialize_restored_schema_phase(
     if event is None:
         return session
 
+    payload = event.phase_payload
+    if (
+        (session.current_question is None or session.question_id is None)
+        and payload is not None
+        and payload.question_set is not None
+        and payload.question_set.questions
+    ):
+        session = _apply_schema_event(session, event)
+
     if session.current_phase == "GUIDED_PRACTICE":
         phase_state = event.journey_state.phase_2_guided_learning
-        if phase_state.status != "NOT_STARTED":
+        missing_question = session.current_question is None or session.question_id is None
+        if phase_state.status != "NOT_STARTED" and not missing_question:
             return session
-        if not phase_state.target_micro_skill_ids:
+        target_micro_skill_ids = (
+            phase_state.target_micro_skill_ids
+            if phase_state.status == "NOT_STARTED"
+            else phase_state.remaining_micro_skill_ids
+        )
+        if not target_micro_skill_ids:
             raise HTTPException(
                 status_code=503,
-                detail="Student Model returned no target skills for the restored phase.",
+                detail=(
+                    "Student Model returned an active Guided Practice journey "
+                    "without a question or remaining target skills."
+                ),
             )
         request = GuidedQuestionSetRequestedEvent(
             request_id=(
@@ -590,16 +613,25 @@ async def _initialize_restored_schema_phase(
             topic_id=event.journey_state.topic_id,
             student_id=session.student_id,
             timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            target_micro_skill_ids=phase_state.target_micro_skill_ids,
+            target_micro_skill_ids=target_micro_skill_ids,
         )
     elif session.current_phase == "INDEPENDENT_PRACTICE":
         phase_state = event.journey_state.phase_3_independent_practice
-        if phase_state.status != "NOT_STARTED":
+        missing_question = session.current_question is None or session.question_id is None
+        if phase_state.status != "NOT_STARTED" and not missing_question:
             return session
-        if not phase_state.target_micro_skill_ids:
+        target_micro_skill_ids = (
+            phase_state.target_micro_skill_ids
+            if phase_state.status == "NOT_STARTED"
+            else phase_state.remaining_micro_skill_ids
+        )
+        if not target_micro_skill_ids:
             raise HTTPException(
                 status_code=503,
-                detail="Student Model returned no target skills for the restored phase.",
+                detail=(
+                    "Student Model returned an active Independent Practice journey "
+                    "without a question or remaining target skills."
+                ),
             )
         support_by_skill = (
             event.journey_state.phase_2_guided_learning.highest_support_used_by_skill
@@ -620,7 +652,7 @@ async def _initialize_restored_schema_phase(
                     micro_skill_id=micro_skill_id,
                     highest_support_used=support_by_skill.get(micro_skill_id, "NONE"),
                 )
-                for micro_skill_id in phase_state.target_micro_skill_ids
+                for micro_skill_id in target_micro_skill_ids
             ],
             used_question_ids=phase_state.used_question_ids,
         )
