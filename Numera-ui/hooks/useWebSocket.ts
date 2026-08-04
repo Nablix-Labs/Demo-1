@@ -36,6 +36,7 @@ export function useWebSocket(sessionId: string | null) {
   const {
     addTranscriptMessage,
     updatePartialTranscript,
+    commitPartialTranscript,
     setSessionState,
     setVoiceStatus,
     applyCanvasDraw,
@@ -89,10 +90,19 @@ export function useWebSocket(sessionId: string | null) {
             break;
 
           case 'transcript_final':
-            addTranscriptMessage({
-              role: msg.role as 'ai' | 'student',
-              text: msg.text as string,
-            });
+            // A student's final transcript REPLACES the partial bubble it has
+            // been growing; it is not a second message. Appending it left both
+            // on screen — the dotted partial and the blue final — and because
+            // Deepgram revises as it goes, the two often disagreed: "How to put
+            // this" sitting above "How to do this question?" (Manjusha, 4 Aug).
+            //
+            // The REST transport already committed in place; only the WS path
+            // appended, so this only ever showed on the server transport.
+            if (msg.role === 'student') {
+              commitPartialTranscript(msg.text as string);
+            } else {
+              addTranscriptMessage({ role: msg.role as 'ai' | 'student', text: msg.text as string });
+            }
             // The student said something the server heard. From here a reply is
             // owed, and only Deepgram's UtteranceEnd will ask for one — so start
             // the rescue clock in case that event never arrives.
@@ -215,7 +225,7 @@ export function useWebSocket(sessionId: string | null) {
       }
     };
 
-  }, [sessionId, sendControl, addTranscriptMessage, updatePartialTranscript, setSessionState, setVoiceStatus, applyCanvasDraw]);
+  }, [sessionId, sendControl, addTranscriptMessage, updatePartialTranscript, commitPartialTranscript, setSessionState, setVoiceStatus, applyCanvasDraw]);
 
   useEffect(() => {
     connect();
