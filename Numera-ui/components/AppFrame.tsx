@@ -142,6 +142,20 @@ export default function AppFrame({ children }: { children: ReactNode }) {
   return (
     <AuthGate>
       {!tutoring && <ToolRail />}
+      {/* The tool rail is hidden on the tutoring routes so the lesson gets the
+          full width — but those are not FOCUS_ROUTES either, so they were the
+          only screens in the app with no way out. A student in guided or
+          independent practice could not sign out at all (Manjusha, 4 Aug).
+          Same cluster and same corner as focus mode, so it is where anyone who
+          has used the rest of the app already expects it. Bottom-left is clear
+          on both: the canvas toolbar docks bottom-centre and the FABs and
+          action row sit bottom-right. */}
+      {tutoring && (
+        <div className="fixed bottom-5 left-5 z-50 flex items-center gap-1">
+          <VoicePicker />
+          <LogOutButton />
+        </div>
+      )}
       <div className="flex-1 flex min-w-0">
         {!isLesson ? (
           children

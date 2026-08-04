@@ -161,6 +161,16 @@ export function useWebSocket(sessionId: string | null) {
             // along so a failed stream (tutor_audio_end with error — Cartesia
             // quota, 31 Jul) speaks through the REST fallback chain instead of
             // leaving guided practice silent.
+            // SPEAKING from the moment the reply lands, not from the moment its
+            // audio starts. Those are seconds apart (synthesis + buffering), and
+            // the mic gate keys off this — leaving it open through that window
+            // let the mic catch the tutor's opening words and answer them.
+            setVoiceStatus('speaking');
+            tutorAudioStream.setOnIdle(() => {
+              const store = useNumeraStore.getState();
+              if (store.voiceStatus !== 'speaking') return; // superseded meanwhile
+              store.beginListeningTurn();
+            });
             tutorAudioStream.begin(
               (typeof msg.voice_text === 'string' && msg.voice_text) || spokenLine,
             );

@@ -18,6 +18,7 @@ import { useFlowNav } from '@/lib/useFlowNav';
 import { useRouter } from 'next/navigation';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
+import { useMicLevel } from '@/store/useMicLevel';
 import { useDemoTutor, resetSessionStart, sessionStartError } from '@/hooks/useDemoTutor';
 import { useVoiceTurn } from '@/hooks/useVoiceTurn';
 import { useVoiceStream } from '@/hooks/useVoiceStream';
@@ -49,6 +50,8 @@ export default function LessonPage() {
   const updatePartialTranscript = useNumeraStore((s) => s.updatePartialTranscript);
   const voiceStatus = useNumeraStore((s) => s.voiceStatus);
   const beginListeningTurn = useNumeraStore((s) => s.beginListeningTurn);
+  // True while tutor audio is genuinely playing — the echo gate below.
+  const tutorSpeaking = useMicLevel((s) => s.aiSpeaking);
 
   // ── Live backend wiring (no-op unless NEXT_PUBLIC_API_BASE_URL is set) ──
   const tutor = useDemoTutor();
@@ -136,7 +139,23 @@ export default function LessonPage() {
   // 17/19). In 'server' transport the voice server owns turn detection, so gate
   // only on mute there.
   const capture = VOICE_TRANSPORT === 'server' ? voiceStream : voice;
-  const listening = VOICE_TRANSPORT === 'server' ? !micMuted : voiceStatus === 'listening' && !micMuted;
+  // Half-duplex applies to BOTH transports. It used to gate the server
+  // transport on mute alone, on the reasoning that the voice server owns turn
+  // detection — but turn detection is not echo suppression. The mic stayed open
+  // through the tutor's reply, so the tutor's own audio went out of the speakers,
+  // back in through the microphone, and Deepgram transcribed it as student
+  // speech. UtteranceEnd then fired on the tutor's own words and produced
+  // another answer, which produced another, and the replies piled up on top of
+  // each other. That is what "long sentences are broken to many and answers are
+  // generated individually, finally overlapping" is (Manjusha, 4 Aug).
+  //
+  // `aiSpeaking` is driven by the audio element actually advancing (see
+  // startMouth in lib/tts.ts), so it clears on a stall as well as on a clean
+  // end — the mic cannot be held shut by a reply that silently died.
+  // Both signals clear inside the same funnel (TutorAudioStream.finish), so
+  // they can never disagree — and gating on both means neither one being missed
+  // can leave the tutor listening to itself.
+  const listening = !micMuted && voiceStatus === 'listening' && !tutorSpeaking;
 
   // Depend on the individual callbacks, not on `capture`. The hooks return a
   // fresh object every render, so depending on it re-ran this effect on EVERY

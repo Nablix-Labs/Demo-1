@@ -380,10 +380,19 @@ class TutorAudioStream {
       // If nothing has played yet, voice the same words through the REST
       // fallback chain (own voice → other product voice → browser).
       const speakInstead = this.nextIndex === 0 ? this.fallbackText : null;
+      const idle = this.onIdle;
       this.finish();
       if (speakInstead) {
         console.warn('[tts] streamed audio failed; voicing the turn via fallback');
-        speakTutor(speakInstead);
+        // finish() already reported idle, but the fallback voice is about to
+        // start talking — so report it AGAIN when that finishes. Without this
+        // the mic reopens while the fallback is mid-sentence and we are back to
+        // the tutor hearing itself, which is the bug this gate exists to stop.
+        useMicLevel.getState().setAiSpeaking(true);
+        speakTutor(speakInstead, () => {
+          useMicLevel.getState().setAiSpeaking(false);
+          idle?.();
+        });
       }
       return;
     }
@@ -447,10 +456,26 @@ class TutorAudioStream {
     }, MOUTH_PULSE_MS);
   }
 
+  /**
+   * Called when the tutor has genuinely stopped making sound — cleanly, on
+   * error, or on a stall.
+   *
+   * The mic gate depends on this. Every path that ends a reply funnels through
+   * `finish()`, so this fires from all of them (onended, onerror, the stall
+   * detector, a failed stream, an explicit stop). That single funnel is the
+   * reason the mic cannot be left shut by a reply that died quietly.
+   */
+  private onIdle: (() => void) | null = null;
+
+  setOnIdle(handler: (() => void) | null): void {
+    this.onIdle = handler;
+  }
+
   private finish(): void {
     this.stopMouth();
     useMicLevel.getState().setAiSpeaking(false);
     this.teardown();
+    this.onIdle?.();
   }
 
   private stopMouth(): void {
