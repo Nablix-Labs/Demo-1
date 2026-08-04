@@ -150,9 +150,12 @@ export default function AppFrame({ children }: { children: ReactNode }) {
           has used the rest of the app already expects it. Bottom-left is clear
           on both: the canvas toolbar docks bottom-centre and the FABs and
           action row sit bottom-right. */}
+      {/* Log out only — no VoicePicker here. MediaPanel already mounts one on
+          the lesson route, and a second would be two controls writing the same
+          store field from opposite corners of the same screen. */}
       {tutoring && (
         <div className="fixed bottom-5 left-5 z-50 flex items-center gap-1">
-          <VoicePicker />
+          {!isLesson && <VoicePicker />}
           <LogOutButton />
         </div>
       )}

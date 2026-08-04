@@ -222,6 +222,11 @@ export function useWebSocket(sessionId: string | null) {
     return () => {
       watchdogRef.current?.dispose();
       watchdogRef.current = null;
+      // The idle handler reopens the student's turn. tutorAudioStream is a
+      // module singleton, so a handler left registered here outlives this
+      // screen and would reopen a listening turn on whatever the student
+      // navigated to — including a phase that expects no voice input at all.
+      tutorAudioStream.setOnIdle(null);
       wsRef.current?.close(1000, 'component unmount');
     };
   }, [connect]);

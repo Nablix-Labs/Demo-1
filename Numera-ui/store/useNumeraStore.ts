@@ -514,7 +514,11 @@ export const useNumeraStore = create<NumeraState>()(
     (set) => ({
   ...initial,
 
-  setSessionId: (id) => set({ sessionId: id }),
+  // Opening a session resets the ordering guard. interaction_state_version is
+  // monotonic WITHIN a session, so a fresh session starts counting again — and
+  // carrying the previous session's high-water mark forward would make every
+  // reply in the new one look stale and be dropped, freezing the lesson.
+  setSessionId: (id) => set({ sessionId: id, appliedResponse: EMPTY_APPLIED }),
   setSessionState: (sessionState) => set({ sessionState }),
   setActiveSlide: (activeSlide) => set({ activeSlide }),
   setTotalSlides: (totalSlides) => set({ totalSlides }),
@@ -586,7 +590,7 @@ export const useNumeraStore = create<NumeraState>()(
   setBackendSession: (backendSession) => set({ backendSession }),
   setSessionSummary: (sessionSummary) => set({ sessionSummary }),
   setSessionReview: (sessionReview) => set({ sessionReview }),
-  clearSessionId: () => set({ sessionId: null }),
+  clearSessionId: () => set({ sessionId: null, appliedResponse: EMPTY_APPLIED }),
 
   // Mute is orthogonal to the turn phase (voice contract §12): the LISTENING/
   // PROCESSING/SPEAKING phase is owned by the turn machine (beginListeningTurn /
