@@ -4,6 +4,29 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 
 GuidedStudentState = Literal["CORRECT", "PARTIAL", "WRONG", "STUCK", "UNCLEAR"]
+EvaluationReasonCode = Literal[
+    "ALL_REQUIRED_COMPONENTS_CONFIRMED",
+    "REQUIRED_COMPONENTS_MISSING",
+    "RESPONSE_INCORRECT",
+    "STUDENT_STUCK",
+    "RESPONSE_UNCLEAR",
+    "EXPLAIN_AGAIN_REEXPRESSION",
+]
+WrongSupportReasonCode = Literal[
+    "WRONG_1_HINT",
+    "WRONG_2_HINT",
+    "WRONG_3_VISUAL_CUE",
+    "WRONG_4_INTERVENTION",
+]
+GuidedRoutingReasonCode = Literal[
+    "GUIDED_IN_PROGRESS",
+    "GUIDED_HINT_REQUIRED",
+    "GUIDED_VISUAL_SUPPORT_REQUIRED",
+    "GUIDED_SCAFFOLD_REQUIRED",
+    "GUIDED_COMPLETED",
+    "GUIDED_PHASE_COMPLETED",
+    "PARALLEL_EXAMPLE_REQUIRED",
+]
 
 
 class GuidedLearningModel(BaseModel):
@@ -43,6 +66,28 @@ class ActiveScaffold(GuidedLearningModel):
 class PrerequisiteRepair(GuidedLearningModel):
     prerequisite_micro_skill_ids: list[str]
     reason_code: str
+
+
+class InactivityPolicy(GuidedLearningModel):
+    initial_idle_threshold_ms: int = Field(ge=1)
+    cooldown_ms: int = Field(ge=1)
+    max_nudges_per_tutor_turn: int = Field(ge=1)
+    generated_nudge_rate_limit: int = Field(ge=1)
+
+
+class NudgeDelivery(GuidedLearningModel):
+    interaction_id: str
+    status: Literal["GENERATED", "PRESENTED"]
+    message: str = Field(min_length=1)
+
+
+def inactivity_policy() -> InactivityPolicy:
+    return InactivityPolicy(
+        initial_idle_threshold_ms=20_000,
+        cooldown_ms=30_000,
+        max_nudges_per_tutor_turn=2,
+        generated_nudge_rate_limit=4,
+    )
 
 
 class GuidedEvaluation(GuidedLearningModel):

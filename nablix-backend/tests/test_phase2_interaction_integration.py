@@ -1,15 +1,20 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.adapters import provider
 from app.adapters.student_model import StudentModelServiceAdapter
+from app.ai_engine import classifier
+from app.ai_engine.schemas import OpenAIExplainAgainMessage
 from app.core.config import Settings
 from app.main import app
+from app.models.guided_learning import GeneratedConcept, GeneratedQuestionRubric
 from app.models.student_model_session import (
     StudentModelSessionEvent,
     StudentModelSessionEventResponse,
 )
-from app.services import session_service
+from app.services import interaction_service, session_service
 from tests.test_session_events import _event_response, _session_opened_response
 
 
@@ -121,7 +126,47 @@ def test_text_duplicate_and_stale_turns_do_not_mutate_state() -> None:
     assert stored.json()["attempt_count"] == first_body["attempt_count"]
 
 
-def test_explain_again_is_cached_and_does_not_grade() -> None:
+def test_explain_again_is_cached_and_does_not_grade(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _ExplainAgainClient:
+        def generate_guided_rubric(self, **kwargs: object) -> GeneratedQuestionRubric:
+            return GeneratedQuestionRubric(
+                question_id=str(kwargs["question_id"]),
+                required_concepts=[
+                    GeneratedConcept(
+                        concept_id="CURRENT_CONCEPT",
+                        description="Explains the current concept.",
+                        required=True,
+                    )
+                ],
+                completion_rule="ALL_REQUIRED_CONCEPTS",
+                cache_key="phase2-explain-test",
+                prompt_version="1.0.0",
+            )
+
+        def generate_explain_again_message(
+            self,
+            **kwargs: object,
+        ) -> OpenAIExplainAgainMessage:
+            return OpenAIExplainAgainMessage(
+                tutor_message="Try viewing the current relationship from the starting value.",
+                tutor_message_voice_optimised="Try viewing the current relationship from the starting value.",
+                answer_reveal_risk=False,
+                confidence=0.95,
+            )
+
+    explain_client = _ExplainAgainClient()
+    monkeypatch.setattr(
+        interaction_service,
+        "build_openai_ai_engine_client",
+        lambda settings: explain_client,
+    )
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: explain_client,
+    )
     student_id = "ST152"
     session = _start(student_id)
     request = _interaction(
@@ -183,6 +228,15 @@ def test_inactivity_nudge_is_cached_without_pedagogical_mutation() -> None:
         None,
     )
     request["input_source"] = "SYSTEM"
+    request.pop("text_input")
+
+    stored_session = session_service._sessions[str(session["session_id"])]
+    session_service._sessions[str(session["session_id"])] = stored_session.model_copy(
+        update={
+            "last_tutor_response_at": datetime.now(timezone.utc)
+            - timedelta(seconds=21)
+        }
+    )
 
     first = client.post("/interaction", json=request)
     assert first.status_code == 200
@@ -191,6 +245,17 @@ def test_inactivity_nudge_is_cached_without_pedagogical_mutation() -> None:
     assert first_body["attempt_count"] == session["attempt_count"]
     assert first_body["question_id"] == session["question_id"]
     assert first_body["current_phase"] == session["current_phase"]
+    assert first_body["nudge_delivery"] == {
+        "interaction_id": "TURN-NUDGE-1",
+        "status": "GENERATED",
+        "message": first_body["message"],
+    }
+    assert first_body["inactivity_policy"] == {
+        "initial_idle_threshold_ms": 20000,
+        "cooldown_ms": 30000,
+        "max_nudges_per_tutor_turn": 2,
+        "generated_nudge_rate_limit": 4,
+    }
 
     duplicate = client.post("/interaction", json=request)
     assert duplicate.status_code == 200
@@ -200,3 +265,37 @@ def test_inactivity_nudge_is_cached_without_pedagogical_mutation() -> None:
     assert duplicate_body["interaction_state_version"] == first_body[
         "interaction_state_version"
     ]
+
+    presented_request = {
+        **request,
+        "interaction_type": "NUDGE_PRESENTED",
+        "turn_id": "TURN-NUDGE-PRESENTED-1",
+        "nudge_id": "TURN-NUDGE-1",
+    }
+    presented = client.post("/interaction", json=presented_request)
+    assert presented.status_code == 200
+    presented_body = presented.json()
+    assert presented_body["nudge_delivery"]["status"] == "PRESENTED"
+    assert presented_body["attempt_count"] == session["attempt_count"]
+    assert presented_body["consecutive_stuck_count"] == 0
+
+
+def test_inactivity_nudge_is_suppressed_before_server_threshold() -> None:
+    student_id = "ST155"
+    session = _start(student_id)
+    request = _interaction(
+        session,
+        student_id,
+        "TURN-NUDGE-EARLY",
+        "INACTIVITY_NUDGE",
+        None,
+    )
+    request["input_source"] = "SYSTEM"
+    request.pop("text_input")
+
+    response = client.post("/interaction", json=request)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "NUDGE_SUPPRESSED"
+    assert body["nudge_delivery"] is None
+    assert body["attempt_increment"] == 0

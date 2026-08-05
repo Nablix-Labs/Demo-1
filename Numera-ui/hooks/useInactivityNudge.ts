@@ -9,12 +9,9 @@
  * up nudging a student who is mid-sentence on one input because another input's
  * clock happened to expire.
  *
- * ── Dormant until the server says otherwise ────────────────────────────────
- * No policy, no nudging. The handoff calls for explicit validated configuration
- * with no model defaults, and the backend does not send it yet, so today this
- * runs, observes, and claims nothing. That is the correct behaviour rather than
- * a placeholder: inventing a threshold locally would mean the first student to
- * pause for thought gets interrupted on a number nobody agreed.
+ * The controller remains dormant until the server sends a policy. Once present,
+ * it claims through the normal interaction endpoint; the backend independently
+ * validates its own clock, cooldown, and rate limits.
  *
  * ── What is transmitted ────────────────────────────────────────────────────
  * Nothing about the activity itself. No strokes, keystrokes, partial text,
@@ -37,6 +34,7 @@ import {
   type ActivityGate,
   type NudgeRecord,
 } from '@/lib/inactivity';
+import type { NudgeDelivery } from '@/lib/api';
 
 /** How often the single controller re-evaluates. Not a threshold — just a tick. */
 const TICK_MS = 1_000;
@@ -49,13 +47,13 @@ export interface InactivityNudgeOptions {
   /**
    * Claim a nudge from the backend. Returns the nudge id, or null if the
    * backend declined (its own clock disagreed, cooldown, rate limit).
-   * Omitted until the endpoint exists — without it nothing is ever claimed.
+   * Without this callback nothing is ever claimed.
    */
-  claim?: () => Promise<string | null>;
+  claim?: (idleDurationMs: number) => Promise<NudgeDelivery | null>;
   /** Show/speak the nudge. Called at most once per nudge, never retried. */
-  present?: (id: string) => void;
+  present?: (delivery: NudgeDelivery) => void;
   /** Tell the backend it was presented. Retried; the presentation is not. */
-  acknowledge?: (id: string) => Promise<void>;
+  acknowledge?: (delivery: NudgeDelivery) => Promise<void>;
 }
 
 export function useInactivityNudge(options: InactivityNudgeOptions = {}): void {
@@ -126,8 +124,9 @@ export function useInactivityNudge(options: InactivityNudgeOptions = {}): void {
 
       claimingRef.current = true;
       try {
-        const id = await claim();
-        if (!id) return;
+        const delivery = await claim(now - (idleSinceRef.current ?? now));
+        if (!delivery) return;
+        const id = delivery.interaction_id;
 
         lastClaimAtRef.current = Date.now();
         nudgesThisTurnRef.current += 1;
@@ -150,18 +149,22 @@ export function useInactivityNudge(options: InactivityNudgeOptions = {}): void {
         // One-way from here: only the acknowledgement is ever retried.
         record = markPresented(record);
         recordsRef.current = recordsRef.current.map((r) => (r.id === id ? record : r));
-        present?.(id);
+        present?.(delivery);
 
         if (acknowledge) {
-          try {
-            await acknowledge(id);
+          let acknowledged = false;
+          for (let attempt = 0; attempt < 2 && !acknowledged; attempt += 1) {
+            try {
+              await acknowledge(delivery);
+              acknowledged = true;
+            } catch {
+              if (attempt === 1) console.warn('[nudge] presented but not acknowledged');
+            }
+          }
+          if (acknowledged) {
             recordsRef.current = recordsRef.current.map((r) =>
               r.id === id ? markAcknowledged(r) : r,
             );
-          } catch {
-            // Stays PRESENTED_UNACKNOWLEDGED — shown to the student but kept out
-            // of learner history until the backend confirms it. Never re-present.
-            console.warn('[nudge] presented but not acknowledged');
           }
         }
       } finally {

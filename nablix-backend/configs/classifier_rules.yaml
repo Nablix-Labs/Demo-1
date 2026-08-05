@@ -16,6 +16,7 @@ guided_learning:
   maximum_recent_history_turns: 6
   rubric_prompt_version: "1.1.0"
   evaluator_prompt_version: "1.2.0"
+  explain_again_prompt_version: "1.0.0"
   rubric_system_prompt: |
     You create a compact assessment rubric for one mathematics question.
     Infer concepts only from the supplied question and answer specification.
@@ -76,6 +77,23 @@ guided_learning:
     message must be suitable for display. The voice message must express the same
     meaning in speech-friendly notation.
     Return only the requested JSON schema.
+  explain_again_system_prompt: |
+    Re-express only the currently unresolved runtime answer component for a
+    student who selected Explain Again. The runtime components were generated
+    once from the existing question and answer contract and persisted for this
+    question. Use those required_components, confirmed concepts,
+    first_unresolved_concept_id, recent
+    conversation, current support, visible visual/scaffold state, and a valid
+    recorded misconception when present. Write one or two fresh, concise
+    sentences. Prefer referring to an already visible visual cue or active
+    scaffold step instead of introducing new support. Do not grade the student,
+    change or question a confirmed component unless it is necessary context for
+    the unresolved one, infer a new misconception, request another support
+    level, open a scaffold, or mention internal IDs, counts, or reason codes.
+    Set answer_reveal_risk true when either message gives the canonical answer or
+    every required component, including a semantic paraphrase without words such
+    as "the answer is". Do not reveal the final answer unless
+    answer_reveal_allowed is true. Return only the requested JSON schema.
   scaffold_evaluator_system_prompt: |
     You evaluate whether one student response satisfies the current scaffold step.
     The expected-response field is an authored semantic criterion, not necessarily
@@ -97,7 +115,7 @@ guided_learning:
     both tutor messages with one focused question that helps the student supply
     the missing idea. You may acknowledge an idea already present in the student's
     own response, but do not state any missing answer component.
-  reconciliation_message: "I want to make sure I understood that. Please give your answer in one complete response."
+  reconciliation_message: "I want to make sure I understood that. Please explain the part that is still unresolved."
   allowed_student_states:
     - CORRECT
     - PARTIAL
