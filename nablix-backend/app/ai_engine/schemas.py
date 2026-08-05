@@ -114,6 +114,14 @@ class VisualCue(StrictSchema):
     actions: list[dict[str, object]] = Field(default_factory=list)
 
 
+class VisibleVisualCue(StrictSchema):
+    show: StrictBool
+    cue_id: str | None
+    cue_type: VisualCueType | None
+    description: str | None
+    actions: list[dict[str, object]] = Field(default_factory=list)
+
+
 class HighlightInstruction(StrictSchema):
     step_number: int = Field(ge=1)
     highlight_type: HighlightType
@@ -248,7 +256,7 @@ class ExplainAgainRequest(StrictSchema):
     recent_conversation: list[ConversationMessage]
     active_support_level: SupportUsed
     highest_support_used: SupportUsed
-    visible_visual_cue: VisualCue | None
+    visible_visual_cue: VisibleVisualCue | None
     active_scaffold: ActiveScaffoldState | None
     answer_reveal_allowed: StrictBool
 
