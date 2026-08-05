@@ -23,8 +23,14 @@ from app.models.fields import (
 from app.models.guided_learning import (
     ActiveScaffold,
     ActiveTeachingObjective,
+    EvaluationReasonCode,
+    GuidedRoutingReasonCode,
     GuidedStudentState,
+    InactivityPolicy,
+    NudgeDelivery,
     PrerequisiteRepair,
+    WrongSupportReasonCode,
+    inactivity_policy,
 )
 from app.models.session import CanvasState, SessionSummary, VoiceState
 from app.models.student_model_session import (
@@ -57,6 +63,8 @@ class InteractionRequest(BaseModel):
     question_completed: bool | None = None
     conversation_history: list[ConversationMessage] = Field(default_factory=list)
     timestamp: str | None = None
+    idle_duration_ms: int | None = Field(default=None, ge=0)
+    nudge_id: TurnId | None = None
 
     @model_validator(mode="after")
     def validate_turn(self) -> "InteractionRequest":
@@ -69,6 +77,15 @@ class InteractionRequest(BaseModel):
             raise ValueError(
                 "SYSTEM input_source is only valid for inactivity nudge interactions."
             )
+        if self.interaction_type == "NUDGE_PRESENTED" and self.nudge_id is None:
+            raise ValueError("nudge_id is required for NUDGE_PRESENTED.")
+        if self.interaction_type != "NUDGE_PRESENTED" and self.nudge_id is not None:
+            raise ValueError("nudge_id is only valid for NUDGE_PRESENTED.")
+        if (
+            self.interaction_type != "INACTIVITY_NUDGE"
+            and self.idle_duration_ms is not None
+        ):
+            raise ValueError("idle_duration_ms is only valid for INACTIVITY_NUDGE.")
         return self
 
 
@@ -80,6 +97,7 @@ class InteractionResponse(BaseModel):
     status: Literal[
         "DUPLICATE_TURN",
         "CLARIFICATION_REQUIRED",
+        "NUDGE_SUPPRESSED",
     ] | None = None
     accepted_turn_id: TurnId | None = None
     interaction_state_version: int = Field(default=0, ge=0)
@@ -130,8 +148,13 @@ class InteractionResponse(BaseModel):
     active_teaching_objective: ActiveTeachingObjective | None = None
     first_unresolved_concept_id: str | None = None
     selected_error_code: str | None = None
-    evaluation_reason_code: str | None = None
-    support_reason_code: str | None = None
+    evaluation_reason_code: EvaluationReasonCode | None = None
+    support_reason_code: WrongSupportReasonCode | GuidedRoutingReasonCode | None = None
+    routing_reason_code: GuidedRoutingReasonCode | None = None
+    wrong_attempt_count: int = Field(default=0, ge=0)
+    intervention_triggered: bool = False
+    inactivity_policy: InactivityPolicy = Field(default_factory=inactivity_policy)
+    nudge_delivery: NudgeDelivery | None = None
     support_served_this_turn: SupportUsed | None = None
     active_support_level: SupportUsed = "NONE"
     highest_support_used: SupportUsed = "NONE"

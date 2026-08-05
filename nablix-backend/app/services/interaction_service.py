@@ -41,7 +41,14 @@ from app.models.adapters import (
     VisualCue,
 )
 from app.models.fields import Phase
-from app.models.guided_learning import ScaffoldEvaluationContext
+from app.models.guided_learning import (
+    EvaluationReasonCode,
+    GuidedStudentState,
+    NudgeDelivery,
+    ScaffoldEvaluationContext,
+    WrongSupportReasonCode,
+    inactivity_policy,
+)
 from app.models.interaction import (
     InteractionRequest,
     InteractionResponse,
@@ -185,7 +192,20 @@ async def process_answer_with_session_event(
             else None
         )
     )
-    support_escalation = (
+    response_is_wrong = _tutor_response_is_wrong(tutor)
+    next_wrong_attempt_count = (
+        session.wrong_attempt_count + 1
+        if response_is_wrong
+        else session.wrong_attempt_count
+    )
+    wrong_four_escalation = (
+        schema_managed
+        and session.current_phase == "GUIDED_PRACTICE"
+        and event_type == "INCORRECT_ATTEMPT"
+        and response_is_wrong
+        and next_wrong_attempt_count >= 4
+    )
+    stuck_support_escalation = (
         schema_managed
         and session.current_phase == "GUIDED_PRACTICE"
         and event_type is None
@@ -198,6 +218,7 @@ async def process_answer_with_session_event(
             )
         )
     )
+    support_escalation = wrong_four_escalation or stuck_support_escalation
     if not schema_managed or (event_type is None and not support_escalation):
         return student, tutor, None, None, session
 
@@ -209,11 +230,21 @@ async def process_answer_with_session_event(
     if support_escalation:
         escalation_type: Literal[
             "GUIDED_SUPPORT_ESCALATION_REQUIRED",
+            "GUIDED_STUCK_SUPPORT_REQUIRED",
             "MAXIMUM_GUIDED_SUPPORT_PARALLEL",
         ] = (
-            "MAXIMUM_GUIDED_SUPPORT_PARALLEL"
-            if tutor.response_strategy == "PROVIDE_WORKED_EXAMPLE"
-            else "GUIDED_SUPPORT_ESCALATION_REQUIRED"
+            "GUIDED_SUPPORT_ESCALATION_REQUIRED"
+            if wrong_four_escalation
+            else (
+                "MAXIMUM_GUIDED_SUPPORT_PARALLEL"
+                if tutor.response_strategy == "PROVIDE_WORKED_EXAMPLE"
+                else "GUIDED_STUCK_SUPPORT_REQUIRED"
+            )
+        )
+        wrong_four_error_code = (
+            _wrong_four_error_code(session, tutor, context.message)
+            if wrong_four_escalation
+            else None
         )
         response = await adapters.student_model.send_session_event(
             GuidedSupportEvent(
@@ -230,6 +261,10 @@ async def process_answer_with_session_event(
                 timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 question_id=session.question_id,
                 micro_skill_id=micro_skill_ids[0],
+                triggering_response=(
+                    context.message if wrong_four_escalation else None
+                ),
+                error_code=wrong_four_error_code,
             ),
             access_token,
         )
@@ -313,7 +348,7 @@ async def process_answer_with_session_event(
             "session_id": session.session_id,
             "question_id": session.question_id,
             "student_model_event": (
-                "GUIDED_SUPPORT_ESCALATION_REQUIRED"
+                escalation_type
                 if support_escalation
                 else event_type
             ),
@@ -532,6 +567,75 @@ def _db_error_code(session: SessionRecord, student_message: str) -> str | None:
         ):
             return error_code
     return None
+
+
+def _wrong_four_error_code(
+    session: SessionRecord,
+    tutor: TutorResult,
+    student_message: str,
+) -> str:
+    allowed_codes = {
+        item.get("error_code")
+        for item in _schema_question(session).tutor_view.potential_errors
+        if isinstance(item.get("error_code"), str)
+    }
+    candidates = [tutor.selected_error_code, _db_error_code(session, student_message)]
+    selected = next((code for code in candidates if code in allowed_codes), None)
+    if selected is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "WRONG_4_ERROR_UNRESOLVED: the fourth wrong response has no "
+                "error code from the active question catalog."
+            ),
+        )
+    return selected
+
+
+def _evaluation_reason_code(
+    state: GuidedStudentState | None,
+) -> EvaluationReasonCode | None:
+    mapping: dict[GuidedStudentState, EvaluationReasonCode] = {
+        "CORRECT": "ALL_REQUIRED_COMPONENTS_CONFIRMED",
+        "PARTIAL": "REQUIRED_COMPONENTS_MISSING",
+        "WRONG": "RESPONSE_INCORRECT",
+        "STUCK": "STUDENT_STUCK",
+        "UNCLEAR": "RESPONSE_UNCLEAR",
+    }
+    return mapping.get(state) if state is not None else None
+
+
+def _evaluation_reason_code_for_tutor(
+    tutor: TutorResult,
+) -> EvaluationReasonCode | None:
+    guided_code = _evaluation_reason_code(tutor.guided_student_state)
+    if guided_code is not None:
+        return guided_code
+    if tutor.evaluation == "CORRECT":
+        return "ALL_REQUIRED_COMPONENTS_CONFIRMED"
+    if tutor.evaluation == "PARTIALLY_CORRECT":
+        return "REQUIRED_COMPONENTS_MISSING"
+    if tutor.evaluation == "INCORRECT":
+        return "RESPONSE_INCORRECT"
+    if tutor.evaluation == "UNCLEAR":
+        return "RESPONSE_UNCLEAR"
+    return None
+
+
+def _wrong_support_reason_code(wrong_attempt_count: int) -> WrongSupportReasonCode:
+    if wrong_attempt_count <= 1:
+        return "WRONG_1_HINT"
+    if wrong_attempt_count == 2:
+        return "WRONG_2_HINT"
+    if wrong_attempt_count == 3:
+        return "WRONG_3_VISUAL_CUE"
+    return "WRONG_4_INTERVENTION"
+
+
+def _tutor_response_is_wrong(tutor: TutorResult) -> bool:
+    return tutor.guided_student_state == "WRONG" or (
+        tutor.guided_student_state is None and tutor.evaluation == "INCORRECT"
+    )
 
 
 def _schema_question_mapped_micro_skills(session: SessionRecord) -> list[str]:
@@ -1039,6 +1143,9 @@ def _turn_updates(
     updates: dict[str, object] = {
         "last_tutor_action": last_tutor_action,
         "expected_student_response": expected_student_response,
+        "last_tutor_response_at": datetime.now(timezone.utc),
+        "pending_nudge_id": None,
+        "pending_nudge_message": None,
     }
     if request.turn_id is None:
         raise RuntimeError("validated interaction is missing turn_id")
@@ -1162,7 +1269,7 @@ def _response_from(
     session_summary: SessionSummary | None,
     conversation_action: ConversationAction,
     attempt_increment: int,
-    status: Literal["CLARIFICATION_REQUIRED"] | None,
+    status: Literal["CLARIFICATION_REQUIRED", "NUDGE_SUPPRESSED"] | None,
     retry_safe: bool | None,
     previous_phase: Phase | None = None,
 ) -> InteractionResponse:
@@ -1301,20 +1408,7 @@ def _non_graded_response(
     message: str,
     conversation_action: ConversationAction,
 ) -> InteractionResponse:
-    is_nudge = request.interaction_type in {"INACTIVITY_NUDGE", "NUDGE_PRESENTED"}
-    state_updates = (
-        {
-            "last_processed_turn_id": request.turn_id,
-            "last_tutor_action": session.last_tutor_action,
-            "expected_student_response": session.expected_student_response,
-        }
-        if is_nudge
-        else _turn_updates(request, "GAVE_HINT", "ANSWER")
-    )
-    if request.interaction_type == "INACTIVITY_NUDGE" and session.nudge_generated_count < 4:
-        state_updates["nudge_generated_count"] = session.nudge_generated_count + 1
-    if request.interaction_type == "NUDGE_PRESENTED" and session.nudge_presented_count < 2:
-        state_updates["nudge_presented_count"] = session.nudge_presented_count + 1
+    state_updates = _turn_updates(request, "GAVE_HINT", "ANSWER")
     updated_session = update_interaction_state(
         request.session_id,
         request.student_id,
@@ -1344,6 +1438,161 @@ def _non_graded_response(
         True,
     )
     return _cache_response(request, response)
+
+
+def _contextual_nudge_message(session: SessionRecord) -> str:
+    if session.current_scaffold_step_id is not None and session.scaffold_steps:
+        return (
+            "I'm still here with you. Look at the current step: "
+            f"{session.scaffold_steps[0]} What would you try?"
+        )
+    if session.current_question is not None:
+        return (
+            "I'm still here with you. Looking at the question, what is the first "
+            "thing you would try?"
+        )
+    return "I'm still here with you. Tell me what you are thinking so far."
+
+
+def _nudge_eligible(session: SessionRecord, now: datetime) -> bool:
+    policy = inactivity_policy()
+    elapsed_ms = int((now - session.last_tutor_response_at).total_seconds() * 1000)
+    if session.expected_student_response == "NONE":
+        return False
+    if elapsed_ms < policy.initial_idle_threshold_ms:
+        return False
+    if session.nudge_presented_count >= policy.max_nudges_per_tutor_turn:
+        return False
+    if session.nudge_generated_count >= policy.generated_nudge_rate_limit:
+        return False
+    if session.last_nudge_generated_at is None:
+        return True
+    cooldown_ms = int((now - session.last_nudge_generated_at).total_seconds() * 1000)
+    return cooldown_ms >= policy.cooldown_ms
+
+
+def _nudge_response(
+    request: InteractionRequest,
+    session: SessionRecord,
+    message: str,
+    status: Literal["GENERATED", "PRESENTED"] | None,
+    state_updates: dict[str, object],
+) -> InteractionResponse:
+    updated_session = update_interaction_state(
+        request.session_id,
+        request.student_id,
+        session,
+        session.current_phase,
+        session.hint_count,
+        session.current_phase,
+        request.transcript_confidence,
+        request.canvas_snapshot_id,
+        None,
+        session.show_visual_cue,
+        session.show_scaffold_panel,
+        session.scaffold_steps,
+        state_updates,
+    )
+    response = _response_from(
+        request,
+        updated_session,
+        message,
+        message,
+        None,
+        updated_session.scaffold_steps,
+        None,
+        "WAIT_FOR_STUDENT",
+        0,
+        "NUDGE_SUPPRESSED" if status is None else None,
+        True,
+    )
+    delivery = (
+        NudgeDelivery(
+            interaction_id=(
+                request.turn_id if status == "GENERATED" else request.nudge_id
+            ),
+            status=status,
+            message=message,
+        )
+        if status is not None
+        else None
+    )
+    return _cache_response(
+        request,
+        response.model_copy(update={"nudge_delivery": delivery}),
+    )
+
+
+def _claim_inactivity_nudge(
+    request: InteractionRequest,
+    session: SessionRecord,
+) -> InteractionResponse:
+    now = datetime.now(timezone.utc)
+    base_updates: dict[str, object] = {
+        "last_processed_turn_id": request.turn_id,
+        "last_tutor_action": session.last_tutor_action,
+        "expected_student_response": session.expected_student_response,
+    }
+    if not _nudge_eligible(session, now):
+        return _nudge_response(
+            request,
+            session,
+            "No inactivity prompt was needed.",
+            None,
+            base_updates,
+        )
+    message = _contextual_nudge_message(session)
+    return _nudge_response(
+        request,
+        session,
+        message,
+        "GENERATED",
+        {
+            **base_updates,
+            "nudge_generated_count": session.nudge_generated_count + 1,
+            "last_nudge_generated_at": now,
+            "pending_nudge_id": request.turn_id,
+            "pending_nudge_message": message,
+        },
+    )
+
+
+def _acknowledge_inactivity_nudge(
+    request: InteractionRequest,
+    session: SessionRecord,
+) -> InteractionResponse:
+    if (
+        request.nudge_id != session.pending_nudge_id
+        or session.pending_nudge_message is None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="UNKNOWN_NUDGE: nudge_id does not name the pending generated nudge.",
+        )
+    rules = load_classifier_rules()
+    history = [
+        *session.conversation_history,
+        ConversationMessage(role="assistant", content=session.pending_nudge_message),
+    ]
+    if rules.conversation_rules.max_recent_messages == 0:
+        history = []
+    else:
+        history = history[-rules.conversation_rules.max_recent_messages :]
+    return _nudge_response(
+        request,
+        session,
+        session.pending_nudge_message,
+        "PRESENTED",
+        {
+            "last_processed_turn_id": request.turn_id,
+            "last_tutor_action": session.last_tutor_action,
+            "expected_student_response": session.expected_student_response,
+            "nudge_presented_count": session.nudge_presented_count + 1,
+            "pending_nudge_id": None,
+            "pending_nudge_message": None,
+            "conversation_history": history,
+        },
+    )
 
 
 def _recorded_misconception(
@@ -1568,19 +1817,9 @@ async def _process_interaction(
     if request.interaction_type == "EXPLAIN_AGAIN":
         return _explain_again_interaction_response(request, session)
     if request.interaction_type == "INACTIVITY_NUDGE":
-        return _non_graded_response(
-            request,
-            session,
-            "Are you still with me? Take your time and continue when you're ready.",
-            "WAIT_FOR_STUDENT",
-        )
+        return _claim_inactivity_nudge(request, session)
     if request.interaction_type == "NUDGE_PRESENTED":
-        return _non_graded_response(
-            request,
-            session,
-            "Take your time and continue when you're ready.",
-            "WAIT_FOR_STUDENT",
-        )
+        return _acknowledge_inactivity_nudge(request, session)
 
     student_message = _student_message_from(request)
     rules: ClassifierRulesConfig = load_classifier_rules()
@@ -1898,6 +2137,16 @@ async def _process_interaction(
         "attempt_count": (
             session.attempt_count if schema_question_changed else applied_attempt_count
         ),
+        "wrong_attempt_count": (
+            session.wrong_attempt_count
+            if schema_question_changed
+            else session.wrong_attempt_count + 1
+            if _tutor_response_is_wrong(tutor)
+            else 0
+            if tutor.guided_student_state == "CORRECT"
+            or tutor.evaluation == "CORRECT"
+            else session.wrong_attempt_count
+        ),
         "question_completed": (
             session.question_completed if schema_question_changed else completed
         ),
@@ -1924,7 +2173,13 @@ async def _process_interaction(
         ),
         "selected_error_code": (
             tutor.selected_error_code
+            or (
+                _db_error_code(session, student_message)
+                if _tutor_response_is_wrong(tutor)
+                else None
+            )
             if tutor.guided_student_state is not None
+            or _tutor_response_is_wrong(tutor)
             else session.selected_error_code
         ),
         "recommended_entry_phase": recommended,
@@ -1950,6 +2205,7 @@ async def _process_interaction(
         )
     if schema_question_changed:
         state_updates["stuck_count"] = 0
+        state_updates["wrong_attempt_count"] = 0
         state_updates["generated_question_rubric"] = None
         state_updates["active_teaching_objective"] = None
         state_updates["guided_student_state"] = None
@@ -2073,19 +2329,49 @@ async def _process_interaction(
         and schema_content_response.phase_payload.support_to_serve is not None
         else None
     )
+    routing_reason_code = (
+        schema_content_response.routing.reason_code
+        if schema_content_response is not None
+        and schema_content_response.routing.reason_code
+        in {
+            "GUIDED_IN_PROGRESS",
+            "GUIDED_HINT_REQUIRED",
+            "GUIDED_VISUAL_SUPPORT_REQUIRED",
+            "GUIDED_SCAFFOLD_REQUIRED",
+            "GUIDED_COMPLETED",
+            "GUIDED_PHASE_COMPLETED",
+            "PARALLEL_EXAMPLE_REQUIRED",
+        }
+        else None
+    )
+    wrong_support_reason = (
+        _wrong_support_reason_code(updated_session.wrong_attempt_count)
+        if _tutor_response_is_wrong(tutor)
+        else None
+    )
+    selected_error_code = tutor.selected_error_code or (
+        _db_error_code(turn_session, student_message)
+        if _tutor_response_is_wrong(tutor)
+        else None
+    )
     response = response.model_copy(
         update={
             "guided_student_state": tutor.guided_student_state,
-            "selected_error_code": tutor.selected_error_code,
-            "evaluation_reason_code": (
-                f"GUIDED_{tutor.guided_student_state}"
-                if tutor.guided_student_state is not None
-                else None
-            ),
+            "selected_error_code": selected_error_code,
+            "evaluation_reason_code": _evaluation_reason_code_for_tutor(tutor),
             "support_reason_code": (
-                schema_content_response.routing.reason_code
+                wrong_support_reason
+                if wrong_support_reason is not None
+                else routing_reason_code
                 if support_served is not None
                 else None
+            ),
+            "routing_reason_code": routing_reason_code,
+            "wrong_attempt_count": updated_session.wrong_attempt_count,
+            "intervention_triggered": (
+                schema_content_response.status.intervention_required
+                if schema_content_response is not None
+                else False
             ),
             "support_served_this_turn": support_served,
         }

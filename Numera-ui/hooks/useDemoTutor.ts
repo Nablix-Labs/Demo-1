@@ -26,6 +26,7 @@ import {
   type CanvasSubmissionResult,
   studentFacingError,
   type InteractionResponse,
+  type NudgeDelivery,
 } from '@/lib/api';
 import { applyInteractionSupport, acceptResponse } from '@/lib/interactionPresentation';
 import { useNumeraStore } from '@/store/useNumeraStore';
@@ -138,6 +139,11 @@ function syncBackendSession(response: {
   current_phase: string;
   current_question: string | null;
   question_id: string | null;
+  inactivity_policy?: {
+    initial_idle_threshold_ms: number;
+    cooldown_ms: number;
+    max_nudges_per_tutor_turn: number;
+  };
 }): void {
   // Text is kept verbatim. This used to strip a leading "solve for x:" because
   // the screens re-added it themselves — which silently mangled any question
@@ -157,6 +163,13 @@ function syncBackendSession(response: {
   // question set, so this is the one place both halves are known at once.
   const { index, total } = questionProgress(store.backendSession, response.question_id);
   store.setQuestionProgress(index, total);
+  if (response.inactivity_policy) {
+    store.setInactivityPolicy({
+      initialIdleThresholdMs: response.inactivity_policy.initial_idle_threshold_ms,
+      cooldownMs: response.inactivity_policy.cooldown_ms,
+      maxNudgesPerTutorTurn: response.inactivity_policy.max_nudges_per_tutor_turn,
+    });
+  }
 }
 
 /**
@@ -326,10 +339,8 @@ export function useDemoTutor() {
    * no support progression, no scaffold changes. It sends the request and
    * renders exactly what comes back.
    *
-   * `EXPLAIN_AGAIN` does not exist on the backend yet, so a 4xx falls back to
-   * re-showing the cue we already hold. That fallback is safe for the same
-   * reason the control is: replaying what the tutor already said cannot be
-   * graded, so it cannot cost the student an attempt either way.
+   * Older deployments can still return 404/405/422; only those explicit
+   * compatibility responses fall back to the cue already held by the client.
    */
   const explainAgain = useCallback(async (): Promise<InteractionResponse | null> => {
     const s = useNumeraStore.getState();
@@ -384,6 +395,65 @@ export function useDemoTutor() {
       return null;
     }
   }, [sessionId, addTranscriptMessage, addTrailEntry]);
+
+  const claimInactivityNudge = useCallback(async (
+    idleDurationMs: number,
+  ): Promise<NudgeDelivery | null> => {
+    const state = useNumeraStore.getState();
+    if (!apiEnabled() || !sessionId || !state.activeQuestionId) return null;
+    const turnId = state.beginSubmissionTurn();
+    const res = await sendInteraction({
+      session_id: sessionId,
+      student_id: studentId(),
+      interaction_type: 'INACTIVITY_NUDGE',
+      input_source: 'SYSTEM',
+      turn_id: turnId,
+      previous_tutor_turn_id: state.lastTutorTurnId,
+      idle_duration_ms: idleDurationMs,
+      current_phase: state.currentPhase,
+      concept_id: state.activeConceptId,
+      question_id: state.activeQuestionId,
+      hint_count: state.lastHintText ? 1 : 0,
+    });
+    if (res.status === 'NUDGE_SUPPRESSED' || !res.nudge_delivery) return null;
+    if (!acceptResponse(res)) return null;
+    syncBackendSession(res);
+    return res.nudge_delivery;
+  }, [sessionId]);
+
+  const presentInactivityNudge = useCallback(
+    (delivery: NudgeDelivery): void => {
+      tutorSay(delivery.message);
+    },
+    [],
+  );
+
+  const acknowledgeInactivityNudge = useCallback(
+    async (delivery: NudgeDelivery): Promise<void> => {
+      const state = useNumeraStore.getState();
+      if (!apiEnabled() || !sessionId || !state.activeQuestionId) return;
+      const res = await sendInteraction({
+        session_id: sessionId,
+        student_id: studentId(),
+        interaction_type: 'NUDGE_PRESENTED',
+        input_source: 'SYSTEM',
+        turn_id: `ACK-${delivery.interaction_id}`,
+        previous_tutor_turn_id: state.lastTutorTurnId,
+        nudge_id: delivery.interaction_id,
+        current_phase: state.currentPhase,
+        concept_id: state.activeConceptId,
+        question_id: state.activeQuestionId,
+        hint_count: state.lastHintText ? 1 : 0,
+      });
+      if (res.nudge_delivery?.status !== 'PRESENTED') {
+        throw new Error('Backend did not acknowledge the presented inactivity nudge.');
+      }
+      acceptResponse(res);
+      addTranscriptMessage({ role: 'ai', text: delivery.message });
+      addTrailEntry({ kind: 'tutor', text: delivery.message, meta: 'inactivity nudge' });
+    },
+    [sessionId, addTranscriptMessage, addTrailEntry],
+  );
 
   /**
    * Reveal the next rung of the support ladder (§6).
@@ -615,6 +685,9 @@ export function useDemoTutor() {
     submitVoiceTurn,
     hint,
     explainAgain,
+    claimInactivityNudge,
+    presentInactivityNudge,
+    acknowledgeInactivityNudge,
     end,
   };
 }

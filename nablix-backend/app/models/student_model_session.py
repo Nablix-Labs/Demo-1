@@ -1,6 +1,6 @@
 from typing import Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 StudentModelPhase = Literal[
@@ -301,11 +301,24 @@ class GuidedAttemptEvent(MutatingSessionEventBase):
 class GuidedSupportEvent(MutatingSessionEventBase):
     event_type: Literal[
         "GUIDED_SUPPORT_ESCALATION_REQUIRED",
+        "GUIDED_STUCK_SUPPORT_REQUIRED",
         "MAXIMUM_GUIDED_SUPPORT_PARALLEL",
         "MAXIMUM_GUIDED_SUPPORT_REQUIRED",
     ]
     question_id: str
     micro_skill_id: str
+    triggering_response: str | None = None
+    error_code: str | None = None
+
+    @model_validator(mode="after")
+    def validate_wrong_four_evidence(self) -> "GuidedSupportEvent":
+        if self.event_type != "GUIDED_SUPPORT_ESCALATION_REQUIRED":
+            return self
+        if self.triggering_response is None or not self.triggering_response.strip():
+            raise ValueError("triggering_response is required for Wrong 4 escalation.")
+        if self.error_code is None or not self.error_code.strip():
+            raise ValueError("error_code is required for Wrong 4 escalation.")
+        return self
 
 
 class GuidedPhaseCompletedEvent(MutatingSessionEventBase):

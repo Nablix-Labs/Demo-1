@@ -26,6 +26,8 @@ from app.models.guided_learning import (
     ActiveTeachingObjective,
     GeneratedQuestionRubric,
     GuidedStudentState,
+    InactivityPolicy,
+    inactivity_policy,
 )
 from app.models.session_review import SessionReviewResponse
 from app.models.student_model_session import (
@@ -179,9 +181,14 @@ class SessionRecord(BaseModel):
     allow_voice_input: bool = True
     hint_count: int
     attempt_count: int = 0
+    wrong_attempt_count: int = 0
     interaction_state_version: int = 0
     nudge_generated_count: int = 0
     nudge_presented_count: int = 0
+    last_tutor_response_at: datetime
+    last_nudge_generated_at: datetime | None = None
+    pending_nudge_id: TurnId | None = None
+    pending_nudge_message: str | None = None
     stuck_count: int = 0
     # Consecutive REQUEST_EXPLANATION turns on the current question. PARTIAL
     # explanation turns carry attempt_increment=0, so without this nothing
@@ -239,3 +246,4 @@ class SessionResponse(SessionRecord):
         default=None,
         exclude=True,
     )
+    inactivity_policy: InactivityPolicy = Field(default_factory=inactivity_policy)

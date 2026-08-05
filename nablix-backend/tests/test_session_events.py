@@ -511,7 +511,10 @@ def _event_response(
                 "next_action": "START_INDEPENDENT",
             }
         )
-    elif event_type == "GUIDED_SUPPORT_ESCALATION_REQUIRED":
+    elif event_type in {
+        "GUIDED_SUPPORT_ESCALATION_REQUIRED",
+        "GUIDED_STUCK_SUPPORT_REQUIRED",
+    }:
         response = _event_response("ORIENTATION_COMPLETED", request_id)
         journey = response["journey_state"]
         payload = response["phase_payload"]
@@ -560,6 +563,11 @@ def _event_response(
                 "next_action": "DELIVER_SCAFFOLD_STEP",
             }
         )
+        if event_type == "GUIDED_SUPPORT_ESCALATION_REQUIRED":
+            status = response["status"]
+            assert isinstance(status, dict)
+            status["intervention_required"] = True
+            status["intervention_reason"] = "WRONG_4"
     return response
 
 
@@ -1317,7 +1325,7 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
             assert stuck.json()["current_scaffold_step_id"] is None
         else:
             assert len(events) == event_count_before_stuck + 1
-            assert events[-1]["event_type"] == "GUIDED_SUPPORT_ESCALATION_REQUIRED"
+            assert events[-1]["event_type"] == "GUIDED_STUCK_SUPPORT_REQUIRED"
             assert events[-1]["micro_skill_id"] == "T02.M1"
             assert stuck.json()["scaffold_step_text"] == (
                 "Which operation should you undo first?"
@@ -1534,12 +1542,17 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     )
 
     assert fourth_wrong.status_code == 200
-    assert events[-1]["event_type"] == "INCORRECT_ATTEMPT"
-    assert events[-1]["student_response"] == "x = 4"
+    assert events[-1]["event_type"] == "GUIDED_SUPPORT_ESCALATION_REQUIRED"
+    assert events[-1]["triggering_response"] == "x = 4"
     assert events[-1]["error_code"] == "ERR-T02-SUBTRACTION-MISAPPLIED"
     assert fourth_wrong.json()["show_scaffold_panel"] is True
-    assert events[-1]["micro_skill_ids"] == ["T02.M1"]
+    assert events[-1]["micro_skill_id"] == "T02.M1"
     assert fourth_wrong.json()["current_scaffold_step_id"] == "SCF-T02-M1-S1"
+    assert fourth_wrong.json()["wrong_attempt_count"] == 4
+    assert fourth_wrong.json()["evaluation_reason_code"] == "RESPONSE_INCORRECT"
+    assert fourth_wrong.json()["support_reason_code"] == "WRONG_4_INTERVENTION"
+    assert fourth_wrong.json()["routing_reason_code"] == "GUIDED_SCAFFOLD_REQUIRED"
+    assert fourth_wrong.json()["intervention_triggered"] is True
 
     for scaffold_answer in ("addition", "4", "on both sides", "x = 5"):
         scaffold_response = client.post(
