@@ -1,3 +1,4 @@
+from enum import StrEnum
 from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -19,6 +20,18 @@ SupportUsed = Literal[
     "PARALLEL_EXAMPLE",
     "TUTOR_SOLVED",
 ]
+
+
+class RoutingReasonCode(StrEnum):
+    DIAGNOSTIC_STARTED = "DIAGNOSTIC_STARTED"
+    DIAGNOSTIC_GAPS_FOUND = "DIAGNOSTIC_GAPS_FOUND"
+    DIAGNOSTIC_NO_GAPS = "DIAGNOSTIC_NO_GAPS"
+    ORIENTATION_STARTED = "ORIENTATION_STARTED"
+    ORIENTATION_COMPLETED = "ORIENTATION_COMPLETED"
+    GUIDED_IN_PROGRESS = "GUIDED_IN_PROGRESS"
+    GUIDED_HINT_REQUIRED = "GUIDED_HINT_REQUIRED"
+    GUIDED_SCAFFOLD_REQUIRED = "GUIDED_SCAFFOLD_REQUIRED"
+    GUIDED_COMPLETED = "GUIDED_COMPLETED"
 
 
 class MicroSkillMapping(BaseModel):
@@ -137,7 +150,7 @@ class StudentModelPhasePayload(BaseModel):
 
 
 class StudentModelRouting(BaseModel):
-    reason_code: str
+    reason_code: RoutingReasonCode
     reason: str
     next_action: str
     next_topic_id: str | None = None
@@ -306,6 +319,8 @@ class GuidedSupportEvent(MutatingSessionEventBase):
     ]
     question_id: str
     micro_skill_id: str
+    triggering_response: str
+    error_code: str
 
 
 class GuidedPhaseCompletedEvent(MutatingSessionEventBase):

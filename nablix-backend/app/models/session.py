@@ -33,6 +33,36 @@ from app.models.student_model_session import (
 from app.services.phase1_tutor import Phase1TutorMessages
 
 
+NudgeDeliveryStatus = Literal[
+    "GENERATED",
+    "PRESENTED",
+]
+
+
+class InactivityPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    initial_idle_threshold_ms: int = Field(ge=1)
+    cooldown_ms: int = Field(ge=1)
+    max_nudges_per_tutor_turn: int = Field(ge=1)
+    generated_nudge_rate_limit: int = Field(ge=1)
+
+
+class NudgeDeliveryRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    interaction_id: TurnId
+    session_id: SessionId
+    source_tutor_turn_id: TurnId
+    question_id: QuestionId
+    message: str
+    message_voice: str
+    status: NudgeDeliveryStatus
+    created_at: datetime
+    presented_at: datetime | None = None
+    acknowledged_at: datetime | None = None
+
+
 class VoiceState(BaseModel):
     """Voice-channel state surfaced to the frontend (mock defaults for now)."""
 
@@ -179,6 +209,10 @@ class SessionRecord(BaseModel):
     nudge_generated_count: int = 0
     nudge_presented_count: int = 0
     stuck_count: int = 0
+    wrong_attempt_count: int = 0
+    selected_error_code: str | None = None
+    last_tutor_response_at: datetime | None = None
+    inactivity_policy: InactivityPolicy | None = None
     # Consecutive REQUEST_EXPLANATION turns on the current question. PARTIAL
     # explanation turns carry attempt_increment=0, so without this nothing
     # counts them and nothing can cap them (31 Jul: 29 consecutive rejections

@@ -1490,7 +1490,7 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
         "Undo the addition first."
     )
 
-    for answer in ("x = 3", "x = 2"):
+    for wrong_number in range(2, 5):
         guided_incorrect = client.post(
             "/interaction",
             json={
@@ -1498,8 +1498,8 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
                 "student_id": "ST001",
                 "interaction_type": "ANSWER_SUBMISSION",
                 "input_source": "TEXT",
-                "turn_id": f"TURN-GUIDED-WRONG-{answer}",
-                "text_input": answer,
+                "turn_id": f"TURN-GUIDED-WRONG-{wrong_number}",
+                "text_input": "x = 4",
                 "current_phase": "GUIDED_PRACTICE",
                 "concept_id": "ALG_LINEAR_ONE_STEP",
                 "question_id": "Q-T02-004",
@@ -1507,9 +1507,13 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
             },
         )
         assert guided_incorrect.status_code == 200
+        assert guided_incorrect.json()["wrong_attempt_count"] == wrong_number
 
     assert events[-1]["event_type"] == "GUIDED_SUPPORT_ESCALATION_REQUIRED"
     assert events[-1]["micro_skill_id"] == "T02.M1"
+    assert events[-1]["triggering_response"] == "x = 4"
+    assert events[-1]["error_code"] == "ERR-T02-SUBTRACTION-MISAPPLIED"
+    assert guided_incorrect.json()["support_reason_code"] == "WRONG_4_INTERVENTION"
     assert guided_incorrect.json()["show_scaffold_panel"] is True
     assert guided_incorrect.json()["current_scaffold_step_id"] == "SCF-T02-M1-S1"
 

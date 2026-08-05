@@ -1,9 +1,25 @@
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 
 GuidedStudentState = Literal["CORRECT", "PARTIAL", "WRONG", "STUCK", "UNCLEAR"]
+
+
+class EvaluationReasonCode(StrEnum):
+    ALL_REQUIRED_COMPONENTS_CONFIRMED = "ALL_REQUIRED_COMPONENTS_CONFIRMED"
+    REQUIRED_COMPONENTS_MISSING = "REQUIRED_COMPONENTS_MISSING"
+    RESPONSE_INCORRECT = "RESPONSE_INCORRECT"
+    STUDENT_STUCK = "STUDENT_STUCK"
+    RESPONSE_UNCLEAR = "RESPONSE_UNCLEAR"
+
+
+class WrongEscalationCode(StrEnum):
+    WRONG_1_HINT = "WRONG_1_HINT"
+    WRONG_2_HINT = "WRONG_2_HINT"
+    WRONG_3_VISUAL_CUE = "WRONG_3_VISUAL_CUE"
+    WRONG_4_INTERVENTION = "WRONG_4_INTERVENTION"
 
 
 class GuidedLearningModel(BaseModel):

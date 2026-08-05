@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     adapter_request_timeout_seconds: int = 20
     adapter_request_retry_count: int = 2
 
+    # Server-authoritative inactivity policy. Client idle duration is telemetry only.
+    inactivity_initial_idle_threshold_ms: int = Field(default=20_000, ge=1)
+    inactivity_cooldown_ms: int = Field(default=30_000, ge=1)
+    inactivity_max_nudges_per_tutor_turn: int = Field(default=2, ge=1)
+    inactivity_generated_nudge_rate_limit: int = Field(default=4, ge=1)
+
     #Validation
     max_text_input_length: int = 500
     min_voice_confidence_threshold: float = 0.7

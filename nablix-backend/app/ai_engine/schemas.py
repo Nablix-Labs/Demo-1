@@ -6,10 +6,12 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from app.models.adapters import ConversationAction
 from app.models.guided_learning import (
+    ActiveScaffold,
     ActiveTeachingObjective,
     GeneratedQuestionRubric,
     GuidedStudentState,
 )
+from app.models.student_model_session import SupportUsed
 
 
 EvaluationCategory = Literal[
@@ -111,6 +113,45 @@ class VisualCue(StrictSchema):
     cue_type: VisualCueType | None
     description: str | None
     actions: list[dict[str, object]] = Field(default_factory=list)
+
+
+class ExplainAgainSupportState(StrictSchema):
+    active_support_level: SupportUsed
+    highest_support_used: SupportUsed
+    support_reason_code: str | None
+
+
+class ExplainAgainConversationMessage(StrictSchema):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1)
+
+
+class ExplainAgainVisualCue(StrictSchema):
+    show: StrictBool
+    cue_type: str | None
+    description: str | None
+    actions: list[dict[str, object]] = Field(default_factory=list)
+
+
+class ExplainAgainRequest(StrictSchema):
+    question: str = Field(min_length=1)
+    generated_question_rubric: GeneratedQuestionRubric | None
+    active_teaching_objective: ActiveTeachingObjective | None
+    first_unresolved_concept_id: str | None
+    recent_conversation: list[ExplainAgainConversationMessage]
+    visible_cue: ExplainAgainVisualCue | None
+    active_scaffold: ActiveScaffold | None
+    support_state: ExplainAgainSupportState
+    selected_error_code: str | None
+    misconception_evidence: str | None
+
+
+class ExplainAgainResponse(StrictSchema):
+    tutor_message: str = Field(min_length=1)
+    tutor_message_voice: str = Field(min_length=1)
+    answer_reveal_allowed: Literal[False]
+    progression_change_requested: Literal[False]
+    attempt_increment: Literal[0]
 
 
 class HighlightInstruction(StrictSchema):

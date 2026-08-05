@@ -19,6 +19,8 @@ from app.ai_engine.prompt_registry import (
 from app.ai_engine.schemas import (
     ErrorType,
     EvaluationCategory,
+    ExplainAgainRequest,
+    ExplainAgainResponse,
     HintLevel,
     InputSource,
     IntentType,
@@ -274,6 +276,25 @@ class OpenAIAIEngineClient:
             raise AdapterError(
                 "openai_ai_engine",
                 f"invalid scaffold evaluation: {error}",
+            ) from error
+
+    def generate_explain_again_response(
+        self,
+        request: ExplainAgainRequest,
+        system_prompt: str,
+    ) -> ExplainAgainResponse:
+        content = self._request_guided_json(
+            name="explain_again_response",
+            schema=ExplainAgainResponse.model_json_schema(),
+            system_prompt=system_prompt,
+            user_payload=request.model_dump(),
+        )
+        try:
+            return ExplainAgainResponse.model_validate(content)
+        except ValidationError as error:
+            raise AdapterError(
+                "openai_ai_engine",
+                f"invalid Explain Again response: {error}",
             ) from error
 
     def _request_guided_json(
