@@ -365,6 +365,20 @@ export interface SessionRecord {
   status: string;
   mode: string;
   canvas_submissions: CanvasSubmissionResult[];
+  inactivity_policy?: InactivityPolicyResponse;
+}
+
+export interface InactivityPolicyResponse {
+  initial_idle_threshold_ms: number;
+  cooldown_ms: number;
+  max_nudges_per_tutor_turn: number;
+  generated_nudge_rate_limit: number;
+}
+
+export interface NudgeDelivery {
+  interaction_id: string;
+  status: 'GENERATED' | 'PRESENTED';
+  message: string;
 }
 
 // ── /session/start ────────────────────────────────────────────────────────────
@@ -667,6 +681,8 @@ export interface InteractionPayload {
   transcript_confidence?: number;
   /** Reference to a prior /canvas/submit so the turn carries the canvas work. */
   canvas_snapshot_id?: string;
+  idle_duration_ms?: number;
+  nudge_id?: string;
   current_phase: string;
   concept_id: string;
   question_id: string;
@@ -781,7 +797,11 @@ export interface InteractionResponse extends GuidedStateFields {
   // implements the contract; the frontend falls back sensibly when they're absent.
   /** Turn-level status: normal turns omit it; DUPLICATE_TURN / STALE_TURN /
    *  CLARIFICATION_REQUIRED signal the frontend to not treat this as a fresh reply. */
-  status?: 'DUPLICATE_TURN' | 'STALE_TURN' | 'CLARIFICATION_REQUIRED';
+  status?:
+    | 'DUPLICATE_TURN'
+    | 'STALE_TURN'
+    | 'CLARIFICATION_REQUIRED'
+    | 'NUDGE_SUPPRESSED';
   /** The student turn_id this reply corresponds to. */
   accepted_turn_id?: string | null;
   /** New tutor turn id — becomes previous_tutor_turn_id on the next request. */
@@ -794,6 +814,8 @@ export interface InteractionResponse extends GuidedStateFields {
   expected_student_response?: string;
   /** Whether voice input is currently permitted. */
   allow_voice_input?: boolean;
+  inactivity_policy?: InactivityPolicyResponse;
+  nudge_delivery?: NudgeDelivery | null;
 
   // ── Phase 2 scaffolding (frontend handoff, 2026-07-29) ────────────────────
   //

@@ -106,9 +106,13 @@ export default function LessonPage() {
 
   // One inactivity controller for the whole lesson — canvas, text, voice,
   // request lifecycle, page visibility and connectivity all feed this and
-  // nothing else. Dormant until the backend sends a policy and the claim
-  // endpoint exists; it observes and claims nothing today.
-  useInactivityNudge({ disconnected: !sessionId });
+  // nothing else. It remains dormant until the backend sends its policy.
+  useInactivityNudge({
+    disconnected: !sessionId,
+    claim: tutor.claimInactivityNudge,
+    present: tutor.presentInactivityNudge,
+    acknowledge: tutor.acknowledgeInactivityNudge,
+  });
 
   // Start a backend session on lesson entry and let it drive the displayed
   // question/number/opening message. Mic starts muted so capture is opt-in.

@@ -19,6 +19,8 @@ from app.ai_engine.schemas import (
     CanvasTextRegion,
     ErrorType,
     EvaluationCategory,
+    ExplainAgainRequest,
+    ExplainAgainResult,
     GuardrailCheck,
     HintLevel,
     InputSource,
@@ -410,6 +412,67 @@ def should_use_guided_state_machine(
     )
 
 
+def resolve_guided_rubric(
+    question_id: str,
+    question_type: QuestionType | None,
+    question: str,
+    answer_spec: AnswerSpec,
+    potential_errors: list[dict[str, object]],
+    target_micro_skill_ids: list[str],
+    existing_rubric: GeneratedQuestionRubric | None,
+    rules: ClassifierRulesConfig,
+    openai_client: OpenAIAIEngineClient,
+) -> GeneratedQuestionRubric:
+    """Return the persisted runtime rubric or generate it once from existing content."""
+
+    rubric = existing_rubric
+    if rubric is None or rubric.question_id != question_id:
+        rubric_error: AdapterError | None = None
+        for attempt in range(rules.guided_learning.maximum_retries + 1):
+            try:
+                rubric = openai_client.generate_guided_rubric(
+                    question_id=question_id,
+                    question_type=question_type,
+                    question=question,
+                    answer_spec=answer_spec,
+                    potential_errors=potential_errors,
+                    target_micro_skill_ids=target_micro_skill_ids,
+                    prompt_version=rules.guided_learning.rubric_prompt_version,
+                    system_prompt=rules.guided_learning.rubric_system_prompt,
+                )
+                validate_generated_rubric(
+                    rubric,
+                    question_id,
+                    question_type,
+                    answer_spec,
+                    rules,
+                )
+                break
+            except AdapterError as error:
+                rubric_error = error
+                logger.warning(
+                    "guided_rubric_retry",
+                    extra={
+                        "question_id": question_id,
+                        "attempt": attempt + 1,
+                        "detail": error.detail,
+                    },
+                )
+        if rubric is None:
+            raise rubric_error or AdapterError(
+                "openai_ai_engine",
+                f"Rubric generation failed for {question_id}.",
+            )
+    validate_generated_rubric(
+        rubric,
+        question_id,
+        question_type,
+        answer_spec,
+        rules,
+    )
+    return rubric
+
+
 def classify_guided_learning_response(
     request: ClassificationRequest,
     rules: ClassifierRulesConfig,
@@ -440,50 +503,16 @@ def classify_guided_learning_response(
             ),
         )
     allowed_errors = guided_error_definitions(context.potential_errors)
-    rubric = request.generated_question_rubric
-    if rubric is None or rubric.question_id != request.question_id:
-        rubric_error: AdapterError | None = None
-        for attempt in range(rules.guided_learning.maximum_retries + 1):
-            try:
-                rubric = openai_client.generate_guided_rubric(
-                    question_id=request.question_id,
-                    question_type=request.question_type,
-                    question=request.question,
-                    answer_spec=request.answer_spec,
-                    potential_errors=allowed_errors,
-                    target_micro_skill_ids=context.target_micro_skill_ids,
-                    prompt_version=rules.guided_learning.rubric_prompt_version,
-                    system_prompt=rules.guided_learning.rubric_system_prompt,
-                )
-                validate_generated_rubric(
-                    rubric,
-                    request.question_id,
-                    request.question_type,
-                    request.answer_spec,
-                    rules,
-                )
-                break
-            except AdapterError as error:
-                rubric_error = error
-                logger.warning(
-                    "guided_rubric_retry",
-                    extra={
-                        "question_id": request.question_id,
-                        "attempt": attempt + 1,
-                        "detail": error.detail,
-                    },
-                )
-        if rubric is None:
-            raise rubric_error or AdapterError(
-                "openai_ai_engine",
-                f"Rubric generation failed for {request.question_id}.",
-            )
-    validate_generated_rubric(
-        rubric,
-        request.question_id,
-        request.question_type,
-        request.answer_spec,
-        rules,
+    rubric = resolve_guided_rubric(
+        question_id=request.question_id,
+        question_type=request.question_type,
+        question=request.question,
+        answer_spec=request.answer_spec,
+        potential_errors=allowed_errors,
+        target_micro_skill_ids=context.target_micro_skill_ids,
+        existing_rubric=request.generated_question_rubric,
+        rules=rules,
+        openai_client=openai_client,
     )
     objective = request.active_teaching_objective or initial_guided_objective(rubric)
     evaluation: GuidedEvaluation | None = None
@@ -575,6 +604,8 @@ def classify_guided_learning_response(
                 "openai_ai_engine",
                 "Guided turn evaluation failed without a validated response.",
             )
+    if is_authoritative_guided_completion(request):
+        evaluation = authoritative_guided_completion(evaluation, rules)
     next_objective = normalized_guided_objective(evaluation, objective)
     logger.info(
         "guided_state_evaluated",
@@ -600,6 +631,38 @@ def classify_guided_learning_response(
         rubric,
         evaluation,
         next_objective,
+    )
+
+
+def authoritative_guided_completion(
+    evaluation: GuidedEvaluation,
+    rules: ClassifierRulesConfig,
+) -> GuidedEvaluation:
+    """Keep a proven answer correct without inventing component evidence."""
+    return evaluation.model_copy(
+        update={
+            "student_state": "CORRECT",
+            "newly_confirmed_concept_ids": [],
+            "preserved_concept_ids": [],
+            "contradicted_concept_ids": [],
+            "missing_concept_ids": [],
+            "selected_error_code": None,
+            "next_objective": None,
+            "tutor_message": rules.messages.CORRECT,
+            "tutor_message_voice": rules.messages.CORRECT,
+        }
+    )
+
+
+def is_authoritative_guided_completion(
+    request: ClassificationRequest,
+) -> bool:
+    """Return whether the contract has proven the whole requested response."""
+    if evaluate_answer_contract(request) != "CORRECT" or request.answer_spec is None:
+        return False
+    return not (
+        request.answer_spec.explanation_required
+        and request.answer_spec.verification_method == "EXACT_CHOICE_MATCH"
     )
 
 
@@ -1012,6 +1075,195 @@ def build_openai_ai_engine_client(settings: Settings) -> OpenAIAIEngineClient | 
         store_responses=settings.openai_store_responses,
         retry_count=settings.adapter_request_retry_count,
     )
+
+
+def generate_explain_again_response(
+    request: ExplainAgainRequest,
+) -> ExplainAgainResult:
+    """Generate wording for an explicit Explain Again turn without changing state."""
+
+    rules = load_classifier_rules()
+    validate_explain_again_request(request)
+    openai_client = build_openai_ai_engine_client(get_settings())
+    if openai_client is None:
+        raise AdapterError(
+            "openai_ai_engine",
+            "Explain Again requires an enabled OpenAI AI-engine client.",
+        )
+
+    last_error: AdapterError | None = None
+    validation_feedback: str | None = None
+    for attempt in range(rules.guided_learning.maximum_retries + 1):
+        recent_conversation = request.recent_conversation[
+            -rules.guided_learning.maximum_recent_history_turns:
+        ] if rules.guided_learning.maximum_recent_history_turns > 0 else []
+        prompt_request = request.model_copy(
+            update={"recent_conversation": recent_conversation}
+        )
+        try:
+            message = openai_client.generate_explain_again_message(
+                request=prompt_request,
+                validation_feedback=validation_feedback,
+                prompt_version=rules.guided_learning.explain_again_prompt_version,
+                system_prompt=rules.guided_learning.explain_again_system_prompt,
+            )
+        except AdapterError as error:
+            last_error = error
+            logger.warning(
+                "explain_again_generation_retry",
+                extra={
+                    "question_id": request.question_id,
+                    "attempt": attempt + 1,
+                    "detail": error.detail,
+                },
+            )
+            continue
+        if request.answer_reveal_allowed or (
+            message.answer_reveal_risk is False
+            and not message_reveals_answer(
+            message.tutor_message,
+            message.tutor_message_voice_optimised,
+            request.answer_spec.canonical_answer,
+            rules,
+            )
+        ):
+            return ExplainAgainResult(
+                interaction_type="EXPLAIN_AGAIN",
+                tutor_message=message.tutor_message,
+                tutor_message_voice_optimised=message.tutor_message_voice_optimised,
+                confidence=message.confidence,
+                attempt_increment=0,
+                evaluation_reason_code="EXPLAIN_AGAIN_REEXPRESSION",
+                guided_student_state=request.guided_student_state,
+                active_teaching_objective=request.active_teaching_objective,
+                first_unresolved_concept_id=request.first_unresolved_concept_id,
+                selected_error_code=request.selected_error_code,
+                support_served_this_turn=None,
+                active_support_level=request.active_support_level,
+                highest_support_used=request.highest_support_used,
+                active_scaffold=request.active_scaffold,
+                progression_change_requested=False,
+            )
+        validation_feedback = rules.answer_reveal_guardrail.rewrite_feedback
+        last_error = AdapterError(
+            "openai_ai_engine",
+            (
+                "Explain Again response disclosed the final answer for "
+                f"question_id={request.question_id}."
+            ),
+        )
+        logger.warning(
+            "explain_again_answer_reveal_retry",
+            extra={"question_id": request.question_id, "attempt": attempt + 1},
+        )
+    raise last_error or AdapterError(
+        "openai_ai_engine",
+        f"Explain Again generation failed for question_id={request.question_id}.",
+    )
+
+
+def validate_explain_again_request(request: ExplainAgainRequest) -> None:
+    required_components = [
+        component
+        for component in request.generated_question_rubric.required_concepts
+        if component.required
+    ]
+    component_ids = [component.concept_id for component in required_components]
+    if request.generated_question_rubric.question_id != request.question_id:
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Explain Again rubric does not match question_id={request.question_id}.",
+        )
+    if len(component_ids) != len(set(component_ids)):
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Explain Again requires unique runtime component IDs for {request.question_id}.",
+        )
+    required_ids = set(component_ids)
+    if not required_ids:
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Explain Again requires at least one runtime required component for {request.question_id}.",
+        )
+    active_ids = {
+        *request.active_teaching_objective.target_concept_ids,
+        *request.active_teaching_objective.confirmed_concept_ids,
+        *request.active_teaching_objective.missing_concept_ids,
+    }
+    if not active_ids.issubset(required_ids):
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Explain Again objective has unknown runtime component IDs for {request.question_id}.",
+        )
+    if set(request.active_teaching_objective.confirmed_concept_ids) & set(
+        request.active_teaching_objective.missing_concept_ids
+    ):
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Explain Again objective overlaps confirmed and missing components for {request.question_id}.",
+        )
+    if request.first_unresolved_concept_id not in set(
+        request.active_teaching_objective.missing_concept_ids
+    ):
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Explain Again first unresolved component is not missing for {request.question_id}.",
+        )
+    objective_ids = {
+        *request.active_teaching_objective.confirmed_concept_ids,
+        *request.active_teaching_objective.missing_concept_ids,
+    }
+    if objective_ids != required_ids:
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Explain Again objective omits runtime required components for {request.question_id}.",
+        )
+    first_missing = next(
+        component
+        for component in required_components
+        if component.concept_id in request.active_teaching_objective.missing_concept_ids
+    )
+    if request.first_unresolved_concept_id != first_missing.concept_id:
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Explain Again first unresolved component is out of runtime rubric order for {request.question_id}.",
+        )
+    if (request.selected_error_code is None) != (
+        request.recorded_misconception is None
+    ):
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Explain Again selected error and recorded misconception must both be present or absent for {request.question_id}.",
+        )
+    if request.recorded_misconception is not None and (
+        request.recorded_misconception.error_code != request.selected_error_code
+    ):
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Explain Again misconception does not match selected error for {request.question_id}.",
+        )
+    support_rank = {
+        "NONE": 0,
+        "HINT": 1,
+        "VISUAL_CUE": 2,
+        "SCAFFOLD": 3,
+        "PARALLEL_EXAMPLE": 4,
+        "TUTOR_SOLVED": 5,
+    }
+    if support_rank[request.active_support_level] > support_rank[
+        request.highest_support_used
+    ]:
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Explain Again active support exceeds highest support for {request.question_id}.",
+        )
+    if request.active_scaffold is not None and (
+        request.active_scaffold.step_number > request.active_scaffold.total_steps
+    ):
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Explain Again scaffold step exceeds total steps for {request.question_id}.",
+        )
 
 
 def generate_tutor_turn_with_openai(

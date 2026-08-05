@@ -15,7 +15,14 @@ from app.ai_engine.prompt_registry import (
     load_prompt_registry,
     serialize_session_context,
 )
-from app.ai_engine.schemas import CanvasTextRegion
+from app.ai_engine.schemas import (
+    ActiveScaffoldState,
+    CanvasTextRegion,
+    ExplainAgainRequest,
+    OpenAIExplainAgainMessage,
+    RecordedMisconception,
+    VisualCue,
+)
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AdapterError
 from app.core.logger import StructuredJsonFormatter
@@ -82,6 +89,342 @@ def _guided_rubric() -> GeneratedQuestionRubric:
         cache_key="rubric-hash",
         prompt_version="1.0.0",
     )
+
+
+def _multipart_guided_rubric() -> GeneratedQuestionRubric:
+    return GeneratedQuestionRubric(
+        question_id="Q-T01-006",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="GENERAL_RULE",
+                description="States the general rule c + 4.",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="CHANGING_VALUE",
+                description="Identifies c as changing.",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="FIXED_INCREMENT",
+                description="Identifies +4 as fixed.",
+                required=True,
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="multipart-rubric",
+        prompt_version="1.0.0",
+    )
+
+
+def _explain_again_request() -> ExplainAgainRequest:
+    return ExplainAgainRequest(
+        question_id="Q-T01-006",
+        question="A counter starts at c and increases by 4. State the general rule and explain what changes and stays fixed.",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-006",
+            canonical_answer="c + 4; c changes; add 4 stays fixed",
+            accepted_answers=["c + 4"],
+            verification_method="STRUCTURED_TEXT_AND_SYMBOLIC_MATCH",
+            explanation_required=True,
+        ),
+        generated_question_rubric=_multipart_guided_rubric(),
+        active_teaching_objective=ActiveTeachingObjective(
+            objective_type="EXPLAIN_CONCEPT",
+            target_concept_ids=["CHANGING_VALUE", "FIXED_INCREMENT"],
+            confirmed_concept_ids=["GENERAL_RULE"],
+            missing_concept_ids=["CHANGING_VALUE", "FIXED_INCREMENT"],
+        ),
+        first_unresolved_concept_id="CHANGING_VALUE",
+        guided_student_state="PARTIAL",
+        selected_error_code="ERR-T01-COUNTER-RULE",
+        recorded_misconception=RecordedMisconception(
+            error_code="ERR-T01-COUNTER-RULE",
+            description="Treats c as fixed rather than a starting value.",
+        ),
+        recent_conversation=[
+            ConversationMessage(role="user", content="The rule is c + 4."),
+            ConversationMessage(role="assistant", content="What can c represent?"),
+        ],
+        active_support_level="SCAFFOLD",
+        highest_support_used="SCAFFOLD",
+        visible_visual_cue=VisualCue(
+            show=True,
+            cue_type="CONCEPT_CARD",
+            description="A counter can start at different values.",
+            actions=[],
+        ),
+        active_scaffold=ActiveScaffoldState(
+            scaffold_id="SCF-T01-COUNTER-RULE",
+            current_step_id="SCF-T01-CTR-S1",
+            step_number=1,
+            total_steps=4,
+            step_text="Which quantity can change?",
+            step_voice="Which quantity can change?",
+        ),
+        answer_reveal_allowed=False,
+    )
+
+
+def test_explain_again_reexpresses_the_unresolved_component_without_progression_change(
+    monkeypatch,
+) -> None:
+    captured_requests: list[ExplainAgainRequest] = []
+
+    class _ExplainAgainClient:
+        def generate_explain_again_message(
+            self,
+            request: ExplainAgainRequest,
+            **kwargs: object,
+        ) -> OpenAIExplainAgainMessage:
+            captured_requests.append(request)
+            messages = [
+                "Look at the counter card: c is the starting value, so what could make it different each time?",
+                "Use the first scaffold question again: how could the counter begin at one value today and another tomorrow?",
+            ]
+            message = messages[len(captured_requests) - 1]
+            return OpenAIExplainAgainMessage(
+                tutor_message=message,
+                tutor_message_voice_optimised=message,
+                answer_reveal_risk=False,
+                confidence=0.96,
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _ExplainAgainClient(),
+    )
+
+    first = classifier.generate_explain_again_response(_explain_again_request())
+    second = classifier.generate_explain_again_response(_explain_again_request())
+
+    assert len(captured_requests) == 2
+    assert captured_requests[0].generated_question_rubric.required_concepts[1].concept_id == "CHANGING_VALUE"
+    assert captured_requests[0].active_scaffold is not None
+    assert captured_requests[0].visible_visual_cue is not None
+    assert first.tutor_message != second.tutor_message
+    assert first.attempt_increment == 0
+    assert first.progression_change_requested is False
+    assert first.support_served_this_turn is None
+    assert first.guided_student_state == "PARTIAL"
+    assert first.active_teaching_objective.confirmed_concept_ids == ["GENERAL_RULE"]
+    assert first.first_unresolved_concept_id == "CHANGING_VALUE"
+    assert first.active_support_level == "SCAFFOLD"
+    assert first.highest_support_used == "SCAFFOLD"
+    assert first.active_scaffold is not None
+
+
+def test_explain_again_retries_a_revealing_llm_response_without_canned_wording(
+    monkeypatch,
+) -> None:
+    validation_feedback: list[str | None] = []
+
+    class _ExplainAgainClient:
+        def generate_explain_again_message(
+            self,
+            **kwargs: object,
+        ) -> OpenAIExplainAgainMessage:
+            validation_feedback.append(cast(str | None, kwargs["validation_feedback"]))
+            if len(validation_feedback) == 1:
+                return OpenAIExplainAgainMessage(
+                    tutor_message="A counter can begin with any c and always moves on by four.",
+                    tutor_message_voice_optimised="A counter can begin with any c and always moves on by four.",
+                    answer_reveal_risk=True,
+                    confidence=0.99,
+                )
+            return OpenAIExplainAgainMessage(
+                tutor_message="Think about the starting value: could it be the same every time?",
+                tutor_message_voice_optimised="Think about the starting value: could it be the same every time?",
+                answer_reveal_risk=False,
+                confidence=0.98,
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _ExplainAgainClient(),
+    )
+
+    response = classifier.generate_explain_again_response(_explain_again_request())
+
+    assert len(validation_feedback) == 2
+    assert validation_feedback[0] is None
+    assert validation_feedback[1] == classifier.load_classifier_rules().answer_reveal_guardrail.rewrite_feedback
+    assert response.tutor_message == "Think about the starting value: could it be the same every time?"
+    assert response.attempt_increment == 0
+    assert response.progression_change_requested is False
+
+
+@pytest.mark.parametrize(
+    ("request_update", "expected_message"),
+    [
+        (
+            {
+                "first_unresolved_concept_id": "FIXED_INCREMENT",
+            },
+            "out of runtime rubric order",
+        ),
+        (
+            {
+                "active_teaching_objective": ActiveTeachingObjective(
+                    objective_type="EXPLAIN_CONCEPT",
+                    target_concept_ids=["CHANGING_VALUE"],
+                    confirmed_concept_ids=["GENERAL_RULE"],
+                    missing_concept_ids=["CHANGING_VALUE"],
+                )
+            },
+            "omits runtime required components",
+        ),
+        (
+            {
+                "active_teaching_objective": ActiveTeachingObjective(
+                    objective_type="EXPLAIN_CONCEPT",
+                    target_concept_ids=["CHANGING_VALUE", "FIXED_INCREMENT"],
+                    confirmed_concept_ids=["GENERAL_RULE", "CHANGING_VALUE"],
+                    missing_concept_ids=["CHANGING_VALUE", "FIXED_INCREMENT"],
+                )
+            },
+            "overlaps confirmed and missing",
+        ),
+        (
+            {
+                "selected_error_code": None,
+            },
+            "must both be present or absent",
+        ),
+        (
+            {
+                "recorded_misconception": None,
+            },
+            "must both be present or absent",
+        ),
+        (
+            {
+                "recorded_misconception": RecordedMisconception(
+                    error_code="ERR-OTHER",
+                    description="A different recorded misconception.",
+                ),
+            },
+            "does not match selected error",
+        ),
+        (
+            {
+                "active_support_level": "SCAFFOLD",
+                "highest_support_used": "HINT",
+            },
+            "active support exceeds highest support",
+        ),
+        (
+            {
+                "active_scaffold": ActiveScaffoldState(
+                    scaffold_id="SCF-T01-COUNTER-RULE",
+                    current_step_id="SCF-T01-CTR-S4",
+                    step_number=5,
+                    total_steps=4,
+                    step_text="Which quantity can change?",
+                    step_voice="Which quantity can change?",
+                )
+            },
+            "scaffold step exceeds total steps",
+        ),
+    ],
+)
+def test_explain_again_rejects_invalid_persisted_state_contract(
+    request_update: dict[str, object],
+    expected_message: str,
+) -> None:
+    request = _explain_again_request().model_copy(update=request_update)
+
+    with pytest.raises(AdapterError, match=expected_message):
+        classifier.validate_explain_again_request(request)
+
+
+def test_explain_again_rejects_duplicate_runtime_component_contract() -> None:
+    required_components = [
+        GeneratedConcept(
+            concept_id="GENERAL_RULE",
+            required=True,
+            description="States the general rule.",
+        ),
+        GeneratedConcept(
+            concept_id="GENERAL_RULE",
+            required=True,
+            description="Explains the changing value.",
+        ),
+    ]
+    request = _explain_again_request().model_copy(
+        update={
+            "generated_question_rubric": _explain_again_request().generated_question_rubric.model_copy(
+                update={"required_concepts": required_components}
+            )
+        }
+    )
+
+    with pytest.raises(AdapterError, match="unique runtime component IDs"):
+        classifier.validate_explain_again_request(request)
+
+
+def test_explain_again_rejects_optional_component_in_active_objective() -> None:
+    request = _explain_again_request()
+    components = [
+        component.model_copy(update={"required": False})
+        if component.concept_id == "FIXED_INCREMENT"
+        else component
+        for component in request.generated_question_rubric.required_concepts
+    ]
+    invalid = request.model_copy(
+        update={
+            "generated_question_rubric": request.generated_question_rubric.model_copy(
+                update={"required_concepts": components}
+            )
+        }
+    )
+
+    with pytest.raises(AdapterError, match="unknown runtime component IDs"):
+        classifier.validate_explain_again_request(invalid)
+
+
+def test_explain_again_limits_typed_conversation_history(monkeypatch) -> None:
+    captured_history: list[ConversationMessage] = []
+
+    class _ExplainAgainClient:
+        def generate_explain_again_message(
+            self,
+            request: ExplainAgainRequest,
+            **kwargs: object,
+        ) -> OpenAIExplainAgainMessage:
+            captured_history.extend(request.recent_conversation)
+            return OpenAIExplainAgainMessage(
+                tutor_message="Could the counter start at the same value every time?",
+                tutor_message_voice_optimised="Could the counter start at the same value every time?",
+                answer_reveal_risk=False,
+                confidence=0.96,
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _ExplainAgainClient(),
+    )
+    request = _explain_again_request().model_copy(
+        update={
+            "recent_conversation": [
+                ConversationMessage(role="user", content=f"turn {index}")
+                for index in range(8)
+            ]
+        }
+    )
+
+    classifier.generate_explain_again_response(request)
+
+    assert len(captured_history) == classifier.load_classifier_rules().guided_learning.maximum_recent_history_turns
+    assert captured_history[0].content == "turn 2"
+
+
+def test_explain_again_requires_an_enabled_llm_client() -> None:
+    with pytest.raises(AdapterError, match="Explain Again requires an enabled OpenAI"):
+        classifier.generate_explain_again_response(_explain_again_request())
 
 
 def test_guided_evaluation_schema_rejects_blank_tutor_messages() -> None:
@@ -2196,7 +2539,7 @@ def test_guided_partial_without_confirmed_concepts_becomes_safe_unclear(
     assert response.question_completed is False
     assert response.tutor_message == (
         "I want to make sure I understood that. "
-        "Please give your answer in one complete response."
+        "Please explain the part that is still unresolved."
     )
 
 
@@ -2218,6 +2561,170 @@ def test_guided_error_definitions_preserve_student_model_metadata() -> None:
             "response_patterns": ["2pq"],
         }
     ]
+
+
+def test_guided_multipart_canonical_answer_cannot_be_downgraded_by_llm(
+    monkeypatch,
+) -> None:
+    calls = 0
+
+    class _PartialGuidedClient:
+        def generate_guided_rubric(self, **kwargs):
+            return _multipart_guided_rubric()
+
+        def evaluate_guided_turn(self, **kwargs):
+            nonlocal calls
+            calls += 1
+            return GuidedEvaluation(
+                student_state="PARTIAL",
+                newly_confirmed_concept_ids=["GENERAL_RULE"],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=["CHANGING_VALUE", "FIXED_INCREMENT"],
+                selected_error_code=None,
+                confidence=0.98,
+                next_objective=kwargs["active_objective"],
+                tutor_message="What else changes?",
+                tutor_message_voice="What else changes?",
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _PartialGuidedClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T01-006",
+            question=(
+                "A counter starts at any value c and increases by 4. "
+                "Write the general rule and state what changes and what stays fixed."
+            ),
+            question_type="MULTI_PART_SHORT_RESPONSE",
+            correct_answer="c + 4; c changes; +4 stays fixed",
+            answer_spec=_answer_spec(
+                "c + 4; c changes; +4 stays fixed",
+                ["c+4", "c is changing", "add 4 stays fixed"],
+                "STRUCTURED_TEXT_AND_SYMBOLIC_MATCH",
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            student_input="c + 4; c changes; +4 stays fixed",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert calls == 1
+    assert response.evaluation == "CORRECT"
+    assert response.guided_student_state == "CORRECT"
+    assert response.question_completed is True
+    assert response.attempt_increment == 1
+    assert response.active_teaching_objective is None
+    assert response.recommended_conversation_action == "ADVANCE_TO_NEXT_QUESTION"
+
+
+def test_guided_multipart_undetermined_paraphrase_still_uses_llm(monkeypatch) -> None:
+    calls = 0
+
+    class _SemanticGuidedClient:
+        def generate_guided_rubric(self, **kwargs):
+            return _multipart_guided_rubric()
+
+        def evaluate_guided_turn(self, **kwargs):
+            nonlocal calls
+            calls += 1
+            assert kwargs["deterministic_evaluation"] is None
+            return GuidedEvaluation(
+                student_state="CORRECT",
+                newly_confirmed_concept_ids=[
+                    "GENERAL_RULE",
+                    "CHANGING_VALUE",
+                    "FIXED_INCREMENT",
+                ],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=[],
+                selected_error_code=None,
+                confidence=0.98,
+                next_objective=None,
+                tutor_message="Yes, that describes the complete rule.",
+                tutor_message_voice="Yes, that describes the complete rule.",
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _SemanticGuidedClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T01-006",
+            question=(
+                "A counter starts at any value c and increases by 4. "
+                "Write the general rule and state what changes and what stays fixed."
+            ),
+            question_type="MULTI_PART_SHORT_RESPONSE",
+            correct_answer="c + 4; c changes; +4 stays fixed",
+            answer_spec=_answer_spec(
+                "c + 4; c changes; +4 stays fixed",
+                ["c+4", "c is changing", "add 4 stays fixed"],
+                "STRUCTURED_TEXT_AND_SYMBOLIC_MATCH",
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            student_input=(
+                "The counter can start at different values, and every time "
+                "you add four to it."
+            ),
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert calls == 1
+    assert response.evaluation == "CORRECT"
+    assert response.question_completed is True
+
+
+def test_non_multipart_deterministic_correct_stays_outside_guided_llm(
+    monkeypatch,
+) -> None:
+    class _UnexpectedGuidedClient:
+        def generate_guided_rubric(self, **kwargs):
+            raise AssertionError("Non-multipart deterministic answers must not use the guided LLM.")
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _UnexpectedGuidedClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T02-002",
+            question="What does cd mean?",
+            correct_answer="c multiplied by d",
+            answer_spec=_answer_spec(
+                "c multiplied by d",
+                ["c times d"],
+                "CONCEPT_TEXT_MATCH",
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            student_input="c times d",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.evaluation == "CORRECT"
+    assert response.question_completed is True
 
 
 def test_guided_multipart_preserves_completed_parts_and_requests_the_missing_part(

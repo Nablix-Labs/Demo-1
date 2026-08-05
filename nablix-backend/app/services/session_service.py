@@ -329,6 +329,7 @@ async def start_session(
         student_id=request.student_id,
         concept_id=request.concept_id,
         started_at=started_at,
+        last_tutor_response_at=started_at,
         current_phase=phase,
         current_question=current_question,
         question_type=question_updates["question_type"],
@@ -714,6 +715,9 @@ def _apply_schema_event(
                 "question_completed": next_question_id is None,
                 "generated_question_rubric": None,
                 "active_teaching_objective": None,
+                "guided_student_state": None,
+                "selected_error_code": None,
+                "wrong_attempt_count": 0,
             }
         )
     if transition is not None:

@@ -22,7 +22,13 @@ from app.models.fields import (
     StudentId,
     TurnId,
 )
-from app.models.guided_learning import ActiveTeachingObjective, GeneratedQuestionRubric
+from app.models.guided_learning import (
+    ActiveTeachingObjective,
+    GeneratedQuestionRubric,
+    GuidedStudentState,
+    InactivityPolicy,
+    inactivity_policy,
+)
 from app.models.session_review import SessionReviewResponse
 from app.models.student_model_session import (
     PublicStudentModelEvent,
@@ -205,9 +211,14 @@ class SessionRecord(BaseModel):
     allow_voice_input: bool = True
     hint_count: int
     attempt_count: int = 0
+    wrong_attempt_count: int = 0
     interaction_state_version: int = 0
     nudge_generated_count: int = 0
     nudge_presented_count: int = 0
+    last_tutor_response_at: datetime
+    last_nudge_generated_at: datetime | None = None
+    pending_nudge_id: TurnId | None = None
+    pending_nudge_message: str | None = None
     stuck_count: int = 0
     wrong_attempt_count: int = 0
     selected_error_code: str | None = None
@@ -220,6 +231,8 @@ class SessionRecord(BaseModel):
     explanation_request_count: int = 0
     generated_question_rubric: GeneratedQuestionRubric | None = None
     active_teaching_objective: ActiveTeachingObjective | None = None
+    guided_student_state: GuidedStudentState | None = None
+    selected_error_code: str | None = None
     question_completed: bool = False
     answer_value_confirmed: bool = False
     conversation_history: list[ConversationMessage] = Field(default_factory=list)
@@ -267,3 +280,4 @@ class SessionResponse(SessionRecord):
         default=None,
         exclude=True,
     )
+    inactivity_policy: InactivityPolicy = Field(default_factory=inactivity_policy)
