@@ -109,7 +109,12 @@ export default function CanvasStage() {
           A bare equation gets the "Solve for x:" lead-in and maths type; anything
           with its own wording (e.g. a word problem) is shown verbatim as prose
           that wraps. See lib/questionText.ts. */}
-      <div className="absolute top-[26px] left-[34px] right-[34px] flex items-start gap-3 z-10">
+      {/* The right padding is what keeps this clear of TeachBack, which pins
+          "Explain it back" to the same corner at a higher z-index. Without it
+          "Explain again" renders underneath and is simply invisible — which is
+          exactly how it went missing in testing (Sanya, 5 Aug). It also stops a
+          long question running under that button. */}
+      <div className="absolute top-[26px] left-[34px] right-[34px] flex items-start gap-3 z-10 pr-[150px]">
         <div className="w-[30px] h-[30px] rounded-md border border-muted-gray bg-reading-surface flex items-center justify-center text-xs font-semibold text-slate-blue flex-shrink-0">
           {questionNumber}
         </div>
