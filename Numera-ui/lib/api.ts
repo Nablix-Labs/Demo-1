@@ -433,6 +433,47 @@ export function questionProgress(
     : { index, total: questions.length };
 }
 
+/**
+ * The student's view of one question in the session's set.
+ *
+ * `/interaction` replies name the current question and its `question_type`, but
+ * never carry its options — the Student Model ships those once, on the session
+ * record. So anything that needs to RENDER a choice question has to come back
+ * here and look it up by id.
+ *
+ * Null when the set is absent or the id isn't in it. Callers render the plain
+ * question rather than inventing options.
+ */
+export function studentViewFor(
+  record: SessionRecord | null | undefined,
+  questionId: string | null | undefined,
+): SchemaStudentQuestionView | null {
+  if (!questionId) return null;
+  const questions = record?.student_model_event?.phase_payload?.question_set?.questions ?? [];
+  return questions.find((q) => q.question_id === questionId)?.student_view ?? null;
+}
+
+/** Question types where the student picks from `options` rather than free-typing. */
+const CHOICE_TYPES: QuestionType[] = [
+  'SINGLE_CHOICE',
+  'CHOICE_WITH_EXPLANATION',
+  'TRUE_FALSE_WITH_EXPLANATION',
+];
+
+/**
+ * Should this question show its options?
+ *
+ * Both halves matter. A type that expects a choice but arrived with an empty
+ * `options` array must fall back to free response — rendering an empty chooser
+ * would leave the student with a question and no way to answer it.
+ */
+export function hasSelectableOptions(
+  view: Pick<SchemaStudentQuestionView, 'question_type' | 'options'> | null | undefined,
+): boolean {
+  if (!view) return false;
+  return CHOICE_TYPES.includes(view.question_type) && view.options.length > 0;
+}
+
 /** The orientation bundle for this session, or null when there isn't one. */
 export function orientationBundle(
   record: SessionRecord | null | undefined,

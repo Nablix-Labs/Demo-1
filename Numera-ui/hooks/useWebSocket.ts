@@ -26,7 +26,7 @@ import { useNumeraStore } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { tutorAudioStream, effectiveVoice } from '@/lib/tts';
 import { buildVoiceStreamUrl, voiceStreamingEnabled, allowAnonTutorCalls } from '@/lib/runtimeConfig';
-import { ANON_ACCESS_TOKEN, studentId } from '@/lib/api';
+import { ANON_ACCESS_TOKEN, studentId, type QuestionType } from '@/lib/api';
 import { applyInteractionSupport, type SupportPresentation } from '@/lib/interactionPresentation';
 import { TurnWatchdog } from '@/lib/turnWatchdog';
 
@@ -165,6 +165,14 @@ export function useWebSocket(sessionId: string | null) {
                 questionId: (msg.question_id as string | null) ?? null,
                 questionText:
                   typeof msg.current_question === 'string' ? msg.current_question : null,
+                // The voice server does not always forward this. Passing
+                // undefined rather than null lets applyBackendPhase keep the
+                // type it already has instead of blanking a choice question
+                // into a free-response one mid-lesson.
+                questionType:
+                  typeof msg.question_type === 'string'
+                    ? (msg.question_type as QuestionType)
+                    : undefined,
               });
             }
             // Reset the player; chunks are coming next. The voice line rides
