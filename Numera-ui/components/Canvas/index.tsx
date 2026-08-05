@@ -44,10 +44,15 @@ export default function CanvasStage() {
   const canvasAllowed = isConsentActive(canvasConsents, 'canvas_processing');
   const tutor = useDemoTutor();
 
-  // Explain Again replays the cue the backend already sent for this question.
-  // There is nothing to replay before one arrives, so the control stays hidden
-  // rather than appearing and doing nothing.
-  const canReplayCue = Boolean(visualCueType ?? visualCueDescription);
+  // Explain Again replays the current explanation. It was gated on a visual cue
+  // having arrived, which made it invisible on an ordinary question — the
+  // student only ever saw it after climbing the ladder as far as VISUAL_CUE,
+  // which is not what §2 asks for and is how it went missing in testing
+  // (Sanya, 5 Aug). The backend implements EXPLAIN_AGAIN now, so the control
+  // only needs something to replay: a tutor turn on the current question. A
+  // held cue still qualifies on its own, for the offline/demo path.
+  const hasTutorTurn = useNumeraStore((s) => s.transcript.some((m) => m.role === 'ai'));
+  const canReplayCue = Boolean(visualCueType ?? visualCueDescription) || hasTutorTurn;
   const { explainAgain } = tutor;
   const replayCue = useCallback(() => { void explainAgain(); }, [explainAgain]);
 

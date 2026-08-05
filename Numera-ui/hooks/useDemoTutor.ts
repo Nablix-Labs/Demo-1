@@ -421,11 +421,25 @@ export function useDemoTutor() {
     return res.nudge_delivery;
   }, [sessionId]);
 
+  /**
+   * Deliver an authorised nudge: one chat line, spoken once.
+   *
+   * It has to land in the transcript as well as the speaker. Speaking it alone
+   * meant a voice arrived with nothing on screen to account for it — the
+   * student hears the tutor start talking and there is no message anywhere
+   * explaining why, which is how it read in testing ("the tutor starts speaking
+   * randomly", Sanya, 5 Aug). A line the student can see and scroll back to is
+   * a nudge; a disembodied voice is an interruption.
+   *
+   * Still not a tutor turn: no turn ids, no support state, no trail entry,
+   * because the student has not done anything to respond to.
+   */
   const presentInactivityNudge = useCallback(
     (delivery: NudgeDelivery): void => {
-      tutorSay(delivery.message);
+      addTranscriptMessage({ role: 'ai', text: delivery.message });
+      tutorSay(delivery.message, { afterMarks: true });
     },
-    [],
+    [addTranscriptMessage],
   );
 
   const acknowledgeInactivityNudge = useCallback(
