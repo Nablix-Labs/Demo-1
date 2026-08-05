@@ -3,13 +3,16 @@ from fastapi.testclient import TestClient
 
 from app.adapters import provider
 from app.adapters.student_model import StudentModelServiceAdapter
+from app.ai_engine import classifier
+from app.ai_engine.schemas import OpenAIExplainAgainMessage
 from app.core.config import Settings
 from app.main import app
+from app.models.guided_learning import GeneratedConcept, GeneratedQuestionRubric
 from app.models.student_model_session import (
     StudentModelSessionEvent,
     StudentModelSessionEventResponse,
 )
-from app.services import session_service
+from app.services import interaction_service, session_service
 from tests.test_session_events import _event_response, _session_opened_response
 
 
@@ -121,7 +124,47 @@ def test_text_duplicate_and_stale_turns_do_not_mutate_state() -> None:
     assert stored.json()["attempt_count"] == first_body["attempt_count"]
 
 
-def test_explain_again_is_cached_and_does_not_grade() -> None:
+def test_explain_again_is_cached_and_does_not_grade(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _ExplainAgainClient:
+        def generate_guided_rubric(self, **kwargs: object) -> GeneratedQuestionRubric:
+            return GeneratedQuestionRubric(
+                question_id=str(kwargs["question_id"]),
+                required_concepts=[
+                    GeneratedConcept(
+                        concept_id="CURRENT_CONCEPT",
+                        description="Explains the current concept.",
+                        required=True,
+                    )
+                ],
+                completion_rule="ALL_REQUIRED_CONCEPTS",
+                cache_key="phase2-explain-test",
+                prompt_version="1.0.0",
+            )
+
+        def generate_explain_again_message(
+            self,
+            **kwargs: object,
+        ) -> OpenAIExplainAgainMessage:
+            return OpenAIExplainAgainMessage(
+                tutor_message="Try viewing the current relationship from the starting value.",
+                tutor_message_voice_optimised="Try viewing the current relationship from the starting value.",
+                answer_reveal_risk=False,
+                confidence=0.95,
+            )
+
+    explain_client = _ExplainAgainClient()
+    monkeypatch.setattr(
+        interaction_service,
+        "build_openai_ai_engine_client",
+        lambda settings: explain_client,
+    )
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: explain_client,
+    )
     student_id = "ST152"
     session = _start(student_id)
     request = _interaction(

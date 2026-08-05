@@ -22,7 +22,11 @@ from app.models.fields import (
     StudentId,
     TurnId,
 )
-from app.models.guided_learning import ActiveTeachingObjective, GeneratedQuestionRubric
+from app.models.guided_learning import (
+    ActiveTeachingObjective,
+    GeneratedQuestionRubric,
+    GuidedStudentState,
+)
 from app.models.session_review import SessionReviewResponse
 from app.models.student_model_session import (
     PublicStudentModelEvent,
@@ -186,6 +190,8 @@ class SessionRecord(BaseModel):
     explanation_request_count: int = 0
     generated_question_rubric: GeneratedQuestionRubric | None = None
     active_teaching_objective: ActiveTeachingObjective | None = None
+    guided_student_state: GuidedStudentState | None = None
+    selected_error_code: str | None = None
     question_completed: bool = False
     answer_value_confirmed: bool = False
     conversation_history: list[ConversationMessage] = Field(default_factory=list)

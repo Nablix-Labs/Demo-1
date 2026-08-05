@@ -10,7 +10,7 @@ from app.models.guided_learning import (
     GeneratedQuestionRubric,
     GuidedStudentState,
 )
-from app.models.student_model_session import SupportUsed
+from app.models.student_model_session import AnswerSpec, SupportUsed
 
 
 EvaluationCategory = Literal[
@@ -221,13 +221,6 @@ class TutorResponse(StrictSchema):
     scaffold_original_answer_correct: StrictBool = False
 
 
-class AuthoredRequiredComponent(StrictSchema):
-    component_id: str = Field(min_length=1)
-    sequence_no: int = Field(ge=1)
-    required: StrictBool
-    evaluation_criterion: str = Field(min_length=1)
-
-
 class RecordedMisconception(StrictSchema):
     error_code: str = Field(min_length=1)
     description: str = Field(min_length=1)
@@ -242,22 +235,14 @@ class ActiveScaffoldState(StrictSchema):
     step_voice: str | None
 
 
-class AuthoredAnswerSpec(StrictSchema):
-    answer_spec_id: str = Field(min_length=1)
-    canonical_answer: str = Field(min_length=1)
-    accepted_answers: list[str]
-    verification_method: str = Field(min_length=1)
-    explanation_required: StrictBool | None
-    required_components: list[AuthoredRequiredComponent] = Field(min_length=1)
-
-
 class ExplainAgainRequest(StrictSchema):
     question_id: str = Field(min_length=1)
     question: str = Field(min_length=1)
-    answer_spec: AuthoredAnswerSpec
+    answer_spec: AnswerSpec
+    generated_question_rubric: GeneratedQuestionRubric
     active_teaching_objective: ActiveTeachingObjective
     first_unresolved_concept_id: str = Field(min_length=1)
-    guided_student_state: GuidedStudentState
+    guided_student_state: GuidedStudentState | None
     selected_error_code: str | None
     recorded_misconception: RecordedMisconception | None
     recent_conversation: list[ConversationMessage]
@@ -282,7 +267,7 @@ class ExplainAgainResult(StrictSchema):
     confidence: float = Field(ge=0.0, le=1.0)
     attempt_increment: Literal[0]
     evaluation_reason_code: Literal["EXPLAIN_AGAIN_REEXPRESSION"]
-    guided_student_state: GuidedStudentState
+    guided_student_state: GuidedStudentState | None
     active_teaching_objective: ActiveTeachingObjective
     first_unresolved_concept_id: str = Field(min_length=1)
     selected_error_code: str | None

@@ -396,7 +396,7 @@ class OpenAIAIEngineClient:
                 "answer_spec": request.answer_spec.model_dump(),
                 "required_components": [
                     component.model_dump()
-                    for component in request.answer_spec.required_components
+                    for component in request.generated_question_rubric.required_concepts
                 ],
                 "active_teaching_objective": request.active_teaching_objective.model_dump(),
                 "first_unresolved_concept_id": request.first_unresolved_concept_id,

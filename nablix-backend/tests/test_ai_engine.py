@@ -17,8 +17,6 @@ from app.ai_engine.prompt_registry import (
 )
 from app.ai_engine.schemas import (
     ActiveScaffoldState,
-    AuthoredAnswerSpec,
-    AuthoredRequiredComponent,
     CanvasTextRegion,
     ExplainAgainRequest,
     OpenAIExplainAgainMessage,
@@ -123,33 +121,14 @@ def _explain_again_request() -> ExplainAgainRequest:
     return ExplainAgainRequest(
         question_id="Q-T01-006",
         question="A counter starts at c and increases by 4. State the general rule and explain what changes and stays fixed.",
-        answer_spec=AuthoredAnswerSpec(
+        answer_spec=AnswerSpec(
             answer_spec_id="ANS-T01-006",
             canonical_answer="c + 4; c changes; add 4 stays fixed",
             accepted_answers=["c + 4"],
             verification_method="STRUCTURED_TEXT_AND_SYMBOLIC_MATCH",
             explanation_required=True,
-            required_components=[
-                AuthoredRequiredComponent(
-                    component_id="GENERAL_RULE",
-                    sequence_no=1,
-                    required=True,
-                    evaluation_criterion="States c + 4 or an equivalent rule.",
-                ),
-                AuthoredRequiredComponent(
-                    component_id="CHANGING_VALUE",
-                    sequence_no=2,
-                    required=True,
-                    evaluation_criterion="Explains that c can be different starting values.",
-                ),
-                AuthoredRequiredComponent(
-                    component_id="FIXED_INCREMENT",
-                    sequence_no=3,
-                    required=True,
-                    evaluation_criterion="Explains that adding four remains fixed.",
-                ),
-            ],
         ),
+        generated_question_rubric=_multipart_guided_rubric(),
         active_teaching_objective=ActiveTeachingObjective(
             objective_type="EXPLAIN_CONCEPT",
             target_concept_ids=["CHANGING_VALUE", "FIXED_INCREMENT"],
@@ -221,7 +200,7 @@ def test_explain_again_reexpresses_the_unresolved_component_without_progression_
     second = classifier.generate_explain_again_response(_explain_again_request())
 
     assert len(captured_requests) == 2
-    assert captured_requests[0].answer_spec.required_components[1].component_id == "CHANGING_VALUE"
+    assert captured_requests[0].generated_question_rubric.required_concepts[1].concept_id == "CHANGING_VALUE"
     assert captured_requests[0].active_scaffold is not None
     assert captured_requests[0].visible_visual_cue is not None
     assert first.tutor_message != second.tutor_message
@@ -284,7 +263,7 @@ def test_explain_again_retries_a_revealing_llm_response_without_canned_wording(
             {
                 "first_unresolved_concept_id": "FIXED_INCREMENT",
             },
-            "out of authored order",
+            "out of runtime rubric order",
         ),
         (
             {
@@ -295,7 +274,7 @@ def test_explain_again_retries_a_revealing_llm_response_without_canned_wording(
                     missing_concept_ids=["CHANGING_VALUE"],
                 )
             },
-            "omits authored required components",
+            "omits runtime required components",
         ),
         (
             {
@@ -361,51 +340,28 @@ def test_explain_again_rejects_invalid_persisted_state_contract(
         classifier.validate_explain_again_request(request)
 
 
-@pytest.mark.parametrize(
-    "required_components",
-    [
-        [
-            AuthoredRequiredComponent(
-                component_id="GENERAL_RULE",
-                sequence_no=1,
-                required=True,
-                evaluation_criterion="States the general rule.",
-            ),
-            AuthoredRequiredComponent(
-                component_id="GENERAL_RULE",
-                sequence_no=2,
-                required=True,
-                evaluation_criterion="Explains the changing value.",
-            ),
-        ],
-        [
-            AuthoredRequiredComponent(
-                component_id="GENERAL_RULE",
-                sequence_no=1,
-                required=True,
-                evaluation_criterion="States the general rule.",
-            ),
-            AuthoredRequiredComponent(
-                component_id="CHANGING_VALUE",
-                sequence_no=1,
-                required=True,
-                evaluation_criterion="Explains the changing value.",
-            ),
-        ],
-    ],
-)
-def test_explain_again_rejects_duplicate_authored_component_contract(
-    required_components: list[AuthoredRequiredComponent],
-) -> None:
+def test_explain_again_rejects_duplicate_runtime_component_contract() -> None:
+    required_components = [
+        GeneratedConcept(
+            concept_id="GENERAL_RULE",
+            required=True,
+            description="States the general rule.",
+        ),
+        GeneratedConcept(
+            concept_id="GENERAL_RULE",
+            required=True,
+            description="Explains the changing value.",
+        ),
+    ]
     request = _explain_again_request().model_copy(
         update={
-            "answer_spec": _explain_again_request().answer_spec.model_copy(
-                update={"required_components": required_components}
+            "generated_question_rubric": _explain_again_request().generated_question_rubric.model_copy(
+                update={"required_concepts": required_components}
             )
         }
     )
 
-    with pytest.raises(AdapterError, match="unique authored component IDs and order"):
+    with pytest.raises(AdapterError, match="unique runtime component IDs"):
         classifier.validate_explain_again_request(request)
 
 
@@ -413,15 +369,19 @@ def test_explain_again_rejects_optional_component_in_active_objective() -> None:
     request = _explain_again_request()
     components = [
         component.model_copy(update={"required": False})
-        if component.component_id == "FIXED_INCREMENT"
+        if component.concept_id == "FIXED_INCREMENT"
         else component
-        for component in request.answer_spec.required_components
+        for component in request.generated_question_rubric.required_concepts
     ]
     invalid = request.model_copy(
-        update={"answer_spec": request.answer_spec.model_copy(update={"required_components": components})}
+        update={
+            "generated_question_rubric": request.generated_question_rubric.model_copy(
+                update={"required_concepts": components}
+            )
+        }
     )
 
-    with pytest.raises(AdapterError, match="unknown authored component IDs"):
+    with pytest.raises(AdapterError, match="unknown runtime component IDs"):
         classifier.validate_explain_again_request(invalid)
 
 

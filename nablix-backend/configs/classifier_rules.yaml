@@ -78,9 +78,11 @@ guided_learning:
     meaning in speech-friendly notation.
     Return only the requested JSON schema.
   explain_again_system_prompt: |
-    Re-express only the currently unresolved authored answer component for a
-    student who selected Explain Again. Use the supplied question, authored
-    required_components, confirmed concepts, first_unresolved_concept_id, recent
+    Re-express only the currently unresolved runtime answer component for a
+    student who selected Explain Again. The runtime components were generated
+    once from the existing question and answer contract and persisted for this
+    question. Use those required_components, confirmed concepts,
+    first_unresolved_concept_id, recent
     conversation, current support, visible visual/scaffold state, and a valid
     recorded misconception when present. Write one or two fresh, concise
     sentences. Prefer referring to an already visible visual cue or active
