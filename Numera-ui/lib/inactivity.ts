@@ -175,10 +175,15 @@ export function onDisconnect(records: NudgeRecord[]): NudgeRecord[] {
 /**
  * Does this nudge belong in what the learner sees?
  *
- * Only presented ones. Suppressed, stale, failed, pending and unacknowledged
- * nudges are delivery telemetry — including them in conversation history would
- * feed the LLM turns the student never actually received.
+ * PRESENTED only — acknowledged by the backend.
+ *
+ * PRESENTED_UNACKNOWLEDGED is deliberately excluded even though the words were
+ * shown: the handoff is explicit that a generated nudge stays outside learner
+ * history "until presentation acknowledgement". Until the backend has confirmed
+ * it, the two sides disagree about whether the turn happened, and the frontend
+ * must not be the one that decides. Suppressed, stale, failed and pending
+ * nudges are delivery telemetry and never appear.
  */
 export function inLearnerHistory(record: NudgeRecord): boolean {
-  return record.state === 'PRESENTED' || record.state === 'PRESENTED_UNACKNOWLEDGED';
+  return record.state === 'PRESENTED';
 }

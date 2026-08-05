@@ -22,6 +22,7 @@ import { useMicLevel } from '@/store/useMicLevel';
 import { useDemoTutor, resetSessionStart, sessionStartError } from '@/hooks/useDemoTutor';
 import { useVoiceTurn } from '@/hooks/useVoiceTurn';
 import { useVoiceStream } from '@/hooks/useVoiceStream';
+import { useInactivityNudge } from '@/hooks/useInactivityNudge';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { demoFor } from '@/lib/demoContent';
 
@@ -102,6 +103,12 @@ export default function LessonPage() {
   // Server transport: stream raw mic audio to the voice server instead of doing
   // browser STT + REST. The server drives transcript/tutor_response/audio over WS.
   const voiceStream = useVoiceStream({ onAudio: sendAudioChunk });
+
+  // One inactivity controller for the whole lesson — canvas, text, voice,
+  // request lifecycle, page visibility and connectivity all feed this and
+  // nothing else. Dormant until the backend sends a policy and the claim
+  // endpoint exists; it observes and claims nothing today.
+  useInactivityNudge({ disconnected: !sessionId });
 
   // Start a backend session on lesson entry and let it drive the displayed
   // question/number/opening message. Mic starts muted so capture is opt-in.

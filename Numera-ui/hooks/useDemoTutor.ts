@@ -229,6 +229,7 @@ export function useDemoTutor() {
       // /interaction requires a question_id, so sending here would 422.
       if (!questionId) return null;
       addTrailEntry({ kind: 'answer', text });
+      const turnId = useNumeraStore.getState().beginSubmissionTurn();
       try {
         const state = useNumeraStore.getState();
         const res = await sendInteraction({
@@ -241,6 +242,11 @@ export function useDemoTutor() {
           concept_id: ctx.concept_id,
           question_id: questionId,
           hint_count: ctx.hint_count,
+          // Typed answers used to carry no turn id at all, so the backend had
+          // nothing to dedupe on and a retry was indistinguishable from a second
+          // answer. Minted once here and reused verbatim on a retry.
+          turn_id: turnId,
+          previous_tutor_turn_id: state.lastTutorTurnId,
         });
         // Ordering guard (handoff item 2): a response older than what is on
         // screen is dropped, and a cached replay is applied exactly once.
@@ -337,6 +343,7 @@ export function useDemoTutor() {
       return null;
     }
 
+    const turnId = useNumeraStore.getState().beginSubmissionTurn();
     try {
       const res = await sendInteraction({
         session_id: sessionId,
@@ -347,20 +354,36 @@ export function useDemoTutor() {
         concept_id: s.activeConceptId,
         question_id: s.activeQuestionId,
         hint_count: s.lastHintText ? 1 : 0,
+        turn_id: turnId,
         previous_tutor_turn_id: s.lastTutorTurnId ?? null,
       });
+      // Same ordering guard as every other turn. A cached replay keeps its
+      // original version, so re-pressing the button must not re-render the reply
+      // a second time — which is exactly what the guard is for.
+      if (!acceptResponse(res)) return res;
       // Present the returned wording once; preserve cue and scaffold as sent.
       addTranscriptMessage({ role: 'ai', text: res.message });
       const spoken = applyInteractionSupport(res);
       tutorSay(spoken, { afterMarks: Boolean(res.canvas_draw?.length) });
       if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
       return res;
-    } catch {
-      console.warn('[explain-again] backend has no EXPLAIN_AGAIN yet — replaying the held cue');
-      replayLocally();
+    } catch (err) {
+      // Fall back ONLY when the endpoint genuinely is not there yet. A blanket
+      // catch turned every real failure — a 500, an auth rejection, a timeout —
+      // into a silent local replay, so the student saw the old cue reappear and
+      // nobody ever learned the backend had failed.
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      const endpointMissing = status === 404 || status === 405 || status === 422;
+      if (endpointMissing) {
+        console.warn('[explain-again] backend has no EXPLAIN_AGAIN yet — replaying the held cue');
+        replayLocally();
+        return null;
+      }
+      addTranscriptMessage({ role: 'ai', text: chatError(err, TUTOR_UNAVAILABLE) });
+      addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Explain again failed.') });
       return null;
     }
-  }, [sessionId, addTranscriptMessage]);
+  }, [sessionId, addTranscriptMessage, addTrailEntry]);
 
   /**
    * Reveal the next rung of the support ladder (§6).

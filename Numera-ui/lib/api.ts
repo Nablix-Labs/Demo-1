@@ -178,13 +178,25 @@ export function studentFacingError(err: unknown): string | null {
 
 // ── Shared enums ──────────────────────────────────────────────────────────────
 export type InteractionMode = 'VOICE' | 'TEXT';
-export type InputSource = 'TEXT' | 'VOICE';
+/**
+ * Where a turn came from. SYSTEM is not the student: it marks turns the platform
+ * originated, which today means inactivity nudges. Keeping it distinct is what
+ * stops a nudge being counted as a learner interaction anywhere downstream.
+ */
+export type InputSource = 'TEXT' | 'VOICE' | 'CANVAS' | 'SYSTEM';
 export type InteractionType =
   | 'ANSWER_SUBMISSION'
   // Replay the current explanation. Neither an answer nor a help escalation:
   // the backend returns attempt_increment 0 and emits no Student Model event
   // (Phase 2 handoff, Chirudeva — Explain Again).
   | 'EXPLAIN_AGAIN'
+  // Non-learner events (Phase 2 handoff, Chirudeva — Inactivity events). Neither
+  // is an attempt: they change no attempt count, STUCK count, support state,
+  // scaffold, question or phase.
+  //   INACTIVITY_NUDGE  — the client claims a nudge after server-validated silence
+  //   NUDGE_PRESENTED   — acknowledgement that one was actually shown or spoken
+  | 'INACTIVITY_NUDGE'
+  | 'NUDGE_PRESENTED'
   | 'HINT_REQUEST'
   | 'CANVAS_SUBMISSION'
   | 'SESSION_START'

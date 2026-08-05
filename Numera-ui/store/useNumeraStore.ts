@@ -14,6 +14,7 @@ import { DEMO_CONCEPT_ID, type ActiveScaffold, type SessionRecord, type SessionR
 import { uid } from '@/lib/uid';
 import type { SupportRung } from '@/lib/supportLadder';
 import { EMPTY_APPLIED, type AppliedState } from '@/lib/responseGate';
+import type { InactivityPolicy } from '@/lib/inactivity';
 
 // Sequential, human-readable student turn ids (voice contract §3): TURN-0001, …
 // One per LISTENING turn; kept sequential (not uuid) so logs read cleanly.
@@ -231,6 +232,12 @@ export interface NumeraState {
   // is on screen right now, not the lesson.
   appliedResponse: AppliedState;
 
+  // Server-owned inactivity policy. Null until the backend sends one, and that
+  // is what keeps nudging off: the handoff requires explicit validated config
+  // with no model defaults, so a locally invented threshold would interrupt the
+  // first student who paused to think on a number nobody agreed.
+  inactivityPolicy: InactivityPolicy | null;
+
   // Transcript
   transcript: TranscriptMessage[];
 
@@ -327,6 +334,16 @@ export interface NumeraState {
    *  phase. Call when the student's turn starts (session open, or after the tutor
    *  finishes and another response is expected). */
   beginListeningTurn: () => void;
+  /**
+   * Mint a turn id for a NON-voice submission (typed answer, Explain Again).
+   *
+   * Voice turns get theirs from beginListeningTurn when the mic opens, but text
+   * and Explain Again had no turn at all, so they sent none — which meant the
+   * backend could not dedupe them and a retry looked like a second answer.
+   * Returns the id so the caller can reuse it verbatim on a retry, which is the
+   * whole point of the contract.
+   */
+  beginSubmissionTurn: () => string;
   /** Record the tutor's reply turn (voice contract §11): store its tutor_turn_id
    *  as the next previous_tutor_turn_id, and the backend gating for the next turn. */
   setTutorTurn: (tutorTurnId: string | null, gating: { expects: boolean; allow: boolean }) => void;
@@ -336,6 +353,7 @@ export interface NumeraState {
   setVisualCue: (cue: { show: boolean; cueType?: string | null; description?: string | null }) => void;
   setSupportShown: (rung: SupportRung | null) => void;
   setAppliedResponse: (a: AppliedState) => void;
+  setInactivityPolicy: (p: InactivityPolicy | null) => void;
   setLastHintText: (text: string | null) => void;
   /** Position within this phase's question set, for the progress rail. */
   setQuestionProgress: (index: number, total: number) => void;
@@ -401,9 +419,9 @@ export interface NumeraState {
 const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
-  | 'setQuestionText' | 'applyBackendPhase' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'setTutorTurn'
+  | 'setQuestionText' | 'applyBackendPhase' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn'
   | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue'
-  | 'setSupportShown' | 'setLastHintText' | 'setQuestionProgress' | 'setAppliedResponse'
+  | 'setSupportShown' | 'setLastHintText' | 'setQuestionProgress' | 'setAppliedResponse' | 'setInactivityPolicy'
   | 'addTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript' | 'commitPartialTranscript'
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
   | 'setShapeKind' | 'setEraserMode'
@@ -458,6 +476,7 @@ const initial: Omit<
   supportShown: null as SupportRung | null,
   lastHintText: null as string | null,
   appliedResponse: EMPTY_APPLIED,
+  inactivityPolicy: null as InactivityPolicy | null,
   // Empty. This used to seed a three-message demo conversation about
   // "2x + 5 = 13", which rendered for every student before the backend had said
   // anything — a real tester reported it as "I am getting my old questions"
@@ -602,6 +621,12 @@ export const useNumeraStore = create<NumeraState>()(
 
   setVoiceStatus: (voiceStatus) => set({ voiceStatus }),
 
+  beginSubmissionTurn: () => {
+    const id = nextTurnId();
+    set({ currentTurnId: id });
+    return id;
+  },
+
   beginListeningTurn: () =>
     set({ currentTurnId: nextTurnId(), voiceStatus: 'listening' }),
 
@@ -619,6 +644,7 @@ export const useNumeraStore = create<NumeraState>()(
     set({ visualCueVisible: show, visualCueType: cueType, visualCueDescription: description }),
   setSupportShown: (supportShown) => set({ supportShown }),
   setAppliedResponse: (appliedResponse) => set({ appliedResponse }),
+  setInactivityPolicy: (inactivityPolicy) => set({ inactivityPolicy }),
   setLastHintText: (lastHintText) => set({ lastHintText }),
   setQuestionProgress: (index, total) =>
     set({ activeSlide: Math.max(0, index), totalSlides: Math.max(0, total) }),

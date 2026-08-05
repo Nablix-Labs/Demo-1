@@ -119,6 +119,16 @@ describe('activity suppresses a nudge in flight (rules 3, 4)', () => {
     expect(inLearnerHistory(nudge({ state: 'SUPPRESSED' }))).toBe(false);
   });
 
+  it('ONLY an acknowledged nudge enters learner history', () => {
+    // The handoff is explicit: a generated nudge stays outside learner history
+    // "until presentation acknowledgement". Until the backend confirms it, the
+    // two sides disagree about whether the turn happened, and the frontend must
+    // not be the one that decides.
+    expect(inLearnerHistory(nudge({ state: 'PRESENTED' }))).toBe(true);
+    expect(inLearnerHistory(nudge({ state: 'PRESENTED_UNACKNOWLEDGED' }))).toBe(false);
+    expect(inLearnerHistory(nudge({ state: 'PENDING' }))).toBe(false);
+  });
+
   it('activity after presentation does NOT rewrite history', () => {
     // It has already been seen or heard. Pretending otherwise would put the
     // frontend and the backend's records out of step.
