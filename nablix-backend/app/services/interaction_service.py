@@ -198,8 +198,12 @@ async def process_answer_with_session_event(
         if response_is_wrong
         else session.wrong_attempt_count
     )
+    atomic_guided_events_enabled = (
+        get_settings().student_model_atomic_guided_events_enabled
+    )
     wrong_four_escalation = (
-        schema_managed
+        atomic_guided_events_enabled
+        and schema_managed
         and session.current_phase == "GUIDED_PRACTICE"
         and event_type == "INCORRECT_ATTEMPT"
         and response_is_wrong
@@ -238,7 +242,11 @@ async def process_answer_with_session_event(
             else (
                 "MAXIMUM_GUIDED_SUPPORT_PARALLEL"
                 if tutor.response_strategy == "PROVIDE_WORKED_EXAMPLE"
-                else "GUIDED_STUCK_SUPPORT_REQUIRED"
+                else (
+                    "GUIDED_STUCK_SUPPORT_REQUIRED"
+                    if atomic_guided_events_enabled
+                    else "GUIDED_SUPPORT_ESCALATION_REQUIRED"
+                )
             )
         )
         wrong_four_error_code = (

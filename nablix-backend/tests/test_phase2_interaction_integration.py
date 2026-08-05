@@ -11,6 +11,7 @@ from app.core.config import Settings
 from app.main import app
 from app.models.guided_learning import GeneratedConcept, GeneratedQuestionRubric
 from app.models.student_model_session import (
+    GuidedSupportEvent,
     StudentModelSessionEvent,
     StudentModelSessionEventResponse,
 )
@@ -19,6 +20,23 @@ from tests.test_session_events import _event_response, _session_opened_response
 
 
 client = TestClient(app, headers={"Authorization": "Bearer test-token"})
+
+
+def test_atomic_guided_events_are_disabled_for_legacy_student_model() -> None:
+    assert Settings().student_model_atomic_guided_events_enabled is False
+    event = GuidedSupportEvent(
+        request_id="REQ-LEGACY-STUCK",
+        event_type="GUIDED_SUPPORT_ESCALATION_REQUIRED",
+        source_turn_id="TURN-LEGACY-STUCK",
+        expected_journey_version=1,
+        topic_id="ALG-ORI-02",
+        student_id="ST150",
+        timestamp="2026-08-05T00:00:00Z",
+        question_id="Q-T02-004",
+        micro_skill_id="T02.M1",
+    )
+    assert event.triggering_response is None
+    assert event.error_code is None
 
 
 @pytest.fixture(autouse=True)
