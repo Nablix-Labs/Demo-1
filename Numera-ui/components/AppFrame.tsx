@@ -19,9 +19,9 @@ import { basePath } from '@/lib/runtimeConfig';
 
 // Routes that render on their own, without the tool rail or media panel.
 // Screens shown before a student is signed in.
-const PRE_AUTH_ROUTES = ['/login', '/onboard', '/consent', '/restricted'];
+const PRE_AUTH_ROUTES = ['/login', '/onboard', '/consent', '/restricted', '/dev-screens'];
 
-const FOCUS_ROUTES = ['/onboard', '/diagnostic', '/orientation', '/teach', '/complete', '/consent', '/login', '/restricted'];
+const FOCUS_ROUTES = ['/onboard', '/diagnostic', '/orientation', '/teach', '/complete', '/consent', '/login', '/restricted', '/dev-screens'];
 
 /**
  * Routes where a lesson is actually in progress.
