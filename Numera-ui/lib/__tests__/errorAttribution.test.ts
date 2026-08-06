@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { studentFacingError } from '@/lib/api';
+import { studentFacingError, voiceTurnFailedMessage } from '@/lib/api';
 
 /**
  * A failure should say what actually failed.
@@ -82,5 +82,40 @@ describe('a genuinely unreachable server still reads as unreachable', () => {
     expect(studentFacingError(new Error('Network Error'))).toBeNull();
     expect(studentFacingError({})).toBeNull();
     expect(studentFacingError(undefined)).toBeNull();
+  });
+});
+
+/**
+ * A voice turn that fails must SAY so.
+ *
+ * The socket's `error` frame never reaches studentFacingError — it is not an
+ * HTTP error — so it had no student-facing mapping at all. useWebSocket logged
+ * it and stood the rescue watchdog down, and the turn ended in silence with the
+ * status still reading "Listening…". A student who had just answered sat there
+ * waiting for a reply that was never coming (reported 6 Aug).
+ */
+describe('a failed voice turn is announced, not swallowed', () => {
+  it('always returns something to show — never empty', () => {
+    for (const m of [undefined, '', 'Tutor unavailable', 'kaboom']) {
+      expect(voiceTurnFailedMessage(m).trim().length).toBeGreaterThan(0);
+    }
+  });
+
+  it('sends an expired session to sign in again', () => {
+    expect(voiceTurnFailedMessage('INVALID_TOKEN: unauthorized')).toMatch(/signed in|log in/i);
+  });
+
+  it('names a slow tutor as the tutor being slow', () => {
+    expect(voiceTurnFailedMessage('upstream timeout')).toMatch(/in time|too slow/i);
+  });
+
+  it('never blames the student', () => {
+    for (const m of ['Tutor unavailable', 'upstream timeout', 'INVALID_TOKEN']) {
+      expect(voiceTurnFailedMessage(m)).not.toMatch(/you (got|were) (it )?wrong|your fault/i);
+    }
+  });
+
+  it('does not leak the server string at the student', () => {
+    expect(voiceTurnFailedMessage('NullPointerException at line 42')).not.toMatch(/NullPointer/);
   });
 });

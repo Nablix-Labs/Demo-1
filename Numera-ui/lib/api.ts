@@ -100,6 +100,31 @@ export interface ApiError {
  * must never be shown to a student. Anything we don't have specific copy for
  * falls back to the caller's generic message.
  */
+/**
+ * What to say when the VOICE SERVER gives up on a turn.
+ *
+ * The socket's `error` frame is not an HTTP error, so it never reaches
+ * `studentFacingError` — it arrives as a bare string meant for a server log
+ * ("Tutor unavailable", "upstream timeout"). Showing that to an eleven-year-old
+ * is no better than showing nothing, and showing NOTHING is what we did: the
+ * turn ended in silence with the status still reading "Listening…", so a
+ * student sat waiting for a reply that was never coming.
+ *
+ * The engineer-facing text stays in the console; this is the sentence the
+ * student gets. It says the tutor failed rather than implying the student did,
+ * and it says what to do next.
+ */
+export function voiceTurnFailedMessage(serverMessage?: string): string {
+  const raw = (serverMessage ?? '').toLowerCase();
+  if (/auth|token|unauthor|forbidden/.test(raw)) {
+    return 'Your session needs to be signed in again before I can answer that. Please log in and try once more.';
+  }
+  if (/timeout|timed out|unavailable|upstream/.test(raw)) {
+    return 'I didn’t manage to answer that in time — my side was too slow. Say it again and I’ll have another go.';
+  }
+  return 'Something went wrong on my side and I couldn’t answer that. Say it again in a moment and I’ll try again.';
+}
+
 export function studentFacingError(err: unknown): string | null {
   const res = (err as { response?: { status?: number; data?: Partial<ApiError> } })?.response;
   // 409 on a session call means the Student Model already has this topic part

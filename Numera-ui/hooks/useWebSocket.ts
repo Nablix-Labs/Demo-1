@@ -26,7 +26,7 @@ import { useNumeraStore } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { tutorAudioStream, effectiveVoice } from '@/lib/tts';
 import { buildVoiceStreamUrl, voiceStreamingEnabled, allowAnonTutorCalls } from '@/lib/runtimeConfig';
-import { ANON_ACCESS_TOKEN, studentId, type QuestionType } from '@/lib/api';
+import { ANON_ACCESS_TOKEN, studentId, voiceTurnFailedMessage, type QuestionType } from '@/lib/api';
 import { applyInteractionSupport, type SupportPresentation } from '@/lib/interactionPresentation';
 import { TurnWatchdog } from '@/lib/turnWatchdog';
 
@@ -208,9 +208,27 @@ export function useWebSocket(sessionId: string | null) {
             break;
           case 'error':
             // The server already gave up on this turn ("Tutor unavailable").
-            // Nothing is stuck, so there is nothing to rescue.
+            // Nothing is stuck, so there is nothing to rescue — but the student
+            // still has to be TOLD.
+            //
+            // This branch used to stand the watchdog down and log to the
+            // console, and that was the whole handler. The turn then ended in
+            // silence with the status still reading "Listening…", so a student
+            // who had just answered sat waiting for a reply that was never
+            // coming (reported 6 Aug: "she doesn't get proper response").
+            //
+            // The REST path has always mapped its failures through
+            // studentFacingError, which is why this kept being reported as
+            // voice-specific when it is not: the same backend failure is simply
+            // announced on chat and swallowed here.
             watchdogRef.current?.noteTurnResolved();
+            // Engineer-facing text stays in the console — it is the backend's
+            // own reason and the fastest way to find which service failed.
             console.error('[WS] server error:', msg.message);
+            addTranscriptMessage({
+              role: 'ai',
+              text: voiceTurnFailedMessage(msg.message as string | undefined),
+            });
             break;
 
           default:
