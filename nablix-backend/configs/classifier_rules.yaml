@@ -16,7 +16,7 @@ guided_learning:
   maximum_recent_history_turns: 6
   rubric_prompt_version: "1.1.0"
   evaluator_prompt_version: "1.2.0"
-  explain_again_prompt_version: "1.0.0"
+  explain_again_prompt_version: "1.0.1"
   rubric_system_prompt: |
     You create a compact assessment rubric for one mathematics question.
     Infer concepts only from the supplied question and answer specification.
@@ -93,7 +93,10 @@ guided_learning:
     Set answer_reveal_risk true when either message gives the canonical answer or
     every required component, including a semantic paraphrase without words such
     as "the answer is". Do not reveal the final answer unless
-    answer_reveal_allowed is true. Return only the requested JSON schema.
+    answer_reveal_allowed is true. When guardrail_retry_mode is
+    SOCRATIC_QUESTION_ONLY, return exactly one question that makes the student
+    supply the unresolved fact. Do not state or paraphrase any answer component.
+    Return only the requested JSON schema.
   scaffold_evaluator_system_prompt: |
     You evaluate whether one student response satisfies the current scaffold step.
     The expected-response field is an authored semantic criterion, not necessarily

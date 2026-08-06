@@ -251,10 +251,34 @@ def test_explain_again_retries_a_revealing_llm_response_without_canned_wording(
 
     assert len(validation_feedback) == 2
     assert validation_feedback[0] is None
-    assert validation_feedback[1] == classifier.load_classifier_rules().answer_reveal_guardrail.rewrite_feedback
-    assert response.tutor_message == "Think about the starting value: could it be the same every time?"
+    assert validation_feedback[1] is not None
+    assert "exactly one Socratic question" in validation_feedback[1]
+    assert response.tutor_message == (
+        "Think about the starting value: could it be the same every time?"
+    )
     assert response.attempt_increment == 0
     assert response.progression_change_requested is False
+
+
+def test_explain_again_guardrail_retry_removes_answer_bearing_context() -> None:
+    request = _explain_again_request()
+    payload = openai_client.build_explain_again_guardrail_retry_payload(
+        request,
+        "Return exactly one Socratic question.",
+        "1.0.1",
+    )
+
+    assert payload["guardrail_retry_mode"] == "SOCRATIC_QUESTION_ONLY"
+    assert payload["first_unresolved_concept_id"] == "CHANGING_VALUE"
+    assert payload["answer_reveal_allowed"] is False
+    assert "answer_spec" not in payload
+    assert "required_components" not in payload
+    assert "active_teaching_objective" not in payload
+    assert "recent_conversation" not in payload
+    assert "recorded_misconception" not in payload
+    visible_visual_cue = payload["visible_visual_cue"]
+    assert isinstance(visible_visual_cue, dict)
+    assert "description" not in visible_visual_cue
 
 
 @pytest.mark.parametrize(

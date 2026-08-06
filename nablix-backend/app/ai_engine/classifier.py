@@ -1144,7 +1144,12 @@ def generate_explain_again_response(
                 active_scaffold=request.active_scaffold,
                 progression_change_requested=False,
             )
-        validation_feedback = rules.answer_reveal_guardrail.rewrite_feedback
+        validation_feedback = (
+            f"{rules.answer_reveal_guardrail.rewrite_feedback} "
+            "Guardrail retry mode: return exactly one Socratic question that "
+            "asks the student to supply the unresolved fact. Do not state, "
+            "summarise, or paraphrase any answer component."
+        )
         last_error = AdapterError(
             "openai_ai_engine",
             (
