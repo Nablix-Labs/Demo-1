@@ -40,3 +40,14 @@ def test_guided_question_opening_combines_question_and_motivation(
 def test_guided_question_opening_rejects_missing_question_text() -> None:
     with pytest.raises(ValueError, match="non-empty question text"):
         guided_question_opening("   ", "SHORT_RESPONSE", "Let us begin.")
+
+
+def test_guided_question_opening_does_not_include_internal_question_id() -> None:
+    message = guided_question_opening(
+        "A counter starts at c and increases by 4.",
+        "SHORT_RESPONSE",
+        "Let’s resume with this question.",
+    )
+
+    assert message.startswith("Let’s resume with this question. A counter starts")
+    assert "Q-T01-006" not in message

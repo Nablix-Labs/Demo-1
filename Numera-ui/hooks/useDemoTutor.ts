@@ -32,6 +32,7 @@ import {
 import { applyInteractionSupport, acceptResponse } from '@/lib/interactionPresentation';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { tutorSay, setStudentWriting } from '@/lib/tutorSpeech';
+import { speakBrowser } from '@/lib/tts';
 import {
   availableSupport,
   nextSupport,
@@ -114,7 +115,7 @@ function errorMessage(err: unknown, fallback: string): string {
 // visible to the student instead of the chat silently freezing.
 const TUTOR_UNAVAILABLE = "Sorry — I couldn't reach the tutor just now. Please try again in a moment.";
 const EXPLAIN_AGAIN_ACKNOWLEDGEMENT =
-  'Okay—give me a moment to explain that another way.';
+  'Okay—give me a moment. I’m looking at the question and the support already on your screen, so I can explain the same idea in a clearer, different way.';
 
 /**
  * What the student sees in the chat when a tutor call fails.
@@ -370,7 +371,12 @@ export function useDemoTutor() {
     const turnId = useNumeraStore.getState().beginSubmissionTurn();
     addTranscriptMessage({ role: 'ai', text: EXPLAIN_AGAIN_ACKNOWLEDGEMENT });
     addTrailEntry({ kind: 'tutor', text: EXPLAIN_AGAIN_ACKNOWLEDGEMENT });
-    tutorSay(EXPLAIN_AGAIN_ACKNOWLEDGEMENT);
+    const acknowledgementFinished = new Promise<void>((resolve) => {
+      tutorSay(EXPLAIN_AGAIN_ACKNOWLEDGEMENT, {
+        onEnd: resolve,
+        speak: speakBrowser,
+      });
+    });
     try {
       const res = await sendInteraction({
         session_id: sessionId,
@@ -387,8 +393,12 @@ export function useDemoTutor() {
       // Same ordering guard as every other turn. A cached replay keeps its
       // original version, so re-pressing the button must not re-render the reply
       // a second time — which is exactly what the guard is for.
-      if (!acceptResponse(res)) return res;
+      if (!acceptResponse(res)) {
+        await acknowledgementFinished;
+        return res;
+      }
       // Present the returned wording once; preserve cue and scaffold as sent.
+      await acknowledgementFinished;
       addTranscriptMessage({ role: 'ai', text: res.message });
       const spoken = applyInteractionSupport(res);
       tutorSay(spoken, { afterMarks: Boolean(res.canvas_draw?.length) });
@@ -402,10 +412,12 @@ export function useDemoTutor() {
       const status = (err as { response?: { status?: number } })?.response?.status;
       const endpointMissing = status === 404 || status === 405 || status === 422;
       if (endpointMissing) {
+        await acknowledgementFinished;
         console.warn('[explain-again] backend has no EXPLAIN_AGAIN yet — replaying the held cue');
         replayLocally();
         return null;
       }
+      await acknowledgementFinished;
       addTranscriptMessage({ role: 'ai', text: chatError(err, TUTOR_UNAVAILABLE) });
       addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Explain again failed.') });
       return null;

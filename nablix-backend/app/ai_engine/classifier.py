@@ -1093,6 +1093,7 @@ def generate_explain_again_response(
 
     last_error: AdapterError | None = None
     validation_feedback: str | None = None
+    answer_reveal_rejected = False
     for attempt in range(rules.guided_learning.maximum_retries + 1):
         recent_conversation = request.recent_conversation[
             -rules.guided_learning.maximum_recent_history_turns:
@@ -1127,23 +1128,13 @@ def generate_explain_again_response(
             rules,
             )
         ):
-            return ExplainAgainResult(
-                interaction_type="EXPLAIN_AGAIN",
-                tutor_message=message.tutor_message,
-                tutor_message_voice_optimised=message.tutor_message_voice_optimised,
-                confidence=message.confidence,
-                attempt_increment=0,
-                evaluation_reason_code="EXPLAIN_AGAIN_REEXPRESSION",
-                guided_student_state=request.guided_student_state,
-                active_teaching_objective=request.active_teaching_objective,
-                first_unresolved_concept_id=request.first_unresolved_concept_id,
-                selected_error_code=request.selected_error_code,
-                support_served_this_turn=None,
-                active_support_level=request.active_support_level,
-                highest_support_used=request.highest_support_used,
-                active_scaffold=request.active_scaffold,
-                progression_change_requested=False,
+            return _explain_again_result(
+                request,
+                message.tutor_message,
+                message.tutor_message_voice_optimised,
+                message.confidence,
             )
+        answer_reveal_rejected = True
         validation_feedback = (
             f"{rules.answer_reveal_guardrail.rewrite_feedback} "
             "Guardrail retry mode: return exactly one Socratic question that "
@@ -1161,9 +1152,63 @@ def generate_explain_again_response(
             "explain_again_answer_reveal_retry",
             extra={"question_id": request.question_id, "attempt": attempt + 1},
         )
+    if answer_reveal_rejected:
+        safe_message = _safe_explain_again_message(request)
+        logger.warning(
+            "explain_again_safe_response_used",
+            extra={"question_id": request.question_id},
+        )
+        return _explain_again_result(
+            request,
+            safe_message,
+            safe_message,
+            1.0,
+        )
     raise last_error or AdapterError(
         "openai_ai_engine",
         f"Explain Again generation failed for question_id={request.question_id}.",
+    )
+
+
+def _explain_again_result(
+    request: ExplainAgainRequest,
+    tutor_message: str,
+    tutor_message_voice_optimised: str,
+    confidence: float,
+) -> ExplainAgainResult:
+    return ExplainAgainResult(
+        interaction_type="EXPLAIN_AGAIN",
+        tutor_message=tutor_message,
+        tutor_message_voice_optimised=tutor_message_voice_optimised,
+        confidence=confidence,
+        attempt_increment=0,
+        evaluation_reason_code="EXPLAIN_AGAIN_REEXPRESSION",
+        guided_student_state=request.guided_student_state,
+        active_teaching_objective=request.active_teaching_objective,
+        first_unresolved_concept_id=request.first_unresolved_concept_id,
+        selected_error_code=request.selected_error_code,
+        support_served_this_turn=None,
+        active_support_level=request.active_support_level,
+        highest_support_used=request.highest_support_used,
+        active_scaffold=request.active_scaffold,
+        progression_change_requested=False,
+    )
+
+
+def _safe_explain_again_message(request: ExplainAgainRequest) -> str:
+    if request.active_scaffold is not None:
+        return (
+            "Let’s look at the step already on your screen in a different way. "
+            "What do you notice first?"
+        )
+    if request.visible_visual_cue is not None and request.visible_visual_cue.show:
+        return (
+            "Let’s use the visual already on your screen. "
+            "What is the first difference you notice?"
+        )
+    return (
+        "Let’s break the question into one smaller part. "
+        "What information would you start with?"
     )
 
 

@@ -235,7 +235,7 @@ async def start_session(
             else guided_question_opening(
                 current_question,
                 question_updates["question_type"],
-                support_hint or event.routing.reason,
+                "Let’s resume with this question.",
             )
             if (
                 phase == "GUIDED_PRACTICE"

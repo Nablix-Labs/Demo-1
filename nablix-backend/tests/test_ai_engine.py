@@ -281,6 +281,46 @@ def test_explain_again_guardrail_retry_removes_answer_bearing_context() -> None:
     assert "description" not in visible_visual_cue
 
 
+def test_explain_again_uses_safe_state_aware_response_when_all_llm_wording_reveals_answer(
+    monkeypatch,
+) -> None:
+    calls = 0
+
+    class _AlwaysRevealingExplainAgainClient:
+        def generate_explain_again_message(
+            self,
+            **kwargs: object,
+        ) -> OpenAIExplainAgainMessage:
+            nonlocal calls
+            calls += 1
+            return OpenAIExplainAgainMessage(
+                tutor_message="The complete answer is c plus four, c changes, and four stays fixed.",
+                tutor_message_voice_optimised="The complete answer is c plus four, c changes, and four stays fixed.",
+                answer_reveal_risk=True,
+                confidence=0.99,
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _AlwaysRevealingExplainAgainClient(),
+    )
+
+    request = _explain_again_request()
+    response = classifier.generate_explain_again_response(request)
+
+    rules = classifier.load_classifier_rules()
+    assert calls == rules.guided_learning.maximum_retries + 1
+    assert response.tutor_message == (
+        "Let’s look at the step already on your screen in a different way. "
+        "What do you notice first?"
+    )
+    assert response.attempt_increment == 0
+    assert response.active_teaching_objective == request.active_teaching_objective
+    assert response.active_support_level == request.active_support_level
+    assert response.progression_change_requested is False
+
+
 @pytest.mark.parametrize(
     ("request_update", "expected_message"),
     [
