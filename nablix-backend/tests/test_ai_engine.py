@@ -2545,6 +2545,107 @@ def test_guided_answer_reveal_fallback_names_the_missing_explanation(
     ]
 
 
+@pytest.mark.parametrize(
+    "student_input",
+    [
+        "because n is a variable",
+        "because we can add 4 to anynumber n",
+        "n can represent any number",
+    ],
+)
+def test_guided_general_rule_explanation_accepts_clear_paraphrases(
+    monkeypatch: pytest.MonkeyPatch,
+    student_input: str,
+) -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-004",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="GENERAL_RULE_SELECTION",
+                description="Selects n + 4 as the general rule.",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="EXPLANATION_FOR_SELECTION",
+                description=(
+                    "Explains why n + 4 is a general rule rather than a "
+                    "specific numerical case."
+                ),
+                required=True,
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="general-rule-choice-rubric",
+        prompt_version="1.0.0",
+    )
+
+    class _GuidedClient:
+        def evaluate_guided_turn(
+            self,
+            **kwargs: object,
+        ) -> GuidedEvaluation:
+            del kwargs
+            return GuidedEvaluation(
+                student_state="PARTIAL",
+                newly_confirmed_concept_ids=[],
+                preserved_concept_ids=["GENERAL_RULE_SELECTION"],
+                contradicted_concept_ids=[],
+                missing_concept_ids=["EXPLANATION_FOR_SELECTION"],
+                selected_error_code=None,
+                confidence=0.9,
+                next_objective=ActiveTeachingObjective(
+                    objective_type="EXPLAIN_REASONING",
+                    target_concept_ids=["EXPLANATION_FOR_SELECTION"],
+                    confirmed_concept_ids=["GENERAL_RULE_SELECTION"],
+                    missing_concept_ids=["EXPLANATION_FOR_SELECTION"],
+                ),
+                tutor_message="Please provide a more complete explanation.",
+                tutor_message_voice="Please provide a more complete explanation.",
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _GuidedClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T01-004",
+            question=(
+                "Which is the general rule: A) 12 + 4 or B) n + 4? "
+                "Explain briefly."
+            ),
+            question_type="CHOICE_WITH_EXPLANATION",
+            correct_answer="B",
+            answer_spec=AnswerSpec(
+                answer_spec_id="ANS-T01-004",
+                canonical_answer="B",
+                accepted_answers=["B", "n + 4"],
+                verification_method="CHOICE_AND_CONCEPT_MATCH",
+                explanation_required=True,
+            ),
+            generated_question_rubric=rubric,
+            active_teaching_objective=ActiveTeachingObjective(
+                objective_type="EXPLAIN_REASONING",
+                target_concept_ids=["EXPLANATION_FOR_SELECTION"],
+                confirmed_concept_ids=["GENERAL_RULE_SELECTION"],
+                missing_concept_ids=["EXPLANATION_FOR_SELECTION"],
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            student_input=student_input,
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=2,
+            current_hint_level=1,
+        )
+    )
+
+    assert response.guided_student_state == "CORRECT"
+    assert response.question_completed is True
+    assert response.active_teaching_objective is None
+
+
 def test_multipart_answer_numbers_do_not_trigger_numeric_reveal_guardrail() -> None:
     rules = classifier.load_classifier_rules()
     canonical_answer = "4 × n; p × q; r × r; c ÷ d; 2 × (x + 1)"

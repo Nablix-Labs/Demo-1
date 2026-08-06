@@ -889,7 +889,34 @@ def component_evidence_tokens(value: str) -> set[str]:
 def authored_component_is_demonstrated(
     component: GeneratedConcept,
     response_tokens: set[str],
+    normalized_response: str,
 ) -> bool:
+    component_kind = normalize_semantic_answer(
+        f"{component.concept_id} {component.description}"
+    )
+    asks_for_general_rule_explanation = (
+        any(
+            token in component_kind
+            for token in ("explanation", "explain", "reason", "why")
+        )
+        and "general rule" in component_kind
+    )
+    if asks_for_general_rule_explanation:
+        compact_response = normalized_response.replace(" ", "")
+        communicates_generality = (
+            "variable" in response_tokens
+            or "varies" in response_tokens
+            or "different value" in normalized_response
+            or "different number" in normalized_response
+            or "any value" in normalized_response
+            or "any number" in normalized_response
+            or "anyvalue" in compact_response
+            or "anynumber" in compact_response
+            or "can change" in normalized_response
+            or "not specific" in normalized_response
+        )
+        if communicates_generality:
+            return True
     if not component.concept_id.startswith("REQUIRED_COMPONENT_"):
         return False
     required_tokens = component_evidence_tokens(component.description)
@@ -905,11 +932,16 @@ def merge_authored_component_evidence(
 
     if _NEGATION_PATTERN.search(student_input.lower()) is not None:
         return evaluation
-    response_tokens = component_evidence_tokens(student_input)
+    normalized_response = normalize_semantic_answer(student_input)
+    response_tokens = component_evidence_tokens(normalized_response)
     demonstrated_ids = {
         component.concept_id
         for component in rubric.required_concepts
-        if authored_component_is_demonstrated(component, response_tokens)
+        if authored_component_is_demonstrated(
+            component,
+            response_tokens,
+            normalized_response,
+        )
     }
     if not demonstrated_ids:
         return evaluation
