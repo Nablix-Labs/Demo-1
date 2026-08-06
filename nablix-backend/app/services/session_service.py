@@ -343,7 +343,9 @@ async def start_session(
         interaction_mode=request.interaction_mode,
         ui_state=phase,
         message=(
-            _diagnostic_start_message()
+            "Session Review — practice questions complete."
+            if phase == "REVIEW"
+            else _diagnostic_start_message()
             if phase == "DIAGNOSTIC"
             else support_hint or event.routing.reason
         ),
