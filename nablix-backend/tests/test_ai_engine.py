@@ -2705,9 +2705,9 @@ def test_guided_multipart_undetermined_paraphrase_still_uses_llm(monkeypatch) ->
             return GuidedEvaluation(
                 student_state="CORRECT",
                 newly_confirmed_concept_ids=[
-                    "GENERAL_RULE",
-                    "CHANGING_VALUE",
-                    "FIXED_INCREMENT",
+                    "REQUIRED_COMPONENT_1",
+                    "REQUIRED_COMPONENT_2",
+                    "REQUIRED_COMPONENT_3",
                 ],
                 preserved_concept_ids=[],
                 contradicted_concept_ids=[],
@@ -2829,17 +2829,20 @@ def test_guided_multipart_preserves_completed_parts_and_requests_the_missing_par
             captured["evaluation_question_type"] = kwargs["question_type"]
             return GuidedEvaluation(
                 student_state="PARTIAL",
-                newly_confirmed_concept_ids=["GENERAL_RULE", "CHANGING_VALUE"],
+                newly_confirmed_concept_ids=[
+                    "REQUIRED_COMPONENT_1",
+                    "REQUIRED_COMPONENT_2",
+                ],
                 preserved_concept_ids=[],
                 contradicted_concept_ids=[],
-                missing_concept_ids=["FIXED_INCREMENT"],
+                missing_concept_ids=["REQUIRED_COMPONENT_3"],
                 selected_error_code=None,
                 confidence=0.98,
                 next_objective=ActiveTeachingObjective(
                     objective_type="EXPLAIN_CONCEPT",
-                    target_concept_ids=["FIXED_INCREMENT"],
+                    target_concept_ids=["REQUIRED_COMPONENT_3"],
                     confirmed_concept_ids=[],
-                    missing_concept_ids=["FIXED_INCREMENT"],
+                    missing_concept_ids=["REQUIRED_COMPONENT_3"],
                 ),
                 tutor_message="Your rule and changing value are clear. What stays fixed?",
                 tutor_message_voice="Your rule and changing value are clear. What stays fixed?",
@@ -2874,20 +2877,98 @@ def test_guided_multipart_preserves_completed_parts_and_requests_the_missing_par
         )
     )
 
-    assert captured == {
-        "rubric_question_type": "MULTI_PART_SHORT_RESPONSE",
-        "evaluation_question_type": "MULTI_PART_SHORT_RESPONSE",
-    }
+    assert captured == {"evaluation_question_type": "MULTI_PART_SHORT_RESPONSE"}
     assert response.guided_student_state == "PARTIAL"
     assert response.student_model_events == []
     assert response.active_teaching_objective is not None
     assert response.active_teaching_objective.confirmed_concept_ids == [
-        "CHANGING_VALUE",
-        "GENERAL_RULE",
+        "REQUIRED_COMPONENT_1",
+        "REQUIRED_COMPONENT_2",
     ]
     assert response.active_teaching_objective.missing_concept_ids == [
-        "FIXED_INCREMENT"
+        "REQUIRED_COMPONENT_3"
     ]
+
+
+def test_guided_multipart_completes_from_accumulated_component_evidence(
+    monkeypatch,
+) -> None:
+    class _GuidedClient:
+        def evaluate_guided_turn(self, **kwargs):
+            if kwargs["student_response"] == "c + 4":
+                return GuidedEvaluation(
+                    student_state="PARTIAL",
+                    newly_confirmed_concept_ids=["REQUIRED_COMPONENT_1"],
+                    preserved_concept_ids=[],
+                    contradicted_concept_ids=[],
+                    missing_concept_ids=[
+                        "REQUIRED_COMPONENT_2",
+                        "REQUIRED_COMPONENT_3",
+                    ],
+                    selected_error_code=None,
+                    confidence=0.98,
+                    next_objective=None,
+                    tutor_message="What changes and what stays fixed?",
+                    tutor_message_voice="What changes and what stays fixed?",
+                )
+            return GuidedEvaluation(
+                student_state="PARTIAL",
+                newly_confirmed_concept_ids=[
+                    "REQUIRED_COMPONENT_2",
+                    "REQUIRED_COMPONENT_3",
+                ],
+                preserved_concept_ids=["REQUIRED_COMPONENT_1"],
+                contradicted_concept_ids=[],
+                missing_concept_ids=[],
+                selected_error_code=None,
+                confidence=0.98,
+                next_objective=None,
+                tutor_message="Can you express the starting counter value?",
+                tutor_message_voice="Can you express the starting counter value?",
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _GuidedClient(),
+    )
+    common_request = {
+        "question_id": "Q-T01-006",
+        "question": (
+            "A counter starts at any value c and increases by 4. "
+            "Write the general rule and state what changes and what stays fixed."
+        ),
+        "question_type": "MULTI_PART_SHORT_RESPONSE",
+        "correct_answer": "c + 4; c changes; +4 stays fixed",
+        "answer_spec": _answer_spec(
+            "c + 4; c changes; +4 stays fixed",
+            ["c+4", "c is changing", "add 4 stays fixed"],
+            "STRUCTURED_TEXT_AND_SYMBOLIC_MATCH",
+        ),
+        "phase_2_prompt_context": _guided_context(0),
+        "current_phase": "GUIDED_PRACTICE",
+        "input_source": "TEXT",
+        "transcript_confidence": None,
+        "attempt_count": 1,
+        "current_hint_level": None,
+    }
+    first = classify_student_response(
+        ClassificationRequest(student_input="c + 4", **common_request)
+    )
+    second = classify_student_response(
+        ClassificationRequest(
+            student_input="c changes and +4 stays fixed",
+            generated_question_rubric=first.generated_question_rubric,
+            active_teaching_objective=first.active_teaching_objective,
+            **common_request,
+        )
+    )
+
+    assert first.guided_student_state == "PARTIAL"
+    assert second.guided_student_state == "CORRECT"
+    assert second.active_teaching_objective is None
+    assert second.question_completed is True
+    assert second.recommended_conversation_action == "ADVANCE_TO_NEXT_QUESTION"
 
 
 def test_guided_multipart_reconciles_completion_with_unconfirmed_required_parts(
@@ -2924,7 +3005,7 @@ def test_guided_multipart_reconciles_completion_with_unconfirmed_required_parts(
         def evaluate_guided_turn(self, **kwargs):
             return GuidedEvaluation(
                 student_state="CORRECT",
-                newly_confirmed_concept_ids=["GENERAL_RULE"],
+                newly_confirmed_concept_ids=["REQUIRED_COMPONENT_1"],
                 preserved_concept_ids=[],
                 contradicted_concept_ids=[],
                 missing_concept_ids=[],
@@ -2971,9 +3052,9 @@ def test_guided_multipart_reconciles_completion_with_unconfirmed_required_parts(
     assert response.active_teaching_objective is not None
     assert response.active_teaching_objective.confirmed_concept_ids == []
     assert response.active_teaching_objective.missing_concept_ids == [
-        "CHANGING_VALUE",
-        "FIXED_INCREMENT",
-        "GENERAL_RULE",
+        "REQUIRED_COMPONENT_1",
+        "REQUIRED_COMPONENT_2",
+        "REQUIRED_COMPONENT_3",
     ]
 
 

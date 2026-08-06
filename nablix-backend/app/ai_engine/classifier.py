@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import unicodedata
 from collections.abc import Sequence
@@ -45,6 +47,7 @@ from app.models.adapters import (
 )
 from app.models.guided_learning import (
     ActiveTeachingObjective,
+    GeneratedConcept,
     GeneratedQuestionRubric,
     GuidedEvaluation,
     GuidedStudentState,
@@ -425,6 +428,15 @@ def resolve_guided_rubric(
 ) -> GeneratedQuestionRubric:
     """Return the persisted runtime rubric or generate it once from existing content."""
 
+    authored_rubric = rubric_from_authored_answer_parts(
+        question_id,
+        question_type,
+        answer_spec,
+        rules.guided_learning.rubric_prompt_version,
+    )
+    if authored_rubric is not None:
+        return authored_rubric
+
     rubric = existing_rubric
     if rubric is None or rubric.question_id != question_id:
         rubric_error: AdapterError | None = None
@@ -473,6 +485,71 @@ def resolve_guided_rubric(
     return rubric
 
 
+def rubric_from_authored_answer_parts(
+    question_id: str,
+    question_type: QuestionType | None,
+    answer_spec: AnswerSpec,
+    prompt_version: str,
+) -> GeneratedQuestionRubric | None:
+    """Build stable multipart components from the existing authored contract."""
+
+    if question_type != "MULTI_PART_SHORT_RESPONSE":
+        return None
+    answer_parts = [
+        part.strip()
+        for part in answer_spec.canonical_answer.split(";")
+        if part.strip()
+    ]
+    if len(answer_parts) < 2:
+        return None
+    cache_source = json.dumps(
+        {
+            "question_id": question_id,
+            "answer_parts": answer_parts,
+            "prompt_version": prompt_version,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return GeneratedQuestionRubric(
+        question_id=question_id,
+        required_concepts=[
+            GeneratedConcept(
+                concept_id=f"REQUIRED_COMPONENT_{index}",
+                description=answer_part,
+                required=True,
+            )
+            for index, answer_part in enumerate(answer_parts, start=1)
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key=hashlib.sha256(cache_source.encode("utf-8")).hexdigest(),
+        prompt_version=prompt_version,
+    )
+
+
+def objective_for_rubric(
+    objective: ActiveTeachingObjective | None,
+    rubric: GeneratedQuestionRubric,
+) -> ActiveTeachingObjective:
+    """Keep persisted evidence only when it belongs to the current rubric."""
+
+    if objective is None:
+        return initial_guided_objective(rubric)
+    required_ids = {
+        concept.concept_id
+        for concept in rubric.required_concepts
+        if concept.required
+    }
+    objective_ids = {
+        *objective.confirmed_concept_ids,
+        *objective.missing_concept_ids,
+    }
+    if objective_ids != required_ids:
+        return initial_guided_objective(rubric)
+    return objective
+
+
 def classify_guided_learning_response(
     request: ClassificationRequest,
     rules: ClassifierRulesConfig,
@@ -514,7 +591,7 @@ def classify_guided_learning_response(
         rules=rules,
         openai_client=openai_client,
     )
-    objective = request.active_teaching_objective or initial_guided_objective(rubric)
+    objective = objective_for_rubric(request.active_teaching_objective, rubric)
     evaluation: GuidedEvaluation | None = None
     raw_student_state: GuidedStudentState | None = None
     raw_confidence: float | None = None
@@ -831,6 +908,20 @@ def validate_guided_evaluation(
             "openai_ai_engine",
             "Guided evaluation must return non-empty text and voice messages.",
         )
+    if not remaining:
+        return evaluation.model_copy(
+            update={
+                "student_state": "CORRECT",
+                "preserved_concept_ids": sorted(
+                    set(objective.confirmed_concept_ids) - contradicted
+                ),
+                "missing_concept_ids": [],
+                "selected_error_code": None,
+                "next_objective": None,
+                "tutor_message": rules.messages.CORRECT,
+                "tutor_message_voice": rules.messages.CORRECT,
+            }
+        )
     if evaluation.student_state == "CORRECT" and remaining:
         return reconcile_guided_evaluation(
             evaluation,
@@ -846,13 +937,6 @@ def validate_guided_evaluation(
             objective,
             rules,
             "PARTIAL did not contain both confirmed and missing concepts",
-        )
-    if evaluation.student_state == "WRONG" and not remaining:
-        return reconcile_guided_evaluation(
-            evaluation,
-            objective,
-            rules,
-            "WRONG confirmed every required concept",
         )
     if evaluation.student_state in {"STUCK", "UNCLEAR"} and (
         evaluation.newly_confirmed_concept_ids
