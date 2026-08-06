@@ -32,6 +32,7 @@ import {
 import { applyInteractionSupport, acceptResponse } from '@/lib/interactionPresentation';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { tutorSay, setStudentWriting } from '@/lib/tutorSpeech';
+import { speakBrowser } from '@/lib/tts';
 import {
   availableSupport,
   nextSupport,
@@ -381,6 +382,10 @@ export function useDemoTutor() {
     const acknowledgementFinished = new Promise<void>((resolve) => {
       tutorSay(EXPLAIN_AGAIN_ACKNOWLEDGEMENT, {
         onEnd: resolve,
+        // This acknowledgement must begin on the click itself. Waiting for a
+        // remote TTS round trip makes it arrive alongside the LLM explanation,
+        // which defeats its purpose and can lose browser audio permission.
+        speak: speakBrowser,
       });
     });
     try {
