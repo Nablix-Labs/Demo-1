@@ -505,10 +505,9 @@ export function useDemoTutor() {
         throw new Error('Backend did not acknowledge the presented inactivity nudge.');
       }
       acceptResponse(res);
-      addTranscriptMessage({ role: 'ai', text: delivery.message });
       addTrailEntry({ kind: 'tutor', text: delivery.message, meta: 'inactivity nudge' });
     },
-    [sessionId, addTranscriptMessage, addTrailEntry],
+    [sessionId, addTrailEntry],
   );
 
   /**
