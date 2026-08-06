@@ -12,7 +12,7 @@
  * Backend calls are gated on NEXT_PUBLIC_API_BASE_URL: when it's unset (local
  * UI-only runs) the hook is a no-op so the mock UX keeps working untouched.
  */
-import { useCallback } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   startSession,
   submitCanvas,
@@ -113,6 +113,8 @@ function errorMessage(err: unknown, fallback: string): string {
 // Shown in the chat when a tutor call fails (e.g. backend 5xx), so a failure is
 // visible to the student instead of the chat silently freezing.
 const TUTOR_UNAVAILABLE = "Sorry — I couldn't reach the tutor just now. Please try again in a moment.";
+const EXPLAIN_AGAIN_ACKNOWLEDGEMENT =
+  'Okay—give me a moment to explain that another way.';
 
 /**
  * What the student sees in the chat when a tutor call fails.
@@ -233,6 +235,8 @@ export async function beginSession(
 export function useDemoTutor() {
   const sessionId = useNumeraStore((s) => s.sessionId);
   const canvasExporter = useNumeraStore((s) => s.canvasExporter);
+  const explainAgainRequest = useRef<Promise<InteractionResponse | null> | null>(null);
+  const [explainAgainPending, setExplainAgainPending] = useState(false);
   const addTranscriptMessage = useNumeraStore((s) => s.addTranscriptMessage);
   const addTrailEntry = useNumeraStore((s) => s.addTrailEntry);
 
@@ -345,13 +349,13 @@ export function useDemoTutor() {
    *
    * Neither an answer nor a help escalation (Phase 2 handoff, Manav — Frontend,
    * Explain Again 2). The frontend computes nothing: no attempts, no components,
-   * no support progression, no scaffold changes. It sends the request and
-   * renders exactly what comes back.
+   * no support progression and no scaffold changes. It immediately acknowledges
+   * the request, then renders the generated explanation when it arrives.
    *
    * Older deployments can still return 404/405/422; only those explicit
    * compatibility responses fall back to the cue already held by the client.
    */
-  const explainAgain = useCallback(async (): Promise<InteractionResponse | null> => {
+  const runExplainAgain = useCallback(async (): Promise<InteractionResponse | null> => {
     const s = useNumeraStore.getState();
     const replayLocally = () => {
       s.setVisualCueVisible(true);
@@ -364,6 +368,9 @@ export function useDemoTutor() {
     }
 
     const turnId = useNumeraStore.getState().beginSubmissionTurn();
+    addTranscriptMessage({ role: 'ai', text: EXPLAIN_AGAIN_ACKNOWLEDGEMENT });
+    addTrailEntry({ kind: 'tutor', text: EXPLAIN_AGAIN_ACKNOWLEDGEMENT });
+    tutorSay(EXPLAIN_AGAIN_ACKNOWLEDGEMENT);
     try {
       const res = await sendInteraction({
         session_id: sessionId,
@@ -404,6 +411,17 @@ export function useDemoTutor() {
       return null;
     }
   }, [sessionId, addTranscriptMessage, addTrailEntry]);
+
+  const explainAgain = useCallback((): Promise<InteractionResponse | null> => {
+    if (explainAgainRequest.current !== null) return explainAgainRequest.current;
+    setExplainAgainPending(true);
+    const request = runExplainAgain().finally(() => {
+      explainAgainRequest.current = null;
+      setExplainAgainPending(false);
+    });
+    explainAgainRequest.current = request;
+    return request;
+  }, [runExplainAgain]);
 
   const claimInactivityNudge = useCallback(async (
     idleDurationMs: number,
@@ -708,6 +726,7 @@ export function useDemoTutor() {
     submitVoiceTurn,
     hint,
     explainAgain,
+    explainAgainPending,
     claimInactivityNudge,
     presentInactivityNudge,
     acknowledgeInactivityNudge,

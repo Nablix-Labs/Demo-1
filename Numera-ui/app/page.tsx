@@ -25,6 +25,7 @@ import { useVoiceStream } from '@/hooks/useVoiceStream';
 import { useInactivityNudge } from '@/hooks/useInactivityNudge';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { demoFor } from '@/lib/demoContent';
+import { tutorSay } from '@/lib/tutorSpeech';
 
 // Voice turn transport. 'rest' (default): browser STT (useVoiceTurn) → REST +
 // browser TTS. 'server': stream mic audio to the :8004 voice server, which does
@@ -134,6 +135,7 @@ export default function LessonPage() {
       setQuestionText((rec.current_question ?? '').replace(/^solve for\s*x\s*:?\s*/i, '').trim());
       setQuestionNumber(rec.question_number);
       setTranscript([{ role: 'ai', text: rec.message }]);
+      if (rec.current_phase === 'GUIDED_PRACTICE') tutorSay(rec.message);
       clearTutorMarks();
       // Only the question TEXT is set here. Its type and options come off the
       // same record via syncBackendSession → applyBackendPhase, which already

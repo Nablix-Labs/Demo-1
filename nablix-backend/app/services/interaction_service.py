@@ -1,6 +1,6 @@
 import re
 from datetime import datetime, timezone
-from typing import Final, Literal
+from typing import Final, Literal, cast
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -68,10 +68,12 @@ from app.models.student_model_session import (
     IndependentQuestionSetRequestedEvent,
     IndependentRetryCompletedEvent,
     Phase2RepairResult,
+    QuestionType,
     StudentModelSessionEventResponse,
     StudentModelQuestion,
     SupportUsed,
 )
+from app.services.guided_question_opening import guided_question_opening
 from app.services.phase_transition import (
     DEFAULT_TRANSITION_MESSAGE,
     TRANSITION_MESSAGES,
@@ -2332,8 +2334,31 @@ async def _process_interaction(
         and resulting_question.strip() != ""
     )
     if question_advanced:
-        tutor_message = rules.messages.NEXT_QUESTION.format(
-            question=resulting_question.strip()
+        resulting_question_type = state_updates.get(
+            "question_type",
+            turn_session.question_type,
+        )
+        guided_question_type: QuestionType | None = (
+            cast(QuestionType, resulting_question_type)
+            if resulting_question_type in {
+                "SINGLE_CHOICE",
+                "SHORT_RESPONSE",
+                "MULTI_PART_SHORT_RESPONSE",
+                "CHOICE_WITH_EXPLANATION",
+                "TRUE_FALSE_WITH_EXPLANATION",
+            }
+            else None
+        )
+        tutor_message = (
+            guided_question_opening(
+                resulting_question,
+                guided_question_type,
+                "Nice work. Here is the next question.",
+            )
+            if session.current_phase == "GUIDED_PRACTICE"
+            else rules.messages.NEXT_QUESTION.format(
+                question=resulting_question.strip()
+            )
         )
         tutor_message_voice = tutor_message
         conversation_action = "ADVANCE_TO_NEXT_QUESTION"

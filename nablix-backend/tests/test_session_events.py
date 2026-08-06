@@ -1305,7 +1305,11 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert completed["current_phase"] == "GUIDED_PRACTICE"
     assert completed["question_id"] == "Q-T02-004"
     assert completed["student_model_state"]["target_micro_skill_ids"] == ["T02.M1"]
-    assert completed["message"] == "Now let’s use this idea together in a question."
+    assert completed["message"] == (
+        "Now let’s use this idea together in a question. "
+        "Solve for x: x + 4 = 9. "
+        "Look through the choices carefully—you already know enough to make a start."
+    )
     assert [event["event_type"] for event in events] == [
         "SESSION_OPENED",
         "DIAGNOSTIC_COMPLETED",

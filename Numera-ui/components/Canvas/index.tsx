@@ -80,8 +80,10 @@ export default function CanvasStage() {
     },
     [setSelectedOption, setTextInput],
   );
-  const { explainAgain } = tutor;
-  const replayCue = useCallback(() => { void explainAgain(); }, [explainAgain]);
+  const { explainAgain, explainAgainPending } = tutor;
+  const replayCue = useCallback(() => {
+    if (!explainAgainPending) void explainAgain();
+  }, [explainAgain, explainAgainPending]);
 
   const exportRef = useRef<(() => string | null) | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -157,16 +159,17 @@ export default function CanvasStage() {
           onSelectOption={pickOption}
         />
         {/* §2: "Explain Again — replays the current concept visually without
-            counting as an attempt." It deliberately makes no request: replaying
-            what the tutor already showed cannot be graded, so there is no way
-            for it to cost the student an attempt. Only shown when there is
-            something to replay. */}
+            counting as an attempt." The backend generates the re-expression;
+            while that request is in flight the disabled busy state prevents a
+            second click from creating a duplicate turn. */}
         {canReplayCue && (
           <button
             onClick={replayCue}
-            className="ml-auto flex-shrink-0 rounded-full border border-muted-gray bg-white px-3.5 py-1.5 text-[12px] font-semibold text-slate-blue hover:text-ink hover:bg-reading-surface transition-colors"
+            disabled={explainAgainPending}
+            aria-busy={explainAgainPending}
+            className="ml-auto flex-shrink-0 rounded-full border border-muted-gray bg-white px-3.5 py-1.5 text-[12px] font-semibold text-slate-blue hover:text-ink hover:bg-reading-surface disabled:cursor-wait disabled:opacity-60 transition-colors"
           >
-            Explain again
+            {explainAgainPending ? 'Explaining…' : 'Explain again'}
           </button>
         )}
       </div>
