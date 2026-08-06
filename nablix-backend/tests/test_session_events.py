@@ -2045,3 +2045,74 @@ def test_legacy_initial_phase_session_is_rejected(monkeypatch) -> None:
     assert started.status_code == 409
     assert "Legacy initial_phase sessions are not supported" in started.json()["message"]
     assert captured == {}
+
+
+def test_phase3_content_exhaustion_auto_transitions_to_review() -> None:
+    event_dict = {
+        "schema_version": "3.0",
+        "request_id": "SESSION001:SESSION_OPENED",
+        "processed_at": "2026-08-06T12:00:00Z",
+        "journey_state": {
+            "student_id": "ST010",
+            "active_session_id": "SESSION-001",
+            "topic_id": "ALG-KS3-01",
+            "topic_status": "IN_PROGRESS",
+            "mastery_status": "NEARLY_MASTERED",
+            "continuity_status": "ON_TRACK",
+            "current_phase": "PHASE_3_INDEPENDENT_PRACTICE",
+            "recommended_entry_phase": "PHASE_3_INDEPENDENT_PRACTICE",
+            "session_count": 1,
+            "started_at": "2026-08-06T12:00:00Z",
+            "last_activity_at": "2026-08-06T12:00:00Z",
+            "phase_0_diagnostic": {"status": "COMPLETED", "phase_visit_no": 1},
+            "phase_1_orientation": {"status": "COMPLETED", "phase_visit_no": 1},
+            "phase_2_guided_learning": {"status": "COMPLETED", "phase_visit_no": 1},
+            "phase_3_independent_practice": {
+                "status": "IN_PROGRESS",
+                "phase_visit_no": 1,
+                "target_micro_skill_ids": ["T01.M6"],
+                "remaining_micro_skill_ids": ["T01.M6"],
+                "verified_micro_skill_ids": [],
+                "used_question_ids": ["Q-T01-008"],
+            },
+            "review": {"status": "NOT_STARTED", "phase_visit_no": None},
+            "version": 30,
+            "updated_at": "2026-08-06T12:00:00Z",
+        },
+        "phase_payload": {
+            "phase": "PHASE_3_INDEPENDENT_PRACTICE",
+            "payload_type": "RESCUE_AND_FRESH_QUESTION",
+            "question_set": {"questions": []},
+            "rescue_to_serve": {
+                "rescue_type": "PARALLEL_EXAMPLE",
+                "micro_skill_id": "T01.M6",
+                "parallel_example": None,
+                "fresh_retry_question_id": None,
+            },
+        },
+        "event_result": None,
+        "routing": {
+            "reason_code": "INDEPENDENT_FAILURE",
+            "reason": "Independent verification failed for T01.M6.",
+            "next_action": "DELIVER_RESCUE_AND_FRESH_RETRY",
+            "prerequisite_check_required": False,
+            "prerequisite_micro_skill_ids": [],
+            "content_gap_detected": True,
+            "missing_micro_skill_ids": ["T01.M6"],
+        },
+        "status": {
+            "success": True,
+            "status_code": "OK",
+            "intervention_required": False,
+            "intervention_reason": None,
+            "warnings": [],
+            "operational_errors": [],
+        },
+    }
+    parsed = session_service.StudentModelSessionEventResponse.model_validate(event_dict)
+    validated = session_service._validate_session_opened_payload(parsed)
+    assert validated.phase == "REVIEW"
+    assert validated.payload_type == "REVIEW_SUMMARY"
+    assert validated.review_summary is not None
+    assert validated.review_summary["summary_id"] == "SUMMARY-CONTENT-EXHAUSTED"
+

@@ -153,7 +153,7 @@ class StudentModelPhasePayload(BaseModel):
 
 
 class StudentModelRouting(BaseModel):
-    reason_code: RoutingReasonCode
+    reason_code: str
     reason: str
     next_action: str
     next_topic_id: str | None = None

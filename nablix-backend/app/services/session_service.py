@@ -8,6 +8,7 @@ from typing_extensions import NotRequired
 
 from app.adapters.provider import get_adapters
 from app.core.config import get_settings
+from app.core.logger import logger
 from app.models.adapters import ConversationMessage, StudentModelResult, VisionOCRResult
 from app.models.canvas import CanvasSubmissionRecord
 from app.models.fields import Phase
@@ -385,6 +386,23 @@ async def start_session(
     return session
 
 
+def _build_content_exhausted_review_summary(
+    event: StudentModelSessionEventResponse,
+) -> dict[str, object]:
+    """Synthesise a minimal review summary when Phase 3 content ran out."""
+    js = event.journey_state
+    return {
+        "summary_id": "SUMMARY-CONTENT-EXHAUSTED",
+        "topic_id": js.topic_id,
+        "mastery_status": js.mastery_status,
+        "phase_3_summary": {
+            "verified": js.phase_3_independent_practice.verified_micro_skill_ids,
+            "remaining": js.phase_3_independent_practice.remaining_micro_skill_ids,
+            "content_exhausted": True,
+        },
+    }
+
+
 def _validate_session_opened_payload(
     event: StudentModelSessionEventResponse,
 ) -> StudentModelPhasePayload:
@@ -440,6 +458,16 @@ def _validate_session_opened_payload(
     } and (
         payload.question_set is None or not payload.question_set.questions
     ):
+        if payload.phase == "PHASE_3_INDEPENDENT_PRACTICE":
+            logger.warning(
+                "Phase 3 content exhausted — no questions in payload. "
+                "Auto-transitioning session to REVIEW phase."
+            )
+            return StudentModelPhasePayload(
+                phase="REVIEW",
+                payload_type="REVIEW_SUMMARY",
+                review_summary=_build_content_exhausted_review_summary(event),
+            )
         raise HTTPException(
             status_code=503,
             detail=f"Student Model returned no questions for {payload.phase}.",
