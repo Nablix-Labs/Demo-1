@@ -20,11 +20,11 @@ from app.ai_engine.schemas import (
     ErrorType,
     EvaluationCategory,
     ExplainAgainRequest,
+    ExplainAgainResponse,
     HintLevel,
     InputSource,
     IntentType,
     LearningPhase,
-    OpenAIExplainAgainMessage,
     ResponseStrategy,
     StrictSchema,
 )
@@ -278,6 +278,25 @@ class OpenAIAIEngineClient:
                 f"invalid scaffold evaluation: {error}",
             ) from error
 
+    def generate_explain_again_response(
+        self,
+        request: ExplainAgainRequest,
+        system_prompt: str,
+    ) -> ExplainAgainResponse:
+        content = self._request_guided_json(
+            name="explain_again_response",
+            schema=ExplainAgainResponse.model_json_schema(),
+            system_prompt=system_prompt,
+            user_payload=request.model_dump(),
+        )
+        try:
+            return ExplainAgainResponse.model_validate(content)
+        except ValidationError as error:
+            raise AdapterError(
+                "openai_ai_engine",
+                f"invalid Explain Again response: {error}",
+            ) from error
+
     def _request_guided_json(
         self,
         name: str,
@@ -378,62 +397,6 @@ class OpenAIAIEngineClient:
             },
         )
         return OpenAITutorMessage.model_validate(content)
-
-    def generate_explain_again_message(
-        self,
-        request: ExplainAgainRequest,
-        validation_feedback: str | None,
-        prompt_version: str,
-        system_prompt: str,
-    ) -> OpenAIExplainAgainMessage:
-        content = self._request_guided_json(
-            name="explain_again",
-            schema=OpenAIExplainAgainMessage.model_json_schema(),
-            system_prompt=system_prompt,
-            user_payload={
-                "question_id": request.question_id,
-                "question": request.question,
-                "answer_spec": request.answer_spec.model_dump(),
-                "required_components": [
-                    component.model_dump()
-                    for component in request.generated_question_rubric.required_concepts
-                ],
-                "active_teaching_objective": request.active_teaching_objective.model_dump(),
-                "first_unresolved_concept_id": request.first_unresolved_concept_id,
-                "guided_student_state": request.guided_student_state,
-                "selected_error_code": request.selected_error_code,
-                "recorded_misconception": (
-                    request.recorded_misconception.model_dump()
-                    if request.recorded_misconception is not None
-                    else None
-                ),
-                "recent_conversation": [
-                    message.model_dump() for message in request.recent_conversation
-                ],
-                "active_support_level": request.active_support_level,
-                "highest_support_used": request.highest_support_used,
-                "visible_visual_cue": (
-                    request.visible_visual_cue.model_dump()
-                    if request.visible_visual_cue is not None
-                    else None
-                ),
-                "active_scaffold": (
-                    request.active_scaffold.model_dump()
-                    if request.active_scaffold is not None
-                    else None
-                ),
-                "answer_reveal_allowed": request.answer_reveal_allowed,
-                "validation_feedback": validation_feedback,
-                "prompt_version": prompt_version,
-            },
-        )
-        try:
-            return OpenAIExplainAgainMessage.model_validate(content)
-        except ValidationError as error:
-            raise AdapterError(
-                "openai_ai_engine",
-                f"invalid Explain Again response: {error}",
-            ) from error
 
     def generate_session_review(
         self,

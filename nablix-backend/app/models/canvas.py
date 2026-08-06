@@ -85,6 +85,18 @@ class CanvasDrawPayload(BaseModel):
     elements: list[TutorElement] = Field(default_factory=list)
 
 
+class CanvasPoint(BaseModel):
+    x: float = Field(ge=0.0, le=1.0)
+    y: float = Field(ge=0.0, le=1.0)
+
+
+class CanvasStroke(BaseModel):
+    stroke_id: str
+    tool: Literal["pen", "pencil", "eraser", "highlighter"]
+    points: list[CanvasPoint]
+    width: float = 0.0
+
+
 class CanvasSubmitRequest(BaseModel):
     """Validated request to submit a canvas artifact for later analysis."""
 
@@ -92,6 +104,7 @@ class CanvasSubmitRequest(BaseModel):
     student_id: StudentId
     turn_id: TurnId | None = None
     snapshot_data_url: SnapshotDataUrl
+    strokes: list[CanvasStroke] = Field(default_factory=list)
     # Optional spoken transcript to grade alongside the canvas (VAD turn). Omitted by
     # the Check button, which stays canvas-only.
     transcript: str | None = None
@@ -99,6 +112,7 @@ class CanvasSubmitRequest(BaseModel):
     submission_role: Literal["STANDALONE_ATTEMPT", "VOICE_ATTACHMENT"] = (
         "STANDALONE_ATTEMPT"
     )
+
 
 
 class CanvasLatency(BaseModel):

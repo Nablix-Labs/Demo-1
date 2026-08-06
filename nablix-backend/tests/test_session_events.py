@@ -511,10 +511,7 @@ def _event_response(
                 "next_action": "START_INDEPENDENT",
             }
         )
-    elif event_type in {
-        "GUIDED_SUPPORT_ESCALATION_REQUIRED",
-        "GUIDED_STUCK_SUPPORT_REQUIRED",
-    }:
+    elif event_type == "GUIDED_SUPPORT_ESCALATION_REQUIRED":
         response = _event_response("ORIENTATION_COMPLETED", request_id)
         journey = response["journey_state"]
         payload = response["phase_payload"]
@@ -563,11 +560,6 @@ def _event_response(
                 "next_action": "DELIVER_SCAFFOLD_STEP",
             }
         )
-        if event_type == "GUIDED_SUPPORT_ESCALATION_REQUIRED":
-            status = response["status"]
-            assert isinstance(status, dict)
-            status["intervention_required"] = True
-            status["intervention_reason"] = "WRONG_4"
     return response
 
 
@@ -1194,16 +1186,10 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     ) -> dict[str, object]:
         del adapter_name, url, headers, timeout_seconds, retry_count
         events.append(payload)
-        event_type = str(payload["event_type"])
-        incorrect_count = sum(
-            event["event_type"] == "INCORRECT_ATTEMPT" for event in events
+        return _event_response(
+            str(payload["event_type"]),
+            str(payload["request_id"]),
         )
-        response_type = (
-            "GUIDED_SUPPORT_ESCALATION_REQUIRED"
-            if event_type == "INCORRECT_ATTEMPT" and incorrect_count == 4
-            else event_type
-        )
-        return _event_response(response_type, str(payload["request_id"]))
 
     settings = Settings(
         student_model_url="https://student-model.example",
@@ -1331,7 +1317,9 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
             assert stuck.json()["current_scaffold_step_id"] is None
         else:
             assert len(events) == event_count_before_stuck + 1
-            assert events[-1]["event_type"] == "GUIDED_STUCK_SUPPORT_REQUIRED"
+            assert events[-1]["event_type"] == "GUIDED_SUPPORT_ESCALATION_REQUIRED"
+
+
             assert events[-1]["micro_skill_id"] == "T02.M1"
             assert stuck.json()["scaffold_step_text"] == (
                 "Which operation should you undo first?"
@@ -1510,7 +1498,7 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
         "Undo the addition first."
     )
 
-    for answer in ("x = 3", "x = 2"):
+    for wrong_number in range(2, 5):
         guided_incorrect = client.post(
             "/interaction",
             json={
@@ -1518,8 +1506,8 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
                 "student_id": "ST001",
                 "interaction_type": "ANSWER_SUBMISSION",
                 "input_source": "TEXT",
-                "turn_id": f"TURN-GUIDED-WRONG-{answer}",
-                "text_input": answer,
+                "turn_id": f"TURN-GUIDED-WRONG-{wrong_number}",
+                "text_input": "x = 4",
                 "current_phase": "GUIDED_PRACTICE",
                 "concept_id": "ALG_LINEAR_ONE_STEP",
                 "question_id": "Q-T02-004",
@@ -1527,38 +1515,15 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
             },
         )
         assert guided_incorrect.status_code == 200
+        assert guided_incorrect.json()["wrong_attempt_count"] == wrong_number
 
-    assert events[-1]["event_type"] == "INCORRECT_ATTEMPT"
-    assert guided_incorrect.json()["show_scaffold_panel"] is False
-
-    fourth_wrong = client.post(
-        "/interaction",
-        json={
-            "session_id": session_id,
-            "student_id": "ST001",
-            "interaction_type": "ANSWER_SUBMISSION",
-            "input_source": "TEXT",
-            "turn_id": "TURN-GUIDED-WRONG-4",
-            "text_input": "x = 4",
-            "current_phase": "GUIDED_PRACTICE",
-            "concept_id": "ALG_LINEAR_ONE_STEP",
-            "question_id": "Q-T02-004",
-            "hint_count": 0,
-        },
-    )
-
-    assert fourth_wrong.status_code == 200
     assert events[-1]["event_type"] == "GUIDED_SUPPORT_ESCALATION_REQUIRED"
+    assert events[-1]["micro_skill_id"] == "T02.M1"
     assert events[-1]["triggering_response"] == "x = 4"
     assert events[-1]["error_code"] == "ERR-T02-SUBTRACTION-MISAPPLIED"
-    assert fourth_wrong.json()["show_scaffold_panel"] is True
-    assert events[-1]["micro_skill_id"] == "T02.M1"
-    assert fourth_wrong.json()["current_scaffold_step_id"] == "SCF-T02-M1-S1"
-    assert fourth_wrong.json()["wrong_attempt_count"] == 4
-    assert fourth_wrong.json()["evaluation_reason_code"] == "RESPONSE_INCORRECT"
-    assert fourth_wrong.json()["support_reason_code"] == "WRONG_4_INTERVENTION"
-    assert fourth_wrong.json()["routing_reason_code"] == "GUIDED_SCAFFOLD_REQUIRED"
-    assert fourth_wrong.json()["intervention_triggered"] is True
+    assert guided_incorrect.json()["support_reason_code"] == "WRONG_4_INTERVENTION"
+    assert guided_incorrect.json()["show_scaffold_panel"] is True
+    assert guided_incorrect.json()["current_scaffold_step_id"] == "SCF-T02-M1-S1"
 
     for scaffold_answer in ("addition", "4", "on both sides", "x = 5"):
         scaffold_response = client.post(

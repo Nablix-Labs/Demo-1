@@ -23,21 +23,24 @@ from app.models.fields import (
 from app.models.guided_learning import (
     ActiveScaffold,
     ActiveTeachingObjective,
-    EvaluationReasonCode,
-    GuidedRoutingReasonCode,
     GuidedStudentState,
-    InactivityPolicy,
-    NudgeDelivery,
+    EvaluationReasonCode,
     PrerequisiteRepair,
-    WrongSupportReasonCode,
-    inactivity_policy,
+    WrongEscalationCode,
 )
-from app.models.session import CanvasState, SessionSummary, VoiceState
+from app.models.session import (
+    CanvasState,
+    InactivityPolicy,
+    NudgeDeliveryRecord,
+    SessionSummary,
+    VoiceState,
+)
 from app.models.student_model_session import (
     PublicStudentModelEvent,
     QuestionType,
     StudentModelCoreState,
     SupportUsed,
+    RoutingReasonCode,
 )
 
 
@@ -62,9 +65,9 @@ class InteractionRequest(BaseModel):
     attempt_count: int | None = Field(default=None, ge=0)
     question_completed: bool | None = None
     conversation_history: list[ConversationMessage] = Field(default_factory=list)
-    timestamp: str | None = None
     idle_duration_ms: int | None = Field(default=None, ge=0)
     nudge_id: TurnId | None = None
+    timestamp: str | None = None
 
     @model_validator(mode="after")
     def validate_turn(self) -> "InteractionRequest":
@@ -79,13 +82,10 @@ class InteractionRequest(BaseModel):
             )
         if self.interaction_type == "NUDGE_PRESENTED" and self.nudge_id is None:
             raise ValueError("nudge_id is required for NUDGE_PRESENTED.")
-        if self.interaction_type != "NUDGE_PRESENTED" and self.nudge_id is not None:
-            raise ValueError("nudge_id is only valid for NUDGE_PRESENTED.")
-        if (
-            self.interaction_type != "INACTIVITY_NUDGE"
-            and self.idle_duration_ms is not None
-        ):
-            raise ValueError("idle_duration_ms is only valid for INACTIVITY_NUDGE.")
+        if self.interaction_type in system_interactions and self.previous_tutor_turn_id is None:
+            raise ValueError(
+                "previous_tutor_turn_id is required for inactivity interactions."
+            )
         return self
 
 
@@ -149,18 +149,18 @@ class InteractionResponse(BaseModel):
     first_unresolved_concept_id: str | None = None
     selected_error_code: str | None = None
     evaluation_reason_code: EvaluationReasonCode | None = None
-    support_reason_code: WrongSupportReasonCode | GuidedRoutingReasonCode | None = None
-    routing_reason_code: GuidedRoutingReasonCode | None = None
-    wrong_attempt_count: int = Field(default=0, ge=0)
-    intervention_triggered: bool = False
-    inactivity_policy: InactivityPolicy = Field(default_factory=inactivity_policy)
-    nudge_delivery: NudgeDelivery | None = None
+    routing_reason_code: RoutingReasonCode | None = None
+    support_reason_code: WrongEscalationCode | RoutingReasonCode | None = None
     support_served_this_turn: SupportUsed | None = None
     active_support_level: SupportUsed = "NONE"
     highest_support_used: SupportUsed = "NONE"
     consecutive_stuck_count: int = Field(default=0, ge=0)
+    wrong_attempt_count: int = Field(default=0, ge=0)
+    intervention_triggered: bool = False
     active_scaffold: ActiveScaffold | None = None
     prerequisite_repair: PrerequisiteRepair | None = None
+    inactivity_policy: InactivityPolicy | None = None
+    nudge_delivery: NudgeDeliveryRecord | None = None
 
 
 class StaleTurnResponse(BaseModel):

@@ -4,13 +4,17 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
-from app.models.adapters import ConversationAction, ConversationMessage
+from app.models.adapters import ConversationAction
 from app.models.guided_learning import (
+    ActiveScaffold,
     ActiveTeachingObjective,
     GeneratedQuestionRubric,
     GuidedStudentState,
 )
+
+
 from app.models.student_model_session import AnswerSpec, SupportUsed
+
 
 
 EvaluationCategory = Literal[
@@ -114,6 +118,24 @@ class VisualCue(StrictSchema):
     actions: list[dict[str, object]] = Field(default_factory=list)
 
 
+class ExplainAgainSupportState(StrictSchema):
+    active_support_level: SupportUsed
+    highest_support_used: SupportUsed
+    support_reason_code: str | None
+
+
+class ExplainAgainConversationMessage(StrictSchema):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1)
+
+
+class ExplainAgainVisualCue(StrictSchema):
+    show: StrictBool
+    cue_type: str | None
+    description: str | None
+    actions: list[dict[str, object]] = Field(default_factory=list)
+
+
 class VisibleVisualCue(StrictSchema):
     show: StrictBool
     cue_id: str | None
@@ -122,7 +144,52 @@ class VisibleVisualCue(StrictSchema):
     actions: list[dict[str, object]] = Field(default_factory=list)
 
 
+class ActiveScaffoldState(StrictSchema):
+    scaffold_id: str = Field(min_length=1)
+    current_step_id: str = Field(min_length=1)
+    step_number: int = Field(ge=1)
+    total_steps: int = Field(ge=1)
+    step_text: str = Field(min_length=1)
+    step_voice: str | None = None
+
+
+class ExplainAgainRequest(StrictSchema):
+    question_id: str | None = None
+    question: str | None = None
+    concept_id: str | None = None
+    current_phase: LearningPhase | None = None
+    generated_question_rubric: GeneratedQuestionRubric | None = None
+    active_teaching_objective: ActiveTeachingObjective | None = None
+    first_unresolved_concept_id: str | None = None
+    recent_conversation: list[object] = Field(default_factory=list)
+    visible_cue: ExplainAgainVisualCue | None = None
+    active_scaffold: ActiveScaffoldState | ActiveScaffold | None = None
+
+    support_state: ExplainAgainSupportState | None = None
+    selected_error_code: str | None = None
+    misconception_evidence: str | None = None
+    recorded_misconception: RecordedMisconception | None = None
+    guided_student_state: GuidedStudentState | None = None
+    active_support_level: SupportUsed | None = None
+    highest_support_used: SupportUsed | None = None
+    visible_visual_cue: VisibleVisualCue | None = None
+    answer_reveal_allowed: StrictBool = False
+    answer_spec: AnswerSpec | None = None
+    session_id: str | None = None
+    student_id: str | None = None
+
+
+
+class ExplainAgainResponse(StrictSchema):
+    tutor_message: str = Field(min_length=1)
+    tutor_message_voice: str = Field(min_length=1)
+    answer_reveal_allowed: Literal[False]
+    progression_change_requested: Literal[False]
+    attempt_increment: Literal[0]
+
+
 class HighlightInstruction(StrictSchema):
+
     step_number: int = Field(ge=1)
     highlight_type: HighlightType
     colour: HighlightColour
@@ -229,58 +296,37 @@ class TutorResponse(StrictSchema):
     scaffold_original_answer_correct: StrictBool = False
 
 
-class RecordedMisconception(StrictSchema):
-    error_code: str = Field(min_length=1)
-    description: str = Field(min_length=1)
-
-
-class ActiveScaffoldState(StrictSchema):
-    scaffold_id: str = Field(min_length=1)
-    current_step_id: str = Field(min_length=1)
-    step_number: int = Field(ge=1)
-    total_steps: int = Field(ge=1)
-    step_text: str = Field(min_length=1)
-    step_voice: str | None
-
-
-class ExplainAgainRequest(StrictSchema):
-    question_id: str = Field(min_length=1)
-    question: str = Field(min_length=1)
-    answer_spec: AnswerSpec
-    generated_question_rubric: GeneratedQuestionRubric
-    active_teaching_objective: ActiveTeachingObjective
-    first_unresolved_concept_id: str = Field(min_length=1)
-    guided_student_state: GuidedStudentState | None
-    selected_error_code: str | None
-    recorded_misconception: RecordedMisconception | None
-    recent_conversation: list[ConversationMessage]
-    active_support_level: SupportUsed
-    highest_support_used: SupportUsed
-    visible_visual_cue: VisibleVisualCue | None
-    active_scaffold: ActiveScaffoldState | None
-    answer_reveal_allowed: StrictBool
+class ExplainAgainResult(StrictSchema):
+    interaction_type: str = "EXPLAIN_AGAIN"
+    tutor_message: str
+    tutor_message_voice_optimised: str
+    confidence: float
+    attempt_increment: int = 0
+    evaluation_reason_code: str
+    guided_student_state: GuidedStudentState | None = None
+    active_teaching_objective: ActiveTeachingObjective | None = None
+    first_unresolved_concept_id: str | None = None
+    selected_error_code: str | None = None
+    support_served_this_turn: SupportUsed | None = None
+    active_support_level: SupportUsed | None = None
+    highest_support_used: SupportUsed | None = None
+    active_scaffold: ActiveScaffoldState | None = None
+    progression_change_requested: StrictBool = False
 
 
 class OpenAIExplainAgainMessage(StrictSchema):
-    tutor_message: str = Field(min_length=1)
-    tutor_message_voice_optimised: str = Field(min_length=1)
-    answer_reveal_risk: StrictBool
-    confidence: float = Field(ge=0.0, le=1.0)
+
+    tutor_message: str
+    tutor_message_voice_optimised: str
+    confidence: float
+    answer_reveal_risk: StrictBool = False
 
 
-class ExplainAgainResult(StrictSchema):
-    interaction_type: Literal["EXPLAIN_AGAIN"]
-    tutor_message: str = Field(min_length=1)
-    tutor_message_voice_optimised: str = Field(min_length=1)
-    confidence: float = Field(ge=0.0, le=1.0)
-    attempt_increment: Literal[0]
-    evaluation_reason_code: Literal["EXPLAIN_AGAIN_REEXPRESSION"]
-    guided_student_state: GuidedStudentState | None
-    active_teaching_objective: ActiveTeachingObjective
-    first_unresolved_concept_id: str = Field(min_length=1)
-    selected_error_code: str | None
-    support_served_this_turn: None
-    active_support_level: SupportUsed
-    highest_support_used: SupportUsed
-    active_scaffold: ActiveScaffoldState | None
-    progression_change_requested: Literal[False]
+class RecordedMisconception(StrictSchema):
+    error_code: str
+    description: str
+
+
+
+
+

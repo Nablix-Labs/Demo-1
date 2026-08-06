@@ -1,6 +1,8 @@
+from enum import StrEnum
 from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
 
 
 StudentModelPhase = Literal[
@@ -19,6 +21,18 @@ SupportUsed = Literal[
     "PARALLEL_EXAMPLE",
     "TUTOR_SOLVED",
 ]
+
+
+class RoutingReasonCode(StrEnum):
+    DIAGNOSTIC_STARTED = "DIAGNOSTIC_STARTED"
+    DIAGNOSTIC_GAPS_FOUND = "DIAGNOSTIC_GAPS_FOUND"
+    DIAGNOSTIC_NO_GAPS = "DIAGNOSTIC_NO_GAPS"
+    ORIENTATION_STARTED = "ORIENTATION_STARTED"
+    ORIENTATION_COMPLETED = "ORIENTATION_COMPLETED"
+    GUIDED_IN_PROGRESS = "GUIDED_IN_PROGRESS"
+    GUIDED_HINT_REQUIRED = "GUIDED_HINT_REQUIRED"
+    GUIDED_SCAFFOLD_REQUIRED = "GUIDED_SCAFFOLD_REQUIRED"
+    GUIDED_COMPLETED = "GUIDED_COMPLETED"
 
 
 class MicroSkillMapping(BaseModel):
@@ -56,6 +70,8 @@ class AnswerSpec(BaseModel):
     accepted_answers: list[str]
     verification_method: str
     explanation_required: bool | None = None
+    answer_steps: list[str] = Field(default_factory=list)
+
 
 
 class TutorQuestionView(BaseModel):
@@ -137,7 +153,7 @@ class StudentModelPhasePayload(BaseModel):
 
 
 class StudentModelRouting(BaseModel):
-    reason_code: str
+    reason_code: RoutingReasonCode
     reason: str
     next_action: str
     next_topic_id: str | None = None
@@ -301,10 +317,11 @@ class GuidedAttemptEvent(MutatingSessionEventBase):
 class GuidedSupportEvent(MutatingSessionEventBase):
     event_type: Literal[
         "GUIDED_SUPPORT_ESCALATION_REQUIRED",
-        "GUIDED_STUCK_SUPPORT_REQUIRED",
         "MAXIMUM_GUIDED_SUPPORT_PARALLEL",
         "MAXIMUM_GUIDED_SUPPORT_REQUIRED",
+        "GUIDED_STUCK_SUPPORT_REQUIRED",
     ]
+
     question_id: str
     micro_skill_id: str
     triggering_response: str | None = None
@@ -321,6 +338,7 @@ class GuidedSupportEvent(MutatingSessionEventBase):
         if self.error_code is None or not self.error_code.strip():
             raise ValueError("error_code is required for Wrong 4 escalation.")
         return self
+
 
 
 class GuidedPhaseCompletedEvent(MutatingSessionEventBase):

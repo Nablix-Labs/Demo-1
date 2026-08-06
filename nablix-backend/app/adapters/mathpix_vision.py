@@ -17,6 +17,7 @@ _ARRAY_BLOCK = re.compile(
 
 class _MathpixLineData(BaseModel):
     text: str | None = None
+    mathml: str | None = None
     cnt: list[list[float]] = Field(default_factory=list)
     confidence: float | None = None
     conversion_output: bool | None = None
@@ -25,9 +26,11 @@ class _MathpixLineData(BaseModel):
 class _MathpixOCRPayload(BaseModel):
     text: str = ""
     latex_styled: str | None = None
+    mathml: str | None = None
     confidence: float | None = None
     confidence_rate: float | None = None
     line_data: list[_MathpixLineData] = Field(default_factory=list)
+    data: list[dict[str, object]] | None = None
     image_width: int | None = None
     image_height: int | None = None
     error: str | None = None
@@ -54,9 +57,14 @@ class MathpixVisionOCRAdapter:
 
         request_body: dict[str, object] = {
             "src": snapshot_data_url,
+            "formats": ["text", "latex_styled", "data"],
+            "data_options": {
+                "include_mathml": True,
+            },
             "include_line_data": True,
             "rm_spaces": True,
         }
+
         headers: dict[str, str] = {
             "app_id": self._app_id,
             "app_key": self._app_key,

@@ -15,6 +15,9 @@ from app.models.interaction import InteractionResponse
 from app.models.session import (
     CanvasState,
     DiagnosticCompleteRequest,
+    InactivityPolicy,
+    NudgeDeliveryRecord,
+    NudgeDeliveryStatus,
     OrientationCompletionRequest,
     OrientationPhaseRequest,
     PhaseTransitionRecord,
@@ -59,6 +62,12 @@ from app.services.student_model_session import (
 _sessions: dict[str, SessionRecord] = {}
 _interaction_locks: dict[str, asyncio.Lock] = {}
 _last_interaction_responses: dict[tuple[str, str], InteractionResponse] = {}
+_nudge_deliveries: dict[tuple[str, str], NudgeDeliveryRecord] = {}
+
+_NUDGE_STATUS_TRANSITIONS: dict[NudgeDeliveryStatus, set[NudgeDeliveryStatus]] = {
+    "GENERATED": {"PRESENTED"},
+    "PRESENTED": set(),
+}
 
 
 class QuestionUpdates(TypedDict):
@@ -112,6 +121,108 @@ def cache_interaction_response(
     response: InteractionResponse,
 ) -> None:
     _last_interaction_responses[(session_id, turn_id)] = response
+
+
+def inactivity_policy() -> InactivityPolicy:
+    settings = get_settings()
+    return InactivityPolicy(
+        initial_idle_threshold_ms=settings.inactivity_initial_idle_threshold_ms,
+        cooldown_ms=settings.inactivity_cooldown_ms,
+        max_nudges_per_tutor_turn=settings.inactivity_max_nudges_per_tutor_turn,
+        generated_nudge_rate_limit=settings.inactivity_generated_nudge_rate_limit,
+    )
+
+
+def nudge_delivery_for(
+    session_id: str,
+    interaction_id: str,
+) -> NudgeDeliveryRecord | None:
+    return _nudge_deliveries.get((session_id, interaction_id))
+
+
+def nudge_deliveries_for_tutor_turn(
+    session_id: str,
+    source_tutor_turn_id: str,
+) -> list[NudgeDeliveryRecord]:
+    return [
+        record
+        for (stored_session_id, _), record in _nudge_deliveries.items()
+        if stored_session_id == session_id
+        and record.source_tutor_turn_id == source_tutor_turn_id
+    ]
+
+
+def clear_nudge_deliveries_for_session(session_id: str) -> None:
+    keys = [key for key in _nudge_deliveries if key[0] == session_id]
+    for key in keys:
+        del _nudge_deliveries[key]
+
+
+def store_nudge_delivery(record: NudgeDeliveryRecord) -> NudgeDeliveryRecord:
+    key = (record.session_id, record.interaction_id)
+    existing = _nudge_deliveries.get(key)
+    if existing is not None:
+        return existing
+    _nudge_deliveries[key] = record
+    return record
+
+
+def update_nudge_delivery_status(
+    session_id: str,
+    interaction_id: str,
+    status: NudgeDeliveryStatus,
+    presented_at: datetime | None,
+    acknowledged_at: datetime | None,
+) -> NudgeDeliveryRecord:
+    key = (session_id, interaction_id)
+    record = _nudge_deliveries.get(key)
+    if record is None:
+        raise KeyError(
+            f"Nudge delivery not found for session_id={session_id} "
+            f"interaction_id={interaction_id}."
+        )
+    if status not in _NUDGE_STATUS_TRANSITIONS[record.status]:
+        raise ValueError(
+            f"Invalid nudge delivery transition {record.status}->{status} for "
+            f"session_id={session_id} interaction_id={interaction_id}."
+        )
+    if status == "PRESENTED" and (presented_at is None or acknowledged_at is None):
+        raise ValueError(
+            "presented_at and acknowledged_at are required for an acknowledged nudge."
+        )
+    updated = record.model_copy(
+        update={
+            "status": status,
+            "presented_at": presented_at,
+            "acknowledged_at": acknowledged_at,
+        }
+    )
+    _nudge_deliveries[key] = updated
+    return updated
+
+
+_SIDE_CHANNEL_UPDATE_FIELDS = {
+    "conversation_history",
+    "last_processed_turn_id",
+    "last_tutor_turn_id",
+    "last_tutor_response_at",
+    "nudge_generated_count",
+    "nudge_presented_count",
+}
+
+
+def update_side_channel_state(
+    session: SessionRecord,
+    updates: dict[str, object],
+) -> SessionRecord:
+    unexpected = set(updates) - _SIDE_CHANNEL_UPDATE_FIELDS
+    if unexpected:
+        raise ValueError(
+            f"Side-channel update attempted protected fields: {sorted(unexpected)}."
+        )
+    updated = session.model_copy(update=updates)
+    _sessions[session.session_id] = updated
+    return updated
 
 
 # Retained only for legacy session-review fixtures; active sessions use the
@@ -252,7 +363,10 @@ async def start_session(
             "current_attempt_sequence",
             1,
         ),
+        inactivity_policy=inactivity_policy(),
+        last_tutor_turn_id=f"TUTOR-{uuid4()}",
         scaffold_step_number=_restore_counter(
+
             phase_state,
             "current_scaffold_step_number",
             0,
@@ -1204,6 +1318,7 @@ async def end_session(request: SessionEndRequest) -> SessionRecord:
         }
     )
     _sessions[request.session_id] = ended_session
+    clear_nudge_deliveries_for_session(request.session_id)
     return ended_session
 
 

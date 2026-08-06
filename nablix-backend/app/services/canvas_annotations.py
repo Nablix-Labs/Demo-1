@@ -1,6 +1,7 @@
 from app.models.adapters import (
     AnnotationIntent,
     OCRTextRegion,
+    SpatialMathToken,
     TutorMistakeClassification,
     TutorResult,
 )
@@ -24,7 +25,11 @@ def assign_step_ids(regions: list[OCRTextRegion]) -> list[OCRTextRegion]:
     return numbered_regions
 
 
-def plan_canvas_draw(tutor: TutorResult, regions: list[OCRTextRegion]) -> list[CanvasDrawPayload]:
+def plan_canvas_draw(
+    tutor: TutorResult,
+    regions: list[OCRTextRegion],
+    spatial_tokens: list[SpatialMathToken] | None = None,
+) -> list[CanvasDrawPayload]:
     """Convert grounded tutor annotation intents into frontend draw commands."""
 
     classification = tutor.mistake_classification
@@ -35,11 +40,24 @@ def plan_canvas_draw(tutor: TutorResult, regions: list[OCRTextRegion]) -> list[C
     if target_region is None:
         return []
 
-    # ponytail: whole-line marks only. Model-estimated OCR boxes can't support
-    # glyph-level precision; reinstate span interpolation only with an OCR
-    # provider that returns native geometry (Mathpix / Google Vision).
-    # target_span stays in the DTO contract for that upgrade.
-    target_box = _line_box(target_region)
+    # Priority 1: Resolution via specific spatial token bounding box union
+    target_box: Box | None = None
+    if spatial_tokens and classification.target_token_ids:
+        matching_tokens = [
+            tok for tok in spatial_tokens if tok.token_id in classification.target_token_ids
+        ]
+        if matching_tokens:
+            boxes = [tok.bounding_box for tok in matching_tokens if tok.bounding_box]
+            if boxes:
+                min_x = min(b.get("x", target_region.x) for b in boxes)
+                min_y = min(b.get("y", target_region.y) for b in boxes)
+                max_x = max(b.get("x", target_region.x) + b.get("width", target_region.w) for b in boxes)
+                max_y = max(b.get("y", target_region.y) + b.get("height", target_region.h) for b in boxes)
+                target_box = (min_x, min_y, max(0.01, max_x - min_x), max(0.01, max_y - min_y))
+
+    if target_box is None:
+        target_box = _line_box(target_region)
+
     elements = _elements_for(classification, tutor.annotation_intents, target_box)
     if not elements:
         return []
@@ -51,6 +69,7 @@ def plan_canvas_draw(tutor: TutorResult, regions: list[OCRTextRegion]) -> list[C
             elements=elements,
         )
     ]
+
 
 
 def _region_for(step_id: str | None, regions: list[OCRTextRegion]) -> OCRTextRegion | None:

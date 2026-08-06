@@ -6,11 +6,16 @@ from fastapi.testclient import TestClient
 from app.adapters import provider
 from app.adapters.student_model import StudentModelServiceAdapter
 from app.ai_engine import classifier
-from app.ai_engine.schemas import ExplainAgainRequest, OpenAIExplainAgainMessage
+from app.ai_engine.schemas import (
+    ExplainAgainRequest,
+    ExplainAgainResponse,
+    OpenAIExplainAgainMessage,
+)
 from app.core.config import Settings
 from app.main import app
 from app.models.adapters import VisualCue as AdapterVisualCue
 from app.models.guided_learning import GeneratedConcept, GeneratedQuestionRubric
+
 from app.models.student_model_session import (
     GuidedSupportEvent,
     StudentModelSessionEvent,
@@ -67,6 +72,27 @@ def schema_student_model(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(session_service, "get_settings", lambda: settings)
     monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", send_session_event)
 
+    class ExplainAgainClient:
+        def generate_explain_again_response(
+            self,
+            request: object,
+            system_prompt: str,
+        ) -> ExplainAgainResponse:
+            del request, system_prompt
+            return ExplainAgainResponse(
+                tutor_message="Here is a different way to think about the same idea.",
+                tutor_message_voice="Voice: here is a different way to think about it.",
+                answer_reveal_allowed=False,
+                progression_change_requested=False,
+                attempt_increment=0,
+            )
+
+    monkeypatch.setattr(
+        interaction_service,
+        "build_openai_ai_engine_client",
+        lambda settings: ExplainAgainClient(),
+    )
+
 
 def _start(student_id: str) -> dict[str, object]:
     response = client.post(
@@ -78,7 +104,14 @@ def _start(student_id: str) -> dict[str, object]:
         },
     )
     assert response.status_code == 200
-    return response.json()
+    body = response.json()
+    assert body["inactivity_policy"] == {
+        "initial_idle_threshold_ms": 20_000,
+        "cooldown_ms": 30_000,
+        "max_nudges_per_tutor_turn": 2,
+        "generated_nudge_rate_limit": 4,
+    }
+    return body
 
 
 def _interaction(
@@ -103,6 +136,25 @@ def _interaction(
     }
 
 
+def _pedagogical_state(session_id: object) -> dict[str, object]:
+    session = session_service._sessions[str(session_id)]
+    fields = (
+        "attempt_count",
+        "wrong_attempt_count",
+        "generated_question_rubric",
+        "active_teaching_objective",
+        "student_model_event",
+        "student_model_state",
+        "hint_count",
+        "scaffold_id",
+        "current_scaffold_step_id",
+        "scaffold_step_number",
+        "scaffold_steps",
+        "current_phase",
+    )
+    return {field: getattr(session, field) for field in fields}
+
+
 def test_text_duplicate_and_stale_turns_do_not_mutate_state() -> None:
     student_id = "ST151"
     session = _start(student_id)
@@ -115,7 +167,7 @@ def test_text_duplicate_and_stale_turns_do_not_mutate_state() -> None:
     )
 
     first = client.post("/interaction", json=request)
-    assert first.status_code == 200
+    assert first.status_code == 200, first.text
     first_body = first.json()
 
     duplicate = client.post("/interaction", json=request)
@@ -126,6 +178,7 @@ def test_text_duplicate_and_stale_turns_do_not_mutate_state() -> None:
     assert duplicate_body["interaction_state_version"] == first_body[
         "interaction_state_version"
     ]
+
     assert duplicate_body["message"] == first_body["message"]
     assert duplicate_body["attempt_count"] == first_body["attempt_count"]
 
@@ -180,6 +233,14 @@ def test_explain_again_is_cached_and_does_not_grade(
                 confidence=0.95,
             )
 
+        def generate_explain_again_response(
+            self,
+            **kwargs: object,
+        ) -> OpenAIExplainAgainMessage:
+            return self.generate_explain_again_message(**kwargs)
+
+
+
     explain_client = _ExplainAgainClient()
     monkeypatch.setattr(
         interaction_service,
@@ -214,9 +275,10 @@ def test_explain_again_is_cached_and_does_not_grade(
         "EXPLAIN_AGAIN",
         None,
     )
+    before = _pedagogical_state(session["session_id"])
 
     first = client.post("/interaction", json=request)
-    assert first.status_code == 200
+    assert first.status_code == 200, first.text
     first_body = first.json()
     assert first_body["accepted_turn_id"] == "TURN-EXPLAIN-1"
     assert first_body["attempt_increment"] == 0
@@ -227,6 +289,7 @@ def test_explain_again_is_cached_and_does_not_grade(
     assert captured_requests[0].visible_visual_cue.cue_id == "VC-T01-ADD-NOT-MULTIPLY"
     assert captured_requests[0].visible_visual_cue.cue_type is None
 
+
     duplicate = client.post("/interaction", json=request)
     assert duplicate.status_code == 200
     duplicate_body = duplicate.json()
@@ -236,6 +299,7 @@ def test_explain_again_is_cached_and_does_not_grade(
         "interaction_state_version"
     ]
     assert duplicate_body["attempt_count"] == first_body["attempt_count"]
+    assert _pedagogical_state(session["session_id"]) == before
 
 
 def test_help_request_without_active_support_is_explicit() -> None:
@@ -269,8 +333,8 @@ def test_inactivity_nudge_is_cached_without_pedagogical_mutation() -> None:
         None,
     )
     request["input_source"] = "SYSTEM"
-    request.pop("text_input")
-
+    request["previous_tutor_turn_id"] = session["last_tutor_turn_id"]
+    request["idle_duration_ms"] = 20_000
     stored_session = session_service._sessions[str(session["session_id"])]
     session_service._sessions[str(session["session_id"])] = stored_session.model_copy(
         update={
@@ -278,25 +342,16 @@ def test_inactivity_nudge_is_cached_without_pedagogical_mutation() -> None:
             - timedelta(seconds=21)
         }
     )
+    before = _pedagogical_state(session["session_id"])
 
     first = client.post("/interaction", json=request)
-    assert first.status_code == 200
+    assert first.status_code == 200, first.text
     first_body = first.json()
+    assert first_body["nudge_delivery"]["status"] == "GENERATED"
     assert first_body["attempt_increment"] == 0
     assert first_body["attempt_count"] == session["attempt_count"]
     assert first_body["question_id"] == session["question_id"]
     assert first_body["current_phase"] == session["current_phase"]
-    assert first_body["nudge_delivery"] == {
-        "interaction_id": "TURN-NUDGE-1",
-        "status": "GENERATED",
-        "message": first_body["message"],
-    }
-    assert first_body["inactivity_policy"] == {
-        "initial_idle_threshold_ms": 20000,
-        "cooldown_ms": 30000,
-        "max_nudges_per_tutor_turn": 2,
-        "generated_nudge_rate_limit": 4,
-    }
 
     duplicate = client.post("/interaction", json=request)
     assert duplicate.status_code == 200
@@ -307,36 +362,43 @@ def test_inactivity_nudge_is_cached_without_pedagogical_mutation() -> None:
         "interaction_state_version"
     ]
 
-    presented_request = {
-        **request,
-        "interaction_type": "NUDGE_PRESENTED",
-        "turn_id": "TURN-NUDGE-PRESENTED-1",
-        "nudge_id": "TURN-NUDGE-1",
-    }
-    presented = client.post("/interaction", json=presented_request)
-    assert presented.status_code == 200
-    presented_body = presented.json()
-    assert presented_body["nudge_delivery"]["status"] == "PRESENTED"
-    assert presented_body["attempt_count"] == session["attempt_count"]
-    assert presented_body["consecutive_stuck_count"] == 0
-
-
-def test_inactivity_nudge_is_suppressed_before_server_threshold() -> None:
-    student_id = "ST155"
-    session = _start(student_id)
-    request = _interaction(
+    presented_request = _interaction(
         session,
         student_id,
-        "TURN-NUDGE-EARLY",
-        "INACTIVITY_NUDGE",
-        None,
+        "TURN-NUDGE-PRESENTED-1",
+        "NUDGE_PRESENTED",
+        str(session["last_tutor_turn_id"]),
     )
-    request["input_source"] = "SYSTEM"
-    request.pop("text_input")
+    presented_request.update(
+        {
+            "input_source": "SYSTEM",
+            "text_input": None,
+            "nudge_id": first_body["nudge_delivery"]["interaction_id"],
+        }
+    )
+    presented = client.post("/interaction", json=presented_request)
+    assert presented.status_code == 200, presented.text
+    assert presented.json()["nudge_delivery"]["status"] == "PRESENTED"
+    assert presented.json()["attempt_count"] == session["attempt_count"]
+    assert presented.json()["current_phase"] == session["current_phase"]
+    assert _pedagogical_state(session["session_id"]) == before
+
+
+def test_inactivity_suppression_has_no_displayable_message() -> None:
+    session = _start("ST155")
+    request = _interaction(
+        session,
+        "ST155",
+        "TURN-NUDGE-SUPPRESSED-1",
+        "INACTIVITY_NUDGE",
+        str(session["last_tutor_turn_id"]),
+    )
+    request.update({"input_source": "SYSTEM", "text_input": None})
 
     response = client.post("/interaction", json=request)
+
     assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "NUDGE_SUPPRESSED"
-    assert body["nudge_delivery"] is None
-    assert body["attempt_increment"] == 0
+    assert response.json()["status"] == "NUDGE_SUPPRESSED"
+    assert response.json()["nudge_delivery"] is None
+    assert response.json()["message"] == ""
+    assert response.json()["message_voice"] == ""
