@@ -7,11 +7,11 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from app.models.adapters import ConversationAction
 from app.models.guided_learning import (
     ActiveScaffold,
-    ActiveScaffold as ActiveScaffoldState,
     ActiveTeachingObjective,
     GeneratedQuestionRubric,
     GuidedStudentState,
 )
+
 
 from app.models.student_model_session import AnswerSpec, SupportUsed
 
@@ -136,6 +136,23 @@ class ExplainAgainVisualCue(StrictSchema):
     actions: list[dict[str, object]] = Field(default_factory=list)
 
 
+class VisibleVisualCue(StrictSchema):
+    show: StrictBool
+    cue_id: str | None
+    cue_type: VisualCueType | None
+    description: str | None
+    actions: list[dict[str, object]] = Field(default_factory=list)
+
+
+class ActiveScaffoldState(StrictSchema):
+    scaffold_id: str = Field(min_length=1)
+    current_step_id: str = Field(min_length=1)
+    step_number: int = Field(ge=1)
+    total_steps: int = Field(ge=1)
+    step_text: str = Field(min_length=1)
+    step_voice: str | None = None
+
+
 class ExplainAgainRequest(StrictSchema):
     question_id: str | None = None
     question: str | None = None
@@ -146,7 +163,8 @@ class ExplainAgainRequest(StrictSchema):
     first_unresolved_concept_id: str | None = None
     recent_conversation: list[object] = Field(default_factory=list)
     visible_cue: ExplainAgainVisualCue | None = None
-    active_scaffold: ActiveScaffoldState | None = None
+    active_scaffold: ActiveScaffoldState | ActiveScaffold | None = None
+
     support_state: ExplainAgainSupportState | None = None
     selected_error_code: str | None = None
     misconception_evidence: str | None = None
@@ -154,7 +172,7 @@ class ExplainAgainRequest(StrictSchema):
     guided_student_state: GuidedStudentState | None = None
     active_support_level: SupportUsed | None = None
     highest_support_used: SupportUsed | None = None
-    visible_visual_cue: VisualCue | None = None
+    visible_visual_cue: VisibleVisualCue | None = None
     answer_reveal_allowed: StrictBool = False
     answer_spec: AnswerSpec | None = None
     session_id: str | None = None
@@ -171,6 +189,7 @@ class ExplainAgainResponse(StrictSchema):
 
 
 class HighlightInstruction(StrictSchema):
+
     step_number: int = Field(ge=1)
     highlight_type: HighlightType
     colour: HighlightColour
@@ -295,8 +314,8 @@ class ExplainAgainResult(StrictSchema):
     progression_change_requested: StrictBool = False
 
 
-
 class OpenAIExplainAgainMessage(StrictSchema):
+
     tutor_message: str
     tutor_message_voice_optimised: str
     confidence: float

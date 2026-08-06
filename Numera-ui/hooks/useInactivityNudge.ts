@@ -39,6 +39,9 @@ import type { NudgeDelivery } from '@/lib/api';
 /** How often the single controller re-evaluates. Not a threshold — just a tick. */
 const TICK_MS = 1_000;
 
+/** Module scope: a per-mount counter, so two live controllers get distinct ids. */
+let controllerSeq = 0;
+
 export interface InactivityNudgeOptions {
   /** True while any tutor request is in flight. */
   requestInFlight?: boolean;
@@ -65,6 +68,9 @@ export function useInactivityNudge(options: InactivityNudgeOptions = {}): void {
   const claimingRef = useRef(false);
   const optsRef = useRef(options);
   optsRef.current = options;
+  // Identifies this controller in the log. Two mounted at once would each keep
+  // their own per-turn count and neither would know about the other's nudges.
+  const instanceId = useRef(`c${++controllerSeq}`).current;
 
   useEffect(() => {
     const gateNow = (): ActivityGate => {
@@ -130,6 +136,17 @@ export function useInactivityNudge(options: InactivityNudgeOptions = {}): void {
 
         lastClaimAtRef.current = Date.now();
         nudgesThisTurnRef.current += 1;
+        // Four identical nudges reached a tester on one question (Sanya, 5 Aug)
+        // when the per-turn cap is two, so either this counter is being reset or
+        // there is a second controller running. Both are invisible without a
+        // trace: log which instance claimed, and what it thinks the count is.
+        console.info(
+          `[nudge] claimed ${id} — ${nudgesThisTurnRef.current}/${
+            useNumeraStore.getState().inactivityPolicy?.maxNudgesPerTutorTurn ?? '?'
+          } this turn (controller ${instanceId}, tutor turn ${
+            useNumeraStore.getState().lastTutorTurnId ?? 'none'
+          })`,
+        );
         let record: NudgeRecord = {
           id,
           state: 'PENDING',

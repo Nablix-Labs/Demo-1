@@ -135,6 +135,10 @@ export default function LessonPage() {
       setQuestionNumber(rec.question_number);
       setTranscript([{ role: 'ai', text: rec.message }]);
       clearTutorMarks();
+      // Only the question TEXT is set here. Its type and options come off the
+      // same record via syncBackendSession → applyBackendPhase, which already
+      // ran inside startSession — setting them again here would re-run the phase
+      // logic and overwrite the stripped text above with the raw version.
       // Backend decides whether a supporting picture should be shown.
       useNumeraStore.getState().setVisualCueVisible(rec.show_visual_cue);
       // Open the student's first LISTENING turn (mints turn_id). Mic stays muted

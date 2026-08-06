@@ -7,12 +7,14 @@ from fastapi import HTTPException
 
 from app.adapters.base import StudentModelAdapter
 from app.adapters.provider import get_adapters
+from app.ai_engine import classifier
 from app.ai_engine.classifier import (
     build_openai_ai_engine_client,
     contains_answer_reveal,
     detect_student_intent,
     normalize_exact_notation,
 )
+
 from app.ai_engine.schemas import (
     ExplainAgainConversationMessage,
     ExplainAgainRequest,
@@ -20,6 +22,16 @@ from app.ai_engine.schemas import (
     ExplainAgainVisualCue,
 )
 from app.ai_engine.classifier_config import ClassifierRulesConfig, load_classifier_rules
+from app.ai_engine.schemas import (
+    ActiveScaffoldState,
+    ExplainAgainConversationMessage,
+    ExplainAgainRequest,
+    ExplainAgainSupportState,
+    ExplainAgainVisualCue,
+    RecordedMisconception,
+    VisibleVisualCue as AIVisibleVisualCue,
+)
+
 from app.core.config import get_settings
 from app.core.logger import logger
 from app.models.adapters import (
@@ -39,9 +51,11 @@ from app.models.fields import Phase
 from app.models.guided_learning import (
     ActiveScaffold,
     EvaluationReasonCode,
+    NudgeDelivery,
     ScaffoldEvaluationContext,
     WrongEscalationCode,
 )
+
 from app.models.interaction import (
     InteractionRequest,
     InteractionResponse,
@@ -242,8 +256,19 @@ async def process_answer_with_session_event(
             else None
         )
     )
-    wrong_escalation = (
-        schema_managed
+    response_is_wrong = _is_wrong_evaluation(tutor)
+
+    next_wrong_attempt_count = (
+        session.wrong_attempt_count + 1
+        if response_is_wrong
+        else session.wrong_attempt_count
+    )
+    atomic_guided_events_enabled = (
+        get_settings().student_model_atomic_guided_events_enabled
+    )
+    wrong_four_escalation = (
+        atomic_guided_events_enabled
+        and schema_managed
         and session.current_phase == "GUIDED_PRACTICE"
         and _is_wrong_evaluation(tutor)
         and wrong_attempt_count >= 4
@@ -258,7 +283,7 @@ async def process_answer_with_session_event(
             >= rules.strategy_rules.stuck_scaffold_min_count
         )
     )
-    support_escalation = wrong_escalation or stuck_escalation
+    support_escalation = wrong_four_escalation or stuck_escalation
     if not schema_managed or (event_type is None and not support_escalation):
         return student, tutor, None, None, session
 
@@ -268,20 +293,19 @@ async def process_answer_with_session_event(
         .retry_required_micro_skill_ids
     )
     if support_escalation:
-        escalation_type: Literal[
-            "GUIDED_SUPPORT_ESCALATION_REQUIRED",
-            "MAXIMUM_GUIDED_SUPPORT_PARALLEL",
-        ] = (
+        escalation_type = (
             "MAXIMUM_GUIDED_SUPPORT_PARALLEL"
-            if not wrong_escalation
-            and tutor.response_strategy == "PROVIDE_WORKED_EXAMPLE"
+            if tutor.response_strategy == "PROVIDE_WORKED_EXAMPLE"
             else "GUIDED_SUPPORT_ESCALATION_REQUIRED"
         )
+
+
+
         escalation_error_code = _db_error_code(
             session,
             context.message,
         ) or _catalog_error_code(session, tutor.selected_error_code)
-        if wrong_escalation and escalation_error_code is None:
+        if wrong_four_escalation and escalation_error_code is None:
             raise HTTPException(
                 status_code=409,
                 detail="Wrong 4 requires an active question error_code.",
@@ -307,9 +331,11 @@ async def process_answer_with_session_event(
                 timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 question_id=session.question_id,
                 micro_skill_id=micro_skill_ids[0],
-                triggering_response=context.message,
-                error_code=escalation_error_code,
+                triggering_response=context.message if escalation_type == "GUIDED_SUPPORT_ESCALATION_REQUIRED" else None,
+                error_code=escalation_error_code if escalation_type == "GUIDED_SUPPORT_ESCALATION_REQUIRED" else None,
             ),
+
+
             access_token,
         )
     elif session.current_phase == "INDEPENDENT_PRACTICE" and retry_required:
@@ -1241,7 +1267,8 @@ def _response_from(
     session_summary: SessionSummary | None,
     conversation_action: ConversationAction,
     attempt_increment: int,
-    status: Literal["CLARIFICATION_REQUIRED"] | None,
+    status: Literal["CLARIFICATION_REQUIRED", "NUDGE_SUPPRESSED"] | None,
+
     retry_safe: bool | None,
     previous_phase: Phase | None = None,
 ) -> InteractionResponse:
@@ -1464,8 +1491,8 @@ def _generate_explain_again(session: SessionRecord) -> tuple[str, str]:
         )
     active_support, highest_support = _support_levels(session)
     cue = _schema_visual_cue(session.student_model_event)
-    response = client.generate_explain_again_response(
-        ExplainAgainRequest(
+    response = client.generate_explain_again_message(
+        request=ExplainAgainRequest(
             question=session.current_question,
             generated_question_rubric=session.generated_question_rubric,
             active_teaching_objective=session.active_teaching_objective,
@@ -1479,11 +1506,20 @@ def _generate_explain_again(session: SessionRecord) -> tuple[str, str]:
                 ExplainAgainConversationMessage(role=item.role, content=item.content)
                 for item in session.conversation_history
             ],
-            visible_cue=(
-                ExplainAgainVisualCue.model_validate(cue.model_dump())
+            visible_visual_cue=(
+                AIVisibleVisualCue(
+                    show=cue.show,
+                    cue_id=cue.cue_type,
+                    cue_type=None,
+                    description=cue.description,
+                    actions=cue.actions,
+                )
                 if cue is not None
                 else None
             ),
+
+
+
             active_scaffold=_active_scaffold(session),
             support_state=ExplainAgainSupportState(
                 active_support_level=active_support,
@@ -1497,9 +1533,11 @@ def _generate_explain_again(session: SessionRecord) -> tuple[str, str]:
             selected_error_code=session.selected_error_code,
             misconception_evidence=_misconception_evidence(session),
         ),
-        _EXPLAIN_AGAIN_SYSTEM_PROMPT,
     )
-    return response.tutor_message, response.tutor_message_voice
+
+    voice_msg = getattr(response, "tutor_message_voice_optimised", getattr(response, "tutor_message_voice", response.tutor_message))
+    return response.tutor_message, voice_msg
+
 
 
 def _claim_inactivity_nudge(
@@ -1638,7 +1676,360 @@ def _side_channel_response(
     return _cache_response(request, response)
 
 
+
+def _contextual_nudge_message(session: SessionRecord) -> str:
+    if session.current_scaffold_step_id is not None and session.scaffold_steps:
+        return (
+            "I'm still here with you. Look at the current step: "
+            f"{session.scaffold_steps[0]} What would you try?"
+        )
+    if session.current_question is not None:
+        return (
+            "I'm still here with you. Looking at the question, what is the first "
+            "thing you would try?"
+        )
+    return "I'm still here with you. Tell me what you are thinking so far."
+
+
+def _nudge_eligible(session: SessionRecord, now: datetime) -> bool:
+    policy = inactivity_policy()
+    elapsed_ms = int((now - session.last_tutor_response_at).total_seconds() * 1000)
+    if session.expected_student_response == "NONE":
+        return False
+    if elapsed_ms < policy.initial_idle_threshold_ms:
+        return False
+    if session.nudge_presented_count >= policy.max_nudges_per_tutor_turn:
+        return False
+    if session.nudge_generated_count >= policy.generated_nudge_rate_limit:
+        return False
+    if session.last_nudge_generated_at is None:
+        return True
+    cooldown_ms = int((now - session.last_nudge_generated_at).total_seconds() * 1000)
+    return cooldown_ms >= policy.cooldown_ms
+
+
+def _nudge_response(
+    request: InteractionRequest,
+    session: SessionRecord,
+    message: str,
+    status: Literal["GENERATED", "PRESENTED"] | None,
+    state_updates: dict[str, object],
+) -> InteractionResponse:
+    updated_session = update_interaction_state(
+        request.session_id,
+        request.student_id,
+        session,
+        session.current_phase,
+        session.hint_count,
+        session.current_phase,
+        request.transcript_confidence,
+        request.canvas_snapshot_id,
+        None,
+        session.show_visual_cue,
+        session.show_scaffold_panel,
+        session.scaffold_steps,
+        state_updates,
+    )
+    response = _response_from(
+        request,
+        updated_session,
+        message,
+        message,
+        None,
+        updated_session.scaffold_steps,
+        None,
+        "WAIT_FOR_STUDENT",
+        0,
+        "NUDGE_SUPPRESSED" if status is None else None,
+        True,
+    )
+    delivery = (
+        NudgeDelivery(
+            interaction_id=(
+                request.turn_id if status == "GENERATED" else (request.nudge_id or request.turn_id)
+            ),
+            status=status,
+            message=message,
+        )
+        if status is not None
+        else None
+    )
+
+
+    return _cache_response(
+        request,
+        response.model_copy(update={"nudge_delivery": delivery}),
+    )
+
+
+def _claim_inactivity_nudge(
+    request: InteractionRequest,
+    session: SessionRecord,
+) -> InteractionResponse:
+    now = datetime.now(timezone.utc)
+    base_updates: dict[str, object] = {
+        "last_processed_turn_id": request.turn_id,
+        "last_tutor_action": session.last_tutor_action,
+        "expected_student_response": session.expected_student_response,
+    }
+    if not _nudge_eligible(session, now):
+        return _nudge_response(
+            request,
+            session,
+            "",
+
+            None,
+            base_updates,
+        )
+    message = _contextual_nudge_message(session)
+    return _nudge_response(
+        request,
+        session,
+        message,
+        "GENERATED",
+        {
+            **base_updates,
+            "nudge_generated_count": session.nudge_generated_count + 1,
+            "last_nudge_generated_at": now,
+            "pending_nudge_id": request.turn_id,
+            "pending_nudge_message": message,
+        },
+    )
+
+
+def _acknowledge_inactivity_nudge(
+    request: InteractionRequest,
+    session: SessionRecord,
+) -> InteractionResponse:
+    if (
+        request.nudge_id != session.pending_nudge_id
+        or session.pending_nudge_message is None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="UNKNOWN_NUDGE: nudge_id does not name the pending generated nudge.",
+        )
+    rules = load_classifier_rules()
+    history = [
+        *session.conversation_history,
+        ConversationMessage(role="assistant", content=session.pending_nudge_message),
+    ]
+    if rules.conversation_rules.max_recent_messages == 0:
+        history = []
+    else:
+        history = history[-rules.conversation_rules.max_recent_messages :]
+    return _nudge_response(
+        request,
+        session,
+        session.pending_nudge_message,
+        "PRESENTED",
+        {
+            "last_processed_turn_id": request.turn_id,
+            "last_tutor_action": session.last_tutor_action,
+            "expected_student_response": session.expected_student_response,
+            "nudge_presented_count": session.nudge_presented_count + 1,
+            "pending_nudge_id": None,
+            "pending_nudge_message": None,
+            "conversation_history": history,
+        },
+    )
+
+
+def _recorded_misconception(
+    session: SessionRecord,
+    selected_error_code: str | None,
+) -> RecordedMisconception | None:
+    if selected_error_code is None:
+        return None
+    for potential_error in _schema_question(session).tutor_view.potential_errors:
+        error_code = potential_error.get("error_code")
+        description = potential_error.get("description") or potential_error.get(
+            "error_description"
+        )
+        if error_code == selected_error_code and isinstance(description, str):
+            return RecordedMisconception(
+                error_code=selected_error_code,
+                description=description,
+            )
+    raise RuntimeError(
+        f"Selected error {selected_error_code} has no current question metadata."
+    )
+
+
+def _active_scaffold_for_explain_again(
+    session: SessionRecord,
+) -> ActiveScaffoldState | None:
+    if (
+        session.scaffold_id is None
+        or session.current_scaffold_step_id is None
+        or session.scaffold_step_number < 1
+        or session.scaffold_total_steps < 1
+        or not session.scaffold_steps
+    ):
+        return None
+    return ActiveScaffoldState(
+        scaffold_id=session.scaffold_id,
+        current_step_id=session.current_scaffold_step_id,
+        step_number=session.scaffold_step_number,
+        total_steps=session.scaffold_total_steps,
+        step_text=session.scaffold_steps[0],
+        step_voice=session.scaffold_steps[0],
+    )
+
+
+def _visible_visual_cue_for_explain_again(
+    visual_cue: VisualCue | None,
+) -> AIVisibleVisualCue | None:
+    if visual_cue is None:
+        return None
+    return AIVisibleVisualCue(
+        show=visual_cue.show,
+        cue_id=visual_cue.cue_type,
+        cue_type=None,
+        description=visual_cue.description,
+        actions=visual_cue.actions,
+    )
+
+
+def _explain_again_interaction_response(
+    request: InteractionRequest,
+    session: SessionRecord,
+) -> InteractionResponse:
+    if session.current_phase != "GUIDED_PRACTICE":
+        raise HTTPException(
+            status_code=409,
+            detail="EXPLAIN_AGAIN is currently available only in Guided Practice.",
+        )
+    if session.question_id is None or session.current_question is None:
+        raise HTTPException(
+            status_code=409,
+            detail="EXPLAIN_AGAIN requires an active question.",
+        )
+    answer_spec = _active_answer_spec(session)
+    context = _phase_2_prompt_context(session)
+    if answer_spec is None or context is None:
+        raise HTTPException(
+            status_code=409,
+            detail="EXPLAIN_AGAIN requires the active Guided Practice answer contract.",
+        )
+    rules = load_classifier_rules()
+    openai_client = build_openai_ai_engine_client(get_settings())
+    if openai_client is None:
+        raise AdapterError(
+            "openai_ai_engine",
+            "Explain Again requires an enabled OpenAI AI-engine client.",
+        )
+    rubric = resolve_guided_rubric(
+        question_id=session.question_id,
+        question_type=session.question_type,
+        question=session.current_question,
+        answer_spec=answer_spec,
+        potential_errors=guided_error_definitions(context.potential_errors),
+        target_micro_skill_ids=context.target_micro_skill_ids,
+        existing_rubric=session.generated_question_rubric,
+        rules=rules,
+        openai_client=openai_client,
+    )
+    objective = session.active_teaching_objective or initial_guided_objective(rubric)
+    if not objective.missing_concept_ids:
+        raise HTTPException(
+            status_code=409,
+            detail="EXPLAIN_AGAIN has no unresolved Guided Practice component.",
+        )
+    visual_cue = (
+        _schema_visual_cue(session.student_model_event)
+        if session.show_visual_cue
+        else None
+    )
+    active_support_level, highest_support_used = _guided_support_levels(session)
+    recorded_misconception = _recorded_misconception(
+        session,
+        session.selected_error_code,
+    )
+    result = generate_explain_again_response(
+        ExplainAgainRequest(
+            question_id=session.question_id,
+            question=session.current_question,
+            answer_spec=answer_spec,
+            generated_question_rubric=rubric,
+            active_teaching_objective=objective,
+            first_unresolved_concept_id=objective.missing_concept_ids[0],
+            guided_student_state=session.guided_student_state,
+            selected_error_code=session.selected_error_code,
+            recorded_misconception=recorded_misconception,
+            recent_conversation=session.conversation_history,
+            active_support_level=active_support_level,
+            highest_support_used=highest_support_used,
+            visible_visual_cue=_visible_visual_cue_for_explain_again(visual_cue),
+            active_scaffold=_active_scaffold_for_explain_again(session),
+            answer_reveal_allowed=False,
+        )
+    )
+    if result.progression_change_requested:
+        raise RuntimeError("Explain Again requested a forbidden progression change.")
+    history = [
+        *session.conversation_history,
+        ConversationMessage(role="assistant", content=result.tutor_message),
+    ]
+    max_messages = rules.conversation_rules.max_recent_messages
+    if max_messages == 0:
+        history = []
+    else:
+        history = history[-max_messages:]
+    updated_session = update_interaction_state(
+        request.session_id,
+        request.student_id,
+        session,
+        session.current_phase,
+        session.hint_count,
+        session.current_phase,
+        request.transcript_confidence,
+        request.canvas_snapshot_id,
+        None,
+        session.show_visual_cue,
+        session.show_scaffold_panel,
+        session.scaffold_steps,
+        {
+            **_turn_updates(request, "ASKED_QUESTION", "ANSWER"),
+            "generated_question_rubric": rubric,
+            "active_teaching_objective": objective,
+            "conversation_history": history,
+        },
+    )
+    response = _response_from(
+        request,
+        updated_session,
+        result.tutor_message,
+        result.tutor_message_voice_optimised,
+        visual_cue,
+        updated_session.scaffold_steps,
+        None,
+        "ASK_QUESTION",
+        0,
+        None,
+        True,
+    ).model_copy(
+        update={
+            "guided_student_state": result.guided_student_state,
+            "active_teaching_objective": result.active_teaching_objective,
+            "first_unresolved_concept_id": result.first_unresolved_concept_id,
+            "selected_error_code": result.selected_error_code,
+            "evaluation_reason_code": result.evaluation_reason_code,
+            "support_served_this_turn": None,
+            "active_support_level": result.active_support_level,
+            "highest_support_used": result.highest_support_used,
+            "active_scaffold": (
+                result.active_scaffold.model_dump()
+                if result.active_scaffold is not None
+                else None
+            ),
+        }
+    )
+    return _cache_response(request, response)
+
+
 async def _process_interaction(
+
     request: InteractionRequest,
     access_token: str,
 ) -> InteractionResponse | StaleTurnResponse:
@@ -1687,29 +2078,12 @@ async def _process_interaction(
             _tutor_side_channel_updates(request, session, message),
         )
     if request.interaction_type == "INACTIVITY_NUDGE":
-        delivery = _claim_inactivity_nudge(request, session)
-        response = _side_channel_response(
-            request,
-            session,
-            delivery.message if delivery is not None else "",
-            delivery.message_voice if delivery is not None else "",
-            "WAIT_FOR_STUDENT",
-            _nudge_side_channel_updates(request, session, None),
-        )
-        if delivery is None:
-            response = response.model_copy(update={"status": "NUDGE_SUPPRESSED"})
-            return _cache_response(request, response)
-        return response
+        nudge_res = _claim_inactivity_nudge(request, session)
+        return nudge_res
+
     if request.interaction_type == "NUDGE_PRESENTED":
-        delivery = _acknowledge_inactivity_nudge(request, session)
-        return _side_channel_response(
-            request,
-            session,
-            delivery.message,
-            delivery.message_voice,
-            "WAIT_FOR_STUDENT",
-            _nudge_side_channel_updates(request, session, delivery.message),
-        )
+        return _acknowledge_inactivity_nudge(request, session)
+
 
     student_message = _student_message_from(request)
     rules: ClassifierRulesConfig = load_classifier_rules()

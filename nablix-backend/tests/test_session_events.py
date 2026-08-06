@@ -1168,6 +1168,12 @@ def test_student_model_request_ids_are_stable_across_retries() -> None:
 
 
 def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> None:
+    atomic_settings = Settings(student_model_atomic_guided_events_enabled=True)
+    monkeypatch.setattr(
+        interaction_service,
+        "get_settings",
+        lambda: atomic_settings,
+    )
     events: list[dict[str, object]] = []
 
     async def fake_post_json(
@@ -1312,6 +1318,8 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
         else:
             assert len(events) == event_count_before_stuck + 1
             assert events[-1]["event_type"] == "GUIDED_SUPPORT_ESCALATION_REQUIRED"
+
+
             assert events[-1]["micro_skill_id"] == "T02.M1"
             assert stuck.json()["scaffold_step_text"] == (
                 "Which operation should you undo first?"

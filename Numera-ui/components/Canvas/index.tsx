@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useAuthStore, isConsentActive } from '@/store/useAuthStore';
+import type { SchemaQuestionOption } from '@/lib/api';
 import { useDemoTutor } from '@/hooks/useDemoTutor';
 import { gridBackground, GRID_OPTIONS } from '@/lib/canvasGrid';
 import { tutorSay } from '@/lib/tutorSpeech';
@@ -53,6 +54,32 @@ export default function CanvasStage() {
   // held cue still qualifies on its own, for the offline/demo path.
   const hasTutorTurn = useNumeraStore((s) => s.transcript.some((m) => m.role === 'ai'));
   const canReplayCue = Boolean(visualCueType ?? visualCueDescription) || hasTutorTurn;
+
+  // Choice questions. The pick is recorded and the option text goes into the
+  // answer box, because the interaction contract carries no option id — an
+  // answer travels as `text_input` either way. That also keeps one submit path
+  // rather than a second one that only choice questions use.
+  //
+  // The text is REPLACED, not appended: re-picking after changing your mind
+  // should swap the answer, not leave both options sitting in the box. Anything
+  // the student typed after the option is preserved.
+  const questionType = useNumeraStore((s) => s.questionType);
+  const questionOptions = useNumeraStore((s) => s.questionOptions);
+  const selectedOptionId = useNumeraStore((s) => s.selectedOptionId);
+  const setSelectedOption = useNumeraStore((s) => s.setSelectedOption);
+  const setTextInput = useNumeraStore((s) => s.setTextInput);
+  const pickOption = useCallback(
+    (option: SchemaQuestionOption) => {
+      const s = useNumeraStore.getState();
+      const previous = s.questionOptions.find((o) => o.option_id === s.selectedOptionId);
+      const trailing = previous
+        ? s.textInput.replace(previous.text, '').trimStart()
+        : s.textInput.trimStart();
+      setSelectedOption(option.option_id);
+      setTextInput(trailing ? `${option.text} ${trailing}` : option.text);
+    },
+    [setSelectedOption, setTextInput],
+  );
   const { explainAgain } = tutor;
   const replayCue = useCallback(() => { void explainAgain(); }, [explainAgain]);
 
@@ -109,11 +136,26 @@ export default function CanvasStage() {
           A bare equation gets the "Solve for x:" lead-in and maths type; anything
           with its own wording (e.g. a word problem) is shown verbatim as prose
           that wraps. See lib/questionText.ts. */}
-      <div className="absolute top-[26px] left-[34px] right-[34px] flex items-start gap-3 z-10">
+      {/* The right padding is what keeps this clear of TeachBack, which pins
+          "Explain it back" to the same corner (right-[34px]) at a higher
+          z-index. Without it "Explain again" renders underneath and is simply
+          invisible — which is exactly how it went missing in testing (Sanya,
+          5 Aug). It also stops a long question running under that button.
+
+          150px because that button measures 131px with the app's own styles;
+          the rest is the gap. If its label changes, re-measure. */}
+      <div className="absolute top-[26px] left-[34px] right-[34px] flex items-start gap-3 z-10 pr-[150px]">
         <div className="w-[30px] h-[30px] rounded-md border border-muted-gray bg-reading-surface flex items-center justify-center text-xs font-semibold text-slate-blue flex-shrink-0">
           {questionNumber}
         </div>
-        <QuestionDisplay question={questionText} size="lesson" />
+        <QuestionDisplay
+          question={questionText}
+          size="lesson"
+          questionType={questionType}
+          options={questionOptions}
+          selectedOptionId={selectedOptionId}
+          onSelectOption={pickOption}
+        />
         {/* §2: "Explain Again — replays the current concept visually without
             counting as an attempt." It deliberately makes no request: replaying
             what the tutor already showed cannot be graded, so there is no way
