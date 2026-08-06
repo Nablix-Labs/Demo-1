@@ -316,6 +316,8 @@ async def start_session(
         access_token,
     )
     payload = _validate_session_opened_payload(event)
+    if payload.phase != event.phase_payload.phase:
+        event = event.model_copy(update={"phase_payload": payload})
     phase = PHASE_FROM_STUDENT_MODEL[payload.phase]
     flags = UI_STATE_FLAGS[phase]
     question_updates = _question_updates(event)
