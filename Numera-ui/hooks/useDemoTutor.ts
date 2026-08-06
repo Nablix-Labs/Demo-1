@@ -32,7 +32,6 @@ import {
 import { applyInteractionSupport, acceptResponse } from '@/lib/interactionPresentation';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { tutorSay, setStudentWriting } from '@/lib/tutorSpeech';
-import { speakBrowser } from '@/lib/tts';
 import {
   availableSupport,
   nextSupport,
@@ -377,7 +376,6 @@ export function useDemoTutor() {
     const acknowledgementFinished = new Promise<void>((resolve) => {
       tutorSay(EXPLAIN_AGAIN_ACKNOWLEDGEMENT, {
         onEnd: resolve,
-        speak: speakBrowser,
       });
     });
     try {
