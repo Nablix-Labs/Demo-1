@@ -1,4 +1,4 @@
-from enum import StrEnum
+from enum import Enum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
@@ -30,7 +30,7 @@ GuidedRoutingReasonCode = Literal[
 ]
 
 
-class EvaluationReasonCode(StrEnum):
+class EvaluationReasonCode(str, Enum):
     ALL_REQUIRED_COMPONENTS_CONFIRMED = "ALL_REQUIRED_COMPONENTS_CONFIRMED"
     REQUIRED_COMPONENTS_MISSING = "REQUIRED_COMPONENTS_MISSING"
     RESPONSE_INCORRECT = "RESPONSE_INCORRECT"
@@ -38,7 +38,7 @@ class EvaluationReasonCode(StrEnum):
     RESPONSE_UNCLEAR = "RESPONSE_UNCLEAR"
 
 
-class WrongEscalationCode(StrEnum):
+class WrongEscalationCode(str, Enum):
     WRONG_1_HINT = "WRONG_1_HINT"
     WRONG_2_HINT = "WRONG_2_HINT"
     WRONG_3_VISUAL_CUE = "WRONG_3_VISUAL_CUE"
