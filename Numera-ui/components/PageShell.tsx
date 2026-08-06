@@ -17,25 +17,54 @@ import { cn } from '@/lib/cn';
  */
 const MEASURE = 'mx-auto w-full max-w-[1080px]';
 
+/**
+ * The wider measure, for pages that are a grid of cards rather than prose.
+ * Capping those at the reading measure stranded them in a narrow column on a
+ * large screen and pushed everything below the fold for no reason. Opt-in, so
+ * the pages that are genuinely prose keep their readable line length.
+ */
+const MEASURE_WIDE = 'mx-auto w-full max-w-[1500px]';
+
 export default function PageShell({
   title,
   subtitle,
   action,
+  wide = false,
   children,
 }: {
   title: string;
   subtitle?: string;
   action?: ReactNode;
+  /** Use the wide measure and tighter gutters. For card grids, not prose. */
+  wide?: boolean;
   children: ReactNode;
 }) {
+  const measure = wide ? MEASURE_WIDE : MEASURE;
+  const gutter = wide ? 'px-6' : 'px-10';
+  /*
+   * The surface is opaque, not glass.
+   *
+   * This used `.lg-glass`, which is `rgba(255,255,255,0.6)` over the app's
+   * ambient shader — so the vivid gradient read straight through every library
+   * page. Body text sat on a moving blue wash, contrast failed, and nothing
+   * registered as a surface sitting ON something. Glass is right for chrome
+   * floating over a lesson; it is wrong for a page you read.
+   *
+   * Changed here rather than in `.lg-glass` itself: that class is shared with
+   * the app chrome, where the effect is doing its job.
+   */
   return (
-    <main className="lg-glass flex-1 min-w-0 flex flex-col rounded-2xl m-2 overflow-hidden" aria-label={title}>
+    <main
+      className="flex-1 min-w-0 flex flex-col rounded-2xl m-2 overflow-hidden bg-white border border-white/60"
+      style={{ boxShadow: '0 10px 34px rgba(11,16,32,0.18)' }}
+      aria-label={title}
+    >
       {/* Header and body share one centred measure. Previously the header ran
           the full width while pages set their own (usually narrower) max-width,
           so the title floated far left of the content it belonged to and the
           whole page hung off the top-left corner of a wide screen. */}
-      <header className="border-b border-white/40 px-10 py-8 flex-shrink-0">
-        <div className={cn(MEASURE, 'flex items-end justify-between gap-4')}>
+      <header className={cn('border-b border-white/40 py-8 flex-shrink-0', gutter)}>
+        <div className={cn(measure, 'flex items-end justify-between gap-4')}>
           <div>
             <h1 className="text-[30px] font-semibold text-ink leading-[1.15] tracking-[-0.02em]">
               {title}
@@ -45,8 +74,13 @@ export default function PageShell({
           {action}
         </div>
       </header>
-      <div className="flex-1 overflow-y-auto px-10 py-9">
-        <div className={MEASURE}>{children}</div>
+      {/* pb clears the dock. It floats bottom-centre over this surface, so
+          without it the last row of any page is unreachable — you can scroll
+          to the bottom and the dock is still sitting on top of it. Padding
+          belongs on the scroll container, not on AppFrame: this is the element
+          that actually scrolls. */}
+      <div className={cn('flex-1 overflow-y-auto pt-9 pb-32', gutter)}>
+        <div className={measure}>{children}</div>
       </div>
     </main>
   );
