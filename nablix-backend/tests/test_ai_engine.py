@@ -2895,16 +2895,16 @@ def test_guided_multipart_completes_from_accumulated_component_evidence(
 ) -> None:
     class _GuidedClient:
         def evaluate_guided_turn(self, **kwargs):
-            if kwargs["student_response"] == "c + 4":
+            if kwargs["student_response"] == "c + 4 and c changes":
                 return GuidedEvaluation(
                     student_state="PARTIAL",
-                    newly_confirmed_concept_ids=["REQUIRED_COMPONENT_1"],
+                    newly_confirmed_concept_ids=[
+                        "REQUIRED_COMPONENT_1",
+                        "REQUIRED_COMPONENT_2",
+                    ],
                     preserved_concept_ids=[],
                     contradicted_concept_ids=[],
-                    missing_concept_ids=[
-                        "REQUIRED_COMPONENT_2",
-                        "REQUIRED_COMPONENT_3",
-                    ],
+                    missing_concept_ids=["REQUIRED_COMPONENT_3"],
                     selected_error_code=None,
                     confidence=0.98,
                     next_objective=None,
@@ -2913,13 +2913,13 @@ def test_guided_multipart_completes_from_accumulated_component_evidence(
                 )
             return GuidedEvaluation(
                 student_state="PARTIAL",
-                newly_confirmed_concept_ids=[
+                newly_confirmed_concept_ids=[],
+                preserved_concept_ids=[
+                    "REQUIRED_COMPONENT_1",
                     "REQUIRED_COMPONENT_2",
-                    "REQUIRED_COMPONENT_3",
                 ],
-                preserved_concept_ids=["REQUIRED_COMPONENT_1"],
                 contradicted_concept_ids=[],
-                missing_concept_ids=[],
+                missing_concept_ids=["REQUIRED_COMPONENT_3"],
                 selected_error_code=None,
                 confidence=0.98,
                 next_objective=None,
@@ -2953,11 +2953,11 @@ def test_guided_multipart_completes_from_accumulated_component_evidence(
         "current_hint_level": None,
     }
     first = classify_student_response(
-        ClassificationRequest(student_input="c + 4", **common_request)
+        ClassificationRequest(student_input="c + 4 and c changes", **common_request)
     )
     second = classify_student_response(
         ClassificationRequest(
-            student_input="c changes and +4 stays fixed",
+            student_input="+4 is fixed",
             generated_question_rubric=first.generated_question_rubric,
             active_teaching_objective=first.active_teaching_objective,
             **common_request,

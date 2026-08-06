@@ -617,6 +617,11 @@ def classify_guided_learning_response(
                 evaluator_prompt_version=rules.guided_learning.evaluator_prompt_version,
                 system_prompt=rules.guided_learning.evaluator_system_prompt,
             )
+            candidate = merge_authored_component_evidence(
+                candidate,
+                rubric,
+                request.student_input,
+            )
             raw_student_state = candidate.student_state
             raw_confidence = candidate.confidence
             evaluation = validate_guided_evaluation(
@@ -810,6 +815,68 @@ def validate_generated_rubric(
                 "concepts for every answer component."
             ),
         )
+
+
+_COMPONENT_TOKEN_ALIASES = {
+    "added": "add",
+    "adding": "add",
+    "adds": "add",
+    "changed": "change",
+    "changes": "change",
+    "changing": "change",
+    "constant": "fixed",
+    "remains": "stay",
+    "stays": "stay",
+    "unchanged": "fixed",
+}
+_COMPONENT_LINKING_TOKENS = {"a", "an", "is", "the", "stay"}
+_NEGATION_PATTERN = re.compile(r"\b(?:not|isn't|isnt|doesn't|doesnt|never)\b")
+
+
+def component_evidence_tokens(value: str) -> set[str]:
+    """Normalize harmless wording differences in one authored answer part."""
+
+    normalized_tokens = {
+        _COMPONENT_TOKEN_ALIASES.get(token, token)
+        for token in normalize_semantic_answer(value).split()
+    }
+    return normalized_tokens - _COMPONENT_LINKING_TOKENS
+
+
+def authored_component_is_demonstrated(
+    component: GeneratedConcept,
+    response_tokens: set[str],
+) -> bool:
+    if not component.concept_id.startswith("REQUIRED_COMPONENT_"):
+        return False
+    required_tokens = component_evidence_tokens(component.description)
+    return bool(required_tokens) and required_tokens.issubset(response_tokens)
+
+
+def merge_authored_component_evidence(
+    evaluation: GuidedEvaluation,
+    rubric: GeneratedQuestionRubric,
+    student_input: str,
+) -> GuidedEvaluation:
+    """Confirm clear lexical paraphrases without replacing semantic LLM review."""
+
+    if _NEGATION_PATTERN.search(student_input.lower()) is not None:
+        return evaluation
+    response_tokens = component_evidence_tokens(student_input)
+    demonstrated_ids = {
+        component.concept_id
+        for component in rubric.required_concepts
+        if authored_component_is_demonstrated(component, response_tokens)
+    }
+    if not demonstrated_ids:
+        return evaluation
+    contradicted_ids = set(evaluation.contradicted_concept_ids)
+    confirmed_ids = (
+        set(evaluation.newly_confirmed_concept_ids) | demonstrated_ids
+    ) - contradicted_ids
+    return evaluation.model_copy(
+        update={"newly_confirmed_concept_ids": sorted(confirmed_ids)}
+    )
 
 
 def initial_guided_objective(
