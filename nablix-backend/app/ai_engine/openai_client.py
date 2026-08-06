@@ -33,6 +33,8 @@ from app.core.logger import logger
 from app.models.adapters import ConversationMessage, ConversationState, Phase2PromptContext
 from app.models.guided_learning import (
     ActiveTeachingObjective,
+    FocusedComponentEvidence,
+    GeneratedConcept,
     GeneratedQuestionRubric,
     GuidedEvaluation,
     ScaffoldEvaluationContext,
@@ -324,6 +326,53 @@ class OpenAIAIEngineClient:
                 "openai_ai_engine",
                 f"invalid guided evaluation: {error}",
             ) from error
+
+    def adjudicate_component_evidence(
+        self,
+        question_type: QuestionType | None,
+        question: str,
+        answer_spec: AnswerSpec,
+        target_component: GeneratedConcept,
+        active_objective: ActiveTeachingObjective,
+        student_response: str,
+        input_source: InputSource,
+        recent_conversation: list[ConversationMessage],
+        prompt_version: str,
+        system_prompt: str,
+    ) -> FocusedComponentEvidence:
+        content = self._request_guided_json(
+            name="guided_component_adjudication",
+            schema=FocusedComponentEvidence.model_json_schema(),
+            system_prompt=system_prompt,
+            user_payload={
+                "question_type": question_type,
+                "question": question,
+                "answer_spec": answer_spec.model_dump(),
+                "target_component": target_component.model_dump(),
+                "active_objective": active_objective.model_dump(),
+                "student_response": student_response,
+                "input_source": input_source,
+                "recent_conversation": [
+                    message.model_dump() for message in recent_conversation
+                ],
+                "prompt_version": prompt_version,
+            },
+        )
+        try:
+            evidence = FocusedComponentEvidence.model_validate(content)
+        except ValidationError as error:
+            raise AdapterError(
+                "openai_ai_engine",
+                f"invalid focused component evidence: {error}",
+            ) from error
+        if evidence.component_id != target_component.concept_id:
+            raise AdapterError(
+                "openai_ai_engine",
+                "Focused component evidence returned an unexpected component ID: "
+                f"expected={target_component.concept_id}, "
+                f"actual={evidence.component_id}.",
+            )
+        return evidence
 
     def evaluate_scaffold_step(
         self,

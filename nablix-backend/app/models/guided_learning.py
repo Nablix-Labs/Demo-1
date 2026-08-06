@@ -4,6 +4,11 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 
 GuidedStudentState = Literal["CORRECT", "PARTIAL", "WRONG", "STUCK", "UNCLEAR"]
+ComponentEvidenceStatus = Literal[
+    "DEMONSTRATED",
+    "CONTRADICTED",
+    "NOT_DEMONSTRATED",
+]
 EvaluationReasonCode = Literal[
     "ALL_REQUIRED_COMPONENTS_CONFIRMED",
     "REQUIRED_COMPONENTS_MISSING",
@@ -101,6 +106,13 @@ class GuidedEvaluation(GuidedLearningModel):
     next_objective: ActiveTeachingObjective | None
     tutor_message: str = Field(min_length=1)
     tutor_message_voice: str = Field(min_length=1)
+
+
+class FocusedComponentEvidence(GuidedLearningModel):
+    component_id: str = Field(min_length=1)
+    status: ComponentEvidenceStatus
+    evidence: str | None
+    confidence: float = Field(ge=0.0, le=1.0)
 
 
 class ScaffoldEvaluationContext(GuidedLearningModel):

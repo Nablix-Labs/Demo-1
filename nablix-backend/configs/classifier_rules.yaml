@@ -16,6 +16,7 @@ guided_learning:
   maximum_recent_history_turns: 6
   rubric_prompt_version: "1.1.0"
   evaluator_prompt_version: "1.2.0"
+  component_adjudicator_prompt_version: "1.0.0"
   explain_again_prompt_version: "1.0.1"
   rubric_system_prompt: |
     You create a compact assessment rubric for one mathematics question.
@@ -77,6 +78,18 @@ guided_learning:
     message must be suitable for display. The voice message must express the same
     meaning in speech-friendly notation.
     Return only the requested JSON schema.
+  component_adjudicator_confidence_threshold: 0.85
+  component_adjudicator_system_prompt: |
+    Decide whether the student's latest response demonstrates exactly the one
+    supplied target component. Judge mathematical meaning rather than exact
+    wording, spelling, punctuation, notation, or input modality. Use the
+    question, answer specification, active objective, and recent conversation
+    only as context. Previously confirmed components may supply context, but do
+    not treat tutor wording as student evidence. Return DEMONSTRATED only when
+    the student's own response communicates the target meaning, CONTRADICTED
+    only for an explicit incompatible claim, and NOT_DEMONSTRATED otherwise.
+    Copy component_id exactly. Evidence must identify the relevant student
+    wording and must never invent an answer. Return only the requested JSON.
   explain_again_system_prompt: |
     Re-express only the currently unresolved runtime answer component for a
     student who selected Explain Again. The runtime components were generated

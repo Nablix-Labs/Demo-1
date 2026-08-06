@@ -41,6 +41,7 @@ from app.models.adapters import (
 from app.models.student_model_session import AnswerSpec
 from app.models.guided_learning import (
     ActiveTeachingObjective,
+    FocusedComponentEvidence,
     GeneratedConcept,
     GeneratedQuestionRubric,
     GuidedEvaluation,
@@ -2601,6 +2602,19 @@ def test_guided_general_rule_explanation_accepts_clear_paraphrases(
                 ),
                 tutor_message="Please provide a more complete explanation.",
                 tutor_message_voice="Please provide a more complete explanation.",
+            )
+
+        def adjudicate_component_evidence(
+            self,
+            **kwargs: object,
+        ) -> FocusedComponentEvidence:
+            target_component = kwargs["target_component"]
+            assert isinstance(target_component, GeneratedConcept)
+            return FocusedComponentEvidence(
+                component_id=target_component.concept_id,
+                status="DEMONSTRATED",
+                evidence=student_input,
+                confidence=0.96,
             )
 
     monkeypatch.setattr(

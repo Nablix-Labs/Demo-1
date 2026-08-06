@@ -47,6 +47,7 @@ from app.models.adapters import (
 )
 from app.models.guided_learning import (
     ActiveTeachingObjective,
+    FocusedComponentEvidence,
     GeneratedConcept,
     GeneratedQuestionRubric,
     GuidedEvaluation,
@@ -729,6 +730,63 @@ def classify_guided_learning_response(
                 "openai_ai_engine",
                 "Guided turn evaluation failed without a validated response.",
             )
+    adjudication_target = component_adjudication_target(
+        evaluation,
+        objective,
+        rubric,
+        request.student_input,
+        request.question,
+        request.answer_spec,
+    )
+    adjudicator = getattr(openai_client, "adjudicate_component_evidence", None)
+    if adjudication_target is not None and callable(adjudicator):
+        logger.info(
+            "guided_component_adjudication_started",
+            extra={
+                "question_id": request.question_id,
+                "component_id": adjudication_target.concept_id,
+            },
+        )
+        evidence = adjudicator(
+            question_type=request.question_type,
+            question=request.question,
+            answer_spec=request.answer_spec,
+            target_component=adjudication_target,
+            active_objective=objective,
+            student_response=request.student_input,
+            input_source=request.input_source,
+            recent_conversation=request.conversation_history[
+                -rules.guided_learning.maximum_recent_history_turns:
+            ],
+            prompt_version=(
+                rules.guided_learning.component_adjudicator_prompt_version
+            ),
+            system_prompt=(
+                rules.guided_learning.component_adjudicator_system_prompt
+            ),
+        )
+        evaluation = apply_focused_component_evidence(
+            evaluation,
+            evidence,
+            rules.guided_learning.component_adjudicator_confidence_threshold,
+        )
+        evaluation = validate_guided_evaluation(
+            evaluation,
+            rubric,
+            objective,
+            allowed_errors,
+            rules,
+        )
+        logger.info(
+            "guided_component_adjudication_completed",
+            extra={
+                "question_id": request.question_id,
+                "component_id": evidence.component_id,
+                "status": evidence.status,
+                "confidence": evidence.confidence,
+                "student_state": evaluation.student_state,
+            },
+        )
     if is_authoritative_guided_completion(request):
         evaluation = authoritative_guided_completion(evaluation, rules)
     next_objective = normalized_guided_objective(evaluation, objective)
@@ -891,32 +949,6 @@ def authored_component_is_demonstrated(
     response_tokens: set[str],
     normalized_response: str,
 ) -> bool:
-    component_kind = normalize_semantic_answer(
-        f"{component.concept_id} {component.description}"
-    )
-    asks_for_general_rule_explanation = (
-        any(
-            token in component_kind
-            for token in ("explanation", "explain", "reason", "why")
-        )
-        and "general rule" in component_kind
-    )
-    if asks_for_general_rule_explanation:
-        compact_response = normalized_response.replace(" ", "")
-        communicates_generality = (
-            "variable" in response_tokens
-            or "varies" in response_tokens
-            or "different value" in normalized_response
-            or "different number" in normalized_response
-            or "any value" in normalized_response
-            or "any number" in normalized_response
-            or "anyvalue" in compact_response
-            or "anynumber" in compact_response
-            or "can change" in normalized_response
-            or "not specific" in normalized_response
-        )
-        if communicates_generality:
-            return True
     if not component.concept_id.startswith("REQUIRED_COMPONENT_"):
         return False
     required_tokens = component_evidence_tokens(component.description)
@@ -949,6 +981,105 @@ def merge_authored_component_evidence(
     confirmed_ids = (
         set(evaluation.newly_confirmed_concept_ids) | demonstrated_ids
     ) - contradicted_ids
+    return evaluation.model_copy(
+        update={"newly_confirmed_concept_ids": sorted(confirmed_ids)}
+    )
+
+
+def significant_component_tokens(value: str) -> set[str]:
+    """Return cheap relevance tokens while retaining numbers and variables."""
+
+    tokens = set(normalize_semantic_answer(value).split())
+    ignored = {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "be",
+        "because",
+        "briefly",
+        "can",
+        "does",
+        "explain",
+        "for",
+        "how",
+        "is",
+        "it",
+        "of",
+        "or",
+        "the",
+        "this",
+        "to",
+        "what",
+        "which",
+        "why",
+        "with",
+    }
+    return {
+        token
+        for token in tokens - ignored
+        if len(token) >= 3 or token.isdigit() or token.isalpha() and len(token) == 1
+    }
+
+
+def component_adjudication_target(
+    evaluation: GuidedEvaluation,
+    objective: ActiveTeachingObjective,
+    rubric: GeneratedQuestionRubric,
+    student_response: str,
+    question: str,
+    answer_spec: AnswerSpec,
+) -> GeneratedConcept | None:
+    """Select one unresolved component only for a relevant PARTIAL response."""
+
+    if (
+        evaluation.student_state != "PARTIAL"
+        or evaluation.contradicted_concept_ids
+        or not objective.confirmed_concept_ids
+        or not evaluation.missing_concept_ids
+        or not student_response.strip()
+    ):
+        return None
+    missing_ids = set(evaluation.missing_concept_ids)
+    target = next(
+        (
+            component
+            for component in rubric.required_concepts
+            if component.required and component.concept_id in missing_ids
+        ),
+        None,
+    )
+    if target is None:
+        return None
+    response_tokens = significant_component_tokens(student_response)
+    context = " ".join(
+        [
+            target.description,
+            question,
+            answer_spec.canonical_answer,
+            *answer_spec.accepted_answers,
+        ]
+    )
+    if not response_tokens.intersection(significant_component_tokens(context)):
+        return None
+    return target
+
+
+def apply_focused_component_evidence(
+    evaluation: GuidedEvaluation,
+    evidence: FocusedComponentEvidence,
+    confidence_threshold: float,
+) -> GuidedEvaluation:
+    """Use the focused pass only to correct a high-confidence false negative."""
+
+    if (
+        evidence.status != "DEMONSTRATED"
+        or evidence.confidence < confidence_threshold
+    ):
+        return evaluation
+    confirmed_ids = set(evaluation.newly_confirmed_concept_ids)
+    confirmed_ids.add(evidence.component_id)
     return evaluation.model_copy(
         update={"newly_confirmed_concept_ids": sorted(confirmed_ids)}
     )
