@@ -419,7 +419,9 @@ def _validate_session_opened_payload(
         event.journey_state.recommended_entry_phase
         or event.journey_state.current_phase
     )
-    if payload.phase != expected_phase:
+    if payload.phase != expected_phase and not (
+        expected_phase == "PHASE_3_INDEPENDENT_PRACTICE" and payload.phase == "REVIEW"
+    ):
         raise HTTPException(
             status_code=503,
             detail=(
