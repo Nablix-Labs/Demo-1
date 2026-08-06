@@ -371,6 +371,9 @@ export function useDemoTutor() {
     const turnId = useNumeraStore.getState().beginSubmissionTurn();
     addTranscriptMessage({ role: 'ai', text: EXPLAIN_AGAIN_ACKNOWLEDGEMENT });
     addTrailEntry({ kind: 'tutor', text: EXPLAIN_AGAIN_ACKNOWLEDGEMENT });
+    // Explain Again is an explicit handoff from the student to the tutor, even
+    // when the canvas still contains unsubmitted marks.
+    setStudentWriting(false);
     const acknowledgementFinished = new Promise<void>((resolve) => {
       tutorSay(EXPLAIN_AGAIN_ACKNOWLEDGEMENT, {
         onEnd: resolve,
