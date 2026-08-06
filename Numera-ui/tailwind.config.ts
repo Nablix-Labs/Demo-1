@@ -23,6 +23,22 @@ const config: Config = {
         'reading-surface': '#F4F6F9', // Main learning canvas — explanation cards
         'off-white':       '#FAFAFA', // High-whitespace surface — page background
         'muted-gray':      '#E0E2E5', // Borders / inactive — dividers, disabled
+
+        // Book component (components/ui/book.tsx). Named for the design system
+        // it came from so the component reads unmodified against its source.
+        // `gray-200` is deliberately NOT redefined here: the original used its
+        // own scale, and overriding Tailwind's would silently restyle every
+        // other screen that uses bg-gray-200.
+        'background-200':  '#FAFAFA',
+        'gray-alpha-400':  'rgba(0,0,0,0.08)',
+      },
+      boxShadow: {
+        book: '0 1px 1px 0 rgba(0,0,0,.02), 0 4px 8px -4px rgba(0,0,0,.1), 0 16px 24px -8px rgba(0,0,0,.03)',
+        'book-border': 'inset 0 1px 2px 0 rgba(255,255,255,.3)',
+      },
+      backgroundImage: {
+        // The lower half of a cover: paper catching light from above.
+        'book-gradient': 'linear-gradient(180deg, #FFFFFF 0%, #F4F4F5 100%)',
       },
       fontFamily: {
         // Clean, readable sans-serif. Cognitive clarity over decorative fonts.
