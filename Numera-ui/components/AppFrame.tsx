@@ -26,20 +26,20 @@ const FOCUS_ROUTES = ['/onboard', '/diagnostic', '/orientation', '/teach', '/com
 /**
  * Routes where a lesson is actually in progress.
  *
- * The tool rail is hidden here. Not for tidiness — it does not work. Routing
+ * The dock is hidden here. Not for tidiness — it does not work. Routing
  * follows the backend's current_phase and usePhaseRouting re-asserts it on every
  * path change, so a student who clicks Workbook mid-lesson is pushed back to the
  * lesson within a second. Verified live on 2026-07-29: Workbook, Key Notes and
  * History all bounced straight back to `/`.
  *
  * Eleven controls that visibly do nothing are worse than no controls, so the
- * rail now appears only where a student can genuinely go somewhere — between
- * lessons, on the library screens. The learning flow is a flow; the rail is for
+ * dock now appears only where a student can genuinely go somewhere — between
+ * lessons, on the library screens. The learning flow is a flow; the dock is for
  * the places either side of it.
  */
 const TUTORING_ROUTES = ['/', '/practice'];
 
-const ToolRail = dynamic(() => import('./ToolRail'), { ssr: false });
+const Dock = dynamic(() => import('./Dock'), { ssr: false });
 const MediaPanel = dynamic(() => import('./MediaPanel'), { ssr: false });
 const VoicePicker = dynamic(() => import('./VoicePicker'), { ssr: false });
 const LogOutButton = dynamic(() => import('./LogOutButton'), { ssr: false });
@@ -141,9 +141,13 @@ export default function AppFrame({ children }: { children: ReactNode }) {
 
   return (
     <AuthGate>
-      {!tutoring && <ToolRail />}
-      {/* The tool rail is hidden on the tutoring routes so the lesson gets the
-          full width — but those are not FOCUS_ROUTES either, so they were the
+      {/* Tucked away on the lesson routes rather than absent. The lesson gets
+          its full width and the canvas keeps bottom-centre, but pushing the
+          pointer to the bottom edge always brings navigation back — so
+          tapping Lesson from the Workbook is no longer a one-way door. */}
+      <Dock autoHide={tutoring} />
+      {/* The dock is hidden on the tutoring routes so the lesson gets the
+          full screen — but those are not FOCUS_ROUTES either, so they were the
           only screens in the app with no way out. A student in guided or
           independent practice could not sign out at all (Manjusha, 4 Aug).
           Same cluster and same corner as focus mode, so it is where anyone who

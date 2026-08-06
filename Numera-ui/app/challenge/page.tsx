@@ -74,7 +74,10 @@ export default function ChallengePage() {
 
   // ── Active challenge ──
   return (
-    <div className="flex-1 min-w-0 flex flex-col bg-white" aria-label="Group challenge room">
+    // pb clears the dock. This is the one dock route that does not use
+    // PageShell, and AITutorBar docks flush to the bottom — exactly where the
+    // dock floats — so the tutor's voice bar needs lifting above it.
+    <div className="flex-1 min-w-0 flex flex-col bg-white pb-32" aria-label="Group challenge room">
       {/* Header */}
       <header className="flex items-center gap-4 px-6 py-3.5 border-b border-muted-gray flex-shrink-0">
         <div className="min-w-0">

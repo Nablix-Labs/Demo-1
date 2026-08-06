@@ -84,6 +84,15 @@ interface StudentProfile {
   ageBand: string;   // e.g. "11-14 (KS3)"
   gradeBand: string; // e.g. "Year 9"
   preferredMode: 'voice' | 'text' | 'balanced';
+  /**
+   * Profile photo as a data URL, set from the profile page.
+   *
+   * Downscaled to 256px square before it gets here. The whole store is
+   * persisted to localStorage, and a full-size phone photo is several MB of
+   * base64 — enough to blow the ~5MB quota and take every other persisted key
+   * down with it.
+   */
+  avatar?: string | null;
 }
 
 interface Guardian {
