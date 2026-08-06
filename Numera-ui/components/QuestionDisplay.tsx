@@ -12,29 +12,128 @@
  */
 
 import { questionLayout } from '@/lib/questionText';
+import type { QuestionType, SchemaQuestionOption } from '@/lib/api';
+import { cn } from '@/lib/cn';
 
 // Set via `style` rather than an arbitrary Tailwind class: the class would have
 // to be interpolated, and Tailwind's scanner only sees class strings written out
 // literally — an interpolated one silently produces no CSS at all.
 const MATHS_FONT = { fontFamily: 'Cambria Math, Georgia, serif' } as const;
 
+/**
+ * The choices for a question that has them.
+ *
+ * Labelled A, B, C rather than left bare: the tutor refers to options by letter
+ * when it speaks, and a student answering by voice needs something to say. The
+ * letter is positional and comes from the order the Student Model sent, so it
+ * matches what the tutor is looking at.
+ *
+ * Selecting is not submitting. CHOICE_WITH_EXPLANATION wants the reasoning as
+ * well as the pick, and the interaction contract has no `option_id` field — the
+ * answer travels as `text_input` — so choosing writes the option into the answer
+ * box and leaves the student to finish the sentence.
+ */
+function Options({
+  options,
+  selectedId,
+  onSelect,
+  requiresExplanation,
+}: {
+  options: SchemaQuestionOption[];
+  selectedId: string | null;
+  onSelect: (option: SchemaQuestionOption) => void;
+  requiresExplanation: boolean;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5" role="radiogroup" aria-label="Answer options">
+      {options.map((option, i) => {
+        const selected = option.option_id === selectedId;
+        return (
+          <button
+            key={option.option_id}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            onClick={() => onSelect(option)}
+            className={cn(
+              'group flex items-center gap-2.5 rounded-lg border px-3 py-2 text-left text-[14px] transition-colors',
+              selected
+                ? 'border-focus-navy bg-focus-navy/5 text-ink font-medium'
+                : 'border-muted-gray bg-white text-ink hover:bg-reading-surface',
+            )}
+          >
+            <span
+              className={cn(
+                'flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md border text-[11px] font-semibold',
+                selected
+                  ? 'border-focus-navy bg-focus-navy text-white'
+                  : 'border-muted-gray bg-reading-surface text-slate-blue',
+              )}
+              aria-hidden="true"
+            >
+              {String.fromCharCode(65 + i)}
+            </span>
+            <span style={MATHS_FONT}>{option.text}</span>
+          </button>
+        );
+      })}
+      {requiresExplanation && (
+        <p className="text-[12px] text-slate-blue mt-0.5">
+          {selectedId
+            ? 'Now say or write why you picked it.'
+            : 'Pick one, then explain why.'}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function QuestionDisplay({
   question,
   size = 'lesson',
+  questionType = null,
+  options = [],
+  selectedOptionId = null,
+  onSelectOption,
 }: {
   question: string;
   /** `lesson` is the full canvas header; `compact` is the practice header. */
   size?: 'lesson' | 'compact';
+  /** Drives whether options render. Null renders the question alone. */
+  questionType?: QuestionType | null;
+  options?: SchemaQuestionOption[];
+  selectedOptionId?: string | null;
+  onSelectOption?: (option: SchemaQuestionOption) => void;
 }) {
   const layout = questionLayout(question);
   const equationSize = size === 'lesson' ? 'text-[22px]' : 'text-[16px]';
   const proseSize = size === 'lesson' ? 'text-[17px]' : 'text-[14px]';
 
+  // A question that expects a choice but arrived with none falls back to free
+  // response. Rendering an empty chooser would leave the student looking at a
+  // question with no way to answer it.
+  const showOptions = Boolean(onSelectOption) && options.length > 0 && questionType !== null
+    && questionType !== 'SHORT_RESPONSE' && questionType !== 'MULTI_PART_SHORT_RESPONSE';
+  const requiresExplanation =
+    questionType === 'CHOICE_WITH_EXPLANATION' || questionType === 'TRUE_FALSE_WITH_EXPLANATION';
+
+  const optionList = showOptions ? (
+    <Options
+      options={options}
+      selectedId={selectedOptionId}
+      onSelect={onSelectOption!}
+      requiresExplanation={requiresExplanation}
+    />
+  ) : null;
+
   if (layout.kind === 'equation') {
     return (
-      <div className={`${equationSize} font-semibold text-ink`}>
-        Solve for <span className="italic" style={MATHS_FONT}>x</span>:{' '}
-        <span style={MATHS_FONT}>{layout.text}</span>
+      <div className="flex flex-col gap-3">
+        <div className={`${equationSize} font-semibold text-ink`}>
+          Solve for <span className="italic" style={MATHS_FONT}>x</span>:{' '}
+          <span style={MATHS_FONT}>{layout.text}</span>
+        </div>
+        {optionList}
       </div>
     );
   }
@@ -68,6 +167,7 @@ export default function QuestionDisplay({
             {layout.instruction}
           </p>
         )}
+        {optionList}
       </div>
     );
   }
@@ -76,10 +176,13 @@ export default function QuestionDisplay({
   // are deliberate, and collapsing them is what flattened the stacked cases in
   // the first place — while still letting long lines wrap.
   return (
-    <p
-      className={`${proseSize} font-semibold text-ink leading-snug max-w-[62ch] whitespace-pre-line`}
-    >
-      {layout.text}
-    </p>
+    <div className="flex flex-col gap-3">
+      <p
+        className={`${proseSize} font-semibold text-ink leading-snug max-w-[62ch] whitespace-pre-line`}
+      >
+        {layout.text}
+      </p>
+      {optionList}
+    </div>
   );
 }

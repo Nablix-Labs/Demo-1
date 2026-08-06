@@ -10,7 +10,16 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import type { LearningPhase } from '@/lib/phases';
 import type { FlowStage } from '@/lib/flow';
 import { TOPICS } from '@/lib/topics';
-import { DEMO_CONCEPT_ID, type ActiveScaffold, type SessionRecord, type SessionReview, type SessionSummary } from '@/lib/api';
+import {
+  DEMO_CONCEPT_ID,
+  studentViewFor,
+  type ActiveScaffold,
+  type QuestionType,
+  type SchemaQuestionOption,
+  type SessionRecord,
+  type SessionReview,
+  type SessionSummary,
+} from '@/lib/api';
 import { uid } from '@/lib/uid';
 import type { SupportRung } from '@/lib/supportLadder';
 import { EMPTY_APPLIED, type AppliedState } from '@/lib/responseGate';
@@ -164,6 +173,22 @@ export interface NumeraState {
   // orientation and attached the next turn to a question that was already done.
   activeConceptId: string;
   activeQuestionId: string | null;
+
+  // How the current question expects to be answered, and the choices it offers.
+  //
+  // The Student Model sends both — `question_type` on the interaction reply,
+  // `options` once on the session record — and until now the frontend read
+  // neither, so every question rendered as free response no matter what it was.
+  // A CHOICE_WITH_EXPLANATION question showed its text and nothing to choose
+  // from.
+  //
+  // Empty rather than null when there are no options, so callers can render the
+  // list unconditionally. `selectedOptionId` is the student's current pick; it
+  // is deliberately NOT persisted (see partialize) — a choice belongs to the
+  // attempt being made, not to the browser.
+  questionType: QuestionType | null;
+  questionOptions: SchemaQuestionOption[];
+  selectedOptionId: string | null;
 
   // Tutoring phase the session is in. Seeded from the session's current_phase
   // and advanced from each interaction response's current_phase — the value we
@@ -319,7 +344,11 @@ export interface NumeraState {
     phase: string;
     questionId: string | null;
     questionText: string | null;
+    /** From the interaction reply. Falls back to the session record's view. */
+    questionType?: QuestionType | null;
   }) => void;
+  /** The student picked an option. Null clears the pick. */
+  setSelectedOption: (optionId: string | null) => void;
   setQuestionNumber: (n: number) => void;
   setActiveEquation: (conceptId: string, questionId: string, label?: string) => void;
   setCurrentPhase: (phase: string) => void;
@@ -419,7 +448,7 @@ export interface NumeraState {
 const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
-  | 'setQuestionText' | 'applyBackendPhase' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn'
+  | 'setQuestionText' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn'
   | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue'
   | 'setSupportShown' | 'setLastHintText' | 'setQuestionProgress' | 'setAppliedResponse' | 'setInactivityPolicy'
   | 'addTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript' | 'commitPartialTranscript'
@@ -459,6 +488,9 @@ const initial: Omit<
   // routing the student to the lesson screen before the backend had spoken.
   activeConceptId: DEMO_CONCEPT_ID,
   activeQuestionId: null,
+  questionType: null as QuestionType | null,
+  questionOptions: [] as SchemaQuestionOption[],
+  selectedOptionId: null as string | null,
   currentPhase: '',
   backendSession: null,
   sessionSummary: null,
@@ -561,7 +593,7 @@ export const useNumeraStore = create<NumeraState>()(
    *     `current_question`; treating that as "no question" blanked the canvas
    *     while the student was still working on it (Manjusha, 2026-07-29).
    */
-  applyBackendPhase: ({ phase, questionId, questionText }) =>
+  applyBackendPhase: ({ phase, questionId, questionText, questionType }) =>
     set((s) => {
       const phaseChanged = phase !== s.currentPhase;
       const text = questionText?.trim() ?? '';
@@ -573,10 +605,17 @@ export const useNumeraStore = create<NumeraState>()(
       // already finished (Sanya, 2026-07-29). Moving question or phase drops
       // it; the backend re-sends a cue when the new question needs one.
       const questionChanged = nextQuestionId !== s.activeQuestionId || phaseChanged;
+      // Options live on the session record, not on the reply, so they have to be
+      // looked up by id every time the question moves. The reply's own
+      // `question_type` wins when it sent one — it is the more current of the
+      // two — and the record's view fills in when it didn't.
+      const view = studentViewFor(s.backendSession, nextQuestionId);
       return {
         currentPhase: phase,
         activeQuestionId: nextQuestionId,
         questionText: text || (phaseChanged ? '' : s.questionText),
+        questionType: questionType ?? view?.question_type ?? (questionChanged ? null : s.questionType),
+        questionOptions: view?.options ?? (questionChanged ? [] : s.questionOptions),
         // The support ladder is per-question too (§6: support is requested one
         // rung at a time for the question being worked on). Carrying `supportShown`
         // across a question boundary would leave the next question's "Need help?"
@@ -588,10 +627,15 @@ export const useNumeraStore = create<NumeraState>()(
               visualCueDescription: null,
               supportShown: null,
               lastHintText: null,
+              // A pick belongs to the question it was made on. Carrying it over
+              // would show the next question opening with an answer already
+              // chosen.
+              selectedOptionId: null,
             }
           : {}),
       };
     }),
+  setSelectedOption: (selectedOptionId) => set({ selectedOptionId }),
   setQuestionNumber: (questionNumber) => set({ questionNumber }),
 
   // Switch the question the session runs on. Clearing sessionId makes the lesson

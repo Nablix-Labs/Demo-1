@@ -27,6 +27,7 @@ import {
   studentFacingError,
   type InteractionResponse,
   type NudgeDelivery,
+  type QuestionType,
 } from '@/lib/api';
 import { applyInteractionSupport, acceptResponse } from '@/lib/interactionPresentation';
 import { useNumeraStore } from '@/store/useNumeraStore';
@@ -139,6 +140,13 @@ function syncBackendSession(response: {
   current_phase: string;
   current_question: string | null;
   question_id: string | null;
+  /**
+   * How the question expects to be answered. Present on both the session record
+   * and every interaction reply, and until now read from neither — so a
+   * CHOICE_WITH_EXPLANATION question rendered as free response, with its options
+   * sitting unused on the record.
+   */
+  question_type?: QuestionType | null;
   inactivity_policy?: {
     initial_idle_threshold_ms: number;
     cooldown_ms: number;
@@ -157,6 +165,7 @@ function syncBackendSession(response: {
     phase: response.current_phase,
     questionId: response.question_id,
     questionText: response.current_question,
+    questionType: response.question_type ?? null,
   });
 
   // Progress rail (§2). The denominator only exists on the session record's
@@ -421,11 +430,25 @@ export function useDemoTutor() {
     return res.nudge_delivery;
   }, [sessionId]);
 
+  /**
+   * Deliver an authorised nudge: one chat line, spoken once.
+   *
+   * It has to land in the transcript as well as the speaker. Speaking it alone
+   * meant a voice arrived with nothing on screen to account for it — the
+   * student hears the tutor start talking and there is no message anywhere
+   * explaining why, which is how it read in testing ("the tutor starts speaking
+   * randomly", Sanya, 5 Aug). A line the student can see and scroll back to is
+   * a nudge; a disembodied voice is an interruption.
+   *
+   * Still not a tutor turn: no turn ids, no support state, no trail entry,
+   * because the student has not done anything to respond to.
+   */
   const presentInactivityNudge = useCallback(
     (delivery: NudgeDelivery): void => {
-      tutorSay(delivery.message);
+      addTranscriptMessage({ role: 'ai', text: delivery.message });
+      tutorSay(delivery.message, { afterMarks: true });
     },
-    [],
+    [addTranscriptMessage],
   );
 
   const acknowledgeInactivityNudge = useCallback(
