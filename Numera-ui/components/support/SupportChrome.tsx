@@ -15,7 +15,7 @@ import SupportPanel from './SupportPanel';
 import RemoteAssistBanner from './RemoteAssistBanner';
 
 /** Screens shown before a student is signed in. Kept in step with AppFrame. */
-const PRE_AUTH_ROUTES = ['/login', '/onboard', '/consent', '/restricted'];
+const PRE_AUTH_ROUTES = ['/login', '/onboard', '/consent', '/restricted', '/dev-screens'];
 
 export default function SupportChrome() {
   const pathname = usePathname();

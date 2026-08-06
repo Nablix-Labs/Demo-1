@@ -349,3 +349,47 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .teach-fade-up, .teach-bob, .teach-pop { animation: none; }
 }
+
+/* ── Book (components/ui/book.tsx) ────────────────────────────────────────────
+   The binding gradient — the band of light and shade running down the hinge of
+   a hardback. Two stacked gradients: highlights, then the shadow that sits in
+   the groove. It is applied through `mix-blend-overlay`, so it works over any
+   cover colour without being retinted per book. */
+:root {
+  --ds-book-bind:
+    linear-gradient(90deg,
+      rgba(255,255,255,0), rgba(255,255,255,0) 12%,
+      rgba(255,255,255,0.25) 29.25%, rgba(255,255,255,0) 50.5%,
+      rgba(255,255,255,0) 75.25%, rgba(255,255,255,0.25) 91%,
+      rgba(255,255,255,0)),
+    linear-gradient(90deg,
+      rgba(0,0,0,0.03), rgba(0,0,0,0.1) 12%, rgba(0,0,0,0) 30%,
+      rgba(0,0,0,0.02) 50%, rgba(0,0,0,0.2) 73.5%, rgba(0,0,0,0.5) 75.25%,
+      rgba(0,0,0,0.15) 85.25%, rgba(0,0,0,0));
+}
+
+/* Cloth tooth on the cover. The source used a remote .avif from Vercel's CDN;
+   this is generated instead, so the app ships no third-party asset request and
+   nothing breaks when that URL moves. */
+.book-texture {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='t'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.4' numOctaves='5'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23t)' opacity='0.42'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+}
+
+/* The tilt. Transform-only, so it runs on the compositor rather than through
+   requestAnimationFrame, which the embedded browser pane suppresses. */
+.book-rotate {
+  transition: transform 250ms cubic-bezier(0.22, 1, 0.36, 1);
+  transform: rotateY(0deg);
+}
+.group\/book:hover .book-rotate,
+.book-rotate:hover {
+  transform: rotateY(-22deg) translateX(-4px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .book-rotate, .group\/book:hover .book-rotate, .book-rotate:hover {
+    transition: none;
+    transform: none;
+  }
+}
