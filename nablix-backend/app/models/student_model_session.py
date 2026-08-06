@@ -1,4 +1,4 @@
-from enum import StrEnum
+from enum import Enum
 from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -23,7 +23,7 @@ SupportUsed = Literal[
 ]
 
 
-class RoutingReasonCode(StrEnum):
+class RoutingReasonCode(str, Enum):
     DIAGNOSTIC_STARTED = "DIAGNOSTIC_STARTED"
     DIAGNOSTIC_GAPS_FOUND = "DIAGNOSTIC_GAPS_FOUND"
     DIAGNOSTIC_NO_GAPS = "DIAGNOSTIC_NO_GAPS"
