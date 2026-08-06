@@ -7,11 +7,14 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from app.models.adapters import ConversationAction
 from app.models.guided_learning import (
     ActiveScaffold,
+    ActiveScaffold as ActiveScaffoldState,
     ActiveTeachingObjective,
     GeneratedQuestionRubric,
     GuidedStudentState,
 )
-from app.models.student_model_session import SupportUsed
+
+from app.models.student_model_session import AnswerSpec, SupportUsed
+
 
 
 EvaluationCategory = Literal[
@@ -134,16 +137,29 @@ class ExplainAgainVisualCue(StrictSchema):
 
 
 class ExplainAgainRequest(StrictSchema):
-    question: str = Field(min_length=1)
-    generated_question_rubric: GeneratedQuestionRubric | None
-    active_teaching_objective: ActiveTeachingObjective | None
-    first_unresolved_concept_id: str | None
-    recent_conversation: list[ExplainAgainConversationMessage]
-    visible_cue: ExplainAgainVisualCue | None
-    active_scaffold: ActiveScaffold | None
-    support_state: ExplainAgainSupportState
-    selected_error_code: str | None
-    misconception_evidence: str | None
+    question_id: str | None = None
+    question: str | None = None
+    concept_id: str | None = None
+    current_phase: LearningPhase | None = None
+    generated_question_rubric: GeneratedQuestionRubric | None = None
+    active_teaching_objective: ActiveTeachingObjective | None = None
+    first_unresolved_concept_id: str | None = None
+    recent_conversation: list[object] = Field(default_factory=list)
+    visible_cue: ExplainAgainVisualCue | None = None
+    active_scaffold: ActiveScaffoldState | None = None
+    support_state: ExplainAgainSupportState | None = None
+    selected_error_code: str | None = None
+    misconception_evidence: str | None = None
+    recorded_misconception: RecordedMisconception | None = None
+    guided_student_state: GuidedStudentState | None = None
+    active_support_level: SupportUsed | None = None
+    highest_support_used: SupportUsed | None = None
+    visible_visual_cue: VisualCue | None = None
+    answer_reveal_allowed: StrictBool = False
+    answer_spec: AnswerSpec | None = None
+    session_id: str | None = None
+    student_id: str | None = None
+
 
 
 class ExplainAgainResponse(StrictSchema):
@@ -259,3 +275,39 @@ class TutorResponse(StrictSchema):
     generated_question_rubric: GeneratedQuestionRubric | None = None
     active_teaching_objective: ActiveTeachingObjective | None = None
     scaffold_original_answer_correct: StrictBool = False
+
+
+class ExplainAgainResult(StrictSchema):
+    interaction_type: str = "EXPLAIN_AGAIN"
+    tutor_message: str
+    tutor_message_voice_optimised: str
+    confidence: float
+    attempt_increment: int = 0
+    evaluation_reason_code: str
+    guided_student_state: GuidedStudentState | None = None
+    active_teaching_objective: ActiveTeachingObjective | None = None
+    first_unresolved_concept_id: str | None = None
+    selected_error_code: str | None = None
+    support_served_this_turn: SupportUsed | None = None
+    active_support_level: SupportUsed | None = None
+    highest_support_used: SupportUsed | None = None
+    active_scaffold: ActiveScaffoldState | None = None
+    progression_change_requested: StrictBool = False
+
+
+
+class OpenAIExplainAgainMessage(StrictSchema):
+    tutor_message: str
+    tutor_message_voice_optimised: str
+    confidence: float
+    answer_reveal_risk: StrictBool = False
+
+
+class RecordedMisconception(StrictSchema):
+    error_code: str
+    description: str
+
+
+
+
+

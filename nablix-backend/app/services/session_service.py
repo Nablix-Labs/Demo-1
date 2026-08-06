@@ -365,8 +365,8 @@ async def start_session(
         ),
         inactivity_policy=inactivity_policy(),
         last_tutor_turn_id=f"TUTOR-{uuid4()}",
-        last_tutor_response_at=started_at,
         scaffold_step_number=_restore_counter(
+
             phase_state,
             "current_scaffold_step_number",
             0,

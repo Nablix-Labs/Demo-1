@@ -194,9 +194,32 @@ class CanvasFeedback(BaseModel):
     highlight_instruction: HighlightInstruction | None = None
 
 
+class SpatialMathToken(BaseModel):
+    token_id: str
+    step_id: str
+    text: str
+    latex: str | None = None
+    role: Literal[
+        "number",
+        "identifier",
+        "operator",
+        "fraction_bar",
+        "radical",
+        "fence",
+        "unknown",
+    ] = "unknown"
+    semantic_path: str = ""
+    stroke_ids: list[str] = Field(default_factory=list)
+    bounding_box: dict[str, float] = Field(default_factory=dict)  # x, y, width, height in 0..1
+    alignment_confidence: float = 1.0
+
+
 class TutorMistakeClassification(BaseModel):
     status: Literal["mistake_found", "no_mistake", "uncertain"]
     mistake_step_id: str | None = None
+    target_token_ids: list[str] = Field(default_factory=list)
+    error_token: str | None = None
+    expected_token: str | None = None
     target_text: str | None = None
     target_span: tuple[int, int] | None = None
     replacement_text: str | None = None
@@ -208,6 +231,7 @@ class AnnotationIntent(BaseModel):
     target_step_id: str
     text: str | None = None
     placement: Literal["right", "below"] | None = None
+
 
 
 class TutorResult(BaseModel):
