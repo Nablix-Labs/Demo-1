@@ -74,14 +74,35 @@ describe('partial → final leaves exactly one bubble', () => {
     expect(partials()).toHaveLength(0);
   });
 
-  it('two consecutive turns leave two bubbles, not four', () => {
+  it('two finals in one breath-separated answer leave ONE bubble, not four', () => {
+    /*
+     * This asserted two bubbles until 6 Aug, on the assumption that a fresh
+     * partial after a final meant a fresh turn. It does not: streaming ASR
+     * sends partials, a final, more partials and another final all inside one
+     * continuous answer — one per breath. That assumption is what turned a
+     * single spoken answer into six bubbles in front of Manjusha.
+     *
+     * The original intent of this test — that nothing is DUPLICATED, no partial
+     * left stranded beside its final — is unchanged and still asserted. Only
+     * the count changed, because the definition of a turn did.
+     */
     const s = useNumeraStore.getState();
     s.updatePartialTranscript('n minus');
     s.commitPartialTranscript('n minus 5');
     s.updatePartialTranscript('n plus');
     s.commitPartialTranscript('n plus 5');
 
-    expect(texts()).toEqual(['n minus 5', 'n plus 5']);
+    expect(texts()).toEqual(['n minus 5 n plus 5']);
+    expect(partials()).toHaveLength(0);
+  });
+
+  it('a tutor reply between them does split them into two bubbles', () => {
+    const s = useNumeraStore.getState();
+    s.commitPartialTranscript('n minus 5');
+    s.addTranscriptMessage({ role: 'ai', text: 'Are you sure?' });
+    s.commitPartialTranscript('n plus 5');
+
+    expect(texts()).toEqual(['n minus 5', 'Are you sure?', 'n plus 5']);
     expect(partials()).toHaveLength(0);
   });
 });

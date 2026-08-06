@@ -18,10 +18,11 @@ today, but **nothing survives a different device or a cleared browser.**
 | Identity | Name | `student.name` (onboarding, local) | **Yes** |
 | Identity | Photo | `student.avatar`, data URL in `localStorage` | **Yes** |
 | Identity | Year / age band | `student.gradeBand` / `.ageBand` (local) | **Yes** |
-| Identity | Account status | `accountStatus` (local state machine) | **Yes** |
+| Identity | Account status | `accountStatus` (local state machine) — drives the access gate, no longer shown as a chip | **Yes** |
 | Identity | Plan / tier | `tier` from `POST /auth/login` | Already real |
 | Identity | Student code | `studentCode` from login | Partially — see §5 |
-| Learning flow | 6 phase segments | `phasesDone` (local, written by the manual flow) | **Yes** |
+| Learning flow | 6 phase pills + green checklist card | `phasesDone` (local, written by the manual flow) | **Yes** |
+| Header | Profile set-up % | counted from filled fields, client-side | No |
 | Topic progress | % unlocked | derived from `phasesDone` | **Yes** |
 | How you learn | Tutor input mode | `inputMode` (local, drives the lesson) | **Yes** (sync) |
 | How you learn | Panel side | `panelSide` (local) | **Yes** (sync) |

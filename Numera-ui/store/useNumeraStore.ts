@@ -100,6 +100,17 @@ export interface TranscriptMessage {
   role: 'ai' | 'student';
   text: string;
   partial?: boolean; // true while still transcribing
+  /**
+   * The student is still mid-turn — more speech may join this message.
+   *
+   * Streaming ASR emits a FINAL at every speech-final point, which in practice
+   * means every breath the student takes. Committing each one as its own
+   * message turned one spoken answer into six bubbles ("Okay. I think the
+   * answer for this question is" / "option b." / "Again, plus four." / …,
+   * Manjusha 6 Aug). How many bubbles a turn becomes is a presentation
+   * decision, so it is made here rather than blamed on the transcriber.
+   */
+  open?: boolean;
   timestamp: number;
 }
 
@@ -696,8 +707,14 @@ export const useNumeraStore = create<NumeraState>()(
 
   addTranscriptMessage: (msg) =>
     set((s) => ({
+      // Anything the tutor says ends the student's turn, so the next thing they
+      // say starts a new bubble instead of joining the last one. This is the
+      // only place the turn closes, because it is the only true signal: the
+      // tutor answering IS the turn being over.
       transcript: [
-        ...s.transcript,
+        ...(msg.role === 'ai'
+          ? s.transcript.map((m) => (m.open ? { ...m, open: false } : m))
+          : s.transcript),
         { ...msg, id: uid(), timestamp: Date.now() },
       ],
     })),
@@ -748,13 +765,27 @@ export const useNumeraStore = create<NumeraState>()(
   commitPartialTranscript: (text) =>
     set((s) => {
       const existing = s.transcript.find((m) => m.partial);
+      const settled = s.transcript.filter((m) => !m.partial);
+      const last = settled[settled.length - 1];
+
+      // Still the same spoken turn: join this segment onto it rather than
+      // starting another bubble. The turn is closed by the tutor replying, in
+      // addTranscriptMessage.
+      if (last && last.role === 'student' && last.open) {
+        const joined = `${last.text} ${text}`.replace(/\s+/g, ' ').trim();
+        return {
+          transcript: [...settled.slice(0, -1), { ...last, text: joined }],
+        };
+      }
+
       return {
         transcript: [
-          ...s.transcript.filter((m) => !m.partial),
+          ...settled,
           {
             id: existing?.id ?? uid(),
             role: 'student',
             text,
+            open: true,
             timestamp: existing?.timestamp ?? Date.now(),
           },
         ],
