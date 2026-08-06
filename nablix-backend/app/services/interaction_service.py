@@ -717,12 +717,15 @@ async def _initialize_restored_schema_phase(
         missing_question = session.current_question is None or session.question_id is None
         if phase_state.status != "NOT_STARTED" and not missing_question:
             return session
+
         target_micro_skill_ids = (
             phase_state.target_micro_skill_ids
             if phase_state.status == "NOT_STARTED"
             else phase_state.remaining_micro_skill_ids
         )
         if not target_micro_skill_ids:
+            if not missing_question:
+                return session
             raise HTTPException(
                 status_code=503,
                 detail=(
@@ -748,12 +751,15 @@ async def _initialize_restored_schema_phase(
         missing_question = session.current_question is None or session.question_id is None
         if phase_state.status != "NOT_STARTED" and not missing_question:
             return session
+
         target_micro_skill_ids = (
             phase_state.target_micro_skill_ids
             if phase_state.status == "NOT_STARTED"
             else phase_state.remaining_micro_skill_ids
         )
         if not target_micro_skill_ids:
+            if not missing_question:
+                return session
             raise HTTPException(
                 status_code=503,
                 detail=(
@@ -761,6 +767,7 @@ async def _initialize_restored_schema_phase(
                     "without a question or remaining target skills."
                 ),
             )
+
         support_by_skill = (
             event.journey_state.phase_2_guided_learning.highest_support_used_by_skill
         )
