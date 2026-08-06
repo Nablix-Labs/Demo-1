@@ -9,7 +9,6 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import SlideDots from '@/components/SlideDots';
 import CanvasStage from '@/components/Canvas';
 import ContinuityCheck from '@/components/ContinuityCheck';
 import FloatingMicButton from '@/components/FloatingMicButton';
@@ -234,7 +233,10 @@ export default function LessonPage() {
 
   return (
     <>
-      <SlideDots />
+      {/* SlideDots (the "Lesson progress" rail) is off for guided practice.
+          It sat as a 34px glass column wedged between the tutor panel and the
+          canvas, reading as a stray bar rather than as progress, and this phase
+          is one question at a time so there is no sequence for it to track. */}
       <CanvasStage />
       <ContinuityCheck />
       <FloatingMicButton />
