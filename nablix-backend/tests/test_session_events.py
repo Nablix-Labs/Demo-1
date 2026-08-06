@@ -1176,6 +1176,12 @@ def test_student_model_request_ids_are_stable_across_retries() -> None:
 
 
 def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> None:
+    atomic_settings = Settings(student_model_atomic_guided_events_enabled=True)
+    monkeypatch.setattr(
+        interaction_service,
+        "get_settings",
+        lambda: atomic_settings,
+    )
     events: list[dict[str, object]] = []
 
     async def fake_post_json(

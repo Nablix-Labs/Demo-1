@@ -22,7 +22,7 @@ from app.ai_engine.schemas import (
     ActiveScaffoldState,
     ExplainAgainRequest,
     RecordedMisconception,
-    VisualCue as AIVisualCue,
+    VisibleVisualCue as AIVisibleVisualCue,
 )
 from app.core.config import get_settings
 from app.core.exceptions import AdapterError
@@ -198,8 +198,12 @@ async def process_answer_with_session_event(
         if response_is_wrong
         else session.wrong_attempt_count
     )
+    atomic_guided_events_enabled = (
+        get_settings().student_model_atomic_guided_events_enabled
+    )
     wrong_four_escalation = (
-        schema_managed
+        atomic_guided_events_enabled
+        and schema_managed
         and session.current_phase == "GUIDED_PRACTICE"
         and event_type == "INCORRECT_ATTEMPT"
         and response_is_wrong
@@ -238,7 +242,11 @@ async def process_answer_with_session_event(
             else (
                 "MAXIMUM_GUIDED_SUPPORT_PARALLEL"
                 if tutor.response_strategy == "PROVIDE_WORKED_EXAMPLE"
-                else "GUIDED_STUCK_SUPPORT_REQUIRED"
+                else (
+                    "GUIDED_STUCK_SUPPORT_REQUIRED"
+                    if atomic_guided_events_enabled
+                    else "GUIDED_SUPPORT_ESCALATION_REQUIRED"
+                )
             )
         )
         wrong_four_error_code = (
@@ -1637,6 +1645,20 @@ def _active_scaffold_for_explain_again(
     )
 
 
+def _visible_visual_cue_for_explain_again(
+    visual_cue: VisualCue | None,
+) -> AIVisibleVisualCue | None:
+    if visual_cue is None:
+        return None
+    return AIVisibleVisualCue(
+        show=visual_cue.show,
+        cue_id=visual_cue.cue_type,
+        cue_type=None,
+        description=visual_cue.description,
+        actions=visual_cue.actions,
+    )
+
+
 def _explain_again_interaction_response(
     request: InteractionRequest,
     session: SessionRecord,
@@ -1706,11 +1728,7 @@ def _explain_again_interaction_response(
             recent_conversation=session.conversation_history,
             active_support_level=active_support_level,
             highest_support_used=highest_support_used,
-            visible_visual_cue=(
-                AIVisualCue(**visual_cue.model_dump())
-                if visual_cue is not None
-                else None
-            ),
+            visible_visual_cue=_visible_visual_cue_for_explain_again(visual_cue),
             active_scaffold=_active_scaffold_for_explain_again(session),
             answer_reveal_allowed=False,
         )

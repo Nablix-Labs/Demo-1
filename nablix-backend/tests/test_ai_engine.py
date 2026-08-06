@@ -21,7 +21,7 @@ from app.ai_engine.schemas import (
     ExplainAgainRequest,
     OpenAIExplainAgainMessage,
     RecordedMisconception,
-    VisualCue,
+    VisibleVisualCue,
 )
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AdapterError
@@ -148,8 +148,9 @@ def _explain_again_request() -> ExplainAgainRequest:
         ],
         active_support_level="SCAFFOLD",
         highest_support_used="SCAFFOLD",
-        visible_visual_cue=VisualCue(
+        visible_visual_cue=VisibleVisualCue(
             show=True,
+            cue_id="VC-T01-COUNTER-CHANGE",
             cue_type="CONCEPT_CARD",
             description="A counter can start at different values.",
             actions=[],

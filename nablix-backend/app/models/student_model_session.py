@@ -314,6 +314,8 @@ class GuidedSupportEvent(MutatingSessionEventBase):
     def validate_wrong_four_evidence(self) -> "GuidedSupportEvent":
         if self.event_type != "GUIDED_SUPPORT_ESCALATION_REQUIRED":
             return self
+        if self.triggering_response is None and self.error_code is None:
+            return self
         if self.triggering_response is None or not self.triggering_response.strip():
             raise ValueError("triggering_response is required for Wrong 4 escalation.")
         if self.error_code is None or not self.error_code.strip():
