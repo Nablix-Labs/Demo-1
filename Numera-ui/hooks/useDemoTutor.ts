@@ -235,6 +235,7 @@ export async function beginSession(
 export function useDemoTutor() {
   const sessionId = useNumeraStore((s) => s.sessionId);
   const canvasExporter = useNumeraStore((s) => s.canvasExporter);
+  const canvasSubmissionInFlight = useRef(false);
   const explainAgainRequest = useRef<Promise<InteractionResponse | null> | null>(null);
   const [explainAgainPending, setExplainAgainPending] = useState(false);
   const addTranscriptMessage = useNumeraStore((s) => s.addTranscriptMessage);
@@ -305,6 +306,8 @@ export function useDemoTutor() {
       addTrailEntry({ kind: 'tutor', text: 'Nothing on the canvas to submit yet.' });
       return null;
     }
+    if (canvasSubmissionInFlight.current) return null;
+    canvasSubmissionInFlight.current = true;
     try {
       const res = await submitCanvas(sessionId, png, 'STANDALONE_ATTEMPT');
       // Canvas responses now carry the same phase state as /interaction, so a
@@ -341,6 +344,8 @@ export function useDemoTutor() {
       addTranscriptMessage({ role: 'ai', text: chatError(err, TUTOR_UNAVAILABLE) }); // surface the failure in the chat
       addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Could not read the canvas.') });
       return null;
+    } finally {
+      canvasSubmissionInFlight.current = false;
     }
   }, [sessionId, canvasExporter, addTranscriptMessage, addTrailEntry]);
 
@@ -597,7 +602,8 @@ export function useDemoTutor() {
       // actually drew something (don't send blank canvases to the backend/OCR).
       let canvasSnapshotId: string | undefined;
       const png = hasCanvasActivity() ? canvasExporter?.() : null;
-      if (png) {
+      if (png && !canvasSubmissionInFlight.current) {
+        canvasSubmissionInFlight.current = true;
         try {
           console.log('→ POST /canvas/submit', { session_id: sessionId, student_id: studentId(), snapshot_bytes: png.length });
           const canvasRes = await submitCanvas(sessionId, png, 'VOICE_ATTACHMENT');
@@ -612,6 +618,8 @@ export function useDemoTutor() {
         } catch (err) {
           console.warn('✗ /canvas/submit failed:', err);
           /* canvas is optional for a voice turn */
+        } finally {
+          canvasSubmissionInFlight.current = false;
         }
       } else {
         console.log('(no canvas content this turn)');

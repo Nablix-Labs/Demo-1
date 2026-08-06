@@ -2452,6 +2452,99 @@ def test_guided_evaluator_retries_answer_revealing_wording(monkeypatch) -> None:
     assert feedback[1] is not None
 
 
+def test_guided_answer_reveal_fallback_names_the_missing_explanation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evaluation_calls = 0
+
+    class _GuidedClient:
+        def generate_guided_rubric(
+            self,
+            **kwargs: object,
+        ) -> GeneratedQuestionRubric:
+            del kwargs
+            return GeneratedQuestionRubric(
+                question_id="Q-EXPLAIN-RULE",
+                required_concepts=[
+                    GeneratedConcept(
+                        concept_id="GENERAL_RULE",
+                        description="States the general rule.",
+                        required=True,
+                    ),
+                    GeneratedConcept(
+                        concept_id="EXPLANATION_OF_RULE",
+                        description="Explains why the general rule represents the situation.",
+                        required=True,
+                    ),
+                ],
+                completion_rule="ALL_REQUIRED_CONCEPTS",
+                cache_key="explanation-rubric",
+                prompt_version="1.0.0",
+            )
+
+        def evaluate_guided_turn(
+            self,
+            **kwargs: object,
+        ) -> GuidedEvaluation:
+            nonlocal evaluation_calls
+            del kwargs
+            evaluation_calls += 1
+            return GuidedEvaluation(
+                student_state="PARTIAL",
+                newly_confirmed_concept_ids=["GENERAL_RULE"],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=["EXPLANATION_OF_RULE"],
+                selected_error_code=None,
+                confidence=0.98,
+                next_objective=ActiveTeachingObjective(
+                    objective_type="EXPLAIN_REASONING",
+                    target_concept_ids=["EXPLANATION_OF_RULE"],
+                    confirmed_concept_ids=["GENERAL_RULE"],
+                    missing_concept_ids=["EXPLANATION_OF_RULE"],
+                ),
+                tutor_message="The complete answer is n plus four because four is added.",
+                tutor_message_voice="The complete answer is n plus four because four is added.",
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _GuidedClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-EXPLAIN-RULE",
+            question="Write the general rule and explain why it represents the situation.",
+            correct_answer="n plus four because four is added",
+            answer_spec=AnswerSpec(
+                answer_spec_id="ANS-EXPLAIN-RULE",
+                canonical_answer="n plus four because four is added",
+                accepted_answers=["n + 4"],
+                verification_method="STRUCTURED_TEXT_AND_SYMBOLIC_MATCH",
+                explanation_required=True,
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            student_input="n + 4",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert evaluation_calls > 1
+    assert response.guided_student_state == "PARTIAL"
+    assert response.tutor_message == (
+        "You have given the answer. Now explain why it is true in this situation."
+    )
+    assert response.active_teaching_objective is not None
+    assert response.active_teaching_objective.missing_concept_ids == [
+        "EXPLANATION_OF_RULE"
+    ]
+
+
 def test_multipart_answer_numbers_do_not_trigger_numeric_reveal_guardrail() -> None:
     rules = classifier.load_classifier_rules()
     canonical_answer = "4 × n; p × q; r × r; c ÷ d; 2 × (x + 1)"

@@ -79,6 +79,7 @@ export interface ApiError {
     | 'INVALID_JSON'
     | 'HTTP_ERROR'
     | 'INTERNAL_ERROR'
+    | 'JOURNEY_VERSION_CONFLICT'
     // The bearer we sent was rejected — either by this backend or by a service it
     // calls on our behalf (e.g. student_model). Observed 2026-07-26 on the first
     // CORRECT_ATTEMPT of a session: the backend posts a progress event to
@@ -107,6 +108,10 @@ export function studentFacingError(err: unknown): string | null {
   // (backend ask #3), so say what is actually true rather than blaming the
   // network and sending the student off retrying forever.
   const backendMessage = typeof res?.data?.message === 'string' ? res.data.message.trim() : '';
+  const code = res?.data?.error_code;
+  if (code === 'JOURNEY_VERSION_CONFLICT') {
+    return 'Two submissions arrived together. Your work is safe—please press Check once more.';
+  }
   if (res?.status === 409) {
     // Not every 409 is the resume case. On 2026-07-29 a guided-practice turn
     // came back 409 "Student Model did not return metadata for
@@ -118,7 +123,6 @@ export function studentFacingError(err: unknown): string | null {
     }
     return `The tutor couldn\u2019t load this question. ${backendMessage}`;
   }
-  const code = res?.data?.error_code;
   switch (code) {
     case 'AUTHENTICATION_FAILED':
       return 'Your session needs to be signed in again before I can mark that. Please log in and retry.';

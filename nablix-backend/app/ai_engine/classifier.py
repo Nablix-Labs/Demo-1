@@ -550,6 +550,40 @@ def objective_for_rubric(
     return objective
 
 
+def focused_unresolved_prompt(
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+    default_message: str,
+) -> str:
+    """Ask for the first missing requirement without disclosing its answer."""
+
+    missing_ids = set(objective.missing_concept_ids)
+    missing_component = next(
+        (
+            component
+            for component in rubric.required_concepts
+            if component.required and component.concept_id in missing_ids
+        ),
+        None,
+    )
+    if missing_component is None:
+        return default_message
+    component_kind = (
+        f"{missing_component.concept_id} {missing_component.description}"
+    ).casefold()
+    if any(term in component_kind for term in ("explanation", "explain", "reason", "why")):
+        return "You have given the answer. Now explain why it is true in this situation."
+    if any(term in component_kind for term in ("changing", "changes", "variable")):
+        return "Which value can change from one example to another?"
+    if any(term in component_kind for term in ("fixed", "increment", "constant")):
+        return "What operation or amount stays fixed?"
+    if any(term in component_kind for term in ("general_rule", "general rule", "expression")):
+        return "What general rule represents this situation?"
+    if any(term in component_kind for term in ("choice", "selection", "option")):
+        return "Which option do you choose?"
+    return "What else does the question ask you to state?"
+
+
 def classify_guided_learning_response(
     request: ClassificationRequest,
     rules: ClassifierRulesConfig,
@@ -675,10 +709,19 @@ def classify_guided_learning_response(
                     "student_state": rejected_evaluation.student_state,
                 },
             )
+            unresolved_objective = (
+                normalized_guided_objective(rejected_evaluation, objective)
+                or objective
+            )
+            safe_message = focused_unresolved_prompt(
+                rubric,
+                unresolved_objective,
+                rules.guided_learning.reconciliation_message,
+            )
             evaluation = rejected_evaluation.model_copy(
                 update={
-                    "tutor_message": rules.guided_learning.reconciliation_message,
-                    "tutor_message_voice": rules.guided_learning.reconciliation_message,
+                    "tutor_message": safe_message,
+                    "tutor_message_voice": safe_message,
                 }
             )
         else:
