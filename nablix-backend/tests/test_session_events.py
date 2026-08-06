@@ -28,11 +28,19 @@ def test_scaffold_response_matching_accepts_safe_variants() -> None:
         ("it is in front of x", "Before x"),
         ("1/2x", "½x"),
         ("on both sides", "Both sides"),
+        ("+4", "add 4"),
+        ("+ 4", "increases by 4"),
+        ("add four", "add 4"),
+        ("the counter increases by four each time", "add 4"),
+        ("c is added by 4 each time", "add 4"),
     ]
     rejected = [
         ("1", "½"),
         ("before x", "½"),
         ("x/2", "½x"),
+        ("4", "add 4"),
+        ("-4", "add 4"),
+        ("subtract 4", "add 4"),
     ]
 
     for student_message, expected_response in accepted:

@@ -1,6 +1,6 @@
 import re
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Final, Literal
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -87,6 +87,40 @@ from app.services.session_service import (
 )
 from app.services.student_model_session import (
     PHASE_FROM_STUDENT_MODEL,
+)
+
+
+_NUMBER_WORD_VALUES: Final[dict[str, str]] = {
+    "zero": "0",
+    "one": "1",
+    "two": "2",
+    "three": "3",
+    "four": "4",
+    "five": "5",
+    "six": "6",
+    "seven": "7",
+    "eight": "8",
+    "nine": "9",
+    "ten": "10",
+    "eleven": "11",
+    "twelve": "12",
+    "thirteen": "13",
+    "fourteen": "14",
+    "fifteen": "15",
+    "sixteen": "16",
+    "seventeen": "17",
+    "eighteen": "18",
+    "nineteen": "19",
+    "twenty": "20",
+}
+_SCAFFOLD_INTEGER_TOKEN: Final[str] = (
+    r"-?\d+|" + "|".join(_NUMBER_WORD_VALUES)
+)
+_ADDITION_CHANGE_PATTERN: Final[re.Pattern[str]] = re.compile(
+    rf"(?:\+|(?<!\w)(?:plus|add(?:s|ed|ing)?(?:\s+by)?|"
+    rf"increase(?:s|d|ing)?(?:\s+by)?))\s*"
+    rf"(?P<operand>{_SCAFFOLD_INTEGER_TOKEN})(?!\w)",
+    re.IGNORECASE,
 )
 
 
@@ -1044,7 +1078,21 @@ def _scaffold_response_is_correct(
     }
     if any(_contains_scaffold_response(normalized_student, value) for value in accepted):
         return True
+    expected_addition = _addition_change_operand(expected_response)
+    student_addition = _addition_change_operand(student_message)
+    if expected_addition is not None and student_addition == expected_addition:
+        return True
     return tutor_evaluation == "CORRECT"
+
+
+def _addition_change_operand(value: str) -> str | None:
+    match = _ADDITION_CHANGE_PATTERN.search(value.casefold().replace("＋", "+"))
+    if match is None:
+        return None
+    operand = match.group("operand").casefold()
+    if operand in _NUMBER_WORD_VALUES:
+        return _NUMBER_WORD_VALUES[operand]
+    return str(int(operand))
 
 
 def _scaffold_evaluation_context(
