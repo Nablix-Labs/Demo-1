@@ -17,6 +17,7 @@ from app.ai_engine.prompt_registry import (
     sha256_text,
 )
 from app.ai_engine.schemas import (
+    CanvasTokenDiagnosis,
     ErrorType,
     EvaluationCategory,
     ExplainAgainRequest,
@@ -27,6 +28,7 @@ from app.ai_engine.schemas import (
     OpenAIExplainAgainMessage,
     ResponseStrategy,
     StrictSchema,
+    SpatialMathToken,
 )
 from app.core.exceptions import AdapterError
 from app.core.logger import logger
@@ -276,6 +278,34 @@ class OpenAIAIEngineClient:
             raise AdapterError(
                 "openai_ai_engine",
                 f"invalid scaffold evaluation: {error}",
+            ) from error
+
+    def diagnose_canvas_tokens(
+        self,
+        question: str,
+        accepted_answer_steps: list[str],
+        spatial_tokens: list[SpatialMathToken],
+        prompt_version: str,
+        system_prompt: str,
+    ) -> CanvasTokenDiagnosis:
+        content = self._request_guided_json(
+            name="canvas_token_diagnosis",
+            schema=CanvasTokenDiagnosis.model_json_schema(),
+            system_prompt=system_prompt,
+            user_payload={
+                "question": question,
+                "accepted_answer_steps": accepted_answer_steps,
+                "spatial_tokens": [token.model_dump() for token in spatial_tokens],
+                "prompt_version": prompt_version,
+                "answer_reveal_allowed": False,
+            },
+        )
+        try:
+            return CanvasTokenDiagnosis.model_validate(content)
+        except ValidationError as error:
+            raise AdapterError(
+                "openai_ai_engine",
+                f"invalid canvas token diagnosis: {error}",
             ) from error
 
     def _request_guided_json(

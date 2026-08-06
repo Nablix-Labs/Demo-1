@@ -418,6 +418,17 @@ canvas_review:
     CONCEPTUAL_MISUNDERSTANDING: Check what the number beside the variable means before continuing.
     PROCEDURAL_ERROR: This step changes the solution. Apply the same valid operation to both sides.
     downstream_step: Review the first incorrect step before checking this one.
+canvas_token_diagnosis:
+  enabled: false
+  min_token_confidence: 0.75
+  prompt_version: canvas-token-diagnosis-v1
+  system_prompt: >-
+    You diagnose mathematical work using only the supplied question, authored
+    answer steps, and spatial token registry. Return strict JSON. Never return
+    coordinates, bounding boxes, text spans, or token IDs that are not supplied.
+    If no precise token-level correction is justified, return status uncertain
+    with empty target_token_ids and null token/error fields. Do not reveal the
+    final answer unless it is already explicitly present in the student work.
 progressive_hint_messages:
   ARITHMETIC_ERROR:
     - Good try. Your method is close, so check the arithmetic carefully.

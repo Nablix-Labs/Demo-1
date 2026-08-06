@@ -99,6 +99,15 @@ HighlightType = Literal["ERROR"]
 HighlightColour = Literal["RED"]
 HintLevel = Literal[1, 2, 3]
 MistakeStatus = Literal["mistake_found", "no_mistake", "uncertain"]
+LocalizationStatus = Literal["validated", "uncertain", "not_applicable"]
+SpatialMathTokenRole = Literal[
+    "number",
+    "operator",
+    "identifier",
+    "relation",
+    "parenthesis",
+    "other",
+]
 AnnotationIntentKind = Literal["circle_target", "write_correction", "draw_arrow"]
 AnnotationPlacement = Literal["right", "below"]
 
@@ -143,6 +152,26 @@ class CanvasTextRegion(StrictSchema):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
+class SpatialMathToken(StrictSchema):
+    """OCR token reference safe to include in an LLM localization request."""
+
+    token_id: str = Field(min_length=1)
+    step_id: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+    role: SpatialMathTokenRole
+    alignment_confidence: float = Field(ge=0.0, le=1.0)
+
+
+class CanvasTokenDiagnosis(StrictSchema):
+    status: MistakeStatus
+    mistake_step_id: str | None
+    target_token_ids: list[str]
+    error_token: str | None
+    expected_token: str | None
+    error_type: ErrorType | None
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
 class CanvasMistakeClassification(StrictSchema):
     status: MistakeStatus
     mistake_step_id: str | None
@@ -150,6 +179,10 @@ class CanvasMistakeClassification(StrictSchema):
     target_span: list[int] | None
     replacement_text: str | None
     confidence: float = Field(ge=0.0, le=1.0)
+    target_token_ids: list[str] = Field(default_factory=list)
+    error_token: str | None = None
+    expected_token: str | None = None
+    localization_status: LocalizationStatus = "not_applicable"
 
 
 class CanvasAnnotationIntent(StrictSchema):

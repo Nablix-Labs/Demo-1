@@ -20,9 +20,11 @@ from app.ai_engine.schemas import (
     AuthoredAnswerSpec,
     AuthoredRequiredComponent,
     CanvasTextRegion,
+    CanvasTokenDiagnosis,
     ExplainAgainRequest,
     OpenAIExplainAgainMessage,
     RecordedMisconception,
+    SpatialMathToken,
     VisualCue,
 )
 from app.core.config import Settings, get_settings
@@ -1904,6 +1906,277 @@ def _canvas_region(step_id: str, text: str, confidence: float) -> CanvasTextRegi
         h=0.08,
         confidence=confidence,
     )
+
+
+def _spatial_token(
+    token_id: str,
+    step_id: str,
+    text: str,
+    confidence: float = 0.95,
+) -> SpatialMathToken:
+    return SpatialMathToken(
+        token_id=token_id,
+        step_id=step_id,
+        text=text,
+        role="operator" if text in {"+", "-", "="} else "number",
+        alignment_confidence=confidence,
+    )
+
+
+def _canvas_token_rules() -> classifier.ClassifierRulesConfig:
+    rules = classifier.load_classifier_rules()
+    return rules.model_copy(
+        update={
+            "canvas_token_diagnosis": rules.canvas_token_diagnosis.model_copy(
+                update={"enabled": True}
+            )
+        }
+    )
+
+
+class _CanvasTokenClient:
+    def __init__(self, responses: list[CanvasTokenDiagnosis | AdapterError]) -> None:
+        self.responses = responses
+        self.calls = 0
+
+    def diagnose_canvas_tokens(
+        self,
+        question: str,
+        accepted_answer_steps: list[str],
+        spatial_tokens: list[SpatialMathToken],
+        prompt_version: str,
+        system_prompt: str,
+    ) -> CanvasTokenDiagnosis:
+        self.calls += 1
+        response = self.responses.pop(0)
+        if isinstance(response, AdapterError):
+            raise response
+        return response
+
+
+def _token_diagnosis(
+    target_token_ids: list[str] | None = None,
+    mistake_step_id: str | None = "step-1",
+    error_token: str | None = "-",
+) -> CanvasTokenDiagnosis:
+    return CanvasTokenDiagnosis(
+        status="mistake_found",
+        mistake_step_id=mistake_step_id,
+        target_token_ids=target_token_ids or ["step-1:token-2"],
+        error_token=error_token,
+        expected_token="+",
+        error_type="OPPOSITE_OPERATION_ERROR",
+        confidence=0.96,
+    )
+
+
+def test_canvas_token_diagnosis_returns_validated_token_reference() -> None:
+    client = _CanvasTokenClient([_token_diagnosis()])
+    request = ClassificationRequest(
+        question="Solve 4 - y = 10",
+        correct_answer="y = -6",
+        student_input="4 - y = 10",
+        current_phase="GUIDED_PRACTICE",
+        input_source="CANVAS",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+        accepted_answer_steps=["4 - y = 10", "-y = 6", "y = -6"],
+        spatial_tokens=[
+            _spatial_token("step-1:token-1", "step-1", "4"),
+            _spatial_token("step-1:token-2", "step-1", "-"),
+        ],
+    )
+
+    review = classifier.review_canvas_tokens(
+        request,
+        _canvas_token_rules(),
+        0.9,
+        client,
+    )
+
+    classification = review.mistake_classification
+    assert classification.localization_status == "validated"
+    assert classification.target_token_ids == ["step-1:token-2"]
+    assert classification.error_token == "-"
+    assert classification.expected_token == "+"
+    assert review.annotation_intents == []
+    assert client.calls == 1
+
+
+def test_canvas_token_diagnosis_openai_payload_excludes_coordinates(monkeypatch) -> None:
+    request_bodies: list[dict[str, object]] = []
+
+    class _CanvasDiagnosisOpenAIClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self) -> "_CanvasDiagnosisOpenAIClient":
+            return self
+
+        def __exit__(self, *exc) -> bool:
+            return False
+
+        def post(self, *args, **kwargs) -> _FakeOpenAIResponse:
+            request_bodies.append(kwargs["json"])
+            return _FakeOpenAIResponse(
+                '{"status":"mistake_found","mistake_step_id":"step-1",'
+                '"target_token_ids":["step-1:token-2"],"error_token":"-",'
+                '"expected_token":"+","error_type":"OPPOSITE_OPERATION_ERROR",'
+                '"confidence":0.96}'
+            )
+
+    monkeypatch.setattr(openai_client.httpx, "Client", _CanvasDiagnosisOpenAIClient)
+    client = openai_client.OpenAIAIEngineClient(
+        api_key="sk-test",
+        model="gpt-test",
+        timeout_seconds=10,
+        prompt_cache_key_enabled=False,
+        store_responses=False,
+        retry_count=0,
+    )
+
+    diagnosis = client.diagnose_canvas_tokens(
+        question="Solve 4 - y = 10",
+        accepted_answer_steps=["4 - y = 10", "-y = 6", "y = -6"],
+        spatial_tokens=[_spatial_token("step-1:token-2", "step-1", "-")],
+        prompt_version="canvas-token-diagnosis-v1",
+        system_prompt="Return token IDs only.",
+    )
+
+    payload = json.loads(request_bodies[0]["input"][-1]["content"])
+    assert diagnosis.target_token_ids == ["step-1:token-2"]
+    assert payload["component"] == "canvas_token_diagnosis"
+    assert payload["spatial_tokens"] == [
+        {
+            "alignment_confidence": 0.95,
+            "role": "operator",
+            "step_id": "step-1",
+            "text": "-",
+            "token_id": "step-1:token-2",
+        }
+    ]
+    assert "bounding_box" not in payload
+
+
+@pytest.mark.parametrize(
+    "diagnosis",
+    [
+        _token_diagnosis(target_token_ids=["unknown"]),
+        _token_diagnosis(target_token_ids=["step-1:token-2", "step-1:token-2"]),
+        _token_diagnosis(target_token_ids=["step-2:token-1"]),
+        _token_diagnosis(error_token="+"),
+    ],
+)
+def test_canvas_token_diagnosis_suppresses_invalid_localization(
+    diagnosis: CanvasTokenDiagnosis,
+) -> None:
+    client = _CanvasTokenClient([diagnosis])
+    request = ClassificationRequest(
+        question="Solve 4 - y = 10",
+        correct_answer="y = -6",
+        student_input="4 - y = 10",
+        current_phase="GUIDED_PRACTICE",
+        input_source="CANVAS",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+        accepted_answer_steps=["4 - y = 10"],
+        spatial_tokens=[
+            _spatial_token("step-1:token-2", "step-1", "-"),
+            _spatial_token("step-2:token-1", "step-2", "-"),
+        ],
+    )
+
+    review = classifier.review_canvas_tokens(request, _canvas_token_rules(), 0.9, client)
+
+    assert review.mistake_classification.status == "uncertain"
+    assert review.mistake_classification.localization_status == "uncertain"
+    assert review.mistake_classification.target_token_ids == []
+    assert review.annotation_intents == []
+
+
+def test_canvas_token_diagnosis_does_not_call_llm_without_usable_context() -> None:
+    client = _CanvasTokenClient([_token_diagnosis()])
+    request = ClassificationRequest(
+        question="Solve 4 - y = 10",
+        correct_answer="y = -6",
+        student_input="4 - y = 10",
+        current_phase="GUIDED_PRACTICE",
+        input_source="CANVAS",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+        accepted_answer_steps=[],
+        spatial_tokens=[_spatial_token("step-1:token-2", "step-1", "-", 0.5)],
+    )
+
+    review = classifier.review_canvas_tokens(request, _canvas_token_rules(), 0.9, client)
+
+    assert review.mistake_classification.status == "uncertain"
+    assert client.calls == 0
+
+
+def test_canvas_token_diagnosis_retries_invalid_openai_output() -> None:
+    client = _CanvasTokenClient(
+        [
+            AdapterError("openai_ai_engine", "invalid canvas token diagnosis"),
+            AdapterError("openai_ai_engine", "invalid canvas token diagnosis"),
+            _token_diagnosis(),
+        ]
+    )
+    request = ClassificationRequest(
+        question="Solve 4 - y = 10",
+        correct_answer="y = -6",
+        student_input="4 - y = 10",
+        current_phase="GUIDED_PRACTICE",
+        input_source="CANVAS",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+        accepted_answer_steps=["4 - y = 10"],
+        spatial_tokens=[_spatial_token("step-1:token-2", "step-1", "-")],
+    )
+
+    review = classifier.review_canvas_tokens(request, _canvas_token_rules(), 0.9, client)
+
+    assert review.mistake_classification.localization_status == "validated"
+    assert client.calls == 3
+
+
+def test_canvas_token_feature_flag_preserves_legacy_canvas_review() -> None:
+    client = _CanvasTokenClient([_token_diagnosis()])
+    request = ClassificationRequest(
+        question="x + 4 = 9",
+        correct_answer="x = 5",
+        student_input="x + 4 = 9\nx = 9 - 5",
+        current_phase="GUIDED_PRACTICE",
+        input_source="CANVAS",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+        canvas_regions=[
+            _canvas_region("step-1", "x + 4 = 9", 0.95),
+            _canvas_region("step-2", "x = 9 - 5", 0.95),
+        ],
+    )
+
+    decision = classifier.build_tutor_decision(
+        request=request,
+        rules=classifier.load_classifier_rules(),
+        intent="SUBMITTING_ANSWER",
+        evaluation="INCORRECT",
+        error_type=None,
+        response_strategy="GUIDED_HINT",
+        hint_level=1,
+        confidence=0.9,
+        openai_client=client,
+    )
+
+    assert decision.canvas_review is not None
+    assert decision.canvas_review.mistake_classification.status == "mistake_found"
+    assert decision.canvas_review.mistake_classification.target_token_ids == []
+    assert client.calls == 0
 
 
 def test_ai_engine_returns_canvas_mistake_for_wrong_inverse_operand() -> None:

@@ -134,6 +134,13 @@ class CanvasReviewConfig(StrictSchema):
     messages: CanvasReviewMessagesConfig
 
 
+class CanvasTokenDiagnosisConfig(StrictSchema):
+    enabled: bool
+    min_token_confidence: float = Field(ge=0.0, le=1.0)
+    prompt_version: str
+    system_prompt: str
+
+
 class MessageConfig(StrictSchema):
     SAFETY_RESPONSE: str
     REQUESTING_ANSWER_OR_OVERRIDE: str
@@ -217,6 +224,7 @@ class ClassifierRulesConfig(StrictSchema):
     conversation_rules: ConversationRulesConfig
     reasoning_completion: ReasoningCompletionConfig
     canvas_review: CanvasReviewConfig
+    canvas_token_diagnosis: CanvasTokenDiagnosisConfig
     progressive_hint_messages: dict[ErrorType, list[str]]
     messages: MessageConfig
     guided_learning: GuidedLearningConfig

@@ -16,6 +16,7 @@ from app.ai_engine.schemas import (
     CanvasFeedback,
     CanvasMathReview,
     CanvasMistakeClassification,
+    CanvasTokenDiagnosis,
     CanvasTextRegion,
     ErrorType,
     EvaluationCategory,
@@ -30,6 +31,7 @@ from app.ai_engine.schemas import (
     ResponseStrategy,
     SafetyCheck,
     StrictSchema,
+    SpatialMathToken,
     StudentModelEvent,
     TutorResponse,
     VisualCue,
@@ -82,6 +84,8 @@ class ClassificationRequest(StrictSchema):
     max_hint_results: int = Field(default=3, ge=1)
     exclude_content_ids: list[str] = Field(default_factory=list)
     canvas_regions: list[CanvasTextRegion] = Field(default_factory=list)
+    spatial_tokens: list[SpatialMathToken] = Field(default_factory=list)
+    accepted_answer_steps: list[str] = Field(default_factory=list)
     conversation_history: list[ConversationMessage] = Field(default_factory=list)
     conversation_state: ConversationState | None = None
     generated_question_rubric: GeneratedQuestionRubric | None = None
@@ -200,6 +204,7 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
         response_strategy=response_strategy,
         hint_level=hint_level,
         confidence=rules.confidence.standard_response,
+        openai_client=openai_client,
     )
     if request.input_source == "CANVAS":
         canvas_context = build_canvas_wording_context(
@@ -1845,17 +1850,26 @@ def build_tutor_decision(
     response_strategy: ResponseStrategy,
     hint_level: HintLevel | None,
     confidence: float,
+    openai_client: OpenAIAIEngineClient | None,
 ) -> TutorDecision:
     canvas_review: CanvasMathReview | None = None
     if request.input_source == "CANVAS" and intent == "SUBMITTING_ANSWER":
-        canvas_review = review_canvas_math(
-            question=request.question,
-            correct_answer=request.correct_answer,
-            current_phase=request.current_phase,
-            canvas_regions=request.canvas_regions,
-            config=rules.canvas_review,
-            confidence=confidence,
-        )
+        if rules.canvas_token_diagnosis.enabled:
+            canvas_review = review_canvas_tokens(
+                request=request,
+                rules=rules,
+                confidence=confidence,
+                openai_client=openai_client,
+            )
+        else:
+            canvas_review = review_canvas_math(
+                question=request.question,
+                correct_answer=request.correct_answer,
+                current_phase=request.current_phase,
+                canvas_regions=request.canvas_regions,
+                config=rules.canvas_review,
+                confidence=confidence,
+            )
 
     effective_error_type: ErrorType | None = (
         canvas_review.error_type
@@ -1894,6 +1908,181 @@ def build_tutor_decision(
         hint_level=effective_hint_level,
         canvas_review=canvas_review,
         reasoning_complete=has_reasoning_evidence(request, rules),
+    )
+
+
+def review_canvas_tokens(
+    request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
+    confidence: float,
+    openai_client: OpenAIAIEngineClient | None,
+) -> CanvasMathReview:
+    if (
+        openai_client is None
+        or len(request.accepted_answer_steps) == 0
+        or len(request.spatial_tokens) == 0
+        or not spatial_tokens_are_usable(request.spatial_tokens, rules)
+    ):
+        return uncertain_canvas_token_review(confidence)
+
+    diagnosis: CanvasTokenDiagnosis | None = None
+    last_error: AdapterError | None = None
+    for attempt in range(rules.guided_learning.maximum_retries + 1):
+        try:
+            diagnosis = openai_client.diagnose_canvas_tokens(
+                question=request.question,
+                accepted_answer_steps=request.accepted_answer_steps,
+                spatial_tokens=request.spatial_tokens,
+                prompt_version=rules.canvas_token_diagnosis.prompt_version,
+                system_prompt=rules.canvas_token_diagnosis.system_prompt,
+            )
+            break
+        except AdapterError as error:
+            last_error = error
+            logger.warning(
+                "canvas_token_diagnosis_retry",
+                extra={
+                    "question_id": request.question_id,
+                    "attempt": attempt + 1,
+                    "maximum_retries": rules.guided_learning.maximum_retries,
+                    "error": str(error),
+                },
+            )
+    if diagnosis is None:
+        raise AdapterError(
+            "openai_ai_engine",
+            "canvas token diagnosis failed after configured retries: "
+            f"question_id={request.question_id}; error={last_error}",
+        )
+    return validated_canvas_token_review(
+        diagnosis,
+        request.spatial_tokens,
+        request.current_phase,
+        rules,
+        confidence,
+    )
+
+
+def spatial_tokens_are_usable(
+    tokens: list[SpatialMathToken],
+    rules: ClassifierRulesConfig,
+) -> bool:
+    token_ids = [token.token_id for token in tokens]
+    return (
+        len(token_ids) == len(set(token_ids))
+        and all(
+            token.alignment_confidence >= rules.canvas_token_diagnosis.min_token_confidence
+            for token in tokens
+        )
+    )
+
+
+def validated_canvas_token_review(
+    diagnosis: CanvasTokenDiagnosis,
+    tokens: list[SpatialMathToken],
+    current_phase: LearningPhase,
+    rules: ClassifierRulesConfig,
+    confidence: float,
+) -> CanvasMathReview:
+    if diagnosis.status == "uncertain":
+        return uncertain_canvas_token_review(confidence)
+    if diagnosis.status == "no_mistake":
+        if any(
+            value is not None
+            for value in (
+                diagnosis.mistake_step_id,
+                diagnosis.error_token,
+                diagnosis.expected_token,
+                diagnosis.error_type,
+            )
+        ) or diagnosis.target_token_ids:
+            return uncertain_canvas_token_review(confidence)
+        return CanvasMathReview(
+            error_type=None,
+            tutor_feedback=None,
+            canvas_feedback=CanvasFeedback(
+                has_feedback=False,
+                step_feedback=[],
+                highlight_instruction=None,
+            ),
+            mistake_classification=CanvasMistakeClassification(
+                status="no_mistake",
+                mistake_step_id=None,
+                target_text=None,
+                target_span=None,
+                replacement_text=None,
+                confidence=confidence,
+                localization_status="not_applicable",
+            ),
+            annotation_intents=[],
+        )
+
+    token_by_id = {token.token_id: token for token in tokens}
+    target_ids = diagnosis.target_token_ids
+    target_tokens = [token_by_id.get(token_id) for token_id in target_ids]
+    if (
+        diagnosis.mistake_step_id is None
+        or diagnosis.error_token is None
+        or diagnosis.expected_token is None
+        or diagnosis.error_type is None
+        or len(target_ids) == 0
+        or len(target_ids) != len(set(target_ids))
+        or any(token is None for token in target_tokens)
+        or any(token.step_id != diagnosis.mistake_step_id for token in target_tokens if token is not None)
+        or any(token.text != diagnosis.error_token for token in target_tokens if token is not None)
+    ):
+        return uncertain_canvas_token_review(confidence)
+
+    message = rules.canvas_review.messages.model_dump().get(diagnosis.error_type)
+    if not isinstance(message, str):
+        return uncertain_canvas_token_review(confidence)
+    return CanvasMathReview(
+        error_type=diagnosis.error_type,
+        tutor_feedback=(
+            message
+            if current_phase in rules.canvas_review.feedback_enabled_phases
+            else None
+        ),
+        canvas_feedback=CanvasFeedback(
+            has_feedback=False,
+            step_feedback=[],
+            highlight_instruction=None,
+        ),
+        mistake_classification=CanvasMistakeClassification(
+            status="mistake_found",
+            mistake_step_id=diagnosis.mistake_step_id,
+            target_text=diagnosis.error_token,
+            target_span=None,
+            replacement_text=diagnosis.expected_token,
+            confidence=confidence,
+            target_token_ids=target_ids,
+            error_token=diagnosis.error_token,
+            expected_token=diagnosis.expected_token,
+            localization_status="validated",
+        ),
+        annotation_intents=[],
+    )
+
+
+def uncertain_canvas_token_review(confidence: float) -> CanvasMathReview:
+    return CanvasMathReview(
+        error_type=None,
+        tutor_feedback=None,
+        canvas_feedback=CanvasFeedback(
+            has_feedback=False,
+            step_feedback=[],
+            highlight_instruction=None,
+        ),
+        mistake_classification=CanvasMistakeClassification(
+            status="uncertain",
+            mistake_step_id=None,
+            target_text=None,
+            target_span=None,
+            replacement_text=None,
+            confidence=confidence,
+            localization_status="uncertain",
+        ),
+        annotation_intents=[],
     )
 
 
