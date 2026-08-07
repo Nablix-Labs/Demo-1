@@ -36,6 +36,23 @@ client = TestClient(app, headers={"Authorization": "Bearer test-token"})
 VALID_SNAPSHOT_DATA_URL = "data:image/png;base64,aGVsbG8="
 
 
+def test_canvas_semantic_text_normalizes_detected_relationships() -> None:
+    ocr = VisionOCRResult(
+        raw_ocr_text="",
+        detected_equation="m + 7",
+        detected_steps=[
+            r"m \rightarrow change",
+            r"7 \rightarrow fixed",
+            "Operation → +",
+        ],
+        confidence=0.99,
+    )
+
+    assert canvas_service._semantic_canvas_text(ocr) == (
+        "m  means  change\n7  means  fixed\nOperation  means  +"
+    )
+
+
 def test_canvas_endpoint_serializes_submissions_for_one_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

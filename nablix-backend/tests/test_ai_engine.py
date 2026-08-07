@@ -2964,6 +2964,22 @@ def test_guided_multipart_undetermined_paraphrase_still_uses_llm(monkeypatch) ->
     assert response.question_completed is True
 
 
+def test_guided_component_tokens_accept_canvas_role_labels() -> None:
+    canvas_tokens = classifier.component_evidence_tokens(
+        "m means change; 7 means fixed; operation means +"
+    )
+
+    assert classifier.component_evidence_tokens(
+        "m is the changing quantity"
+    ).issubset(canvas_tokens)
+    assert classifier.component_evidence_tokens(
+        "7 is the fixed value"
+    ).issubset(canvas_tokens)
+    assert classifier.component_evidence_tokens(
+        "+ is the addition operation"
+    ).issubset(canvas_tokens)
+
+
 def test_non_multipart_deterministic_correct_stays_outside_guided_llm(
     monkeypatch,
 ) -> None:

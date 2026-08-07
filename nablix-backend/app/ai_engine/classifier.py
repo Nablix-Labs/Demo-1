@@ -920,6 +920,7 @@ def validate_generated_rubric(
 
 _COMPONENT_TOKEN_ALIASES = {
     "added": "add",
+    "addition": "add",
     "adding": "add",
     "adds": "add",
     "changed": "change",
@@ -930,7 +931,17 @@ _COMPONENT_TOKEN_ALIASES = {
     "stays": "stay",
     "unchanged": "fixed",
 }
-_COMPONENT_LINKING_TOKENS = {"a", "an", "is", "the", "stay"}
+_COMPONENT_LINKING_TOKENS = {
+    "a",
+    "an",
+    "is",
+    "means",
+    "operation",
+    "quantity",
+    "the",
+    "value",
+    "stay",
+}
 _NEGATION_PATTERN = re.compile(r"\b(?:not|isn't|isnt|doesn't|doesnt|never)\b")
 
 
