@@ -2691,6 +2691,21 @@ def test_single_numeric_answer_still_uses_numeric_reveal_guardrail() -> None:
     ) is True
 
 
+def test_single_choice_reveal_requires_a_standalone_choice_token() -> None:
+    rules = classifier.load_classifier_rules()
+
+    assert classifier.contains_answer_reveal(
+        "Explain briefly why the variable can change.",
+        "B",
+        rules,
+    ) is False
+    assert classifier.contains_answer_reveal(
+        "The correct option is B.",
+        "B",
+        rules,
+    ) is True
+
+
 def test_guided_llm_partial_persists_only_the_missing_objective(monkeypatch) -> None:
     captured: dict[str, object] = {}
 

@@ -2610,7 +2610,18 @@ def contains_answer_reveal(message: str, correct_answer: str, rules: ClassifierR
     normalized_message: str = normalize_text(message)
     normalized_correct_answer: str = normalize_text(correct_answer)
 
-    if normalized_correct_answer != "" and normalized_correct_answer in normalized_message:
+    exact_answer_present = False
+    if len(normalized_correct_answer) == 1 and normalized_correct_answer.isalnum():
+        exact_answer_present = (
+            re.search(
+                rf"(?<!\w){re.escape(normalized_correct_answer)}(?!\w)",
+                normalized_message,
+            )
+            is not None
+        )
+    elif normalized_correct_answer != "":
+        exact_answer_present = normalized_correct_answer in normalized_message
+    if exact_answer_present:
         return True
     if contains_any(normalized_message, rules.answer_reveal_guardrail.reveal_phrases):
         return True

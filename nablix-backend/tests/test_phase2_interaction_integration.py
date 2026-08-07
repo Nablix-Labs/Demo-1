@@ -35,10 +35,24 @@ client = TestClient(app, headers={"Authorization": "Bearer test-token"})
         "GUIDED_VISUAL_SUPPORT_REQUIRED",
         "GUIDED_PHASE_COMPLETED",
         "PARALLEL_EXAMPLE_REQUIRED",
+        "SESSION_RESUMED",
     ],
 )
 def test_all_guided_routing_reasons_are_response_safe(reason_code: str) -> None:
     assert RoutingReasonCode(reason_code).value == reason_code
+
+
+def test_repeated_unresolved_guided_explanation_never_forces_completion() -> None:
+    assert interaction_service._may_force_complete_repeated_explanation(
+        "GUIDED_PRACTICE",
+        False,
+        3,
+    ) is False
+    assert interaction_service._may_force_complete_repeated_explanation(
+        "GUIDED_PRACTICE",
+        True,
+        3,
+    ) is False
 
 
 def test_atomic_guided_events_are_disabled_for_legacy_student_model() -> None:
