@@ -25,6 +25,7 @@ import { useVoiceStream } from '@/hooks/useVoiceStream';
 import { useInactivityNudge } from '@/hooks/useInactivityNudge';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { demoFor } from '@/lib/demoContent';
+import { setStudentWriting, tutorSay } from '@/lib/tutorSpeech';
 
 // Voice turn transport. 'rest' (default): browser STT (useVoiceTurn) → REST +
 // browser TTS. 'server': stream mic audio to the :8004 voice server, which does
@@ -134,6 +135,16 @@ export default function LessonPage() {
       setQuestionText((rec.current_question ?? '').replace(/^solve for\s*x\s*:?\s*/i, '').trim());
       setQuestionNumber(rec.question_number);
       setTranscript([{ role: 'ai', text: rec.message }]);
+      if (rec.current_phase === 'GUIDED_PRACTICE') {
+        // A fresh guided question gives the floor to the tutor. Canvas-writing
+        // state is module-scoped and can otherwise survive navigation from the
+        // previous question, silently dropping this opening narration.
+        setStudentWriting(false);
+        useNumeraStore.getState().setVoiceStatus('speaking');
+        tutorSay(rec.message, {
+          onEnd: () => useNumeraStore.getState().beginListeningTurn(),
+        });
+      }
       clearTutorMarks();
       // Only the question TEXT is set here. Its type and options come off the
       // same record via syncBackendSession → applyBackendPhase, which already
@@ -143,7 +154,7 @@ export default function LessonPage() {
       useNumeraStore.getState().setVisualCueVisible(rec.show_visual_cue);
       // Open the student's first LISTENING turn (mints turn_id). Mic stays muted
       // until the student opts in; half-duplex gating does the rest.
-      beginListeningTurn();
+      if (rec.current_phase !== 'GUIDED_PRACTICE') beginListeningTurn();
     });
   }, [hydrated, apiEnabled, sessionId, activeConceptId, startSession, setMicMuted, setQuestionText, setQuestionNumber, setTranscript, clearTutorMarks, beginListeningTurn]);
 

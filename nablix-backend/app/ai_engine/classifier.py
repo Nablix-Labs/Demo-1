@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import unicodedata
 from collections.abc import Sequence
@@ -45,6 +47,8 @@ from app.models.adapters import (
 )
 from app.models.guided_learning import (
     ActiveTeachingObjective,
+    FocusedComponentEvidence,
+    GeneratedConcept,
     GeneratedQuestionRubric,
     GuidedEvaluation,
     GuidedStudentState,
@@ -425,6 +429,15 @@ def resolve_guided_rubric(
 ) -> GeneratedQuestionRubric:
     """Return the persisted runtime rubric or generate it once from existing content."""
 
+    authored_rubric = rubric_from_authored_answer_parts(
+        question_id,
+        question_type,
+        answer_spec,
+        rules.guided_learning.rubric_prompt_version,
+    )
+    if authored_rubric is not None:
+        return authored_rubric
+
     rubric = existing_rubric
     if rubric is None or rubric.question_id != question_id:
         rubric_error: AdapterError | None = None
@@ -473,6 +486,105 @@ def resolve_guided_rubric(
     return rubric
 
 
+def rubric_from_authored_answer_parts(
+    question_id: str,
+    question_type: QuestionType | None,
+    answer_spec: AnswerSpec,
+    prompt_version: str,
+) -> GeneratedQuestionRubric | None:
+    """Build stable multipart components from the existing authored contract."""
+
+    if question_type != "MULTI_PART_SHORT_RESPONSE":
+        return None
+    answer_parts = [
+        part.strip()
+        for part in answer_spec.canonical_answer.split(";")
+        if part.strip()
+    ]
+    if len(answer_parts) < 2:
+        return None
+    cache_source = json.dumps(
+        {
+            "question_id": question_id,
+            "answer_parts": answer_parts,
+            "prompt_version": prompt_version,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return GeneratedQuestionRubric(
+        question_id=question_id,
+        required_concepts=[
+            GeneratedConcept(
+                concept_id=f"REQUIRED_COMPONENT_{index}",
+                description=answer_part,
+                required=True,
+            )
+            for index, answer_part in enumerate(answer_parts, start=1)
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key=hashlib.sha256(cache_source.encode("utf-8")).hexdigest(),
+        prompt_version=prompt_version,
+    )
+
+
+def objective_for_rubric(
+    objective: ActiveTeachingObjective | None,
+    rubric: GeneratedQuestionRubric,
+) -> ActiveTeachingObjective:
+    """Keep persisted evidence only when it belongs to the current rubric."""
+
+    if objective is None:
+        return initial_guided_objective(rubric)
+    required_ids = {
+        concept.concept_id
+        for concept in rubric.required_concepts
+        if concept.required
+    }
+    objective_ids = {
+        *objective.confirmed_concept_ids,
+        *objective.missing_concept_ids,
+    }
+    if objective_ids != required_ids:
+        return initial_guided_objective(rubric)
+    return objective
+
+
+def focused_unresolved_prompt(
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+    default_message: str,
+) -> str:
+    """Ask for the first missing requirement without disclosing its answer."""
+
+    missing_ids = set(objective.missing_concept_ids)
+    missing_component = next(
+        (
+            component
+            for component in rubric.required_concepts
+            if component.required and component.concept_id in missing_ids
+        ),
+        None,
+    )
+    if missing_component is None:
+        return default_message
+    component_kind = (
+        f"{missing_component.concept_id} {missing_component.description}"
+    ).casefold()
+    if any(term in component_kind for term in ("explanation", "explain", "reason", "why")):
+        return "You have given the answer. Now explain why it is true in this situation."
+    if any(term in component_kind for term in ("changing", "changes", "variable")):
+        return "Which value can change from one example to another?"
+    if any(term in component_kind for term in ("fixed", "increment", "constant")):
+        return "What operation or amount stays fixed?"
+    if any(term in component_kind for term in ("general_rule", "general rule", "expression")):
+        return "What general rule represents this situation?"
+    if any(term in component_kind for term in ("choice", "selection", "option")):
+        return "Which option do you choose?"
+    return "What else does the question ask you to state?"
+
+
 def classify_guided_learning_response(
     request: ClassificationRequest,
     rules: ClassifierRulesConfig,
@@ -514,7 +626,7 @@ def classify_guided_learning_response(
         rules=rules,
         openai_client=openai_client,
     )
-    objective = request.active_teaching_objective or initial_guided_objective(rubric)
+    objective = objective_for_rubric(request.active_teaching_objective, rubric)
     evaluation: GuidedEvaluation | None = None
     raw_student_state: GuidedStudentState | None = None
     raw_confidence: float | None = None
@@ -539,6 +651,11 @@ def classify_guided_learning_response(
                 validation_feedback=validation_feedback,
                 evaluator_prompt_version=rules.guided_learning.evaluator_prompt_version,
                 system_prompt=rules.guided_learning.evaluator_system_prompt,
+            )
+            candidate = merge_authored_component_evidence(
+                candidate,
+                rubric,
+                request.student_input,
             )
             raw_student_state = candidate.student_state
             raw_confidence = candidate.confidence
@@ -593,10 +710,19 @@ def classify_guided_learning_response(
                     "student_state": rejected_evaluation.student_state,
                 },
             )
+            unresolved_objective = (
+                normalized_guided_objective(rejected_evaluation, objective)
+                or objective
+            )
+            safe_message = focused_unresolved_prompt(
+                rubric,
+                unresolved_objective,
+                rules.guided_learning.reconciliation_message,
+            )
             evaluation = rejected_evaluation.model_copy(
                 update={
-                    "tutor_message": rules.guided_learning.reconciliation_message,
-                    "tutor_message_voice": rules.guided_learning.reconciliation_message,
+                    "tutor_message": safe_message,
+                    "tutor_message_voice": safe_message,
                 }
             )
         else:
@@ -604,6 +730,63 @@ def classify_guided_learning_response(
                 "openai_ai_engine",
                 "Guided turn evaluation failed without a validated response.",
             )
+    adjudication_target = component_adjudication_target(
+        evaluation,
+        objective,
+        rubric,
+        request.student_input,
+        request.question,
+        request.answer_spec,
+    )
+    adjudicator = getattr(openai_client, "adjudicate_component_evidence", None)
+    if adjudication_target is not None and callable(adjudicator):
+        logger.info(
+            "guided_component_adjudication_started",
+            extra={
+                "question_id": request.question_id,
+                "component_id": adjudication_target.concept_id,
+            },
+        )
+        evidence = adjudicator(
+            question_type=request.question_type,
+            question=request.question,
+            answer_spec=request.answer_spec,
+            target_component=adjudication_target,
+            active_objective=objective,
+            student_response=request.student_input,
+            input_source=request.input_source,
+            recent_conversation=request.conversation_history[
+                -rules.guided_learning.maximum_recent_history_turns:
+            ],
+            prompt_version=(
+                rules.guided_learning.component_adjudicator_prompt_version
+            ),
+            system_prompt=(
+                rules.guided_learning.component_adjudicator_system_prompt
+            ),
+        )
+        evaluation = apply_focused_component_evidence(
+            evaluation,
+            evidence,
+            rules.guided_learning.component_adjudicator_confidence_threshold,
+        )
+        evaluation = validate_guided_evaluation(
+            evaluation,
+            rubric,
+            objective,
+            allowed_errors,
+            rules,
+        )
+        logger.info(
+            "guided_component_adjudication_completed",
+            extra={
+                "question_id": request.question_id,
+                "component_id": evidence.component_id,
+                "status": evidence.status,
+                "confidence": evidence.confidence,
+                "student_state": evaluation.student_state,
+            },
+        )
     if is_authoritative_guided_completion(request):
         evaluation = authoritative_guided_completion(evaluation, rules)
     next_objective = normalized_guided_objective(evaluation, objective)
@@ -735,6 +918,173 @@ def validate_generated_rubric(
         )
 
 
+_COMPONENT_TOKEN_ALIASES = {
+    "added": "add",
+    "adding": "add",
+    "adds": "add",
+    "changed": "change",
+    "changes": "change",
+    "changing": "change",
+    "constant": "fixed",
+    "remains": "stay",
+    "stays": "stay",
+    "unchanged": "fixed",
+}
+_COMPONENT_LINKING_TOKENS = {"a", "an", "is", "the", "stay"}
+_NEGATION_PATTERN = re.compile(r"\b(?:not|isn't|isnt|doesn't|doesnt|never)\b")
+
+
+def component_evidence_tokens(value: str) -> set[str]:
+    """Normalize harmless wording differences in one authored answer part."""
+
+    normalized_tokens = {
+        _COMPONENT_TOKEN_ALIASES.get(token, token)
+        for token in normalize_semantic_answer(value).split()
+    }
+    return normalized_tokens - _COMPONENT_LINKING_TOKENS
+
+
+def authored_component_is_demonstrated(
+    component: GeneratedConcept,
+    response_tokens: set[str],
+    normalized_response: str,
+) -> bool:
+    if not component.concept_id.startswith("REQUIRED_COMPONENT_"):
+        return False
+    required_tokens = component_evidence_tokens(component.description)
+    return bool(required_tokens) and required_tokens.issubset(response_tokens)
+
+
+def merge_authored_component_evidence(
+    evaluation: GuidedEvaluation,
+    rubric: GeneratedQuestionRubric,
+    student_input: str,
+) -> GuidedEvaluation:
+    """Confirm clear lexical paraphrases without replacing semantic LLM review."""
+
+    if _NEGATION_PATTERN.search(student_input.lower()) is not None:
+        return evaluation
+    normalized_response = normalize_semantic_answer(student_input)
+    response_tokens = component_evidence_tokens(normalized_response)
+    demonstrated_ids = {
+        component.concept_id
+        for component in rubric.required_concepts
+        if authored_component_is_demonstrated(
+            component,
+            response_tokens,
+            normalized_response,
+        )
+    }
+    if not demonstrated_ids:
+        return evaluation
+    contradicted_ids = set(evaluation.contradicted_concept_ids)
+    confirmed_ids = (
+        set(evaluation.newly_confirmed_concept_ids) | demonstrated_ids
+    ) - contradicted_ids
+    return evaluation.model_copy(
+        update={"newly_confirmed_concept_ids": sorted(confirmed_ids)}
+    )
+
+
+def significant_component_tokens(value: str) -> set[str]:
+    """Return cheap relevance tokens while retaining numbers and variables."""
+
+    tokens = set(normalize_semantic_answer(value).split())
+    ignored = {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "be",
+        "because",
+        "briefly",
+        "can",
+        "does",
+        "explain",
+        "for",
+        "how",
+        "is",
+        "it",
+        "of",
+        "or",
+        "the",
+        "this",
+        "to",
+        "what",
+        "which",
+        "why",
+        "with",
+    }
+    return {
+        token
+        for token in tokens - ignored
+        if len(token) >= 3 or token.isdigit() or token.isalpha() and len(token) == 1
+    }
+
+
+def component_adjudication_target(
+    evaluation: GuidedEvaluation,
+    objective: ActiveTeachingObjective,
+    rubric: GeneratedQuestionRubric,
+    student_response: str,
+    question: str,
+    answer_spec: AnswerSpec,
+) -> GeneratedConcept | None:
+    """Select one unresolved component only for a relevant PARTIAL response."""
+
+    if (
+        evaluation.student_state != "PARTIAL"
+        or evaluation.contradicted_concept_ids
+        or not objective.confirmed_concept_ids
+        or not evaluation.missing_concept_ids
+        or not student_response.strip()
+    ):
+        return None
+    missing_ids = set(evaluation.missing_concept_ids)
+    target = next(
+        (
+            component
+            for component in rubric.required_concepts
+            if component.required and component.concept_id in missing_ids
+        ),
+        None,
+    )
+    if target is None:
+        return None
+    response_tokens = significant_component_tokens(student_response)
+    context = " ".join(
+        [
+            target.description,
+            question,
+            answer_spec.canonical_answer,
+            *answer_spec.accepted_answers,
+        ]
+    )
+    if not response_tokens.intersection(significant_component_tokens(context)):
+        return None
+    return target
+
+
+def apply_focused_component_evidence(
+    evaluation: GuidedEvaluation,
+    evidence: FocusedComponentEvidence,
+    confidence_threshold: float,
+) -> GuidedEvaluation:
+    """Use the focused pass only to correct a high-confidence false negative."""
+
+    if (
+        evidence.status != "DEMONSTRATED"
+        or evidence.confidence < confidence_threshold
+    ):
+        return evaluation
+    confirmed_ids = set(evaluation.newly_confirmed_concept_ids)
+    confirmed_ids.add(evidence.component_id)
+    return evaluation.model_copy(
+        update={"newly_confirmed_concept_ids": sorted(confirmed_ids)}
+    )
+
+
 def initial_guided_objective(
     rubric: GeneratedQuestionRubric,
 ) -> ActiveTeachingObjective:
@@ -831,6 +1181,20 @@ def validate_guided_evaluation(
             "openai_ai_engine",
             "Guided evaluation must return non-empty text and voice messages.",
         )
+    if not remaining:
+        return evaluation.model_copy(
+            update={
+                "student_state": "CORRECT",
+                "preserved_concept_ids": sorted(
+                    set(objective.confirmed_concept_ids) - contradicted
+                ),
+                "missing_concept_ids": [],
+                "selected_error_code": None,
+                "next_objective": None,
+                "tutor_message": rules.messages.CORRECT,
+                "tutor_message_voice": rules.messages.CORRECT,
+            }
+        )
     if evaluation.student_state == "CORRECT" and remaining:
         return reconcile_guided_evaluation(
             evaluation,
@@ -846,13 +1210,6 @@ def validate_guided_evaluation(
             objective,
             rules,
             "PARTIAL did not contain both confirmed and missing concepts",
-        )
-    if evaluation.student_state == "WRONG" and not remaining:
-        return reconcile_guided_evaluation(
-            evaluation,
-            objective,
-            rules,
-            "WRONG confirmed every required concept",
         )
     if evaluation.student_state in {"STUCK", "UNCLEAR"} and (
         evaluation.newly_confirmed_concept_ids
@@ -1093,6 +1450,7 @@ def generate_explain_again_response(
 
     last_error: AdapterError | None = None
     validation_feedback: str | None = None
+    answer_reveal_rejected = False
     for attempt in range(rules.guided_learning.maximum_retries + 1):
         recent_conversation = request.recent_conversation[
             -rules.guided_learning.maximum_recent_history_turns:
@@ -1127,24 +1485,19 @@ def generate_explain_again_response(
             rules,
             )
         ):
-            return ExplainAgainResult(
-                interaction_type="EXPLAIN_AGAIN",
-                tutor_message=message.tutor_message,
-                tutor_message_voice_optimised=message.tutor_message_voice_optimised,
-                confidence=message.confidence,
-                attempt_increment=0,
-                evaluation_reason_code="EXPLAIN_AGAIN_REEXPRESSION",
-                guided_student_state=request.guided_student_state,
-                active_teaching_objective=request.active_teaching_objective,
-                first_unresolved_concept_id=request.first_unresolved_concept_id,
-                selected_error_code=request.selected_error_code,
-                support_served_this_turn=None,
-                active_support_level=request.active_support_level,
-                highest_support_used=request.highest_support_used,
-                active_scaffold=request.active_scaffold,
-                progression_change_requested=False,
+            return _explain_again_result(
+                request,
+                message.tutor_message,
+                message.tutor_message_voice_optimised,
+                message.confidence,
             )
-        validation_feedback = rules.answer_reveal_guardrail.rewrite_feedback
+        answer_reveal_rejected = True
+        validation_feedback = (
+            f"{rules.answer_reveal_guardrail.rewrite_feedback} "
+            "Guardrail retry mode: return exactly one Socratic question that "
+            "asks the student to supply the unresolved fact. Do not state, "
+            "summarise, or paraphrase any answer component."
+        )
         last_error = AdapterError(
             "openai_ai_engine",
             (
@@ -1156,9 +1509,63 @@ def generate_explain_again_response(
             "explain_again_answer_reveal_retry",
             extra={"question_id": request.question_id, "attempt": attempt + 1},
         )
+    if answer_reveal_rejected:
+        safe_message = _safe_explain_again_message(request)
+        logger.warning(
+            "explain_again_safe_response_used",
+            extra={"question_id": request.question_id},
+        )
+        return _explain_again_result(
+            request,
+            safe_message,
+            safe_message,
+            1.0,
+        )
     raise last_error or AdapterError(
         "openai_ai_engine",
         f"Explain Again generation failed for question_id={request.question_id}.",
+    )
+
+
+def _explain_again_result(
+    request: ExplainAgainRequest,
+    tutor_message: str,
+    tutor_message_voice_optimised: str,
+    confidence: float,
+) -> ExplainAgainResult:
+    return ExplainAgainResult(
+        interaction_type="EXPLAIN_AGAIN",
+        tutor_message=tutor_message,
+        tutor_message_voice_optimised=tutor_message_voice_optimised,
+        confidence=confidence,
+        attempt_increment=0,
+        evaluation_reason_code="EXPLAIN_AGAIN_REEXPRESSION",
+        guided_student_state=request.guided_student_state,
+        active_teaching_objective=request.active_teaching_objective,
+        first_unresolved_concept_id=request.first_unresolved_concept_id,
+        selected_error_code=request.selected_error_code,
+        support_served_this_turn=None,
+        active_support_level=request.active_support_level,
+        highest_support_used=request.highest_support_used,
+        active_scaffold=request.active_scaffold,
+        progression_change_requested=False,
+    )
+
+
+def _safe_explain_again_message(request: ExplainAgainRequest) -> str:
+    if request.active_scaffold is not None:
+        return (
+            "Let’s look at the step already on your screen in a different way. "
+            "What do you notice first?"
+        )
+    if request.visible_visual_cue is not None and request.visible_visual_cue.show:
+        return (
+            "Let’s use the visual already on your screen. "
+            "What is the first difference you notice?"
+        )
+    return (
+        "Let’s break the question into one smaller part. "
+        "What information would you start with?"
     )
 
 

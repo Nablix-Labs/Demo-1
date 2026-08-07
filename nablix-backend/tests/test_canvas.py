@@ -1,6 +1,9 @@
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api import canvas as canvas_api
 from app.adapters import provider
 from app.adapters.student_model import StudentModelServiceAdapter
 from app.adapters.tutor_engine import TutorEngineServiceAdapter
@@ -14,6 +17,7 @@ from app.models.adapters import (
     TutorResult,
     VisionOCRResult,
 )
+from app.models.canvas import CanvasSubmitRequest
 from app.services import canvas_service, interaction_service, session_service
 from app.services.snapshot_store import get_snapshot
 from app.models.student_model_session import (
@@ -30,6 +34,43 @@ from tests.test_session_events import (
 client = TestClient(app, headers={"Authorization": "Bearer test-token"})
 
 VALID_SNAPSHOT_DATA_URL = "data:image/png;base64,aGVsbG8="
+
+
+def test_canvas_endpoint_serializes_submissions_for_one_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active_calls = 0
+    maximum_active_calls = 0
+
+    async def tracked_submit(
+        request: CanvasSubmitRequest,
+        access_token: str,
+    ) -> None:
+        nonlocal active_calls, maximum_active_calls
+        del request, access_token
+        active_calls += 1
+        maximum_active_calls = max(maximum_active_calls, active_calls)
+        await asyncio.sleep(0)
+        active_calls -= 1
+        return None
+
+    monkeypatch.setattr(canvas_api, "submit_canvas", tracked_submit)
+    request = CanvasSubmitRequest(
+        session_id="SESSION001",
+        student_id="ST001",
+        snapshot_data_url=VALID_SNAPSHOT_DATA_URL,
+        submission_role="STANDALONE_ATTEMPT",
+    )
+
+    async def submit_concurrently() -> None:
+        await asyncio.gather(
+            canvas_api.canvas_submit_endpoint(request, "token"),
+            canvas_api.canvas_submit_endpoint(request, "token"),
+        )
+
+    asyncio.run(submit_concurrently())
+
+    assert maximum_active_calls == 1
 
 
 @pytest.fixture(autouse=True)
