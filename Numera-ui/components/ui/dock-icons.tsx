@@ -171,12 +171,28 @@ export const HelpIcon: ReactElement = (
 );
 
 /* ── Profile — the student themselves, so it takes the brand's own
-      identity colour rather than a section colour. Log out lives inside
-      this page: a session-ending action should be somewhere you go on
-      purpose, not one mis-click away in a flat row of ten destinations. ── */
+      identity colour rather than a section colour. ── */
 export const ProfileIcon: ReactElement = (
   <Tile id="nd-profile" from="#2F4470" to="#1B2A4A">
     <circle cx="12" cy="8" r="4" />
     <path d="M4 21v-1a8 8 0 0 1 16 0v1" />
+  </Tile>
+);
+
+/* ── Log out — the way out, asked for in the dock itself (Manjusha, 7 Aug).
+      It also lives in Profile, which is where this used to be the ONLY way
+      to reach it; the reasoning then was that a session-ending action should
+      be somewhere you go on purpose rather than one tap away in a row of
+      destinations. That concern is real and it has not gone away, so this
+      tile is deliberately the quietest in the set: muted grey rather than a
+      section colour, and last in the row, so it reads as "leave" and not as
+      another place to visit. It is also absent from the lesson, where the
+      dock is tucked away — which is exactly where a mis-tap would cost the
+      most work. ── */
+export const LogOutIcon: ReactElement = (
+  <Tile id="nd-logout" from="#7C8794" to="#4A5563">
+    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+    <polyline points="16 17 21 12 16 7" />
+    <line x1="21" y1="12" x2="9" y2="12" />
   </Tile>
 );

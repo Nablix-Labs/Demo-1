@@ -139,12 +139,48 @@ export function useVoiceStream({ onAudio }: UseVoiceStreamOptions) {
     streamRef.current = stream;
 
     const Ctx = window.AudioContext ?? (window as SpeechWindow).webkitAudioContext!;
-    const ctx = new Ctx();
+    /**
+     * Ask for the capture rate Deepgram is actually configured for
+     * (`encoding=linear16&sample_rate=16000`, streaming_server.py:86-87)
+     * instead of taking the hardware's 44.1/48kHz and squashing it ourselves.
+     *
+     * `downsample()` below is a box average: it sums ~3 input samples per
+     * output sample and divides. That is a low-pass filter with a very poor
+     * response, so everything above 8kHz folds back into the speech band as
+     * aliasing rather than being filtered out. Sibilants and plosives are
+     * exactly where that lands, and it is the ASR that pays — garbled,
+     * repeated-word transcripts of the kind reported on 7 Aug ("I call BBB.
+     * Because that that that has an extra support").
+     *
+     * Browsers resample in the audio thread with a proper polyphase filter, so
+     * asking for 16kHz here hands the job to code built for it. When the
+     * browser honours it, `downsample()` sees inRate === TARGET_RATE and
+     * returns its input untouched; when it doesn't, the old path still runs.
+     * Either way the wire format is unchanged.
+     *
+     * This does NOT make transcription accurate on its own — model and
+     * language are the voice server's to tune. It removes damage we were
+     * adding.
+     */
+    let ctx: AudioContext;
+    try {
+      ctx = new Ctx({ sampleRate: TARGET_RATE });
+    } catch {
+      // Older Safari rejects the option outright rather than ignoring it.
+      ctx = new Ctx();
+    }
     ctxRef.current = ctx;
     const source = ctx.createMediaStreamSource(stream);
     const proc = ctx.createScriptProcessor(4096, 1, 1);
     procRef.current = proc;
     const inRate = ctx.sampleRate;
+    // Whether the browser honoured the request is not knowable from the code —
+    // say which path is live so a transcription complaint can be checked
+    // against it rather than guessed at.
+    console.log(
+      `[voice] capture ${inRate}Hz → ${TARGET_RATE}Hz`,
+      inRate === TARGET_RATE ? '(native, no resampling)' : '(falling back to box-average downsample)',
+    );
 
     proc.onaudioprocess = (e: AudioProcessingEvent) => {
       const input = e.inputBuffer.getChannelData(0);
