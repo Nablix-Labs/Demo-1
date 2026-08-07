@@ -165,15 +165,33 @@ export function stopTutorSpeech(): void {
   useMicLevel.getState().setAiSpeaking(false);
 }
 
-function playBase64Mp3(base64: string, onEnd?: () => void): void {
+function playBase64Mp3(
+  base64: string,
+  fallbackText: string,
+  onEnd?: () => void,
+): void {
   const audio = new Audio(`data:${AUDIO_MIME};base64,${base64}`);
   currentAudio = audio;
   let mouthTimer: ReturnType<typeof setInterval> | null = null;
-  const finish = () => {
+  let settled = false;
+  const cleanUp = () => {
     if (mouthTimer) clearInterval(mouthTimer);
+    mouthTimer = null;
     useMicLevel.getState().setAiSpeaking(false);
     if (currentAudio === audio) currentAudio = null;
+  };
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    cleanUp();
     onEnd?.();
+  };
+  const speakBlockedAudioInBrowser = () => {
+    if (settled) return;
+    settled = true;
+    cleanUp();
+    console.warn('[tts] generated audio playback was blocked; using browser speech');
+    speakBrowser(fallbackText, onEnd);
   };
   audio.onplaying = () => {
     useMicLevel.getState().setAiSpeaking(true);
@@ -195,7 +213,7 @@ function playBase64Mp3(base64: string, onEnd?: () => void): void {
   };
   audio.onended = finish;
   audio.onerror = finish;
-  void audio.play().catch(finish);
+  void audio.play().catch(speakBlockedAudioInBrowser);
 }
 
 /**
@@ -257,7 +275,7 @@ export function speakTutor(text: string, onEnd?: () => void): void {
         if (token !== speakToken) return; // superseded while fetching
         if (audioBase64) {
           failedAt.delete(p ?? '');
-          playBase64Mp3(audioBase64, onEnd);
+          playBase64Mp3(audioBase64, text, onEnd);
           return;
         }
         onFail();

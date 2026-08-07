@@ -12,7 +12,7 @@
  * Backend calls are gated on NEXT_PUBLIC_API_BASE_URL: when it's unset (local
  * UI-only runs) the hook is a no-op so the mock UX keeps working untouched.
  */
-import { useCallback } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   startSession,
   submitCanvas,
@@ -32,6 +32,7 @@ import {
 import { applyInteractionSupport, acceptResponse } from '@/lib/interactionPresentation';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { tutorSay, setStudentWriting } from '@/lib/tutorSpeech';
+import { speakBrowser } from '@/lib/tts';
 import {
   availableSupport,
   nextSupport,
@@ -113,6 +114,8 @@ function errorMessage(err: unknown, fallback: string): string {
 // Shown in the chat when a tutor call fails (e.g. backend 5xx), so a failure is
 // visible to the student instead of the chat silently freezing.
 const TUTOR_UNAVAILABLE = "Sorry — I couldn't reach the tutor just now. Please try again in a moment.";
+const EXPLAIN_AGAIN_ACKNOWLEDGEMENT =
+  'Okay—give me a moment. I’m looking at the question and the support already on your screen, so I can explain the same idea in a clearer, different way.';
 
 /**
  * What the student sees in the chat when a tutor call fails.
@@ -233,6 +236,9 @@ export async function beginSession(
 export function useDemoTutor() {
   const sessionId = useNumeraStore((s) => s.sessionId);
   const canvasExporter = useNumeraStore((s) => s.canvasExporter);
+  const canvasSubmissionInFlight = useRef(false);
+  const explainAgainRequest = useRef<Promise<InteractionResponse | null> | null>(null);
+  const [explainAgainPending, setExplainAgainPending] = useState(false);
   const addTranscriptMessage = useNumeraStore((s) => s.addTranscriptMessage);
   const addTrailEntry = useNumeraStore((s) => s.addTrailEntry);
 
@@ -301,6 +307,8 @@ export function useDemoTutor() {
       addTrailEntry({ kind: 'tutor', text: 'Nothing on the canvas to submit yet.' });
       return null;
     }
+    if (canvasSubmissionInFlight.current) return null;
+    canvasSubmissionInFlight.current = true;
     try {
       const res = await submitCanvas(sessionId, png, 'STANDALONE_ATTEMPT');
       // Canvas responses now carry the same phase state as /interaction, so a
@@ -337,6 +345,8 @@ export function useDemoTutor() {
       addTranscriptMessage({ role: 'ai', text: chatError(err, TUTOR_UNAVAILABLE) }); // surface the failure in the chat
       addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Could not read the canvas.') });
       return null;
+    } finally {
+      canvasSubmissionInFlight.current = false;
     }
   }, [sessionId, canvasExporter, addTranscriptMessage, addTrailEntry]);
 
@@ -345,13 +355,13 @@ export function useDemoTutor() {
    *
    * Neither an answer nor a help escalation (Phase 2 handoff, Manav — Frontend,
    * Explain Again 2). The frontend computes nothing: no attempts, no components,
-   * no support progression, no scaffold changes. It sends the request and
-   * renders exactly what comes back.
+   * no support progression and no scaffold changes. It immediately acknowledges
+   * the request, then renders the generated explanation when it arrives.
    *
    * Older deployments can still return 404/405/422; only those explicit
    * compatibility responses fall back to the cue already held by the client.
    */
-  const explainAgain = useCallback(async (): Promise<InteractionResponse | null> => {
+  const runExplainAgain = useCallback(async (): Promise<InteractionResponse | null> => {
     const s = useNumeraStore.getState();
     const replayLocally = () => {
       s.setVisualCueVisible(true);
@@ -364,6 +374,20 @@ export function useDemoTutor() {
     }
 
     const turnId = useNumeraStore.getState().beginSubmissionTurn();
+    addTranscriptMessage({ role: 'ai', text: EXPLAIN_AGAIN_ACKNOWLEDGEMENT });
+    addTrailEntry({ kind: 'tutor', text: EXPLAIN_AGAIN_ACKNOWLEDGEMENT });
+    // Explain Again is an explicit handoff from the student to the tutor, even
+    // when the canvas still contains unsubmitted marks.
+    setStudentWriting(false);
+    const acknowledgementFinished = new Promise<void>((resolve) => {
+      tutorSay(EXPLAIN_AGAIN_ACKNOWLEDGEMENT, {
+        onEnd: resolve,
+        // This acknowledgement must begin on the click itself. Waiting for a
+        // remote TTS round trip makes it arrive alongside the LLM explanation,
+        // which defeats its purpose and can lose browser audio permission.
+        speak: speakBrowser,
+      });
+    });
     try {
       const res = await sendInteraction({
         session_id: sessionId,
@@ -380,8 +404,12 @@ export function useDemoTutor() {
       // Same ordering guard as every other turn. A cached replay keeps its
       // original version, so re-pressing the button must not re-render the reply
       // a second time — which is exactly what the guard is for.
-      if (!acceptResponse(res)) return res;
+      if (!acceptResponse(res)) {
+        await acknowledgementFinished;
+        return res;
+      }
       // Present the returned wording once; preserve cue and scaffold as sent.
+      await acknowledgementFinished;
       addTranscriptMessage({ role: 'ai', text: res.message });
       const spoken = applyInteractionSupport(res);
       tutorSay(spoken, { afterMarks: Boolean(res.canvas_draw?.length) });
@@ -395,15 +423,28 @@ export function useDemoTutor() {
       const status = (err as { response?: { status?: number } })?.response?.status;
       const endpointMissing = status === 404 || status === 405 || status === 422;
       if (endpointMissing) {
+        await acknowledgementFinished;
         console.warn('[explain-again] backend has no EXPLAIN_AGAIN yet — replaying the held cue');
         replayLocally();
         return null;
       }
+      await acknowledgementFinished;
       addTranscriptMessage({ role: 'ai', text: chatError(err, TUTOR_UNAVAILABLE) });
       addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Explain again failed.') });
       return null;
     }
   }, [sessionId, addTranscriptMessage, addTrailEntry]);
+
+  const explainAgain = useCallback((): Promise<InteractionResponse | null> => {
+    if (explainAgainRequest.current !== null) return explainAgainRequest.current;
+    setExplainAgainPending(true);
+    const request = runExplainAgain().finally(() => {
+      explainAgainRequest.current = null;
+      setExplainAgainPending(false);
+    });
+    explainAgainRequest.current = request;
+    return request;
+  }, [runExplainAgain]);
 
   const claimInactivityNudge = useCallback(async (
     idleDurationMs: number,
@@ -472,10 +513,9 @@ export function useDemoTutor() {
         throw new Error('Backend did not acknowledge the presented inactivity nudge.');
       }
       acceptResponse(res);
-      addTranscriptMessage({ role: 'ai', text: delivery.message });
       addTrailEntry({ kind: 'tutor', text: delivery.message, meta: 'inactivity nudge' });
     },
-    [sessionId, addTranscriptMessage, addTrailEntry],
+    [sessionId, addTrailEntry],
   );
 
   /**
@@ -567,7 +607,8 @@ export function useDemoTutor() {
       // actually drew something (don't send blank canvases to the backend/OCR).
       let canvasSnapshotId: string | undefined;
       const png = hasCanvasActivity() ? canvasExporter?.() : null;
-      if (png) {
+      if (png && !canvasSubmissionInFlight.current) {
+        canvasSubmissionInFlight.current = true;
         try {
           console.log('→ POST /canvas/submit', { session_id: sessionId, student_id: studentId(), snapshot_bytes: png.length });
           const canvasRes = await submitCanvas(sessionId, png, 'VOICE_ATTACHMENT');
@@ -582,6 +623,8 @@ export function useDemoTutor() {
         } catch (err) {
           console.warn('✗ /canvas/submit failed:', err);
           /* canvas is optional for a voice turn */
+        } finally {
+          canvasSubmissionInFlight.current = false;
         }
       } else {
         console.log('(no canvas content this turn)');
@@ -708,6 +751,7 @@ export function useDemoTutor() {
     submitVoiceTurn,
     hint,
     explainAgain,
+    explainAgainPending,
     claimInactivityNudge,
     presentInactivityNudge,
     acknowledgeInactivityNudge,

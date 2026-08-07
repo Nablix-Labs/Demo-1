@@ -75,6 +75,18 @@ describe('the cases that were already right stay right', () => {
     expect(msg).not.toMatch(/already have this topic/i);
     expect(msg).toContain('ALG_1STEP_GP_F01');
   });
+
+  it('a journey-version conflict never exposes the stored journey payload', () => {
+    const msg = studentFacingError(
+      err(409, {
+        error_code: 'JOURNEY_VERSION_CONFLICT',
+        message: "{'current_journey_state': {'student_id': 'ST016', 'version': 8}}",
+      }),
+    );
+    expect(msg).toMatch(/two submissions|press Check/i);
+    expect(msg).not.toContain('current_journey_state');
+    expect(msg).not.toContain('student_id');
+  });
 });
 
 describe('a genuinely unreachable server still reads as unreachable', () => {
