@@ -93,7 +93,8 @@ export interface IdleDecision {
     | 'below_threshold'
     | 'in_cooldown'
     | 'max_reached'
-    | 'no_policy';
+    | 'no_policy'
+    | 'no_tutor_turn';
 }
 
 /**
@@ -109,11 +110,17 @@ export function shouldClaimNudge(args: {
   elapsedMs: number;
   sinceLastNudgeMs: number | null;
   nudgesThisTurn: number;
+  /** The tutor turn this nudge would belong to; null before the tutor has spoken. */
+  tutorTurnId: string | null;
 }): IdleDecision {
-  const { policy, gate, elapsedMs, sinceLastNudgeMs, nudgesThisTurn } = args;
+  const { policy, gate, elapsedMs, sinceLastNudgeMs, nudgesThisTurn, tutorTurnId } = args;
 
   // No local defaults: without server policy we do not invent one.
   if (!policy) return { claim: false, reason: 'no_policy' };
+  // A nudge belongs to a tutor turn. The backend requires the id and rejects
+  // the interaction without it, so claiming here can only produce a 422 —
+  // once per tick, forever. See the test for the full account.
+  if (!tutorTurnId) return { claim: false, reason: 'no_tutor_turn' };
   if (!clockMayRun(gate)) return { claim: false, reason: 'blocked' };
   if (nudgesThisTurn >= policy.maxNudgesPerTutorTurn)
     return { claim: false, reason: 'max_reached' };

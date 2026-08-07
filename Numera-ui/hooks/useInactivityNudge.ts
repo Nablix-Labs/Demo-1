@@ -122,6 +122,7 @@ export function useInactivityNudge(options: InactivityNudgeOptions = {}): void {
         elapsedMs: now - idleSinceRef.current,
         sinceLastNudgeMs: lastClaimAtRef.current === null ? null : now - lastClaimAtRef.current,
         nudgesThisTurn: nudgesThisTurnRef.current,
+        tutorTurnId: useNumeraStore.getState().lastTutorTurnId,
       });
       if (!decision.claim) return;
 
@@ -184,6 +185,12 @@ export function useInactivityNudge(options: InactivityNudgeOptions = {}): void {
             );
           }
         }
+      } catch (err) {
+        // A claim that throws used to escape this interval entirely — there was
+        // a `finally` here but no `catch`, so every rejected claim surfaced as
+        // "Uncaught (in promise) AxiosError" and the tick kept firing (7 Aug).
+        // The nudge is optional; a failed one is a log line, not a page error.
+        console.warn('[nudge] claim failed — skipping this one', err);
       } finally {
         claimingRef.current = false;
       }

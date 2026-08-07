@@ -175,6 +175,23 @@ export function useWebSocket(sessionId: string | null) {
                     : undefined,
               });
             }
+            // Record the tutor turn, exactly as the REST path does (contract
+            // §11, useDemoTutor). This was missing entirely, and setTutorTurn
+            // had only ever been called there — so on the server transport
+            // lastTutorTurnId stayed null for the whole session even though the
+            // voice server forwards tutor_turn_id in this very frame.
+            //
+            // Everything keyed to the tutor turn was therefore dead here. The
+            // visible one: inactivity nudges sent previous_tutor_turn_id: null,
+            // which the backend rejects outright, so an idle student produced a
+            // 422 on every tick instead of a nudge (7 Aug, VM).
+            useNumeraStore.getState().setTutorTurn(
+              (msg.tutor_turn_id as string | null) ?? null,
+              {
+                expects: (msg.expects_student_response as boolean | undefined) ?? true,
+                allow: (msg.allow_voice_input as boolean | undefined) ?? true,
+              },
+            );
             // Reset the player; chunks are coming next. The voice line rides
             // along so a failed stream (tutor_audio_end with error — Cartesia
             // quota, 31 Jul) speaks through the REST fallback chain instead of
