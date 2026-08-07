@@ -646,7 +646,19 @@ export function useDemoTutor() {
           hint_count: ctx.hint_count,
           // Voice turn-sync contract (§5): identify the turn so the backend can
           // dedupe/reject stale turns. transcript_final is always true here.
-          turn_id: state.currentTurnId ?? undefined,
+          //
+          // Mint one rather than sending `undefined`. turn_id is REQUIRED on
+          // InteractionRequest (interaction.py:57), so omitting it is a 422
+          // before the tutor ever sees the answer — the same shape of failure
+          // as the nudge's null previous_tutor_turn_id and the voice socket's
+          // missing turn_id, both found today.
+          //
+          // It can genuinely be null here: this path reads the id but never
+          // opens a turn, and the only opener on entry is page.tsx, which skips
+          // it when the session starts already in GUIDED_PRACTICE. A student
+          // resuming straight into guided practice whose opening line never
+          // finished speaking would answer with no turn id at all.
+          turn_id: state.currentTurnId ?? state.beginSubmissionTurn(),
           previous_tutor_turn_id: state.lastTutorTurnId,
           transcript_final: true,
         };
