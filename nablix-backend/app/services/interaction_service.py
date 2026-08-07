@@ -1265,6 +1265,20 @@ def _conversation_state_for(
     return "ASKED_QUESTION", "ANSWER"
 
 
+def _may_force_complete_repeated_explanation(
+    current_phase: Phase,
+    answer_value_confirmed: bool,
+    explanation_request_count: int,
+) -> bool:
+    """Allow the legacy loop-breaker only outside evidence-driven guidance."""
+
+    return (
+        current_phase != "GUIDED_PRACTICE"
+        and answer_value_confirmed
+        and explanation_request_count >= 2
+    )
+
+
 def _stale_turn_response(session: SessionRecord) -> StaleTurnResponse:
     return StaleTurnResponse(
         status="STALE_TURN",
@@ -2518,25 +2532,27 @@ async def _process_interaction(
         state_updates["active_teaching_objective"] = None
         state_updates["explanation_request_count"] = 0
 
-    # A rejected explanation must not loop forever. The evaluator accepts
-    # concrete wordings ("I subtracted 6 from both sides") but can reject a
-    # child's generic-but-honest ones ("I moved it to the other side") — and
-    # PARTIAL turns carry attempt_increment=0, so no counter ever advanced and
-    # no support ever escalated. Live on 31 Jul: 29 consecutive
-    # REQUEST_EXPLANATION turns on one question; the session was unwinnable.
-    # After two rejected asks the third would start the loop, so accept the
-    # student's reasoning and move on — the answer VALUE was already right, and
-    # the question_advanced block below supplies the next-question message.
-    # Schema-managed turns are untouched: there the Student Model owns
-    # progression.
+    # Never turn repeated unresolved reasoning into a correct completion during
+    # Guided Practice. A previous loop-breaker advanced after three explanation
+    # requests even when answer_value_confirmed was false, allowing an incorrect
+    # response to move to the next question. Guided progression must remain
+    # evidence-driven; repetition alone is not evidence.
     if conversation_action == "REQUEST_EXPLANATION" and schema_response is None:
-        if session.explanation_request_count >= 2:
+        answer_value_confirmed = (
+            session.answer_value_confirmed or tutor.answer_value_confirmed
+        )
+        if _may_force_complete_repeated_explanation(
+            turn_session.current_phase,
+            answer_value_confirmed,
+            session.explanation_request_count,
+        ):
             conversation_action = "ADVANCE_TO_NEXT_QUESTION"
             state_updates["explanation_request_count"] = 0
             state_updates["question_completed"] = True
         else:
-            state_updates["explanation_request_count"] = (
-                session.explanation_request_count + 1
+            state_updates["explanation_request_count"] = min(
+                session.explanation_request_count + 1,
+                2,
             )
     elif session.explanation_request_count:
         state_updates["explanation_request_count"] = 0

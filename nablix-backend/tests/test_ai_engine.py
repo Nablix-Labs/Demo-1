@@ -2691,6 +2691,21 @@ def test_single_numeric_answer_still_uses_numeric_reveal_guardrail() -> None:
     ) is True
 
 
+def test_single_choice_reveal_requires_a_standalone_choice_token() -> None:
+    rules = classifier.load_classifier_rules()
+
+    assert classifier.contains_answer_reveal(
+        "Explain briefly why the variable can change.",
+        "B",
+        rules,
+    ) is False
+    assert classifier.contains_answer_reveal(
+        "The correct option is B.",
+        "B",
+        rules,
+    ) is True
+
+
 def test_guided_llm_partial_persists_only_the_missing_objective(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
@@ -2962,6 +2977,22 @@ def test_guided_multipart_undetermined_paraphrase_still_uses_llm(monkeypatch) ->
     assert calls == 1
     assert response.evaluation == "CORRECT"
     assert response.question_completed is True
+
+
+def test_guided_component_tokens_accept_canvas_role_labels() -> None:
+    canvas_tokens = classifier.component_evidence_tokens(
+        "m means change; 7 means fixed; operation means +"
+    )
+
+    assert classifier.component_evidence_tokens(
+        "m is the changing quantity"
+    ).issubset(canvas_tokens)
+    assert classifier.component_evidence_tokens(
+        "7 is the fixed value"
+    ).issubset(canvas_tokens)
+    assert classifier.component_evidence_tokens(
+        "+ is the addition operation"
+    ).issubset(canvas_tokens)
 
 
 def test_non_multipart_deterministic_correct_stays_outside_guided_llm(
