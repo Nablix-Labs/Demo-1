@@ -32,6 +32,33 @@ import { TurnWatchdog } from '@/lib/turnWatchdog';
 import { SpeechSettleTimer } from '@/lib/speechSettle';
 import { turnContextFrame } from '@/lib/voiceTurnContext';
 
+
+/**
+ * Print every voice frame, in and out, with its full JSON.
+ *
+ * The REST path has always logged its payloads ("→ POST /interaction" and the
+ * reply), so a tester debugging a typed turn can read exactly what crossed the
+ * wire. The socket logged almost nothing — status lines, errors, unknown types
+ * — and on the server transport a voice turn IS the socket. DevTools does not
+ * fill the gap either: WebSocket frames are not network entries, they are
+ * buried in the Messages tab of the one /voice/stream connection, so nothing
+ * about a voice turn showed up where anyone looks for it (asked directly,
+ * 7 Aug).
+ *
+ * Audio frames are excluded on purpose. They arrive around fifty a second and
+ * carry base64 payloads; logging them would bury the frames that matter and
+ * make the console useless for exactly the person this is for.
+ */
+const AUDIO_FRAMES = new Set(['audio_chunk', 'tutor_audio_chunk']);
+
+function logFrame(direction: 'in' | 'out', msg: Record<string, unknown>): void {
+  const type = String(msg.type ?? 'unknown');
+  if (AUDIO_FRAMES.has(type)) return;
+  const arrow = direction === 'in' ? '←' : '→';
+  const colour = direction === 'in' ? '#2f7d5b' : '#7a5cc8';
+  console.log(`%c[voice ${arrow}] ${type}`, `color:${colour};font-weight:bold`, msg);
+}
+
 export function useWebSocket(sessionId: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
   const watchdogRef = useRef<TurnWatchdog | null>(null);
@@ -48,7 +75,9 @@ export function useWebSocket(sessionId: string | null) {
   /** Send a control message (start/stop) to the voice server. */
   const sendControl = useCallback((type: string, extra?: Record<string, unknown>) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type, ...extra }));
+      const frame = { type, ...extra };
+      logFrame('out', frame);
+      wsRef.current.send(JSON.stringify(frame));
     }
   }, []);
 
@@ -121,6 +150,7 @@ export function useWebSocket(sessionId: string | null) {
     ws.onmessage = (event: MessageEvent) => {
       try {
         const msg = JSON.parse(event.data as string) as Record<string, unknown>;
+        logFrame('in', msg);
 
         switch (msg.type) {
           case 'transcript_partial':
@@ -371,13 +401,16 @@ export function useWebSocket(sessionId: string | null) {
   /** Send a typed text message */
   const sendTextMessage = useCallback((text: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'text_message', text }));
+      const frame = { type: 'text_message', text };
+      logFrame('out', frame);
+      wsRef.current.send(JSON.stringify(frame));
     }
   }, []);
 
   /** Send canvas PNG snapshot (+ optional stroke data) on "Check My Work" */
   const sendCanvasSubmission = useCallback((png: string, strokes?: object[]) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
+      logFrame('out', { type: 'canvas_submission', png_bytes: png.length, strokes });
       wsRef.current.send(JSON.stringify({ type: 'canvas_submission', png, strokes }));
     }
   }, []);
