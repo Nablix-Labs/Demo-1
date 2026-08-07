@@ -120,7 +120,18 @@ export function voiceTurnFailedMessage(serverMessage?: string): string {
   if (/auth|token|unauthor|forbidden/.test(raw)) {
     return 'Your session needs to be signed in again before I can answer that. Please log in and try once more.';
   }
-  if (/timeout|timed out|unavailable|upstream/.test(raw)) {
+  // Only wording that actually says TIMEOUT gets the timeout copy.
+  //
+  // `unavailable` and `upstream` used to land here too, and that was wrong:
+  // "Tutor unavailable. Please try again." is the voice server's single
+  // catch-all (streaming_server.py:689), sent for a timeout AND for every
+  // non-200 the tutor call returns — a 409, a 500, anything. Mapping it to
+  // "my side was too slow" described a plain backend rejection as slowness,
+  // and read from a screenshot it looks like a frontend timeout, which is the
+  // one place the fault never was (7 Aug). The generic line below is what an
+  // unexplained failure gets; the real reason is in the console, from the
+  // server's own message.
+  if (/timeout|timed out/.test(raw)) {
     return 'I didn’t manage to answer that in time — my side was too slow. Say it again and I’ll have another go.';
   }
   return 'Something went wrong on my side and I couldn’t answer that. Say it again in a moment and I’ll try again.';

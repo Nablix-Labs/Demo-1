@@ -121,6 +121,23 @@ describe('a failed voice turn is announced, not swallowed', () => {
     expect(voiceTurnFailedMessage('upstream timeout')).toMatch(/in time|too slow/i);
   });
 
+  /**
+   * "Tutor unavailable. Please try again." is the voice server's ONE catch-all
+   * (streaming_server.py:689). It sends that same sentence whether the tutor
+   * call timed out or came back 409/500 — any non-200 raises there.
+   *
+   * Reading "unavailable" as slowness therefore described a plain backend
+   * rejection to the student as the tutor being slow, and to whoever read the
+   * screenshot as a frontend timeout. That is exactly the wrong place to send
+   * the next person looking (reported 7 Aug). Only wording that actually says
+   * timeout gets the timeout copy.
+   */
+  it('does not report the server catch-all as slowness', () => {
+    const msg = voiceTurnFailedMessage('Tutor unavailable. Please try again.');
+    expect(msg).not.toMatch(/in time|too slow/i);
+    expect(msg).toMatch(/try again|say it again/i);
+  });
+
   it('never blames the student', () => {
     for (const m of ['Tutor unavailable', 'upstream timeout', 'INVALID_TOKEN']) {
       expect(voiceTurnFailedMessage(m)).not.toMatch(/you (got|were) (it )?wrong|your fault/i);
