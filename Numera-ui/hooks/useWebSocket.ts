@@ -27,13 +27,15 @@ import { useAuthStore } from '@/store/useAuthStore';
 import { tutorAudioStream, effectiveVoice } from '@/lib/tts';
 import { buildVoiceStreamUrl, voiceStreamingEnabled, allowAnonTutorCalls } from '@/lib/runtimeConfig';
 import { ANON_ACCESS_TOKEN, studentId, voiceTurnFailedMessage, type QuestionType } from '@/lib/api';
-import { applyInteractionSupport, type SupportPresentation } from '@/lib/interactionPresentation';
+import { applyInteractionSupport, acceptResponse, type SupportPresentation } from '@/lib/interactionPresentation';
 import { TurnWatchdog } from '@/lib/turnWatchdog';
+import { SpeechSettleTimer } from '@/lib/speechSettle';
 import { turnContextFrame } from '@/lib/voiceTurnContext';
 
 export function useWebSocket(sessionId: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
   const watchdogRef = useRef<TurnWatchdog | null>(null);
+  const processingTimerRef = useRef<SpeechSettleTimer | null>(null);
   const {
     addTranscriptMessage,
     updatePartialTranscript,
@@ -75,6 +77,19 @@ export function useWebSocket(sessionId: string | null) {
     const ws = new WebSocket(buildVoiceStreamUrl(sessionId, studentId(), effectiveVoice()));
     wsRef.current = ws;
 
+    // The student's words have stopped arriving, so the server has taken the
+    // turn and the tutor is working on it. Say PROCESSING rather than leaving
+    // the panel reading "Listening…" while nobody is listening — that is the
+    // state a tester reads as the tutor ignoring them.
+    processingTimerRef.current?.cancel();
+    processingTimerRef.current = new SpeechSettleTimer(() => {
+      const store = useNumeraStore.getState();
+      // Only from LISTENING: if the tutor already started speaking, or a newer
+      // turn opened, this settle belongs to a turn that is no longer current.
+      if (store.voiceStatus !== 'listening') return;
+      store.setVoiceStatus('processing');
+    });
+
     watchdogRef.current?.dispose();
     watchdogRef.current = new TurnWatchdog(() => {
       console.warn('[WS] no tutor reply for a transcribed turn — forcing finalisation');
@@ -110,6 +125,8 @@ export function useWebSocket(sessionId: string | null) {
         switch (msg.type) {
           case 'transcript_partial':
             updatePartialTranscript(msg.text as string);
+            // Still talking — anything pending belongs to an unfinished turn.
+            processingTimerRef.current?.noteSpeech();
             break;
 
           case 'transcript_final':
@@ -129,7 +146,13 @@ export function useWebSocket(sessionId: string | null) {
             // The student said something the server heard. From here a reply is
             // owed, and only Deepgram's UtteranceEnd will ask for one — so start
             // the rescue clock in case that event never arrives.
-            if (msg.role === 'student') watchdogRef.current?.noteStudentSpeech();
+            // A final is per Deepgram SEGMENT, not per turn — "It is" can be
+            // final while the student is still saying "…5". So this restarts
+            // the settle clock like a partial does; it does not end the turn.
+            if (msg.role === 'student') {
+              watchdogRef.current?.noteStudentSpeech();
+              processingTimerRef.current?.noteSpeech();
+            }
             break;
 
           case 'session_state':
@@ -153,6 +176,22 @@ export function useWebSocket(sessionId: string | null) {
             // anything else, so a slow render can't let it fire late and cancel
             // the audio that is about to stream in.
             watchdogRef.current?.noteTurnResolved();
+            processingTimerRef.current?.cancel();
+            // Ordering guard (handoff item: "prevent a late response from an
+            // earlier failed turn from overwriting a newer turn"). The REST
+            // path has gone through this gate since Phase 2; the socket never
+            // did, so a slow reply to an abandoned turn could land on top of a
+            // newer one. Same rule, same bookkeeping, both transports.
+            if (!acceptResponse(msg as Parameters<typeof acceptResponse>[0])) {
+              console.log('[WS] stale tutor_response dropped', {
+                version: msg.interaction_state_version,
+                accepted_turn_id: msg.accepted_turn_id,
+              });
+              // Nothing is in flight any more; let the student speak again.
+              useNumeraStore.getState().beginListeningTurn();
+              sendTurnContext();
+              break;
+            }
             addTranscriptMessage({ role: 'ai', text: msg.text as string });
             // applyInteractionSupport returns the line the tutor should SAY —
             // the scaffold step's voice line when a panel is open, else the
@@ -266,6 +305,7 @@ export function useWebSocket(sessionId: string | null) {
             // voice-specific when it is not: the same backend failure is simply
             // announced on chat and swallowed here.
             watchdogRef.current?.noteTurnResolved();
+            processingTimerRef.current?.cancel();
             // Engineer-facing text stays in the console — it is the backend's
             // own reason and the fastest way to find which service failed.
             console.error('[WS] server error:', msg.message);
@@ -273,6 +313,11 @@ export function useWebSocket(sessionId: string | null) {
               role: 'ai',
               text: voiceTurnFailedMessage(msg.message as string | undefined),
             });
+            // The copy tells the student to say it again, so put them back in a
+            // state where they can. Without this the panel could sit in
+            // PROCESSING for a turn that already failed, with the mic shut.
+            useNumeraStore.getState().beginListeningTurn();
+            sendTurnContext();
             break;
 
           default:
@@ -288,6 +333,9 @@ export function useWebSocket(sessionId: string | null) {
       // A `stop` sent down a dead socket goes nowhere; the reconnect below
       // starts a fresh turn anyway.
       watchdogRef.current?.dispose();
+      // Nothing is settling on a closed socket; a late fire would announce
+      // PROCESSING for a turn that can no longer be processed.
+      processingTimerRef.current?.cancel();
       setVoiceStatus('idle');
       // Simple exponential back-off reconnect (omit in production; use a library)
       if (e.code !== 1000) {
@@ -295,13 +343,15 @@ export function useWebSocket(sessionId: string | null) {
       }
     };
 
-  }, [sessionId, sendControl, addTranscriptMessage, updatePartialTranscript, commitPartialTranscript, setSessionState, setVoiceStatus, applyCanvasDraw]);
+  }, [sessionId, sendControl, sendTurnContext, addTranscriptMessage, updatePartialTranscript, commitPartialTranscript, setSessionState, setVoiceStatus, applyCanvasDraw]);
 
   useEffect(() => {
     connect();
     return () => {
       watchdogRef.current?.dispose();
       watchdogRef.current = null;
+      processingTimerRef.current?.cancel();
+      processingTimerRef.current = null;
       // The idle handler reopens the student's turn. tutorAudioStream is a
       // module singleton, so a handler left registered here outlives this
       // screen and would reopen a listening turn on whatever the student
