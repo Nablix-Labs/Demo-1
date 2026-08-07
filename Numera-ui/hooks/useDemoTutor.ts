@@ -28,6 +28,7 @@ import {
   type InteractionResponse,
   type NudgeDelivery,
   type QuestionType,
+  isStaleSessionError,
 } from '@/lib/api';
 import { applyInteractionSupport, acceptResponse } from '@/lib/interactionPresentation';
 import { useNumeraStore } from '@/store/useNumeraStore';
@@ -78,6 +79,31 @@ export const sessionStartError = (): string | null => lastStartError;
 export function resetSessionStart(): void {
   failedConcept = null;
   lastStartError = null;
+}
+
+/**
+ * Recover from a session the backend has forgotten.
+ *
+ * We keep the session id across reloads now (see the store's partialize), which
+ * is what stops every refresh opening a second session on a topic already in
+ * progress. The cost is that the id can outlive the backend, whose session
+ * state is in memory and dies with the process — after a restart every call
+ * answers 404 and the lesson would sit there failing forever.
+ *
+ * Clearing the id is enough: the lesson's start effect is guarded on it being
+ * null, so dropping it is what asks for a fresh session. The latch has to go
+ * too, or the retry is refused for the concept that just failed.
+ *
+ * Returns whether it recovered, so callers can skip their own error copy — a
+ * dead session is not something to tell a student about when the next line of
+ * code opens them a live one.
+ */
+function recoverIfStaleSession(err: unknown): boolean {
+  if (!isStaleSessionError(err)) return false;
+  console.warn('[session] backend no longer has this session — starting a fresh one');
+  resetSessionStart();
+  useNumeraStore.getState().clearSessionId();
+  return true;
 }
 
 /**
@@ -342,6 +368,9 @@ export function useDemoTutor() {
       tutorSay(res.tutor.tutor_message, { afterMarks: drew });
       return res;
     } catch (err) {
+      // A forgotten session recovers by opening a new one; see
+      // recoverIfStaleSession. Nothing to report to the student.
+      if (recoverIfStaleSession(err)) return null;
       addTranscriptMessage({ role: 'ai', text: chatError(err, TUTOR_UNAVAILABLE) }); // surface the failure in the chat
       addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Could not read the canvas.') });
       return null;
@@ -721,6 +750,13 @@ export function useDemoTutor() {
       } catch (err) {
         console.warn('✗ /interaction failed:', err);
         console.groupEnd();
+        // The backend has forgotten this session (its state is in memory).
+        // Clearing the id makes the lesson open a fresh one, so there is
+        // nothing here worth telling the student about.
+        if (recoverIfStaleSession(err)) {
+          useNumeraStore.getState().beginListeningTurn();
+          return null;
+        }
         addTranscriptMessage({ role: 'ai', text: chatError(err, TUTOR_UNAVAILABLE) }); // surface the failure in the chat
         addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Tutor unavailable.') });
         useNumeraStore.getState().beginListeningTurn(); // reopen listening so the student can retry

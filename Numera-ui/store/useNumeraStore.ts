@@ -963,9 +963,22 @@ export const useNumeraStore = create<NumeraState>()(
     {
       name: 'numera-store',
       storage: createJSONStorage(() => localStorage),
-      // Persist only durable UI preferences + learning progress — never
-      // session/canvas/transcript state, which is backend-driven & ephemeral.
+      // Persist durable UI preferences, learning progress — and the session id.
+      //
+      // The id used to be excluded with the rest of the "backend-driven &
+      // ephemeral" state, and that reasoning was wrong in one specific way:
+      // dropping it did not give the student a clean slate, it gave them a
+      // SECOND session on a topic they already had open. The Student Model
+      // resumed it and stamped routing_reason_code=SESSION_RESUMED, which the
+      // backend cannot serialise into InteractionResponse, so every turn in
+      // that session answered 500 (7 Aug: 164 session starts, 16 resumed).
+      //
+      // Canvas and transcript stay out — those really are per-session.
+      // A persisted id CAN outlive the backend, whose sessions are in memory;
+      // isStaleSessionError + clearSessionId in useDemoTutor is what recovers
+      // from that, rather than leaving the lesson wedged.
       partialize: (s) => ({
+        sessionId: s.sessionId,
         panelSide: s.panelSide,
         panelCollapsed: s.panelCollapsed,
         transcriptVisible: s.transcriptVisible,

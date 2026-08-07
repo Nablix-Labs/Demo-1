@@ -137,6 +137,27 @@ export function voiceTurnFailedMessage(serverMessage?: string): string {
   return 'Something went wrong on my side and I couldn’t answer that. Say it again in a moment and I’ll try again.';
 }
 
+/**
+ * Is this failure "the session you are using no longer exists"?
+ *
+ * Backend session state is in-memory and dies with the process, so a session id
+ * that was perfectly good five minutes ago can start answering 404. That is the
+ * price of persisting the id across reloads — and persisting it is worth paying
+ * for, because NOT persisting it meant every reload opened a brand-new session
+ * on a topic the student already had in progress. The Student Model then
+ * resumed it and stamped routing_reason_code=SESSION_RESUMED, which the backend
+ * cannot serialise, so every turn in that session 500s (7 Aug: 164 session
+ * starts, 16 resumed).
+ *
+ * So: keep the id, and recognise when it has gone stale so the lesson can open
+ * a fresh one instead of wedging on a session the backend has forgotten.
+ */
+export function isStaleSessionError(err: unknown): boolean {
+  const res = (err as { response?: { status?: number; data?: { message?: string } } })?.response;
+  if (res?.status !== 404) return false;
+  return /session/i.test(res?.data?.message ?? '');
+}
+
 export function studentFacingError(err: unknown): string | null {
   const res = (err as { response?: { status?: number; data?: Partial<ApiError> } })?.response;
   // 409 on a session call means the Student Model already has this topic part
