@@ -126,10 +126,22 @@ function hasCanvasActivity(): boolean {
  * them. This makes a screenshot of the trail enough to tell them apart.
  */
 function errorMessage(err: unknown, fallback: string): string {
-  const res = (err as { response?: { status?: number; data?: { message?: string; error_code?: string } } })?.response;
+  const res = (err as {
+    response?: {
+      status?: number;
+      data?: { message?: string; error_code?: string; request_id?: string };
+    };
+  })?.response;
   if (res) {
     const parts = [`HTTP ${res.status ?? '?'}`];
     if (res.data?.error_code) parts.push(res.data.error_code);
+    // The join key. The backend stamps request_id on every error and logs the
+    // same id on its side, so quoting it here turns "it failed" into a line
+    // anyone can grep straight to:
+    //     journalctl -u nablix-backend | grep REQD6AA967B
+    // Without it a tester reports a failure and someone else re-derives which
+    // of the day's requests it was — which is most of the cost of a bug report.
+    if (res.data?.request_id) parts.push(`req=${res.data.request_id}`);
     const detail = res.data?.message?.trim();
     return `${parts.join(' ')}${detail ? ` — ${detail}` : ''}`;
   }
