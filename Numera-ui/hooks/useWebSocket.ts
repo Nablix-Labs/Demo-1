@@ -29,6 +29,7 @@ import { buildVoiceStreamUrl, voiceStreamingEnabled, allowAnonTutorCalls } from 
 import { ANON_ACCESS_TOKEN, studentId, voiceTurnFailedMessage, type QuestionType } from '@/lib/api';
 import { applyInteractionSupport, type SupportPresentation } from '@/lib/interactionPresentation';
 import { TurnWatchdog } from '@/lib/turnWatchdog';
+import { turnContextFrame } from '@/lib/voiceTurnContext';
 
 export function useWebSocket(sessionId: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
@@ -48,6 +49,21 @@ export function useWebSocket(sessionId: string | null) {
       wsRef.current.send(JSON.stringify({ type, ...extra }));
     }
   }, []);
+
+  /**
+   * Tell the server which turn the next utterance belongs to.
+   *
+   * Must go out at the start of EVERY student turn: the server clears its
+   * latched turn fields once a turn is processed, so one frame per connection
+   * would only ever fix the first turn. See lib/voiceTurnContext.ts.
+   */
+  const sendTurnContext = useCallback(() => {
+    const s = useNumeraStore.getState();
+    const frame = turnContextFrame(s.currentTurnId, s.lastTutorTurnId);
+    if (!frame) return;
+    const { type, ...fields } = frame;
+    sendControl(type, fields);
+  }, [sendControl]);
 
   const connect = useCallback(() => {
     if (!sessionId || !voiceStreamingEnabled) return;
@@ -77,7 +93,14 @@ export function useWebSocket(sessionId: string | null) {
       }
       ws.send(JSON.stringify({ type: 'authenticate', access_token: accessToken }));
       console.log('[WS] connected');
+      // A fresh socket is a fresh listening turn. Mint one if the lesson hasn't
+      // already, so the very first utterance carries a turn_id like every
+      // later one does.
+      if (!useNumeraStore.getState().currentTurnId) {
+        useNumeraStore.getState().beginListeningTurn();
+      }
       setVoiceStatus('listening');
+      sendTurnContext();
     };
 
     ws.onmessage = (event: MessageEvent) => {
@@ -205,6 +228,10 @@ export function useWebSocket(sessionId: string | null) {
               const store = useNumeraStore.getState();
               if (store.voiceStatus !== 'speaking') return; // superseded meanwhile
               store.beginListeningTurn();
+              // New turn, new id — and the server dropped the last one when it
+              // finished this reply, so it needs the new one before the student
+              // speaks again.
+              sendTurnContext();
             });
             tutorAudioStream.begin(
               (typeof msg.voice_text === 'string' && msg.voice_text) || spokenLine,
