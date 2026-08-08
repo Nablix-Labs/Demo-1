@@ -27,6 +27,7 @@ import { useAuthStore } from '@/store/useAuthStore';
 import { tutorAudioStream, effectiveVoice } from '@/lib/tts';
 import { buildVoiceStreamUrl, voiceStreamingEnabled, allowAnonTutorCalls } from '@/lib/runtimeConfig';
 import { ANON_ACCESS_TOKEN, studentId, voiceTurnFailedMessage, type QuestionType } from '@/lib/api';
+import { resetSessionStart } from '@/hooks/useDemoTutor';
 import { applyInteractionSupport, acceptResponse, type SupportPresentation } from '@/lib/interactionPresentation';
 import { TurnWatchdog } from '@/lib/turnWatchdog';
 import { SpeechSettleTimer } from '@/lib/speechSettle';
@@ -59,18 +60,44 @@ function logFrame(direction: 'in' | 'out', msg: Record<string, unknown>): void {
   console.log(`%c[voice ${arrow}] ${type}`, `color:${colour};font-weight:bold`, msg);
 }
 
+/** Reconnect back-off: base 3s, doubling per consecutive failure, capped. */
+const RETRY_BASE_MS = 3_000;
+const RETRY_MAX_MS = 30_000;
+/** After the watchdog's rescue `stop`, how long the server gets to answer it
+ *  before the turn is declared failed to the student. */
+const RESCUE_GRACE_MS = 8_000;
+
 export function useWebSocket(sessionId: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
   const watchdogRef = useRef<TurnWatchdog | null>(null);
   const processingTimerRef = useRef<SpeechSettleTimer | null>(null);
-  const {
-    addTranscriptMessage,
-    updatePartialTranscript,
-    commitPartialTranscript,
-    setSessionState,
-    setVoiceStatus,
-    applyCanvasDraw,
-  } = useNumeraStore();
+  /** Pending reconnect timer. Held so cleanup can cancel it — an uncancelled
+   *  one reopened sockets after unmount and, after a sessionId change, from a
+   *  stale closure over the OLD session (two live sockets, doubled audio). */
+  const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryAttemptRef = useRef(0);
+  const rescueGraceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** True while the frames arriving belong to a tutor_response that was
+   *  REJECTED by the ordering gate. The server streams one reply at a time on
+   *  the socket, so everything up to the next tutor_response is that stale
+   *  reply's audio — playing it would splice an abandoned answer into the
+   *  next one. */
+  const discardAudioRef = useRef(false);
+  // Individual action selectors — subscribing to the whole store re-rendered
+  // the entire lesson tree on every partial transcript (several per second
+  // while the student speaks; felt as hitching on low-end tablets).
+  const addTranscriptMessage = useNumeraStore((s) => s.addTranscriptMessage);
+  const updatePartialTranscript = useNumeraStore((s) => s.updatePartialTranscript);
+  const commitPartialTranscript = useNumeraStore((s) => s.commitPartialTranscript);
+  const setSessionState = useNumeraStore((s) => s.setSessionState);
+  const setVoiceStatus = useNumeraStore((s) => s.setVoiceStatus);
+  const applyCanvasDraw = useNumeraStore((s) => s.applyCanvasDraw);
+  // Reconnect when the voice picker changes: the provider/voice ride in the
+  // socket URL, so an open socket keeps the old voice until a reconnect. These
+  // subscriptions put them in connect()'s dependency chain — the effect below
+  // then closes the old socket and opens one with the new voice.
+  const ttsProvider = useNumeraStore((s) => s.ttsProvider);
+  const ttsVoice = useNumeraStore((s) => s.ttsVoice);
 
   /** Send a control message (start/stop) to the voice server. */
   const sendControl = useCallback((type: string, extra?: Record<string, unknown>) => {
@@ -78,6 +105,10 @@ export function useWebSocket(sessionId: string | null) {
       const frame = { type, ...extra };
       logFrame('out', frame);
       wsRef.current.send(JSON.stringify(frame));
+    } else {
+      // Dropping silently made rescues invisible: the watchdog's `stop` and
+      // every turn_context could vanish with no trace in the console.
+      console.warn(`[WS] dropped '${type}' — socket not open`);
     }
   }, []);
 
@@ -98,6 +129,8 @@ export function useWebSocket(sessionId: string | null) {
 
   const connect = useCallback(() => {
     if (!sessionId || !voiceStreamingEnabled) return;
+    // One pending reconnect at a time; a connect supersedes any queued retry.
+    if (retryRef.current) { clearTimeout(retryRef.current); retryRef.current = null; }
 
     // Same resolver the REST path uses, so the streamed voice matches the one
     // the student heard in the diagnostic. Passing the raw store values here
@@ -105,6 +138,7 @@ export function useWebSocket(sessionId: string | null) {
     // to its env default — a different voice mid-session.
     const ws = new WebSocket(buildVoiceStreamUrl(sessionId, studentId(), effectiveVoice()));
     wsRef.current = ws;
+    discardAudioRef.current = false;
 
     // The student's words have stopped arriving, so the server has taken the
     // turn and the tutor is working on it. Say PROCESSING rather than leaving
@@ -120,12 +154,33 @@ export function useWebSocket(sessionId: string | null) {
     });
 
     watchdogRef.current?.dispose();
-    watchdogRef.current = new TurnWatchdog(() => {
+    watchdogRef.current = new TurnWatchdog((armedTurnId) => {
+      // A stray final (echo, noise) can arm the watchdog with no turn behind
+      // it; if the lesson has since moved on, firing `stop` now would land in
+      // the middle of a DIFFERENT turn — and the server's stop handler cancels
+      // work in flight. Only rescue the turn this was armed for.
+      if (armedTurnId !== useNumeraStore.getState().currentTurnId) return;
       console.warn('[WS] no tutor reply for a transcribed turn — forcing finalisation');
       sendControl('stop');
+      // The rescue used to end here: fire `stop`, log, done. If the stop
+      // produced nothing (or the socket was already closed, where sendControl
+      // silently no-ops) the panel sat at "Processing…" with the mic shut for
+      // the rest of the session. Give the stop a grace window, then tell the
+      // student and hand the floor back.
+      if (rescueGraceRef.current) clearTimeout(rescueGraceRef.current);
+      rescueGraceRef.current = setTimeout(() => {
+        rescueGraceRef.current = null;
+        const store = useNumeraStore.getState();
+        if (store.currentTurnId !== armedTurnId) return; // something resolved it
+        addTranscriptMessage({ role: 'ai', text: voiceTurnFailedMessage() });
+        store.beginListeningTurn();
+        sendTurnContext();
+      }, RESCUE_GRACE_MS);
     });
 
     ws.onopen = () => {
+      if (wsRef.current !== ws) { ws.close(1000, 'superseded'); return; }
+      retryAttemptRef.current = 0;
       // Mirror the REST interceptor: fall back to the placeholder bearer when
       // there's no real login and anon testing is enabled, so the socket isn't
       // self-closed on the VM where sign-up doesn't log in yet.
@@ -148,6 +203,9 @@ export function useWebSocket(sessionId: string | null) {
     };
 
     ws.onmessage = (event: MessageEvent) => {
+      // An orphaned socket (superseded by a reconnect) must not handle frames —
+      // two live handlers meant two tutor voices and duplicated transcripts.
+      if (wsRef.current !== ws) return;
       try {
         const msg = JSON.parse(event.data as string) as Record<string, unknown>;
         logFrame('in', msg);
@@ -180,7 +238,7 @@ export function useWebSocket(sessionId: string | null) {
             // final while the student is still saying "…5". So this restarts
             // the settle clock like a partial does; it does not end the turn.
             if (msg.role === 'student') {
-              watchdogRef.current?.noteStudentSpeech();
+              watchdogRef.current?.noteStudentSpeech(useNumeraStore.getState().currentTurnId);
               processingTimerRef.current?.noteSpeech();
             }
             break;
@@ -207,6 +265,10 @@ export function useWebSocket(sessionId: string | null) {
             // the audio that is about to stream in.
             watchdogRef.current?.noteTurnResolved();
             processingTimerRef.current?.cancel();
+            if (rescueGraceRef.current) { clearTimeout(rescueGraceRef.current); rescueGraceRef.current = null; }
+            // A new reply starts a new audio stream; whatever was being
+            // discarded is over.
+            discardAudioRef.current = false;
             // Ordering guard (handoff item: "prevent a late response from an
             // earlier failed turn from overwriting a newer turn"). The REST
             // path has gone through this gate since Phase 2; the socket never
@@ -217,6 +279,12 @@ export function useWebSocket(sessionId: string | null) {
                 version: msg.interaction_state_version,
                 accepted_turn_id: msg.accepted_turn_id,
               });
+              // The dropped reply's AUDIO is still about to stream in. The
+              // server sends one reply at a time on this socket, so every
+              // audio frame until the next tutor_response is that stale
+              // reply's — playing it would splice an abandoned answer into
+              // whatever comes next.
+              discardAudioRef.current = true;
               // Nothing is in flight any more; let the student speak again.
               useNumeraStore.getState().beginListeningTurn();
               sendTurnContext();
@@ -296,6 +364,13 @@ export function useWebSocket(sessionId: string | null) {
             tutorAudioStream.setOnIdle(() => {
               const store = useNumeraStore.getState();
               if (store.voiceStatus !== 'speaking') return; // superseded meanwhile
+              // The REST path already honours this; the socket unconditionally
+              // reopened the mic, so a reply that expects no answer (or forbids
+              // voice) still had room noise transcribed and submitted as a turn.
+              if (!store.expectsStudentResponse || !store.allowVoiceInput) {
+                store.setVoiceStatus('waiting');
+                return;
+              }
               store.beginListeningTurn();
               // New turn, new id — and the server dropped the last one when it
               // finished this reply, so it needs the new one before the student
@@ -308,10 +383,12 @@ export function useWebSocket(sessionId: string | null) {
             break;
 
           case 'tutor_audio_chunk':
+            if (discardAudioRef.current) break; // audio of a rejected stale reply
             tutorAudioStream.push(msg.chunk_index as number, msg.chunk as string);
             break;
 
           case 'tutor_audio_end':
+            if (discardAudioRef.current) { discardAudioRef.current = false; break; }
             tutorAudioStream.finishStream(msg.total_chunks as number, msg.error as string | undefined);
             break;
 
@@ -339,6 +416,17 @@ export function useWebSocket(sessionId: string | null) {
             // Engineer-facing text stays in the console — it is the backend's
             // own reason and the fastest way to find which service failed.
             console.error('[WS] server error:', msg.message);
+            // A session the backend has forgotten (restart — its sessions are
+            // in-memory) fails EVERY turn from here on; the REST path recovers
+            // by dropping the dead session and starting fresh, but the socket
+            // path had no equivalent, so only clearing localStorage got a
+            // student out. Same recovery, this transport.
+            if (/session.*(not.?found|was not found|unknown|expired)/i.test(String(msg.message ?? ''))) {
+              console.warn('[WS] server no longer knows this session — starting a fresh one');
+              resetSessionStart();
+              useNumeraStore.getState().clearSessionId();
+              break; // the lesson's start effect reopens a session; this socket closes with it
+            }
             addTranscriptMessage({
               role: 'ai',
               text: voiceTurnFailedMessage(msg.message as string | undefined),
@@ -358,26 +446,59 @@ export function useWebSocket(sessionId: string | null) {
       }
     };
 
+    // Without this the browser reports errors only via onclose; log the event
+    // itself so a failed connect is distinguishable from a dropped one.
+    ws.onerror = () => {
+      if (wsRef.current !== ws) return;
+      console.error('[WS] socket error (see close event for the code)');
+    };
+
     ws.onclose = (e) => {
+      if (wsRef.current !== ws) return; // an old socket dying is not news
       console.log('[WS] closed', e.code, e.reason);
+      // A turn was in flight — the student spoke and the reply can no longer
+      // arrive on this socket. It used to vanish without a word; tell them.
+      const midTurn = watchdogRef.current?.armed ?? false;
       // A `stop` sent down a dead socket goes nowhere; the reconnect below
       // starts a fresh turn anyway.
       watchdogRef.current?.dispose();
       // Nothing is settling on a closed socket; a late fire would announce
       // PROCESSING for a turn that can no longer be processed.
       processingTimerRef.current?.cancel();
+      if (rescueGraceRef.current) { clearTimeout(rescueGraceRef.current); rescueGraceRef.current = null; }
       setVoiceStatus('idle');
-      // Simple exponential back-off reconnect (omit in production; use a library)
+      if (midTurn) {
+        addTranscriptMessage({
+          role: 'ai',
+          text: 'I lost the connection for a second there — say that again and I’ll pick it up.',
+        });
+      }
+      // An auth close cannot be fixed by retrying — reconnecting every 3s
+      // forever with the mic pinned shut and no message was the old behaviour.
+      if (e.code === 4401 || e.code === 4403) {
+        addTranscriptMessage({
+          role: 'ai',
+          text: 'Voice needs you to be signed in — log in again and I’ll be right here.',
+        });
+        return;
+      }
       if (e.code !== 1000) {
-        setTimeout(connect, 3000);
+        const delay = Math.min(RETRY_BASE_MS * 2 ** retryAttemptRef.current, RETRY_MAX_MS);
+        retryAttemptRef.current += 1;
+        retryRef.current = setTimeout(connect, delay);
       }
     };
 
-  }, [sessionId, sendControl, sendTurnContext, addTranscriptMessage, updatePartialTranscript, commitPartialTranscript, setSessionState, setVoiceStatus, applyCanvasDraw]);
+  }, [sessionId, ttsProvider, ttsVoice, sendControl, sendTurnContext, addTranscriptMessage, updatePartialTranscript, commitPartialTranscript, setSessionState, setVoiceStatus, applyCanvasDraw]);
 
   useEffect(() => {
     connect();
     return () => {
+      // The pending reconnect must die with the screen — it used to survive
+      // unmount and open a socket onto whatever page came next.
+      if (retryRef.current) { clearTimeout(retryRef.current); retryRef.current = null; }
+      retryAttemptRef.current = 0;
+      if (rescueGraceRef.current) { clearTimeout(rescueGraceRef.current); rescueGraceRef.current = null; }
       watchdogRef.current?.dispose();
       watchdogRef.current = null;
       processingTimerRef.current?.cancel();
@@ -387,7 +508,9 @@ export function useWebSocket(sessionId: string | null) {
       // screen and would reopen a listening turn on whatever the student
       // navigated to — including a phase that expects no voice input at all.
       tutorAudioStream.setOnIdle(null);
-      wsRef.current?.close(1000, 'component unmount');
+      const ws = wsRef.current;
+      wsRef.current = null; // orphan it first so its handlers no-op
+      ws?.close(1000, 'component unmount');
     };
   }, [connect]);
 

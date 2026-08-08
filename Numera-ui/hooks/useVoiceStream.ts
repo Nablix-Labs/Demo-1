@@ -84,6 +84,15 @@ export function useVoiceStream({ onAudio }: UseVoiceStreamOptions) {
   const streamRef = useRef<MediaStream | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
   const procRef = useRef<ScriptProcessorNode | null>(null);
+  /**
+   * Whether captured frames are actually SENT. The mic used to be fully torn
+   * down and re-acquired on every turn boundary, which cost 100-400ms of dead
+   * air per turn — the opening syllable of every answer was simply never
+   * captured, and Deepgram graded "It is" instead of "It is 5". The hardware
+   * now stays open for the whole session (start/stop = mute/unmute and
+   * unmount); turn-taking only flips this flag.
+   */
+  const transmitting = useRef(true);
 
   /**
    * Bumped by every stop(). A start() that was awaiting getUserMedia compares
@@ -107,9 +116,17 @@ export function useVoiceStream({ onAudio }: UseVoiceStreamOptions) {
     procRef.current = null;
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
-    void ctxRef.current?.close();
+    // close() rejects if the context is already closed/closing — that used to
+    // surface as an unhandled promise rejection in the console.
+    void ctxRef.current?.close().catch(() => { /* already closed */ });
     ctxRef.current = null;
     useMicLevel.getState().setActive(false);
+  }, []);
+
+  /** Gate transmission without releasing the hardware (turn-taking). */
+  const setTransmitting = useCallback((on: boolean) => {
+    transmitting.current = on;
+    if (!on) useMicLevel.getState().setLevels(new Array(MIC_BARS).fill(0));
   }, []);
 
   const start = useCallback(async () => {
@@ -124,10 +141,17 @@ export function useVoiceStream({ onAudio }: UseVoiceStreamOptions) {
       stream = await navigator.mediaDevices.getUserMedia({
         audio: audioConstraints({ echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }),
       });
-    } catch {
+    } catch (err) {
       starting.current = false;   // permission refused or no device
+      // This used to be swallowed whole. A denied or missing mic then looked
+      // exactly like the tutor ignoring the student: the panel said
+      // "Listening…" while zero audio was being sent. Say so, everywhere.
+      const denied = (err as { name?: string })?.name === 'NotAllowedError';
+      console.error('[voice] microphone capture failed:', err);
+      useMicLevel.getState().setMicError(denied ? 'denied' : 'failed');
       return;
     }
+    useMicLevel.getState().setMicError(null);
 
     // Muted (or unmounted) while we were waiting — release the mic immediately
     // rather than wiring up a capture nobody asked for.
@@ -164,10 +188,21 @@ export function useVoiceStream({ onAudio }: UseVoiceStreamOptions) {
      */
     let ctx: AudioContext;
     try {
-      ctx = new Ctx({ sampleRate: TARGET_RATE });
-    } catch {
-      // Older Safari rejects the option outright rather than ignoring it.
-      ctx = new Ctx();
+      try {
+        ctx = new Ctx({ sampleRate: TARGET_RATE });
+      } catch {
+        // Older Safari rejects the option outright rather than ignoring it.
+        ctx = new Ctx();
+      }
+    } catch (err) {
+      // Even the bare constructor failed (context limit hit, platform bug).
+      // Uncaught, this was an unhandled rejection and a mic held open with no
+      // graph behind it.
+      console.error('[voice] AudioContext creation failed:', err);
+      stream.getTracks().forEach((t) => t.stop());
+      starting.current = false;
+      useMicLevel.getState().setMicError('failed');
+      return;
     }
     ctxRef.current = ctx;
     const source = ctx.createMediaStreamSource(stream);
@@ -183,6 +218,9 @@ export function useVoiceStream({ onAudio }: UseVoiceStreamOptions) {
     );
 
     proc.onaudioprocess = (e: AudioProcessingEvent) => {
+      // Hardware stays open; only transmission is gated (half-duplex). Frames
+      // captured while the tutor speaks are dropped here, never sent.
+      if (!transmitting.current) return;
       const input = e.inputBuffer.getChannelData(0);
       const down = downsample(input, inRate);
       onAudioRef.current(bytesToBase64(floatToPcm16(down)));
@@ -211,5 +249,5 @@ export function useVoiceStream({ onAudio }: UseVoiceStreamOptions) {
   // Clean up on unmount.
   useEffect(() => stop, [stop]);
 
-  return { active, supported, start, stop };
+  return { active, supported, start, stop, setTransmitting };
 }

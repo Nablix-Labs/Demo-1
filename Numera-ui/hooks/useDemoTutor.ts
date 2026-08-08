@@ -15,6 +15,7 @@
 import { useCallback, useRef, useState } from 'react';
 import {
   startSession,
+  getSession,
   submitCanvas,
   sendInteraction,
   endSession,
@@ -269,6 +270,45 @@ export async function beginSession(
     }
   })();
   return inFlight;
+}
+
+let resumeInFlight: Promise<void> | null = null;
+
+/**
+ * Rehydrate a persisted session after a page refresh.
+ *
+ * `sessionId` survives the refresh (persist/partialize) but `backendSession`,
+ * the question and the phase do not — and `beginSession` short-circuits on the
+ * surviving id. The lesson therefore came back BLANK: no question on the
+ * canvas, no opening message, and every REST turn dropped with "no question is
+ * active". GET /session/{id} has existed in lib/api.ts the whole time with no
+ * caller; this is its caller. A 404 means the backend has forgotten the
+ * session (restart) — drop it so a fresh one starts.
+ */
+export async function resumeSession(): Promise<void> {
+  if (!apiEnabled()) return;
+  const store = useNumeraStore.getState();
+  if (!store.sessionId || store.backendSession) return;
+  if (resumeInFlight) return resumeInFlight;
+  resumeInFlight = (async () => {
+    try {
+      const rec = await getSession(store.sessionId!);
+      const s = useNumeraStore.getState();
+      s.setBackendSession(rec);
+      syncBackendSession(rec);
+    } catch (err) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (isStaleSessionError(err) || status === 404) {
+        resetSessionStart();
+        useNumeraStore.getState().clearSessionId();
+      } else {
+        console.warn('✗ session resume failed (will stay on the stored session):', err);
+      }
+    } finally {
+      resumeInFlight = null;
+    }
+  })();
+  return resumeInFlight;
 }
 
 export function useDemoTutor() {
@@ -663,7 +703,13 @@ export function useDemoTutor() {
           });
         } catch (err) {
           console.warn('✗ /canvas/submit failed:', err);
-          /* canvas is optional for a voice turn */
+          // Canvas is optional for a voice turn, but grading proceeds as if the
+          // page were blank — the student deserves to know their written work
+          // wasn't seen rather than wonder why the tutor ignored it.
+          addTranscriptMessage({
+            role: 'ai',
+            text: 'I couldn’t see your canvas work just now, so I’m going by what you said.',
+          });
         } finally {
           canvasSubmissionInFlight.current = false;
         }

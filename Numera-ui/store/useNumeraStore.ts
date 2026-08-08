@@ -507,7 +507,11 @@ const initial: Omit<
   sessionSummary: null,
   sessionReview: null,
   micMuted: false,
-  voiceStatus: 'listening',
+  // 'idle' until something real happens: the socket opening or a session
+  // starting promotes it. Starting at 'listening' had the panel claiming
+  // "Listening…" — and the capture effect opening the mic — before any
+  // socket existed to receive the audio, which was then simply discarded.
+  voiceStatus: 'idle',
   currentTurnId: null,
   lastTutorTurnId: null,
   expectsStudentResponse: true,

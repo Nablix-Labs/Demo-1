@@ -18,7 +18,7 @@ import { useRouter } from 'next/navigation';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useMicLevel } from '@/store/useMicLevel';
-import { useDemoTutor, resetSessionStart, sessionStartError } from '@/hooks/useDemoTutor';
+import { useDemoTutor, resetSessionStart, resumeSession, sessionStartError } from '@/hooks/useDemoTutor';
 import { useVoiceTurn } from '@/hooks/useVoiceTurn';
 import { useVoiceStream } from '@/hooks/useVoiceStream';
 import { useInactivityNudge } from '@/hooks/useInactivityNudge';
@@ -50,6 +50,7 @@ export default function LessonPage() {
   const currentPhase = useNumeraStore((s) => s.currentPhase);
   const updatePartialTranscript = useNumeraStore((s) => s.updatePartialTranscript);
   const voiceStatus = useNumeraStore((s) => s.voiceStatus);
+  const allowVoiceInput = useNumeraStore((s) => s.allowVoiceInput);
   const beginListeningTurn = useNumeraStore((s) => s.beginListeningTurn);
   // True while tutor audio is genuinely playing — the echo gate below.
   const tutorSpeaking = useMicLevel((s) => s.aiSpeaking);
@@ -113,6 +114,16 @@ export default function LessonPage() {
     present: tutor.presentInactivityNudge,
     acknowledge: tutor.acknowledgeInactivityNudge,
   });
+
+  // A refresh keeps sessionId (persisted) but loses the session record, the
+  // question and the phase — and the start effect below short-circuits on the
+  // surviving id, so the lesson used to come back blank and unresponsive.
+  // Refetch the record; a 404 inside resumeSession drops the dead session,
+  // sessionId goes null, and the start effect takes over with a fresh one.
+  const backendSession = useNumeraStore((s) => s.backendSession);
+  useEffect(() => {
+    if (hydrated && apiEnabled && sessionId && !backendSession) void resumeSession();
+  }, [hydrated, apiEnabled, sessionId, backendSession]);
 
   // Start a backend session on lesson entry and let it drive the displayed
   // question/number/opening message. Mic starts muted so capture is opt-in.
@@ -180,7 +191,10 @@ export default function LessonPage() {
   // Both signals clear inside the same funnel (TutorAudioStream.finish), so
   // they can never disagree — and gating on both means neither one being missed
   // can leave the tutor listening to itself.
-  const listening = !micMuted && voiceStatus === 'listening' && !tutorSpeaking;
+  // allowVoiceInput: some tutor replies forbid a voice answer; the store has
+  // recorded it since Phase 2 but nothing consulted it, so the mic opened
+  // anyway and room noise was transcribed into an unwanted turn.
+  const listening = !micMuted && voiceStatus === 'listening' && !tutorSpeaking && allowVoiceInput;
 
   // Depend on the individual callbacks, not on `capture`. The hooks return a
   // fresh object every render, so depending on it re-ran this effect on EVERY
@@ -188,12 +202,28 @@ export default function LessonPage() {
   // is what made it possible for the mic to end up live while muted.
   // start/stop are useCallback-stable, so this now runs only when the
   // listening decision actually changes.
+  //
+  // The two transports gate differently on purpose. The REST path (browser
+  // STT) starts and stops its recogniser per turn — that is how Web Speech
+  // works. The server path used to do the same with the raw mic, and paid
+  // 100-400ms of getUserMedia + AudioContext setup at the start of EVERY
+  // student turn: the first syllable of each answer was never captured, which
+  // is where the truncated Deepgram transcripts came from. Now the hardware
+  // stays open while unmuted and turn-taking gates only whether frames are
+  // SENT (setTransmitting below), so echo suppression is unchanged but the
+  // first word is no longer eaten.
   const { supported: captureSupported, start: startCapture, stop: stopCapture } = capture;
+  const captureOn = VOICE_TRANSPORT === 'server' ? !micMuted : listening;
   useEffect(() => {
     if (!apiEnabled || !sessionId || !captureSupported) return;
-    if (listening) void startCapture();
+    if (captureOn) void startCapture();
     else stopCapture();
-  }, [apiEnabled, sessionId, listening, captureSupported, startCapture, stopCapture]);
+  }, [apiEnabled, sessionId, captureOn, captureSupported, startCapture, stopCapture]);
+
+  const { setTransmitting } = voiceStream;
+  useEffect(() => {
+    if (VOICE_TRANSPORT === 'server') setTransmitting(listening);
+  }, [listening, setTransmitting]);
 
   // Whatever happens, the mic must not outlive this screen.
   useEffect(() => stopCapture, [stopCapture]);
