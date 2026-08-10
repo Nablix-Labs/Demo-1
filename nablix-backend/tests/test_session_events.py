@@ -39,6 +39,22 @@ def test_guided_support_failure_distinguishes_wrong_partial_from_defence() -> No
     assert not interaction_service._is_support_failure(stuck)
 
 
+def test_unresolved_partial_advances_the_authoritative_support_ladder() -> None:
+    rules = load_classifier_rules()
+    unresolved = TutorResult.model_construct(
+        guided_student_state="PARTIAL",
+        evaluation="PARTIALLY_CORRECT",
+        intent="SUBMITTING_ANSWER",
+        answer_value_confirmed=False,
+    )
+    defence = unresolved.model_copy(update={"answer_value_confirmed": True})
+
+    assert interaction_service._guided_attempt_event_type(unresolved, rules) == (
+        "INCORRECT_ATTEMPT"
+    )
+    assert interaction_service._guided_attempt_event_type(defence, rules) is None
+
+
 def test_scaffold_response_matching_accepts_safe_variants() -> None:
     rules = load_classifier_rules()
     accepted = [
@@ -1603,7 +1619,8 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert guided_incorrect.json()["show_visual_cue"] is True
     assert guided_incorrect.json()["visual_cue"] == {
         "show": True,
-            "cue_type": "VC-T02-COEFFICIENT-COUNT",
+            "cue_id": "VC-T02-COEFFICIENT-COUNT",
+            "cue_type": None,
             "description": "Count the equal letter terms.",
             "actions": [
                 {
