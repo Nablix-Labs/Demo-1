@@ -7,7 +7,6 @@ from fastapi import HTTPException
 
 from app.adapters.base import StudentModelAdapter
 from app.adapters.provider import get_adapters
-from app.ai_engine import classifier
 from app.ai_engine.classifier import (
     build_openai_ai_engine_client,
     contains_answer_reveal,
@@ -15,19 +14,10 @@ from app.ai_engine.classifier import (
     normalize_exact_notation,
 )
 
-from app.ai_engine.schemas import (
-    ExplainAgainConversationMessage,
-    ExplainAgainRequest,
-    ExplainAgainSupportState,
-    ExplainAgainVisualCue,
-)
 from app.ai_engine.classifier_config import ClassifierRulesConfig, load_classifier_rules
 from app.ai_engine.schemas import (
     ActiveScaffoldState,
-    ExplainAgainConversationMessage,
     ExplainAgainRequest,
-    ExplainAgainSupportState,
-    ExplainAgainVisualCue,
     RecordedMisconception,
     VisibleVisualCue as AIVisibleVisualCue,
 )
@@ -166,13 +156,6 @@ _SUPPORT_RANK: tuple[SupportUsed, ...] = (
     "PARALLEL_EXAMPLE",
     "TUTOR_SOLVED",
 )
-_EXPLAIN_AGAIN_SYSTEM_PROMPT = """
-Explain the current mathematical idea in a genuinely different way for the same
-learner and question. Use the supplied confirmed and missing components, active
-support, cue, and scaffold context. Do not grade, reveal the final answer, change
-progression, escalate support, or alter the active scaffold. Return only the
-strict response schema.
-""".strip()
 _INACTIVITY_MESSAGE = "Are you still with me? Take your time and continue when you're ready."
 _EVALUATION_REASON_BY_STATE: dict[str, EvaluationReasonCode] = {
     "CORRECT": EvaluationReasonCode.ALL_REQUIRED_COMPONENTS_CONFIRMED,
@@ -1515,102 +1498,6 @@ def _active_scaffold(session: SessionRecord) -> ActiveScaffold | None:
     )
 
 
-def _support_levels(session: SessionRecord) -> tuple[SupportUsed, SupportUsed]:
-    event = session.student_model_event
-    if event is None:
-        return "NONE", "NONE"
-    support = (
-        event.phase_payload.support_to_serve
-        if event.phase_payload is not None
-        else None
-    )
-    support_type = support.get("support_type") if support is not None else None
-    active: SupportUsed = (
-        support_type
-        if support_type in _SUPPORT_RANK
-        else "VISUAL_CUE"
-        if support_type == "HINT_AND_VISUAL_CUE"
-        else "NONE"
-    )
-    highest = max(
-        event.journey_state.phase_2_guided_learning.highest_support_used_by_skill.values(),
-        key=_SUPPORT_RANK.index,
-        default="NONE",
-    )
-    return active, highest
-
-
-def _misconception_evidence(session: SessionRecord) -> str | None:
-    if session.selected_error_code is None or session.student_model_event is None:
-        return None
-    for potential_error in _schema_question(session).tutor_view.potential_errors:
-        if potential_error.get("error_code") != session.selected_error_code:
-            continue
-        description = potential_error.get("error_description")
-        return description if isinstance(description, str) else None
-    return None
-
-
-def _generate_explain_again(session: SessionRecord) -> tuple[str, str]:
-    if session.current_question is None:
-        raise HTTPException(status_code=409, detail="No active question to explain.")
-    client = build_openai_ai_engine_client(get_settings())
-    if client is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Explain Again requires the configured Sanya LLM engine.",
-        )
-    active_support, highest_support = _support_levels(session)
-    cue = _schema_visual_cue(session.student_model_event)
-    response = client.generate_explain_again_message(
-        request=ExplainAgainRequest(
-            question=session.current_question,
-            generated_question_rubric=session.generated_question_rubric,
-            active_teaching_objective=session.active_teaching_objective,
-            first_unresolved_concept_id=(
-                session.active_teaching_objective.missing_concept_ids[0]
-                if session.active_teaching_objective is not None
-                and session.active_teaching_objective.missing_concept_ids
-                else None
-            ),
-            recent_conversation=[
-                ExplainAgainConversationMessage(role=item.role, content=item.content)
-                for item in session.conversation_history
-            ],
-            visible_visual_cue=(
-                AIVisibleVisualCue(
-                    show=cue.show,
-                    cue_id=cue.cue_type,
-                    cue_type=None,
-                    description=cue.description,
-                    actions=cue.actions,
-                )
-                if cue is not None
-                else None
-            ),
-
-
-
-            active_scaffold=_active_scaffold(session),
-            support_state=ExplainAgainSupportState(
-                active_support_level=active_support,
-                highest_support_used=highest_support,
-                support_reason_code=(
-                    session.student_model_event.routing.reason_code
-                    if session.student_model_event is not None
-                    else None
-                ),
-            ),
-            selected_error_code=session.selected_error_code,
-            misconception_evidence=_misconception_evidence(session),
-        ),
-    )
-
-    voice_msg = getattr(response, "tutor_message_voice_optimised", getattr(response, "tutor_message_voice", response.tutor_message))
-    return response.tutor_message, voice_msg
-
-
-
 def _claim_inactivity_nudge(
     request: InteractionRequest,
     session: SessionRecord,
@@ -2139,15 +2026,7 @@ async def _process_interaction(
             _tutor_side_channel_updates(request, session, support_message),
         )
     if request.interaction_type == "EXPLAIN_AGAIN":
-        message, message_voice = _generate_explain_again(session)
-        return _side_channel_response(
-            request,
-            session,
-            message,
-            message_voice,
-            "ASK_QUESTION",
-            _tutor_side_channel_updates(request, session, message),
-        )
+        return _explain_again_interaction_response(request, session)
     if request.interaction_type == "INACTIVITY_NUDGE":
         nudge_res = _claim_inactivity_nudge(request, session)
         return nudge_res
@@ -2508,11 +2387,12 @@ async def _process_interaction(
             if tutor.guided_student_state == "CORRECT"
             else session.wrong_attempt_count
         ),
-        "selected_error_code": (
-            tutor.selected_error_code
-            if tutor.selected_error_code is not None
-            else session.selected_error_code
-        ),
+        # A misconception belongs to the answer that demonstrated it. Keeping
+        # the previous code when the current evaluation returns none makes a
+        # corrected answer inherit stale feedback such as "you multiplied".
+        # Side-channel turns do not pass through this state update, so clearing
+        # here cannot affect Explain Again or inactivity requests.
+        "selected_error_code": tutor.selected_error_code,
         **_schema_scaffold_state(schema_content_response),
         **scaffold_turn_updates,
     }

@@ -15,10 +15,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const startSession = vi.fn();
+const getSession = vi.fn();
 
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   startSession: (...args: unknown[]) => startSession(...args),
+  getSession: (...args: unknown[]) => getSession(...args),
 }));
 vi.mock('@/lib/tts', () => ({ speakTutor: vi.fn() }));
 
@@ -33,14 +35,17 @@ const RECORD = {
 async function loadTutor() {
   vi.resetModules();
   process.env.NEXT_PUBLIC_API_BASE_URL = '/api';
-  const { beginSession, resetSessionStart } = await import('@/hooks/useDemoTutor');
+  const { beginSession, resetSessionStart, resumeSession } = await import('@/hooks/useDemoTutor');
   const { useNumeraStore } = await import('@/store/useNumeraStore');
   useNumeraStore.setState({ sessionId: null, backendSession: null });
-  return { beginSession, resetSessionStart, useNumeraStore };
+  return { beginSession, resetSessionStart, resumeSession, useNumeraStore };
 }
 
 describe('session start', () => {
-  beforeEach(() => { startSession.mockReset(); });
+  beforeEach(() => {
+    startSession.mockReset();
+    getSession.mockReset();
+  });
   afterEach(() => { delete process.env.NEXT_PUBLIC_API_BASE_URL; });
 
   it('collapses a burst of concurrent starts into ONE request', async () => {
@@ -73,5 +78,36 @@ describe('session start', () => {
     resetSessionStart();
     expect(await beginSession('ALG_LINEAR_ONE_STEP')).toEqual(RECORD);
     expect(startSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('restores the complete tutor-turn contract after a refresh', async () => {
+    getSession.mockResolvedValue({
+      ...RECORD,
+      question_number: 3,
+      message: 'What operation connects the changing value and five?',
+      last_tutor_turn_id: 'TUTOR-RESTORED',
+      expected_student_response: 'ANSWER',
+      allow_voice_input: true,
+      inactivity_policy: {
+        initial_idle_threshold_ms: 45000,
+        cooldown_ms: 30000,
+        max_nudges_per_tutor_turn: 2,
+        generated_nudge_rate_limit: 2,
+      },
+    });
+    const { resumeSession, useNumeraStore } = await loadTutor();
+    useNumeraStore.setState({ sessionId: 'SESSION001', backendSession: null, transcript: [] });
+
+    await resumeSession();
+
+    const state = useNumeraStore.getState();
+    expect(state.questionNumber).toBe(3);
+    expect(state.lastTutorTurnId).toBe('TUTOR-RESTORED');
+    expect(state.expectsStudentResponse).toBe(true);
+    expect(state.allowVoiceInput).toBe(true);
+    expect(state.inactivityPolicy?.initialIdleThresholdMs).toBe(45000);
+    expect(state.transcript).toEqual([
+      { role: 'ai', text: 'What operation connects the changing value and five?' },
+    ]);
   });
 });

@@ -3574,6 +3574,60 @@ def test_guided_wrong_at_configured_confidence_requests_student_model_support(
     assert response.attempt_increment == 1
 
 
+def test_guided_partial_with_only_authored_error_evidence_counts_as_wrong(
+    monkeypatch,
+) -> None:
+    class _GuidedClient:
+        def generate_guided_rubric(self, **kwargs):
+            return _guided_rubric().model_copy(
+                update={"question_id": "Q-T02-003"}
+            )
+
+        def evaluate_guided_turn(self, **kwargs):
+            objective = kwargs["active_objective"]
+            return GuidedEvaluation(
+                student_state="PARTIAL",
+                newly_confirmed_concept_ids=[],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=objective.missing_concept_ids,
+                selected_error_code="ERR-T02-ADDITION",
+                confidence=0.97,
+                next_objective=objective,
+                tutor_message="That uses addition. Which operation is required?",
+                tutor_message_voice="That uses addition. Which operation is required?",
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _GuidedClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T02-003",
+            question="Write p × p × q in compact algebraic notation.",
+            correct_answer="p²q",
+            answer_spec=_answer_spec(
+                "p²q",
+                ["p^2q"],
+                "EXACT_NOTATION_MATCH",
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            student_input="p + q",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=4,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.guided_student_state == "WRONG"
+    assert response.selected_error_code == "ERR-T02-ADDITION"
+    assert response.attempt_increment == 1
+
+
 def test_guided_explicit_stuck_is_not_downgraded_by_semantic_confidence(
     monkeypatch,
 ) -> None:
