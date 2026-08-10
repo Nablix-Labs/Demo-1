@@ -1317,6 +1317,7 @@ def _scaffold_response_is_correct(
     student_message: str,
     expected_response: str,
     tutor_evaluation: str,
+    canonical_answer: str,
     rules: ClassifierRulesConfig,
 ) -> bool:
     normalized_student = _normalize_scaffold_response(student_message)
@@ -1335,11 +1336,60 @@ def _scaffold_response_is_correct(
     }
     if any(_contains_scaffold_response(normalized_student, value) for value in accepted):
         return True
+    if _matches_authored_scaffold_concept(
+        normalized_student,
+        normalized_expected,
+        _normalize_scaffold_response(canonical_answer),
+    ):
+        return True
     expected_addition = _addition_change_operand(expected_response)
     student_addition = _addition_change_operand(student_message)
     if expected_addition is not None and student_addition == expected_addition:
         return True
     return tutor_evaluation == "CORRECT"
+
+
+def _matches_authored_scaffold_concept(
+    student: str,
+    expected: str,
+    canonical_answer: str,
+) -> bool:
+    """Accept concise semantic replies grounded in the authored answer."""
+    alternatives = {
+        alternative.strip()
+        for alternative in re.split(r"\bor\b|\|", expected)
+        if alternative.strip()
+    }
+    if any(_contains_scaffold_response(student, value) for value in alternatives):
+        return True
+
+    quantity_words = {"number", "quantity", "value", "variable"}
+    student_words = set(student.split())
+    expected_words = set(expected.split())
+    if (
+        student_words & quantity_words
+        and expected_words & quantity_words
+        and student_words & {"starting", "changing"}
+        and expected_words & {"starting", "changing"}
+    ):
+        return True
+
+    student_symbols = set(re.findall(r"(?<!\w)[a-z](?!\w)", student))
+    authored_symbols = set(
+        re.findall(
+            r"(?<!\w)[a-z](?!\w)",
+            canonical_answer,
+        )
+    )
+    expects_changing_quantity = bool(
+        expected_words & quantity_words
+        or expected_words & {"starting", "changing"}
+    )
+    return bool(
+        expects_changing_quantity
+        and student_symbols
+        and student_symbols <= authored_symbols
+    )
 
 
 def _addition_change_operand(value: str) -> str | None:
@@ -2746,6 +2796,7 @@ async def _process_interaction(
             student_message,
             expected_scaffold_response,
             tutor.evaluation,
+            turn_session.correct_answer or "",
             rules,
         ):
             next_prompt, scaffold_turn_updates = _next_scaffold_state(turn_session)

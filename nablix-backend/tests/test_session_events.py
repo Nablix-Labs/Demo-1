@@ -48,6 +48,7 @@ def test_scaffold_response_matching_accepts_safe_variants() -> None:
             student_message,
             expected_response,
             "INCORRECT",
+            "n + 5",
             rules,
         )
     for student_message, expected_response in rejected:
@@ -55,6 +56,16 @@ def test_scaffold_response_matching_accepts_safe_variants() -> None:
             student_message,
             expected_response,
             "PARTIALLY_CORRECT",
+            "n + 5",
+            rules,
+        )
+
+    for student_message in ["the starting variable", "n"]:
+        assert interaction_service._scaffold_response_is_correct(
+            student_message,
+            "Starting number",
+            "INCORRECT",
+            "n + 5",
             rules,
         )
 
