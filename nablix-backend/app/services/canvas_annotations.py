@@ -60,9 +60,6 @@ def plan_canvas_draw(
                 max_y = max(b.get("y", target_region.y) + b.get("height", target_region.h) for b in boxes)
                 target_box = (min_x, min_y, max(0.01, max_x - min_x), max(0.01, max_y - min_y))
 
-        if target_box is None:
-            return []
-
     if target_box is None:
         target_box = _line_box(target_region)
 

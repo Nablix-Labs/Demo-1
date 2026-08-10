@@ -28,6 +28,8 @@ from app.services.interaction_service import (
     _initialize_restored_schema_phase,
     _phase_2_prompt_context,
     _schema_question,
+    _schema_support_steps,
+    _schema_visual_cue,
     _guided_rescue,
     _scaffold_evaluation_context,
     process_answer_with_session_event,
@@ -256,6 +258,8 @@ async def submit_canvas(
         if tutor.evaluation == "UNCLEAR"
         else "processed"
     )
+    schema_visual_cue = _schema_visual_cue(schema_content_response)
+    schema_scaffold_steps = _schema_support_steps(schema_content_response)
     response = _response_from(
         session_id=request.session_id,
         student_id=request.student_id,
@@ -265,8 +269,11 @@ async def submit_canvas(
         session=updated_session,
         message=tutor.tutor_message,
         message_voice=tutor.tutor_message_voice,
-        visual_cue=tutor.visual_cue if tutor.visual_cue.show else None,
-        scaffold_steps=tutor.scaffold_steps_delivered,
+        visual_cue=(
+            schema_visual_cue
+            or (tutor.visual_cue if tutor.visual_cue.show else None)
+        ),
+        scaffold_steps=(schema_scaffold_steps or tutor.scaffold_steps_delivered),
         session_summary=None,
         conversation_action=tutor.recommended_conversation_action,
         attempt_increment=tutor.attempt_increment,
@@ -280,4 +287,9 @@ async def submit_canvas(
     response.canvas_draw = canvas_draw
     response.ocr = ocr
     response.latency = latency
+    rescue = _guided_rescue(schema_content_response)
+    if rescue is not None:
+        response.guided_rescue = rescue
+        response.support_served_this_turn = rescue.rescue_type
+        response.active_support_level = rescue.rescue_type
     return response

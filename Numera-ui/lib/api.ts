@@ -260,7 +260,8 @@ export type InteractionType =
   //   NUDGE_PRESENTED   — acknowledgement that one was actually shown or spoken
   | 'INACTIVITY_NUDGE'
   | 'NUDGE_PRESENTED'
-  | 'HINT_REQUEST'
+  | 'HELP_REQUEST'
+  | 'SUPPORT_REPLAY'
   | 'CANVAS_SUBMISSION'
   | 'SESSION_START'
   | 'SESSION_END';
@@ -825,6 +826,7 @@ export interface InteractionPayload {
  *  which visual to render. Matches the backend VisualCue model. */
 export interface VisualCue {
   show: boolean;
+  cue_id?: string | null;
   cue_type: string | null;
   description: string | null;
   /** Structured cue actions (backend adapters.py:175). Not rendered yet — Phase 2 §6. */

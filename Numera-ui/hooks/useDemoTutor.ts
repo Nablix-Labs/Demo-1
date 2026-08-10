@@ -39,13 +39,9 @@ import { useNumeraStore } from '@/store/useNumeraStore';
 import { tutorSay, setStudentWriting } from '@/lib/tutorSpeech';
 import { phaseAnnouncement, withTransitionVoice } from '@/lib/phaseTransition';
 import { speakBrowser } from '@/lib/tts';
-import {
-  availableSupport,
-  nextSupport,
-  LADDER_EXHAUSTED,
-  type SupportRung,
-} from '@/lib/supportLadder';
+import type { SupportRung } from '@/lib/supportLadder';
 import type { NudgeClaimResult } from '@/hooks/useInactivityNudge';
+import { reportFailure } from '@/lib/failureReport';
 
 const apiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
@@ -172,6 +168,57 @@ const EXPLAIN_AGAIN_ACKNOWLEDGEMENT =
  */
 function chatError(err: unknown, fallback: string): string {
   return studentFacingError(err) ?? fallback;
+}
+
+/**
+ * Said instead of repeating an error the student has already been given.
+ *
+ * "Please try that again in a moment" is reasonable advice once. Said twice
+ * verbatim it is worse than useless: the student cannot tell a second failure
+ * from an echo of the first, and it keeps telling them to do the one thing that
+ * has now demonstrably not worked (10 Aug — two identical bubbles, then a nudge
+ * asking what they would try). The second time, stop asking them to retry and
+ * say plainly that it is not them.
+ */
+const STILL_FAILING =
+  'Still not working, and it is nothing you did — the problem is on my side. Retrying probably won’t help right now, so give it a few minutes or tell your teacher.';
+
+/**
+ * Record a failed tutor turn: one message in the chat, no duplicates, and the
+ * inactivity controller told to stay quiet.
+ *
+ * Kept here rather than at each catch site because all four of them need the
+ * same three things, and the nudge suppression is the part that is easy to
+ * forget on a new one.
+ */
+function reportTutorFailure(
+  err: unknown,
+  fallback: string,
+  add: (msg: { role: 'ai'; text: string }) => void,
+  label = '/interaction',
+): void {
+  const store = useNumeraStore.getState();
+  // Before anything student-facing: the full picture in the console, including
+  // exactly what we sent. A screenshot of the chat says almost nothing; this
+  // says who broke and gives the backend's own request_id to grep for.
+  reportFailure(label, err, {
+    session_id: store.sessionId,
+    question_id: store.activeQuestionId,
+    phase: store.currentPhase,
+    turn_id: store.currentTurnId,
+    previous_tutor_turn_id: store.lastTutorTurnId,
+    expects_student_response: store.expectsStudentResponse,
+  });
+  const text = chatError(err, fallback);
+  const previous = store.transcript.at(-1);
+  const lastWasThisFailure = previous?.role === 'ai' && previous.text === text;
+  const said = lastWasThisFailure ? STILL_FAILING : text;
+  // Third failure onward the honest line has already been said, and repeating it
+  // verbatim only makes the chat look broken on top of being broken. The trail
+  // and the console still get every attempt.
+  if (previous?.role !== 'ai' || previous.text !== said) add({ role: 'ai', text: said });
+  // Whatever the student does next, they are owed a reply — not a nudge.
+  store.markTutorTurnFailed();
 }
 
 /**
@@ -322,6 +369,12 @@ export async function beginSession(
       if (rec.current_question) s.addTrailEntry({ kind: 'question', text: rec.current_question });
       return rec;
     } catch (err) {
+      // A failed start is the most consequential failure in the app — nothing
+      // else works after it — and until now it left one trail entry the student
+      // never sees. The 401 here is the anon-bearer wall: the tutor backend
+      // accepts the placeholder, then forwards SESSION_OPENED to student_model,
+      // which validates it properly and rejects (INVALID_TOKEN).
+      reportFailure('/session/start', err, { concept_id: conceptId, mode });
       // Latch the failure so a remount loop can't hammer the endpoint.
       failedConcept = conceptId;
       lastStartError = studentFacingError(err);
@@ -459,7 +512,7 @@ export function useDemoTutor() {
         tutorSay(spoken, { afterMarks: drew });
         return res;
       } catch (err) {
-        addTranscriptMessage({ role: 'ai', text: chatError(err, TUTOR_UNAVAILABLE) }); // surface the failure in the chat
+        reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage, '/interaction (answer)');
         addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Tutor unavailable.') });
         return null;
       }
@@ -520,7 +573,7 @@ export function useDemoTutor() {
       // A forgotten session recovers by opening a new one; see
       // recoverIfStaleSession. Nothing to report to the student.
       if (recoverIfStaleSession(err)) return null;
-      addTranscriptMessage({ role: 'ai', text: chatError(err, TUTOR_UNAVAILABLE) }); // surface the failure in the chat
+      reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage, '/canvas/submit');
       addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Could not read the canvas.') });
       return null;
     } finally {
@@ -614,7 +667,7 @@ export function useDemoTutor() {
       // A failed API call must release the button immediately. Speech engines
       // do not consistently fire onEnd when playback is muted or interrupted;
       // waiting here previously left Explain Again stuck on "Explaining…".
-      addTranscriptMessage({ role: 'ai', text: chatError(err, TUTOR_UNAVAILABLE) });
+      reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage, '/interaction (explain again)');
       addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Explain again failed.') });
       return null;
     }
@@ -740,34 +793,34 @@ export function useDemoTutor() {
    */
   const hint = useCallback(async (): Promise<SupportRung | null> => {
     const s = useNumeraStore.getState();
-    const rung = nextSupport(
-      s.supportShown,
-      availableSupport({
-        hintText: s.lastHintText,
-        showVisualCue: Boolean(s.visualCueType ?? s.visualCueDescription),
-        showScaffoldPanel: Boolean(s.activeScaffold),
-        hasScaffoldStep: Boolean(s.activeScaffold?.stepText),
-      }),
-    );
-
-    if (!rung) {
-      addTranscriptMessage({ role: 'ai', text: LADDER_EXHAUSTED });
+    if (!apiEnabled() || !sessionId || !s.activeQuestionId) {
       return null;
     }
-
-    s.setSupportShown(rung);
-    if (rung === 'HINT' && s.lastHintText) {
-      addTranscriptMessage({ role: 'ai', text: s.lastHintText });
-      addTrailEntry({ kind: 'hint', text: s.lastHintText, meta: 'Hint' });
-      tutorSay(s.lastHintText);
-    } else if (rung === 'VISUAL_CUE') {
-      s.setVisualCueVisible(true);
-      if (s.visualCueDescription) tutorSay(s.visualCueDescription, { afterMarks: true });
-    }
-    // SCAFFOLD needs no reveal step: ScaffoldPanel renders whenever the backend
-    // has authorised a step, so it is already on screen by the time we get here.
+    const turnId = s.beginSubmissionTurn();
+    const res = await sendSynchronizedInteraction({
+      session_id: sessionId,
+      student_id: studentId(),
+      interaction_type: 'HELP_REQUEST',
+      input_source: 'TEXT',
+      text_input: 'Please give me the next hint.',
+      current_phase: s.currentPhase,
+      concept_id: s.activeConceptId,
+      question_id: s.activeQuestionId,
+      hint_count: s.lastHintText ? 1 : 0,
+      turn_id: turnId,
+      previous_tutor_turn_id: s.lastTutorTurnId,
+    });
+    if (!acceptResponse(res)) return null;
+    syncBackendSession(res);
+    addTranscriptMessage({ role: 'ai', text: res.message });
+    addTrailEntry({ kind: 'hint', text: res.message, meta: res.support_served_this_turn ?? 'support' });
+    const spoken = applyInteractionSupport(res);
+    tutorSay(spoken, { afterMarks: Boolean(res.canvas_draw?.length) });
+    const served = res.support_served_this_turn;
+    const rung: SupportRung | null = served && served !== 'NONE' ? served : null;
+    if (rung) useNumeraStore.getState().setSupportShown(rung);
     return rung;
-  }, [addTranscriptMessage, addTrailEntry]);
+  }, [sessionId, addTranscriptMessage, addTrailEntry]);
 
   /**
    * Fire one completed voice turn to the backend with one frozen canvas payload,
@@ -928,7 +981,7 @@ export function useDemoTutor() {
           useNumeraStore.getState().beginListeningTurn();
           return null;
         }
-        addTranscriptMessage({ role: 'ai', text: chatError(err, TUTOR_UNAVAILABLE) }); // surface the failure in the chat
+        reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage, '/interaction (voice turn)');
         addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Tutor unavailable.') });
         useNumeraStore.getState().beginListeningTurn(); // reopen listening so the student can retry
         return null;

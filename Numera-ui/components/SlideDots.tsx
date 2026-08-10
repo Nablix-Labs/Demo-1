@@ -16,7 +16,8 @@ import { useNumeraStore } from '@/store/useNumeraStore';
 import { cn } from '@/lib/cn';
 
 export default function SlideDots() {
-  const { activeSlide, totalSlides } = useNumeraStore();
+  const activeSlide = useNumeraStore((s) => s.activeSlide);
+  const totalSlides = useNumeraStore((s) => s.totalSlides);
 
   // Nothing true to show yet. The rail used to default to "step 3 of 9" and
   // nothing ever assigned it, so every student saw the same invented position

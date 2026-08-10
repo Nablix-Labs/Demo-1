@@ -32,6 +32,7 @@ import { applyInteractionSupport, acceptResponse, type SupportPresentation } fro
 import { TurnWatchdog } from '@/lib/turnWatchdog';
 import { SpeechSettleTimer } from '@/lib/speechSettle';
 import { turnContextFrame } from '@/lib/voiceTurnContext';
+import { reportFailure } from '@/lib/failureReport';
 
 
 /**
@@ -77,6 +78,9 @@ export function useWebSocket(sessionId: string | null) {
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryAttemptRef = useRef(0);
   const rescueGraceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Id of the rescue's "Something went wrong" bubble, so a reply that lands
+   *  after the rescue can retract the now-false apology. */
+  const rescueMsgIdRef = useRef<string | null>(null);
   /** True while the frames arriving belong to a tutor_response that was
    *  REJECTED by the ordering gate. The server streams one reply at a time on
    *  the socket, so everything up to the next tutor_response is that stale
@@ -172,7 +176,11 @@ export function useWebSocket(sessionId: string | null) {
         rescueGraceRef.current = null;
         const store = useNumeraStore.getState();
         if (store.currentTurnId !== armedTurnId) return; // something resolved it
-        addTranscriptMessage({ role: 'ai', text: voiceTurnFailedMessage() });
+        // Keep the apology's id: replies have been observed landing AFTER this
+        // rescue (53s past utterance end, 10 Aug), and "Something went wrong"
+        // sitting above "Nice work!" reads as a contradiction. If that happens,
+        // the tutor_response handler retracts this bubble.
+        rescueMsgIdRef.current = addTranscriptMessage({ role: 'ai', text: voiceTurnFailedMessage() });
         store.beginListeningTurn();
         sendTurnContext();
       }, RESCUE_GRACE_MS);
@@ -289,6 +297,19 @@ export function useWebSocket(sessionId: string | null) {
               useNumeraStore.getState().beginListeningTurn();
               sendTurnContext();
               break;
+            }
+            // A reply landing after the rescue makes the rescue's apology false
+            // ("Something went wrong" directly above "Nice work!" — Manjusha,
+            // 10 Aug). Retract it, but only while it is still the newest AI
+            // bubble: once the conversation has moved past it, deleting a
+            // message from mid-history is more confusing than the apology.
+            if (rescueMsgIdRef.current) {
+              const transcript = useNumeraStore.getState().transcript;
+              const lastAi = [...transcript].reverse().find((m) => m.role === 'ai');
+              if (lastAi?.id === rescueMsgIdRef.current) {
+                useNumeraStore.getState().removeTranscriptMessage(lastAi.id);
+              }
+              rescueMsgIdRef.current = null;
             }
             addTranscriptMessage({ role: 'ai', text: msg.text as string });
             // applyInteractionSupport returns the line the tutor should SAY —
@@ -413,9 +434,21 @@ export function useWebSocket(sessionId: string | null) {
             // announced on chat and swallowed here.
             watchdogRef.current?.noteTurnResolved();
             processingTimerRef.current?.cancel();
-            // Engineer-facing text stays in the console — it is the backend's
-            // own reason and the fastest way to find which service failed.
-            console.error('[WS] server error:', msg.message);
+            // Engineer-facing detail stays in the console — it is the backend's
+            // own reason and the fastest way to find which service failed. The
+            // full report matches what the REST path writes, because until now
+            // this transport logged one line and the same backend fault kept
+            // being filed as "voice is broken" rather than as itself.
+            reportFailure(
+              'voice socket',
+              { config: { method: 'WS', url: '/voice/stream' }, message: msg.message },
+              {
+                session_id: useNumeraStore.getState().sessionId,
+                question_id: useNumeraStore.getState().activeQuestionId,
+                phase: useNumeraStore.getState().currentPhase,
+                frame: msg,
+              },
+            );
             // A session the backend has forgotten (restart — its sessions are
             // in-memory) fails EVERY turn from here on; the REST path recovers
             // by dropping the dead session and starting fresh, but the socket
@@ -431,6 +464,10 @@ export function useWebSocket(sessionId: string | null) {
               role: 'ai',
               text: voiceTurnFailedMessage(msg.message as string | undefined),
             });
+            // Same as the REST path: the tutor owes them a reply, so the idle
+            // clock must not read the silence that follows as being stuck and
+            // ask what they would try first. This transport had the same hole.
+            useNumeraStore.getState().markTutorTurnFailed();
             // The copy tells the student to say it again, so put them back in a
             // state where they can. Without this the panel could sit in
             // PROCESSING for a turn that already failed, with the mic shut.
