@@ -9,6 +9,7 @@ from app.core.config import Settings
 from app.core.exceptions import AdapterError
 from app.main import app
 from app.ai_engine.classifier_config import load_classifier_rules
+from app.models.adapters import TutorResult
 from app.services import interaction_service, session_service
 
 
@@ -17,6 +18,25 @@ SessionEventPost = Callable[
     [str, str, dict[str, object], dict[str, str], int, int],
     Awaitable[dict[str, object]],
 ]
+
+
+def test_guided_support_failure_distinguishes_wrong_partial_from_defence() -> None:
+    wrong_partial = TutorResult.model_construct(
+        guided_student_state="PARTIAL",
+        evaluation="PARTIALLY_CORRECT",
+        intent="SUBMITTING_ANSWER",
+        answer_value_confirmed=False,
+    )
+    defence_partial = wrong_partial.model_copy(
+        update={"answer_value_confirmed": True}
+    )
+    stuck = wrong_partial.model_copy(
+        update={"intent": "EXPRESSING_CONFUSION"}
+    )
+
+    assert interaction_service._is_support_failure(wrong_partial)
+    assert not interaction_service._is_support_failure(defence_partial)
+    assert not interaction_service._is_support_failure(stuck)
 
 
 def test_scaffold_response_matching_accepts_safe_variants() -> None:

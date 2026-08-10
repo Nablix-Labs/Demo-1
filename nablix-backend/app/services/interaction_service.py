@@ -284,6 +284,15 @@ def _is_wrong_evaluation(tutor: TutorResult) -> bool:
     )
 
 
+def _is_support_failure(tutor: TutorResult) -> bool:
+    """Return whether an unresolved answer should advance guided support."""
+    return _is_wrong_evaluation(tutor) or (
+        tutor.guided_student_state == "PARTIAL"
+        and not tutor.answer_value_confirmed
+        and tutor.intent != "EXPRESSING_CONFUSION"
+    )
+
+
 def _guided_rescue(
     event: StudentModelSessionEventResponse | None,
 ) -> GuidedRescue | None:
@@ -456,7 +465,7 @@ async def process_answer_with_session_event(
     scaffold_turn = session.current_scaffold_step_id is not None
     wrong_attempt_count = (
         session.wrong_attempt_count + 1
-        if not scaffold_turn and _is_wrong_evaluation(tutor)
+        if not scaffold_turn and _is_support_failure(tutor)
         else session.wrong_attempt_count
     )
     if not scaffold_turn:
@@ -486,7 +495,7 @@ async def process_answer_with_session_event(
             else None
         )
     )
-    response_is_wrong = _is_wrong_evaluation(tutor)
+    response_is_wrong = _is_support_failure(tutor)
 
     next_wrong_attempt_count = (
         session.wrong_attempt_count + 1
@@ -500,7 +509,7 @@ async def process_answer_with_session_event(
         atomic_guided_events_enabled
         and schema_managed
         and session.current_phase == "GUIDED_PRACTICE"
-        and _is_wrong_evaluation(tutor)
+        and _is_support_failure(tutor)
         and wrong_attempt_count >= 4
     )
     stuck_escalation = (
@@ -1477,7 +1486,7 @@ def _deterministic_wrong_tutor_result(
     tutor: TutorResult,
     wrong_attempt_count: int,
 ) -> TutorResult:
-    if not _is_wrong_evaluation(tutor):
+    if not _is_support_failure(tutor):
         return tutor
     bounded_count = min(wrong_attempt_count, 4)
     strategy_by_count = {
@@ -2904,7 +2913,7 @@ async def _process_interaction(
         ),
         "wrong_attempt_count": (
             session.wrong_attempt_count + 1
-            if not scaffold_turn and _is_wrong_evaluation(tutor)
+            if not scaffold_turn and _is_support_failure(tutor)
             else 0
             if tutor.guided_student_state == "CORRECT"
             else session.wrong_attempt_count
@@ -3105,7 +3114,7 @@ async def _process_interaction(
                 _WRONG_ESCALATION_BY_COUNT[
                     min(updated_session.wrong_attempt_count, 4)
                 ]
-                if _is_wrong_evaluation(tutor)
+                if _is_support_failure(tutor)
                 and updated_session.wrong_attempt_count > 0
                 else schema_content_response.routing.reason_code
                 if support_served is not None
@@ -3114,7 +3123,7 @@ async def _process_interaction(
             "support_served_this_turn": support_served,
             "wrong_attempt_count": updated_session.wrong_attempt_count,
             "intervention_triggered": (
-                _is_wrong_evaluation(tutor)
+                _is_support_failure(tutor)
                 and updated_session.wrong_attempt_count >= 4
             ),
             "ocr": ocr,
