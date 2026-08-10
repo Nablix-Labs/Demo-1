@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { MoreVertical, PanelLeft, PanelRight, Eye, EyeOff, FileDown, ChevronsLeft, ChevronsRight } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { exportNotesPDF } from '@/lib/exportNotes';
 import VoicePicker from '@/components/VoicePicker';
@@ -14,7 +15,13 @@ import ResizeHandle from './ResizeHandle';
 
 /** ⋮ overflow menu — panel side + transcript visibility. */
 function PanelMenu() {
-  const { panelSide, transcriptVisible, togglePanelSide, toggleTranscript, togglePanelCollapsed } = useNumeraStore();
+  const { panelSide, transcriptVisible, togglePanelSide, toggleTranscript, togglePanelCollapsed } = useNumeraStore(
+    useShallow((s) => ({
+      panelSide: s.panelSide, transcriptVisible: s.transcriptVisible,
+      togglePanelSide: s.togglePanelSide, toggleTranscript: s.toggleTranscript,
+      togglePanelCollapsed: s.togglePanelCollapsed,
+    })),
+  );
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 

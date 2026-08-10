@@ -12,6 +12,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
+import { useShallow } from 'zustand/react/shallow';
 import { useNumeraStore, type CanvasExporter } from '@/store/useNumeraStore';
 import { useAuthStore, isConsentActive } from '@/store/useAuthStore';
 import type { SchemaQuestionOption } from '@/lib/api';
@@ -36,7 +37,16 @@ const HELP_TIPS = [
 ];
 
 export default function CanvasStage() {
-  const { questionText, questionNumber, items, setCanvasExporter, canvasGrid, setCanvasGrid } = useNumeraStore();
+  // Selected, not destructured off the whole store: a bare useNumeraStore()
+  // subscribes to every write, and the transcript writes several times a
+  // second while the student speaks — which re-rendered the entire canvas per
+  // partial transcript (audit F-14).
+  const { questionText, questionNumber, items, setCanvasExporter, canvasGrid, setCanvasGrid } = useNumeraStore(
+    useShallow((s) => ({
+      questionText: s.questionText, questionNumber: s.questionNumber, items: s.items,
+      setCanvasExporter: s.setCanvasExporter, canvasGrid: s.canvasGrid, setCanvasGrid: s.setCanvasGrid,
+    })),
+  );
   const activeScaffold = useNumeraStore((s) => s.activeScaffold);
   const visualCueType = useNumeraStore((s) => s.visualCueType);
   const visualCueDescription = useNumeraStore((s) => s.visualCueDescription);
