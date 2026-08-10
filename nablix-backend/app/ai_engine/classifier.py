@@ -1213,9 +1213,18 @@ def validate_guided_evaluation(
             rules,
             "CORRECT left required concepts missing",
         )
-    if evaluation.student_state == "PARTIAL" and (
-        not confirmed or not remaining
+    if (
+        evaluation.student_state == "PARTIAL"
+        and not confirmed
+        and remaining
+        and evaluation.selected_error_code is not None
     ):
+        # PARTIAL requires positive evidence for at least one authored
+        # component. When the model found only an authored misconception, this
+        # is an incorrect attempt, not an unclear partial. Preserving that error
+        # lets the deterministic Wrong-1..Wrong-4 ladder reach its scaffold.
+        evaluation = evaluation.model_copy(update={"student_state": "WRONG"})
+    if evaluation.student_state == "PARTIAL" and (not confirmed or not remaining):
         return reconcile_guided_evaluation(
             evaluation,
             objective,

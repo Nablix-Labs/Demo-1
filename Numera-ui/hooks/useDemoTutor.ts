@@ -182,6 +182,10 @@ function syncBackendSession(response: {
   current_phase: string;
   current_question: string | null;
   question_id: string | null;
+  question_number?: number;
+  last_tutor_turn_id?: string | null;
+  expected_student_response?: string;
+  allow_voice_input?: boolean;
   /**
    * How the question expects to be answered. Present on both the session record
    * and every interaction reply, and until now read from neither — so a
@@ -209,6 +213,15 @@ function syncBackendSession(response: {
     questionText: response.current_question,
     questionType: response.question_type ?? null,
   });
+  if (response.question_number !== undefined) {
+    store.setQuestionNumber(response.question_number);
+  }
+  if (response.last_tutor_turn_id !== undefined) {
+    store.setTutorTurn(response.last_tutor_turn_id, {
+      expects: response.expected_student_response !== 'NONE',
+      allow: response.allow_voice_input ?? false,
+    });
+  }
 
   // Progress rail (§2). The denominator only exists on the session record's
   // question set, so this is the one place both halves are known at once.
@@ -296,6 +309,9 @@ export async function resumeSession(): Promise<void> {
       const s = useNumeraStore.getState();
       s.setBackendSession(rec);
       syncBackendSession(rec);
+      if (s.transcript.length === 0 && rec.message.trim()) {
+        s.setTranscript([{ role: 'ai', text: rec.message }]);
+      }
     } catch (err) {
       const status = (err as { response?: { status?: number } })?.response?.status;
       if (isStaleSessionError(err) || status === 404) {
@@ -382,7 +398,9 @@ export function useDemoTutor() {
     if (!apiEnabled() || !sessionId) return null;
     const png = hasCanvasActivity() ? canvasExporter?.() : null;
     if (!png) {
-      addTrailEntry({ kind: 'tutor', text: 'Nothing on the canvas to submit yet.' });
+      const message = 'Write or draw something on the canvas first, then I can check it with you.';
+      addTranscriptMessage({ role: 'ai', text: message });
+      addTrailEntry({ kind: 'tutor', text: message });
       return null;
     }
     if (canvasSubmissionInFlight.current) return null;
@@ -469,6 +487,10 @@ export function useDemoTutor() {
         speak: speakBrowser,
       });
     });
+    const acknowledgementWindow = Promise.race([
+      acknowledgementFinished,
+      new Promise<void>((resolve) => window.setTimeout(resolve, 6000)),
+    ]);
     try {
       const res = await sendInteraction({
         session_id: sessionId,
@@ -486,11 +508,11 @@ export function useDemoTutor() {
       // original version, so re-pressing the button must not re-render the reply
       // a second time — which is exactly what the guard is for.
       if (!acceptResponse(res)) {
-        await acknowledgementFinished;
+        await acknowledgementWindow;
         return res;
       }
       // Present the returned wording once; preserve cue and scaffold as sent.
-      await acknowledgementFinished;
+      await acknowledgementWindow;
       addTranscriptMessage({ role: 'ai', text: res.message });
       const spoken = applyInteractionSupport(res);
       tutorSay(spoken, { afterMarks: Boolean(res.canvas_draw?.length) });
@@ -504,12 +526,14 @@ export function useDemoTutor() {
       const status = (err as { response?: { status?: number } })?.response?.status;
       const endpointMissing = status === 404 || status === 405 || status === 422;
       if (endpointMissing) {
-        await acknowledgementFinished;
+        await acknowledgementWindow;
         console.warn('[explain-again] backend has no EXPLAIN_AGAIN yet — replaying the held cue');
         replayLocally();
         return null;
       }
-      await acknowledgementFinished;
+      // A failed API call must release the button immediately. Speech engines
+      // do not consistently fire onEnd when playback is muted or interrupted;
+      // waiting here previously left Explain Again stuck on "Explaining…".
       addTranscriptMessage({ role: 'ai', text: chatError(err, TUTOR_UNAVAILABLE) });
       addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Explain again failed.') });
       return null;

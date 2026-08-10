@@ -403,6 +403,8 @@ export interface SessionRecord {
   question_type?: QuestionType | null;
   question_id: string | null;
   question_number: number;
+  last_tutor_turn_id?: string | null;
+  expected_student_response?: string;
   student_model_event?: StudentModelEvent | null;
   student_model_state?: StudentModelState | null;
   voice_state: VoiceState;
