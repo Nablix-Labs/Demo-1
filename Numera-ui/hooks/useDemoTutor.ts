@@ -34,6 +34,7 @@ import {
 import { applyInteractionSupport, acceptResponse } from '@/lib/interactionPresentation';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { tutorSay, setStudentWriting } from '@/lib/tutorSpeech';
+import { phaseAnnouncement, withTransitionVoice } from '@/lib/phaseTransition';
 import { speakBrowser } from '@/lib/tts';
 import {
   availableSupport,
@@ -389,12 +390,19 @@ export function useDemoTutor() {
         // screen is dropped, and a cached replay is applied exactly once.
         if (!acceptResponse(res)) return res;
         syncBackendSession(res);
+        // Read the phase we were in BEFORE advancing it, or the transition can
+        // never be detected.
+        const entering = phaseAnnouncement(res, useNumeraStore.getState().currentPhase);
+        if (entering) {
+          addTranscriptMessage({ role: 'ai', text: entering.text });
+          addTrailEntry({ kind: 'tutor', text: entering.text, meta: 'phase change' });
+        }
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message });
         if (res.current_phase) useNumeraStore.getState().setCurrentPhase(res.current_phase); // advance phase
         const drew = Boolean(res.canvas_draw?.length);
         if (drew) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw!);
-        const spoken = applyInteractionSupport(res);
+        const spoken = withTransitionVoice(entering, applyInteractionSupport(res));
         // §1: highlight first, pause, then speak. When the turn also drew, the
         // mark lands before it is described; when it didn't, this speaks at once.
         tutorSay(spoken, { afterMarks: drew });
@@ -424,6 +432,7 @@ export function useDemoTutor() {
       const res = await submitCanvas(sessionId, png, 'STANDALONE_ATTEMPT');
       // Canvas responses now carry the same phase state as /interaction, so a
       // backend phase change here also drives usePhaseRouting.
+      const entering = phaseAnnouncement(res, useNumeraStore.getState().currentPhase);
       if (res.current_phase && res.current_question) {
         syncBackendSession({
           current_phase: res.current_phase,
@@ -438,6 +447,10 @@ export function useDemoTutor() {
           res.ocr.needs_clarification ? ' · needs clarification' : ''
         }`,
       });
+      if (entering) {
+        addTranscriptMessage({ role: 'ai', text: entering.text });
+        addTrailEntry({ kind: 'tutor', text: entering.text, meta: 'phase change' });
+      }
       addTranscriptMessage({ role: 'ai', text: res.tutor.tutor_message });
       addTrailEntry({
         kind: 'tutor',
@@ -450,7 +463,7 @@ export function useDemoTutor() {
       // otherwise the tutor's response to a submission would be silently dropped
       // by the very rule that kept it quiet while they were writing.
       setStudentWriting(false);
-      tutorSay(res.tutor.tutor_message, { afterMarks: drew });
+      tutorSay(withTransitionVoice(entering, res.tutor.tutor_message), { afterMarks: drew });
       return res;
     } catch (err) {
       // A forgotten session recovers by opening a new one; see
@@ -814,11 +827,16 @@ export function useDemoTutor() {
         }
         syncBackendSession(res);
         console.groupEnd();
+        const entering = phaseAnnouncement(res, useNumeraStore.getState().currentPhase);
+        if (entering) {
+          addTranscriptMessage({ role: 'ai', text: entering.text });
+          addTrailEntry({ kind: 'tutor', text: entering.text, meta: 'phase change' });
+        }
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message });
         if (res.current_phase) useNumeraStore.getState().setCurrentPhase(res.current_phase); // advance phase
         if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
-        const spoken = applyInteractionSupport(res);
+        const spoken = withTransitionVoice(entering, applyInteractionSupport(res));
         // Record the tutor turn + backend gating for the next turn (contract §11).
         // Fallbacks keep the loop working before the backend sends these fields.
         useNumeraStore.getState().setTutorTurn(res.tutor_turn_id ?? null, {

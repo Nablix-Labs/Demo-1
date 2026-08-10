@@ -914,6 +914,11 @@ export interface InteractionResponse extends GuidedStateFields {
   accepted_turn_id?: string | null;
   /** New tutor turn id — becomes previous_tutor_turn_id on the next request. */
   tutor_turn_id?: string | null;
+  /** Spoken/shown framing when this reply moves the student into a new phase.
+   *  The canvas response documents its phase block as "same contract as
+   *  InteractionResponse", but these two were only ever declared there. */
+  phase_transition_message?: string | null;
+  phase_transition_voice?: string | null;
   /** Backend's next conversational move (ASK_QUESTION, ADVANCE_TO_NEXT_QUESTION, …). */
   conversation_action?: string;
   /** Whether another student response is expected after this reply. */
