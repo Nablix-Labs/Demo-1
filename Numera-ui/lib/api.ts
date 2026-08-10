@@ -178,7 +178,11 @@ export function studentFacingError(err: unknown): string | null {
     if (!backendMessage || /already|in progress|resume/i.test(backendMessage)) {
       return 'You already have this topic in progress, and the tutor can\u2019t pick it back up yet. Ask the team to reset it for you.';
     }
-    return `The tutor couldn\u2019t load this question. ${backendMessage}`;
+    // A non-resume conflict is a service-contract failure. Backend messages can
+    // contain adapter URLs, payloads, student IDs, or authored error codes; none
+    // of that belongs in learner chat. Keep the diagnostic in the browser
+    // console/network response and give the learner safe, actionable wording.
+    return 'The tutor hit a problem on its side. Nothing you did\u2014please try again in a moment.';
   }
   switch (code) {
     case 'AUTHENTICATION_FAILED':
@@ -855,6 +859,21 @@ export interface GuidedStateFields {
     step_voice?: string | null;
     total_steps: number;
   } | null;
+  guided_rescue?: {
+    rescue_type: 'PARALLEL_EXAMPLE' | 'TUTOR_SOLVED';
+    micro_skill_id: string;
+    parallel_example: {
+      parallel_example_id: string;
+      problem: string;
+      worked_steps: string[];
+      final_answer: string;
+    } | null;
+    tutor_solved: {
+      explanation: string;
+      final_answer: string;
+      answer_steps: string[];
+    } | null;
+  } | null;
   consecutive_stuck_count?: number;
   /** Matches models/guided_learning.py:PrerequisiteRepair. */
   prerequisite_repair?: {
@@ -1095,6 +1114,7 @@ export interface CanvasSubmissionResult {
   /** Tutor drawing actions (e.g. mark up the student's working). The backend
    *  sends a LIST of draw actions here, unlike the WS path (one per message). */
   canvas_draw?: CanvasDrawPayload[];
+  guided_rescue?: GuidedStateFields['guided_rescue'];
   /** Phase state after this submission — same contract as InteractionResponse. */
   phase_changed?: boolean;
   previous_phase?: string | null;

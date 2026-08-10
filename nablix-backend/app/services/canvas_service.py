@@ -28,6 +28,7 @@ from app.services.interaction_service import (
     _initialize_restored_schema_phase,
     _phase_2_prompt_context,
     _schema_question,
+    _guided_rescue,
     _scaffold_evaluation_context,
     process_answer_with_session_event,
 )
@@ -189,13 +190,15 @@ async def submit_canvas(
     if request.submission_role == "VOICE_ATTACHMENT":
         tutor = _attachment_result(ocr)
         student_result = None
+        schema_content_response = None
         updated_session = session
     elif ocr.needs_clarification or ocr.confidence < settings.min_ocr_confidence_threshold:
         tutor = _clarification_result(ocr)
         student_result = None
+        schema_content_response = None
         updated_session = session
     else:
-        student_result, tutor, _schema_content, _schema_response, updated_session = (
+        student_result, tutor, schema_content_response, _schema_response, updated_session = (
             await process_answer_with_session_event(
                 context,
                 session,
@@ -269,6 +272,7 @@ async def submit_canvas(
         tutor=tutor,
         latency=latency,
         canvas_draw=canvas_draw,
+        guided_rescue=_guided_rescue(schema_content_response),
         phase_changed=phase_changed,
         previous_phase=previous_session.current_phase if phase_changed else None,
         current_phase=updated_session.current_phase,
