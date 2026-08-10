@@ -1,9 +1,10 @@
+import asyncio
 from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.models.session import QuestionAttemptRecord, SessionEndRequest
+from app.models.session import QuestionAttemptRecord, SessionEndRequest, SessionRecord
 from app.services import session_service
 
 client = TestClient(app, headers={"Authorization": "Bearer test-token"})
@@ -51,6 +52,39 @@ def test_session_start_rejects_invalid_interaction_mode() -> None:
 
     assert response.status_code == 422
     assert response.json()["field"] == "interaction_mode"
+
+
+def test_review_session_with_no_attempts_can_end() -> None:
+    session_id = "SESSION001"
+    session_service._sessions[session_id] = SessionRecord.model_construct(
+        session_id=session_id,
+        student_id="ST001",
+        concept_id="ALG_LINEAR_ONE_STEP",
+        started_at=datetime.now(timezone.utc),
+        current_phase="REVIEW",
+        current_question=None,
+        question_number=1,
+        interaction_mode="TEXT",
+        ui_state="REVIEW",
+        message="Session Review — practice questions complete.",
+        hint_count=0,
+        last_tutor_response_at=datetime.now(timezone.utc),
+        status="started",
+        student_model_event=object(),
+    )
+    try:
+        ended = asyncio.run(
+            session_service.end_session(
+                SessionEndRequest(session_id=session_id, student_id="ST001")
+            )
+        )
+        assert ended.status == "ended"
+        assert ended.session_summary is not None
+        assert ended.session_summary.session_performance.total_attempts == 0
+        assert ended.session_review is not None
+        assert ended.session_review.call_to_action == "NONE"
+    finally:
+        session_service._sessions.pop(session_id, None)
 
 
 def test_get_session_rejects_malformed_session_id() -> None:

@@ -30,6 +30,7 @@ from app.models.session import (
     SessionSummary,
     VoiceState,
 )
+from app.models.session_review import SessionReviewResponse
 from app.models.student_model_session import (
     DiagnosticResult,
     DiagnosticCompletedEvent,
@@ -1181,6 +1182,7 @@ def assemble_session_summary(session: SessionRecord, ended_at: datetime) -> Sess
         ),
         None,
     )
+
     correct_attempts: int = sum(
         attempt.evaluation == "CORRECT" for attempt in session.per_question_history
     )
@@ -1211,6 +1213,31 @@ def assemble_session_summary(session: SessionRecord, ended_at: datetime) -> Sess
         phase_transitions=session.phase_transitions,
         recommended_entry_phase=session.recommended_entry_phase,
         conversation_history=session.conversation_history,
+    )
+
+
+def _empty_session_review() -> SessionReviewResponse:
+    """Return the safe review contract for a session with no attempts."""
+
+    return SessionReviewResponse(
+        five_category_summary={
+            "category_1_strength": "No questions were attempted in this session.",
+            "category_2_first_error": None,
+            "category_3_pattern": None,
+            "category_4_next_practice": "Start a new practice session when ready.",
+            "category_5_mastery": "There is not enough attempt evidence to assess mastery.",
+        },
+        student_facing_summary="This session ended without any recorded attempts.",
+        b6_hook=None,
+        call_to_action="NONE",
+        voice_delivery_order=[
+            "category_1_strength",
+            "category_4_next_practice",
+            "category_5_mastery",
+            "student_facing_summary",
+        ],
+        answer_reveal_allowed=False,
+        guardrail_passed=True,
     )
 
 
@@ -1353,8 +1380,8 @@ def build_session_review_request(session: SessionRecord) -> "SessionReviewReques
 async def end_session(request: SessionEndRequest) -> SessionRecord:
     """Generate the engine review, then mark a stored mock session as ended.
 
-    Review generation runs first: if it fails (or the session has no graded
-    attempts), the caller gets an explicit error and the session stays active.
+    Review generation runs first; empty-attempt REVIEW sessions use the
+    deterministic zero-attempt review contract.
     """
 
     # Imported here: ai_engine.session_review imports this module for answers.
@@ -1366,13 +1393,12 @@ async def end_session(request: SessionEndRequest) -> SessionRecord:
     )
 
     session: SessionRecord = _get_owned_session(request.session_id, request.student_id)
-    if len(session.per_question_history) == 0:
-        raise HTTPException(
-            status_code=409,
-            detail="Cannot end the session yet: no graded attempts to review.",
-        )
     try:
-        review = generate_session_review(build_session_review_request(session))
+        review = (
+            _empty_session_review()
+            if not session.per_question_history
+            else generate_session_review(build_session_review_request(session))
+        )
     except (SessionReviewValidationError, ValidationError, RuntimeError) as error:
         raise HTTPException(
             status_code=502,
