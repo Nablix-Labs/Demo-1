@@ -583,6 +583,8 @@ def focused_unresolved_prompt(
         return "What operation or amount stays fixed?"
     if any(term in component_kind for term in ("general_rule", "general rule", "expression")):
         return "What general rule represents this situation?"
+    if any(term in component_kind for term in ("expanded", "repeated", "adjacent")):
+        return "What do the letters represent when the expression is expanded?"
     if any(term in component_kind for term in ("choice", "selection", "option")):
         return "Which option do you choose?"
     return "What else does the question ask you to state?"
@@ -630,6 +632,33 @@ def classify_guided_learning_response(
         openai_client=openai_client,
     )
     objective = objective_for_rubric(request.active_teaching_objective, rubric)
+    if detect_student_intent(request.student_input, rules) == "EXPRESSING_CONFUSION":
+        focused_prompt = focused_unresolved_prompt(
+            rubric,
+            objective,
+            "Which part should we look at first?",
+        )
+        message = f"That’s okay—we’ll take it one part at a time. {focused_prompt}"
+        evaluation = GuidedEvaluation(
+            student_state="STUCK",
+            newly_confirmed_concept_ids=[],
+            preserved_concept_ids=objective.confirmed_concept_ids,
+            contradicted_concept_ids=[],
+            missing_concept_ids=objective.missing_concept_ids,
+            selected_error_code=None,
+            confidence=rules.confidence.standard_response,
+            next_objective=objective,
+            tutor_message=message,
+            tutor_message_voice=message,
+        )
+        return build_guided_tutor_response(
+            request,
+            rules,
+            safety_check,
+            rubric,
+            evaluation,
+            objective,
+        )
     evaluation: GuidedEvaluation | None = None
     raw_student_state: GuidedStudentState | None = None
     raw_confidence: float | None = None
@@ -793,6 +822,11 @@ def classify_guided_learning_response(
     if is_authoritative_guided_completion(request):
         evaluation = authoritative_guided_completion(evaluation, rules)
     next_objective = normalized_guided_objective(evaluation, objective)
+    evaluation = align_guided_follow_up(
+        evaluation,
+        rubric,
+        next_objective,
+    )
     logger.info(
         "guided_state_evaluated",
         extra={
@@ -817,6 +851,37 @@ def classify_guided_learning_response(
         rubric,
         evaluation,
         next_objective,
+    )
+
+
+def align_guided_follow_up(
+    evaluation: GuidedEvaluation,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective | None,
+) -> GuidedEvaluation:
+    """Make tutor wording agree with the backend's reconciled objective."""
+    if objective is None or evaluation.student_state == "CORRECT":
+        return evaluation
+    prompt = focused_unresolved_prompt(
+        rubric,
+        objective,
+        "What else does the question ask you to state?",
+    )
+    prefix_by_state = {
+        "PARTIAL": "Good—let’s focus on the remaining part.",
+        "WRONG": "Let’s try one part at a time.",
+        "UNCLEAR": "I couldn’t connect that response to the question.",
+        "STUCK": "That’s okay—we’ll take it one part at a time.",
+    }
+    prefix = prefix_by_state.get(evaluation.student_state)
+    if prefix is None:
+        return evaluation
+    message = f"{prefix} {prompt}"
+    return evaluation.model_copy(
+        update={
+            "tutor_message": message,
+            "tutor_message_voice": message,
+        }
     )
 
 
