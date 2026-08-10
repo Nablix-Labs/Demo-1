@@ -1,45 +1,44 @@
-# Implementation Plan: Unify Canvas and Interaction Responses (Option 1)
+# Implementation Plan: Recover From Empty Canvas OCR
 
 ## Overview
-We are modifying the `/canvas/submit` endpoint to return the exact same `InteractionResponse` JSON payload as `/interaction`, while keeping the endpoints separate. This ensures the frontend receives the full session state (messages, hints, attempts) regardless of whether the input was text/voice or canvas strokes.
+
+Treat Mathpix `image_no_content` as normal unreadable student work. Return the existing clarification flow instead of exposing it as `ADAPTER_UNAVAILABLE`.
 
 ## Architecture Decisions
-- **Keep endpoints separate**: Canvas payload (strokes/images) and OCR logic remain isolated in `/canvas/submit`.
-- **Unify response builder**: Refactor the central `_response_from` function in `interaction_service.py` to accept explicit data arguments instead of an `InteractionRequest` object, so it can be safely called by `canvas_service.py`.
-- **Extend InteractionResponse**: Add `canvas_draw`, `ocr`, and `latency` directly to `InteractionResponse`.
+
+- Classify only Mathpix's stable `error_info.id` (and legacy top-level error value) `image_no_content`.
+- Reuse the existing `VisionOCRResult` and canvas clarification path; add no fallback provider, retry loop, feature flag, or new response type.
+- Preserve all other Mathpix failures as `AdapterError` and HTTP 503.
 
 ## Task List
 
-### Phase 1: Foundation (Models)
-- [ ] Task 1: Extend `InteractionResponse` with canvas fields
-- [ ] Task 2: Remove `CanvasSubmitResponse`
+### Phase 1: Provider Boundary
 
-### Checkpoint: Foundation
-- [ ] Models build cleanly
-- [ ] No immediate syntax errors in models
+- [ ] Task 1: Normalize Mathpix empty-content responses.
 
-### Phase 2: Core Refactor (Services)
-- [ ] Task 3: Refactor `_response_from` signature to use explicit arguments
-- [ ] Task 4: Update `_process_interaction` to use the new `_response_from` signature
-- [ ] Task 5: Update `submit_canvas` to build its response using `_response_from`
+### Checkpoint: Provider Boundary
 
-### Checkpoint: Core Features
-- [ ] Server starts without dependency injection or import errors
-- [ ] Both `/interaction` and `/canvas/submit` endpoints can be hit without 500 errors
+- [ ] The focused Mathpix tests pass.
+- [ ] Other provider failures still raise `AdapterError`.
 
-### Phase 3: API & Tests
-- [ ] Task 6: Update `app/api/canvas.py` signature
-- [ ] Task 7: Fix unit tests in `tests/test_canvas.py` and `tests/test_interaction.py`
+### Phase 2: Endpoint Behavior
+
+- [ ] Task 2: Add canvas regression coverage for clarification and attempt preservation.
 
 ### Checkpoint: Complete
-- [ ] `pytest tests/test_canvas.py tests/test_interaction.py -v` passes
-- [ ] Ready for review
+
+- [ ] Focused vision and canvas tests pass.
+- [ ] Backend compile check passes.
+- [ ] No unrelated files are staged.
 
 ## Risks and Mitigations
+
 | Risk | Impact | Mitigation |
-|------|--------|------------|
-| Circular Imports | High | `app/models/interaction.py` importing from `app/models/canvas.py` might cause issues. We will carefully sequence imports or use local imports if needed. |
-| Missing State in Canvas | Med | Ensure `submit_canvas` passes all updated session state correctly into `_response_from`. |
+|---|---|---|
+| A provider outage is mistaken for empty content | High | Match only the exact stable `image_no_content` identifier. |
+| Empty work is graded as an answer | High | Return `needs_clarification=True`; existing canvas service exits before grading. |
+| Existing workspace artifacts are accidentally included | Medium | Stage only the two targeted source/test files. |
 
 ## Open Questions
-- None.
+
+- None for the approved scope.
