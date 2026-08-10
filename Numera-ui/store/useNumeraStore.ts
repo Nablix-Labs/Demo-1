@@ -30,6 +30,45 @@ import type { InactivityPolicy } from '@/lib/inactivity';
 // collided with the backend's cached turns from the same session.
 const nextTurnId = (): string => `TURN-${uid()}`;
 
+/**
+ * Tutor panel width.
+ *
+ * The default is the width the panel was designed at. The minimum is where the
+ * chat bubbles stop being readable; below it the panel should be collapsed, not
+ * shrunk, which is what the collapse control is for.
+ *
+ * The maximum is a share of the window rather than a fixed number of pixels,
+ * because the thing actually being protected is the canvas — a student writing
+ * maths needs room whatever monitor they are on. Half the window is generous
+ * and still leaves the canvas usable.
+ */
+export const PANEL_WIDTH_DEFAULT = 234;
+export const PANEL_WIDTH_MIN = 200;
+const PANEL_WIDTH_MAX_FRACTION = 0.5;
+/** Fallback for SSR and tests, where there is no window to measure. */
+const PANEL_WIDTH_MAX_FALLBACK = 560;
+
+export function panelWidthMax(viewportWidth?: number): number {
+  const w = viewportWidth ?? (typeof window === 'undefined' ? undefined : window.innerWidth);
+  if (w === undefined) return PANEL_WIDTH_MAX_FALLBACK;
+  // Never below the minimum: on a narrow window the fraction alone would invert
+  // the bounds and clamp() would then throw the two ends the wrong way round.
+  return Math.max(PANEL_WIDTH_MIN, Math.round(w * PANEL_WIDTH_MAX_FRACTION));
+}
+
+/**
+ * Clamped on write, not on read.
+ *
+ * A width dragged wide on an external monitor and restored on a laptop would
+ * otherwise leave the canvas a sliver, and the student would have to go find
+ * the drag handle before they could work. Rounded because a fractional width
+ * makes the panel's inner text land on half-pixels and blur.
+ */
+export function clampPanelWidth(px: number, viewportWidth?: number): number {
+  if (!Number.isFinite(px)) return PANEL_WIDTH_DEFAULT;
+  return Math.round(Math.min(Math.max(px, PANEL_WIDTH_MIN), panelWidthMax(viewportWidth)));
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type SessionState =
@@ -326,6 +365,14 @@ export interface NumeraState {
   // UI preferences (guided-learning layout)
   panelSide: 'left' | 'right';        // assistant panel side relative to canvas
   panelCollapsed: boolean;            // panel collapsed to a thin edge tab, giving canvas the width back
+  /**
+   * Tutor panel width in px, dragged by the student and kept across reloads.
+   *
+   * Clamped on write rather than on read: a width persisted on a wide monitor
+   * and restored on a laptop would otherwise leave the canvas a sliver, and the
+   * student would have to find the handle to get their work back.
+   */
+  panelWidth: number;
   transcriptVisible: boolean;         // transcript can be hidden
   toolbarPos: { x: number; y: number } | null; // null = default docked position
   toolbarCollapsed: boolean;          // collapsed to a small bubble
@@ -450,6 +497,10 @@ export interface NumeraState {
   setInputMode: (m: InputMode) => void;
   setTextInput: (v: string) => void;
   setPanelSide: (s: 'left' | 'right') => void;
+  /** Drag the panel edge. Clamped — see `clampPanelWidth`. */
+  setPanelWidth: (px: number) => void;
+  /** Back to the designed width (double-click the handle). */
+  resetPanelWidth: () => void;
   togglePanelSide: () => void;
   togglePanelCollapsed: () => void;
   toggleTranscript: () => void;
@@ -498,7 +549,7 @@ const initial: Omit<
   | 'setShapeKind' | 'setEraserMode'
   | 'setStrokeColor' | 'setStrokeWidth' | 'addItem' | 'removeItem' | 'undo' | 'redo'
   | 'clearCanvas' | 'applyCanvasDraw' | 'clearTutorMarks'
-  | 'setInputMode' | 'setTextInput' | 'setPanelSide' | 'togglePanelSide' | 'togglePanelCollapsed'
+  | 'setInputMode' | 'setTextInput' | 'setPanelSide' | 'setPanelWidth' | 'resetPanelWidth' | 'togglePanelSide' | 'togglePanelCollapsed'
   | 'toggleTranscript' | 'setToolbarPos' | 'toggleToolbarCollapsed' | 'setToolbarOrientation' | 'setMicButtonPos' | 'setCanvasGrid' | 'setTtsVoice' | 'setActiveScaffold'
   | 'setCanvasExporter' | 'startGroupSession' | 'endGroupSession'
   | 'upsertParticipant' | 'removeParticipant' | 'setParticipantCursor'
@@ -575,6 +626,7 @@ const initial: Omit<
   textInput: '',
   panelSide: 'left',
   panelCollapsed: false,
+  panelWidth: PANEL_WIDTH_DEFAULT,
   transcriptVisible: true,
   toolbarPos: null,
   toolbarCollapsed: false,
@@ -912,6 +964,8 @@ export const useNumeraStore = create<NumeraState>()(
   setInputMode: (inputMode) => set({ inputMode }),
   setTextInput: (textInput) => set({ textInput }),
 
+  setPanelWidth: (px) => set({ panelWidth: clampPanelWidth(px) }),
+  resetPanelWidth: () => set({ panelWidth: PANEL_WIDTH_DEFAULT }),
   setPanelSide: (panelSide) => set({ panelSide }),
   togglePanelSide: () => set((s) => ({ panelSide: s.panelSide === 'left' ? 'right' : 'left' })),
   togglePanelCollapsed: () => set((s) => ({ panelCollapsed: !s.panelCollapsed })),
@@ -1029,6 +1083,7 @@ export const useNumeraStore = create<NumeraState>()(
         sessionId: s.sessionId,
         panelSide: s.panelSide,
         panelCollapsed: s.panelCollapsed,
+        panelWidth: s.panelWidth,
         transcriptVisible: s.transcriptVisible,
         toolbarPos: s.toolbarPos,
         toolbarCollapsed: s.toolbarCollapsed,
