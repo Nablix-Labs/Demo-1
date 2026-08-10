@@ -41,6 +41,7 @@ import { phaseAnnouncement, withTransitionVoice } from '@/lib/phaseTransition';
 import { speakBrowser } from '@/lib/tts';
 import type { SupportRung } from '@/lib/supportLadder';
 import type { NudgeClaimResult } from '@/hooks/useInactivityNudge';
+import { reportFailure } from '@/lib/failureReport';
 
 const apiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
@@ -194,8 +195,20 @@ function reportTutorFailure(
   err: unknown,
   fallback: string,
   add: (msg: { role: 'ai'; text: string }) => void,
+  label = '/interaction',
 ): void {
   const store = useNumeraStore.getState();
+  // Before anything student-facing: the full picture in the console, including
+  // exactly what we sent. A screenshot of the chat says almost nothing; this
+  // says who broke and gives the backend's own request_id to grep for.
+  reportFailure(label, err, {
+    session_id: store.sessionId,
+    question_id: store.activeQuestionId,
+    phase: store.currentPhase,
+    turn_id: store.currentTurnId,
+    previous_tutor_turn_id: store.lastTutorTurnId,
+    expects_student_response: store.expectsStudentResponse,
+  });
   const text = chatError(err, fallback);
   const previous = store.transcript.at(-1);
   const lastWasThisFailure = previous?.role === 'ai' && previous.text === text;
@@ -493,7 +506,7 @@ export function useDemoTutor() {
         tutorSay(spoken, { afterMarks: drew });
         return res;
       } catch (err) {
-        reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage);
+        reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage, '/interaction (answer)');
         addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Tutor unavailable.') });
         return null;
       }
@@ -554,7 +567,7 @@ export function useDemoTutor() {
       // A forgotten session recovers by opening a new one; see
       // recoverIfStaleSession. Nothing to report to the student.
       if (recoverIfStaleSession(err)) return null;
-      reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage);
+      reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage, '/canvas/submit');
       addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Could not read the canvas.') });
       return null;
     } finally {
@@ -648,7 +661,7 @@ export function useDemoTutor() {
       // A failed API call must release the button immediately. Speech engines
       // do not consistently fire onEnd when playback is muted or interrupted;
       // waiting here previously left Explain Again stuck on "Explaining…".
-      reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage);
+      reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage, '/interaction (explain again)');
       addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Explain again failed.') });
       return null;
     }
@@ -962,7 +975,7 @@ export function useDemoTutor() {
           useNumeraStore.getState().beginListeningTurn();
           return null;
         }
-        reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage);
+        reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage, '/interaction (voice turn)');
         addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Tutor unavailable.') });
         useNumeraStore.getState().beginListeningTurn(); // reopen listening so the student can retry
         return null;
