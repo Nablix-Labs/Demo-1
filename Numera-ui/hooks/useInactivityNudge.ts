@@ -45,6 +45,11 @@ let activeControllerId: string | null = null;
 const presentedNudgeIds = new Set<string>();
 const MAX_PRESENTED_NUDGE_IDS = 100;
 
+export type NudgeClaimResult =
+  | { status: 'DELIVERED'; delivery: NudgeDelivery }
+  | { status: 'SUPPRESSED' }
+  | { status: 'OUT_OF_SYNC' };
+
 function markNudgePresentedOnce(nudgeId: string): boolean {
   if (presentedNudgeIds.has(nudgeId)) return false;
   presentedNudgeIds.add(nudgeId);
@@ -61,11 +66,11 @@ export interface InactivityNudgeOptions {
   /** True while the socket is down or reconnecting. */
   disconnected?: boolean;
   /**
-   * Claim a nudge from the backend. Returns the nudge id, or null if the
-   * backend declined (its own clock disagreed, cooldown, rate limit).
+   * Claim a nudge from the backend. The result distinguishes an ordinary
+   * policy suppression from stale turn state that has just been synchronized.
    * Without this callback nothing is ever claimed.
    */
-  claim?: (idleDurationMs: number) => Promise<NudgeDelivery | null>;
+  claim?: (idleDurationMs: number) => Promise<NudgeClaimResult>;
   /** Show/speak the nudge. Called at most once per nudge, never retried. */
   present?: (delivery: NudgeDelivery) => void;
   /** Tell the backend it was presented. Retried; the presentation is not. */
@@ -150,8 +155,18 @@ export function useInactivityNudge(options: InactivityNudgeOptions = {}): void {
 
       claimingRef.current = true;
       try {
-        const delivery = await claim(now - (idleSinceRef.current ?? now));
-        if (!delivery) return;
+        const result = await claim(now - (idleSinceRef.current ?? now));
+        if (result.status === 'SUPPRESSED') return;
+        if (result.status === 'OUT_OF_SYNC') {
+          // The claim repaired lastTutorTurnId from the backend's authoritative
+          // response. Start a fresh silence window; never retry stale context
+          // on the next one-second controller tick.
+          idleSinceRef.current = null;
+          lastClaimAtRef.current = Date.now();
+          suppressPending();
+          return;
+        }
+        const delivery = result.delivery;
         const id = delivery.interaction_id;
 
         lastClaimAtRef.current = Date.now();
