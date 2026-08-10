@@ -41,6 +41,19 @@ const TICK_MS = 1_000;
 
 /** Module scope: a per-mount counter, so two live controllers get distinct ids. */
 let controllerSeq = 0;
+let activeControllerId: string | null = null;
+const presentedNudgeIds = new Set<string>();
+const MAX_PRESENTED_NUDGE_IDS = 100;
+
+function markNudgePresentedOnce(nudgeId: string): boolean {
+  if (presentedNudgeIds.has(nudgeId)) return false;
+  presentedNudgeIds.add(nudgeId);
+  if (presentedNudgeIds.size > MAX_PRESENTED_NUDGE_IDS) {
+    const oldest = presentedNudgeIds.values().next().value;
+    if (typeof oldest === 'string') presentedNudgeIds.delete(oldest);
+  }
+  return true;
+}
 
 export interface InactivityNudgeOptions {
   /** True while any tutor request is in flight. */
@@ -73,6 +86,12 @@ export function useInactivityNudge(options: InactivityNudgeOptions = {}): void {
   const instanceId = useRef(`c${++controllerSeq}`).current;
 
   useEffect(() => {
+    if (activeControllerId !== null) {
+      console.warn(`[nudge] controller ${instanceId} is dormant; ${activeControllerId} owns the lease`);
+      return;
+    }
+    activeControllerId = instanceId;
+
     const gateNow = (): ActivityGate => {
       const s = useNumeraStore.getState();
       const speaking = useMicLevel.getState().aiSpeaking;
@@ -167,6 +186,7 @@ export function useInactivityNudge(options: InactivityNudgeOptions = {}): void {
         // One-way from here: only the acknowledgement is ever retried.
         record = markPresented(record);
         recordsRef.current = recordsRef.current.map((r) => (r.id === id ? record : r));
+        if (!markNudgePresentedOnce(id)) return;
         present?.(delivery);
 
         if (acknowledge) {
@@ -211,6 +231,7 @@ export function useInactivityNudge(options: InactivityNudgeOptions = {}): void {
       document.removeEventListener('visibilitychange', onVisibility);
       // Nothing claimed before teardown may be delivered afterwards.
       recordsRef.current = onDisconnect(recordsRef.current);
+      if (activeControllerId === instanceId) activeControllerId = null;
     };
   }, []);
 

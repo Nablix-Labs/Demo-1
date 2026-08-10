@@ -287,6 +287,13 @@ export async function beginSession(
 
 let resumeInFlight: Promise<void> | null = null;
 
+let systemTurnSequence = 0;
+
+function nextSystemTurnId(kind: 'NUDGE' | 'NUDGE-ACK'): string {
+  systemTurnSequence += 1;
+  return `${kind}-${Date.now()}-${systemTurnSequence}`;
+}
+
 /**
  * Rehydrate a persisted session after a page refresh.
  *
@@ -309,8 +316,16 @@ export async function resumeSession(): Promise<void> {
       const s = useNumeraStore.getState();
       s.setBackendSession(rec);
       syncBackendSession(rec);
-      if (s.transcript.length === 0 && rec.message.trim()) {
-        s.setTranscript([{ role: 'ai', text: rec.message }]);
+      if (s.transcript.length === 0) {
+        const restored = (rec.conversation_history ?? []).map((message) => ({
+          role: message.role === 'user' ? 'student' as const : 'ai' as const,
+          text: message.content,
+        }));
+        if (restored.length > 0) {
+          s.setTranscript(restored);
+        } else if (rec.message.trim()) {
+          s.setTranscript([{ role: 'ai', text: rec.message }]);
+        }
       }
     } catch (err) {
       const status = (err as { response?: { status?: number } })?.response?.status;
@@ -556,7 +571,7 @@ export function useDemoTutor() {
   ): Promise<NudgeDelivery | null> => {
     const state = useNumeraStore.getState();
     if (!apiEnabled() || !sessionId || !state.activeQuestionId) return null;
-    const turnId = state.beginSubmissionTurn();
+    const turnId = nextSystemTurnId('NUDGE');
     const res = await sendInteraction({
       session_id: sessionId,
       student_id: studentId(),
@@ -571,8 +586,6 @@ export function useDemoTutor() {
       hint_count: state.lastHintText ? 1 : 0,
     });
     if (res.status === 'NUDGE_SUPPRESSED' || !res.nudge_delivery) return null;
-    if (!acceptResponse(res)) return null;
-    syncBackendSession(res);
     return res.nudge_delivery;
   }, [sessionId]);
 
@@ -606,7 +619,7 @@ export function useDemoTutor() {
         student_id: studentId(),
         interaction_type: 'NUDGE_PRESENTED',
         input_source: 'SYSTEM',
-        turn_id: `ACK-${delivery.interaction_id}`,
+        turn_id: nextSystemTurnId('NUDGE-ACK'),
         previous_tutor_turn_id: state.lastTutorTurnId,
         nudge_id: delivery.interaction_id,
         current_phase: state.currentPhase,
@@ -617,7 +630,6 @@ export function useDemoTutor() {
       if (res.nudge_delivery?.status !== 'PRESENTED') {
         throw new Error('Backend did not acknowledge the presented inactivity nudge.');
       }
-      acceptResponse(res);
       addTrailEntry({ kind: 'tutor', text: delivery.message, meta: 'inactivity nudge' });
     },
     [sessionId, addTrailEntry],

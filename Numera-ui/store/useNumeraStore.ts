@@ -625,12 +625,20 @@ export const useNumeraStore = create<NumeraState>()(
       // `question_type` wins when it sent one — it is the more current of the
       // two — and the record's view fills in when it didn't.
       const view = studentViewFor(s.backendSession, nextQuestionId);
+      const nextQuestionType =
+        questionType ?? view?.question_type ?? (questionChanged ? null : s.questionType);
+      const questionUsesOptions =
+        nextQuestionType === 'SINGLE_CHOICE' ||
+        nextQuestionType === 'CHOICE_WITH_EXPLANATION' ||
+        nextQuestionType === 'TRUE_FALSE_WITH_EXPLANATION';
       return {
         currentPhase: phase,
         activeQuestionId: nextQuestionId,
         questionText: text || (phaseChanged ? '' : s.questionText),
-        questionType: questionType ?? view?.question_type ?? (questionChanged ? null : s.questionType),
-        questionOptions: view?.options ?? (questionChanged ? [] : s.questionOptions),
+        questionType: nextQuestionType,
+        questionOptions: questionUsesOptions
+          ? view?.options ?? (questionChanged ? [] : s.questionOptions)
+          : [],
         // The support ladder is per-question too (§6: support is requested one
         // rung at a time for the question being worked on). Carrying `supportShown`
         // across a question boundary would leave the next question's "Need help?"

@@ -210,6 +210,9 @@ _SIDE_CHANNEL_UPDATE_FIELDS = {
     "last_tutor_response_at",
     "nudge_generated_count",
     "nudge_presented_count",
+    "last_nudge_generated_at",
+    "pending_nudge_id",
+    "pending_nudge_message",
 }
 
 
