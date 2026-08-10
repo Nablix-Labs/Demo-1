@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
-import { Eye, EyeOff, Lightbulb, Check, ArrowRight } from 'lucide-react';
+import { Eye, EyeOff, Check, ArrowRight } from 'lucide-react';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useFlowNav } from '@/lib/useFlowNav';
 import { useDemoTutor, resetSessionStart, sessionStartError } from '@/hooks/useDemoTutor';
@@ -18,6 +18,7 @@ import { DEMO_CONCEPT_ID, DEMO_PHASE } from '@/lib/api';
 import { demoFor } from '@/lib/demoContent';
 import { LADDER_EXHAUSTED } from '@/lib/supportLadder';
 import QuestionDisplay from '@/components/QuestionDisplay';
+import HintNote from '@/components/HintNote';
 import PhaseGate from '@/components/PhaseGate';
 import Toolbar from '@/components/Canvas/Toolbar';
 import { cn } from '@/lib/cn';
@@ -225,15 +226,9 @@ export default function PracticePage() {
           <DrawingCanvas onExportReady={handleExportReady} />
         </div>
 
-        {/* Hint card — only when the observer offers one */}
+        {/* Hint — a sticky note left on the canvas, not another panel */}
         {mode === 'hint' && !done && hintBody && (
-          <div className="absolute top-5 left-6 z-20 max-w-sm flex items-start gap-3 bg-white border border-muted-gray rounded-xl px-4 py-3" style={{ boxShadow: '0 4px 16px rgba(0,0,0,0.12)' }}>
-            <Lightbulb size={16} strokeWidth={1.8} className="flex-shrink-0 mt-0.5 text-ink" />
-            <div>
-              <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-0.5">Gentle hint</div>
-              <p className="text-[12.5px] text-ink leading-snug">{hintBody}</p>
-            </div>
-          </div>
+          <HintNote className="absolute top-5 left-6 z-20">{hintBody}</HintNote>
         )}
 
         {/* Quiet/distress reassurance */}
