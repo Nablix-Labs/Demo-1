@@ -272,6 +272,8 @@ async def submit_canvas(
         previous_phase=previous_session.current_phase if phase_changed else None,
     )
     response.submission_id = submission_id
+    response.snapshot_reference = snapshot_reference
+    response.tutor = tutor
     response.canvas_draw = canvas_draw
     response.ocr = ocr
     response.latency = latency

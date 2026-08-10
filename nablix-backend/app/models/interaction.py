@@ -6,6 +6,7 @@ from app.models.adapters import (
     ConversationAction,
     ConversationMessage,
     ExpectedStudentResponse,
+    TutorResult,
     VisualCue,
     VisionOCRResult,
 )
@@ -168,6 +169,8 @@ class InteractionResponse(BaseModel):
     canvas_draw: list[CanvasDrawPayload] = Field(default_factory=list)
     ocr: VisionOCRResult | None = None
     latency: CanvasLatency | None = None
+    snapshot_reference: str | None = None
+    tutor: TutorResult | None = None
 
 
 class StaleTurnResponse(BaseModel):
