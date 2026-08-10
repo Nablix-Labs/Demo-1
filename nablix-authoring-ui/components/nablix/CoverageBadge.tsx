@@ -45,11 +45,18 @@ const DOT: Record<HealthState, string> = {
   MISSING: 'bg-danger',
 };
 
-/** Small round validation dot for tables (green / amber / red). */
+const DOT_LABEL: Record<HealthState, string> = {
+  COMPLETE: 'Complete',
+  WARNING: 'Needs attention',
+  MISSING: 'Missing content',
+};
+
+/** Small round validation dot for tables and tree nodes (green / amber / red). */
 export function ValidationDot({ state, className }: { state: HealthState; className?: string }) {
   return (
-    <span className={cn('inline-flex items-center gap-1.5', className)}>
+    <span className={cn('inline-flex items-center gap-1.5', className)} title={DOT_LABEL[state]}>
       <span className={cn('h-2.5 w-2.5 rounded-full', DOT[state])} />
+      <span className="sr-only">{DOT_LABEL[state]}</span>
     </span>
   );
 }

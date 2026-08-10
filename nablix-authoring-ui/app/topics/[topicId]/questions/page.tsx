@@ -17,6 +17,7 @@ import { HealthBadge, HealthIssues } from '@/components/nablix/HealthBadge';
 import { QuestionWizard } from '@/components/nablix/QuestionWizard';
 import { apiV3 } from '@/lib/api/v3Adapter';
 import type { MicroSkill, QuestionPhase, QuestionsData } from '@/lib/api/v3-contracts';
+import { useSelectionOverride } from '@/lib/use-selection-override';
 import { cn } from '@/lib/utils';
 
 const PHASES: { id: QuestionPhase; label: string }[] = [
@@ -27,7 +28,10 @@ const PHASES: { id: QuestionPhase; label: string }[] = [
 
 export default function QuestionsPage() {
   const { topicId } = useParams<{ topicId: string }>();
-  const [phase, setPhase] = useState<QuestionPhase>('PHASE_0_DIAGNOSTIC');
+  const override = useSelectionOverride();
+  const [phase, setPhase] = useState<QuestionPhase>(
+    (override.phase as QuestionPhase) ?? 'PHASE_0_DIAGNOSTIC',
+  );
   const [data, setData] = useState<QuestionsData | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [skills, setSkills] = useState<MicroSkill[]>([]);
@@ -39,12 +43,13 @@ export default function QuestionsPage() {
     apiV3.getQuestions(topicId, phase).then((d) => {
       if (!live) return;
       setData(d);
-      setSelected(d.default_selection.question_id);
+      const named = override.select && d.hierarchy.questions.some((q) => q.question_id === override.select);
+      setSelected(named ? override.select! : d.default_selection.question_id);
     });
     return () => {
       live = false;
     };
-  }, [topicId, phase]);
+  }, [topicId, phase, override.select]);
 
   useEffect(() => {
     apiV3.getMicroSkills(topicId).then((d) => setSkills([d.selected_item.details]));

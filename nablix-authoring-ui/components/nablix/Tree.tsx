@@ -19,6 +19,7 @@ import {
   Dot,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { ValidationDot } from './CoverageBadge';
 import type { TreeNode, TreeNodeKind } from '@/lib/tree';
 
 const ICON: Partial<Record<TreeNodeKind, React.ComponentType<{ className?: string }>>> = {
@@ -86,6 +87,8 @@ function Row({
 
       <Icon className={cn('h-4 w-4 shrink-0', active ? 'text-learning-blue' : 'text-slate-blue')} />
       <span className="min-w-0 flex-1 truncate">{node.label}</span>
+
+      {node.health && <ValidationDot state={node.health} className="shrink-0" />}
 
       {node.count !== undefined && (
         <span className="rounded-pill bg-reading-surface px-1.5 text-2xs font-bold tabular-nums text-slate-blue ring-1 ring-inset ring-muted-gray/70">

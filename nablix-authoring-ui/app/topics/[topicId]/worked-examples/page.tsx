@@ -14,19 +14,22 @@ import { StatusPill } from '@/components/nablix/StatusPill';
 import { HealthBadge, HealthIssues } from '@/components/nablix/HealthBadge';
 import { apiV3 } from '@/lib/api/v3Adapter';
 import type { WorkedExamplesData } from '@/lib/api/v3-contracts';
+import { useSelectionOverride } from '@/lib/use-selection-override';
 import { cn } from '@/lib/utils';
 
 export default function WorkedExamplesPage() {
   const { topicId } = useParams<{ topicId: string }>();
+  const override = useSelectionOverride();
   const [data, setData] = useState<WorkedExamplesData | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
 
   useEffect(() => {
     apiV3.getWorkedExamples(topicId).then((d) => {
       setData(d);
-      setSelected(d.default_selection.worked_example_id);
+      const named = override.select && d.hierarchy.worked_examples.some((n) => n.worked_example_id === override.select);
+      setSelected(named ? override.select! : d.default_selection.worked_example_id);
     });
-  }, [topicId]);
+  }, [topicId, override.select]);
 
   if (!data) return <SectionLoading />;
 

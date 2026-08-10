@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { CircleAlert, TriangleAlert, ShieldCheck } from 'lucide-react';
 import type { TopicDetailsData, ValidationIssue } from '@/lib/api/v3-contracts';
-import { routeForPage } from '@/lib/tree';
+import { linkForIssue } from '@/lib/tree';
 import { cn } from '@/lib/utils';
 
 /**
@@ -67,12 +67,12 @@ export function ValidationPanel({
 }
 
 function IssueRow({ issue, topicId }: { issue: ValidationIssue; topicId: string }) {
-  const route = routeForPage(issue.navigate_to?.page_id);
+  const href = linkForIssue(topicId, issue);
   const body = (
     <div
       className={cn(
         'flex gap-2 rounded-lg bg-reading-surface/60 px-3 py-2 text-xs leading-snug transition-colors',
-        route && 'hover:bg-reading-surface',
+        href && 'hover:bg-reading-surface',
       )}
     >
       {issue.blocking ? (
@@ -83,5 +83,5 @@ function IssueRow({ issue, topicId }: { issue: ValidationIssue; topicId: string 
       <span className="text-ink/80">{issue.message}</span>
     </div>
   );
-  return route ? <Link href={`/topics/${topicId}/${route}`}>{body}</Link> : body;
+  return href ? <Link href={href}>{body}</Link> : body;
 }

@@ -13,6 +13,7 @@ import { SectionHeader, SectionLoading, Meta } from '@/components/nablix/Section
 import { HealthBadge, HealthIssues } from '@/components/nablix/HealthBadge';
 import { apiV3 } from '@/lib/api/v3Adapter';
 import type { MisconceptionsData, SupportChild } from '@/lib/api/v3-contracts';
+import { useSelectionOverride } from '@/lib/use-selection-override';
 import { cn } from '@/lib/utils';
 
 function SupportList({
@@ -65,15 +66,17 @@ function SupportList({
 
 export default function MisconceptionsPage() {
   const { topicId } = useParams<{ topicId: string }>();
+  const override = useSelectionOverride();
   const [data, setData] = useState<MisconceptionsData | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
 
   useEffect(() => {
     apiV3.getMisconceptions(topicId).then((d) => {
       setData(d);
-      setSelected(d.default_selection.misconception_id);
+      const named = override.select && d.hierarchy.misconceptions.some((n) => n.misconception_id === override.select);
+      setSelected(named ? override.select! : d.default_selection.misconception_id);
     });
-  }, [topicId]);
+  }, [topicId, override.select]);
 
   if (!data) return <SectionLoading />;
 

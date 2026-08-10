@@ -87,6 +87,7 @@ are written.
 | `Visual_Cues` | `asset_url`, `image_generation_prompt`, `negative_prompt`, `tutor_explanation_template`, `retrieval_text`, `retrieval_keywords`, `embedding_status` | The whole cue editor, essentially. `asset_url` matters most: it is the subject of v3's own `VISUAL_CUE_ASSET_PENDING` warning, so the contract raises a warning about a field it never sends. v3 returns cues as `{id, sequence_order, label, preview, active, shared_by…}` only. |
 | `Parallel_Examples` | `worked_steps` | A parallel example is a worked solution; without steps it's just a statement and an answer. |
 | `Micro_Skills` | `prerequisite_micro_skill_id` | Micro-skill detail shows the prerequisite chain. |
+| coverage cells (page 14) | `add_action` | The guide says clicking a red or amber cell should open the creation flow with `topic_id` and `micro_skill_id` prefilled, but no coverage cell carries an `add_action`. Without it a cell click can only reach the owning section, not a prefilled form. Same applies to the `+ Add` affordances the guide requires at every hierarchy level. |
 
 Everything else I initially suspected was missing turned out to be present on
 inspection — `Scaffold_Steps.partial_content`, the `Question_Scaffolds` link

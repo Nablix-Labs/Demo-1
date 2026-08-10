@@ -13,19 +13,22 @@ import { SectionHeader, SectionLoading, Meta } from '@/components/nablix/Section
 import { HealthBadge, HealthIssues } from '@/components/nablix/HealthBadge';
 import { apiV3 } from '@/lib/api/v3Adapter';
 import type { MicroSkillsData } from '@/lib/api/v3-contracts';
+import { useSelectionOverride } from '@/lib/use-selection-override';
 import { cn } from '@/lib/utils';
 
 export default function MicroSkillsPage() {
   const { topicId } = useParams<{ topicId: string }>();
+  const override = useSelectionOverride();
   const [data, setData] = useState<MicroSkillsData | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
 
   useEffect(() => {
     apiV3.getMicroSkills(topicId).then((d) => {
       setData(d);
-      setSelected(d.default_selection.micro_skill_id);
+      const named = override.select && d.hierarchy.micro_skills.some((n) => n.micro_skill_id === override.select);
+      setSelected(named ? override.select! : d.default_selection.micro_skill_id);
     });
-  }, [topicId]);
+  }, [topicId, override.select]);
 
   if (!data) return <SectionLoading />;
 

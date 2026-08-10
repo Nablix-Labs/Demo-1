@@ -6,6 +6,7 @@
  * carry the navigation metadata needed to open the affected record (guide §10.2).
  */
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { BarChart3, ShieldCheck } from 'lucide-react';
 import { useParams } from 'next/navigation';
 import { CardHeader } from '@/components/nablix/GlassCard';
@@ -13,6 +14,7 @@ import { SectionHeader, SectionLoading } from '@/components/nablix/SectionHeader
 import { HealthBadge } from '@/components/nablix/HealthBadge';
 import { apiV3 } from '@/lib/api/v3Adapter';
 import type { CoverageData } from '@/lib/api/v3-contracts';
+import { linkForCoverageCell, linkForIssue } from '@/lib/tree';
 import { cn } from '@/lib/utils';
 
 export default function CoveragePage() {
@@ -83,10 +85,10 @@ export default function CoveragePage() {
                     return (
                       <td key={c} className="px-3 py-2.5 text-center">
                         {cell ? (
-                          <span className="inline-flex flex-col items-center gap-0.5">
+                          <CoverageCellLink topicId={topicId} column={c}>
                             <HealthBadge health={cell.content_health} count={cell.count} />
                             <span className="text-[10px] text-slate-blue/70">min {cell.required_min}</span>
-                          </span>
+                          </CoverageCellLink>
                         ) : (
                           <span className="text-slate-blue/40">—</span>
                         )}
@@ -104,7 +106,8 @@ export default function CoveragePage() {
         <CardHeader icon={<ShieldCheck className="h-4 w-4" />} title={`Validation · ${issues.length}`} />
         <ul>
           {issues.map((i) => (
-            <li key={`${i.code}-${i.record_id}`} className="border-b border-muted-gray/50 px-5 py-3 last:border-0">
+            <li key={`${i.code}-${i.record_id}`} className="border-b border-muted-gray/50 last:border-0">
+              <IssueBody topicId={topicId} issue={i}>
               <div className="flex flex-wrap items-center gap-2">
                 <span
                   className={cn(
@@ -120,6 +123,7 @@ export default function CoveragePage() {
               <p className="mt-0.5 font-mono text-2xs text-slate-blue">
                 {i.record_type} · {i.record_id}
               </p>
+              </IssueBody>
             </li>
           ))}
           {issues.length === 0 && (
@@ -128,5 +132,47 @@ export default function CoveragePage() {
         </ul>
       </section>
     </div>
+  );
+}
+
+/** A cell links to the section that owns it, when the column maps to one. */
+function CoverageCellLink({
+  topicId,
+  column,
+  children,
+}: {
+  topicId: string;
+  column: string;
+  children: React.ReactNode;
+}) {
+  const href = linkForCoverageCell(topicId, column);
+  const inner = <span className="inline-flex flex-col items-center gap-0.5">{children}</span>;
+  return href ? (
+    <Link href={href} className="inline-block rounded transition-transform hover:scale-105">
+      {inner}
+    </Link>
+  ) : (
+    inner
+  );
+}
+
+/** An issue links to its own record through navigate_to. */
+function IssueBody({
+  topicId,
+  issue,
+  children,
+}: {
+  topicId: string;
+  issue: { navigate_to?: Parameters<typeof linkForIssue>[1]['navigate_to'] };
+  children: React.ReactNode;
+}) {
+  const href = linkForIssue(topicId, issue);
+  const inner = <div className="px-5 py-3">{children}</div>;
+  return href ? (
+    <Link href={href} className="block transition-colors hover:bg-reading-surface/60">
+      {inner}
+    </Link>
+  ) : (
+    inner
   );
 }

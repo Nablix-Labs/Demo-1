@@ -23,6 +23,7 @@ import type {
   SupportTabId,
 } from '@/lib/api/v3-contracts';
 import { TAB_FOR_SUPPORT } from '@/lib/api/v3-contracts';
+import { useSelectionOverride } from '@/lib/use-selection-override';
 import { cn } from '@/lib/utils';
 
 const childId = (c: SupportChild) => c.hint_id ?? c.visual_cue_id ?? '';
@@ -35,6 +36,7 @@ function childrenFor(group: MisconceptionGroup | undefined, tab: SupportTabId): 
 
 export default function HintsCuesPage() {
   const { topicId } = useParams<{ topicId: string }>();
+  const override = useSelectionOverride();
   const [data, setData] = useState<HintsVisualCuesData | null>(null);
   const [parentId, setParentId] = useState<string | null>(null);
   const [tab, setTab] = useState<SupportTabId>('HINTS');
@@ -43,11 +45,18 @@ export default function HintsCuesPage() {
   useEffect(() => {
     apiV3.getSupportAssets(topicId).then((d) => {
       setData(d);
-      setParentId(d.default_selection.misconception_id);
-      setTab(TAB_FOR_SUPPORT[d.default_selection.support_type]);
-      setChildSelected(d.default_selection.support_id);
+      const tabId = (override.tab as SupportTabId) ?? TAB_FOR_SUPPORT[d.default_selection.support_type];
+      // A record named by navigate_to wins; otherwise default_selection does.
+      const target = override.select
+        ? d.hierarchy.misconception_groups.find((g) =>
+            [...g.hints, ...g.visual_cues].some((c) => (c.hint_id ?? c.visual_cue_id) === override.select),
+          )
+        : undefined;
+      setParentId(target?.misconception_id ?? d.default_selection.misconception_id);
+      setTab(tabId);
+      setChildSelected(override.select ?? d.default_selection.support_id);
     });
-  }, [topicId]);
+  }, [topicId, override.select, override.tab]);
 
   const groups = data?.hierarchy.misconception_groups ?? [];
   const parent = useMemo(

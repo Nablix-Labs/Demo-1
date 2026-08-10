@@ -8,7 +8,7 @@ import { Tree } from '@/components/nablix/Tree';
 import { ValidationPanel } from '@/components/nablix/ValidationPanel';
 import { StatusPill } from '@/components/nablix/StatusPill';
 import { WorkspaceProvider } from '@/lib/workspace-context';
-import { buildTopicTree } from '@/lib/tree';
+import { buildTopicTree, healthByRoute } from '@/lib/tree';
 import { apiV3 } from '@/lib/api/v3Adapter';
 import type { CoverageData, TopicDetailsData } from '@/lib/api/v3-contracts';
 
@@ -84,7 +84,11 @@ export default function TopicWorkspaceLayout({ children }: { children: React.Rea
             <h3 className="text-2xs font-bold uppercase tracking-wide text-slate-blue">Content Hierarchy</h3>
           </div>
           {ws ? (
-            <Tree root={buildTopicTree(ws.hierarchy_counts)} topicId={topicId} activeRoute={activeRoute} />
+            <Tree
+              root={buildTopicTree(ws.hierarchy_counts, healthByRoute(coverage?.validation_summary.issues ?? []))}
+              topicId={topicId}
+              activeRoute={activeRoute}
+            />
           ) : (
             <TreeSkeleton />
           )}
