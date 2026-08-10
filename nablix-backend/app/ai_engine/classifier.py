@@ -762,7 +762,7 @@ def classify_guided_learning_response(
                 "openai_ai_engine",
                 "Guided turn evaluation failed without a validated response.",
             )
-    adjudication_target = component_adjudication_target(
+    adjudication_targets = component_adjudication_targets(
         evaluation,
         objective,
         rubric,
@@ -771,53 +771,54 @@ def classify_guided_learning_response(
         request.answer_spec,
     )
     adjudicator = getattr(openai_client, "adjudicate_component_evidence", None)
-    if adjudication_target is not None and callable(adjudicator):
-        logger.info(
-            "guided_component_adjudication_started",
-            extra={
-                "question_id": request.question_id,
-                "component_id": adjudication_target.concept_id,
-            },
-        )
-        evidence = adjudicator(
-            question_type=request.question_type,
-            question=request.question,
-            answer_spec=request.answer_spec,
-            target_component=adjudication_target,
-            active_objective=objective,
-            student_response=request.student_input,
-            input_source=request.input_source,
-            recent_conversation=request.conversation_history[
-                -rules.guided_learning.maximum_recent_history_turns:
-            ],
-            prompt_version=(
-                rules.guided_learning.component_adjudicator_prompt_version
-            ),
-            system_prompt=(
-                rules.guided_learning.component_adjudicator_system_prompt
-            ),
-        )
-        evaluation = apply_focused_component_evidence(
-            evaluation,
-            evidence,
-            rules.guided_learning.component_adjudicator_confidence_threshold,
-        )
+    if adjudication_targets and callable(adjudicator):
+        for adjudication_target in adjudication_targets:
+            logger.info(
+                "guided_component_adjudication_started",
+                extra={
+                    "question_id": request.question_id,
+                    "component_id": adjudication_target.concept_id,
+                },
+            )
+            evidence = adjudicator(
+                question_type=request.question_type,
+                question=request.question,
+                answer_spec=request.answer_spec,
+                target_component=adjudication_target,
+                active_objective=objective,
+                student_response=request.student_input,
+                input_source=request.input_source,
+                recent_conversation=request.conversation_history[
+                    -rules.guided_learning.maximum_recent_history_turns:
+                ],
+                prompt_version=(
+                    rules.guided_learning.component_adjudicator_prompt_version
+                ),
+                system_prompt=(
+                    rules.guided_learning.component_adjudicator_system_prompt
+                ),
+            )
+            evaluation = apply_focused_component_evidence(
+                evaluation,
+                evidence,
+                rules.guided_learning.component_adjudicator_confidence_threshold,
+            )
+            logger.info(
+                "guided_component_adjudication_completed",
+                extra={
+                    "question_id": request.question_id,
+                    "component_id": evidence.component_id,
+                    "status": evidence.status,
+                    "confidence": evidence.confidence,
+                    "student_state": evaluation.student_state,
+                },
+            )
         evaluation = validate_guided_evaluation(
             evaluation,
             rubric,
             objective,
             allowed_errors,
             rules,
-        )
-        logger.info(
-            "guided_component_adjudication_completed",
-            extra={
-                "question_id": request.question_id,
-                "component_id": evidence.component_id,
-                "status": evidence.status,
-                "confidence": evidence.confidence,
-                "student_state": evaluation.student_state,
-            },
         )
     if is_authoritative_guided_completion(request):
         evaluation = authoritative_guided_completion(evaluation, rules)
@@ -1102,15 +1103,24 @@ def significant_component_tokens(value: str) -> set[str]:
     }
 
 
-def component_adjudication_target(
+def component_adjudication_targets(
     evaluation: GuidedEvaluation,
     objective: ActiveTeachingObjective,
     rubric: GeneratedQuestionRubric,
     student_response: str,
     question: str,
     answer_spec: AnswerSpec,
-) -> GeneratedConcept | None:
-    """Select one unresolved component only for a relevant PARTIAL response."""
+) -> list[GeneratedConcept]:
+    """Verify claimed evidence before it can enter persistent guided state."""
+
+    claimed_ids = set(evaluation.newly_confirmed_concept_ids)
+    claimed = [
+        component
+        for component in rubric.required_concepts
+        if component.required and component.concept_id in claimed_ids
+    ]
+    if claimed:
+        return claimed
 
     if (
         evaluation.student_state != "PARTIAL"
@@ -1119,7 +1129,7 @@ def component_adjudication_target(
         or not evaluation.missing_concept_ids
         or not student_response.strip()
     ):
-        return None
+        return []
     missing_ids = set(evaluation.missing_concept_ids)
     target = next(
         (
@@ -1130,7 +1140,7 @@ def component_adjudication_target(
         None,
     )
     if target is None:
-        return None
+        return []
     response_tokens = significant_component_tokens(student_response)
     context = " ".join(
         [
@@ -1141,8 +1151,8 @@ def component_adjudication_target(
         ]
     )
     if not response_tokens.intersection(significant_component_tokens(context)):
-        return None
-    return target
+        return []
+    return [target]
 
 
 def apply_focused_component_evidence(
@@ -1150,17 +1160,24 @@ def apply_focused_component_evidence(
     evidence: FocusedComponentEvidence,
     confidence_threshold: float,
 ) -> GuidedEvaluation:
-    """Use the focused pass only to correct a high-confidence false negative."""
+    """Apply independently verified evidence to one authored component."""
 
-    if (
-        evidence.status != "DEMONSTRATED"
-        or evidence.confidence < confidence_threshold
-    ):
+    if evidence.confidence < confidence_threshold:
         return evaluation
     confirmed_ids = set(evaluation.newly_confirmed_concept_ids)
-    confirmed_ids.add(evidence.component_id)
+    contradicted_ids = set(evaluation.contradicted_concept_ids)
+    if evidence.status == "DEMONSTRATED":
+        confirmed_ids.add(evidence.component_id)
+        contradicted_ids.discard(evidence.component_id)
+    else:
+        confirmed_ids.discard(evidence.component_id)
+        if evidence.status == "CONTRADICTED":
+            contradicted_ids.add(evidence.component_id)
     return evaluation.model_copy(
-        update={"newly_confirmed_concept_ids": sorted(confirmed_ids)}
+        update={
+            "newly_confirmed_concept_ids": sorted(confirmed_ids),
+            "contradicted_concept_ids": sorted(contradicted_ids),
+        }
     )
 
 

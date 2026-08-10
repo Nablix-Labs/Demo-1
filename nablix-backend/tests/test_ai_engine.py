@@ -172,6 +172,35 @@ def test_final_partial_wording_asks_only_the_reconciled_missing_component() -> N
     assert "wrong component" not in aligned.tutor_message
 
 
+def test_contradicted_role_cannot_enter_persistent_component_evidence() -> None:
+    evaluation = GuidedEvaluation(
+        student_state="PARTIAL",
+        newly_confirmed_concept_ids=["FIXED_VALUE"],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=["CHANGING_VALUE", "OPERATION"],
+        selected_error_code=None,
+        confidence=0.96,
+        next_objective=None,
+        tutor_message="Good.",
+        tutor_message_voice="Good.",
+    )
+
+    verified = classifier.apply_focused_component_evidence(
+        evaluation,
+        FocusedComponentEvidence(
+            component_id="FIXED_VALUE",
+            status="CONTRADICTED",
+            evidence="the fixed value is m",
+            confidence=0.99,
+        ),
+        0.85,
+    )
+
+    assert verified.newly_confirmed_concept_ids == []
+    assert verified.contradicted_concept_ids == ["FIXED_VALUE"]
+
+
 def _multipart_guided_rubric() -> GeneratedQuestionRubric:
     return GeneratedQuestionRubric(
         question_id="Q-T01-006",

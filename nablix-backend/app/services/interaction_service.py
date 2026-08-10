@@ -293,6 +293,34 @@ def _is_support_failure(tutor: TutorResult) -> bool:
     )
 
 
+def _guided_attempt_event_type(
+    tutor: TutorResult,
+    rules: ClassifierRulesConfig,
+) -> Literal["CORRECT_ATTEMPT", "INCORRECT_ATTEMPT"] | None:
+    """Map every answer that advances support to an authoritative attempt event."""
+    configured_event = (
+        rules.guided_learning.llm_state_mapping[tutor.guided_student_state]
+        .student_model_event
+        if tutor.guided_student_state is not None
+        else None
+    )
+    if configured_event == "CORRECT_ATTEMPT" or (
+        configured_event is None and tutor.evaluation == "CORRECT"
+    ):
+        return "CORRECT_ATTEMPT"
+    if (
+        configured_event == "INCORRECT_ATTEMPT"
+        or _is_support_failure(tutor)
+        or (
+            tutor.guided_student_state is None
+            and configured_event is None
+            and tutor.evaluation in {"INCORRECT", "PARTIALLY_CORRECT"}
+        )
+    ):
+        return "INCORRECT_ATTEMPT"
+    return None
+
+
 def _guided_rescue(
     event: StudentModelSessionEventResponse | None,
 ) -> GuidedRescue | None:
@@ -475,26 +503,7 @@ async def process_answer_with_session_event(
         "GUIDED_PRACTICE",
         "INDEPENDENT_PRACTICE",
     } and (not scaffold_turn or tutor.scaffold_original_answer_correct)
-    configured_event = (
-        rules.guided_learning.llm_state_mapping[tutor.guided_student_state]
-        .student_model_event
-        if tutor.guided_student_state is not None
-        else None
-    )
-    event_type: Literal["CORRECT_ATTEMPT", "INCORRECT_ATTEMPT"] | None = (
-        "CORRECT_ATTEMPT"
-        if configured_event == "CORRECT_ATTEMPT"
-        or (configured_event is None and tutor.evaluation == "CORRECT")
-        else (
-            "INCORRECT_ATTEMPT"
-            if configured_event == "INCORRECT_ATTEMPT"
-            or (
-                configured_event is None
-                and tutor.evaluation in {"INCORRECT", "PARTIALLY_CORRECT"}
-            )
-            else None
-        )
-    )
+    event_type = _guided_attempt_event_type(tutor, rules)
     response_is_wrong = _is_support_failure(tutor)
 
     next_wrong_attempt_count = (
@@ -552,15 +561,6 @@ async def process_answer_with_session_event(
             context.message,
             tutor,
         )
-        if wrong_four_escalation:
-            if (
-                escalation_type == "GUIDED_SUPPORT_ESCALATION_REQUIRED"
-                and escalation_error_code is None
-            ):
-                raise HTTPException(
-                    status_code=409,
-                    detail="Wrong 4 requires an active question error_code.",
-                )
         response = await adapters.student_model.send_session_event(
             GuidedSupportEvent(
                 request_id=_schema_interaction_request_id(
@@ -1125,6 +1125,7 @@ def _schema_visual_cue(
         if not isinstance(item, dict) or item.get("content_type") != "VISUAL_CUE":
             continue
         content_id = item.get("content_id")
+        cue_type = item.get("cue_type", item.get("visual_cue_type"))
         description = item.get("description")
         actions = item.get("actions", [])
         if not isinstance(content_id, str) or not isinstance(description, str):
@@ -1135,7 +1136,8 @@ def _schema_visual_cue(
             raise RuntimeError("Student Model returned malformed visual cue actions.")
         return VisualCue(
             show=True,
-            cue_type=content_id,
+            cue_id=content_id,
+            cue_type=cue_type if isinstance(cue_type, str) else None,
             description=description,
             actions=actions,
         )
@@ -2206,10 +2208,26 @@ def _visible_visual_cue_for_explain_again(
 ) -> AIVisibleVisualCue | None:
     if visual_cue is None:
         return None
+    presentation_types = {
+        "EQUATION_BLOCK",
+        "NUMBER_LINE",
+        "GRAPH",
+        "TABLE",
+        "HIGHLIGHTED_STEP",
+        "CONCEPT_CARD",
+    }
+    cue_type = (
+        visual_cue.cue_type
+        if visual_cue.cue_type in presentation_types
+        else None
+    )
+    cue_id = visual_cue.cue_id or (
+        visual_cue.cue_type if cue_type is None else None
+    )
     return AIVisibleVisualCue(
         show=visual_cue.show,
-        cue_id=visual_cue.cue_type,
-        cue_type=None,
+        cue_id=cue_id,
+        cue_type=cue_type,
         description=visual_cue.description,
         actions=visual_cue.actions,
     )
