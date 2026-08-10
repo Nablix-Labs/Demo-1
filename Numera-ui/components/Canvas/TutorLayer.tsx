@@ -25,7 +25,7 @@ import { useEffect, useState } from 'react';
 import { Layer, Text, Line, Arrow, Rect, Ellipse, Group } from 'react-konva';
 import { useNumeraStore, type TutorElement } from '@/store/useNumeraStore';
 import { useTutorReveal } from '@/store/useTutorReveal';
-import { measureTutorText, clearTutorTextCache, tutorFontFamily } from '@/lib/tutorTip';
+import { measureTutorTextBounds, clearTutorTextCache, tutorFontFamily } from '@/lib/tutorTip';
 
 const INK = '#1B2A4A'; // focus-navy — readable AI-tutor ink default
 
@@ -75,15 +75,19 @@ export default function TutorLayer({ width, height }: { width: number; height: n
         // typing; clipping by measured width lets each letter appear under the
         // nib as it is written. (See the `x` note in the file header: no
         // offsetX, so the mark occupies [x, x+width].)
-        const inked = measureTutorText(content, fontSize) * p;
+        const { advance, overhangLeft, overhangRight } = measureTutorTextBounds(content, fontSize);
+        const inked = advance * p;
         if (inked <= 0) return null;
+        // Pad by the painted overhang so a slanted glyph is not shaved at either
+        // edge. The right pad reveals a couple of pixels ahead of the nib, which
+        // the nib itself covers.
         return (
           <Group
             key={el.id}
-            clipX={left}
-            clipY={top - fontSize * 1.1}
-            clipWidth={inked}
-            clipHeight={fontSize * 2.2}
+            clipX={left - overhangLeft}
+            clipY={top - fontSize * 1.3}
+            clipWidth={inked + overhangLeft + overhangRight}
+            clipHeight={fontSize * 2.6}
           >
             <Text
               x={left}

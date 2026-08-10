@@ -46,7 +46,46 @@ export function tutorFontFamily(): string {
  */
 export function clearTutorTextCache(): void {
   widthCache.clear();
+  boundsCache.clear();
   familyCache = null;
+}
+
+export interface TextBounds {
+  /** Pen travel: where the next glyph would start. */
+  advance: number;
+  /** How far the painted glyphs spill left of the origin, and right of advance. */
+  overhangLeft: number;
+  overhangRight: number;
+}
+
+const boundsCache = new Map<string, TextBounds>();
+
+/**
+ * Caveat is a slanted hand, so the painted box is wider than the advance width:
+ * the tail of a trailing glyph sits to the RIGHT of where the pen has got to.
+ * Clipping at the advance therefore shaves the last character - visible on
+ * numbers, which have no following letter to hide the cut. Measure the real
+ * painted extents and pad the clip by them.
+ */
+export function measureTutorTextBounds(text: string, fontSize: number): TextBounds {
+  const key = `${fontSize}|${text}`;
+  const hit = boundsCache.get(key);
+  if (hit) return hit;
+  if (typeof document === 'undefined') {
+    return { advance: 0, overhangLeft: 0, overhangRight: 0 };
+  }
+  if (!measureCtx) measureCtx = document.createElement('canvas').getContext('2d');
+  if (!measureCtx) return { advance: 0, overhangLeft: 0, overhangRight: 0 };
+  measureCtx.font = `${fontSize}px ${tutorFontFamily()}`;
+  const m = measureCtx.measureText(text);
+  const out: TextBounds = {
+    advance: m.width,
+    overhangLeft: Math.max(0, m.actualBoundingBoxLeft ?? 0),
+    overhangRight: Math.max(0, (m.actualBoundingBoxRight ?? m.width) - m.width),
+  };
+  if (boundsCache.size > 500) boundsCache.clear();
+  boundsCache.set(key, out);
+  return out;
 }
 
 export function measureTutorText(text: string, fontSize: number): number {

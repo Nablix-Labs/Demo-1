@@ -19,7 +19,9 @@ import { create } from 'zustand';
 import { useEffect } from 'react';
 import { useNumeraStore, type TutorElement } from '@/store/useNumeraStore';
 
-const GAP_MS = 90; // pause between finishing one mark and starting the next
+// A person finishes a line, lifts, and repositions before the next one. 90ms
+// read as a machine moving on; this is closer to a breath.
+const GAP_MS = 260;
 
 function prefersReducedMotion(): boolean {
   return typeof window !== 'undefined' &&
@@ -39,18 +41,32 @@ function ease(t: number): number {
  * How long a single mark takes to "write", scaled by how much there is to draw.
  * Paced for a calm, deliberate hand — slow enough to read as writing, not a pop.
  */
+/**
+ * Nobody writes two lines at exactly the same rate. Vary each mark by up to
+ * ±12%, derived from its id so a given mark always writes the same way — a
+ * random factor would make replays and reconnects visibly inconsistent.
+ */
+function tempoFor(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  return 0.88 + (Math.abs(h) % 100) / 100 * 0.24; // 0.88 – 1.12
+}
+
 function durationFor(el: TutorElement): number {
-  switch (el.kind) {
-    case 'text':      return Math.max(420, (el.text?.length ?? 0) * 55);
-    case 'math':      return Math.max(460, (el.tex ?? el.text ?? '').length * 46);
-    case 'line':      return 380;
-    case 'arrow':     return 460;
-    case 'ellipse':   return 720;
-    case 'rect':      return 640;
-    case 'freehand':  return Math.max(380, ((el.points?.length ?? 0) / 2) * 20);
-    case 'highlight': return Math.max(300, ((el.points?.length ?? 0) / 2) * 15);
-    default:          return 380;
-  }
+  const base = (() => {
+    switch (el.kind) {
+      case 'text':      return Math.max(700, (el.text?.length ?? 0) * 95);
+      case 'math':      return Math.max(750, (el.tex ?? el.text ?? '').length * 80);
+      case 'line':      return 620;
+      case 'arrow':     return 720;
+      case 'ellipse':   return 1150;
+      case 'rect':      return 1040;
+      case 'freehand':  return Math.max(600, ((el.points?.length ?? 0) / 2) * 32);
+      case 'highlight': return Math.max(480, ((el.points?.length ?? 0) / 2) * 24);
+      default:          return 620;
+    }
+  })();
+  return base * tempoFor(el.id);
 }
 
 interface RevealState {

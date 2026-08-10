@@ -35,7 +35,17 @@ const HAND = {
   heightRatio: 0.85,
 };
 
-const GLIDE_MS = 90; // matches GAP_MS in useTutorReveal
+const GLIDE_MS = 260; // matches GAP_MS in useTutorReveal
+
+/**
+ * A hand resting on a surface is never perfectly still, and a pen tracking a
+ * dead-straight path is the giveaway that this is a sprite. A sub-pixel bob,
+ * driven by how far through the mark we are, is enough to break that up without
+ * ever reading as a wobble.
+ */
+function penBob(p: number): number {
+  return Math.sin(p * Math.PI * 7) * 1.4;
+}
 
 function prefersReducedMotion(): boolean {
   return typeof window !== 'undefined' &&
@@ -88,7 +98,8 @@ export default function TutorHandOverlay({ width, height }: { width: number; hei
       node.style.transition = active
         ? 'opacity 160ms ease'
         : `transform ${GLIDE_MS}ms linear, opacity 160ms ease`;
-      node.style.transform = `translate(${target.x - anchorX}px, ${target.y - anchorY}px)`;
+      const bob = active ? penBob(activeP) : 0;
+      node.style.transform = `translate(${target.x - anchorX}px, ${target.y - anchorY + bob}px)`;
       node.style.opacity = '1';
     };
 
