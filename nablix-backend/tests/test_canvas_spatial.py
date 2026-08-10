@@ -133,7 +133,7 @@ def test_align_step_tokens_and_plan_canvas_draw() -> None:
     assert 0.18 <= elem.x <= 0.28
 
 
-def test_plan_canvas_draw_omits_uncertain_token_alignment() -> None:
+def test_plan_canvas_draw_falls_back_to_line_box_for_uncertain_token_alignment() -> None:
     tutor_res = TutorResult(
         evaluation="INCORRECT",
         error_type="OPPOSITE_OPERATION",
@@ -163,4 +163,8 @@ def test_plan_canvas_draw_omits_uncertain_token_alignment() -> None:
 
     payloads = plan_canvas_draw(tutor_res, regions, [])
 
-    assert payloads == []
+    assert len(payloads) == 1
+    assert len(payloads[0].elements) == 1
+    element = payloads[0].elements[0]
+    assert element.kind == "ellipse"
+    assert (element.x, element.y, element.w, element.h) == (0.25, 0.1, 0.5, 0.2)
