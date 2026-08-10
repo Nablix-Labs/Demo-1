@@ -335,6 +335,7 @@ class GuidedSupportEvent(MutatingSessionEventBase):
         "MAXIMUM_GUIDED_SUPPORT_PARALLEL",
         "MAXIMUM_GUIDED_SUPPORT_REQUIRED",
         "GUIDED_STUCK_SUPPORT_REQUIRED",
+        "GUIDED_SUPPORT_REQUESTED",
     ]
 
     question_id: str

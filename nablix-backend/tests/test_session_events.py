@@ -484,7 +484,7 @@ def _event_response(
                 "next_action": "WAIT_FOR_STUDENT_RESPONSE",
             }
         )
-    elif event_type == "INCORRECT_ATTEMPT":
+    elif event_type in {"INCORRECT_ATTEMPT", "GUIDED_SUPPORT_REQUESTED"}:
         response = _event_response("ORIENTATION_COMPLETED", request_id)
         journey = response["journey_state"]
         payload = response["phase_payload"]
@@ -566,7 +566,10 @@ def _event_response(
                 "next_action": "START_INDEPENDENT",
             }
         )
-    elif event_type == "GUIDED_SUPPORT_ESCALATION_REQUIRED":
+    elif event_type in {
+        "GUIDED_SUPPORT_ESCALATION_REQUIRED",
+        "GUIDED_STUCK_SUPPORT_REQUIRED",
+    }:
         response = _event_response("ORIENTATION_COMPLETED", request_id)
         journey = response["journey_state"]
         payload = response["phase_payload"]
@@ -1453,7 +1456,7 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
             assert stuck.json()["current_scaffold_step_id"] is None
         else:
             assert len(events) == event_count_before_stuck + 1
-            assert events[-1]["event_type"] == "GUIDED_SUPPORT_ESCALATION_REQUIRED"
+            assert events[-1]["event_type"] == "GUIDED_STUCK_SUPPORT_REQUIRED"
             assert events[-1]["micro_skill_id"] == "T02.M1"
             assert events[-1].get("triggering_response") is None
             assert events[-1].get("error_code") is None
@@ -1630,10 +1633,7 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
                 }
             ],
         }
-    assert guided_incorrect.json()["message"] == (
-        "Let us review the equation and try the next step carefully. "
-        "Undo the addition first."
-    )
+    assert guided_incorrect.json()["message"] == "Undo the addition first."
 
     for wrong_number in range(2, 5):
         guided_incorrect = client.post(

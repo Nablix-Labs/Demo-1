@@ -55,8 +55,8 @@ def test_repeated_unresolved_guided_explanation_never_forces_completion() -> Non
     ) is False
 
 
-def test_atomic_guided_events_are_disabled_for_legacy_student_model() -> None:
-    assert Settings().student_model_atomic_guided_events_enabled is False
+def test_atomic_guided_events_are_enabled_for_the_current_student_model() -> None:
+    assert Settings().student_model_atomic_guided_events_enabled is True
     event = GuidedSupportEvent(
         request_id="REQ-LEGACY-STUCK",
         event_type="GUIDED_SUPPORT_ESCALATION_REQUIRED",
@@ -329,7 +329,7 @@ def test_explain_again_is_cached_and_does_not_grade(
     assert _pedagogical_state(session["session_id"]) == before
 
 
-def test_help_request_without_active_support_is_explicit() -> None:
+def test_help_request_serves_support_without_recording_an_attempt() -> None:
     student_id = "ST153"
     session = _start(student_id)
     request = _interaction(
@@ -341,12 +341,37 @@ def test_help_request_without_active_support_is_explicit() -> None:
     )
 
     response = client.post("/interaction", json=request)
-    assert response.status_code == 409
-    assert response.json()["message"].startswith("NO_ACTIVE_SUPPORT:")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["support_served_this_turn"] == "VISUAL_CUE"
+    assert body["attempt_increment"] == 0
+    assert body["attempt_count"] == session["attempt_count"]
+    assert body["visual_cue"]["show"] is True
 
     stored = client.get(f"/session/{session['session_id']}")
     assert stored.status_code == 200
     assert stored.json()["attempt_count"] == session["attempt_count"]
+
+
+def test_explicit_hint_phrase_is_not_graded_as_an_answer() -> None:
+    student_id = "ST163"
+    session = _start(student_id)
+    request = _interaction(
+        session,
+        student_id,
+        "TURN-HELP-PHRASE-1",
+        "ANSWER_SUBMISSION",
+        None,
+    )
+    request["text_input"] = "Can you give me a hint?"
+
+    response = client.post("/interaction", json=request)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["support_served_this_turn"] == "VISUAL_CUE"
+    assert body["attempt_increment"] == 0
+    assert body["attempt_count"] == session["attempt_count"]
 
 
 def test_inactivity_nudge_is_cached_without_pedagogical_mutation() -> None:
