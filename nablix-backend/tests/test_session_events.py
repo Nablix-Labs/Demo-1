@@ -568,6 +568,83 @@ def _event_response(
                 "next_action": "DELIVER_SCAFFOLD_STEP",
             }
         )
+    elif event_type == "MAXIMUM_GUIDED_SUPPORT_PARALLEL":
+        response = _event_response("ORIENTATION_COMPLETED", request_id)
+        journey = response["journey_state"]
+        payload = response["phase_payload"]
+        routing = response["routing"]
+        assert isinstance(journey, dict)
+        assert isinstance(payload, dict)
+        assert isinstance(routing, dict)
+        journey["phase_2_guided_learning"]["highest_support_used_by_skill"] = {
+            "T02.M1": "PARALLEL_EXAMPLE"
+        }
+        payload.update(
+            {
+                "payload_type": "RESCUE",
+                "question_set": None,
+                "support_to_serve": None,
+                "rescue_to_serve": {
+                    "rescue_type": "PARALLEL_EXAMPLE",
+                    "micro_skill_id": "T02.M1",
+                    "parallel_example": {
+                        "parallel_example_id": "PAR-T02-M1",
+                        "problem": "Solve y + 3 = 8.",
+                        "worked_steps": [
+                            "Step 1: Subtract 3 from both sides.",
+                            "Step 2: y = 5.",
+                        ],
+                        "final_answer": "y = 5",
+                    },
+                },
+            }
+        )
+        routing.update(
+            {
+                "reason_code": "PARALLEL_EXAMPLE_REQUIRED",
+                "reason": "Delivering a parallel example.",
+                "next_action": "DELIVER_PARALLEL_EXAMPLE",
+            }
+        )
+    elif event_type == "MAXIMUM_GUIDED_SUPPORT_REQUIRED":
+        response = _event_response("ORIENTATION_COMPLETED", request_id)
+        journey = response["journey_state"]
+        payload = response["phase_payload"]
+        routing = response["routing"]
+        assert isinstance(journey, dict)
+        assert isinstance(payload, dict)
+        assert isinstance(routing, dict)
+        journey["phase_2_guided_learning"].update(
+            {
+                "status": "COMPLETED",
+                "completed_micro_skill_ids": ["T02.M1"],
+                "remaining_micro_skill_ids": [],
+                "highest_support_used_by_skill": {"T02.M1": "TUTOR_SOLVED"},
+            }
+        )
+        payload.update(
+            {
+                "payload_type": "RESCUE",
+                "question_set": None,
+                "support_to_serve": None,
+                "rescue_to_serve": {
+                    "rescue_type": "TUTOR_SOLVED",
+                    "micro_skill_id": "T02.M1",
+                    "tutor_solved": {
+                        "explanation": "Subtract 4 from both sides. The correct answer is x = 5.",
+                        "final_answer": "x = 5",
+                        "answer_steps": ["x + 4 - 4 = 9 - 4", "x = 5"],
+                    },
+                },
+            }
+        )
+        routing.update(
+            {
+                "reason_code": "GUIDED_PHASE_COMPLETED",
+                "reason": "Tutor-solved support completed the guided skill.",
+                "next_action": "PROCEED_TO_PHASE_3",
+            }
+        )
     return response
 
 
@@ -1558,32 +1635,54 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert scaffold_response.json()["show_scaffold_panel"] is False
     assert scaffold_response.json()["current_scaffold_step_id"] is None
 
-    guided = client.post(
+    parallel = client.post(
         "/interaction",
         json={
             "session_id": session_id,
             "student_id": "ST001",
             "interaction_type": "ANSWER_SUBMISSION",
             "input_source": "TEXT",
-            "turn_id": "TURN-GUIDED-CORRECT-1",
-            "text_input": "x = 5",
+            "turn_id": "TURN-GUIDED-POST-SCAFFOLD-WRONG",
+            "text_input": "x = 4",
             "current_phase": "GUIDED_PRACTICE",
             "concept_id": "ALG_LINEAR_ONE_STEP",
             "question_id": "Q-T02-004",
             "hint_count": 0,
         },
     )
+    assert parallel.status_code == 200
+    assert events[-1]["event_type"] == "MAXIMUM_GUIDED_SUPPORT_PARALLEL"
+    assert events[-1]["error_code"] == "ERR-T02-SUBTRACTION-MISAPPLIED"
+    assert parallel.json()["guided_rescue"]["rescue_type"] == "PARALLEL_EXAMPLE"
+    assert parallel.json()["support_served_this_turn"] == "PARALLEL_EXAMPLE"
+    assert "Solve y + 3 = 8" in parallel.json()["message"]
+    assert "try the original question again" in parallel.json()["message"]
 
-    assert guided.status_code == 200
-    assert events[-2]["event_type"] == "CORRECT_ATTEMPT"
-    assert events[-2]["question_id"] == "Q-T02-004"
-    assert events[-2]["micro_skill_ids"] == ["T02.M1"]
-    assert events[-2]["student_response"] == "x = 5"
-    assert events[-2]["support_used"] == "SCAFFOLD"
+    tutor_solved = client.post(
+        "/interaction",
+        json={
+            "session_id": session_id,
+            "student_id": "ST001",
+            "interaction_type": "ANSWER_SUBMISSION",
+            "input_source": "TEXT",
+            "turn_id": "TURN-GUIDED-POST-PARALLEL-WRONG",
+            "text_input": "x = 4",
+            "current_phase": "GUIDED_PRACTICE",
+            "concept_id": "ALG_LINEAR_ONE_STEP",
+            "question_id": "Q-T02-004",
+            "hint_count": 0,
+        },
+    )
+    assert tutor_solved.status_code == 200
+    assert events[-2]["event_type"] == "MAXIMUM_GUIDED_SUPPORT_REQUIRED"
+    assert events[-2]["error_code"] == "ERR-T02-SUBTRACTION-MISAPPLIED"
     assert events[-1]["event_type"] == "GUIDED_PHASE_COMPLETED"
     assert events[-1]["completed_micro_skill_ids"] == ["T02.M1"]
-    assert guided.json()["current_phase"] == "INDEPENDENT_PRACTICE"
-    state = guided.json()["student_model_state"]
+    assert tutor_solved.json()["guided_rescue"]["rescue_type"] == "TUTOR_SOLVED"
+    assert tutor_solved.json()["support_served_this_turn"] == "TUTOR_SOLVED"
+    assert "correct answer is x = 5" in tutor_solved.json()["message"]
+    assert tutor_solved.json()["current_phase"] == "INDEPENDENT_PRACTICE"
+    state = tutor_solved.json()["student_model_state"]
     assert state["target_micro_skill_ids"] == ["T02.M1"]
     assert state["completed_micro_skill_ids"] == []
 

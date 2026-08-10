@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.adapters import TutorResult, VisionOCRResult
 from app.models.fields import Phase, SessionId, SnapshotDataUrl, StudentId, TurnId
+from app.models.guided_learning import GuidedRescue
 
 TutorElementKind = Literal[
     "text", "math", "line", "arrow", "rect", "ellipse", "freehand", "highlight"
@@ -144,6 +145,7 @@ class CanvasSubmitResponse(BaseModel):
     tutor: TutorResult
     latency: CanvasLatency
     canvas_draw: list[CanvasDrawPayload] = Field(default_factory=list)
+    guided_rescue: GuidedRescue | None = None
     # Phase state after this submission — same contract as InteractionResponse,
     # so canvas turns can drive the frontend's phase routing.
     phase_changed: bool = False

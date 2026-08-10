@@ -425,7 +425,15 @@ def test_canvas_preserves_question_metadata_for_guided_rescue(
                     update={
                         "payload_type": "RESCUE",
                         "question_set": None,
-                        "rescue_to_serve": {"tutor_solved": {"steps": []}},
+                        "rescue_to_serve": {
+                            "rescue_type": "TUTOR_SOLVED",
+                            "micro_skill_id": "T02.M1",
+                            "tutor_solved": {
+                                "explanation": "Subtract 4 from both sides. The correct answer is x = 5.",
+                                "final_answer": "x = 5",
+                                "answer_steps": ["Subtract 4 from both sides."],
+                            },
+                        },
                     }
                 )
             }
@@ -443,6 +451,8 @@ def test_canvas_preserves_question_metadata_for_guided_rescue(
     )
 
     assert response.status_code == 200, response.text
+    assert response.json()["guided_rescue"]["rescue_type"] == "TUTOR_SOLVED"
+    assert "correct answer is x = 5" in response.json()["tutor"]["tutor_message"]
     after = session_service._get_owned_session(session_id, "ST016")
     assert after.question_id == before.question_id
     assert after.current_question == before.current_question

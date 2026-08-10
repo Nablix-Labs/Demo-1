@@ -859,6 +859,21 @@ export interface GuidedStateFields {
     step_voice?: string | null;
     total_steps: number;
   } | null;
+  guided_rescue?: {
+    rescue_type: 'PARALLEL_EXAMPLE' | 'TUTOR_SOLVED';
+    micro_skill_id: string;
+    parallel_example: {
+      parallel_example_id: string;
+      problem: string;
+      worked_steps: string[];
+      final_answer: string;
+    } | null;
+    tutor_solved: {
+      explanation: string;
+      final_answer: string;
+      answer_steps: string[];
+    } | null;
+  } | null;
   consecutive_stuck_count?: number;
   /** Matches models/guided_learning.py:PrerequisiteRepair. */
   prerequisite_repair?: {
@@ -1099,6 +1114,7 @@ export interface CanvasSubmissionResult {
   /** Tutor drawing actions (e.g. mark up the student's working). The backend
    *  sends a LIST of draw actions here, unlike the WS path (one per message). */
   canvas_draw?: CanvasDrawPayload[];
+  guided_rescue?: GuidedStateFields['guided_rescue'];
   /** Phase state after this submission — same contract as InteractionResponse. */
   phase_changed?: boolean;
   previous_phase?: string | null;
