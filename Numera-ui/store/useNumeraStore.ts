@@ -100,6 +100,17 @@ export interface TranscriptMessage {
   role: 'ai' | 'student';
   text: string;
   partial?: boolean; // true while still transcribing
+  /**
+   * The student is still mid-turn — more speech may join this message.
+   *
+   * Streaming ASR emits a FINAL at every speech-final point, which in practice
+   * means every breath the student takes. Committing each one as its own
+   * message turned one spoken answer into six bubbles ("Okay. I think the
+   * answer for this question is" / "option b." / "Again, plus four." / …,
+   * Manjusha 6 Aug). How many bubbles a turn becomes is a presentation
+   * decision, so it is made here rather than blamed on the transcriber.
+   */
+  open?: boolean;
   timestamp: number;
 }
 
@@ -496,7 +507,11 @@ const initial: Omit<
   sessionSummary: null,
   sessionReview: null,
   micMuted: false,
-  voiceStatus: 'listening',
+  // 'idle' until something real happens: the socket opening or a session
+  // starting promotes it. Starting at 'listening' had the panel claiming
+  // "Listening…" — and the capture effect opening the mic — before any
+  // socket existed to receive the audio, which was then simply discarded.
+  voiceStatus: 'idle',
   currentTurnId: null,
   lastTutorTurnId: null,
   expectsStudentResponse: true,
@@ -696,8 +711,14 @@ export const useNumeraStore = create<NumeraState>()(
 
   addTranscriptMessage: (msg) =>
     set((s) => ({
+      // Anything the tutor says ends the student's turn, so the next thing they
+      // say starts a new bubble instead of joining the last one. This is the
+      // only place the turn closes, because it is the only true signal: the
+      // tutor answering IS the turn being over.
       transcript: [
-        ...s.transcript,
+        ...(msg.role === 'ai'
+          ? s.transcript.map((m) => (m.open ? { ...m, open: false } : m))
+          : s.transcript),
         { ...msg, id: uid(), timestamp: Date.now() },
       ],
     })),
@@ -748,13 +769,27 @@ export const useNumeraStore = create<NumeraState>()(
   commitPartialTranscript: (text) =>
     set((s) => {
       const existing = s.transcript.find((m) => m.partial);
+      const settled = s.transcript.filter((m) => !m.partial);
+      const last = settled[settled.length - 1];
+
+      // Still the same spoken turn: join this segment onto it rather than
+      // starting another bubble. The turn is closed by the tutor replying, in
+      // addTranscriptMessage.
+      if (last && last.role === 'student' && last.open) {
+        const joined = `${last.text} ${text}`.replace(/\s+/g, ' ').trim();
+        return {
+          transcript: [...settled.slice(0, -1), { ...last, text: joined }],
+        };
+      }
+
       return {
         transcript: [
-          ...s.transcript.filter((m) => !m.partial),
+          ...settled,
           {
             id: existing?.id ?? uid(),
             role: 'student',
             text,
+            open: true,
             timestamp: existing?.timestamp ?? Date.now(),
           },
         ],
@@ -932,9 +967,22 @@ export const useNumeraStore = create<NumeraState>()(
     {
       name: 'numera-store',
       storage: createJSONStorage(() => localStorage),
-      // Persist only durable UI preferences + learning progress — never
-      // session/canvas/transcript state, which is backend-driven & ephemeral.
+      // Persist durable UI preferences, learning progress — and the session id.
+      //
+      // The id used to be excluded with the rest of the "backend-driven &
+      // ephemeral" state, and that reasoning was wrong in one specific way:
+      // dropping it did not give the student a clean slate, it gave them a
+      // SECOND session on a topic they already had open. The Student Model
+      // resumed it and stamped routing_reason_code=SESSION_RESUMED, which the
+      // backend cannot serialise into InteractionResponse, so every turn in
+      // that session answered 500 (7 Aug: 164 session starts, 16 resumed).
+      //
+      // Canvas and transcript stay out — those really are per-session.
+      // A persisted id CAN outlive the backend, whose sessions are in memory;
+      // isStaleSessionError + clearSessionId in useDemoTutor is what recovers
+      // from that, rather than leaving the lesson wedged.
       partialize: (s) => ({
+        sessionId: s.sessionId,
         panelSide: s.panelSide,
         panelCollapsed: s.panelCollapsed,
         transcriptVisible: s.transcriptVisible,

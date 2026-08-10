@@ -44,6 +44,7 @@ from app.models.student_model_session import (
     StudentModelSessionEventResponse,
     WorkedExampleRequestedEvent,
 )
+from app.services.guided_question_opening import guided_question_opening
 from app.services.phase_transition import (
     TRANSITION_MESSAGES,
     UI_STATE_FLAGS,
@@ -347,6 +348,16 @@ async def start_session(
             if phase == "REVIEW"
             else _diagnostic_start_message()
             if phase == "DIAGNOSTIC"
+            else guided_question_opening(
+                current_question,
+                question_updates["question_type"],
+                "Let’s resume with this question.",
+            )
+            if (
+                phase == "GUIDED_PRACTICE"
+                and current_question is not None
+                and support_hint is None
+            )
             else support_hint or event.routing.reason
         ),
         diagnostic_transition_message=(
@@ -806,6 +817,20 @@ def _apply_schema_event(
             transition_message = phase1_messages.worked_example_to_guided_message
         if transition_message is not None:
             updates["message"] = transition_message
+    if (
+        next_phase == "GUIDED_PRACTICE"
+        and next_question_id is not None
+        and next_question_id != session.question_id
+        and question_updates is not None
+    ):
+        next_question = question_updates["current_question"]
+        if next_question is None:
+            raise RuntimeError("Guided Practice question is missing its text.")
+        updates["message"] = guided_question_opening(
+            next_question,
+            question_updates["question_type"],
+            str(updates["message"]),
+        )
     updated = session.model_copy(update=updates)
     _sessions[session.session_id] = updated
     return updated

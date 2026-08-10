@@ -25,6 +25,7 @@ from app.ai_engine.schemas import (
     InputSource,
     IntentType,
     LearningPhase,
+    OpenAIExplainAgainMessage,
     ResponseStrategy,
     StrictSchema,
 )
@@ -33,6 +34,8 @@ from app.core.logger import logger
 from app.models.adapters import ConversationMessage, ConversationState, Phase2PromptContext
 from app.models.guided_learning import (
     ActiveTeachingObjective,
+    FocusedComponentEvidence,
+    GeneratedConcept,
     GeneratedQuestionRubric,
     GuidedEvaluation,
     ScaffoldEvaluationContext,
@@ -42,6 +45,78 @@ from app.models.student_model_session import AnswerSpec, QuestionType
 
 
 _OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
+
+
+def build_explain_again_initial_payload(
+    request: ExplainAgainRequest,
+    prompt_version: str,
+) -> dict[str, object]:
+    return {
+        "question_id": request.question_id,
+        "question": request.question,
+        "answer_spec": request.answer_spec.model_dump(),
+        "required_components": [
+            component.model_dump()
+            for component in request.generated_question_rubric.required_concepts
+        ],
+        "active_teaching_objective": request.active_teaching_objective.model_dump(),
+        "first_unresolved_concept_id": request.first_unresolved_concept_id,
+        "guided_student_state": request.guided_student_state,
+        "selected_error_code": request.selected_error_code,
+        "recorded_misconception": (
+            request.recorded_misconception.model_dump()
+            if request.recorded_misconception is not None
+            else None
+        ),
+        "recent_conversation": [
+            message.model_dump() for message in request.recent_conversation
+        ],
+        "active_support_level": request.active_support_level,
+        "highest_support_used": request.highest_support_used,
+        "visible_visual_cue": (
+            request.visible_visual_cue.model_dump()
+            if request.visible_visual_cue is not None
+            else None
+        ),
+        "active_scaffold": (
+            request.active_scaffold.model_dump()
+            if request.active_scaffold is not None
+            else None
+        ),
+        "answer_reveal_allowed": request.answer_reveal_allowed,
+        "validation_feedback": None,
+        "prompt_version": prompt_version,
+    }
+
+
+def build_explain_again_guardrail_retry_payload(
+    request: ExplainAgainRequest,
+    validation_feedback: str,
+    prompt_version: str,
+) -> dict[str, object]:
+    visible_visual_cue: dict[str, object] | None = None
+    if request.visible_visual_cue is not None:
+        visible_visual_cue = {
+            "show": request.visible_visual_cue.show,
+            "cue_id": request.visible_visual_cue.cue_id,
+            "cue_type": request.visible_visual_cue.cue_type,
+        }
+    return {
+        "question_id": request.question_id,
+        "question": request.question,
+        "first_unresolved_concept_id": request.first_unresolved_concept_id,
+        "active_support_level": request.active_support_level,
+        "visible_visual_cue": visible_visual_cue,
+        "active_scaffold": (
+            request.active_scaffold.model_dump()
+            if request.active_scaffold is not None
+            else None
+        ),
+        "answer_reveal_allowed": False,
+        "guardrail_retry_mode": "SOCRATIC_QUESTION_ONLY",
+        "validation_feedback": validation_feedback,
+        "prompt_version": prompt_version,
+    }
 
 
 class OpenAITutorTurn(StrictSchema):
@@ -253,6 +328,53 @@ class OpenAIAIEngineClient:
                 f"invalid guided evaluation: {error}",
             ) from error
 
+    def adjudicate_component_evidence(
+        self,
+        question_type: QuestionType | None,
+        question: str,
+        answer_spec: AnswerSpec,
+        target_component: GeneratedConcept,
+        active_objective: ActiveTeachingObjective,
+        student_response: str,
+        input_source: InputSource,
+        recent_conversation: list[ConversationMessage],
+        prompt_version: str,
+        system_prompt: str,
+    ) -> FocusedComponentEvidence:
+        content = self._request_guided_json(
+            name="guided_component_adjudication",
+            schema=FocusedComponentEvidence.model_json_schema(),
+            system_prompt=system_prompt,
+            user_payload={
+                "question_type": question_type,
+                "question": question,
+                "answer_spec": answer_spec.model_dump(),
+                "target_component": target_component.model_dump(),
+                "active_objective": active_objective.model_dump(),
+                "student_response": student_response,
+                "input_source": input_source,
+                "recent_conversation": [
+                    message.model_dump() for message in recent_conversation
+                ],
+                "prompt_version": prompt_version,
+            },
+        )
+        try:
+            evidence = FocusedComponentEvidence.model_validate(content)
+        except ValidationError as error:
+            raise AdapterError(
+                "openai_ai_engine",
+                f"invalid focused component evidence: {error}",
+            ) from error
+        if evidence.component_id != target_component.concept_id:
+            raise AdapterError(
+                "openai_ai_engine",
+                "Focused component evidence returned an unexpected component ID: "
+                f"expected={target_component.concept_id}, "
+                f"actual={evidence.component_id}.",
+            )
+        return evidence
+
     def evaluate_scaffold_step(
         self,
         context: ScaffoldEvaluationContext,
@@ -397,6 +519,36 @@ class OpenAIAIEngineClient:
             },
         )
         return OpenAITutorMessage.model_validate(content)
+
+    def generate_explain_again_message(
+        self,
+        request: ExplainAgainRequest,
+        validation_feedback: str | None,
+        prompt_version: str,
+        system_prompt: str,
+    ) -> OpenAIExplainAgainMessage:
+        user_payload = (
+            build_explain_again_initial_payload(request, prompt_version)
+            if validation_feedback is None
+            else build_explain_again_guardrail_retry_payload(
+                request,
+                validation_feedback,
+                prompt_version,
+            )
+        )
+        content = self._request_guided_json(
+            name="explain_again",
+            schema=OpenAIExplainAgainMessage.model_json_schema(),
+            system_prompt=system_prompt,
+            user_payload=user_payload,
+        )
+        try:
+            return OpenAIExplainAgainMessage.model_validate(content)
+        except ValidationError as error:
+            raise AdapterError(
+                "openai_ai_engine",
+                f"invalid Explain Again response: {error}",
+            ) from error
 
     def generate_session_review(
         self,

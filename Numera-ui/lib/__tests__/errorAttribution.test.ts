@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { studentFacingError, voiceTurnFailedMessage } from '@/lib/api';
+import { studentFacingError, voiceTurnFailedMessage, isStaleSessionError } from '@/lib/api';
 
 /**
  * A failure should say what actually failed.
@@ -75,6 +75,18 @@ describe('the cases that were already right stay right', () => {
     expect(msg).not.toMatch(/already have this topic/i);
     expect(msg).toContain('ALG_1STEP_GP_F01');
   });
+
+  it('a journey-version conflict never exposes the stored journey payload', () => {
+    const msg = studentFacingError(
+      err(409, {
+        error_code: 'JOURNEY_VERSION_CONFLICT',
+        message: "{'current_journey_state': {'student_id': 'ST016', 'version': 8}}",
+      }),
+    );
+    expect(msg).toMatch(/two submissions|press Check/i);
+    expect(msg).not.toContain('current_journey_state');
+    expect(msg).not.toContain('student_id');
+  });
 });
 
 describe('a genuinely unreachable server still reads as unreachable', () => {
@@ -109,6 +121,23 @@ describe('a failed voice turn is announced, not swallowed', () => {
     expect(voiceTurnFailedMessage('upstream timeout')).toMatch(/in time|too slow/i);
   });
 
+  /**
+   * "Tutor unavailable. Please try again." is the voice server's ONE catch-all
+   * (streaming_server.py:689). It sends that same sentence whether the tutor
+   * call timed out or came back 409/500 — any non-200 raises there.
+   *
+   * Reading "unavailable" as slowness therefore described a plain backend
+   * rejection to the student as the tutor being slow, and to whoever read the
+   * screenshot as a frontend timeout. That is exactly the wrong place to send
+   * the next person looking (reported 7 Aug). Only wording that actually says
+   * timeout gets the timeout copy.
+   */
+  it('does not report the server catch-all as slowness', () => {
+    const msg = voiceTurnFailedMessage('Tutor unavailable. Please try again.');
+    expect(msg).not.toMatch(/in time|too slow/i);
+    expect(msg).toMatch(/try again|say it again/i);
+  });
+
   it('never blames the student', () => {
     for (const m of ['Tutor unavailable', 'upstream timeout', 'INVALID_TOKEN']) {
       expect(voiceTurnFailedMessage(m)).not.toMatch(/you (got|were) (it )?wrong|your fault/i);
@@ -117,5 +146,34 @@ describe('a failed voice turn is announced, not swallowed', () => {
 
   it('does not leak the server string at the student', () => {
     expect(voiceTurnFailedMessage('NullPointerException at line 42')).not.toMatch(/NullPointer/);
+  });
+});
+
+/**
+ * Persisting the session id across reloads is what stops every refresh opening
+ * a new session on a topic already in progress — the thing that produced 164
+ * session starts and 16 SESSION_RESUMED on 7 Aug, each resumed session then
+ * 500ing on every turn. The cost of keeping the id is that it can outlive the
+ * backend, whose session state is in memory. Recognising that is what makes the
+ * trade safe.
+ */
+describe('a session the backend has forgotten is recognised, not retried forever', () => {
+  const err = (status: number, message?: string) => ({ response: { status, data: { message } } });
+
+  it('spots the backend having dropped our session', () => {
+    expect(isStaleSessionError(err(404, 'Session with ID SESSION123 was not found.'))).toBe(true);
+  });
+
+  it('does not treat every 404 as a dead session', () => {
+    // A missing endpoint is not a missing session, and clearing the session id
+    // for one would throw away a perfectly good lesson.
+    expect(isStaleSessionError(err(404, 'Not Found'))).toBe(false);
+  });
+
+  it('leaves other failures alone', () => {
+    expect(isStaleSessionError(err(500, 'Session blew up'))).toBe(false);
+    expect(isStaleSessionError(err(409, 'Topic already in progress'))).toBe(false);
+    expect(isStaleSessionError(new Error('Network Error'))).toBe(false);
+    expect(isStaleSessionError(undefined)).toBe(false);
   });
 });

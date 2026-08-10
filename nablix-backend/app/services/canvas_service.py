@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timezone
 from time import perf_counter
 from uuid import uuid4
@@ -37,6 +38,18 @@ from app.services.session_service import (
     record_canvas_submission,
 )
 from app.services.snapshot_store import build_reference, store_snapshot
+
+
+_CANVAS_RELATION_PATTERN = re.compile(
+    r"(?:\\+(?:rightarrow|to)|[→⟶⟹⇒])"
+)
+
+
+def _semantic_canvas_text(ocr: VisionOCRResult) -> str:
+    """Translate OCR relation notation into prose the answer evaluator can credit."""
+
+    written_work = "\n".join(ocr.detected_steps) or ocr.raw_ocr_text
+    return _CANVAS_RELATION_PATTERN.sub(" means ", written_work)
 
 
 def _clarification_result(ocr: VisionOCRResult) -> TutorResult:
@@ -114,7 +127,7 @@ async def submit_canvas(
     ocr = ocr.model_copy(update={"detected_regions": canvas_regions})
     ocr_latency_ms = (perf_counter() - ocr_started) * 1000
 
-    written_work = "\n".join(ocr.detected_steps) or ocr.raw_ocr_text
+    written_work = _semantic_canvas_text(ocr)
     message = "\n".join(part for part in [written_work, request.transcript] if part)
     rules: ClassifierRulesConfig = load_classifier_rules()
     attempt_count: int = (

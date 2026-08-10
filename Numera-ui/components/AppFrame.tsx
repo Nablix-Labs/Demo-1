@@ -11,6 +11,7 @@
 import { useEffect, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
 import { usePathname } from 'next/navigation';
+import { cn } from '@/lib/cn';
 import AuthGate from './auth/AuthGate';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
@@ -157,8 +158,19 @@ export default function AppFrame({ children }: { children: ReactNode }) {
       {/* Log out only — no VoicePicker here. MediaPanel already mounts one on
           the lesson route, and a second would be two controls writing the same
           store field from opposite corners of the same screen. */}
+      {/* Clear of the tutor panel, not on top of it.
+          bottom-left was chosen when nothing else lived there. The MediaPanel
+          now sits on that side with its message box at the bottom, so this
+          cluster landed directly on the composer — measured live on the VM:
+          logout at x20 y805, composer at x15 y806, overlapping. It shifts past
+          whichever edge the panel is docked to. */}
       {tutoring && (
-        <div className="fixed bottom-5 left-5 z-50 flex items-center gap-1">
+        <div
+          className={cn(
+            'fixed bottom-5 z-50 flex items-center gap-1',
+            panelSide === 'left' ? 'left-[250px]' : 'left-5',
+          )}
+        >
           {!isLesson && <VoicePicker />}
           <LogOutButton />
         </div>

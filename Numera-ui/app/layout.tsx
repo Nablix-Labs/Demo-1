@@ -3,6 +3,7 @@ import 'katex/dist/katex.min.css';
 import './globals.css';
 import AppFrame from '@/components/AppFrame';
 import SupportChrome from '@/components/support/SupportChrome';
+import { caveat } from '@/lib/tutorFont';
 
 export const metadata: Metadata = {
   title: 'Numera — AI Math Tutor',
@@ -16,7 +17,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="h-screen overflow-hidden lg-root font-sans text-ink">
+      <body className={`${caveat.variable} h-screen overflow-hidden lg-root font-sans text-ink`}>
         {/* Liquid Glass — vivid ambient backdrop the chrome lenses over. */}
         <div className="lg-ambient" aria-hidden="true" />
         {/* App shell — the tool rail and media panel persist across every route.

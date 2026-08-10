@@ -20,7 +20,9 @@ import { cn } from '@/lib/cn';
 import {
   LessonIcon, WorkbookIcon, ChallengeIcon, KeyNotesIcon, PeopleIcon,
   FilesIcon, FlaggedIcon, NotificationsIcon, HistoryIcon, HelpIcon, ProfileIcon,
+  LogOutIcon,
 } from '@/components/ui/dock-icons';
+import { useSignOut } from '@/hooks/useSignOut';
 
 /**
  * Module scope, not a hook body. `apps` is a dependency of the dock's
@@ -39,6 +41,9 @@ const APPS: DockApp[] = [
   { id: 'history',       name: 'History',         href: '/history',       icon: HistoryIcon },
   { id: 'help',          name: 'Help & support',  href: '/help',          icon: HelpIcon },
   { id: 'profile',       name: 'Profile',         href: '/profile',       icon: ProfileIcon },
+  // No href — this one acts rather than navigates, so it comes back through
+  // onAppClick below. Last in the row on purpose; see the note on LogOutIcon.
+  { id: 'logout',        name: 'Log out',                                 icon: LogOutIcon },
 ];
 
 /**
@@ -60,6 +65,7 @@ const APPS: DockApp[] = [
 export default function Dock({ autoHide = false }: { autoHide?: boolean }) {
   const pathname = usePathname();
   const [peek, setPeek] = useState(false);
+  const { signOut, overlay } = useSignOut();
 
   // macOS marks running apps with a dot under the icon. Here "running" is
   // "this is the page you are on" — the same meaning the rail gave its white
@@ -73,6 +79,10 @@ export default function Dock({ autoHide = false }: { autoHide?: boolean }) {
 
   return (
     <>
+      {/* The sign-out cover. Portalled to <body> by useSignOut, because the
+          dock's own backdrop-filter would otherwise make a fixed overlay lay
+          out inside the dock instead of over the screen. */}
+      {overlay}
       {/* The reveal strip. Only when tucked away — a full-width invisible band
           at the very bottom of the viewport that the pointer runs into. Sits
           BELOW the dock in z-order so it never eats the dock's own hover. */}
@@ -104,7 +114,7 @@ export default function Dock({ autoHide = false }: { autoHide?: boolean }) {
         <MacOSDock
           apps={APPS}
           openApps={openApps}
-          onAppClick={() => {}}
+          onAppClick={(id) => { if (id === 'logout') signOut(); }}
           surfaceClassName="lg-glass-dark"
           aria-label="Dock"
         />

@@ -1,66 +1,109 @@
 # Profile page — backend & DB requirements
 
-Frontend for `/profile` is built and working. This is what it needs from the
-backend to stop being local-only.
+**From:** Manav (frontend) · **Grouped by owner** at Manjusha's request.
 
-**Current state:** every value on the page reads from the client stores
-(`useAuthStore`, `useNumeraStore`), which persist to `localStorage`. Nothing is
-invented — where the backend has never supplied a value the card prints "Not
-set" rather than a plausible-looking number. That means the page is honest
-today, but **nothing survives a different device or a cleared browser.**
+The frontend for `/profile` is built and working. Everything below is what it
+needs from the backend to stop being local-only.
+
+**Current state:** every value reads from the client stores (`useAuthStore`,
+`useNumeraStore`), persisted to `localStorage`. Nothing is invented — where the
+backend has never supplied a value the card prints "Not set" rather than a
+plausible-looking number. The page is honest today, but **nothing survives a
+different device or a cleared browser.**
+
+**How ownership below was decided:** the table in `CONTEXT.md`, cross-checked
+against `git log` authorship per file. Where the evidence is thin it says so
+rather than guessing — see ask #1.
 
 ---
 
-## 1. What the page shows, and where it comes from now
+## Summary — who does what
 
-| Section | Field | Source today | Needs backend? |
+| # | Owner | Ask | Severity |
 |---|---|---|---|
-| Identity | Name | `student.name` (onboarding, local) | **Yes** |
-| Identity | Photo | `student.avatar`, data URL in `localStorage` | **Yes** |
-| Identity | Year / age band | `student.gradeBand` / `.ageBand` (local) | **Yes** |
-| Identity | Account status | `accountStatus` (local state machine) | **Yes** |
-| Identity | Plan / tier | `tier` from `POST /auth/login` | Already real |
-| Identity | Student code | `studentCode` from login | Partially — see §5 |
-| Learning flow | 6 phase segments | `phasesDone` (local, written by the manual flow) | **Yes** |
-| Topic progress | % unlocked | derived from `phasesDone` | **Yes** |
-| How you learn | Tutor input mode | `inputMode` (local, drives the lesson) | **Yes** (sync) |
-| How you learn | Panel side | `panelSide` (local) | **Yes** (sync) |
-| Account | Email | `email` from login | Already real |
-| Guardian | Name / relationship / email / phone / verified | local, from onboarding | **Yes** |
-| Privacy | 7 consent toggles | `consents` (local) | **Yes** — legally required |
+| 1 | **UNCONFIRMED — Manjusha to assign** | Return `student_code` on the login response | **Blocking** |
+| 2 | **Chiru** — Tutor Backend | `GET /students/me/profile` | High |
+| 3 | **Chiru** — Tutor Backend | `PATCH /students/me/profile` | High |
+| 4 | **Chiru** — Tutor Backend | `POST` / `DELETE /students/me/avatar` | Medium |
+| 5 | **UNASSIGNED — Manjusha to assign** | Persist consents server-side — nothing exists today | **High / compliance** |
+| 6 | **Saravanan** — Student Model | `phases_done[]` + progress counters | Medium |
+| 7 | **Sanya** — Tutor Backend | `GET /students/me/sessions` | Low / optional |
+| 8 | **Manjusha** — Product | Four decisions before anyone builds | Decision |
+
+**Aditya: nothing here.** Voice and RAG are untouched by this page — flagged so
+you do not need to read further.
 
 ---
 
-## 2. Endpoints needed
+# 1. UNCONFIRMED OWNER — `student_code` on the login response
 
-### `GET /students/me/profile`
+**Highest-value item on the list, and I could not establish who owns it.
+Manjusha, please assign.**
 
-One call that populates the whole page. Everything optional except `student_id`
-— the UI already renders "Not set" for anything absent, so a partial response is
-safe to ship first.
+`/auth/login` is served by the **Nablix platform auth server**
+(`nablix.ai:8080`), which is *not* in the `Demo-1` monorepo — so git authorship
+proves nothing here, and `CONTEXT.md`'s ownership table has no auth row. The
+only auth file in this repo is `app/api/auth.py`, a 23-line bearer-token
+dependency that does not issue tokens.
+
+### The problem
+
+Verified 2026-07-28 by reading the auth service source on the VM:
+
+- `create_access_token()` builds the JWT as `{sub, role, tier, iat, exp}` —
+  `sub` is `str(user.user_id)`, an **integer user id, not the `ST###` code**.
+- `TokenResponse` is `{access_token, token_type, role, tier, last_journey_state}`
+  — no `student_code`.
+- `last_journey_state` looks like a way in (the raw journey dict holds
+  `"student_id": student_code`) but `_project()` in `login_state.py` **drops
+  that key**, and it is `None` for any student with no prior journey.
+
+So the frontend cannot derive it client-side. `lib/api.ts` falls back to a fixed
+`ST001`, and `/session/event` rejects every other student with
+`403 STUDENT_FORBIDDEN` on their first correct answer (GitHub issue #40).
+
+### Smallest fix
+
+`login()` already selects `Student.student_id` for the `last_journey_state`
+lookup — have it select `student_code` too and add the field to `TokenResponse`.
+One field.
+
+**Do this first: it unblocks the profile page and the tutoring calls together.**
+
+---
+
+# 2–4. Chiru — Tutor Backend
+
+*Basis: 17 commits on `*student*` files, the most of anyone.*
+
+## 2. `GET /students/me/profile`
+
+One call that populates the whole page. Everything optional except
+`student_id` — the UI already renders "Not set" for anything absent, so a
+partial response is safe to ship first.
 
 ```jsonc
 {
   "student_id": "…",
-  "student_code": "ST008",          // see §5
+  "student_code": "ST008",                    // see ask #1
   "email": "student@example.com",
   "tier": "tier_3",
-  "account_status": "active",        // enum in §4
+  "account_status": "active",                 // enum below
   "display_name": "Manav Arya Singh",
-  "avatar_url": "https://…/avatars/…jpg",   // null if none
+  "avatar_url": "https://…/avatars/…jpg",     // null if none
   "age_band": "11-14 (KS3)",
   "grade_band": "Year 9",
-  "preferred_mode": "balanced",      // voice | text | balanced
+  "preferred_mode": "balanced",               // voice | text | balanced
   "guardian": {
     "name": "…", "relationship": "Parent",
     "email": "…", "phone": "…", "verified": true
   },
   "preferences": { "input_mode": "voice", "panel_side": "left" },
-  "consents": [
+  "consents": [                               // see ask #5
     { "purpose": "account_creation", "accepted_at": "2026-07-01T…", "withdrawn_at": null }
     // one row per purpose, all 7
   ],
-  "progress": {
+  "progress": {                               // see ask #6
     "topic_id": "…",
     "phases_done": ["diagnostic", "orientation"],
     "sessions_total": 5,
@@ -71,105 +114,147 @@ safe to ship first.
 }
 ```
 
-The last three `progress` counters are **not on the page yet** — the frontend
-has no honest source for them. Send them and I will add the stat row from the
-reference design (the big `28 / 2h4m / 86%` numerals). The `/history` page
-currently hardcodes the same figures as mock data.
+## 3. `PATCH /students/me/profile`
 
-### `PATCH /students/me/profile`
-
-Partial update. The page writes: `display_name`, `age_band`, `grade_band`,
+Partial update. The page writes `display_name`, `age_band`, `grade_band`,
 `preferred_mode`, `preferences.input_mode`, `preferences.panel_side`, and the
 guardian block. Should return the updated object.
 
-### `POST /students/me/avatar` — multipart
+## 4. `POST /students/me/avatar` — multipart, and `DELETE` to clear
+
+Returns `{ "avatar_url": "…" }`.
 
 The client already centre-crops to a square and downscales to **256×256 JPEG
-q0.85** (~2–20KB) before sending, so the server does not need to resize. Still
-validate server-side: content-type allow-list (`jpeg/png/webp`), hard size cap,
-re-encode to strip EXIF (a phone photo carries GPS coordinates, and this is a
-children's product).
+q0.85** (~2–20KB), so the server does not need to resize. It **does** still need
+to:
 
-Returns `{ "avatar_url": "…" }`. `DELETE /students/me/avatar` to clear.
+- enforce a content-type allow-list (`jpeg` / `png` / `webp`) and a hard size cap;
+- **re-encode to strip EXIF** — a phone photo carries GPS coordinates, and these
+  are children;
+- delete the stored object on account deletion, not just the row.
 
-> **Note:** avatars are personal data about a minor. They need the same
-> retention and deletion path as everything else — deleting the account must
-> delete the object, not just the row.
+### What the page shows, and where each value comes from now
 
-### `PUT /students/me/consents/{purpose}`
+| Section | Field | Source today | Needs backend? |
+|---|---|---|---|
+| Identity | Name | `student.name` (onboarding, local) | **Yes** |
+| Identity | Photo | `student.avatar`, data URL in `localStorage` | **Yes** |
+| Identity | Year / age band | `student.gradeBand` / `.ageBand` (local) | **Yes** |
+| Identity | Account status | `accountStatus` — drives the access gate | **Yes** |
+| Identity | Plan / tier | `tier` from `POST /auth/login` | Already real |
+| Identity | Student code | `studentCode` from login | Ask #1 |
+| Learning flow | 6 phase pills + green checklist | `phasesDone` (local) | Ask #6 |
+| Topic progress | % unlocked | derived from `phasesDone` | Ask #6 |
+| Header | Profile set-up % | counted from filled fields, client-side | No |
+| How you learn | Tutor input mode | `inputMode` (local, drives the lesson) | **Yes** (sync) |
+| How you learn | Panel side | `panelSide` (local) | **Yes** (sync) |
+| Account | Email | `email` from login | Already real |
+| Guardian | Name / relationship / email / phone / verified | local, from onboarding | **Yes** |
+| Privacy | 7 consent toggles | `consents` (local only) | Ask #5 |
+
+---
+
+# 5. UNASSIGNED — consents are not persisted anywhere
+
+**Verified: the string "consent" does not appear anywhere in
+`nablix-backend/app/`.** No table, no endpoint, no model.
+
+All seven toggles live in `useAuthStore` and persist only to the student's
+`localStorage`. So consent for a minor currently survives nowhere and is
+auditable nowhere — the withdrawal audit trail the proposal's §7 describes does
+not exist server-side, and clearing a browser silently resets it.
+
+This is a compliance gap rather than a profile-page gap, and it has no owner in
+`CONTEXT.md`'s table. **Manjusha to assign.**
+
+## `PUT /students/me/consents/{purpose}`
 
 ```jsonc
 { "granted": true }   // or false to withdraw
 ```
 
-Must return the resulting `account_status`, because withdrawing an
-account-blocking consent restricts the account and the UI has to reflect that
-immediately. The frontend already models this — see §3.
+Must return the resulting `account_status` — withdrawing an account-blocking
+consent restricts the account and the UI has to reflect that immediately.
 
-### `GET /students/me/sessions` (optional, for a richer page)
+## Semantics the backend must match
 
-Would let the profile show a real streak and recent-topic list instead of the
-phase bars alone.
-
----
-
-## 3. Consent semantics the backend must match
-
-These rules are already implemented client-side in `store/useAuthStore.ts` and
-come from §7/§10 of the proposal. The backend is the authority; the frontend
+These rules are implemented client-side in `store/useAuthStore.ts` and come from
+§7/§10 of the proposal. The backend should be the authority; the frontend
 mirrors it.
 
 Seven purposes: `account_creation`, `ai_tutor_usage`, `canvas_processing`,
 `voice_processing`, `learning_analytics`, `safety_monitoring`, `marketing`.
 All mandatory except `marketing`.
 
-Two tiers of consequence:
-
 - **Account-blocking** — `account_creation`, `ai_tutor_usage`,
-  `learning_analytics`, `safety_monitoring`. Withdrawing any one of these sets
+  `learning_analytics`, `safety_monitoring`. Withdrawing any one sets
   `account_status = consent_withdrawn` and restricts the whole account.
   Re-granting all four restores `active`.
 - **Feature-level** — `canvas_processing`, `voice_processing`. Withdrawing
   disables that feature only; the account stays `active`. (This is why the
-  lesson screen currently shows "Canvas processing is not available until the
-  required consent is completed.")
+  lesson screen shows "Canvas processing is not available until the required
+  consent is completed.")
 
-A consent record is *active* when `accepted_at` is set **and** `withdrawn_at`
-is null. Keep withdrawn rows rather than deleting them — the audit trail is the
-point.
+A record is *active* when `accepted_at` is set **and** `withdrawn_at` is null.
+Keep withdrawn rows rather than deleting them — the audit trail is the point.
 
 ---
 
-## 4. Enums
+# 6. Saravanan — Student Model
+
+*Basis: `CONTEXT.md` — Schema 3.0 and learner journey events. No commits in
+`Demo-1`; the Student Model is a separate service.*
+
+- `phases_done[]` on the learner journey — drives the six phase pills and the
+  green checklist card.
+- Progress counters: `sessions_total`, `minutes_total`, `questions_correct`,
+  `questions_total`.
+- Confirm the `students` join needed for ask #1.
+
+The counters are **not on the page yet** — there is no honest source for them,
+and `/history` currently hardcodes the same figures as mock data. Send them and
+I will add the big-numeral stat row from the reference design.
+
+---
+
+# 7. Sanya — sessions endpoint (optional)
+
+*Basis: 24 commits on `*session*`; already owns session resume per `CONTEXT.md`.*
+
+## `GET /students/me/sessions`
+
+Totals plus recent topics. Only needed for a richer page — a real streak and a
+recent-topic list instead of the phase pills alone. Nothing is blocked on it.
+
+---
+
+# 8. Manjusha — decisions needed before anyone builds
+
+| Decision | Why it is yours |
+|---|---|
+| Are student photos allowed at all? | These are KS3–KS4 minors. A product/legal call that comes before storage design. |
+| Avatar retention + deletion policy | Account deletion must delete the stored object, not just the row. |
+| Consent wording, and whether `marketing` stays off by default | Currently off by default and client-side only. |
+| **Assign owners for asks #1 and #5** | Neither the platform auth server nor consent persistence has an owner in `CONTEXT.md`. |
+
+---
+
+# Reference
+
+## Enums
 
 `account_status`: `registration_started` · `consent_pending` · `active` ·
 `consent_withdrawn` · `suspended` · `locked` · `deleted`
 
-`preferred_mode` / `input_mode`: `voice` · `text` · `balanced`
-(`input_mode` is only `voice` | `text`)
+`preferred_mode`: `voice` · `text` · `balanced` (`input_mode` is only
+`voice` | `text`)
 
 `panel_side`: `left` · `right`
 
 `phases_done[]`: `diagnostic` · `orientation` · `teach` · `workbook` ·
 `practice` · `review` (order from `lib/phases.ts`)
 
----
-
-## 5. Blocker carried over from auth
-
-`POST /auth/login` does not return the student's own `ST###` code
-(`LoginResponse.student_code` is absent), so every signed-in student falls back
-to `ST001` and `student_model` answers `403 STUDENT_FORBIDDEN`. There is a
-testing override (`?student=ST008`) in `AppFrame.tsx` as a stopgap.
-
-The profile page prints "Not issued by the backend yet" for the student code
-rather than showing a wrong one. **Fixing login to return `student_code` unblocks
-this field and the tutoring calls at the same time** — it is the single highest-value
-item on this list.
-
----
-
-## 6. Suggested DB shape
+## Suggested DB shape
 
 ```sql
 -- extend the existing student/profile table
@@ -196,19 +281,21 @@ CREATE TABLE guardians (
   verified     boolean NOT NULL DEFAULT false
 );
 
--- consent_records already exists per §7; the page needs these columns
--- (student_id, purpose, accepted_at, withdrawn_at) exposed on the profile read.
+-- Ask #5: no consent storage exists yet. Minimum shape:
+CREATE TABLE consent_records (
+  student_id   uuid NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  purpose      text NOT NULL,
+  accepted_at  timestamptz,
+  withdrawn_at timestamptz,
+  PRIMARY KEY (student_id, purpose)
+);
 ```
 
----
+## What is already done, so nobody rebuilds it
 
-## 7. What I need from you to finish the page
-
-1. `student_code` on the login response (§5) — unblocks the most fields.
-2. `GET /students/me/profile` in roughly the shape above, even partially filled.
-3. Whether avatars go to your object storage or Supabase storage, and the
-   upload endpoint's exact contract.
-4. The three `progress` counters, if you want the big-numeral stat row added.
-
-Send those and the page switches from local state to live data without any
-layout changes — the components already handle missing values.
+- The page renders fully against local state. No layout changes are needed when
+  the API lands — every component already handles a missing value.
+- Avatar downscaling is done client-side (see ask #4).
+- Consent semantics (account-blocking vs feature-level) are implemented and
+  working client-side — verified: an account missing two account-blocking
+  consents is correctly bounced to `/restricted`.

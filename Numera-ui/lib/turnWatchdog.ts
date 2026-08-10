@@ -46,9 +46,10 @@ export const TURN_RESCUE_MS = 45_000;
 
 export class TurnWatchdog {
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private armedTurnId: string | null = null;
 
   constructor(
-    private readonly onStuck: () => void,
+    private readonly onStuck: (armedTurnId: string | null) => void,
     private readonly windowMs: number = TURN_RESCUE_MS,
   ) {}
 
@@ -60,12 +61,18 @@ export class TurnWatchdog {
   /**
    * The student's speech was transcribed. Arms the rescue, restarting the clock
    * — each new segment means they are still talking, so the wait starts over.
+   *
+   * `turnId` is the turn this rescue belongs to, handed back to onStuck so the
+   * callback can refuse to fire into a turn that has since moved on — a stray
+   * echo-final used to arm a timer with no identity, and 45s later its `stop`
+   * landed in the middle of whatever turn was then live.
    */
-  noteStudentSpeech(): void {
+  noteStudentSpeech(turnId: string | null = null): void {
     this.disarm();
+    this.armedTurnId = turnId;
     this.timer = setTimeout(() => {
       this.timer = null;
-      this.onStuck();
+      this.onStuck(this.armedTurnId);
     }, this.windowMs);
   }
 

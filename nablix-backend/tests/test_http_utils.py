@@ -79,7 +79,7 @@ def test_student_model_adapter_surfaces_journey_version_conflict(
         )
     )
 
-    with pytest.raises(JourneyVersionConflict):
+    with pytest.raises(JourneyVersionConflict) as conflict:
         asyncio.run(
             adapter.send_session_event(
                 SessionOpenedEvent(
@@ -92,3 +92,5 @@ def test_student_model_adapter_surfaces_journey_version_conflict(
                 "token",
             )
         )
+    assert "submit it once more" in str(conflict.value.detail)
+    assert "journey_state" not in str(conflict.value.detail)

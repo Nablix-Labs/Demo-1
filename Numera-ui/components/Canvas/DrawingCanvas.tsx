@@ -22,6 +22,7 @@ import { uid } from '@/lib/uid';
 import { setStudentWriting } from '@/lib/tutorSpeech';
 import TutorLayer from './TutorLayer';
 import TutorMathOverlay from './TutorMathOverlay';
+import TutorHandOverlay from './TutorHandOverlay';
 import { useTutorRevealSync } from '@/store/useTutorReveal';
 
 interface DrawingCanvasProps {
@@ -298,6 +299,8 @@ export default function DrawingCanvas({ onExportReady, tutorOnly = false }: Draw
       </Stage>
       {/* Tutor maths as real KaTeX, overlaid on the same coordinate space */}
       <TutorMathOverlay width={containerSize.width} height={containerSize.height} />
+      {/* The writing hand rides the tip of whatever is being revealed */}
+      <TutorHandOverlay width={containerSize.width} height={containerSize.height} />
     </div>
   );
 }

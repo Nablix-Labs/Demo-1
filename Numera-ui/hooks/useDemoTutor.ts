@@ -12,9 +12,10 @@
  * Backend calls are gated on NEXT_PUBLIC_API_BASE_URL: when it's unset (local
  * UI-only runs) the hook is a no-op so the mock UX keeps working untouched.
  */
-import { useCallback } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   startSession,
+  getSession,
   submitCanvas,
   sendInteraction,
   endSession,
@@ -28,10 +29,12 @@ import {
   type InteractionResponse,
   type NudgeDelivery,
   type QuestionType,
+  isStaleSessionError,
 } from '@/lib/api';
 import { applyInteractionSupport, acceptResponse } from '@/lib/interactionPresentation';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { tutorSay, setStudentWriting } from '@/lib/tutorSpeech';
+import { speakBrowser } from '@/lib/tts';
 import {
   availableSupport,
   nextSupport,
@@ -80,6 +83,31 @@ export function resetSessionStart(): void {
 }
 
 /**
+ * Recover from a session the backend has forgotten.
+ *
+ * We keep the session id across reloads now (see the store's partialize), which
+ * is what stops every refresh opening a second session on a topic already in
+ * progress. The cost is that the id can outlive the backend, whose session
+ * state is in memory and dies with the process — after a restart every call
+ * answers 404 and the lesson would sit there failing forever.
+ *
+ * Clearing the id is enough: the lesson's start effect is guarded on it being
+ * null, so dropping it is what asks for a fresh session. The latch has to go
+ * too, or the retry is refused for the concept that just failed.
+ *
+ * Returns whether it recovered, so callers can skip their own error copy — a
+ * dead session is not something to tell a student about when the next line of
+ * code opens them a live one.
+ */
+function recoverIfStaleSession(err: unknown): boolean {
+  if (!isStaleSessionError(err)) return false;
+  console.warn('[session] backend no longer has this session — starting a fresh one');
+  resetSessionStart();
+  useNumeraStore.getState().clearSessionId();
+  return true;
+}
+
+/**
  * True only when the student has actually drawn something. Guards against
  * sending blank canvas snapshots to the backend (and the live OCR provider) when
  * there's no activity. Read at call time so it doesn't re-subscribe the hook.
@@ -99,10 +127,22 @@ function hasCanvasActivity(): boolean {
  * them. This makes a screenshot of the trail enough to tell them apart.
  */
 function errorMessage(err: unknown, fallback: string): string {
-  const res = (err as { response?: { status?: number; data?: { message?: string; error_code?: string } } })?.response;
+  const res = (err as {
+    response?: {
+      status?: number;
+      data?: { message?: string; error_code?: string; request_id?: string };
+    };
+  })?.response;
   if (res) {
     const parts = [`HTTP ${res.status ?? '?'}`];
     if (res.data?.error_code) parts.push(res.data.error_code);
+    // The join key. The backend stamps request_id on every error and logs the
+    // same id on its side, so quoting it here turns "it failed" into a line
+    // anyone can grep straight to:
+    //     journalctl -u nablix-backend | grep REQD6AA967B
+    // Without it a tester reports a failure and someone else re-derives which
+    // of the day's requests it was — which is most of the cost of a bug report.
+    if (res.data?.request_id) parts.push(`req=${res.data.request_id}`);
     const detail = res.data?.message?.trim();
     return `${parts.join(' ')}${detail ? ` — ${detail}` : ''}`;
   }
@@ -113,6 +153,8 @@ function errorMessage(err: unknown, fallback: string): string {
 // Shown in the chat when a tutor call fails (e.g. backend 5xx), so a failure is
 // visible to the student instead of the chat silently freezing.
 const TUTOR_UNAVAILABLE = "Sorry — I couldn't reach the tutor just now. Please try again in a moment.";
+const EXPLAIN_AGAIN_ACKNOWLEDGEMENT =
+  'Okay—give me a moment. I’m looking at the question and the support already on your screen, so I can explain the same idea in a clearer, different way.';
 
 /**
  * What the student sees in the chat when a tutor call fails.
@@ -140,6 +182,10 @@ function syncBackendSession(response: {
   current_phase: string;
   current_question: string | null;
   question_id: string | null;
+  question_number?: number;
+  last_tutor_turn_id?: string | null;
+  expected_student_response?: string;
+  allow_voice_input?: boolean;
   /**
    * How the question expects to be answered. Present on both the session record
    * and every interaction reply, and until now read from neither — so a
@@ -167,6 +213,15 @@ function syncBackendSession(response: {
     questionText: response.current_question,
     questionType: response.question_type ?? null,
   });
+  if (response.question_number !== undefined) {
+    store.setQuestionNumber(response.question_number);
+  }
+  if (response.last_tutor_turn_id !== undefined) {
+    store.setTutorTurn(response.last_tutor_turn_id, {
+      expects: response.expected_student_response !== 'NONE',
+      allow: response.allow_voice_input ?? false,
+    });
+  }
 
   // Progress rail (§2). The denominator only exists on the session record's
   // question set, so this is the one place both halves are known at once.
@@ -230,9 +285,54 @@ export async function beginSession(
   return inFlight;
 }
 
+let resumeInFlight: Promise<void> | null = null;
+
+/**
+ * Rehydrate a persisted session after a page refresh.
+ *
+ * `sessionId` survives the refresh (persist/partialize) but `backendSession`,
+ * the question and the phase do not — and `beginSession` short-circuits on the
+ * surviving id. The lesson therefore came back BLANK: no question on the
+ * canvas, no opening message, and every REST turn dropped with "no question is
+ * active". GET /session/{id} has existed in lib/api.ts the whole time with no
+ * caller; this is its caller. A 404 means the backend has forgotten the
+ * session (restart) — drop it so a fresh one starts.
+ */
+export async function resumeSession(): Promise<void> {
+  if (!apiEnabled()) return;
+  const store = useNumeraStore.getState();
+  if (!store.sessionId || store.backendSession) return;
+  if (resumeInFlight) return resumeInFlight;
+  resumeInFlight = (async () => {
+    try {
+      const rec = await getSession(store.sessionId!);
+      const s = useNumeraStore.getState();
+      s.setBackendSession(rec);
+      syncBackendSession(rec);
+      if (s.transcript.length === 0 && rec.message.trim()) {
+        s.setTranscript([{ role: 'ai', text: rec.message }]);
+      }
+    } catch (err) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (isStaleSessionError(err) || status === 404) {
+        resetSessionStart();
+        useNumeraStore.getState().clearSessionId();
+      } else {
+        console.warn('✗ session resume failed (will stay on the stored session):', err);
+      }
+    } finally {
+      resumeInFlight = null;
+    }
+  })();
+  return resumeInFlight;
+}
+
 export function useDemoTutor() {
   const sessionId = useNumeraStore((s) => s.sessionId);
   const canvasExporter = useNumeraStore((s) => s.canvasExporter);
+  const canvasSubmissionInFlight = useRef(false);
+  const explainAgainRequest = useRef<Promise<InteractionResponse | null> | null>(null);
+  const [explainAgainPending, setExplainAgainPending] = useState(false);
   const addTranscriptMessage = useNumeraStore((s) => s.addTranscriptMessage);
   const addTrailEntry = useNumeraStore((s) => s.addTrailEntry);
 
@@ -298,9 +398,13 @@ export function useDemoTutor() {
     if (!apiEnabled() || !sessionId) return null;
     const png = hasCanvasActivity() ? canvasExporter?.() : null;
     if (!png) {
-      addTrailEntry({ kind: 'tutor', text: 'Nothing on the canvas to submit yet.' });
+      const message = 'Write or draw something on the canvas first, then I can check it with you.';
+      addTranscriptMessage({ role: 'ai', text: message });
+      addTrailEntry({ kind: 'tutor', text: message });
       return null;
     }
+    if (canvasSubmissionInFlight.current) return null;
+    canvasSubmissionInFlight.current = true;
     try {
       const res = await submitCanvas(sessionId, png, 'STANDALONE_ATTEMPT');
       // Canvas responses now carry the same phase state as /interaction, so a
@@ -334,9 +438,14 @@ export function useDemoTutor() {
       tutorSay(res.tutor.tutor_message, { afterMarks: drew });
       return res;
     } catch (err) {
+      // A forgotten session recovers by opening a new one; see
+      // recoverIfStaleSession. Nothing to report to the student.
+      if (recoverIfStaleSession(err)) return null;
       addTranscriptMessage({ role: 'ai', text: chatError(err, TUTOR_UNAVAILABLE) }); // surface the failure in the chat
       addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Could not read the canvas.') });
       return null;
+    } finally {
+      canvasSubmissionInFlight.current = false;
     }
   }, [sessionId, canvasExporter, addTranscriptMessage, addTrailEntry]);
 
@@ -345,13 +454,13 @@ export function useDemoTutor() {
    *
    * Neither an answer nor a help escalation (Phase 2 handoff, Manav — Frontend,
    * Explain Again 2). The frontend computes nothing: no attempts, no components,
-   * no support progression, no scaffold changes. It sends the request and
-   * renders exactly what comes back.
+   * no support progression and no scaffold changes. It immediately acknowledges
+   * the request, then renders the generated explanation when it arrives.
    *
    * Older deployments can still return 404/405/422; only those explicit
    * compatibility responses fall back to the cue already held by the client.
    */
-  const explainAgain = useCallback(async (): Promise<InteractionResponse | null> => {
+  const runExplainAgain = useCallback(async (): Promise<InteractionResponse | null> => {
     const s = useNumeraStore.getState();
     const replayLocally = () => {
       s.setVisualCueVisible(true);
@@ -364,6 +473,24 @@ export function useDemoTutor() {
     }
 
     const turnId = useNumeraStore.getState().beginSubmissionTurn();
+    addTranscriptMessage({ role: 'ai', text: EXPLAIN_AGAIN_ACKNOWLEDGEMENT });
+    addTrailEntry({ kind: 'tutor', text: EXPLAIN_AGAIN_ACKNOWLEDGEMENT });
+    // Explain Again is an explicit handoff from the student to the tutor, even
+    // when the canvas still contains unsubmitted marks.
+    setStudentWriting(false);
+    const acknowledgementFinished = new Promise<void>((resolve) => {
+      tutorSay(EXPLAIN_AGAIN_ACKNOWLEDGEMENT, {
+        onEnd: resolve,
+        // This acknowledgement must begin on the click itself. Waiting for a
+        // remote TTS round trip makes it arrive alongside the LLM explanation,
+        // which defeats its purpose and can lose browser audio permission.
+        speak: speakBrowser,
+      });
+    });
+    const acknowledgementWindow = Promise.race([
+      acknowledgementFinished,
+      new Promise<void>((resolve) => window.setTimeout(resolve, 6000)),
+    ]);
     try {
       const res = await sendInteraction({
         session_id: sessionId,
@@ -380,8 +507,12 @@ export function useDemoTutor() {
       // Same ordering guard as every other turn. A cached replay keeps its
       // original version, so re-pressing the button must not re-render the reply
       // a second time — which is exactly what the guard is for.
-      if (!acceptResponse(res)) return res;
+      if (!acceptResponse(res)) {
+        await acknowledgementWindow;
+        return res;
+      }
       // Present the returned wording once; preserve cue and scaffold as sent.
+      await acknowledgementWindow;
       addTranscriptMessage({ role: 'ai', text: res.message });
       const spoken = applyInteractionSupport(res);
       tutorSay(spoken, { afterMarks: Boolean(res.canvas_draw?.length) });
@@ -395,15 +526,30 @@ export function useDemoTutor() {
       const status = (err as { response?: { status?: number } })?.response?.status;
       const endpointMissing = status === 404 || status === 405 || status === 422;
       if (endpointMissing) {
+        await acknowledgementWindow;
         console.warn('[explain-again] backend has no EXPLAIN_AGAIN yet — replaying the held cue');
         replayLocally();
         return null;
       }
+      // A failed API call must release the button immediately. Speech engines
+      // do not consistently fire onEnd when playback is muted or interrupted;
+      // waiting here previously left Explain Again stuck on "Explaining…".
       addTranscriptMessage({ role: 'ai', text: chatError(err, TUTOR_UNAVAILABLE) });
       addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Explain again failed.') });
       return null;
     }
   }, [sessionId, addTranscriptMessage, addTrailEntry]);
+
+  const explainAgain = useCallback((): Promise<InteractionResponse | null> => {
+    if (explainAgainRequest.current !== null) return explainAgainRequest.current;
+    setExplainAgainPending(true);
+    const request = runExplainAgain().finally(() => {
+      explainAgainRequest.current = null;
+      setExplainAgainPending(false);
+    });
+    explainAgainRequest.current = request;
+    return request;
+  }, [runExplainAgain]);
 
   const claimInactivityNudge = useCallback(async (
     idleDurationMs: number,
@@ -472,10 +618,9 @@ export function useDemoTutor() {
         throw new Error('Backend did not acknowledge the presented inactivity nudge.');
       }
       acceptResponse(res);
-      addTranscriptMessage({ role: 'ai', text: delivery.message });
       addTrailEntry({ kind: 'tutor', text: delivery.message, meta: 'inactivity nudge' });
     },
-    [sessionId, addTranscriptMessage, addTrailEntry],
+    [sessionId, addTrailEntry],
   );
 
   /**
@@ -567,7 +712,8 @@ export function useDemoTutor() {
       // actually drew something (don't send blank canvases to the backend/OCR).
       let canvasSnapshotId: string | undefined;
       const png = hasCanvasActivity() ? canvasExporter?.() : null;
-      if (png) {
+      if (png && !canvasSubmissionInFlight.current) {
+        canvasSubmissionInFlight.current = true;
         try {
           console.log('→ POST /canvas/submit', { session_id: sessionId, student_id: studentId(), snapshot_bytes: png.length });
           const canvasRes = await submitCanvas(sessionId, png, 'VOICE_ATTACHMENT');
@@ -581,7 +727,15 @@ export function useDemoTutor() {
           });
         } catch (err) {
           console.warn('✗ /canvas/submit failed:', err);
-          /* canvas is optional for a voice turn */
+          // Canvas is optional for a voice turn, but grading proceeds as if the
+          // page were blank — the student deserves to know their written work
+          // wasn't seen rather than wonder why the tutor ignored it.
+          addTranscriptMessage({
+            role: 'ai',
+            text: 'I couldn’t see your canvas work just now, so I’m going by what you said.',
+          });
+        } finally {
+          canvasSubmissionInFlight.current = false;
         }
       } else {
         console.log('(no canvas content this turn)');
@@ -603,7 +757,19 @@ export function useDemoTutor() {
           hint_count: ctx.hint_count,
           // Voice turn-sync contract (§5): identify the turn so the backend can
           // dedupe/reject stale turns. transcript_final is always true here.
-          turn_id: state.currentTurnId ?? undefined,
+          //
+          // Mint one rather than sending `undefined`. turn_id is REQUIRED on
+          // InteractionRequest (interaction.py:57), so omitting it is a 422
+          // before the tutor ever sees the answer — the same shape of failure
+          // as the nudge's null previous_tutor_turn_id and the voice socket's
+          // missing turn_id, both found today.
+          //
+          // It can genuinely be null here: this path reads the id but never
+          // opens a turn, and the only opener on entry is page.tsx, which skips
+          // it when the session starts already in GUIDED_PRACTICE. A student
+          // resuming straight into guided practice whose opening line never
+          // finished speaking would answer with no turn id at all.
+          turn_id: state.currentTurnId ?? state.beginSubmissionTurn(),
           previous_tutor_turn_id: state.lastTutorTurnId,
           transcript_final: true,
         };
@@ -666,6 +832,13 @@ export function useDemoTutor() {
       } catch (err) {
         console.warn('✗ /interaction failed:', err);
         console.groupEnd();
+        // The backend has forgotten this session (its state is in memory).
+        // Clearing the id makes the lesson open a fresh one, so there is
+        // nothing here worth telling the student about.
+        if (recoverIfStaleSession(err)) {
+          useNumeraStore.getState().beginListeningTurn();
+          return null;
+        }
         addTranscriptMessage({ role: 'ai', text: chatError(err, TUTOR_UNAVAILABLE) }); // surface the failure in the chat
         addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Tutor unavailable.') });
         useNumeraStore.getState().beginListeningTurn(); // reopen listening so the student can retry
@@ -708,6 +881,7 @@ export function useDemoTutor() {
     submitVoiceTurn,
     hint,
     explainAgain,
+    explainAgainPending,
     claimInactivityNudge,
     presentInactivityNudge,
     acknowledgeInactivityNudge,

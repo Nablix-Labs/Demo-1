@@ -56,7 +56,13 @@ describe('the idle clock only runs when it should (rules 1, 2)', () => {
 });
 
 describe('claiming a nudge', () => {
-  const base = { policy: POLICY, gate: IDLE, sinceLastNudgeMs: null, nudgesThisTurn: 0 };
+  const base = {
+    policy: POLICY,
+    gate: IDLE,
+    sinceLastNudgeMs: null,
+    nudgesThisTurn: 0,
+    tutorTurnId: 't1',
+  };
 
   it('claims once past the threshold', () => {
     expect(shouldClaimNudge({ ...base, elapsedMs: 20_000 })).toEqual({
@@ -96,6 +102,23 @@ describe('claiming a nudge', () => {
     for (const elapsedMs of [60_000, 600_000, 3_600_000]) {
       expect(shouldClaimNudge({ ...base, elapsedMs, nudgesThisTurn: 5 }).claim).toBe(false);
     }
+  });
+
+  /**
+   * A nudge belongs to a tutor turn — NudgeRecord carries its id, and the
+   * backend rejects the interaction outright without one:
+   * "previous_tutor_turn_id is required for inactivity interactions"
+   * (nablix-backend/app/models/interaction.py:85).
+   *
+   * Claiming anyway posted a request that could only ever 422. Because the
+   * controller ticks on an interval it did not do that once, it did it every
+   * tick, and each rejection escaped as an uncaught promise (7 Aug, VM).
+   */
+  it('does not claim before the tutor has taken a turn', () => {
+    expect(shouldClaimNudge({ ...base, tutorTurnId: null, elapsedMs: 999_999 })).toEqual({
+      claim: false,
+      reason: 'no_tutor_turn',
+    });
   });
 
   it('a blocked gate beats an expired clock', () => {

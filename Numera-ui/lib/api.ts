@@ -79,6 +79,7 @@ export interface ApiError {
     | 'INVALID_JSON'
     | 'HTTP_ERROR'
     | 'INTERNAL_ERROR'
+    | 'JOURNEY_VERSION_CONFLICT'
     // The bearer we sent was rejected — either by this backend or by a service it
     // calls on our behalf (e.g. student_model). Observed 2026-07-26 on the first
     // CORRECT_ATTEMPT of a session: the backend posts a progress event to
@@ -119,10 +120,42 @@ export function voiceTurnFailedMessage(serverMessage?: string): string {
   if (/auth|token|unauthor|forbidden/.test(raw)) {
     return 'Your session needs to be signed in again before I can answer that. Please log in and try once more.';
   }
-  if (/timeout|timed out|unavailable|upstream/.test(raw)) {
+  // Only wording that actually says TIMEOUT gets the timeout copy.
+  //
+  // `unavailable` and `upstream` used to land here too, and that was wrong:
+  // "Tutor unavailable. Please try again." is the voice server's single
+  // catch-all (streaming_server.py:689), sent for a timeout AND for every
+  // non-200 the tutor call returns — a 409, a 500, anything. Mapping it to
+  // "my side was too slow" described a plain backend rejection as slowness,
+  // and read from a screenshot it looks like a frontend timeout, which is the
+  // one place the fault never was (7 Aug). The generic line below is what an
+  // unexplained failure gets; the real reason is in the console, from the
+  // server's own message.
+  if (/timeout|timed out/.test(raw)) {
     return 'I didn’t manage to answer that in time — my side was too slow. Say it again and I’ll have another go.';
   }
   return 'Something went wrong on my side and I couldn’t answer that. Say it again in a moment and I’ll try again.';
+}
+
+/**
+ * Is this failure "the session you are using no longer exists"?
+ *
+ * Backend session state is in-memory and dies with the process, so a session id
+ * that was perfectly good five minutes ago can start answering 404. That is the
+ * price of persisting the id across reloads — and persisting it is worth paying
+ * for, because NOT persisting it meant every reload opened a brand-new session
+ * on a topic the student already had in progress. The Student Model then
+ * resumed it and stamped routing_reason_code=SESSION_RESUMED, which the backend
+ * cannot serialise, so every turn in that session 500s (7 Aug: 164 session
+ * starts, 16 resumed).
+ *
+ * So: keep the id, and recognise when it has gone stale so the lesson can open
+ * a fresh one instead of wedging on a session the backend has forgotten.
+ */
+export function isStaleSessionError(err: unknown): boolean {
+  const res = (err as { response?: { status?: number; data?: { message?: string } } })?.response;
+  if (res?.status !== 404) return false;
+  return /session/i.test(res?.data?.message ?? '');
 }
 
 export function studentFacingError(err: unknown): string | null {
@@ -132,6 +165,10 @@ export function studentFacingError(err: unknown): string | null {
   // (backend ask #3), so say what is actually true rather than blaming the
   // network and sending the student off retrying forever.
   const backendMessage = typeof res?.data?.message === 'string' ? res.data.message.trim() : '';
+  const code = res?.data?.error_code;
+  if (code === 'JOURNEY_VERSION_CONFLICT') {
+    return 'Two submissions arrived together. Your work is safe—please press Check once more.';
+  }
   if (res?.status === 409) {
     // Not every 409 is the resume case. On 2026-07-29 a guided-practice turn
     // came back 409 "Student Model did not return metadata for
@@ -143,7 +180,6 @@ export function studentFacingError(err: unknown): string | null {
     }
     return `The tutor couldn\u2019t load this question. ${backendMessage}`;
   }
-  const code = res?.data?.error_code;
   switch (code) {
     case 'AUTHENTICATION_FAILED':
       return 'Your session needs to be signed in again before I can mark that. Please log in and retry.';
@@ -367,6 +403,8 @@ export interface SessionRecord {
   question_type?: QuestionType | null;
   question_id: string | null;
   question_number: number;
+  last_tutor_turn_id?: string | null;
+  expected_student_response?: string;
   student_model_event?: StudentModelEvent | null;
   student_model_state?: StudentModelState | null;
   voice_state: VoiceState;

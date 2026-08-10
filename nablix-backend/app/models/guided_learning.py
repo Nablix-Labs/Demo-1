@@ -5,19 +5,10 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 
 GuidedStudentState = Literal["CORRECT", "PARTIAL", "WRONG", "STUCK", "UNCLEAR"]
-EvaluationReasonCode = Literal[
-    "ALL_REQUIRED_COMPONENTS_CONFIRMED",
-    "REQUIRED_COMPONENTS_MISSING",
-    "RESPONSE_INCORRECT",
-    "STUDENT_STUCK",
-    "RESPONSE_UNCLEAR",
-    "EXPLAIN_AGAIN_REEXPRESSION",
-]
-WrongSupportReasonCode = Literal[
-    "WRONG_1_HINT",
-    "WRONG_2_HINT",
-    "WRONG_3_VISUAL_CUE",
-    "WRONG_4_INTERVENTION",
+ComponentEvidenceStatus = Literal[
+    "DEMONSTRATED",
+    "CONTRADICTED",
+    "NOT_DEMONSTRATED",
 ]
 GuidedRoutingReasonCode = Literal[
     "GUIDED_IN_PROGRESS",
@@ -36,6 +27,7 @@ class EvaluationReasonCode(str, Enum):
     RESPONSE_INCORRECT = "RESPONSE_INCORRECT"
     STUDENT_STUCK = "STUDENT_STUCK"
     RESPONSE_UNCLEAR = "RESPONSE_UNCLEAR"
+    EXPLAIN_AGAIN_REEXPRESSION = "EXPLAIN_AGAIN_REEXPRESSION"
 
 
 class WrongEscalationCode(str, Enum):
@@ -117,6 +109,13 @@ class GuidedEvaluation(GuidedLearningModel):
     next_objective: ActiveTeachingObjective | None
     tutor_message: str = Field(min_length=1)
     tutor_message_voice: str = Field(min_length=1)
+
+
+class FocusedComponentEvidence(GuidedLearningModel):
+    component_id: str = Field(min_length=1)
+    status: ComponentEvidenceStatus
+    evidence: str | None
+    confidence: float = Field(ge=0.0, le=1.0)
 
 
 class ScaffoldEvaluationContext(GuidedLearningModel):
