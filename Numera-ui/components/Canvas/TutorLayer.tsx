@@ -21,9 +21,11 @@
  * Konva here.
  */
 
-import { Layer, Text, Line, Arrow, Rect, Ellipse } from 'react-konva';
+import { useEffect, useState } from 'react';
+import { Layer, Text, Line, Arrow, Rect, Ellipse, Group } from 'react-konva';
 import { useNumeraStore, type TutorElement } from '@/store/useNumeraStore';
 import { useTutorReveal } from '@/store/useTutorReveal';
+import { measureTutorText, clearTutorTextCache, tutorFontFamily } from '@/lib/tutorTip';
 
 const INK = '#1B2A4A'; // focus-navy — readable AI-tutor ink default
 
@@ -36,6 +38,20 @@ function ellipsePerimeter(rx: number, ry: number): number {
 export default function TutorLayer({ width, height }: { width: number; height: number }) {
   const tutorElements = useNumeraStore((s) => s.tutorElements);
   const progress = useTutorReveal((s) => s.progress);
+
+  // Konva paints to a bitmap, so it will happily render a mark in the fallback
+  // face and never repaint when the real one arrives. Wait for the webfont,
+  // bin the widths measured against the fallback, and draw once more.
+  const [, setFontTick] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    document.fonts?.ready.then(() => {
+      if (!alive) return;
+      clearTutorTextCache();
+      setFontTick((n) => n + 1);
+    });
+    return () => { alive = false; };
+  }, []);
 
   // Map normalised pairs → pixel pairs
   const px = (pts: number[]) => pts.map((v, i) => (i % 2 === 0 ? v * width : v * height));
@@ -52,21 +68,33 @@ export default function TutorLayer({ width, height }: { width: number; height: n
       case 'text': {
         const content = el.text ?? '';
         const fontSize = el.size ?? 14;
-        // Type the text out left→right from the anchor (see the `x` note in the
-        // file header): no offsetX, so the mark occupies [x, x+width] and can't
-        // creep leftward into a mark that was placed before it.
-        const shown = content.slice(0, Math.round(content.length * p));
+        const left = (el.x ?? 0.5) * width;
+        const top = (el.y ?? 0.5) * height;
+        // Wipe the ink in continuously rather than revealing whole characters.
+        // Slicing the string made letters pop in one at a time, which reads as
+        // typing; clipping by measured width lets each letter appear under the
+        // nib as it is written. (See the `x` note in the file header: no
+        // offsetX, so the mark occupies [x, x+width].)
+        const inked = measureTutorText(content, fontSize) * p;
+        if (inked <= 0) return null;
         return (
-          <Text
+          <Group
             key={el.id}
-            x={(el.x ?? 0.5) * width}
-            y={(el.y ?? 0.5) * height}
-            text={shown}
-            fontSize={fontSize}
-            fontFamily={'Helvetica, Arial, sans-serif'}
-            fill={color}
-            offsetY={fontSize / 2}
-          />
+            clipX={left}
+            clipY={top - fontSize * 1.1}
+            clipWidth={inked}
+            clipHeight={fontSize * 2.2}
+          >
+            <Text
+              x={left}
+              y={top}
+              text={content}
+              fontSize={fontSize}
+              fontFamily={tutorFontFamily()}
+              fill={color}
+              offsetY={fontSize / 2}
+            />
+          </Group>
         );
       }
       case 'line':

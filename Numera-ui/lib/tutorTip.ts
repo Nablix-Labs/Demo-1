@@ -23,10 +23,35 @@ export type Point = { x: number; y: number };
  */
 let measureCtx: CanvasRenderingContext2D | null = null;
 const widthCache = new Map<string, number>();
+let familyCache: string | null = null;
 
-function measureText(text: string, fontSize: number): number {
+/**
+ * The resolved handwriting family, read from the CSS variable next/font sets.
+ * Canvas needs a real family name - ctx.font cannot parse `var()` - and reading
+ * it here keeps this module free of the next/font build-time transform.
+ */
+export function tutorFontFamily(): string {
+  if (familyCache) return familyCache;
+  if (typeof document === 'undefined') return 'cursive';
+  const el = document.body ?? document.documentElement;
+  const v = getComputedStyle(el).getPropertyValue('--font-tutor-hand').trim();
+  familyCache = v || 'cursive';
+  return familyCache;
+}
+
+/**
+ * Widths measured before the webfont loads are the fallback's, not Caveat's, so
+ * they have to be thrown away once the real face arrives - otherwise the pen
+ * spends the rest of the session offset from its own ink.
+ */
+export function clearTutorTextCache(): void {
+  widthCache.clear();
+  familyCache = null;
+}
+
+export function measureTutorText(text: string, fontSize: number): number {
   if (typeof document === 'undefined') return 0;
-  const font = `${fontSize}px Helvetica, Arial, sans-serif`;
+  const font = `${fontSize}px ${tutorFontFamily()}`;
   const key = `${font}|${text}`;
   const hit = widthCache.get(key);
   if (hit !== undefined) return hit;
@@ -77,9 +102,11 @@ export function tipFor(
     case 'text': {
       const content = el.text ?? '';
       const fontSize = el.size ?? 14;
-      const shown = content.slice(0, Math.round(content.length * clamped));
+      // Advance by measured width, not by whole characters: the ink is wiped in
+      // continuously, so the nib has to move continuously with it.
+      const full = measureTutorText(content, fontSize);
       return {
-        x: (el.x ?? 0.5) * width + measureText(shown, fontSize),
+        x: (el.x ?? 0.5) * width + full * clamped,
         y: (el.y ?? 0.5) * height,
       };
     }
