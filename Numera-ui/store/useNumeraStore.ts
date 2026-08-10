@@ -25,10 +25,10 @@ import type { SupportRung } from '@/lib/supportLadder';
 import { EMPTY_APPLIED, type AppliedState } from '@/lib/responseGate';
 import type { InactivityPolicy } from '@/lib/inactivity';
 
-// Sequential, human-readable student turn ids (voice contract §3): TURN-0001, …
-// One per LISTENING turn; kept sequential (not uuid) so logs read cleanly.
-let turnCounter = 0;
-const nextTurnId = () => `TURN-${String(++turnCounter).padStart(4, '0')}`;
+// A turn id is an idempotency key, so it must remain unique across reloads and
+// reconnects. A module-local counter restarted at TURN-0001 after refresh and
+// collided with the backend's cached turns from the same session.
+const nextTurnId = (): string => `TURN-${uid()}`;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

@@ -42,6 +42,7 @@ import {
   LADDER_EXHAUSTED,
   type SupportRung,
 } from '@/lib/supportLadder';
+import type { NudgeClaimResult } from '@/hooks/useInactivityNudge';
 
 const apiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
@@ -581,9 +582,11 @@ export function useDemoTutor() {
 
   const claimInactivityNudge = useCallback(async (
     idleDurationMs: number,
-  ): Promise<NudgeDelivery | null> => {
+  ): Promise<NudgeClaimResult> => {
     const state = useNumeraStore.getState();
-    if (!apiEnabled() || !sessionId || !state.activeQuestionId) return null;
+    if (!apiEnabled() || !sessionId || !state.activeQuestionId) {
+      return { status: 'SUPPRESSED' };
+    }
     const turnId = nextSystemTurnId('NUDGE');
     const res = await sendInteraction({
       session_id: sessionId,
@@ -598,8 +601,26 @@ export function useDemoTutor() {
       question_id: state.activeQuestionId,
       hint_count: state.lastHintText ? 1 : 0,
     });
-    if (res.status === 'NUDGE_SUPPRESSED' || !res.nudge_delivery) return null;
-    return res.nudge_delivery;
+    if (res.status === 'STALE_TURN') {
+      useNumeraStore.getState().setTutorTurn(res.expected_previous_tutor_turn_id ?? null, {
+        expects: true,
+        allow: state.allowVoiceInput,
+      });
+      return { status: 'OUT_OF_SYNC' };
+    }
+    if (res.status === 'DUPLICATE_TURN') {
+      if (res.tutor_turn_id !== undefined) {
+        useNumeraStore.getState().setTutorTurn(res.tutor_turn_id, {
+          expects: res.expects_student_response ?? true,
+          allow: res.allow_voice_input ?? state.allowVoiceInput,
+        });
+      }
+      return { status: 'OUT_OF_SYNC' };
+    }
+    if (res.status === 'NUDGE_SUPPRESSED' || !res.nudge_delivery) {
+      return { status: 'SUPPRESSED' };
+    }
+    return { status: 'DELIVERED', delivery: res.nudge_delivery };
   }, [sessionId]);
 
   /**
