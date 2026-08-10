@@ -8,6 +8,7 @@ from app.ai_engine.schemas import (
     ExplainAgainRequest,
     ExplainAgainSupportState,
     ExplainAgainVisualCue,
+    OpenAIExplainAgainMessage,
 )
 from app.core.exceptions import AdapterError
 from app.models.guided_learning import (
@@ -136,6 +137,12 @@ def test_generate_explain_again_uses_strict_state_preserving_contract(
     assert user_payload["first_unresolved_concept_id"] == "PRODUCT_MEANING"
     assert user_payload["active_scaffold"]["current_step_id"] == "S-1-STEP-1"
     assert user_payload["support_state"]["active_support_level"] == "SCAFFOLD"
+
+
+def test_explain_again_message_schema_requires_answer_reveal_risk() -> None:
+    schema = OpenAIExplainAgainMessage.model_json_schema()
+
+    assert "answer_reveal_risk" in schema["required"]
 
 
 def test_generate_explain_again_rejects_state_changing_output(
