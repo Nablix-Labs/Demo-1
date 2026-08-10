@@ -31,7 +31,7 @@ function PanelMenu() {
     await exportNotesPDF({
       questionNumber: s.questionNumber,
       questionText: s.questionText,
-      canvasPng: s.canvasExporter?.() ?? null,
+      canvasPng: s.canvasExporter?.()?.snapshotDataUrl ?? null,
       transcript: s.transcript,
     });
   };

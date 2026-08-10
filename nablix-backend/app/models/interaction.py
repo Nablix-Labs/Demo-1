@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -6,8 +7,11 @@ from app.models.adapters import (
     ConversationAction,
     ConversationMessage,
     ExpectedStudentResponse,
+    TutorResult,
     VisualCue,
+    VisionOCRResult,
 )
+from app.models.canvas import CanvasDrawPayload, CanvasLatency, CanvasStroke
 from app.models.fields import (
     BoundedText,
     ConceptId,
@@ -17,6 +21,7 @@ from app.models.fields import (
     Phase,
     QuestionId,
     SessionId,
+    SnapshotDataUrl,
     StudentId,
     TurnId,
 )
@@ -45,6 +50,14 @@ from app.models.student_model_session import (
 )
 
 
+class InteractionCanvasState(BaseModel):
+    """Frozen canvas evidence paired with a completed voice turn."""
+
+    snapshot_data_url: SnapshotDataUrl
+    strokes: list[CanvasStroke] = Field(default_factory=list)
+    captured_at: datetime
+
+
 class InteractionRequest(BaseModel):
     """Validated student interaction sent during an active tutoring session."""
 
@@ -59,6 +72,7 @@ class InteractionRequest(BaseModel):
     previous_tutor_turn_id: TurnId | None = None
     transcript_final: bool | None = None
     canvas_snapshot_id: str | None = None
+    canvas_state: InteractionCanvasState | None = None
     current_phase: Phase
     concept_id: ConceptId
     question_id: QuestionId
@@ -95,10 +109,12 @@ class InteractionResponse(BaseModel):
 
     session_id: str
     student_id: str
+    submission_id: str | None = None
     status: Literal[
         "DUPLICATE_TURN",
         "CLARIFICATION_REQUIRED",
         "NUDGE_SUPPRESSED",
+        "processed",
     ] | None = None
     accepted_turn_id: TurnId | None = None
     interaction_state_version: int = Field(default=0, ge=0)
@@ -163,6 +179,14 @@ class InteractionResponse(BaseModel):
     prerequisite_repair: PrerequisiteRepair | None = None
     inactivity_policy: InactivityPolicy | None = None
     nudge_delivery: NudgeDeliveryRecord | None = None
+    canvas_draw: list[CanvasDrawPayload] = Field(default_factory=list)
+    ocr: VisionOCRResult | None = None
+    latency: CanvasLatency | None = None
+    snapshot_reference: str | None = None
+    tutor: TutorResult | None = None
+    is_canvas_solution_correct: bool | None = None
+    advance_to_next_question: bool = False
+    feedback_type: Literal["PRAISE", "HINT", "CORRECTION", "CLARIFICATION"] | None = None
 
 
 class StaleTurnResponse(BaseModel):

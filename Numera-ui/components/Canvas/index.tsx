@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
-import { useNumeraStore } from '@/store/useNumeraStore';
+import { useNumeraStore, type CanvasExporter } from '@/store/useNumeraStore';
 import { useAuthStore, isConsentActive } from '@/store/useAuthStore';
 import type { SchemaQuestionOption } from '@/lib/api';
 import { useDemoTutor } from '@/hooks/useDemoTutor';
@@ -85,13 +85,13 @@ export default function CanvasStage() {
     if (!explainAgainPending) void explainAgain();
   }, [explainAgain, explainAgainPending]);
 
-  const exportRef = useRef<(() => string | null) | null>(null);
+  const exportRef = useRef<CanvasExporter | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [gridOpen, setGridOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const handleExportReady = useCallback((fn: () => string | null) => {
+  const handleExportReady = useCallback((fn: CanvasExporter) => {
     exportRef.current = fn;
     setCanvasExporter(fn); // expose to the panel menu for "Save as PDF"
   }, [setCanvasExporter]);
@@ -111,8 +111,8 @@ export default function CanvasStage() {
       showToast('Canvas processing is not available until the required consent is completed.');
       return;
     }
-    const png = exportRef.current?.();
-    if (!png || items.length === 0) {
+    const canvasSnapshot = exportRef.current?.();
+    if (!canvasSnapshot || items.length === 0) {
       showToast('Show your working on the canvas first, then tap Check.');
       return;
     }

@@ -470,8 +470,8 @@ export function useDemoTutor() {
   /** Export the current canvas and submit it for live OCR + tutor feedback. */
   const submitCanvasWork = useCallback(async (): Promise<CanvasSubmissionResult | null> => {
     if (!apiEnabled() || !sessionId) return null;
-    const png = hasCanvasActivity() ? canvasExporter?.() : null;
-    if (!png) {
+    const canvasSnapshot = hasCanvasActivity() ? canvasExporter?.() : null;
+    if (!canvasSnapshot) {
       const message = 'Write or draw something on the canvas first, then I can check it with you.';
       addTranscriptMessage({ role: 'ai', text: message });
       addTrailEntry({ kind: 'tutor', text: message });
@@ -480,7 +480,7 @@ export function useDemoTutor() {
     if (canvasSubmissionInFlight.current) return null;
     canvasSubmissionInFlight.current = true;
     try {
-      const res = await submitCanvas(sessionId, png, 'STANDALONE_ATTEMPT');
+      const res = await submitCanvas(sessionId, canvasSnapshot.snapshotDataUrl, 'STANDALONE_ATTEMPT');
       // Canvas responses now carry the same phase state as /interaction, so a
       // backend phase change here also drives usePhaseRouting.
       const entering = phaseAnnouncement(res, useNumeraStore.getState().currentPhase);
@@ -770,8 +770,8 @@ export function useDemoTutor() {
   }, [addTranscriptMessage, addTrailEntry]);
 
   /**
-   * Fire one completed voice turn to the backend: snapshot the canvas, then send
-   * the transcript + canvas reference through /interaction, and speak the reply.
+   * Fire one completed voice turn to the backend with one frozen canvas payload,
+   * then speak the reply.
    * This is the function the turn-end detector calls when the student stops.
    */
   const submitVoiceTurn = useCallback(
@@ -791,6 +791,13 @@ export function useDemoTutor() {
         console.warn('[voice] turn ignored — no question is active in this phase');
         return null;
       }
+      const canvasSnapshot = canvasExporter?.();
+      if (!canvasSnapshot) {
+        const message = 'I could not capture the board for this voice turn. Please try again.';
+        addTranscriptMessage({ role: 'ai', text: message });
+        addTrailEntry({ kind: 'tutor', text: message });
+        return null;
+      }
       const myTurn = ++voiceTurnSeq; // claim this turn; later turns supersede it
       // Enter PROCESSING: the mic closes (half-duplex), duplicate submits are blocked.
       useNumeraStore.getState().setVoiceStatus('processing');
@@ -806,39 +813,6 @@ export function useDemoTutor() {
       console.groupCollapsed(`%c[voice→backend] turn fired`, 'color:#7a5cc8;font-weight:bold');
       console.log('captured transcript:', transcript, confidence != null ? `(confidence ${confidence})` : '');
 
-      // Snapshot the canvas alongside the spoken turn — only if the student
-      // actually drew something (don't send blank canvases to the backend/OCR).
-      let canvasSnapshotId: string | undefined;
-      const png = hasCanvasActivity() ? canvasExporter?.() : null;
-      if (png && !canvasSubmissionInFlight.current) {
-        canvasSubmissionInFlight.current = true;
-        try {
-          console.log('→ POST /canvas/submit', { session_id: sessionId, student_id: studentId(), snapshot_bytes: png.length });
-          const canvasRes = await submitCanvas(sessionId, png, 'VOICE_ATTACHMENT');
-          canvasSnapshotId = canvasRes.submission_id;
-          console.log('← /canvas/submit', { submission_id: canvasRes.submission_id, ocr: canvasRes.ocr, tutor: canvasRes.tutor });
-          if (canvasRes.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(canvasRes.canvas_draw);
-          addTrailEntry({
-            kind: 'canvas',
-            text: canvasRes.ocr.raw_ocr_text || canvasRes.ocr.detected_equation || 'Canvas submitted.',
-            meta: `OCR ${(canvasRes.ocr.confidence * 100).toFixed(0)}%`,
-          });
-        } catch (err) {
-          console.warn('✗ /canvas/submit failed:', err);
-          // Canvas is optional for a voice turn, but grading proceeds as if the
-          // page were blank — the student deserves to know their written work
-          // wasn't seen rather than wonder why the tutor ignored it.
-          addTranscriptMessage({
-            role: 'ai',
-            text: 'I couldn’t see your canvas work just now, so I’m going by what you said.',
-          });
-        } finally {
-          canvasSubmissionInFlight.current = false;
-        }
-      } else {
-        console.log('(no canvas content this turn)');
-      }
-
       try {
         const state = useNumeraStore.getState();
         const interactionReq = {
@@ -848,7 +822,11 @@ export function useDemoTutor() {
           input_source: 'VOICE' as const,
           voice_transcript: transcript,
           transcript_confidence: confidence,
-          canvas_snapshot_id: canvasSnapshotId,
+          canvas_state: {
+            snapshot_data_url: canvasSnapshot.snapshotDataUrl,
+            strokes: canvasSnapshot.strokes,
+            captured_at: canvasSnapshot.capturedAt,
+          },
           current_phase: state.currentPhase,
           concept_id: ctx.concept_id,
           question_id: questionId,
@@ -908,6 +886,13 @@ export function useDemoTutor() {
         }
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message });
+        if (res.ocr) {
+          addTrailEntry({
+            kind: 'canvas',
+            text: res.ocr.raw_ocr_text || res.ocr.detected_equation || 'Canvas submitted.',
+            meta: `OCR ${(res.ocr.confidence * 100).toFixed(0)}%`,
+          });
+        }
         if (res.current_phase) useNumeraStore.getState().setCurrentPhase(res.current_phase); // advance phase
         if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
         const spoken = withTransitionVoice(entering, applyInteractionSupport(res));

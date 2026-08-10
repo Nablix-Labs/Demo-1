@@ -30,6 +30,7 @@ from app.models.session import (
     SessionSummary,
     VoiceState,
 )
+from app.models.session_review import SessionReviewResponse
 from app.models.student_model_session import (
     DiagnosticResult,
     DiagnosticCompletedEvent,
@@ -64,6 +65,7 @@ from app.services.student_model_session import (
 _sessions: dict[str, SessionRecord] = {}
 _interaction_locks: dict[str, asyncio.Lock] = {}
 _last_interaction_responses: dict[tuple[str, str], InteractionResponse] = {}
+_interaction_payload_fingerprints: dict[tuple[str, str], str] = {}
 _nudge_deliveries: dict[tuple[str, str], NudgeDeliveryRecord] = {}
 
 _NUDGE_STATUS_TRANSITIONS: dict[NudgeDeliveryStatus, set[NudgeDeliveryStatus]] = {
@@ -121,8 +123,14 @@ def cache_interaction_response(
     session_id: str,
     turn_id: str,
     response: InteractionResponse,
+    payload_fingerprint: str,
 ) -> None:
     _last_interaction_responses[(session_id, turn_id)] = response
+    _interaction_payload_fingerprints[(session_id, turn_id)] = payload_fingerprint
+
+
+def interaction_payload_fingerprint_for(session_id: str, turn_id: str) -> str | None:
+    return _interaction_payload_fingerprints.get((session_id, turn_id))
 
 
 def inactivity_policy() -> InactivityPolicy:
@@ -347,7 +355,9 @@ async def start_session(
         interaction_mode=request.interaction_mode,
         ui_state=phase,
         message=(
-            _diagnostic_start_message()
+            "Session Review — practice questions complete."
+            if phase == "REVIEW"
+            else _diagnostic_start_message()
             if phase == "DIAGNOSTIC"
             else guided_question_opening(
                 current_question,
@@ -648,17 +658,6 @@ def _apply_schema_event(
             status_code=503,
             detail="Student Model returned no phase payload for the active phase.",
         )
-    next_phase = PHASE_FROM_STUDENT_MODEL[payload.phase]
-    transition = resolve_transition(session.current_phase, next_phase)
-    if next_phase != session.current_phase and transition is None:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Student Model returned an invalid phase transition "
-                f"{session.current_phase} -> {next_phase}."
-            ),
-        )
-
     has_questions = (
         payload.question_set is not None and bool(payload.question_set.questions)
     )
@@ -668,11 +667,34 @@ def _apply_schema_event(
         "SCAFFOLD",
         "RESCUE_AND_FRESH_QUESTION",
     } and not has_questions:
+        if payload.phase == "PHASE_3_INDEPENDENT_PRACTICE":
+            logger.warning(
+                "Phase 3 content exhausted — no questions in payload. "
+                "Auto-transitioning session to REVIEW phase."
+            )
+            payload = StudentModelPhasePayload(
+                phase="REVIEW",
+                payload_type="REVIEW_SUMMARY",
+                review_summary=_build_content_exhausted_review_summary(event),
+            )
+            event = event.model_copy(update={"phase_payload": payload})
+        else:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Student Model returned no active question for "
+                    f"{payload.phase}."
+                ),
+            )
+
+    next_phase = PHASE_FROM_STUDENT_MODEL[payload.phase]
+    transition = resolve_transition(session.current_phase, next_phase)
+    if next_phase != session.current_phase and transition is None:
         raise HTTPException(
-            status_code=503,
+            status_code=409,
             detail=(
-                "Student Model returned no active question for "
-                f"{payload.phase}."
+                "Student Model returned an invalid phase transition "
+                f"{session.current_phase} -> {next_phase}."
             ),
         )
 
@@ -1170,6 +1192,7 @@ def assemble_session_summary(session: SessionRecord, ended_at: datetime) -> Sess
         ),
         None,
     )
+
     correct_attempts: int = sum(
         attempt.evaluation == "CORRECT" for attempt in session.per_question_history
     )
@@ -1200,6 +1223,31 @@ def assemble_session_summary(session: SessionRecord, ended_at: datetime) -> Sess
         phase_transitions=session.phase_transitions,
         recommended_entry_phase=session.recommended_entry_phase,
         conversation_history=session.conversation_history,
+    )
+
+
+def _empty_session_review() -> SessionReviewResponse:
+    """Return the safe review contract for a session with no attempts."""
+
+    return SessionReviewResponse(
+        five_category_summary={
+            "category_1_strength": "No questions were attempted in this session.",
+            "category_2_first_error": None,
+            "category_3_pattern": None,
+            "category_4_next_practice": "Start a new practice session when ready.",
+            "category_5_mastery": "There is not enough attempt evidence to assess mastery.",
+        },
+        student_facing_summary="This session ended without any recorded attempts.",
+        b6_hook=None,
+        call_to_action="NONE",
+        voice_delivery_order=[
+            "category_1_strength",
+            "category_4_next_practice",
+            "category_5_mastery",
+            "student_facing_summary",
+        ],
+        answer_reveal_allowed=False,
+        guardrail_passed=True,
     )
 
 
@@ -1342,8 +1390,8 @@ def build_session_review_request(session: SessionRecord) -> "SessionReviewReques
 async def end_session(request: SessionEndRequest) -> SessionRecord:
     """Generate the engine review, then mark a stored mock session as ended.
 
-    Review generation runs first: if it fails (or the session has no graded
-    attempts), the caller gets an explicit error and the session stays active.
+    Review generation runs first; empty-attempt REVIEW sessions use the
+    deterministic zero-attempt review contract.
     """
 
     # Imported here: ai_engine.session_review imports this module for answers.
@@ -1355,13 +1403,12 @@ async def end_session(request: SessionEndRequest) -> SessionRecord:
     )
 
     session: SessionRecord = _get_owned_session(request.session_id, request.student_id)
-    if len(session.per_question_history) == 0:
-        raise HTTPException(
-            status_code=409,
-            detail="Cannot end the session yet: no graded attempts to review.",
-        )
     try:
-        review = generate_session_review(build_session_review_request(session))
+        review = (
+            _empty_session_review()
+            if not session.per_question_history
+            else generate_session_review(build_session_review_request(session))
+        )
     except (SessionReviewValidationError, ValidationError, RuntimeError) as error:
         raise HTTPException(
             status_code=502,

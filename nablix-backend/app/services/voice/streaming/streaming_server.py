@@ -45,7 +45,7 @@ logger = logging.getLogger("streaming")
 
 DEEPGRAM_WS_URL = "wss://api.deepgram.com/v1/listen"
 DEEPGRAM_API_KEY = voice_config.DEEPGRAM_API_KEY
-MAIN_BACKEND_URL = os.getenv("NABLIX_MAIN_BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
+MAIN_BACKEND_URL = os.getenv("NABLIX_MAIN_BACKEND_URL", "http://127.0.0.1:8001").rstrip("/")
 
 # Math-domain keyterms for Deepgram Nova-3 keyterm prompting.
 # These help the STT model recognize math vocabulary that it

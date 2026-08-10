@@ -63,6 +63,21 @@ export type DrawnItem =
   | { id: string; kind: 'ellipse'; x: number; y: number; w: number; h: number; color: string; size: number }
   | { id: string; kind: 'triangle'; points: number[]; color: string; size: number };
 
+export interface CanvasStrokeSnapshot {
+  stroke_id: string;
+  tool: 'pen' | 'pencil' | 'highlighter' | 'eraser';
+  points: Array<{ x: number; y: number }>;
+  width: number;
+}
+
+export interface CanvasSnapshot {
+  snapshotDataUrl: string;
+  strokes: CanvasStrokeSnapshot[];
+  capturedAt: string;
+}
+
+export type CanvasExporter = () => CanvasSnapshot | null;
+
 /**
  * Tutor-drawn element, rendered on a separate (non-erasable) canvas layer.
  * Geometry is NORMALISED 0–1 relative to canvas width/height, so the backend
@@ -312,7 +327,7 @@ export interface NumeraState {
   ttsVoice: string | null;
 
   // Runtime: canvas PNG exporter, registered by the canvas for PDF notes
-  canvasExporter: (() => string | null) | null;
+  canvasExporter: CanvasExporter | null;
 
   // Group / live session (collaboration)
   sessionMode: 'solo' | 'group';
@@ -428,7 +443,7 @@ export interface NumeraState {
   setMicButtonPos: (pos: { x: number; y: number } | null) => void;
   setCanvasGrid: (g: CanvasGrid) => void;
   setTtsVoice: (provider: string | null, voice: string | null) => void;
-  setCanvasExporter: (fn: (() => string | null) | null) => void;
+  setCanvasExporter: (fn: CanvasExporter | null) => void;
   startGroupSession: () => void;
   endGroupSession: () => void;
   upsertParticipant: (p: Participant) => void;

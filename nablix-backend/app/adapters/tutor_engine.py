@@ -58,7 +58,10 @@ def _coerce_hint_level(value: int | None) -> HintLevel | None:
 
 
 def _coerce_canvas_regions(regions: list[OCRTextRegion]) -> list[CanvasTextRegion]:
-    return [CanvasTextRegion(**region.model_dump()) for region in regions]
+    return [
+        CanvasTextRegion(**region.model_dump(exclude={"mathml"}))
+        for region in regions
+    ]
 
 
 class TutorEngineServiceAdapter:
@@ -112,6 +115,11 @@ class TutorEngineServiceAdapter:
                     max_hint_results=3,
                     exclude_content_ids=[],
                     canvas_regions=_coerce_canvas_regions(context.canvas_regions),
+                    canvas_mathml_blocks=context.canvas_mathml_blocks,
+                    has_canvas_evidence=context.has_canvas_evidence,
+                    canvas_solution_complete_candidate=(
+                        context.canvas_solution_complete_candidate
+                    ),
                     conversation_history=context.conversation_history,
                     conversation_state=context.conversation_state,
                     generated_question_rubric=context.generated_question_rubric,

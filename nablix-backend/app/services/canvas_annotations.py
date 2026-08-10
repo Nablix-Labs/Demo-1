@@ -42,11 +42,16 @@ def plan_canvas_draw(
 
     # Priority 1: Resolution via specific spatial token bounding box union
     target_box: Box | None = None
-    if spatial_tokens and classification.target_token_ids:
+    if classification.target_token_ids:
         matching_tokens = [
-            tok for tok in spatial_tokens if tok.token_id in classification.target_token_ids
+            tok
+            for tok in spatial_tokens or []
+            if tok.token_id in classification.target_token_ids
         ]
-        if matching_tokens:
+        if (
+            len(matching_tokens) == len(classification.target_token_ids)
+            and all(token.alignment_confidence >= 0.9 for token in matching_tokens)
+        ):
             boxes = [tok.bounding_box for tok in matching_tokens if tok.bounding_box]
             if boxes:
                 min_x = min(b.get("x", target_region.x) for b in boxes)
@@ -54,6 +59,9 @@ def plan_canvas_draw(
                 max_x = max(b.get("x", target_region.x) + b.get("width", target_region.w) for b in boxes)
                 max_y = max(b.get("y", target_region.y) + b.get("height", target_region.h) for b in boxes)
                 target_box = (min_x, min_y, max(0.01, max_x - min_x), max(0.01, max_y - min_y))
+
+        if target_box is None:
+            return []
 
     if target_box is None:
         target_box = _line_box(target_region)
