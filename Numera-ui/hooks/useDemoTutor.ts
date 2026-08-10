@@ -369,6 +369,12 @@ export async function beginSession(
       if (rec.current_question) s.addTrailEntry({ kind: 'question', text: rec.current_question });
       return rec;
     } catch (err) {
+      // A failed start is the most consequential failure in the app — nothing
+      // else works after it — and until now it left one trail entry the student
+      // never sees. The 401 here is the anon-bearer wall: the tutor backend
+      // accepts the placeholder, then forwards SESSION_OPENED to student_model,
+      // which validates it properly and rejects (INVALID_TOKEN).
+      reportFailure('/session/start', err, { concept_id: conceptId, mode });
       // Latch the failure so a remount loop can't hammer the endpoint.
       failedConcept = conceptId;
       lastStartError = studentFacingError(err);

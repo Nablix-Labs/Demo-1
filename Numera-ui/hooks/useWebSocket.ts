@@ -32,6 +32,7 @@ import { applyInteractionSupport, acceptResponse, type SupportPresentation } fro
 import { TurnWatchdog } from '@/lib/turnWatchdog';
 import { SpeechSettleTimer } from '@/lib/speechSettle';
 import { turnContextFrame } from '@/lib/voiceTurnContext';
+import { reportFailure } from '@/lib/failureReport';
 
 
 /**
@@ -413,9 +414,21 @@ export function useWebSocket(sessionId: string | null) {
             // announced on chat and swallowed here.
             watchdogRef.current?.noteTurnResolved();
             processingTimerRef.current?.cancel();
-            // Engineer-facing text stays in the console — it is the backend's
-            // own reason and the fastest way to find which service failed.
-            console.error('[WS] server error:', msg.message);
+            // Engineer-facing detail stays in the console — it is the backend's
+            // own reason and the fastest way to find which service failed. The
+            // full report matches what the REST path writes, because until now
+            // this transport logged one line and the same backend fault kept
+            // being filed as "voice is broken" rather than as itself.
+            reportFailure(
+              'voice socket',
+              { config: { method: 'WS', url: '/voice/stream' }, message: msg.message },
+              {
+                session_id: useNumeraStore.getState().sessionId,
+                question_id: useNumeraStore.getState().activeQuestionId,
+                phase: useNumeraStore.getState().currentPhase,
+                frame: msg,
+              },
+            );
             // A session the backend has forgotten (restart — its sessions are
             // in-memory) fails EVERY turn from here on; the REST path recovers
             // by dropping the dead session and starting fresh, but the socket
@@ -431,6 +444,10 @@ export function useWebSocket(sessionId: string | null) {
               role: 'ai',
               text: voiceTurnFailedMessage(msg.message as string | undefined),
             });
+            // Same as the REST path: the tutor owes them a reply, so the idle
+            // clock must not read the silence that follows as being stuck and
+            // ask what they would try first. This transport had the same hole.
+            useNumeraStore.getState().markTutorTurnFailed();
             // The copy tells the student to say it again, so put them back in a
             // state where they can. Without this the panel could sit in
             // PROCESSING for a turn that already failed, with the mic shut.

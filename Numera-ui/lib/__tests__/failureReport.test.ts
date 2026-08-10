@@ -79,6 +79,19 @@ describe('blameFor', () => {
     expect(blameFor(buildFailureReport({}))).toMatch(/^NETWORK/);
   });
 
+  it('does not call a socket error frame a network failure', () => {
+    // The frame has no HTTP status, but the server reached us specifically to
+    // say it gave up. Reading that as NETWORK is how the same backend fault
+    // kept being filed as "voice is broken" while the REST path read correctly.
+    const r = buildFailureReport({
+      config: { method: 'WS', url: '/voice/stream' },
+      message: 'Tutor unavailable. Please try again.',
+    });
+    expect(r.status).toBeNull();
+    expect(blameFor(r)).toMatch(/^BACKEND/);
+    expect(r.serverMessage).toBe('Tutor unavailable. Please try again.');
+  });
+
   it('separates a refusal from a breakage', () => {
     const r = buildFailureReport(axiosError({ response: { status: 403, data: {} } }));
     expect(blameFor(r)).toMatch(/^AUTH/);

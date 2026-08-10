@@ -95,6 +95,11 @@ export function buildFailureReport(
  * while the fault sits in a service log nobody opened.
  */
 export function blameFor(report: FailureReport): string {
+  // A socket `error` frame carries no HTTP status, but it is not a network
+  // failure — the server reached us specifically to say it gave up. Calling it
+  // NETWORK is how the same backend failure kept being reported as "voice is
+  // broken" while the identical fault on the REST path was read correctly.
+  if (report.method === 'WS') return 'BACKEND — the voice socket reported a server-side failure';
   if (report.status === null) return 'NETWORK — the request never completed';
   if (report.status >= 500) return 'BACKEND — the request arrived and the server broke on it';
   if (report.status === 429) return 'BACKEND — rate limited';
