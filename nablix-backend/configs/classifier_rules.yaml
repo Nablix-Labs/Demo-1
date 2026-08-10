@@ -189,10 +189,17 @@ intent_phrases:
   EXPRESSING_CONFUSION:
     - i don't know
     - i do not know
+    - idk
+    - i have no idea
+    - no idea
     - i do not understand
     - i don't understand
+    - what do you mean
+    - what do u mean
     - confused
     - stuck
+    - are you stupid
+    - are u stupid
   OFF_TOPIC:
     - pizza
     - play a game

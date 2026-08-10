@@ -92,6 +92,86 @@ def _guided_rubric() -> GeneratedQuestionRubric:
     )
 
 
+@pytest.mark.parametrize("student_input", ["idk", "I have no idea", "are u stupid"])
+def test_guided_confusion_bypasses_semantic_answer_evaluation(
+    monkeypatch,
+    student_input: str,
+) -> None:
+    class _NoEvaluationClient:
+        def evaluate_guided_turn(self, **kwargs):
+            raise AssertionError("confusion must not be evaluated as an answer")
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _NoEvaluationClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T02-002",
+            question_type="MULTI_PART_SHORT_RESPONSE",
+            question="In m + 7, identify the changing quantity, fixed value, and operation.",
+            correct_answer="m; 7; addition",
+            answer_spec=AnswerSpec(
+                answer_spec_id="ANS-T02-002",
+                canonical_answer="m; 7; addition",
+                accepted_answers=[],
+                verification_method="STRUCTURED_TEXT_MATCH",
+                explanation_required=True,
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            generated_question_rubric=_guided_rubric(),
+            student_input=student_input,
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.guided_student_state == "STUCK"
+    assert response.intent == "EXPRESSING_CONFUSION"
+    assert response.attempt_increment == 0
+    assert "one part at a time" in response.tutor_message
+    assert "make sure I understood" not in response.tutor_message
+
+
+def test_final_partial_wording_asks_only_the_reconciled_missing_component() -> None:
+    rules = classifier.load_classifier_rules()
+    rubric = _guided_rubric()
+    objective = ActiveTeachingObjective(
+        objective_type="ANSWER_QUESTION",
+        target_concept_ids=["EXPANDED_MEANING"],
+        confirmed_concept_ids=["OPERATION"],
+        missing_concept_ids=["EXPANDED_MEANING"],
+    )
+    evaluation = GuidedEvaluation(
+        student_state="PARTIAL",
+        newly_confirmed_concept_ids=["OPERATION"],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=["EXPANDED_MEANING"],
+        selected_error_code=None,
+        confidence=0.95,
+        next_objective=objective,
+        tutor_message="You identified the wrong component.",
+        tutor_message_voice="You identified the wrong component.",
+    )
+
+    aligned = classifier.align_guided_follow_up(
+        evaluation,
+        rubric,
+        objective,
+    )
+
+    assert aligned.tutor_message == (
+        "Good—let’s focus on the remaining part. "
+        "What do the letters represent when the expression is expanded?"
+    )
+    assert "wrong component" not in aligned.tutor_message
+
+
 def _multipart_guided_rubric() -> GeneratedQuestionRubric:
     return GeneratedQuestionRubric(
         question_id="Q-T01-006",
@@ -2447,7 +2527,8 @@ def test_guided_evaluator_retries_answer_revealing_wording(monkeypatch) -> None:
 
     assert response.guided_student_state == "PARTIAL"
     assert response.tutor_message == (
-        "You identified multiplication. What do the two letters represent?"
+        "Good—let’s focus on the remaining part. "
+        "What do the letters represent when the expression is expanded?"
     )
     assert feedback[0] is None
     assert feedback[1] is not None
@@ -2538,6 +2619,7 @@ def test_guided_answer_reveal_fallback_names_the_missing_explanation(
     assert evaluation_calls > 1
     assert response.guided_student_state == "PARTIAL"
     assert response.tutor_message == (
+        "Good—let’s focus on the remaining part. "
         "You have given the answer. Now explain why it is true in this situation."
     )
     assert response.active_teaching_objective is not None
@@ -2826,8 +2908,8 @@ def test_guided_partial_without_confirmed_concepts_becomes_safe_unclear(
     assert response.attempt_increment == 0
     assert response.question_completed is False
     assert response.tutor_message == (
-        "I want to make sure I understood that. "
-        "Please explain the part that is still unresolved."
+        "I couldn’t connect that response to the question. "
+        "What else does the question ask you to state?"
     )
 
 
@@ -3782,7 +3864,8 @@ def test_guided_exact_notation_stuck_uses_question_aware_llm_message(
 
     assert response.guided_student_state == "STUCK"
     assert response.tutor_message == (
-        "Let’s make it smaller. Which letter is repeated?"
+        "That’s okay—we’ll take it one part at a time. "
+        "What else does the question ask you to state?"
     )
     assert "x" not in response.tutor_message
     assert response.attempt_increment == 0
