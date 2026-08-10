@@ -61,6 +61,13 @@ function logFrame(direction: 'in' | 'out', msg: Record<string, unknown>): void {
   console.log(`%c[voice ${arrow}] ${type}`, `color:${colour};font-weight:bold`, msg);
 }
 
+function logBoundary(event: string, fields: Record<string, unknown>): void {
+  console.info(event, {
+    timestamp: new Date().toISOString(),
+    ...fields,
+  });
+}
+
 /** Reconnect back-off: base 3s, doubling per consecutive failure, capped. */
 const RETRY_BASE_MS = 3_000;
 const RETRY_MAX_MS = 30_000;
@@ -236,6 +243,16 @@ export function useWebSocket(sessionId: string | null) {
             // appended, so this only ever showed on the server transport.
             if (msg.role === 'student') {
               commitPartialTranscript(msg.text as string);
+              const store = useNumeraStore.getState();
+              logBoundary('VOICE_FINAL_TRANSCRIPT', {
+                session_id: sessionId,
+                interaction_id: store.currentTurnId,
+                question_id: store.activeQuestionId,
+                transcript: msg.text,
+                confidence: msg.confidence,
+                transcript_final: msg.is_final === true,
+                processing_state: store.voiceStatus,
+              });
             } else {
               addTranscriptMessage({ role: msg.role as 'ai' | 'student', text: msg.text as string });
             }
@@ -312,6 +329,14 @@ export function useWebSocket(sessionId: string | null) {
               rescueMsgIdRef.current = null;
             }
             addTranscriptMessage({ role: 'ai', text: msg.text as string });
+            logBoundary('INTERACTION_RESPONSE', {
+              session_id: sessionId,
+              interaction_id: msg.accepted_turn_id,
+              question_id: msg.question_id ?? useNumeraStore.getState().activeQuestionId,
+              transcript: msg.transcript,
+              status: 'tutor_response',
+              processing_state: 'received',
+            });
             // applyInteractionSupport returns the line the tutor should SAY —
             // the scaffold step's voice line when a panel is open, else the
             // message. Kept as the stream's fallback text below.
@@ -434,6 +459,16 @@ export function useWebSocket(sessionId: string | null) {
             // announced on chat and swallowed here.
             watchdogRef.current?.noteTurnResolved();
             processingTimerRef.current?.cancel();
+            const errorStore = useNumeraStore.getState();
+            logBoundary('INTERACTION_ERROR', {
+              session_id: sessionId,
+              interaction_id: errorStore.currentTurnId,
+              question_id: errorStore.activeQuestionId,
+              transcript: errorStore.transcript.at(-1)?.text,
+              status: 'voice_socket_error',
+              error: msg.message,
+              processing_state: errorStore.voiceStatus,
+            });
             // Engineer-facing detail stays in the console — it is the backend's
             // own reason and the fastest way to find which service failed. The
             // full report matches what the REST path writes, because until now

@@ -902,9 +902,47 @@ export function useDemoTutor() {
           previous_tutor_turn_id: state.lastTutorTurnId,
           transcript_final: true,
         };
-        console.log('→ POST /interaction', interactionReq);
+        console.info('FRONTEND_SUBMIT_TRIGGER', {
+          timestamp: new Date().toISOString(),
+          session_id: sessionId,
+          interaction_id: interactionReq.turn_id,
+          question_id: questionId,
+          transcript,
+          transcript_final: true,
+          processing_state: useNumeraStore.getState().voiceStatus,
+        });
+        console.info('INTERACTION_REQUEST', {
+          timestamp: new Date().toISOString(),
+          session_id: sessionId,
+          interaction_id: interactionReq.turn_id,
+          question_id: questionId,
+          transcript,
+          endpoint: '/interaction',
+          payload_summary: {
+            interaction_type: interactionReq.interaction_type,
+            input_source: interactionReq.input_source,
+            current_phase: interactionReq.current_phase,
+            concept_id: interactionReq.concept_id,
+            hint_count: interactionReq.hint_count,
+            transcript_final: interactionReq.transcript_final,
+            canvas_present: Boolean(interactionReq.canvas_state),
+            canvas_stroke_count: interactionReq.canvas_state.strokes.length,
+          },
+          processing_state: 'processing',
+        });
+        console.log('→ POST /interaction');
         const res = await sendSynchronizedInteraction(interactionReq);
-        console.log('← /interaction', res);
+        console.info('INTERACTION_RESPONSE', {
+          timestamp: new Date().toISOString(),
+          session_id: sessionId,
+          interaction_id: interactionReq.turn_id,
+          question_id: questionId,
+          transcript,
+          endpoint: '/interaction',
+          status: res.status ?? 'success',
+          processing_state: 'received',
+        });
+        console.log('← /interaction');
         // A newer turn fired while we were waiting — drop this stale reply so it
         // can't append out of order under the wrong student turn.
         if (myTurn !== voiceTurnSeq) {
@@ -972,6 +1010,16 @@ export function useDemoTutor() {
         });
         return res;
       } catch (err) {
+        console.info('INTERACTION_ERROR', {
+          timestamp: new Date().toISOString(),
+          session_id: sessionId,
+          interaction_id: useNumeraStore.getState().currentTurnId,
+          question_id: useNumeraStore.getState().activeQuestionId,
+          transcript,
+          endpoint: '/interaction',
+          error: err instanceof Error ? err.message : String(err),
+          processing_state: useNumeraStore.getState().voiceStatus,
+        });
         console.warn('✗ /interaction failed:', err);
         console.groupEnd();
         // The backend has forgotten this session (its state is in memory).
