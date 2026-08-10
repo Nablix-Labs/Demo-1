@@ -319,13 +319,15 @@ class OpenAIExplainAgainMessage(StrictSchema):
     tutor_message: str
     tutor_message_voice_optimised: str
     confidence: float
-    answer_reveal_risk: StrictBool = False
+    # OpenAI strict structured outputs require every property to appear in the
+    # schema's required array. A default made this optional in JSON Schema and
+    # caused the live request to fail before model inference.
+    answer_reveal_risk: StrictBool
 
 
 class RecordedMisconception(StrictSchema):
     error_code: str
     description: str
-
 
 
 

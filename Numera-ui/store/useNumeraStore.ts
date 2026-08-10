@@ -25,10 +25,10 @@ import type { SupportRung } from '@/lib/supportLadder';
 import { EMPTY_APPLIED, type AppliedState } from '@/lib/responseGate';
 import type { InactivityPolicy } from '@/lib/inactivity';
 
-// Sequential, human-readable student turn ids (voice contract §3): TURN-0001, …
-// One per LISTENING turn; kept sequential (not uuid) so logs read cleanly.
-let turnCounter = 0;
-const nextTurnId = () => `TURN-${String(++turnCounter).padStart(4, '0')}`;
+// A turn id is an idempotency key, so it must remain unique across reloads and
+// reconnects. A module-local counter restarted at TURN-0001 after refresh and
+// collided with the backend's cached turns from the same session.
+const nextTurnId = (): string => `TURN-${uid()}`;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -640,12 +640,20 @@ export const useNumeraStore = create<NumeraState>()(
       // `question_type` wins when it sent one — it is the more current of the
       // two — and the record's view fills in when it didn't.
       const view = studentViewFor(s.backendSession, nextQuestionId);
+      const nextQuestionType =
+        questionType ?? view?.question_type ?? (questionChanged ? null : s.questionType);
+      const questionUsesOptions =
+        nextQuestionType === 'SINGLE_CHOICE' ||
+        nextQuestionType === 'CHOICE_WITH_EXPLANATION' ||
+        nextQuestionType === 'TRUE_FALSE_WITH_EXPLANATION';
       return {
         currentPhase: phase,
         activeQuestionId: nextQuestionId,
         questionText: text || (phaseChanged ? '' : s.questionText),
-        questionType: questionType ?? view?.question_type ?? (questionChanged ? null : s.questionType),
-        questionOptions: view?.options ?? (questionChanged ? [] : s.questionOptions),
+        questionType: nextQuestionType,
+        questionOptions: questionUsesOptions
+          ? view?.options ?? (questionChanged ? [] : s.questionOptions)
+          : [],
         // The support ladder is per-question too (§6: support is requested one
         // rung at a time for the question being worked on). Carrying `supportShown`
         // across a question boundary would leave the next question's "Need help?"

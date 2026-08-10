@@ -27,6 +27,7 @@ from app.models.fields import (
 )
 from app.models.guided_learning import (
     ActiveScaffold,
+    GuidedRescue,
     ActiveTeachingObjective,
     GuidedStudentState,
     EvaluationReasonCode,
@@ -174,6 +175,7 @@ class InteractionResponse(BaseModel):
     wrong_attempt_count: int = Field(default=0, ge=0)
     intervention_triggered: bool = False
     active_scaffold: ActiveScaffold | None = None
+    guided_rescue: GuidedRescue | None = None
     prerequisite_repair: PrerequisiteRepair | None = None
     inactivity_policy: InactivityPolicy | None = None
     nudge_delivery: NudgeDeliveryRecord | None = None

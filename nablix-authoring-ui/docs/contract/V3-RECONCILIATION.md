@@ -74,6 +74,13 @@ middle level currently cannot be rendered from data. Either normalise the table,
 or v3 must define the synthetic video object the API will return (id, title,
 duration = sum of scenes, status = rolled up) so the frontend isn't inventing it.
 
+**Update, 10 Aug 2026:** storage is now settled — Azure Blob Storage, chosen to
+keep as much as possible in one ecosystem. That turns this from a warning into a
+blocker, because there is nowhere in the schema *or* in the v3 payload to put the
+file's URL. The table needs creating with a `video_url` field, and page 06's
+`hierarchy.video` node needs `video_url` added. Written up separately as
+*Addendum 1: orientation video storage and schema*.
+
 ---
 
 ## 2. Fields the workbook has and v3 drops

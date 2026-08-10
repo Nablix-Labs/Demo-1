@@ -27,13 +27,17 @@ import {
   type CanvasSubmissionResult,
   studentFacingError,
   type InteractionResponse,
+  type InteractionPayload,
+  type StaleTurnResponse,
   type NudgeDelivery,
   type QuestionType,
+  isStaleTurnResponse,
   isStaleSessionError,
 } from '@/lib/api';
 import { applyInteractionSupport, acceptResponse } from '@/lib/interactionPresentation';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { tutorSay, setStudentWriting } from '@/lib/tutorSpeech';
+import { phaseAnnouncement, withTransitionVoice } from '@/lib/phaseTransition';
 import { speakBrowser } from '@/lib/tts';
 import {
   availableSupport,
@@ -41,6 +45,7 @@ import {
   LADDER_EXHAUSTED,
   type SupportRung,
 } from '@/lib/supportLadder';
+import type { NudgeClaimResult } from '@/hooks/useInactivityNudge';
 
 const apiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
@@ -178,12 +183,13 @@ function chatError(err: unknown, fallback: string): string {
  * the diagnostic question on screen for the whole orientation and attached the
  * next turn to a question the student had already finished. Take the null.
  */
-function syncBackendSession(response: {
+export function syncBackendSession(response: {
   current_phase: string;
   current_question: string | null;
   question_id: string | null;
   question_number?: number;
   last_tutor_turn_id?: string | null;
+  tutor_turn_id?: string | null;
   expected_student_response?: string;
   allow_voice_input?: boolean;
   /**
@@ -216,8 +222,11 @@ function syncBackendSession(response: {
   if (response.question_number !== undefined) {
     store.setQuestionNumber(response.question_number);
   }
-  if (response.last_tutor_turn_id !== undefined) {
-    store.setTutorTurn(response.last_tutor_turn_id, {
+  const tutorTurnId = response.tutor_turn_id !== undefined
+    ? response.tutor_turn_id
+    : response.last_tutor_turn_id;
+  if (tutorTurnId !== undefined) {
+    store.setTutorTurn(tutorTurnId, {
       expects: response.expected_student_response !== 'NONE',
       allow: response.allow_voice_input ?? false,
     });
@@ -234,6 +243,49 @@ function syncBackendSession(response: {
       maxNudgesPerTutorTurn: response.inactivity_policy.max_nudges_per_tutor_turn,
     });
   }
+}
+
+class TurnSynchronizationError extends Error {
+  constructor(sessionId: string, turnId: string | undefined) {
+    super(
+      `Tutor turn synchronization failed after one retry for session_id=${sessionId} `
+      + `turn_id=${turnId ?? 'missing'}.`,
+    );
+    this.name = 'TurnSynchronizationError';
+  }
+}
+
+function synchronizeStaleTurn(response: StaleTurnResponse): void {
+  const store = useNumeraStore.getState();
+  store.setTutorTurn(response.expected_previous_tutor_turn_id, {
+    expects: true,
+    allow: store.allowVoiceInput,
+  });
+}
+
+/**
+ * Submit one student-owned interaction against the latest tutor turn.
+ *
+ * A stale response is authoritative reconciliation data, not tutor feedback.
+ * The backend did not evaluate the turn, so retrying the same idempotency key
+ * once with its expected pointer is safe and prevents the student losing work.
+ */
+export async function sendSynchronizedInteraction(
+  payload: InteractionPayload,
+): Promise<InteractionResponse> {
+  const first = await sendInteraction(payload);
+  if (!isStaleTurnResponse(first)) return first;
+
+  synchronizeStaleTurn(first);
+  const retried = await sendInteraction({
+    ...payload,
+    previous_tutor_turn_id: first.expected_previous_tutor_turn_id,
+  });
+  if (isStaleTurnResponse(retried)) {
+    synchronizeStaleTurn(retried);
+    throw new TurnSynchronizationError(payload.session_id, payload.turn_id);
+  }
+  return retried;
 }
 
 /**
@@ -287,6 +339,13 @@ export async function beginSession(
 
 let resumeInFlight: Promise<void> | null = null;
 
+let systemTurnSequence = 0;
+
+function nextSystemTurnId(kind: 'NUDGE' | 'NUDGE-ACK'): string {
+  systemTurnSequence += 1;
+  return `${kind}-${Date.now()}-${systemTurnSequence}`;
+}
+
 /**
  * Rehydrate a persisted session after a page refresh.
  *
@@ -309,8 +368,16 @@ export async function resumeSession(): Promise<void> {
       const s = useNumeraStore.getState();
       s.setBackendSession(rec);
       syncBackendSession(rec);
-      if (s.transcript.length === 0 && rec.message.trim()) {
-        s.setTranscript([{ role: 'ai', text: rec.message }]);
+      if (s.transcript.length === 0) {
+        const restored = (rec.conversation_history ?? []).map((message) => ({
+          role: message.role === 'user' ? 'student' as const : 'ai' as const,
+          text: message.content,
+        }));
+        if (restored.length > 0) {
+          s.setTranscript(restored);
+        } else if (rec.message.trim()) {
+          s.setTranscript([{ role: 'ai', text: rec.message }]);
+        }
       }
     } catch (err) {
       const status = (err as { response?: { status?: number } })?.response?.status;
@@ -354,7 +421,7 @@ export function useDemoTutor() {
       const turnId = useNumeraStore.getState().beginSubmissionTurn();
       try {
         const state = useNumeraStore.getState();
-        const res = await sendInteraction({
+        const res = await sendSynchronizedInteraction({
           session_id: sessionId,
           student_id: studentId(),
           interaction_type: 'ANSWER_SUBMISSION',
@@ -374,12 +441,19 @@ export function useDemoTutor() {
         // screen is dropped, and a cached replay is applied exactly once.
         if (!acceptResponse(res)) return res;
         syncBackendSession(res);
+        // Read the phase we were in BEFORE advancing it, or the transition can
+        // never be detected.
+        const entering = phaseAnnouncement(res, useNumeraStore.getState().currentPhase);
+        if (entering) {
+          addTranscriptMessage({ role: 'ai', text: entering.text });
+          addTrailEntry({ kind: 'tutor', text: entering.text, meta: 'phase change' });
+        }
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message });
         if (res.current_phase) useNumeraStore.getState().setCurrentPhase(res.current_phase); // advance phase
         const drew = Boolean(res.canvas_draw?.length);
         if (drew) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw!);
-        const spoken = applyInteractionSupport(res);
+        const spoken = withTransitionVoice(entering, applyInteractionSupport(res));
         // §1: highlight first, pause, then speak. When the turn also drew, the
         // mark lands before it is described; when it didn't, this speaks at once.
         tutorSay(spoken, { afterMarks: drew });
@@ -409,6 +483,7 @@ export function useDemoTutor() {
       const res = await submitCanvas(sessionId, canvasSnapshot.snapshotDataUrl, 'STANDALONE_ATTEMPT');
       // Canvas responses now carry the same phase state as /interaction, so a
       // backend phase change here also drives usePhaseRouting.
+      const entering = phaseAnnouncement(res, useNumeraStore.getState().currentPhase);
       if (res.current_phase && res.current_question) {
         syncBackendSession({
           current_phase: res.current_phase,
@@ -423,6 +498,10 @@ export function useDemoTutor() {
           res.ocr.needs_clarification ? ' · needs clarification' : ''
         }`,
       });
+      if (entering) {
+        addTranscriptMessage({ role: 'ai', text: entering.text });
+        addTrailEntry({ kind: 'tutor', text: entering.text, meta: 'phase change' });
+      }
       addTranscriptMessage({ role: 'ai', text: res.tutor.tutor_message });
       addTrailEntry({
         kind: 'tutor',
@@ -435,7 +514,7 @@ export function useDemoTutor() {
       // otherwise the tutor's response to a submission would be silently dropped
       // by the very rule that kept it quiet while they were writing.
       setStudentWriting(false);
-      tutorSay(res.tutor.tutor_message, { afterMarks: drew });
+      tutorSay(withTransitionVoice(entering, res.tutor.tutor_message), { afterMarks: drew });
       return res;
     } catch (err) {
       // A forgotten session recovers by opening a new one; see
@@ -492,7 +571,7 @@ export function useDemoTutor() {
       new Promise<void>((resolve) => window.setTimeout(resolve, 6000)),
     ]);
     try {
-      const res = await sendInteraction({
+      const res = await sendSynchronizedInteraction({
         session_id: sessionId,
         student_id: studentId(),
         interaction_type: 'EXPLAIN_AGAIN',
@@ -511,6 +590,7 @@ export function useDemoTutor() {
         await acknowledgementWindow;
         return res;
       }
+      syncBackendSession(res);
       // Present the returned wording once; preserve cue and scaffold as sent.
       await acknowledgementWindow;
       addTranscriptMessage({ role: 'ai', text: res.message });
@@ -553,10 +633,12 @@ export function useDemoTutor() {
 
   const claimInactivityNudge = useCallback(async (
     idleDurationMs: number,
-  ): Promise<NudgeDelivery | null> => {
+  ): Promise<NudgeClaimResult> => {
     const state = useNumeraStore.getState();
-    if (!apiEnabled() || !sessionId || !state.activeQuestionId) return null;
-    const turnId = state.beginSubmissionTurn();
+    if (!apiEnabled() || !sessionId || !state.activeQuestionId) {
+      return { status: 'SUPPRESSED' };
+    }
+    const turnId = nextSystemTurnId('NUDGE');
     const res = await sendInteraction({
       session_id: sessionId,
       student_id: studentId(),
@@ -570,10 +652,23 @@ export function useDemoTutor() {
       question_id: state.activeQuestionId,
       hint_count: state.lastHintText ? 1 : 0,
     });
-    if (res.status === 'NUDGE_SUPPRESSED' || !res.nudge_delivery) return null;
-    if (!acceptResponse(res)) return null;
-    syncBackendSession(res);
-    return res.nudge_delivery;
+    if (isStaleTurnResponse(res)) {
+      synchronizeStaleTurn(res);
+      return { status: 'OUT_OF_SYNC' };
+    }
+    if (res.status === 'DUPLICATE_TURN') {
+      if (res.tutor_turn_id !== undefined) {
+        useNumeraStore.getState().setTutorTurn(res.tutor_turn_id, {
+          expects: res.expects_student_response ?? true,
+          allow: res.allow_voice_input ?? state.allowVoiceInput,
+        });
+      }
+      return { status: 'OUT_OF_SYNC' };
+    }
+    if (res.status === 'NUDGE_SUPPRESSED' || !res.nudge_delivery) {
+      return { status: 'SUPPRESSED' };
+    }
+    return { status: 'DELIVERED', delivery: res.nudge_delivery };
   }, [sessionId]);
 
   /**
@@ -606,7 +701,7 @@ export function useDemoTutor() {
         student_id: studentId(),
         interaction_type: 'NUDGE_PRESENTED',
         input_source: 'SYSTEM',
-        turn_id: `ACK-${delivery.interaction_id}`,
+        turn_id: nextSystemTurnId('NUDGE-ACK'),
         previous_tutor_turn_id: state.lastTutorTurnId,
         nudge_id: delivery.interaction_id,
         current_phase: state.currentPhase,
@@ -614,10 +709,13 @@ export function useDemoTutor() {
         question_id: state.activeQuestionId,
         hint_count: state.lastHintText ? 1 : 0,
       });
+      if (isStaleTurnResponse(res)) {
+        synchronizeStaleTurn(res);
+        throw new TurnSynchronizationError(sessionId, undefined);
+      }
       if (res.nudge_delivery?.status !== 'PRESENTED') {
         throw new Error('Backend did not acknowledge the presented inactivity nudge.');
       }
-      acceptResponse(res);
       addTrailEntry({ kind: 'tutor', text: delivery.message, meta: 'inactivity nudge' });
     },
     [sessionId, addTrailEntry],
@@ -752,7 +850,7 @@ export function useDemoTutor() {
           transcript_final: true,
         };
         console.log('→ POST /interaction', interactionReq);
-        const res = await sendInteraction(interactionReq);
+        const res = await sendSynchronizedInteraction(interactionReq);
         console.log('← /interaction', res);
         // A newer turn fired while we were waiting — drop this stale reply so it
         // can't append out of order under the wrong student turn.
@@ -761,9 +859,10 @@ export function useDemoTutor() {
           console.groupEnd();
           return null;
         }
-        // Duplicate/stale turns (contract §6): the backend didn't evaluate them, so
-        // don't append a reply, speak, or score — just reopen listening.
-        if (res.status === 'DUPLICATE_TURN' || res.status === 'STALE_TURN') {
+        // A duplicate is a cached response and the ordering gate below decides
+        // whether it has already been rendered. STALE_TURN is reconciled and
+        // retried inside sendSynchronizedInteraction before reaching here.
+        if (res.status === 'DUPLICATE_TURN') {
           console.log(`(${res.status} — not applied)`);
           console.groupEnd();
           useNumeraStore.getState().beginListeningTurn();
@@ -780,6 +879,11 @@ export function useDemoTutor() {
         }
         syncBackendSession(res);
         console.groupEnd();
+        const entering = phaseAnnouncement(res, useNumeraStore.getState().currentPhase);
+        if (entering) {
+          addTranscriptMessage({ role: 'ai', text: entering.text });
+          addTrailEntry({ kind: 'tutor', text: entering.text, meta: 'phase change' });
+        }
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message });
         if (res.ocr) {
@@ -791,7 +895,7 @@ export function useDemoTutor() {
         }
         if (res.current_phase) useNumeraStore.getState().setCurrentPhase(res.current_phase); // advance phase
         if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
-        const spoken = applyInteractionSupport(res);
+        const spoken = withTransitionVoice(entering, applyInteractionSupport(res));
         // Record the tutor turn + backend gating for the next turn (contract §11).
         // Fallbacks keep the loop working before the backend sends these fields.
         useNumeraStore.getState().setTutorTurn(res.tutor_turn_id ?? null, {

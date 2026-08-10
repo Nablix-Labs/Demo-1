@@ -23,9 +23,12 @@ describe('server-side failures are named as server-side', () => {
     expect(msg).not.toMatch(/reach/i);
   });
 
-  it('a 502 carries the backend explanation when there is one', () => {
-    expect(studentFacingError(err(502, { message: 'student_model rejected request' })))
-      .toContain('student_model rejected request');
+  it('a 502 never exposes an internal provider explanation to the student', () => {
+    const message = studentFacingError(err(502, {
+      message: 'status=400 body={"error":{"message":"invalid_json_schema"}}',
+    }));
+    expect(message).toMatch(/tutor service/i);
+    expect(message).not.toMatch(/status=|body=|invalid_json_schema/i);
   });
 
   it('a 504 is reported as a timeout, not a connection failure', () => {
@@ -67,13 +70,26 @@ describe('the cases that were already right stay right', () => {
   });
 
   it('a 409 that is NOT the resume case does not claim it is', () => {
-    // The ALG_1STEP_GP_F01 lesson: a confident wrong explanation sent the team
-    // looking in the wrong place for two days.
+    // The ALG_1STEP_GP_F01 lesson: a confident wrong resume explanation sent
+    // the team looking in the wrong place for two days. The actual adapter
+    // detail remains in diagnostics, but must not be placed in learner chat.
     const msg = studentFacingError(
       err(409, { message: 'Student Model did not return metadata for ALG_1STEP_GP_F01' }),
     );
     expect(msg).not.toMatch(/already have this topic/i);
-    expect(msg).toContain('ALG_1STEP_GP_F01');
+    expect(msg).toMatch(/tutor hit a problem/i);
+    expect(msg).not.toContain('ALG_1STEP_GP_F01');
+  });
+
+  it('never exposes a Student Model error-code rejection in learner chat', () => {
+    const msg = studentFacingError(
+      err(409, {
+        error_code: 'INVALID_ERROR_CODE',
+        message: 'student_model rejected request url=https://nablix.ai:8080/session/event status=409 body={"error_code":"INVALID_ERROR_CODE","message":"error_code UNKNOWN_ERROR is not valid for question Q-T01-002."}',
+      }),
+    );
+    expect(msg).toMatch(/tutor hit a problem/i);
+    expect(msg).not.toMatch(/student_model|UNKNOWN_ERROR|Q-T01-002|session\/event|8080/i);
   });
 
   it('a journey-version conflict never exposes the stored journey payload', () => {

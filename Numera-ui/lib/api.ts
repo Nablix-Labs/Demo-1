@@ -178,7 +178,11 @@ export function studentFacingError(err: unknown): string | null {
     if (!backendMessage || /already|in progress|resume/i.test(backendMessage)) {
       return 'You already have this topic in progress, and the tutor can\u2019t pick it back up yet. Ask the team to reset it for you.';
     }
-    return `The tutor couldn\u2019t load this question. ${backendMessage}`;
+    // A non-resume conflict is a service-contract failure. Backend messages can
+    // contain adapter URLs, payloads, student IDs, or authored error codes; none
+    // of that belongs in learner chat. Keep the diagnostic in the browser
+    // console/network response and give the learner safe, actionable wording.
+    return 'The tutor hit a problem on its side. Nothing you did\u2014please try again in a moment.';
   }
   switch (code) {
     case 'AUTHENTICATION_FAILED':
@@ -213,9 +217,7 @@ export function studentFacingError(err: unknown): string | null {
     return 'The tutor took too long to answer that one. Try sending it again.';
   }
   if (status >= 500) {
-    return backendMessage
-      ? `The tutor service hit an error. ${backendMessage}`
-      : 'The tutor service hit an error on its side. Nothing you did — try again in a moment.';
+    return 'The tutor service hit an error on its side. Nothing you did — try again in a moment.';
   }
   if (status === 429) {
     return 'The tutor is handling a lot right now. Give it a few seconds and try again.';
@@ -411,6 +413,10 @@ export interface SessionRecord {
   canvas_state: CanvasState;
   ui_state: string;
   message: string;
+  conversation_history?: Array<{
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+  }>;
   diagnostic_transition_message?: string | null;
   diagnostic_transition_messages?: string[];
   orientation_messages?: OrientationMessages | null;
@@ -866,6 +872,21 @@ export interface GuidedStateFields {
     step_voice?: string | null;
     total_steps: number;
   } | null;
+  guided_rescue?: {
+    rescue_type: 'PARALLEL_EXAMPLE' | 'TUTOR_SOLVED';
+    micro_skill_id: string;
+    parallel_example: {
+      parallel_example_id: string;
+      problem: string;
+      worked_steps: string[];
+      final_answer: string;
+    } | null;
+    tutor_solved: {
+      explanation: string;
+      final_answer: string;
+      answer_steps: string[];
+    } | null;
+  } | null;
   consecutive_stuck_count?: number;
   /** Matches models/guided_learning.py:PrerequisiteRepair. */
   prerequisite_repair?: {
@@ -918,13 +939,19 @@ export interface InteractionResponse extends GuidedStateFields {
    *  CLARIFICATION_REQUIRED signal the frontend to not treat this as a fresh reply. */
   status?:
     | 'DUPLICATE_TURN'
-    | 'STALE_TURN'
     | 'CLARIFICATION_REQUIRED'
     | 'NUDGE_SUPPRESSED';
   /** The student turn_id this reply corresponds to. */
   accepted_turn_id?: string | null;
   /** New tutor turn id — becomes previous_tutor_turn_id on the next request. */
   tutor_turn_id?: string | null;
+  /** Authoritative tutor turn returned when a request used stale context. */
+  expected_previous_tutor_turn_id?: string | null;
+  /** Spoken/shown framing when this reply moves the student into a new phase.
+   *  The canvas response documents its phase block as "same contract as
+   *  InteractionResponse", but these two were only ever declared there. */
+  phase_transition_message?: string | null;
+  phase_transition_voice?: string | null;
   /** Backend's next conversational move (ASK_QUESTION, ADVANCE_TO_NEXT_QUESTION, …). */
   conversation_action?: string;
   /** Whether another student response is expected after this reply. */
@@ -963,6 +990,24 @@ export interface InteractionResponse extends GuidedStateFields {
   scaffold_step_voice?: string | null;
   /** Total steps — a progress indicator, NOT permission to reveal later ones. */
   total_scaffold_steps?: number | null;
+}
+
+export interface StaleTurnResponse {
+  status: 'STALE_TURN';
+  accepted_turn_id: null;
+  expected_previous_tutor_turn_id: string | null;
+  conversation_action: 'WAIT_FOR_STUDENT';
+  attempt_increment: 0;
+  retry_safe: false;
+  message: string;
+}
+
+export type InteractionResult = InteractionResponse | StaleTurnResponse;
+
+export function isStaleTurnResponse(
+  response: InteractionResult,
+): response is StaleTurnResponse {
+  return response.status === 'STALE_TURN';
 }
 
 /**
@@ -1012,9 +1057,25 @@ export function activeScaffold(res: InteractionResponse | null | undefined): Act
 }
 
 /** POST /interaction — core tutoring call. Requires a started, owned session. */
-export async function sendInteraction(payload: InteractionPayload) {
-  const res = await api.post<InteractionResponse>('/interaction', payload);
-  return res.data;
+export async function sendInteraction(payload: InteractionPayload): Promise<InteractionResult> {
+  try {
+    const res = await api.post<InteractionResponse>('/interaction', payload);
+    return res.data;
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 409) {
+      const data: unknown = error.response.data;
+      if (
+        typeof data === 'object'
+        && data !== null
+        && 'status' in data
+        && data.status === 'STALE_TURN'
+        && 'expected_previous_tutor_turn_id' in data
+      ) {
+        return data as StaleTurnResponse;
+      }
+    }
+    throw error;
+  }
 }
 
 // ── /hint/request — REMOVED ───────────────────────────────────────────────────
@@ -1071,6 +1132,7 @@ export interface CanvasSubmissionResult {
   /** Tutor drawing actions (e.g. mark up the student's working). The backend
    *  sends a LIST of draw actions here, unlike the WS path (one per message). */
   canvas_draw?: CanvasDrawPayload[];
+  guided_rescue?: GuidedStateFields['guided_rescue'];
   /** Phase state after this submission — same contract as InteractionResponse. */
   phase_changed?: boolean;
   previous_phase?: string | null;

@@ -71,6 +71,26 @@ class ActiveScaffold(GuidedLearningModel):
     step_voice: str | None
 
 
+class ParallelExample(GuidedLearningModel):
+    parallel_example_id: str
+    problem: str
+    worked_steps: list[str]
+    final_answer: str
+
+
+class TutorSolved(GuidedLearningModel):
+    explanation: str
+    final_answer: str
+    answer_steps: list[str]
+
+
+class GuidedRescue(GuidedLearningModel):
+    rescue_type: Literal["PARALLEL_EXAMPLE", "TUTOR_SOLVED"]
+    micro_skill_id: str
+    parallel_example: ParallelExample | None
+    tutor_solved: TutorSolved | None
+
+
 class PrerequisiteRepair(GuidedLearningModel):
     prerequisite_micro_skill_ids: list[str]
     reason_code: str

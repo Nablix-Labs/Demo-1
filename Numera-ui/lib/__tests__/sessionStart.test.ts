@@ -85,6 +85,11 @@ describe('session start', () => {
       ...RECORD,
       question_number: 3,
       message: 'What operation connects the changing value and five?',
+      conversation_history: [
+        { role: 'assistant', content: 'Write the general rule.' },
+        { role: 'user', content: 'n + 5' },
+        { role: 'assistant', content: 'Why does n make it general?' },
+      ],
       last_tutor_turn_id: 'TUTOR-RESTORED',
       expected_student_response: 'ANSWER',
       allow_voice_input: true,
@@ -106,8 +111,10 @@ describe('session start', () => {
     expect(state.expectsStudentResponse).toBe(true);
     expect(state.allowVoiceInput).toBe(true);
     expect(state.inactivityPolicy?.initialIdleThresholdMs).toBe(45000);
-    expect(state.transcript).toEqual([
-      { role: 'ai', text: 'What operation connects the changing value and five?' },
+    expect(state.transcript.map(({ role, text }) => ({ role, text }))).toEqual([
+      { role: 'ai', text: 'Write the general rule.' },
+      { role: 'student', text: 'n + 5' },
+      { role: 'ai', text: 'Why does n make it general?' },
     ]);
   });
 });

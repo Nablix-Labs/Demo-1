@@ -379,6 +379,10 @@ def test_inactivity_nudge_is_cached_without_pedagogical_mutation() -> None:
     assert first_body["attempt_count"] == session["attempt_count"]
     assert first_body["question_id"] == session["question_id"]
     assert first_body["current_phase"] == session["current_phase"]
+    assert first_body["accepted_turn_id"] == request["turn_id"]
+    after_claim = session_service._sessions[str(session["session_id"])]
+    assert after_claim.last_processed_turn_id == stored_session.last_processed_turn_id
+    assert after_claim.last_tutor_turn_id == stored_session.last_tutor_turn_id
 
     duplicate = client.post("/interaction", json=request)
     assert duplicate.status_code == 200
@@ -408,6 +412,9 @@ def test_inactivity_nudge_is_cached_without_pedagogical_mutation() -> None:
     assert presented.json()["nudge_delivery"]["status"] == "PRESENTED"
     assert presented.json()["attempt_count"] == session["attempt_count"]
     assert presented.json()["current_phase"] == session["current_phase"]
+    after_presented = session_service._sessions[str(session["session_id"])]
+    assert after_presented.last_processed_turn_id == stored_session.last_processed_turn_id
+    assert after_presented.last_tutor_turn_id == stored_session.last_tutor_turn_id
     assert _pedagogical_state(session["session_id"]) == before
 
 

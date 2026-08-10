@@ -8,6 +8,7 @@ from typing import Final, Literal, cast
 from uuid import uuid4
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from app.adapters.base import StudentModelAdapter
 from app.adapters.provider import get_adapters
@@ -15,7 +16,11 @@ from app.ai_engine.classifier import (
     build_openai_ai_engine_client,
     contains_answer_reveal,
     detect_student_intent,
+    generate_explain_again_response,
+    guided_error_definitions,
+    initial_guided_objective,
     normalize_exact_notation,
+    resolve_guided_rubric,
 )
 
 from app.ai_engine.classifier_config import ClassifierRulesConfig, load_classifier_rules
@@ -48,6 +53,7 @@ from app.models.fields import Phase
 from app.models.guided_learning import (
     ActiveScaffold,
     EvaluationReasonCode,
+    GuidedRescue,
     NudgeDelivery,
     ScaffoldEvaluationContext,
     WrongEscalationCode,
@@ -278,6 +284,83 @@ def _is_wrong_evaluation(tutor: TutorResult) -> bool:
     )
 
 
+def _guided_rescue(
+    event: StudentModelSessionEventResponse | None,
+) -> GuidedRescue | None:
+    if event is None or event.phase_payload is None:
+        return None
+    payload = event.phase_payload
+    if payload.payload_type != "RESCUE" or payload.rescue_to_serve is None:
+        return None
+    rescue = payload.rescue_to_serve
+    try:
+        return GuidedRescue.model_validate(
+            {
+                **rescue,
+                "parallel_example": rescue.get("parallel_example"),
+                "tutor_solved": rescue.get("tutor_solved"),
+            }
+        )
+    except ValidationError as error:
+        raise RuntimeError(
+            "Student Model returned malformed guided rescue content "
+            f"for question_id={event.journey_state.phase_2_guided_learning.current_question_id}: "
+            f"{error}"
+        ) from error
+
+
+def _guided_rescue_message(rescue: GuidedRescue) -> str:
+    if rescue.rescue_type == "PARALLEL_EXAMPLE":
+        example = rescue.parallel_example
+        if example is None:
+            raise RuntimeError("Parallel rescue has no parallel example.")
+        worked_steps = " ".join(example.worked_steps)
+        return (
+            f"Let’s work through a similar example. {example.problem} "
+            f"{worked_steps} The result is {example.final_answer}. "
+            "Now try the original question again."
+        )
+    solved = rescue.tutor_solved
+    if solved is None:
+        raise RuntimeError("Tutor-solved rescue has no solved explanation.")
+    answer_steps = " ".join(solved.answer_steps)
+    return " ".join(
+        part
+        for part in [
+            "Let’s solve this one together.",
+            solved.explanation,
+            answer_steps,
+        ]
+        if part
+    )
+
+
+def _tutor_with_guided_rescue(
+    tutor: TutorResult,
+    event: StudentModelSessionEventResponse,
+) -> TutorResult:
+    rescue = _guided_rescue(event)
+    if rescue is None:
+        return tutor
+    message = _guided_rescue_message(rescue)
+    parallel = rescue.rescue_type == "PARALLEL_EXAMPLE"
+    return tutor.model_copy(
+        update={
+            "response_strategy": (
+                "PROVIDE_WORKED_EXAMPLE" if parallel else "TUTOR_SOLVED"
+            ),
+            "tutor_message": message,
+            "tutor_message_voice": message,
+            "voice_optimised": True,
+            "answer_reveal_allowed": not parallel,
+            "recommended_conversation_action": (
+                "ASK_QUESTION" if parallel else "WAIT_FOR_STUDENT"
+            ),
+            "question_completed": not parallel,
+        }
+    )
+
+
 def _evaluation_reason(tutor: TutorResult) -> EvaluationReasonCode:
     if tutor.guided_student_state is not None:
         return _EVALUATION_REASON_BY_STATE[tutor.guided_student_state]
@@ -435,34 +518,40 @@ async def process_answer_with_session_event(
         return student, tutor, None, None, session
 
     micro_skill_ids = _schema_event_micro_skills(session)
+    highest_guided_support = (
+        stored_event.journey_state.phase_2_guided_learning
+        .highest_support_used_by_skill.get(micro_skill_ids[0], "NONE")
+    )
     retry_required = bool(
         stored_event.journey_state.phase_3_independent_practice
         .retry_required_micro_skill_ids
     )
     if support_escalation:
-        escalation_type = (
-            "MAXIMUM_GUIDED_SUPPORT_PARALLEL"
-            if tutor.response_strategy == "PROVIDE_WORKED_EXAMPLE"
+        escalation_type: Literal[
+            "GUIDED_SUPPORT_ESCALATION_REQUIRED",
+            "MAXIMUM_GUIDED_SUPPORT_PARALLEL",
+            "MAXIMUM_GUIDED_SUPPORT_REQUIRED",
+        ] = (
+            "MAXIMUM_GUIDED_SUPPORT_REQUIRED"
+            if highest_guided_support == "PARALLEL_EXAMPLE"
+            else "MAXIMUM_GUIDED_SUPPORT_PARALLEL"
+            if highest_guided_support == "SCAFFOLD"
             else "GUIDED_SUPPORT_ESCALATION_REQUIRED"
         )
-
-
-
-        escalation_error_code = _db_error_code(
+        escalation_error_code = _validated_error_code(
             session,
             context.message,
-        ) or _catalog_error_code(session, tutor.selected_error_code)
-        if wrong_four_escalation and escalation_error_code is None:
-            raise HTTPException(
-                status_code=409,
-                detail="Wrong 4 requires an active question error_code.",
-            )
-        escalation_error_code = escalation_error_code or tutor.error_type
-        if escalation_error_code is None:
-            raise HTTPException(
-                status_code=409,
-                detail="Support escalation requires an error_code.",
-            )
+            tutor,
+        )
+        if wrong_four_escalation:
+            if (
+                escalation_type == "GUIDED_SUPPORT_ESCALATION_REQUIRED"
+                and escalation_error_code is None
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Wrong 4 requires an active question error_code.",
+                )
         response = await adapters.student_model.send_session_event(
             GuidedSupportEvent(
                 request_id=_schema_interaction_request_id(
@@ -478,8 +567,13 @@ async def process_answer_with_session_event(
                 timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 question_id=session.question_id,
                 micro_skill_id=micro_skill_ids[0],
-                triggering_response=context.message if escalation_type == "GUIDED_SUPPORT_ESCALATION_REQUIRED" else None,
-                error_code=escalation_error_code if escalation_type == "GUIDED_SUPPORT_ESCALATION_REQUIRED" else None,
+                triggering_response=(
+                    context.message
+                    if escalation_type == "GUIDED_SUPPORT_ESCALATION_REQUIRED"
+                    and wrong_four_escalation
+                    else None
+                ),
+                error_code=escalation_error_code,
             ),
 
 
@@ -505,9 +599,7 @@ async def process_answer_with_session_event(
                 independent_success=event_type == "CORRECT_ATTEMPT",
                 error_code=(
                     (
-                        tutor.selected_error_code
-                        if tutor.guided_student_state is not None
-                        else _db_error_code(session, context.message) or tutor.error_type
+                        _validated_error_code(session, context.message, tutor)
                     )
                     if event_type == "INCORRECT_ATTEMPT"
                     else None
@@ -542,9 +634,7 @@ async def process_answer_with_session_event(
                 ),
                 error_code=(
                     (
-                        tutor.selected_error_code
-                        if tutor.guided_student_state is not None
-                        else _db_error_code(session, context.message) or tutor.error_type
+                        _validated_error_code(session, context.message, tutor)
                     )
                     if event_type == "INCORRECT_ATTEMPT"
                     else None
@@ -554,6 +644,7 @@ async def process_answer_with_session_event(
         )
 
     content_response = response
+    tutor = _tutor_with_guided_rescue(tutor, content_response)
     support_to_serve = (
         response.phase_payload.support_to_serve
         if response.phase_payload is not None
@@ -565,7 +656,7 @@ async def process_answer_with_session_event(
             "session_id": session.session_id,
             "question_id": session.question_id,
             "student_model_event": (
-                "GUIDED_SUPPORT_ESCALATION_REQUIRED"
+                escalation_type
                 if support_escalation
                 else event_type
             ),
@@ -825,6 +916,18 @@ def _catalog_error_code(session: SessionRecord, candidate: str | None) -> str | 
         if potential_error.get("error_code") == candidate:
             return candidate
     return None
+
+
+def _validated_error_code(
+    session: SessionRecord,
+    student_message: str,
+    tutor: TutorResult,
+) -> str | None:
+    return (
+        _db_error_code(session, student_message)
+        or _catalog_error_code(session, tutor.selected_error_code)
+        or _catalog_error_code(session, tutor.error_type)
+    )
 
 
 def _schema_question_mapped_micro_skills(session: SessionRecord) -> list[str]:
@@ -1477,6 +1580,38 @@ def _turn_is_stale(request: InteractionRequest, session: SessionRecord) -> bool:
     )
 
 
+def _guided_support_levels(session: SessionRecord) -> tuple[SupportUsed, SupportUsed]:
+    stored_event = session.student_model_event
+    guided = (
+        stored_event.journey_state.phase_2_guided_learning
+        if stored_event is not None
+        else None
+    )
+    support = (
+        stored_event.phase_payload.support_to_serve
+        if stored_event is not None and stored_event.phase_payload is not None
+        else None
+    )
+    support_type = support.get("support_type") if support is not None else None
+    active_support_level: SupportUsed = (
+        support_type
+        if support_type in _SUPPORT_RANK
+        else "VISUAL_CUE"
+        if support_type == "HINT_AND_VISUAL_CUE"
+        else "NONE"
+    )
+    highest_support_used: SupportUsed = (
+        max(
+            guided.highest_support_used_by_skill.values(),
+            key=_SUPPORT_RANK.index,
+            default="NONE",
+        )
+        if guided is not None
+        else "NONE"
+    )
+    return active_support_level, highest_support_used
+
+
 def _response_from(
     session_id: str,
     student_id: str,
@@ -1857,21 +1992,7 @@ def _nudge_response(
     status: Literal["GENERATED", "PRESENTED"] | None,
     state_updates: dict[str, object],
 ) -> InteractionResponse:
-    updated_session = update_interaction_state(
-        request.session_id,
-        request.student_id,
-        session,
-        session.current_phase,
-        session.hint_count,
-        session.current_phase,
-        request.transcript_confidence,
-        request.canvas_snapshot_id,
-        None,
-        session.show_visual_cue,
-        session.show_scaffold_panel,
-        session.scaffold_steps,
-        state_updates,
-    )
+    updated_session = update_side_channel_state(session, state_updates)
     response = _response_from(
         session_id=request.session_id,
         student_id=request.student_id,
@@ -1904,7 +2025,12 @@ def _nudge_response(
 
     return _cache_response(
         request,
-        response.model_copy(update={"nudge_delivery": delivery}),
+        response.model_copy(
+            update={
+                "accepted_turn_id": request.turn_id,
+                "nudge_delivery": delivery,
+            }
+        ),
     )
 
 
@@ -1913,11 +2039,7 @@ def _claim_inactivity_nudge(
     session: SessionRecord,
 ) -> InteractionResponse:
     now = datetime.now(timezone.utc)
-    base_updates: dict[str, object] = {
-        "last_processed_turn_id": request.turn_id,
-        "last_tutor_action": session.last_tutor_action,
-        "expected_student_response": session.expected_student_response,
-    }
+    base_updates: dict[str, object] = {}
     if not _nudge_eligible(session, now):
         return _nudge_response(
             request,
@@ -1970,9 +2092,6 @@ def _acknowledge_inactivity_nudge(
         session.pending_nudge_message,
         "PRESENTED",
         {
-            "last_processed_turn_id": request.turn_id,
-            "last_tutor_action": session.last_tutor_action,
-            "expected_student_response": session.expected_student_response,
             "nudge_presented_count": session.nudge_presented_count + 1,
             "pending_nudge_id": None,
             "pending_nudge_message": None,
@@ -2137,8 +2256,6 @@ def _explain_again_interaction_response(
         session.scaffold_steps,
         {
             **_turn_updates(request, "ASKED_QUESTION", "ANSWER"),
-            "generated_question_rubric": rubric,
-            "active_teaching_objective": objective,
             "conversation_history": history,
         },
     )
@@ -2905,15 +3022,24 @@ async def _process_interaction(
         retry_safe=None,
         previous_phase=session.current_phase if new_phase is not None else None,
     )
-    support_served = (
+    guided_rescue = _guided_rescue(schema_content_response)
+    support_served: SupportUsed | None = (
         response.active_support_level
         if schema_content_response is not None
         and schema_content_response.phase_payload is not None
         and schema_content_response.phase_payload.support_to_serve is not None
+        else guided_rescue.rescue_type
+        if guided_rescue is not None
         else None
     )
     response = response.model_copy(
         update={
+            "guided_rescue": guided_rescue,
+            "active_support_level": (
+                guided_rescue.rescue_type
+                if guided_rescue is not None
+                else response.active_support_level
+            ),
             "guided_student_state": tutor.guided_student_state,
             "selected_error_code": tutor.selected_error_code,
             "evaluation_reason_code": (
