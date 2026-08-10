@@ -260,7 +260,8 @@ export type InteractionType =
   //   NUDGE_PRESENTED   — acknowledgement that one was actually shown or spoken
   | 'INACTIVITY_NUDGE'
   | 'NUDGE_PRESENTED'
-  | 'HINT_REQUEST'
+  | 'HELP_REQUEST'
+  | 'SUPPORT_REPLAY'
   | 'CANVAS_SUBMISSION'
   | 'SESSION_START'
   | 'SESSION_END';

@@ -39,12 +39,7 @@ import { useNumeraStore } from '@/store/useNumeraStore';
 import { tutorSay, setStudentWriting } from '@/lib/tutorSpeech';
 import { phaseAnnouncement, withTransitionVoice } from '@/lib/phaseTransition';
 import { speakBrowser } from '@/lib/tts';
-import {
-  availableSupport,
-  nextSupport,
-  LADDER_EXHAUSTED,
-  type SupportRung,
-} from '@/lib/supportLadder';
+import type { SupportRung } from '@/lib/supportLadder';
 import type { NudgeClaimResult } from '@/hooks/useInactivityNudge';
 
 const apiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
@@ -740,34 +735,34 @@ export function useDemoTutor() {
    */
   const hint = useCallback(async (): Promise<SupportRung | null> => {
     const s = useNumeraStore.getState();
-    const rung = nextSupport(
-      s.supportShown,
-      availableSupport({
-        hintText: s.lastHintText,
-        showVisualCue: Boolean(s.visualCueType ?? s.visualCueDescription),
-        showScaffoldPanel: Boolean(s.activeScaffold),
-        hasScaffoldStep: Boolean(s.activeScaffold?.stepText),
-      }),
-    );
-
-    if (!rung) {
-      addTranscriptMessage({ role: 'ai', text: LADDER_EXHAUSTED });
+    if (!apiEnabled() || !sessionId || !s.activeQuestionId) {
       return null;
     }
-
-    s.setSupportShown(rung);
-    if (rung === 'HINT' && s.lastHintText) {
-      addTranscriptMessage({ role: 'ai', text: s.lastHintText });
-      addTrailEntry({ kind: 'hint', text: s.lastHintText, meta: 'Hint' });
-      tutorSay(s.lastHintText);
-    } else if (rung === 'VISUAL_CUE') {
-      s.setVisualCueVisible(true);
-      if (s.visualCueDescription) tutorSay(s.visualCueDescription, { afterMarks: true });
-    }
-    // SCAFFOLD needs no reveal step: ScaffoldPanel renders whenever the backend
-    // has authorised a step, so it is already on screen by the time we get here.
+    const turnId = s.beginSubmissionTurn();
+    const res = await sendSynchronizedInteraction({
+      session_id: sessionId,
+      student_id: studentId(),
+      interaction_type: 'HELP_REQUEST',
+      input_source: 'TEXT',
+      text_input: 'Please give me the next hint.',
+      current_phase: s.currentPhase,
+      concept_id: s.activeConceptId,
+      question_id: s.activeQuestionId,
+      hint_count: s.lastHintText ? 1 : 0,
+      turn_id: turnId,
+      previous_tutor_turn_id: s.lastTutorTurnId,
+    });
+    if (!acceptResponse(res)) return null;
+    syncBackendSession(res);
+    addTranscriptMessage({ role: 'ai', text: res.message });
+    addTrailEntry({ kind: 'hint', text: res.message, meta: res.support_served_this_turn ?? 'support' });
+    const spoken = applyInteractionSupport(res);
+    tutorSay(spoken, { afterMarks: Boolean(res.canvas_draw?.length) });
+    const served = res.support_served_this_turn;
+    const rung: SupportRung | null = served && served !== 'NONE' ? served : null;
+    if (rung) useNumeraStore.getState().setSupportShown(rung);
     return rung;
-  }, [addTranscriptMessage, addTrailEntry]);
+  }, [sessionId, addTranscriptMessage, addTrailEntry]);
 
   /**
    * Fire one completed voice turn to the backend with one frozen canvas payload,

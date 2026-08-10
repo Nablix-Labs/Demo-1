@@ -178,6 +178,13 @@ _SUPPORT_RANK: tuple[SupportUsed, ...] = (
     "TUTOR_SOLVED",
 )
 _INACTIVITY_MESSAGE = "Are you still with me? Take your time and continue when you're ready."
+_EXPLICIT_HELP_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:give|show|offer)\s+me\s+(?:a\s+)?hint\b|"
+    r"\b(?:can|could|may)\s+i\s+(?:have|get)\s+(?:a\s+)?hint\b|"
+    r"\bi\s+(?:need|want)\s+(?:a\s+)?hint\b|"
+    r"\bhelp\s+me\b|\bi\s+need\s+help\b",
+    re.IGNORECASE,
+)
 _EVALUATION_REASON_BY_STATE: dict[str, EvaluationReasonCode] = {
     "CORRECT": EvaluationReasonCode.ALL_REQUIRED_COMPONENTS_CONFIRMED,
     "PARTIAL": EvaluationReasonCode.REQUIRED_COMPONENTS_MISSING,
@@ -547,6 +554,7 @@ async def process_answer_with_session_event(
     if support_escalation:
         escalation_type: Literal[
             "GUIDED_SUPPORT_ESCALATION_REQUIRED",
+            "GUIDED_STUCK_SUPPORT_REQUIRED",
             "MAXIMUM_GUIDED_SUPPORT_PARALLEL",
             "MAXIMUM_GUIDED_SUPPORT_REQUIRED",
         ] = (
@@ -554,6 +562,8 @@ async def process_answer_with_session_event(
             if highest_guided_support == "PARALLEL_EXAMPLE"
             else "MAXIMUM_GUIDED_SUPPORT_PARALLEL"
             if highest_guided_support == "SCAFFOLD"
+            else "GUIDED_STUCK_SUPPORT_REQUIRED"
+            if stuck_escalation and not wrong_four_escalation
             else "GUIDED_SUPPORT_ESCALATION_REQUIRED"
         )
         escalation_error_code = _validated_error_code(
@@ -1516,7 +1526,16 @@ def _independent_correct_in_session(session: SessionRecord) -> int:
 
 
 def _next_hint_count_from(session: SessionRecord) -> int:
-    return session.hint_count
+    event = session.student_model_event
+    if event is None:
+        return session.hint_count
+    guided = event.journey_state.phase_2_guided_learning
+    current_hint_count = getattr(guided, "current_hint_count", None)
+    return (
+        current_hint_count
+        if isinstance(current_hint_count, int) and current_hint_count >= 0
+        else session.hint_count
+    )
 
 
 def _new_tutor_turn_id() -> str:
@@ -1853,6 +1872,163 @@ def _active_support_message(session: SessionRecord) -> str | None:
     if steps:
         return steps[0]
     return _schema_hint(event)
+
+
+def _is_explicit_help_request(request: InteractionRequest) -> bool:
+    """Recognise an explicit request for support before answer evaluation."""
+    if request.interaction_type != "ANSWER_SUBMISSION":
+        return False
+    message = request.text_input or request.voice_transcript or ""
+    return _EXPLICIT_HELP_PATTERN.search(message) is not None
+
+
+def _support_presentation(
+    event: StudentModelSessionEventResponse,
+) -> tuple[str, VisualCue | None, list[str], ConversationAction, SupportUsed]:
+    """Validate and unpack exactly one Student Model support rung."""
+    payload = event.phase_payload
+    support = payload.support_to_serve if payload is not None else None
+    if support is None:
+        raise RuntimeError(
+            "Student Model returned no support_to_serve for a guided support request."
+        )
+    support_type = support.get("support_type")
+    hint = _schema_hint(event)
+    visual_cue = _schema_visual_cue(event)
+    scaffold_steps = _schema_support_steps(event)
+    if support_type == "HINT":
+        if hint is None:
+            raise RuntimeError("Student Model returned HINT without hint content.")
+        return hint, None, [], "GIVE_HINT", "HINT"
+    if support_type in {"VISUAL_CUE", "HINT_AND_VISUAL_CUE"}:
+        if visual_cue is None:
+            raise RuntimeError(
+                f"Student Model returned {support_type} without visual cue content."
+            )
+        message = hint or visual_cue.description
+        if not message:
+            raise RuntimeError(
+                f"Student Model returned {support_type} without student-facing guidance."
+            )
+        return message, visual_cue, [], "GIVE_HINT", "VISUAL_CUE"
+    if support_type == "SCAFFOLD":
+        scaffold_state = _schema_scaffold_state(event)
+        if (
+            not scaffold_steps
+            or scaffold_state.get("scaffold_id") is None
+            or scaffold_state.get("current_scaffold_step_id") is None
+            or scaffold_state.get("scaffold_expected_response") is None
+        ):
+            raise RuntimeError(
+                "Student Model returned an incomplete SCAFFOLD support contract."
+            )
+        return scaffold_steps[0], None, scaffold_steps, "ASK_QUESTION", "SCAFFOLD"
+    raise RuntimeError(
+        f"Student Model returned unsupported guided support_type={support_type!r}."
+    )
+
+
+async def _guided_help_response(
+    request: InteractionRequest,
+    session: SessionRecord,
+    access_token: str,
+) -> InteractionResponse:
+    if session.current_phase != "GUIDED_PRACTICE":
+        raise HTTPException(
+            status_code=409,
+            detail="HELP_REQUEST is available only during Guided Practice.",
+        )
+    if session.student_model_event is None or session.question_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="HELP_REQUEST requires an active Student Model question.",
+        )
+    micro_skill_ids = _schema_event_micro_skills(session)
+    stored_event = session.student_model_event
+    event = await get_adapters().student_model.send_session_event(
+        GuidedSupportEvent(
+            request_id=_schema_interaction_request_id(
+                session,
+                request.turn_id,
+                "GUIDED_SUPPORT_REQUESTED",
+            ),
+            event_type="GUIDED_SUPPORT_REQUESTED",
+            source_turn_id=request.turn_id,
+            expected_journey_version=stored_event.journey_state.version,
+            topic_id=stored_event.journey_state.topic_id,
+            student_id=session.student_id,
+            timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            question_id=session.question_id,
+            micro_skill_id=micro_skill_ids[0],
+        ),
+        access_token,
+    )
+    message, visual_cue, scaffold_steps, conversation_action, support_level = (
+        _support_presentation(event)
+    )
+    rules = load_classifier_rules()
+    for scaffold_prompt in scaffold_steps:
+        _validate_scaffold_prompt(
+            scaffold_prompt,
+            session.correct_answer,
+            rules,
+        )
+    event_session = _apply_schema_event(session, event)
+    history = _updated_conversation_history(
+        session.conversation_history,
+        request.text_input or request.voice_transcript or "Help requested.",
+        message,
+        rules.conversation_rules.max_recent_messages,
+    )
+    last_action, expected_response = _conversation_state_for(
+        conversation_action,
+        False,
+        None,
+    )
+    updated_session = update_interaction_state(
+        request.session_id,
+        request.student_id,
+        event_session,
+        event_session.current_phase,
+        _next_hint_count_from(event_session),
+        event_session.current_phase,
+        request.transcript_confidence,
+        request.canvas_snapshot_id,
+        None,
+        visual_cue is not None,
+        bool(scaffold_steps),
+        scaffold_steps,
+        {
+            "interaction_state_version": session.interaction_state_version + 1,
+            "conversation_history": history,
+            **_schema_scaffold_state(event),
+            **_turn_updates(request, last_action, expected_response),
+        },
+    )
+    response = _response_from(
+        session_id=request.session_id,
+        student_id=request.student_id,
+        turn_id=request.turn_id,
+        interaction_type="HELP_REQUEST",
+        nudge_id=None,
+        session=updated_session,
+        message=message,
+        message_voice=message,
+        visual_cue=visual_cue,
+        scaffold_steps=scaffold_steps,
+        session_summary=None,
+        conversation_action=conversation_action,
+        attempt_increment=0,
+        status=None,
+        retry_safe=True,
+    ).model_copy(
+        update={
+            "support_served_this_turn": support_level,
+            "active_support_level": support_level,
+            "routing_reason_code": event.routing.reason_code,
+        }
+    )
+    return _cache_response(request, response)
 
 
 def _active_scaffold(session: SessionRecord) -> ActiveScaffold | None:
@@ -2396,7 +2572,9 @@ async def _process_interaction(
     if _turn_is_stale(request, session):
         return _stale_turn_response(session)
 
-    if request.interaction_type in {"HELP_REQUEST", "SUPPORT_REPLAY"}:
+    if request.interaction_type == "HELP_REQUEST" or _is_explicit_help_request(request):
+        return await _guided_help_response(request, session, access_token)
+    if request.interaction_type == "SUPPORT_REPLAY":
         support_message = _active_support_message(session)
         if support_message is None:
             raise HTTPException(
@@ -2795,16 +2973,42 @@ async def _process_interaction(
         schema_response = None
     tutor = tutor.model_copy(update={"safety_check": safety_check})
 
-    visual_cue = _schema_visual_cue(schema_content_response) or (
+    schema_support_action: ConversationAction | None = None
+    schema_support_level: SupportUsed | None = None
+    support_payload = (
+        schema_content_response.phase_payload.support_to_serve
+        if schema_content_response is not None
+        and schema_content_response.phase_payload is not None
+        else None
+    )
+    if (
+        support_payload is not None
+        and support_payload.get("support_type") != "RETRY_WITHOUT_SUPPORT"
+    ):
+        (
+            schema_support_message,
+            schema_support_visual_cue,
+            schema_support_steps,
+            schema_support_action,
+            schema_support_level,
+        ) = _support_presentation(schema_content_response)
+    else:
+        schema_support_message = None
+        schema_support_visual_cue = None
+        schema_support_steps = []
+    visual_cue = schema_support_visual_cue or _schema_visual_cue(schema_content_response) or (
         tutor.visual_cue if tutor.visual_cue.show else None
     )
     schema_hint = _schema_hint(schema_content_response)
-    schema_steps = _schema_support_steps(schema_content_response)
+    schema_steps = schema_support_steps or _schema_support_steps(schema_content_response)
     for scaffold_prompt in schema_steps:
         _validate_scaffold_prompt(scaffold_prompt, session.correct_answer, rules)
     scaffold_steps = schema_steps or tutor.scaffold_steps_delivered
-    tutor_message = _contextual_schema_hint(schema_hint, tutor.tutor_message)
-    tutor_message_voice = _contextual_schema_hint(
+    tutor_message = schema_support_message or _contextual_schema_hint(
+        schema_hint,
+        tutor.tutor_message,
+    )
+    tutor_message_voice = schema_support_message or _contextual_schema_hint(
         schema_hint,
         tutor.tutor_message_voice,
     )
@@ -2888,6 +3092,8 @@ async def _process_interaction(
 
     next_hint_count: int = _next_hint_count_from(session)
     conversation_action: ConversationAction = tutor.recommended_conversation_action
+    if schema_support_action is not None:
+        conversation_action = schema_support_action
     # Persisted every turn: the real attempt counter and completion state Sanya
     # reads back on the next turn.
     schema_question_changed = (
@@ -3102,7 +3308,7 @@ async def _process_interaction(
     )
     guided_rescue = _guided_rescue(schema_content_response)
     support_served: SupportUsed | None = (
-        response.active_support_level
+        schema_support_level or response.active_support_level
         if schema_content_response is not None
         and schema_content_response.phase_payload is not None
         and schema_content_response.phase_payload.support_to_serve is not None
