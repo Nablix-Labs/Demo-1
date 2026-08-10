@@ -1330,9 +1330,9 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
         else:
             assert len(events) == event_count_before_stuck + 1
             assert events[-1]["event_type"] == "GUIDED_SUPPORT_ESCALATION_REQUIRED"
-
-
             assert events[-1]["micro_skill_id"] == "T02.M1"
+            assert events[-1].get("triggering_response") is None
+            assert events[-1].get("error_code") is None
             assert stuck.json()["scaffold_step_text"] == (
                 "Which operation should you undo first?"
             )
@@ -2119,4 +2119,3 @@ def test_phase3_content_exhaustion_auto_transitions_to_review() -> None:
     assert validated.payload_type == "REVIEW_SUMMARY"
     assert validated.review_summary is not None
     assert validated.review_summary["summary_id"] == "SUMMARY-CONTENT-EXHAUSTED"
-

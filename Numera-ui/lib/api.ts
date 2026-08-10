@@ -178,7 +178,11 @@ export function studentFacingError(err: unknown): string | null {
     if (!backendMessage || /already|in progress|resume/i.test(backendMessage)) {
       return 'You already have this topic in progress, and the tutor can\u2019t pick it back up yet. Ask the team to reset it for you.';
     }
-    return `The tutor couldn\u2019t load this question. ${backendMessage}`;
+    // A non-resume conflict is a service-contract failure. Backend messages can
+    // contain adapter URLs, payloads, student IDs, or authored error codes; none
+    // of that belongs in learner chat. Keep the diagnostic in the browser
+    // console/network response and give the learner safe, actionable wording.
+    return 'The tutor hit a problem on its side. Nothing you did\u2014please try again in a moment.';
   }
   switch (code) {
     case 'AUTHENTICATION_FAILED':

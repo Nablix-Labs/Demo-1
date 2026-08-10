@@ -324,21 +324,20 @@ async def process_answer_with_session_event(
 
 
 
-        escalation_error_code = _db_error_code(
-            session,
-            context.message,
-        ) or _catalog_error_code(session, tutor.selected_error_code)
-        if wrong_four_escalation and escalation_error_code is None:
-            raise HTTPException(
-                status_code=409,
-                detail="Wrong 4 requires an active question error_code.",
-            )
-        escalation_error_code = escalation_error_code or tutor.error_type
-        if escalation_error_code is None:
-            raise HTTPException(
-                status_code=409,
-                detail="Support escalation requires an error_code.",
-            )
+        escalation_error_code: str | None = None
+        if wrong_four_escalation:
+            escalation_error_code = _db_error_code(
+                session,
+                context.message,
+            ) or _catalog_error_code(
+                session,
+                tutor.selected_error_code,
+            ) or _catalog_error_code(session, tutor.error_type)
+            if escalation_error_code is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Wrong 4 requires an active question error_code.",
+                )
         response = await adapters.student_model.send_session_event(
             GuidedSupportEvent(
                 request_id=_schema_interaction_request_id(
@@ -354,8 +353,8 @@ async def process_answer_with_session_event(
                 timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 question_id=session.question_id,
                 micro_skill_id=micro_skill_ids[0],
-                triggering_response=context.message if escalation_type == "GUIDED_SUPPORT_ESCALATION_REQUIRED" else None,
-                error_code=escalation_error_code if escalation_type == "GUIDED_SUPPORT_ESCALATION_REQUIRED" else None,
+                triggering_response=context.message if wrong_four_escalation else None,
+                error_code=escalation_error_code if wrong_four_escalation else None,
             ),
 
 
