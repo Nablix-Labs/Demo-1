@@ -26,7 +26,8 @@ export function QuestionWizard({
   microSkills,
   onClose,
 }: {
-  microSkills: MicroSkillDetail[];
+  /** Only the identity fields are needed, so either contract's skill type fits. */
+  microSkills: Pick<MicroSkillDetail, 'micro_skill_id' | 'skill_code' | 'skill_name'>[];
   onClose: () => void;
 }) {
   const [step, setStep] = useState(0);

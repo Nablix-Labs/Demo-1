@@ -84,15 +84,16 @@ are written.
 
 | Sheet | Field(s) dropped by v3 | Why the UI wants it |
 |---|---|---|
-| `Visual_Cues` | `asset_url`, `image_generation_prompt`, `negative_prompt`, `tutor_explanation_template`, `retrieval_text` | `asset_url` is the subject of v3's own `VISUAL_CUE_ASSET_PENDING` warning — the UI must show whether the asset is actually there. The prompt fields are the cue editor. |
-| `Scaffold_Steps` | `partial_content` | Part of the step editor; without it a step round-trips lossily. |
-| `Question_Scaffolds` | whole table (`question_id, micro_skill_id, scaffold_id, priority`) | v3's scaffolds page promises "Question Links must show both question and mapped micro-skill context" — this is the table that provides it. Not in any sample response. |
-| `Parallel_Examples` | `worked_steps` | The parallel example is a worked solution; without steps it's just a statement and an answer. |
-| `Misconception_Errors` | `confidence_weight` | Shown next to each linked error; v3 returns bare error objects. |
-| `Source_Provenance` | `source_item_id`, `license_url` | Scope & Source page renders the licence as a link. |
-| `Orientation_Video_Scenes` | `direction` | Scene editor field. |
-| `Questions` | `version` | Every other entity carries one; the question detail header shows it. |
+| `Visual_Cues` | `asset_url`, `image_generation_prompt`, `negative_prompt`, `tutor_explanation_template`, `retrieval_text`, `retrieval_keywords`, `embedding_status` | The whole cue editor, essentially. `asset_url` matters most: it is the subject of v3's own `VISUAL_CUE_ASSET_PENDING` warning, so the contract raises a warning about a field it never sends. v3 returns cues as `{id, sequence_order, label, preview, active, shared_by…}` only. |
+| `Parallel_Examples` | `worked_steps` | A parallel example is a worked solution; without steps it's just a statement and an answer. |
 | `Micro_Skills` | `prerequisite_micro_skill_id` | Micro-skill detail shows the prerequisite chain. |
+
+Everything else I initially suspected was missing turned out to be present on
+inspection — `Scaffold_Steps.partial_content`, the `Question_Scaffolds` link
+(as `question_links`, with `priority` and micro-skill context),
+`Misconception_Errors.confidence_weight`, `Source_Provenance.source_item_id` /
+`license_url`, scene `direction`, and `version` on questions are all in the
+sample responses. v3 is more complete than a first read suggests.
 
 ## 3. Naming to settle before implementation
 
