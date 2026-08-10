@@ -23,9 +23,12 @@ describe('server-side failures are named as server-side', () => {
     expect(msg).not.toMatch(/reach/i);
   });
 
-  it('a 502 carries the backend explanation when there is one', () => {
-    expect(studentFacingError(err(502, { message: 'student_model rejected request' })))
-      .toContain('student_model rejected request');
+  it('a 502 never exposes an internal provider explanation to the student', () => {
+    const message = studentFacingError(err(502, {
+      message: 'status=400 body={"error":{"message":"invalid_json_schema"}}',
+    }));
+    expect(message).toMatch(/tutor service/i);
+    expect(message).not.toMatch(/status=|body=|invalid_json_schema/i);
   });
 
   it('a 504 is reported as a timeout, not a connection failure', () => {

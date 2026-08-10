@@ -213,9 +213,7 @@ export function studentFacingError(err: unknown): string | null {
     return 'The tutor took too long to answer that one. Try sending it again.';
   }
   if (status >= 500) {
-    return backendMessage
-      ? `The tutor service hit an error. ${backendMessage}`
-      : 'The tutor service hit an error on its side. Nothing you did — try again in a moment.';
+    return 'The tutor service hit an error on its side. Nothing you did — try again in a moment.';
   }
   if (status === 429) {
     return 'The tutor is handling a lot right now. Give it a few seconds and try again.';
@@ -907,7 +905,6 @@ export interface InteractionResponse extends GuidedStateFields {
    *  CLARIFICATION_REQUIRED signal the frontend to not treat this as a fresh reply. */
   status?:
     | 'DUPLICATE_TURN'
-    | 'STALE_TURN'
     | 'CLARIFICATION_REQUIRED'
     | 'NUDGE_SUPPRESSED';
   /** The student turn_id this reply corresponds to. */
@@ -958,6 +955,24 @@ export interface InteractionResponse extends GuidedStateFields {
   total_scaffold_steps?: number | null;
 }
 
+export interface StaleTurnResponse {
+  status: 'STALE_TURN';
+  accepted_turn_id: null;
+  expected_previous_tutor_turn_id: string | null;
+  conversation_action: 'WAIT_FOR_STUDENT';
+  attempt_increment: 0;
+  retry_safe: false;
+  message: string;
+}
+
+export type InteractionResult = InteractionResponse | StaleTurnResponse;
+
+export function isStaleTurnResponse(
+  response: InteractionResult,
+): response is StaleTurnResponse {
+  return response.status === 'STALE_TURN';
+}
+
 /**
  * The scaffold state the UI renders: exactly one step, never a catalogue.
  *
@@ -1005,9 +1020,25 @@ export function activeScaffold(res: InteractionResponse | null | undefined): Act
 }
 
 /** POST /interaction — core tutoring call. Requires a started, owned session. */
-export async function sendInteraction(payload: InteractionPayload) {
-  const res = await api.post<InteractionResponse>('/interaction', payload);
-  return res.data;
+export async function sendInteraction(payload: InteractionPayload): Promise<InteractionResult> {
+  try {
+    const res = await api.post<InteractionResponse>('/interaction', payload);
+    return res.data;
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 409) {
+      const data: unknown = error.response.data;
+      if (
+        typeof data === 'object'
+        && data !== null
+        && 'status' in data
+        && data.status === 'STALE_TURN'
+        && 'expected_previous_tutor_turn_id' in data
+      ) {
+        return data as StaleTurnResponse;
+      }
+    }
+    throw error;
+  }
 }
 
 // ── /hint/request — REMOVED ───────────────────────────────────────────────────

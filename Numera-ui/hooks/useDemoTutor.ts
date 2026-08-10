@@ -27,8 +27,11 @@ import {
   type CanvasSubmissionResult,
   studentFacingError,
   type InteractionResponse,
+  type InteractionPayload,
+  type StaleTurnResponse,
   type NudgeDelivery,
   type QuestionType,
+  isStaleTurnResponse,
   isStaleSessionError,
 } from '@/lib/api';
 import { applyInteractionSupport, acceptResponse } from '@/lib/interactionPresentation';
@@ -180,12 +183,13 @@ function chatError(err: unknown, fallback: string): string {
  * the diagnostic question on screen for the whole orientation and attached the
  * next turn to a question the student had already finished. Take the null.
  */
-function syncBackendSession(response: {
+export function syncBackendSession(response: {
   current_phase: string;
   current_question: string | null;
   question_id: string | null;
   question_number?: number;
   last_tutor_turn_id?: string | null;
+  tutor_turn_id?: string | null;
   expected_student_response?: string;
   allow_voice_input?: boolean;
   /**
@@ -218,8 +222,11 @@ function syncBackendSession(response: {
   if (response.question_number !== undefined) {
     store.setQuestionNumber(response.question_number);
   }
-  if (response.last_tutor_turn_id !== undefined) {
-    store.setTutorTurn(response.last_tutor_turn_id, {
+  const tutorTurnId = response.tutor_turn_id !== undefined
+    ? response.tutor_turn_id
+    : response.last_tutor_turn_id;
+  if (tutorTurnId !== undefined) {
+    store.setTutorTurn(tutorTurnId, {
       expects: response.expected_student_response !== 'NONE',
       allow: response.allow_voice_input ?? false,
     });
@@ -236,6 +243,49 @@ function syncBackendSession(response: {
       maxNudgesPerTutorTurn: response.inactivity_policy.max_nudges_per_tutor_turn,
     });
   }
+}
+
+class TurnSynchronizationError extends Error {
+  constructor(sessionId: string, turnId: string | undefined) {
+    super(
+      `Tutor turn synchronization failed after one retry for session_id=${sessionId} `
+      + `turn_id=${turnId ?? 'missing'}.`,
+    );
+    this.name = 'TurnSynchronizationError';
+  }
+}
+
+function synchronizeStaleTurn(response: StaleTurnResponse): void {
+  const store = useNumeraStore.getState();
+  store.setTutorTurn(response.expected_previous_tutor_turn_id, {
+    expects: true,
+    allow: store.allowVoiceInput,
+  });
+}
+
+/**
+ * Submit one student-owned interaction against the latest tutor turn.
+ *
+ * A stale response is authoritative reconciliation data, not tutor feedback.
+ * The backend did not evaluate the turn, so retrying the same idempotency key
+ * once with its expected pointer is safe and prevents the student losing work.
+ */
+export async function sendSynchronizedInteraction(
+  payload: InteractionPayload,
+): Promise<InteractionResponse> {
+  const first = await sendInteraction(payload);
+  if (!isStaleTurnResponse(first)) return first;
+
+  synchronizeStaleTurn(first);
+  const retried = await sendInteraction({
+    ...payload,
+    previous_tutor_turn_id: first.expected_previous_tutor_turn_id,
+  });
+  if (isStaleTurnResponse(retried)) {
+    synchronizeStaleTurn(retried);
+    throw new TurnSynchronizationError(payload.session_id, payload.turn_id);
+  }
+  return retried;
 }
 
 /**
@@ -371,7 +421,7 @@ export function useDemoTutor() {
       const turnId = useNumeraStore.getState().beginSubmissionTurn();
       try {
         const state = useNumeraStore.getState();
-        const res = await sendInteraction({
+        const res = await sendSynchronizedInteraction({
           session_id: sessionId,
           student_id: studentId(),
           interaction_type: 'ANSWER_SUBMISSION',
@@ -521,7 +571,7 @@ export function useDemoTutor() {
       new Promise<void>((resolve) => window.setTimeout(resolve, 6000)),
     ]);
     try {
-      const res = await sendInteraction({
+      const res = await sendSynchronizedInteraction({
         session_id: sessionId,
         student_id: studentId(),
         interaction_type: 'EXPLAIN_AGAIN',
@@ -540,6 +590,7 @@ export function useDemoTutor() {
         await acknowledgementWindow;
         return res;
       }
+      syncBackendSession(res);
       // Present the returned wording once; preserve cue and scaffold as sent.
       await acknowledgementWindow;
       addTranscriptMessage({ role: 'ai', text: res.message });
@@ -601,11 +652,8 @@ export function useDemoTutor() {
       question_id: state.activeQuestionId,
       hint_count: state.lastHintText ? 1 : 0,
     });
-    if (res.status === 'STALE_TURN') {
-      useNumeraStore.getState().setTutorTurn(res.expected_previous_tutor_turn_id ?? null, {
-        expects: true,
-        allow: state.allowVoiceInput,
-      });
+    if (isStaleTurnResponse(res)) {
+      synchronizeStaleTurn(res);
       return { status: 'OUT_OF_SYNC' };
     }
     if (res.status === 'DUPLICATE_TURN') {
@@ -661,6 +709,10 @@ export function useDemoTutor() {
         question_id: state.activeQuestionId,
         hint_count: state.lastHintText ? 1 : 0,
       });
+      if (isStaleTurnResponse(res)) {
+        synchronizeStaleTurn(res);
+        throw new TurnSynchronizationError(sessionId, undefined);
+      }
       if (res.nudge_delivery?.status !== 'PRESENTED') {
         throw new Error('Backend did not acknowledge the presented inactivity nudge.');
       }
@@ -820,7 +872,7 @@ export function useDemoTutor() {
           transcript_final: true,
         };
         console.log('→ POST /interaction', interactionReq);
-        const res = await sendInteraction(interactionReq);
+        const res = await sendSynchronizedInteraction(interactionReq);
         console.log('← /interaction', res);
         // A newer turn fired while we were waiting — drop this stale reply so it
         // can't append out of order under the wrong student turn.
@@ -829,9 +881,10 @@ export function useDemoTutor() {
           console.groupEnd();
           return null;
         }
-        // Duplicate/stale turns (contract §6): the backend didn't evaluate them, so
-        // don't append a reply, speak, or score — just reopen listening.
-        if (res.status === 'DUPLICATE_TURN' || res.status === 'STALE_TURN') {
+        // A duplicate is a cached response and the ordering gate below decides
+        // whether it has already been rendered. STALE_TURN is reconciled and
+        // retried inside sendSynchronizedInteraction before reaching here.
+        if (res.status === 'DUPLICATE_TURN') {
           console.log(`(${res.status} — not applied)`);
           console.groupEnd();
           useNumeraStore.getState().beginListeningTurn();
