@@ -2119,4 +2119,3 @@ def test_phase3_content_exhaustion_auto_transitions_to_review() -> None:
     assert validated.payload_type == "REVIEW_SUMMARY"
     assert validated.review_summary is not None
     assert validated.review_summary["summary_id"] == "SUMMARY-CONTENT-EXHAUSTED"
-

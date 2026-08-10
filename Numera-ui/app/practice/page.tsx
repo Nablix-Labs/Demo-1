@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { Eye, EyeOff, Lightbulb, Check, ArrowRight } from 'lucide-react';
-import { useNumeraStore } from '@/store/useNumeraStore';
+import { useNumeraStore, type CanvasExporter } from '@/store/useNumeraStore';
 import { useFlowNav } from '@/lib/useFlowNav';
 import { useDemoTutor, resetSessionStart, sessionStartError } from '@/hooks/useDemoTutor';
 import { useVoiceTurn } from '@/hooks/useVoiceTurn';
@@ -93,7 +93,7 @@ export default function PracticePage() {
   useEffect(() => setMounted(true), []);
   const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const handleExportReady = useCallback((fn: () => string | null) => {
+  const handleExportReady = useCallback((fn: CanvasExporter) => {
     setCanvasExporter(fn);
   }, [setCanvasExporter]);
 

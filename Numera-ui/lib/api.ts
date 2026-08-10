@@ -773,6 +773,17 @@ export async function endSession(sessionId: string, student: string = studentId(
 }
 
 // ── /interaction (text) ───────────────────────────────────────────────────────
+export interface InteractionCanvasState {
+  snapshot_data_url: string;
+  strokes: Array<{
+    stroke_id: string;
+    tool: 'pen' | 'pencil' | 'highlighter' | 'eraser';
+    points: Array<{ x: number; y: number }>;
+    width: number;
+  }>;
+  captured_at: string;
+}
+
 export interface InteractionPayload {
   session_id: string;
   student_id: string;
@@ -783,8 +794,10 @@ export interface InteractionPayload {
   /** Use for VOICE input instead of text_input. */
   voice_transcript?: string;
   transcript_confidence?: number;
-  /** Reference to a prior /canvas/submit so the turn carries the canvas work. */
+  /** Legacy reference to a prior /canvas/submit. */
   canvas_snapshot_id?: string;
+  /** Frozen at voice-turn end so speech and board work are evaluated together. */
+  canvas_state?: InteractionCanvasState;
   idle_duration_ms?: number;
   nudge_id?: string;
   current_phase: string;
@@ -893,6 +906,8 @@ export interface InteractionResponse extends GuidedStateFields {
   phase_indicator: string;
   /** Optional tutor drawing to render on the canvas alongside this reply. */
   canvas_draw?: CanvasDrawPayload[];
+  /** OCR from the frozen voice-turn canvas. */
+  ocr?: OcrResult | null;
   /** Whether to show the supporting visual cue after this turn. The backend also
    *  sends the richer `visual_cue` object; prefer that when present. */
   show_visual_cue?: boolean;
@@ -920,6 +935,9 @@ export interface InteractionResponse extends GuidedStateFields {
   allow_voice_input?: boolean;
   inactivity_policy?: InactivityPolicyResponse;
   nudge_delivery?: NudgeDelivery | null;
+  is_canvas_solution_correct?: boolean | null;
+  advance_to_next_question?: boolean;
+  feedback_type?: 'PRAISE' | 'HINT' | 'CORRECTION' | 'CLARIFICATION' | null;
 
   // ── Phase 2 scaffolding (frontend handoff, 2026-07-29) ────────────────────
   //

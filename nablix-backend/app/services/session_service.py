@@ -65,6 +65,7 @@ from app.services.student_model_session import (
 _sessions: dict[str, SessionRecord] = {}
 _interaction_locks: dict[str, asyncio.Lock] = {}
 _last_interaction_responses: dict[tuple[str, str], InteractionResponse] = {}
+_interaction_payload_fingerprints: dict[tuple[str, str], str] = {}
 _nudge_deliveries: dict[tuple[str, str], NudgeDeliveryRecord] = {}
 
 _NUDGE_STATUS_TRANSITIONS: dict[NudgeDeliveryStatus, set[NudgeDeliveryStatus]] = {
@@ -122,8 +123,14 @@ def cache_interaction_response(
     session_id: str,
     turn_id: str,
     response: InteractionResponse,
+    payload_fingerprint: str,
 ) -> None:
     _last_interaction_responses[(session_id, turn_id)] = response
+    _interaction_payload_fingerprints[(session_id, turn_id)] = payload_fingerprint
+
+
+def interaction_payload_fingerprint_for(session_id: str, turn_id: str) -> str | None:
+    return _interaction_payload_fingerprints.get((session_id, turn_id))
 
 
 def inactivity_policy() -> InactivityPolicy:

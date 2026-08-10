@@ -48,7 +48,7 @@ class StudentModelServiceAdapter:
         event: StudentModelSessionEvent,
         access_token: str,
     ) -> StudentModelSessionEventResponse:
-        """Persist one Schema 3.0 journey event and return its full state."""
+        """Serialize one Schema 3.0 event, persist it, and validate its full state."""
 
         if self._settings.use_mock_student_model:
             raise AdapterError(
@@ -64,7 +64,7 @@ class StudentModelServiceAdapter:
             response = await post_json(
                 "student_model",
                 f"{self._settings.student_model_url.rstrip('/')}/session/event",
-                event.model_dump(exclude_none=True),
+                event.model_dump(mode="json", exclude_none=True),
                 {"Authorization": f"Bearer {access_token}"},
                 self._settings.adapter_request_timeout_seconds,
                 self._settings.adapter_request_retry_count,

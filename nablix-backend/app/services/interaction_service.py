@@ -1,5 +1,9 @@
+import hashlib
+import json
 import re
 from datetime import datetime, timezone
+from dataclasses import dataclass
+from time import perf_counter
 from typing import Final, Literal, cast
 from uuid import uuid4
 
@@ -33,9 +37,12 @@ from app.models.adapters import (
     Phase2PromptContext,
     RAGResult,
     StudentModelResult,
+    OCRTextRegion,
+    SpatialMathToken,
     TutorAction,
     TutorResult,
     VisualCue,
+    VisionOCRResult,
 )
 from app.models.fields import Phase
 from app.models.guided_learning import (
@@ -72,6 +79,12 @@ from app.models.student_model_session import (
     SupportUsed,
 )
 from app.services.guided_question_opening import guided_question_opening
+from app.services.canvas_annotations import assign_step_ids, plan_canvas_draw
+from app.services.canvas_spatial import (
+    align_step_tokens,
+    associate_strokes_with_steps,
+    parse_mathml_tokens,
+)
 from app.services.phase_transition import (
     DEFAULT_TRANSITION_MESSAGE,
     TRANSITION_MESSAGES,
@@ -83,6 +96,7 @@ from app.services.session_service import (
     get_canvas_submission,
     interaction_lock_for,
     inactivity_policy,
+    interaction_payload_fingerprint_for,
     last_interaction_response_for,
     nudge_deliveries_for_tutor_turn,
     nudge_delivery_for,
@@ -94,6 +108,7 @@ from app.services.session_service import (
 from app.services.student_model_session import (
     PHASE_FROM_STUDENT_MODEL,
 )
+from app.services.snapshot_store import build_reference, store_snapshot
 
 
 _NUMBER_WORD_VALUES: Final[dict[str, str]] = {
@@ -172,6 +187,87 @@ _WRONG_ESCALATION_BY_COUNT: dict[int, WrongEscalationCode] = {
 }
 
 
+@dataclass(frozen=True)
+class _CanvasEvidence:
+    submission_id: str
+    snapshot_reference: str
+    ocr: VisionOCRResult
+    spatial_tokens: list[SpatialMathToken]
+    ocr_latency_ms: float
+
+
+def _normalised_mathml_tokens(mathml: str) -> str:
+    return "".join(token.text for token in parse_mathml_tokens(mathml)).replace(" ", "")
+
+
+def _with_confirmed_mathml_regions(ocr: VisionOCRResult) -> VisionOCRResult:
+    """Attach MathML only when Mathpix returned one unambiguous block per line."""
+
+    if len(ocr.mathml_blocks) != len(ocr.detected_regions):
+        return ocr
+    regions: list[OCRTextRegion] = []
+    for region, mathml in zip(ocr.detected_regions, ocr.mathml_blocks):
+        if _normalised_mathml_tokens(mathml) != region.text.replace(" ", ""):
+            return ocr
+        regions.append(region.model_copy(update={"mathml": mathml}))
+    return ocr.model_copy(update={"detected_regions": regions})
+
+
+def _is_complete_correct_canvas(
+    ocr: VisionOCRResult | None,
+    correct_answer: str | None,
+) -> bool:
+    return (
+        ocr is not None
+        and not ocr.needs_clarification
+        and ocr.final_answer is not None
+        and normalize_exact_notation(ocr.final_answer)
+        == normalize_exact_notation(correct_answer or "")
+    )
+
+
+async def _canvas_evidence_for(request: InteractionRequest) -> _CanvasEvidence | None:
+    canvas_state = request.canvas_state
+    if canvas_state is None:
+        return None
+    settings = get_settings()
+    if len(canvas_state.snapshot_data_url) > settings.max_snapshot_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Canvas snapshot exceeds the {settings.max_snapshot_bytes} byte limit.",
+        )
+    if request.turn_id is None:
+        raise RuntimeError("validated interaction is missing turn_id")
+
+    snapshot_reference = build_reference(request.turn_id)
+    store_snapshot(snapshot_reference, canvas_state.snapshot_data_url)
+    started = perf_counter()
+    ocr = await get_adapters().vision.recognize(canvas_state.snapshot_data_url)
+    ocr = ocr.model_copy(update={"detected_regions": assign_step_ids(ocr.detected_regions)})
+    ocr = _with_confirmed_mathml_regions(ocr)
+    strokes_by_step = associate_strokes_with_steps(canvas_state.strokes, ocr.detected_regions)
+    spatial_tokens: list[SpatialMathToken] = []
+    for region in ocr.detected_regions:
+        if region.step_id is None or region.mathml is None:
+            continue
+        spatial_tokens.extend(
+            align_step_tokens(
+                region.step_id,
+                region.mathml,
+                region.text,
+                strokes_by_step.get(region.step_id, []),
+                region,
+            )
+        )
+    return _CanvasEvidence(
+        submission_id=request.turn_id,
+        snapshot_reference=snapshot_reference,
+        ocr=ocr,
+        spatial_tokens=spatial_tokens,
+        ocr_latency_ms=(perf_counter() - started) * 1000,
+    )
+
+
 def _is_wrong_evaluation(tutor: TutorResult) -> bool:
     return (
         tutor.guided_student_state == "WRONG"
@@ -242,6 +338,38 @@ async def process_answer_with_session_event(
         )
 
     _, student, tutor = await run_tutor_pipeline(context)
+    if (
+        context.has_canvas_evidence
+        and tutor.mistake_classification is not None
+        and tutor.mistake_classification.status == "no_mistake"
+        and not context.canvas_solution_complete_candidate
+    ):
+        confirmation = "That step is correct. Keep going until you have the final answer."
+        return (
+            student,
+            tutor.model_copy(
+                update={
+                    "evaluation": "PARTIALLY_CORRECT",
+                    "response_strategy": "CONFIRM_CORRECT",
+                    "tutor_message": confirmation,
+                    "tutor_message_voice": confirmation,
+                    "attempt_increment": 0,
+                    "question_completed": False,
+                    "answer_value_confirmed": False,
+                    "recommended_conversation_action": "ACKNOWLEDGE_ANSWER",
+                }
+            ),
+            None,
+            None,
+            session,
+        )
+    if (
+        context.has_canvas_evidence
+        and tutor.mistake_classification is not None
+        and tutor.mistake_classification.status == "mistake_found"
+        and tutor.intent != "SUBMITTING_ANSWER"
+    ):
+        return student, tutor.model_copy(update={"attempt_increment": 0}), None, None, session
     scaffold_turn = session.current_scaffold_step_id is not None
     wrong_attempt_count = (
         session.wrong_attempt_count + 1
@@ -550,6 +678,38 @@ def _normalize_voice_transcript(transcript: str) -> str:
     normalized = re.sub(r"\bequals?\b", "=", normalized, flags=re.IGNORECASE)
     normalized = re.sub(r"\s*=\s*", " = ", normalized)
     return " ".join(normalized.split())
+
+
+_EXPLICIT_ASSIGNMENT = re.compile(
+    r"\b([A-Za-z])\s*=\s*(-?(?:\d+(?:\.\d*)?|\.\d+))\b"
+)
+_SPOKEN_NUMERIC_ANSWER = re.compile(
+    r"\b(?:got|answer\s*(?:=|is)?|solution\s*(?:=|is)?)\s*"
+    r"(-?(?:\d+(?:\.\d*)?|\.\d+))\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _spoken_answer_conflicts_with_canvas(
+    student_message: str,
+    canvas_final_answer: str | None,
+) -> bool:
+    """Detect a plainly stated numeric answer that disagrees with the board."""
+
+    if canvas_final_answer is None:
+        return False
+    normalized_message = _normalize_voice_transcript(student_message)
+    spoken = _EXPLICIT_ASSIGNMENT.search(normalized_message)
+    board = _EXPLICIT_ASSIGNMENT.search(canvas_final_answer)
+    if board is None:
+        return False
+    if spoken is not None:
+        return (
+            spoken.group(1).lower() == board.group(1).lower()
+            and spoken.group(2) != board.group(2)
+        )
+    numeric_answer = _SPOKEN_NUMERIC_ANSWER.search(normalized_message)
+    return numeric_answer is not None and numeric_answer.group(1) != board.group(2)
 
 
 def _is_acknowledgement(message: str, rules: ClassifierRulesConfig) -> bool:
@@ -1288,6 +1448,12 @@ def _duplicate_turn_response(
             f"cached response is missing for duplicate session_id={session.session_id} "
             f"turn_id={request.turn_id}"
         )
+    fingerprint = interaction_payload_fingerprint_for(session.session_id, request.turn_id)
+    if fingerprint is not None and fingerprint != _request_fingerprint(request):
+        raise HTTPException(
+            status_code=409,
+            detail="turn_id was already accepted with different transcript or canvas evidence.",
+        )
     return response.model_copy(
         update={
             "status": "DUPLICATE_TURN",
@@ -1448,8 +1614,19 @@ def _cache_response(
 ) -> InteractionResponse:
     if request.turn_id is None:
         raise RuntimeError("validated interaction is missing turn_id")
-    cache_interaction_response(request.session_id, request.turn_id, response)
+    cache_interaction_response(
+        request.session_id,
+        request.turn_id,
+        response,
+        _request_fingerprint(request),
+    )
     return response
+
+
+def _request_fingerprint(request: InteractionRequest) -> str:
+    payload = request.model_dump(mode="json", exclude_none=True)
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 async def process_interaction(
@@ -2052,11 +2229,17 @@ async def _process_interaction(
 
     student_message = _student_message_from(request)
     rules: ClassifierRulesConfig = load_classifier_rules()
+    canvas_evidence = await _canvas_evidence_for(request)
 
+    canvas_complete_correct = _is_complete_correct_canvas(
+        canvas_evidence.ocr if canvas_evidence is not None else None,
+        session.correct_answer,
+    )
     if (
         request.input_source == "VOICE"
         and request.transcript_confidence is not None
         and request.transcript_confidence < rules.low_transcript_confidence_threshold
+        and not canvas_complete_correct
     ):
         clarification_history = _updated_conversation_history(
             session.conversation_history,
@@ -2072,8 +2255,8 @@ async def _process_interaction(
             session.hint_count,
             session.current_phase,
             request.transcript_confidence,
-            request.canvas_snapshot_id,
-            None,
+            canvas_evidence.submission_id if canvas_evidence is not None else request.canvas_snapshot_id,
+            canvas_evidence.ocr if canvas_evidence is not None else None,
             False,
             False,
             [],
@@ -2106,6 +2289,22 @@ async def _process_interaction(
                 attempt_increment=0,
                 status="CLARIFICATION_REQUIRED",
                 retry_safe=None,
+            ).model_copy(
+                update={
+                    "ocr": canvas_evidence.ocr if canvas_evidence is not None else None,
+                    "snapshot_reference": (
+                        canvas_evidence.snapshot_reference
+                        if canvas_evidence is not None
+                        else None
+                    ),
+                    "is_canvas_solution_correct": (
+                        False
+                        if canvas_evidence is not None
+                        and not canvas_evidence.ocr.needs_clarification
+                        else None
+                    ),
+                    "feedback_type": "CLARIFICATION",
+                }
             ),
         )
 
@@ -2133,7 +2332,78 @@ async def _process_interaction(
         rules.conversation_rules.max_recent_messages,
     )
     canvas_submission = get_canvas_submission(session, request.canvas_snapshot_id)
-    ocr = canvas_submission.ocr if canvas_submission is not None else None
+    ocr = (
+        canvas_evidence.ocr
+        if canvas_evidence is not None
+        else canvas_submission.ocr
+        if canvas_submission is not None
+        else None
+    )
+    canvas_solution_complete_candidate = _is_complete_correct_canvas(
+        ocr,
+        session.correct_answer,
+    )
+    if (
+        canvas_evidence is not None
+        and canvas_solution_complete_candidate
+        and _spoken_answer_conflicts_with_canvas(student_message, ocr.final_answer)
+    ):
+        message = (
+            "Your board shows a correct final answer, but I heard a different answer. "
+            "Which answer would you like me to check?"
+        )
+        updated_session = update_interaction_state(
+            request.session_id,
+            request.student_id,
+            session,
+            session.current_phase,
+            session.hint_count,
+            session.current_phase,
+            request.transcript_confidence,
+            canvas_evidence.submission_id,
+            ocr,
+            False,
+            False,
+            [],
+            {
+                "attempt_count": session.attempt_count,
+                "question_completed": session.question_completed,
+                "conversation_history": _updated_conversation_history(
+                    session.conversation_history,
+                    student_message,
+                    message,
+                    rules.conversation_rules.max_recent_messages,
+                ),
+                **_turn_updates(request, "REQUESTED_CLARIFICATION", "CLARIFICATION"),
+            },
+        )
+        return _cache_response(
+            request,
+            _response_from(
+                session_id=request.session_id,
+                student_id=request.student_id,
+                turn_id=request.turn_id or "TURN-0000",
+                interaction_type=request.interaction_type,
+                nudge_id=request.nudge_id,
+                session=updated_session,
+                message=message,
+                message_voice=message,
+                visual_cue=None,
+                scaffold_steps=[],
+                session_summary=None,
+                conversation_action="REQUEST_CLARIFICATION",
+                attempt_increment=0,
+                status="CLARIFICATION_REQUIRED",
+                retry_safe=None,
+            ).model_copy(
+                update={
+                    "ocr": ocr,
+                    "snapshot_reference": canvas_evidence.snapshot_reference,
+                    "is_canvas_solution_correct": True,
+                    "feedback_type": "CLARIFICATION",
+                }
+            ),
+        )
     scaffold_turn = (
         request.interaction_type == "ANSWER_SUBMISSION"
         and session.current_scaffold_step_id is not None
@@ -2201,7 +2471,68 @@ async def _process_interaction(
         detected_steps=ocr.detected_steps if ocr is not None else [],
         ocr_confidence=ocr.confidence if ocr is not None else None,
         canvas_regions=ocr.detected_regions if ocr is not None else [],
+        canvas_mathml_blocks=ocr.mathml_blocks if ocr is not None else [],
+        spatial_tokens=(canvas_evidence.spatial_tokens if canvas_evidence is not None else []),
+        has_canvas_evidence=canvas_evidence is not None,
+        canvas_solution_complete_candidate=canvas_solution_complete_candidate,
     )
+    if ocr is not None and ocr.needs_clarification:
+        message = "I’m having trouble reading your working on the board. Please rewrite it clearly and try again."
+        updated_session = update_interaction_state(
+            request.session_id,
+            request.student_id,
+            session,
+            session.current_phase,
+            session.hint_count,
+            session.current_phase,
+            request.transcript_confidence,
+            canvas_evidence.submission_id if canvas_evidence is not None else request.canvas_snapshot_id,
+            ocr,
+            False,
+            False,
+            [],
+            {
+                "attempt_count": session.attempt_count,
+                "question_completed": session.question_completed,
+                "conversation_history": _updated_conversation_history(
+                    session.conversation_history,
+                    student_message,
+                    message,
+                    rules.conversation_rules.max_recent_messages,
+                ),
+                **_turn_updates(request, "REQUESTED_CLARIFICATION", "CLARIFICATION"),
+            },
+        )
+        return _cache_response(
+            request,
+            _response_from(
+                session_id=request.session_id,
+                student_id=request.student_id,
+                turn_id=request.turn_id or "TURN-0000",
+                interaction_type=request.interaction_type,
+                nudge_id=request.nudge_id,
+                session=updated_session,
+                message=message,
+                message_voice=message,
+                visual_cue=None,
+                scaffold_steps=[],
+                session_summary=None,
+                conversation_action="REQUEST_CLARIFICATION",
+                attempt_increment=0,
+                status="CLARIFICATION_REQUIRED",
+                retry_safe=None,
+            ).model_copy(
+                update={
+                    "ocr": ocr,
+                    "snapshot_reference": (
+                        canvas_evidence.snapshot_reference
+                        if canvas_evidence is not None
+                        else None
+                    ),
+                    "feedback_type": "CLARIFICATION",
+                }
+            ),
+        )
     safety_check = await adapters.safety.check(context)
     if not safety_check.passed:
         fallback = safety_check.safe_fallback_message or "Let's pause for a moment."
@@ -2548,8 +2879,8 @@ async def _process_interaction(
         next_hint_count,
         next_phase,
         request.transcript_confidence,
-        request.canvas_snapshot_id,
-        None,
+        canvas_evidence.submission_id if canvas_evidence is not None else request.canvas_snapshot_id,
+        ocr,
         visual_cue is not None,
         len(scaffold_steps) > 0,
         scaffold_steps,
@@ -2608,6 +2939,46 @@ async def _process_interaction(
             "intervention_triggered": (
                 _is_wrong_evaluation(tutor)
                 and updated_session.wrong_attempt_count >= 4
+            ),
+            "ocr": ocr,
+            "snapshot_reference": (
+                canvas_evidence.snapshot_reference
+                if canvas_evidence is not None
+                else None
+            ),
+            "canvas_draw": (
+                plan_canvas_draw(
+                    tutor,
+                    ocr.detected_regions,
+                    canvas_evidence.spatial_tokens if canvas_evidence is not None else None,
+                )
+                if ocr is not None
+                else []
+            ),
+            "is_canvas_solution_correct": (
+                True
+                if canvas_evidence is not None
+                and canvas_solution_complete_candidate
+                and tutor.evaluation == "CORRECT"
+                else False
+                if canvas_evidence is not None
+                else None
+            ),
+            "advance_to_next_question": (
+                schema_response is not None
+                and conversation_action == "ADVANCE_TO_NEXT_QUESTION"
+            ),
+            "feedback_type": (
+                "PRAISE"
+                if tutor.evaluation == "CORRECT"
+                or (
+                    canvas_evidence is not None
+                    and tutor.mistake_classification is not None
+                    and tutor.mistake_classification.status == "no_mistake"
+                )
+                else "CORRECTION"
+                if tutor.evaluation in {"INCORRECT", "PARTIALLY_CORRECT"}
+                else "HINT"
             ),
         }
     )

@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -10,7 +11,7 @@ from app.models.adapters import (
     VisualCue,
     VisionOCRResult,
 )
-from app.models.canvas import CanvasDrawPayload, CanvasLatency
+from app.models.canvas import CanvasDrawPayload, CanvasLatency, CanvasStroke
 from app.models.fields import (
     BoundedText,
     ConceptId,
@@ -20,6 +21,7 @@ from app.models.fields import (
     Phase,
     QuestionId,
     SessionId,
+    SnapshotDataUrl,
     StudentId,
     TurnId,
 )
@@ -47,6 +49,14 @@ from app.models.student_model_session import (
 )
 
 
+class InteractionCanvasState(BaseModel):
+    """Frozen canvas evidence paired with a completed voice turn."""
+
+    snapshot_data_url: SnapshotDataUrl
+    strokes: list[CanvasStroke] = Field(default_factory=list)
+    captured_at: datetime
+
+
 class InteractionRequest(BaseModel):
     """Validated student interaction sent during an active tutoring session."""
 
@@ -61,6 +71,7 @@ class InteractionRequest(BaseModel):
     previous_tutor_turn_id: TurnId | None = None
     transcript_final: bool | None = None
     canvas_snapshot_id: str | None = None
+    canvas_state: InteractionCanvasState | None = None
     current_phase: Phase
     concept_id: ConceptId
     question_id: QuestionId
@@ -171,6 +182,9 @@ class InteractionResponse(BaseModel):
     latency: CanvasLatency | None = None
     snapshot_reference: str | None = None
     tutor: TutorResult | None = None
+    is_canvas_solution_correct: bool | None = None
+    advance_to_next_question: bool = False
+    feedback_type: Literal["PRAISE", "HINT", "CORRECTION", "CLARIFICATION"] | None = None
 
 
 class StaleTurnResponse(BaseModel):

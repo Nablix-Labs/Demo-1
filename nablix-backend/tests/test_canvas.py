@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -34,6 +35,41 @@ from tests.test_session_events import (
 client = TestClient(app, headers={"Authorization": "Bearer test-token"})
 
 VALID_SNAPSHOT_DATA_URL = "data:image/png;base64,aGVsbG8="
+
+
+def _unified_voice_payload(
+    session_id: str,
+    student_id: str,
+    turn_id: str,
+    transcript: str,
+) -> dict[str, object]:
+    session = session_service._sessions[session_id]
+    return {
+        "session_id": session_id,
+        "student_id": student_id,
+        "interaction_type": "ANSWER_SUBMISSION",
+        "input_source": "VOICE",
+        "turn_id": turn_id,
+        "voice_transcript": transcript,
+        "transcript_confidence": 0.95,
+        "transcript_final": True,
+        "current_phase": session.current_phase,
+        "concept_id": session.concept_id,
+        "question_id": session.question_id,
+        "hint_count": session.hint_count,
+        "canvas_state": {
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+            "strokes": [
+                {
+                    "stroke_id": "stroke-1",
+                    "tool": "pen",
+                    "points": [{"x": 0.12, "y": 0.18}, {"x": 0.48, "y": 0.26}],
+                    "width": 0.01,
+                }
+            ],
+            "captured_at": "2026-08-10T10:00:00Z",
+        },
+    }
 
 
 def test_canvas_semantic_text_normalizes_detected_relationships() -> None:
@@ -164,6 +200,7 @@ def test_canvas_submit_returns_mock_ocr_result() -> None:
         "w": 0.36,
         "h": 0.08,
         "confidence": 0.96,
+        "mathml": None,
     }
     assert body["ocr"]["final_answer"] == "x = 5"
     assert body["ocr"]["raw_ocr_text"] == "x + 4 = 9, x = 9 - 4, x = 5"
@@ -797,3 +834,239 @@ def test_canvas_correct_same_phase_routes_next_question(
     assert stored.attempt_count == 0
     assert stored.question_completed is False
     assert stored.question_number == 1
+
+
+def test_unified_voice_canvas_validation_advances_for_complete_correct_work() -> None:
+    session_id = _start_session("ST019")
+    payload = _unified_voice_payload(
+        session_id,
+        "ST019",
+        "TURN-UNIFIED-CORRECT",
+        "Is this right?",
+    )
+
+    response = client.post("/interaction", json=payload)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["is_canvas_solution_correct"] is True
+    assert body["advance_to_next_question"] is True
+    assert body["attempt_increment"] == 1
+    assert body["feedback_type"] == "PRAISE"
+
+
+def test_unified_voice_canvas_conflict_returns_clarification() -> None:
+    session_id = _start_session("ST020")
+    payload = _unified_voice_payload(
+        session_id,
+        "ST020",
+        "TURN-UNIFIED-CONFLICT",
+        "I got three.",
+    )
+
+    response = client.post("/interaction", json=payload)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "CLARIFICATION_REQUIRED"
+    assert body["conversation_action"] == "REQUEST_CLARIFICATION"
+    assert body["is_canvas_solution_correct"] is True
+    assert body["attempt_increment"] == 0
+    assert body["feedback_type"] == "CLARIFICATION"
+
+
+def test_unified_voice_canvas_retries_require_identical_evidence() -> None:
+    session_id = _start_session("ST021")
+    payload = _unified_voice_payload(
+        session_id,
+        "ST021",
+        "TURN-UNIFIED-RETRY",
+        "Is this right?",
+    )
+
+    first = client.post("/interaction", json=payload)
+    exact_retry = client.post("/interaction", json=payload)
+    changed_payload = {**payload, "voice_transcript": "I got x equals four."}
+    changed_retry = client.post("/interaction", json=changed_payload)
+
+    assert first.status_code == 200, first.text
+    assert exact_retry.status_code == 200, exact_retry.text
+    assert exact_retry.json()["status"] == "DUPLICATE_TURN"
+    assert changed_retry.status_code == 409
+
+
+def test_unified_voice_canvas_confirms_a_correct_intermediate_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class IntermediateVision:
+        async def recognize(self, snapshot_data_url: str) -> VisionOCRResult:
+            del snapshot_data_url
+            return VisionOCRResult(
+                raw_ocr_text="x = 9 - 4",
+                detected_equation="x + 4 = 9",
+                detected_steps=["x = 9 - 4"],
+                detected_regions=[
+                    {
+                        "text": "x = 9 - 4",
+                        "x": 0.12,
+                        "y": 0.18,
+                        "w": 0.34,
+                        "h": 0.08,
+                        "confidence": 0.95,
+                    }
+                ],
+                final_answer=None,
+                confidence=0.95,
+                provider="mock",
+            )
+
+    adapters = provider.get_adapters()
+    monkeypatch.setattr(
+        interaction_service,
+        "get_adapters",
+        lambda: replace(adapters, vision=IntermediateVision()),
+    )
+    session_id = _start_session("ST022")
+    response = client.post(
+        "/interaction",
+        json=_unified_voice_payload(
+            session_id,
+            "ST022",
+            "TURN-UNIFIED-INTERMEDIATE",
+            "Is this right?",
+        ),
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["is_canvas_solution_correct"] is False
+    assert body["advance_to_next_question"] is False
+    assert body["conversation_action"] == "ACKNOWLEDGE_ANSWER"
+    assert body["attempt_increment"] == 0
+    assert body["feedback_type"] == "PRAISE"
+    assert session_service._sessions[session_id].attempt_count == 0
+
+
+def test_unified_voice_canvas_unclear_ocr_does_not_grade(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UnclearVision:
+        async def recognize(self, snapshot_data_url: str) -> VisionOCRResult:
+            del snapshot_data_url
+            return VisionOCRResult(
+                raw_ocr_text="x = ?",
+                detected_equation="x + 4 = 9",
+                final_answer="x = 5",
+                confidence=0.4,
+                needs_clarification=True,
+                provider="mock",
+            )
+
+    adapters = provider.get_adapters()
+    monkeypatch.setattr(
+        interaction_service,
+        "get_adapters",
+        lambda: replace(adapters, vision=UnclearVision()),
+    )
+    session_id = _start_session("ST023")
+    response = client.post(
+        "/interaction",
+        json=_unified_voice_payload(
+            session_id,
+            "ST023",
+            "TURN-UNIFIED-UNCLEAR",
+            "Is this right?",
+        ),
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "CLARIFICATION_REQUIRED"
+    assert body["is_canvas_solution_correct"] is None
+    assert body["advance_to_next_question"] is False
+    assert body["attempt_increment"] == 0
+    assert body["feedback_type"] == "CLARIFICATION"
+    assert session_service._sessions[session_id].attempt_count == 0
+
+
+def test_unified_voice_canvas_keeps_mathml_in_tutor_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mathml_blocks = [
+        "<math><mi>x</mi><mo>+</mo><mn>4</mn><mo>=</mo><mn>9</mn></math>",
+        "<math><mi>x</mi><mo>=</mo><mn>9</mn><mo>-</mo><mn>4</mn></math>",
+        "<math><mi>x</mi><mo>=</mo><mn>5</mn></math>",
+    ]
+    captured_context: list[AdapterContext] = []
+
+    class MathMLVision:
+        async def recognize(self, snapshot_data_url: str) -> VisionOCRResult:
+            del snapshot_data_url
+            return VisionOCRResult(
+                raw_ocr_text="x + 4 = 9\nx = 9 - 4\nx = 5",
+                detected_equation="x + 4 = 9",
+                detected_steps=["x + 4 = 9", "x = 9 - 4", "x = 5"],
+                detected_regions=[
+                    {"text": "x + 4 = 9", "x": 0.12, "y": 0.18, "w": 0.36, "h": 0.08, "confidence": 0.96},
+                    {"text": "x = 9 - 4", "x": 0.12, "y": 0.30, "w": 0.34, "h": 0.08, "confidence": 0.95},
+                    {"text": "x = 5", "x": 0.12, "y": 0.42, "w": 0.18, "h": 0.08, "confidence": 0.95},
+                ],
+                final_answer="x = 5",
+                confidence=0.95,
+                mathml_blocks=mathml_blocks,
+                provider="mathpix",
+            )
+
+    async def capture_pipeline(context: AdapterContext):
+        captured_context.append(context)
+        return (
+            RAGResult(documents=[], retrieval_confidence=0.0),
+            StudentModelResult(
+                mastery_status="DEVELOPING",
+                continuity_status="on_track",
+                recommended_entry_phase="GUIDED_PRACTICE",
+                hint_dependency_score=0.0,
+                intervention_required=False,
+            ),
+            TutorResult(
+                evaluation="CORRECT",
+                error_type="NONE",
+                intent="ASKING_QUESTION",
+                response_strategy="CONFIRM_CORRECT",
+                tutor_message="Correct.",
+                tutor_message_voice="Correct.",
+                voice_optimised=True,
+                hint_level=0,
+                answer_reveal_allowed=False,
+                confidence=0.95,
+                input_source="VOICE",
+                attempt_increment=1,
+                recommended_conversation_action="ADVANCE_TO_NEXT_QUESTION",
+                question_completed=True,
+                answer_value_confirmed=True,
+                reasoning_complete=True,
+            ),
+        )
+
+    adapters = provider.get_adapters()
+    monkeypatch.setattr(
+        interaction_service,
+        "get_adapters",
+        lambda: replace(adapters, vision=MathMLVision()),
+    )
+    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", capture_pipeline)
+    session_id = _start_session("ST024")
+
+    response = client.post(
+        "/interaction",
+        json=_unified_voice_payload(
+            session_id,
+            "ST024",
+            "TURN-UNIFIED-MATHML",
+            "Is this right?",
+        ),
+    )
+
+    assert response.status_code == 200, response.text
+    assert captured_context[0].canvas_mathml_blocks == mathml_blocks
+    assert [region.mathml for region in captured_context[0].canvas_regions] == mathml_blocks

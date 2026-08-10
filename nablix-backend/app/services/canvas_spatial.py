@@ -68,7 +68,7 @@ def associate_strokes_with_steps(
             reg_top = region.y - 0.05
             reg_bottom = region.y + region.h + 0.05
             if reg_top <= box.cy <= reg_bottom:
-                overlap = min(box.max_y, region.y + region.h) - max(box.min_x, region.y)
+                overlap = min(box.max_y, region.y + region.h) - max(box.min_y, region.y)
                 if overlap > best_overlap:
                     best_overlap = overlap
                     best_step_id = step_id

@@ -17,7 +17,7 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import { Stage, Layer, Line, Rect, Ellipse, Group, Text } from 'react-konva';
 import type Konva from 'konva';
-import { useNumeraStore, type DrawnItem } from '@/store/useNumeraStore';
+import { useNumeraStore, type CanvasExporter, type CanvasStrokeSnapshot, type DrawnItem } from '@/store/useNumeraStore';
 import { uid } from '@/lib/uid';
 import { setStudentWriting } from '@/lib/tutorSpeech';
 import TutorLayer from './TutorLayer';
@@ -26,7 +26,7 @@ import TutorHandOverlay from './TutorHandOverlay';
 import { useTutorRevealSync } from '@/store/useTutorReveal';
 
 interface DrawingCanvasProps {
-  onExportReady?: (exportFn: () => string | null) => void;
+  onExportReady?: (exportFn: CanvasExporter) => void;
   /**
    * The canvas belongs to the tutor: the student can't draw on it, and their ink
    * isn't shown on it either. Used by Phase 1 (concept orientation), where only
@@ -81,13 +81,36 @@ export default function DrawingCanvas({ onExportReady, tutorOnly = false }: Draw
     return () => ro.disconnect();
   }, []);
 
-  // ── Expose exportPNG to parent ───────────────────────────────────────────────
+  // ── Expose the frozen PNG and committed freehand strokes to parent ────────────
   useEffect(() => {
     onExportReady?.(() => {
-      if (!stageRef.current) return null;
-      return stageRef.current.toDataURL({ mimeType: 'image/png', pixelRatio: 2 });
+      const stage = stageRef.current;
+      if (!stage) return null;
+      const width = Math.max(stage.width(), 1);
+      const height = Math.max(stage.height(), 1);
+      const scale = Math.max(width, height);
+      const strokes: CanvasStrokeSnapshot[] = items.flatMap((item) => {
+        if (item.kind !== 'stroke' || item.points.length < 4) return [];
+        const points = item.points.reduce<Array<{ x: number; y: number }>>((result, value, index) => {
+          if (index % 2 === 0 && index + 1 < item.points.length) {
+            result.push({ x: value / width, y: item.points[index + 1] / height });
+          }
+          return result;
+        }, []);
+        return [{
+          stroke_id: item.id,
+          tool: item.tool,
+          points,
+          width: item.size / scale,
+        }];
+      });
+      return {
+        snapshotDataUrl: stage.toDataURL({ mimeType: 'image/png', pixelRatio: 2 }),
+        strokes,
+        capturedAt: new Date().toISOString(),
+      };
     });
-  }, [onExportReady]);
+  }, [items, onExportReady]);
 
   // ── Pointer handlers ─────────────────────────────────────────────────────────
   const handleDown = useCallback(

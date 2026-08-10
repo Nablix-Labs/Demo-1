@@ -30,11 +30,16 @@ class _MathpixOCRPayload(BaseModel):
     confidence: float | None = None
     confidence_rate: float | None = None
     line_data: list[_MathpixLineData] = Field(default_factory=list)
-    data: list[dict[str, object]] | None = None
+    data: list["_MathpixDataItem"] = Field(default_factory=list)
     image_width: int | None = None
     image_height: int | None = None
     error: str | None = None
     error_info: object | None = None
+
+
+class _MathpixDataItem(BaseModel):
+    type: str
+    value: str
 
 
 class MathpixVisionOCRAdapter:
@@ -108,6 +113,7 @@ class MathpixVisionOCRAdapter:
                 or _contains_incomplete_equation(detected_steps)
             ),
             latex=payload.latex_styled or payload.text,
+            mathml_blocks=[item.value for item in payload.data if item.type == "mathml"],
             detected_shapes=[],
             confidence_source="ocr_native",
             provider="mathpix",

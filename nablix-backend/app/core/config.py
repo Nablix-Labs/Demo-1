@@ -9,7 +9,6 @@ class Settings(BaseSettings):
     app_version: str = "1.0.0"
 
     # External service URLs
-    tutor_engine_url: str = "http://localhost:8001"
     voice_service_url: str = "http://localhost:8004" #chiru+aditya
     safety_service_url: str = "http://localhost:8004" #manjusha
     student_model_url: str = ""

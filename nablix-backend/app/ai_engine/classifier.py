@@ -86,6 +86,9 @@ class ClassificationRequest(StrictSchema):
     max_hint_results: int = Field(default=3, ge=1)
     exclude_content_ids: list[str] = Field(default_factory=list)
     canvas_regions: list[CanvasTextRegion] = Field(default_factory=list)
+    canvas_mathml_blocks: list[str] = Field(default_factory=list)
+    has_canvas_evidence: bool = False
+    canvas_solution_complete_candidate: bool = False
     conversation_history: list[ConversationMessage] = Field(default_factory=list)
     conversation_state: ConversationState | None = None
     generated_question_rubric: GeneratedQuestionRubric | None = None
@@ -2298,7 +2301,9 @@ def build_tutor_decision(
     confidence: float,
 ) -> TutorDecision:
     canvas_review: CanvasMathReview | None = None
-    if request.input_source == "CANVAS" and intent == "SUBMITTING_ANSWER":
+    if request.has_canvas_evidence or (
+        request.input_source == "CANVAS" and intent == "SUBMITTING_ANSWER"
+    ):
         canvas_review = review_canvas_math(
             question=request.question,
             correct_answer=request.correct_answer,
@@ -2318,7 +2323,18 @@ def build_tutor_decision(
         and canvas_review.mistake_classification.status == "mistake_found"
     )
     effective_evaluation: EvaluationCategory | None = evaluation
-    if canvas_mistake_found and evaluation == "CORRECT":
+    if (
+        canvas_review is not None
+        and canvas_review.mistake_classification.status == "no_mistake"
+        and request.canvas_solution_complete_candidate
+    ):
+        effective_evaluation = "CORRECT"
+    elif (
+        canvas_review is not None
+        and canvas_review.mistake_classification.status == "mistake_found"
+    ):
+        effective_evaluation = "INCORRECT"
+    if canvas_mistake_found and evaluation == "CORRECT" and not request.has_canvas_evidence:
         effective_evaluation = "PARTIALLY_CORRECT"
 
     effective_response_strategy: ResponseStrategy = response_strategy
