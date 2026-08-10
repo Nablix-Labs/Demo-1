@@ -25,6 +25,7 @@ const IDLE: ActivityGate = {
   pageHidden: false,
   disconnected: false,
   awaitingStudent: true,
+  tutorTurnFailed: false,
 };
 
 const nudge = (over: Partial<NudgeRecord> = {}): NudgeRecord => ({
@@ -43,6 +44,28 @@ describe('the idle clock only runs when it should (rules 1, 2)', () => {
     // Nudging while the tutor still owes a reply blames the student for the
     // tutor being slow.
     expect(clockMayRun({ ...IDLE, awaitingStudent: false })).toBe(false);
+  });
+
+  it('does not run after the tutor turn failed', () => {
+    // Reported 10 Aug: the student answered "n+6", the tutor returned
+    // INTERNAL_ERROR, they answered again, it failed again, they stopped — and
+    // were then asked "what is the first thing you would try?". A failed turn
+    // leaves awaitingStudent true and lastTutorTurnId on the last turn that
+    // worked, so without this the silence is indistinguishable from being stuck.
+    expect(clockMayRun({ ...IDLE, tutorTurnFailed: true })).toBe(false);
+  });
+
+  it('will not claim after a failed turn even once past the threshold', () => {
+    expect(
+      shouldClaimNudge({
+        policy: POLICY,
+        gate: { ...IDLE, tutorTurnFailed: true },
+        elapsedMs: 120_000,
+        sinceLastNudgeMs: null,
+        nudgesThisTurn: 0,
+        tutorTurnId: 't1',
+      }),
+    ).toEqual({ claim: false, reason: 'blocked' });
   });
 
   it.each([

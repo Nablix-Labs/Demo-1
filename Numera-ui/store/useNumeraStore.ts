@@ -251,6 +251,20 @@ export interface NumeraState {
   // opens the mic when both are true.
   expectsStudentResponse: boolean;
   allowVoiceInput: boolean;
+  /**
+   * The tutor's last turn failed and nothing has replaced it.
+   *
+   * A failed turn leaves `expectsStudentResponse` true — deliberately, so the
+   * student can retry — and leaves `lastTutorTurnId` pointing at the last turn
+   * that DID work. To the inactivity controller that is indistinguishable from a
+   * student who has gone quiet on a live question, so it nudges them: the tutor
+   * errors twice, the student stops, and the third bubble asks "what is the
+   * first thing you would try?" (10 Aug). They already tried. Twice.
+   *
+   * Cleared by `setTutorTurn`, which is the only place a real tutor turn is
+   * established, so recovery needs no separate signal.
+   */
+  tutorTurnFailed: boolean;
 
   // Visual cue card — supporting guidance shown when the AI Engine flags a
   // mistake. `visualCueType` is the backend cue_type (picks which card renders);
@@ -402,6 +416,8 @@ export interface NumeraState {
   /** Record the tutor's reply turn (voice contract §11): store its tutor_turn_id
    *  as the next previous_tutor_turn_id, and the backend gating for the next turn. */
   setTutorTurn: (tutorTurnId: string | null, gating: { expects: boolean; allow: boolean }) => void;
+  /** The tutor turn failed; the student is owed a reply, not a nudge. */
+  markTutorTurnFailed: () => void;
   setVisualCueVisible: (v: boolean) => void;
   setActiveScaffold: (s: ActiveScaffold | null) => void;
 
@@ -474,7 +490,7 @@ export interface NumeraState {
 const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
-  | 'setQuestionText' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn'
+  | 'setQuestionText' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'markTutorTurnFailed'
   | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue'
   | 'setSupportShown' | 'setLastHintText' | 'setQuestionProgress' | 'setAppliedResponse' | 'setInactivityPolicy'
   | 'addTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript' | 'commitPartialTranscript'
@@ -531,6 +547,7 @@ const initial: Omit<
   lastTutorTurnId: null,
   expectsStudentResponse: true,
   allowVoiceInput: true,
+  tutorTurnFailed: false,
   activeScaffold: null as ActiveScaffold | null,
   visualCueVisible: false,
   visualCueType: null,
@@ -717,7 +734,11 @@ export const useNumeraStore = create<NumeraState>()(
       lastTutorTurnId: tutorTurnId,
       expectsStudentResponse: expects,
       allowVoiceInput: allow,
+      // A turn landed, so whatever failed before it is over.
+      tutorTurnFailed: false,
     }),
+
+  markTutorTurnFailed: () => set({ tutorTurnFailed: true }),
 
   setVisualCueVisible: (visualCueVisible) => set({ visualCueVisible }),
   setActiveScaffold: (activeScaffold) => set({ activeScaffold }),

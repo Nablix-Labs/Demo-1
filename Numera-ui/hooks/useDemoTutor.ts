@@ -170,6 +170,45 @@ function chatError(err: unknown, fallback: string): string {
 }
 
 /**
+ * Said instead of repeating an error the student has already been given.
+ *
+ * "Please try that again in a moment" is reasonable advice once. Said twice
+ * verbatim it is worse than useless: the student cannot tell a second failure
+ * from an echo of the first, and it keeps telling them to do the one thing that
+ * has now demonstrably not worked (10 Aug — two identical bubbles, then a nudge
+ * asking what they would try). The second time, stop asking them to retry and
+ * say plainly that it is not them.
+ */
+const STILL_FAILING =
+  'Still not working, and it is nothing you did — the problem is on my side. Retrying probably won’t help right now, so give it a few minutes or tell your teacher.';
+
+/**
+ * Record a failed tutor turn: one message in the chat, no duplicates, and the
+ * inactivity controller told to stay quiet.
+ *
+ * Kept here rather than at each catch site because all four of them need the
+ * same three things, and the nudge suppression is the part that is easy to
+ * forget on a new one.
+ */
+function reportTutorFailure(
+  err: unknown,
+  fallback: string,
+  add: (msg: { role: 'ai'; text: string }) => void,
+): void {
+  const store = useNumeraStore.getState();
+  const text = chatError(err, fallback);
+  const previous = store.transcript.at(-1);
+  const lastWasThisFailure = previous?.role === 'ai' && previous.text === text;
+  const said = lastWasThisFailure ? STILL_FAILING : text;
+  // Third failure onward the honest line has already been said, and repeating it
+  // verbatim only makes the chat look broken on top of being broken. The trail
+  // and the console still get every attempt.
+  if (previous?.role !== 'ai' || previous.text !== said) add({ role: 'ai', text: said });
+  // Whatever the student does next, they are owed a reply — not a nudge.
+  store.markTutorTurnFailed();
+}
+
+/**
  * Adopt the phase/question the backend just reported.
  *
  * A null question is a real state, not a missing value: orientation has no
@@ -454,7 +493,7 @@ export function useDemoTutor() {
         tutorSay(spoken, { afterMarks: drew });
         return res;
       } catch (err) {
-        addTranscriptMessage({ role: 'ai', text: chatError(err, TUTOR_UNAVAILABLE) }); // surface the failure in the chat
+        reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage);
         addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Tutor unavailable.') });
         return null;
       }
@@ -515,7 +554,7 @@ export function useDemoTutor() {
       // A forgotten session recovers by opening a new one; see
       // recoverIfStaleSession. Nothing to report to the student.
       if (recoverIfStaleSession(err)) return null;
-      addTranscriptMessage({ role: 'ai', text: chatError(err, TUTOR_UNAVAILABLE) }); // surface the failure in the chat
+      reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage);
       addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Could not read the canvas.') });
       return null;
     } finally {
@@ -609,7 +648,7 @@ export function useDemoTutor() {
       // A failed API call must release the button immediately. Speech engines
       // do not consistently fire onEnd when playback is muted or interrupted;
       // waiting here previously left Explain Again stuck on "Explaining…".
-      addTranscriptMessage({ role: 'ai', text: chatError(err, TUTOR_UNAVAILABLE) });
+      reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage);
       addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Explain again failed.') });
       return null;
     }
@@ -923,7 +962,7 @@ export function useDemoTutor() {
           useNumeraStore.getState().beginListeningTurn();
           return null;
         }
-        addTranscriptMessage({ role: 'ai', text: chatError(err, TUTOR_UNAVAILABLE) }); // surface the failure in the chat
+        reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage);
         addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Tutor unavailable.') });
         useNumeraStore.getState().beginListeningTurn(); // reopen listening so the student can retry
         return null;
