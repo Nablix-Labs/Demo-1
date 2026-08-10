@@ -74,8 +74,12 @@ export type WorkflowStatus = 'DRAFT' | 'IN_REVIEW' | 'APPROVED' | 'PUBLISHED' | 
 export type ActivityStatus = 'ACTIVE' | 'INACTIVE';
 export type Phase =
   | 'PHASE_0_DIAGNOSTIC'
+  | 'PHASE_1_ORIENTATION'
   | 'PHASE_2_GUIDED_LEARNING'
   | 'PHASE_3_INDEPENDENT_PRACTICE';
+
+/** Only these three are authored as question phases; orientation has no questions. */
+export type QuestionPhase = Exclude<Phase, 'PHASE_1_ORIENTATION'>;
 
 /** Topic stub on every workspace page. Note: `title`, not `topic_title`. */
 export interface TopicRef {
@@ -347,6 +351,12 @@ export interface QuestionUsage {
   active: boolean;
 }
 
+/** The canvas answer walkthrough — this is the workbook's `answer_steps`. */
+export interface AnswerStep {
+  step_no: number;
+  text: string;
+}
+
 export interface AnswerSpecification {
   answer_spec_id: string;
   answer_type: string;
@@ -356,7 +366,7 @@ export interface AnswerSpecification {
   verification_method: string;
   required_units: string | null;
   explanation_required: boolean;
-  answer_steps: string[];
+  answer_steps: AnswerStep[];
 }
 
 export interface ErrorMapping {
@@ -390,7 +400,7 @@ export interface QuestionPackage {
 
 export interface QuestionsData {
   topic: TopicRef;
-  phase: { phase_id: Phase; label: string };
+  phase: { phase_id: QuestionPhase; label: string };
   hierarchy: { questions: QuestionNode[] };
   default_selection: { question_id: string };
   selected_item: QuestionPackage;
@@ -446,7 +456,14 @@ export interface MisconceptionsData {
 }
 
 // ── 12 Hints & visual cues ────────────────────────────────────────────────
+/** Careful: the tab ids are plural, the support types are singular. */
 export type SupportType = 'HINT' | 'VISUAL_CUE';
+export type SupportTabId = 'HINTS' | 'VISUAL_CUES';
+
+export const TAB_FOR_SUPPORT: Record<SupportType, SupportTabId> = {
+  HINT: 'HINTS',
+  VISUAL_CUE: 'VISUAL_CUES',
+};
 
 export interface MisconceptionGroup {
   misconception_id: string;
@@ -484,8 +501,8 @@ export interface SelectedSupportItem {
 
 export interface HintsVisualCuesData {
   topic: TopicRef;
-  tabs: { tab_id: string; label: string }[];
-  active_tab: string;
+  tabs: { tab_id: SupportTabId; label: string }[];
+  active_tab: SupportTabId;
   hierarchy: { misconception_groups: MisconceptionGroup[] };
   default_selection: {
     misconception_id: string;
@@ -607,7 +624,7 @@ export interface AuthoringApiV3 {
   getMicroSkills(topicId: string): Promise<MicroSkillsData>;
   getOrientation(topicId: string): Promise<OrientationData>;
   getWorkedExamples(topicId: string): Promise<WorkedExamplesData>;
-  getQuestions(topicId: string, phase: Phase): Promise<QuestionsData>;
+  getQuestions(topicId: string, phase: QuestionPhase): Promise<QuestionsData>;
   getMisconceptions(topicId: string): Promise<MisconceptionsData>;
   getSupportAssets(topicId: string): Promise<HintsVisualCuesData>;
   getScaffolds(topicId: string): Promise<ScaffoldsData>;

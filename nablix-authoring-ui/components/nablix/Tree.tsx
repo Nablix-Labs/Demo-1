@@ -19,14 +19,13 @@ import {
   Dot,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { TreeNode, TreeNodeKind } from '@/lib/api/contracts';
+import type { TreeNode, TreeNodeKind } from '@/lib/tree';
 
 const ICON: Partial<Record<TreeNodeKind, React.ComponentType<{ className?: string }>>> = {
   topic: Folder,
   details: FileText,
   'scope-source': FileText,
   'micro-skills': Target,
-  'micro-skill': Dot,
   orientation: PlayCircle,
   'worked-examples': FlaskConical,
   questions: HelpCircle,
@@ -36,7 +35,6 @@ const ICON: Partial<Record<TreeNodeKind, React.ComponentType<{ className?: strin
   scaffolds: Layers,
   coverage: BarChart3,
   publish: Send,
-  group: Dot,
 };
 
 function nodeHref(topicId: string, route?: string) {

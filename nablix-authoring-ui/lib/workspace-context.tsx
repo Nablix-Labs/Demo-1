@@ -1,11 +1,11 @@
 'use client';
 
 import { createContext, useContext } from 'react';
-import type { TopicContent, TopicWorkspace } from './api/contracts';
+import type { CoverageData, TopicDetailsData } from './api/v3-contracts';
 
 interface WorkspaceValue {
-  workspace: TopicWorkspace;
-  content: TopicContent | null;
+  workspace: TopicDetailsData;
+  coverage: CoverageData | null;
 }
 
 const WorkspaceContext = createContext<WorkspaceValue | null>(null);
@@ -20,12 +20,12 @@ export function WorkspaceProvider({
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
 }
 
-/** The current topic workspace (tree, details, coverage). Null while loading. */
-export function useWorkspace(): TopicWorkspace | null {
+/** Topic header and hierarchy counts for the open workspace. Null while loading. */
+export function useWorkspace(): TopicDetailsData | null {
   return useContext(WorkspaceContext)?.workspace ?? null;
 }
 
-/** Section content (§6–§15) for the current topic. Null while loading. */
-export function useContent(): TopicContent | null {
-  return useContext(WorkspaceContext)?.content ?? null;
+/** Coverage grid and validation for the open workspace. Null while loading. */
+export function useCoverage(): CoverageData | null {
+  return useContext(WorkspaceContext)?.coverage ?? null;
 }

@@ -1,7 +1,9 @@
 import { cn } from '@/lib/utils';
-import type { LifecycleStatus, ActivityStatus } from '@/lib/api/contracts';
+import type { ActivityStatus, WorkflowStatus } from '@/lib/api/v3-contracts';
 
-type Status = LifecycleStatus | ActivityStatus;
+/** v3 draws `status` from two vocabularies depending on the entity, and a few
+ *  records carry values from neither — so unknowns render rather than crash. */
+type Status = WorkflowStatus | ActivityStatus;
 
 const LABELS: Record<Status, string> = {
   DRAFT: 'Draft',
@@ -25,17 +27,23 @@ const STYLES: Record<Status, string> = {
   INACTIVE: 'bg-muted-gray/50 text-slate-blue ring-muted-gray',
 };
 
-export function StatusPill({ status, className }: { status: Status; className?: string }) {
+const UNKNOWN = 'bg-muted-gray/50 text-slate-blue ring-muted-gray';
+
+function titleCase(s: string) {
+  return s.toLowerCase().split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
+export function StatusPill({ status, className }: { status: Status | string; className?: string }) {
   return (
     <span
       className={cn(
         'inline-flex items-center gap-1.5 rounded-pill px-2.5 py-0.5 text-2xs font-semibold ring-1 ring-inset',
-        STYLES[status],
+        STYLES[status as Status] ?? UNKNOWN,
         className,
       )}
     >
       <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
-      {LABELS[status]}
+      {LABELS[status as Status] ?? titleCase(status)}
     </span>
   );
 }

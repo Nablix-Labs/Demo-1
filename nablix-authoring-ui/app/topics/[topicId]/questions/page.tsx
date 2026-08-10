@@ -16,10 +16,10 @@ import { SectionHeader, SectionLoading, WeightChip, Meta } from '@/components/na
 import { HealthBadge, HealthIssues } from '@/components/nablix/HealthBadge';
 import { QuestionWizard } from '@/components/nablix/QuestionWizard';
 import { apiV3 } from '@/lib/api/v3Adapter';
-import type { MicroSkill, Phase, QuestionsData } from '@/lib/api/v3-contracts';
+import type { MicroSkill, QuestionPhase, QuestionsData } from '@/lib/api/v3-contracts';
 import { cn } from '@/lib/utils';
 
-const PHASES: { id: Phase; label: string }[] = [
+const PHASES: { id: QuestionPhase; label: string }[] = [
   { id: 'PHASE_0_DIAGNOSTIC', label: 'Phase 0 · Diagnostic' },
   { id: 'PHASE_2_GUIDED_LEARNING', label: 'Phase 2 · Guided' },
   { id: 'PHASE_3_INDEPENDENT_PRACTICE', label: 'Phase 3 · Independent' },
@@ -27,7 +27,7 @@ const PHASES: { id: Phase; label: string }[] = [
 
 export default function QuestionsPage() {
   const { topicId } = useParams<{ topicId: string }>();
-  const [phase, setPhase] = useState<Phase>('PHASE_0_DIAGNOSTIC');
+  const [phase, setPhase] = useState<QuestionPhase>('PHASE_0_DIAGNOSTIC');
   const [data, setData] = useState<QuestionsData | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [skills, setSkills] = useState<MicroSkill[]>([]);
@@ -194,8 +194,8 @@ export default function QuestionsPage() {
                               label="Answer steps"
                               value={
                                 <ol className="list-decimal space-y-0.5 pl-4">
-                                  {pkg.children.answer_specification.answer_steps.map((s, i) => (
-                                    <li key={i}>{s}</li>
+                                  {pkg.children.answer_specification.answer_steps.map((s) => (
+                                    <li key={s.step_no}>{s.text}</li>
                                   ))}
                                 </ol>
                               }

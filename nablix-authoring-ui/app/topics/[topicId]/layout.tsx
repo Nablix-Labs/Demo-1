@@ -8,19 +8,21 @@ import { Tree } from '@/components/nablix/Tree';
 import { ValidationPanel } from '@/components/nablix/ValidationPanel';
 import { StatusPill } from '@/components/nablix/StatusPill';
 import { WorkspaceProvider } from '@/lib/workspace-context';
-import { api, type TopicContent, type TopicWorkspace } from '@/lib/api';
+import { buildTopicTree } from '@/lib/tree';
+import { apiV3 } from '@/lib/api/v3Adapter';
+import type { CoverageData, TopicDetailsData } from '@/lib/api/v3-contracts';
 
 export default function TopicWorkspaceLayout({ children }: { children: React.ReactNode }) {
   const { topicId } = useParams<{ topicId: string }>();
   const pathname = usePathname();
-  const [ws, setWs] = useState<TopicWorkspace | null>(null);
-  const [content, setContent] = useState<TopicContent | null>(null);
+  const [ws, setWs] = useState<TopicDetailsData | null>(null);
+  const [coverage, setCoverage] = useState<CoverageData | null>(null);
 
   useEffect(() => {
     let alive = true;
-    setContent(null);
-    api.getWorkspace(topicId).then((w) => alive && setWs(w));
-    api.getContent(topicId).then((c) => alive && setContent(c));
+    setCoverage(null);
+    apiV3.getTopicDetails(topicId).then((w) => alive && setWs(w));
+    apiV3.getCoverage(topicId).then((c) => alive && setCoverage(c));
     return () => {
       alive = false;
     };
@@ -31,24 +33,24 @@ export default function TopicWorkspaceLayout({ children }: { children: React.Rea
 
   return (
     <>
-      <Topbar title="Content Authoring Portal" crumb={ws?.details.topic_title ?? topicId} />
+      <Topbar title="Content Authoring Portal" crumb={ws?.topic.topic_title ?? topicId} />
 
       {/* Workspace action bar */}
       <div className="relative z-10 flex flex-wrap items-center gap-3 px-6 pb-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2.5">
             <h2 className="truncate font-display text-lg font-bold text-focus-navy">
-              {ws ? ws.details.topic_title : 'Loading…'}
+              {ws ? ws.topic.topic_title : 'Loading…'}
             </h2>
-            {ws && <StatusPill status={ws.details.lifecycle} />}
+            {ws && <StatusPill status={ws.topic.status} />}
           </div>
           {ws && (
             <div className="mt-0.5 flex items-center gap-2 font-mono text-2xs font-medium text-slate-blue">
-              <span>{ws.details.topic_id}</span>
+              <span>{ws.topic.topic_id}</span>
               <span className="text-slate-blue/40">·</span>
-              <span>{ws.details.ks_stage}</span>
+              <span>{ws.topic.ks_stage}</span>
               <span className="text-slate-blue/40">·</span>
-              <span>v{ws.details.version}</span>
+              <span>v{ws.topic.version}</span>
             </div>
           )}
         </div>
@@ -82,7 +84,7 @@ export default function TopicWorkspaceLayout({ children }: { children: React.Rea
             <h3 className="text-2xs font-bold uppercase tracking-wide text-slate-blue">Content Hierarchy</h3>
           </div>
           {ws ? (
-            <Tree root={ws.tree} topicId={topicId} activeRoute={activeRoute} />
+            <Tree root={buildTopicTree(ws.hierarchy_counts)} topicId={topicId} activeRoute={activeRoute} />
           ) : (
             <TreeSkeleton />
           )}
@@ -91,7 +93,7 @@ export default function TopicWorkspaceLayout({ children }: { children: React.Rea
         {/* Center — editor canvas (light, so white sub-cards read as sheets on a desk) */}
         <div className="min-h-0 overflow-hidden rounded-card bg-reading-surface shadow-[0_1px_2px_rgba(11,16,32,0.06),0_16px_38px_rgba(8,12,24,0.2)]">
           {ws ? (
-            <WorkspaceProvider value={{ workspace: ws, content }}>
+            <WorkspaceProvider value={{ workspace: ws, coverage }}>
               <div className="lg-scroll h-full overflow-y-auto">{children}</div>
             </WorkspaceProvider>
           ) : (
@@ -105,7 +107,7 @@ export default function TopicWorkspaceLayout({ children }: { children: React.Rea
         {/* Right — validation / coverage */}
         <div className="lg-glass min-h-0 rounded-card">
           {ws ? (
-            <ValidationPanel coverage={ws.coverage_summary} validation={ws.validation} />
+            <ValidationPanel counts={ws.hierarchy_counts} issues={coverage?.validation_summary.issues ?? []} />
           ) : (
             <div className="space-y-2 p-4">
               {Array.from({ length: 5 }).map((_, i) => (

@@ -108,6 +108,27 @@ frontend is changing — but they need to be fixed in writing so nobody re-litig
 | Health state | `COMPLETE` / `WARNING` / `MISSING` | `ok` / `warn` / `missing` |
 | Validation severity | `blocking: bool` + `severity` | `severity: 'blocking'\|'warning'` |
 
+### Inconsistencies inside v3 itself
+
+Found by building against it, not by reading it. None are blocking — the
+frontend handles all four — but each is a trap for whoever writes the endpoints,
+because the sample teaches the wrong lesson if you only read one page.
+
+1. **`title` vs `topic_title`.** Every workspace page sends `topic.title`;
+   page 03 alone sends `topic.topic_title`. Pick one.
+2. **Tab ids are plural, support types are singular.** Page 12 sends
+   `tabs[].tab_id = "HINTS" | "VISUAL_CUES"` but
+   `default_selection.support_type = "HINT"` and
+   `selected_item.entity_type = "HINT"`. They look interchangeable and are not —
+   comparing them directly leaves no tab highlighted on load, which is exactly
+   the bug I hit.
+3. **`answer_steps` is an array of objects**, `{step_no, text}` — not the array
+   of strings that `accepted_answers` and `common_wrong_answers` are, right
+   beside it in the same object.
+4. **A fourth phase exists.** `PHASE_1_ORIENTATION` appears on worked examples,
+   though only three phases carry questions. Anything typed as "the phase enum"
+   needs all four.
+
 One genuine ambiguity, not just naming: v3 uses `status` for **activity**
 (`ACTIVE`/`INACTIVE`) on micro-skills, hints and misconceptions, and
 `workflow_status` for **lifecycle** (`DRAFT`…`ARCHIVED`) on topics — but

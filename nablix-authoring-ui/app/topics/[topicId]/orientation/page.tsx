@@ -1,138 +1,188 @@
 'use client';
 
+/**
+ * Orientation — v3 page 06. Video → Scenes and Support Cards are sibling
+ * branches: selecting a card must not leave a scene editor open (guide §7.1).
+ * Scenes render in scene_no order exactly as sent.
+ */
 import { useEffect, useState } from 'react';
-import { PlayCircle, Plus, Clock, Layers, AlertTriangle } from 'lucide-react';
-import { useContent } from '@/lib/workspace-context';
+import { PlayCircle, Plus, LayoutGrid, Clock } from 'lucide-react';
+import { useParams } from 'next/navigation';
 import { CardHeader } from '@/components/nablix/GlassCard';
-import { SectionHeader, SectionLoading, MoveControls } from '@/components/nablix/SectionHeader';
+import { SectionHeader, SectionLoading, Meta } from '@/components/nablix/SectionHeader';
 import { StatusPill } from '@/components/nablix/StatusPill';
-import { moveItem } from '@/lib/utils';
-import type { OrientationScene } from '@/lib/api/contracts';
+import { HealthBadge, HealthIssues } from '@/components/nablix/HealthBadge';
+import { apiV3 } from '@/lib/api/v3Adapter';
+import type { OrientationData } from '@/lib/api/v3-contracts';
+import { cn } from '@/lib/utils';
 
-function secs(n: number) {
-  const m = Math.floor(n / 60);
-  const s = n % 60;
-  return `${m}:${s.toString().padStart(2, '0')}`;
-}
+type Branch = 'SCENES' | 'CARDS';
 
 export default function OrientationPage() {
-  const c = useContent();
-  const [scenes, setScenes] = useState<OrientationScene[]>([]);
+  const { topicId } = useParams<{ topicId: string }>();
+  const [data, setData] = useState<OrientationData | null>(null);
+  const [branch, setBranch] = useState<Branch>('SCENES');
+  const [selected, setSelected] = useState<string | null>(null);
+
   useEffect(() => {
-    if (c) setScenes(c.orientation_video.scenes);
-  }, [c]);
-  if (!c) return <SectionLoading />;
-  const v = c.orientation_video;
-  const sceneTotal = scenes.reduce((a, s) => a + s.duration_sec, 0);
-  const mismatch = Math.abs(sceneTotal - v.duration_sec) > 3;
+    apiV3.getOrientation(topicId).then((d) => {
+      setData(d);
+      const isCard = d.default_selection.node_type.toUpperCase().includes('CARD');
+      setBranch(isCard ? 'CARDS' : 'SCENES');
+      setSelected(d.default_selection.node_id);
+    });
+  }, [topicId]);
+
+  if (!data) return <SectionLoading />;
+
+  const { video, support_cards } = data.hierarchy;
+  const scenes = video.children.scenes;
+
+  /** Switching branch clears the other branch's selection entirely. */
+  function selectBranch(next: Branch) {
+    setBranch(next);
+    setSelected(next === 'SCENES' ? (scenes[0]?.scene_id ?? null) : (support_cards[0]?.support_card_id ?? null));
+  }
+
+  const scene = branch === 'SCENES' ? scenes.find((s) => s.scene_id === selected) ?? null : null;
+  const card = branch === 'CARDS' ? support_cards.find((c) => c.support_card_id === selected) ?? null : null;
 
   return (
     <div className="lg-anim-rise space-y-4 p-5">
       <SectionHeader
         eyebrow="Topic · Orientation"
         icon={<PlayCircle className="h-3.5 w-3.5" />}
-        title="Orientation Content"
-        description="The Phase 1 video that introduces the idea, its scenes, and any support cards."
+        title="Orientation"
+        description="The orientation video's scenes and the support cards that sit beside it."
         action={
           <button className="btn btn-primary">
-            <Plus className="h-4 w-4" /> Add Scene
+            <Plus className="h-4 w-4" /> Add {branch === 'SCENES' ? 'Scene' : 'Support Card'}
           </button>
         }
       />
 
-      {/* Video */}
-      <section className="sheet">
-        <CardHeader
-          icon={<PlayCircle className="h-4 w-4" />}
-          title="Orientation Video"
-          action={<StatusPill status={v.status} />}
-        />
-        <div className="flex flex-wrap items-center gap-4 px-5 py-3">
-          <div className="flex h-16 w-28 items-center justify-center rounded-lg bg-focus-navy/90 text-white/80">
-            <PlayCircle className="h-7 w-7" />
-          </div>
-          <div>
-            <div className="font-display text-base font-bold text-focus-navy">{v.video_title}</div>
-            <div className="mt-1 flex items-center gap-3 text-2xs font-semibold text-slate-blue">
-              <span className="flex items-center gap-1">
-                <Clock className="h-3.5 w-3.5" /> {secs(v.duration_sec)} total
-              </span>
-              <span className="font-mono uppercase">PHASE_1_ORIENTATION</span>
-            </div>
-          </div>
-          <div className="ml-auto text-right">
-            <div className="text-2xs font-semibold uppercase tracking-wide text-slate-blue">Scenes total</div>
-            <div className={`font-mono text-sm font-bold ${mismatch ? 'text-action-orange' : 'text-focus-navy'}`}>
-              {secs(sceneTotal)} / {secs(v.duration_sec)}
-            </div>
-          </div>
-        </div>
-        {mismatch && (
-          <div className="mx-5 mb-3 flex items-center gap-2 rounded-lg bg-highlight-amber/12 px-3 py-2 text-xs font-semibold text-action-orange">
-            <AlertTriangle className="h-4 w-4" /> Scene durations differ from the video length.
-          </div>
-        )}
-      </section>
+      <HealthIssues health={video.content_health} />
 
-      {/* Scenes */}
-      <section className="sheet overflow-hidden">
-        <CardHeader icon={<Layers className="h-4 w-4" />} title={`Scenes · ${scenes.length}`} />
-        <ol>
-          {scenes.map((s, i) => (
-            <li key={s.scene_no} className="flex gap-3 border-b border-muted-gray/50 px-4 py-3 last:border-0">
-              <div className="flex flex-col items-center gap-1 pt-0.5">
-                <MoveControls
-                  onUp={() => setScenes((x) => moveItem(x, i, -1))}
-                  onDown={() => setScenes((x) => moveItem(x, i, 1))}
-                  canUp={i > 0}
-                  canDown={i < scenes.length - 1}
-                />
-                <span className="font-mono text-2xs font-bold text-slate-blue">{i + 1}</span>
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between gap-2">
-                  <h4 className="font-semibold text-focus-navy">{s.scene_title}</h4>
-                  <span className="font-mono text-2xs text-slate-blue">{secs(s.duration_sec)}</span>
-                </div>
-                <dl className="mt-1.5 grid gap-x-6 gap-y-1 sm:grid-cols-2">
-                  <div>
-                    <dt className="text-2xs font-bold uppercase tracking-wide text-slate-blue/80">Visual</dt>
-                    <dd className="text-xs text-ink/85">{s.visual_action}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-2xs font-bold uppercase tracking-wide text-slate-blue/80">Narration</dt>
-                    <dd className="text-xs text-ink/85">{s.narration_text}</dd>
-                  </div>
-                </dl>
-                {s.on_screen_text && (
-                  <div className="mt-1.5 inline-block rounded-md bg-focus-navy/90 px-2 py-1 font-mono text-2xs text-white">
-                    {s.on_screen_text}
-                  </div>
-                )}
-              </div>
-            </li>
-          ))}
-        </ol>
-      </section>
+      <div className="flex flex-wrap items-center gap-1 border-b border-muted-gray/70">
+        {(
+          [
+            ['SCENES', `${video.label} · ${scenes.length} scenes`],
+            ['CARDS', `Support Cards · ${support_cards.length}`],
+          ] as [Branch, string][]
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => selectBranch(id)}
+            className={cn(
+              'rounded-t-lg px-3 py-2 text-sm font-semibold',
+              branch === id ? 'bg-white text-focus-navy shadow-[inset_0_-2px_0_0_var(--lime)]' : 'text-slate-blue hover:text-ink',
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
-      {/* Support cards */}
-      <section className="sheet overflow-hidden">
-        <CardHeader icon={<Layers className="h-4 w-4" />} title={`Support Cards · ${c.support_cards.length}`} />
-        <div className="grid gap-3 p-4 sm:grid-cols-2">
-          {c.support_cards.map((card) => (
-            <div key={card.support_card_id} className="rounded-lg border border-muted-gray/70 bg-reading-surface p-3">
-              <div className="flex items-center justify-between gap-2">
-                <h4 className="text-sm font-semibold text-focus-navy">{card.card_title}</h4>
-                <StatusPill status={card.status} />
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
+        <section className="sheet overflow-hidden self-start">
+          <CardHeader
+            icon={branch === 'SCENES' ? <PlayCircle className="h-4 w-4" /> : <LayoutGrid className="h-4 w-4" />}
+            title={branch === 'SCENES' ? 'Scenes' : 'Support Cards'}
+            action={branch === 'SCENES' ? <HealthBadge health={video.content_health} /> : undefined}
+          />
+          <ol>
+            {branch === 'SCENES'
+              ? scenes.map((s) => {
+                  const active = s.scene_id === selected;
+                  return (
+                    <li key={s.scene_id}>
+                      <button
+                        onClick={() => setSelected(s.scene_id)}
+                        className={cn(
+                          'flex w-full items-center gap-3 border-b border-muted-gray/50 px-4 py-3 text-left last:border-0',
+                          active ? 'bg-focus-navy text-white' : 'hover:bg-reading-surface',
+                        )}
+                      >
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/15 font-mono text-2xs font-bold">
+                          <span className={active ? 'text-white' : 'text-focus-navy'}>{s.scene_no}</span>
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className={cn('block truncate text-sm', active ? 'text-white' : 'text-ink')}>
+                            {s.scene_title}
+                          </span>
+                          <span className={cn('mt-0.5 block text-2xs', active ? 'text-white/70' : 'text-slate-blue')}>
+                            {s.duration_sec}s
+                          </span>
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })
+              : support_cards.map((c) => {
+                  const active = c.support_card_id === selected;
+                  return (
+                    <li key={c.support_card_id}>
+                      <button
+                        onClick={() => setSelected(c.support_card_id)}
+                        className={cn(
+                          'flex w-full items-center gap-3 border-b border-muted-gray/50 px-4 py-3 text-left last:border-0',
+                          active ? 'bg-focus-navy text-white' : 'hover:bg-reading-surface',
+                        )}
+                      >
+                        <span className={cn('min-w-0 flex-1 truncate text-sm', active ? 'text-white' : 'text-ink')}>
+                          {c.card_title}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+            {branch === 'CARDS' && support_cards.length === 0 && (
+              <li className="px-5 py-6 text-center text-sm text-slate-blue">No support cards.</li>
+            )}
+          </ol>
+        </section>
+
+        <div className="min-w-0 space-y-4">
+          {scene && (
+            <section className="sheet overflow-hidden">
+              <CardHeader
+                icon={<PlayCircle className="h-4 w-4" />}
+                title={`Scene ${scene.scene_no} · ${scene.scene_title}`}
+                action={
+                  <span className="flex items-center gap-2">
+                    <span className="flex items-center gap-1 text-2xs text-slate-blue">
+                      <Clock className="h-3 w-3" /> {scene.duration_sec}s
+                    </span>
+                    <StatusPill status={scene.status} />
+                  </span>
+                }
+              />
+              <div className="px-5 py-4">
+                <Meta label="Narration" value={scene.narration_text} />
+                <Meta label="Visual action" value={scene.visual_action} />
+                {scene.on_screen_text && <Meta label="On-screen text" value={scene.on_screen_text} />}
+                {scene.direction && <Meta label="Direction" value={scene.direction} />}
               </div>
-              <div className="mt-2 rounded-md bg-white px-3 py-2 text-center font-mono text-sm text-focus-navy ring-1 ring-inset ring-muted-gray/70">
-                {card.visual_content}
+            </section>
+          )}
+
+          {card && (
+            <section className="sheet overflow-hidden">
+              <CardHeader
+                icon={<LayoutGrid className="h-4 w-4" />}
+                title={card.card_title}
+                action={<StatusPill status={card.status} />}
+              />
+              <div className="px-5 py-4">
+                <Meta label="Visual" value={card.visual_content} />
+                <Meta label="Narration / text" value={card.narration_or_text} />
+                <Meta label="Restriction" value={card.restriction || '—'} />
+                <Meta label="Version" value={card.version} />
               </div>
-              <p className="mt-2 text-xs text-slate-blue">{card.narration_or_text}</p>
-            </div>
-          ))}
+            </section>
+          )}
         </div>
-      </section>
+      </div>
     </div>
   );
 }

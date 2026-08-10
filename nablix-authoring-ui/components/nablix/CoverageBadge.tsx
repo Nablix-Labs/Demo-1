@@ -1,6 +1,9 @@
 import { Check, AlertTriangle, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { CoverageState, ValidationState } from '@/lib/api/contracts';
+import type { HealthState } from '@/lib/api/v3-contracts';
+
+/** Legacy coverage vocabulary, kept for the library screens. */
+export type CoverageState = 'ok' | 'warn' | 'missing';
 
 /** ✓ / ⚠ / ✕ coverage indicator with count — spec §14. */
 export function CoverageBadge({
@@ -36,14 +39,14 @@ export function CoverageBadge({
   );
 }
 
-const DOT: Record<ValidationState, string> = {
-  green: 'bg-success-sage',
-  amber: 'bg-highlight-amber',
-  red: 'bg-danger',
+const DOT: Record<HealthState, string> = {
+  COMPLETE: 'bg-success-sage',
+  WARNING: 'bg-highlight-amber',
+  MISSING: 'bg-danger',
 };
 
 /** Small round validation dot for tables (green / amber / red). */
-export function ValidationDot({ state, className }: { state: ValidationState; className?: string }) {
+export function ValidationDot({ state, className }: { state: HealthState; className?: string }) {
   return (
     <span className={cn('inline-flex items-center gap-1.5', className)}>
       <span className={cn('h-2.5 w-2.5 rounded-full', DOT[state])} />

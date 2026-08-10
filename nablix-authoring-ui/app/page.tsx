@@ -7,7 +7,8 @@ import { Topbar } from '@/components/nablix/Topbar';
 import { StatusPill } from '@/components/nablix/StatusPill';
 import { ValidationDot } from '@/components/nablix/CoverageBadge';
 import { Modal } from '@/components/nablix/Modal';
-import { api, type DashboardStats, type KsStage, type TopicSummary } from '@/lib/api';
+import { apiV3 } from '@/lib/api/v3Adapter';
+import type { DashboardData, DashboardTopicRow, KsStage } from '@/lib/api/v3-contracts';
 import { cn, formatDate } from '@/lib/utils';
 
 function Kpi({ label, value, sub }: { label: string; value?: number; sub?: string }) {
@@ -41,33 +42,32 @@ function TrendBars() {
 const FILTERS = ['All', 'KS3', 'KS4', 'Draft', 'In Review', 'Needs attention'];
 
 export default function DashboardPage() {
-  const [topics, setTopics] = useState<TopicSummary[] | null>(null);
-  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [topics, setTopics] = useState<DashboardTopicRow[] | null>(null);
+  const [stats, setStats] = useState<DashboardData['summary'] | null>(null);
   const [filter, setFilter] = useState('All');
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState({ code: '', title: '', ks_stage: 'KS3' as KsStage });
 
   useEffect(() => {
-    api.listTopics().then(setTopics);
-    api.dashboardStats().then(setStats);
+    apiV3.getDashboard().then((d) => {
+      setTopics(d.topics);
+      setStats(d.summary);
+    });
   }, []);
 
   const canCreate = form.code.trim() !== '' && form.title.trim() !== '';
   function createTopic() {
     if (!canCreate) return;
-    const newTopic: TopicSummary = {
+    const newTopic: DashboardTopicRow = {
       topic_id: `NEW-${form.code.trim().toUpperCase()}`,
       topic_code: form.code.trim().toUpperCase(),
-      topic_title: form.title.trim(),
+      title: form.title.trim(),
       ks_stage: form.ks_stage,
-      completion_pct: 0,
+      completion_percent: 0,
       coverage: { diagnostic: '0/0', guided: '0/0', independent: '0/0' },
-      validation: 'red',
-      status: 'DRAFT',
+      validation: { state: 'MISSING', indicator: 'RED_X', blocking_count: 0, warning_count: 0 },
+      workflow_status: 'DRAFT',
       updated_at: new Date().toISOString(),
-      updated_by: 'You',
-      blocking_errors: 0,
-      warnings: 0,
     };
     setTopics((t) => [newTopic, ...(t ?? [])]);
     setForm({ code: '', title: '', ks_stage: 'KS3' });
@@ -78,13 +78,15 @@ export default function DashboardPage() {
   const rows = all.filter((t) => {
     if (filter === 'All') return true;
     if (filter === 'KS3' || filter === 'KS4') return t.ks_stage === filter;
-    if (filter === 'Draft') return t.status === 'DRAFT';
-    if (filter === 'In Review') return t.status === 'IN_REVIEW';
-    if (filter === 'Needs attention') return t.validation !== 'green';
+    if (filter === 'Draft') return t.workflow_status === 'DRAFT';
+    if (filter === 'In Review') return t.workflow_status === 'IN_REVIEW';
+    if (filter === 'Needs attention') return t.validation.state !== 'COMPLETE';
     return true;
   });
-  const inReview = all.filter((t) => t.status === 'IN_REVIEW' || t.status === 'APPROVED').length;
-  const authors = Array.from(new Set(all.map((t) => t.updated_by))).slice(0, 5);
+  const inReview = all.filter((t) => t.workflow_status === 'IN_REVIEW' || t.workflow_status === 'APPROVED').length;
+  // v3's dashboard summary has no totals for these — they roll up from the rows.
+  const blockingTotal = all.reduce((n, t) => n + t.validation.blocking_count, 0);
+  const warningTotal = all.reduce((n, t) => n + t.validation.warning_count, 0);
 
   return (
     <>
@@ -131,10 +133,16 @@ export default function DashboardPage() {
                 </div>
                 <TrendBars />
               </div>
+              {/* v3 carries no author on a topic row, so this shows the topics
+                  themselves rather than inventing a name to put in an avatar. */}
               <div className="flex -space-x-2">
-                {authors.map((a, i) => (
-                  <span key={i} className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-white bg-focus-navy text-2xs font-bold text-white" title={a}>
-                    {a.split(/[ .]/).filter(Boolean).map((p) => p[0]).slice(0, 2).join('')}
+                {all.slice(0, 5).map((t) => (
+                  <span
+                    key={t.topic_id}
+                    className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-white bg-focus-navy font-mono text-2xs font-bold text-white"
+                    title={t.title}
+                  >
+                    {t.topic_code}
                   </span>
                 ))}
               </div>
@@ -153,11 +161,11 @@ export default function DashboardPage() {
 
             <div className="mt-auto grid grid-cols-2 gap-2 pt-6">
               <div className="rounded-[14px] bg-white/5 px-3 py-2.5 ring-1 ring-inset ring-white/10">
-                <div className="font-display text-2xl font-bold tabular-nums text-white">{stats?.warnings ?? '—'}</div>
+                <div className="font-display text-2xl font-bold tabular-nums text-white">{topics ? warningTotal : '—'}</div>
                 <div className="text-2xs font-semibold uppercase tracking-wide text-white/55">Warnings</div>
               </div>
               <div className="rounded-[14px] bg-white/5 px-3 py-2.5 ring-1 ring-inset ring-white/10">
-                <div className="font-display text-2xl font-bold tabular-nums text-danger">{stats?.blocking_errors ?? '—'}</div>
+                <div className="font-display text-2xl font-bold tabular-nums text-danger">{topics ? blockingTotal : '—'}</div>
                 <div className="text-2xs font-semibold uppercase tracking-wide text-white/55">Blocking</div>
               </div>
             </div>
@@ -219,7 +227,7 @@ export default function DashboardPage() {
                         </td>
                         <td className="px-3 py-3">
                           <Link href={`/topics/${t.topic_id}/details`} className="block">
-                            <div className="font-semibold text-focus-navy group-hover:text-learning-blue">{t.topic_title}</div>
+                            <div className="font-semibold text-focus-navy group-hover:text-learning-blue">{t.title}</div>
                             <div className="font-mono text-2xs text-slate-blue/80">{t.topic_id}</div>
                           </Link>
                         </td>
@@ -234,26 +242,25 @@ export default function DashboardPage() {
                               <div
                                 className={cn(
                                   'h-full rounded-full',
-                                  t.completion_pct === 100 ? 'bg-lime-deep' : t.completion_pct < 60 ? 'bg-danger' : 'bg-lime',
+                                  t.completion_percent === 100 ? 'bg-lime-deep' : t.completion_percent < 60 ? 'bg-danger' : 'bg-lime',
                                 )}
-                                style={{ width: `${t.completion_pct}%` }}
+                                style={{ width: `${t.completion_percent}%` }}
                               />
                             </div>
-                            <span className="font-mono text-2xs font-bold tabular-nums text-slate-blue">{t.completion_pct}%</span>
+                            <span className="font-mono text-2xs font-bold tabular-nums text-slate-blue">{t.completion_percent}%</span>
                           </div>
                         </td>
                         <td className="px-3 py-3 font-mono text-2xs font-semibold tabular-nums text-slate-blue">
                           {t.coverage.diagnostic} · {t.coverage.guided} · {t.coverage.independent}
                         </td>
                         <td className="px-3 py-3">
-                          <ValidationDot state={t.validation} />
+                          <ValidationDot state={t.validation.state} />
                         </td>
                         <td className="px-3 py-3">
-                          <StatusPill status={t.status} />
+                          <StatusPill status={t.workflow_status} />
                         </td>
                         <td className="px-3 py-3 text-2xs text-slate-blue">
                           {formatDate(t.updated_at)}
-                          <div className="text-slate-blue/70">{t.updated_by}</div>
                         </td>
                         <td className="px-3 py-3">
                           <Link

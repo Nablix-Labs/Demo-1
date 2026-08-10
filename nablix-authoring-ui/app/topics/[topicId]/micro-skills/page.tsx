@@ -1,21 +1,37 @@
 'use client';
 
-import { Target, Plus, ArrowRight } from 'lucide-react';
-import { useContent } from '@/lib/workspace-context';
-import { SectionHeader, SectionLoading } from '@/components/nablix/SectionHeader';
-import { StatusPill } from '@/components/nablix/StatusPill';
-import { CoverageBadge } from '@/components/nablix/CoverageBadge';
+/**
+ * Micro-skills — v3 page 05. Topic → Micro-skill → linked questions and
+ * misconceptions. Selecting a skill replaces every linked list with that
+ * skill's own content (guide §6.3).
+ */
+import { useEffect, useState } from 'react';
+import { Target, Plus, HelpCircle, Link2 } from 'lucide-react';
+import { useParams } from 'next/navigation';
+import { CardHeader } from '@/components/nablix/GlassCard';
+import { SectionHeader, SectionLoading, Meta } from '@/components/nablix/SectionHeader';
+import { HealthBadge, HealthIssues } from '@/components/nablix/HealthBadge';
+import { apiV3 } from '@/lib/api/v3Adapter';
+import type { MicroSkillsData } from '@/lib/api/v3-contracts';
 import { cn } from '@/lib/utils';
 
-const PRIORITY: Record<string, string> = {
-  HIGH: 'bg-action-orange/12 text-action-orange',
-  MEDIUM: 'bg-learning-blue/12 text-learning-blue',
-  LOW: 'bg-slate-blue/10 text-slate-blue',
-};
-
 export default function MicroSkillsPage() {
-  const c = useContent();
-  if (!c) return <SectionLoading />;
+  const { topicId } = useParams<{ topicId: string }>();
+  const [data, setData] = useState<MicroSkillsData | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+
+  useEffect(() => {
+    apiV3.getMicroSkills(topicId).then((d) => {
+      setData(d);
+      setSelected(d.default_selection.micro_skill_id);
+    });
+  }, [topicId]);
+
+  if (!data) return <SectionLoading />;
+
+  const skills = data.hierarchy.micro_skills;
+  const node = skills.find((s) => s.micro_skill_id === selected) ?? null;
+  const detail = data.selected_item.details.micro_skill_id === selected ? data.selected_item : null;
 
   return (
     <div className="lg-anim-rise space-y-4 p-5">
@@ -23,7 +39,7 @@ export default function MicroSkillsPage() {
         eyebrow="Topic · Micro-skills"
         icon={<Target className="h-3.5 w-3.5" />}
         title="Micro-skills"
-        description="The atomic skills a student must master. Each shows coverage across Diagnostic, Worked, Guided, Independent and Rescue."
+        description="Every assessable skill in this topic, with the content that covers it."
         action={
           <button className="btn btn-primary">
             <Plus className="h-4 w-4" /> Add Micro-skill
@@ -31,49 +47,114 @@ export default function MicroSkillsPage() {
         }
       />
 
-      <div className="grid gap-3">
-        {c.micro_skills.map((m) => (
-          <section key={m.micro_skill_id} className="sheet p-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="rounded-md bg-focus-navy px-1.5 py-0.5 font-mono text-2xs font-bold text-white">{m.skill_code}</span>
-                  <h3 className="font-display text-base font-bold text-focus-navy">{m.skill_name}</h3>
-                  <StatusPill status={m.status} />
-                </div>
-                <p className="mt-1 max-w-2xl text-sm text-slate-blue">{m.description}</p>
-                <div className="mt-1.5 flex flex-wrap items-center gap-2 font-mono text-2xs text-slate-blue/80">
-                  <span>{m.micro_skill_id}</span>
-                  {m.prerequisite && (
-                    <span className="flex items-center gap-1">
-                      <ArrowRight className="h-3 w-3" /> requires {m.prerequisite}
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
+        <section className="sheet overflow-hidden self-start">
+          <CardHeader icon={<Target className="h-4 w-4" />} title={`Micro-skills · ${skills.length}`} />
+          <ul>
+            {skills.map((s) => {
+              const active = s.micro_skill_id === selected;
+              return (
+                <li key={s.micro_skill_id}>
+                  <button
+                    onClick={() => setSelected(s.micro_skill_id)}
+                    className={cn(
+                      'flex w-full items-start gap-3 border-b border-muted-gray/50 px-4 py-3 text-left last:border-0',
+                      active ? 'bg-focus-navy text-white' : 'hover:bg-reading-surface',
+                    )}
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className={cn('block truncate text-sm font-semibold', active ? 'text-white' : 'text-focus-navy')}>
+                        {s.label}
+                      </span>
+                      <span className={cn('mt-0.5 block font-mono text-2xs', active ? 'text-white/70' : 'text-slate-blue')}>
+                        {s.micro_skill_id}
+                      </span>
                     </span>
-                  )}
-                </div>
-              </div>
-              <span className={cn('rounded-pill px-2.5 py-1 text-2xs font-bold uppercase tracking-wide', PRIORITY[m.assessment_priority])}>
-                {m.assessment_priority} priority
-              </span>
-            </div>
+                    <HealthBadge health={s.content_health} />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
 
-            <div className="mt-3 grid grid-cols-5 gap-2 border-t border-muted-gray/60 pt-3">
-              {(
-                [
-                  ['Diagnostic', m.diagnostic],
-                  ['Worked', m.worked],
-                  ['Guided', m.guided],
-                  ['Independent', m.independent],
-                  ['Hints', m.hints],
-                ] as const
-              ).map(([label, n]) => (
-                <div key={label} className="flex flex-col items-center gap-1 rounded-lg bg-reading-surface py-2">
-                  <CoverageBadge state={n === 0 ? 'missing' : n === 1 ? 'warn' : 'ok'} count={n} />
-                  <span className="text-2xs font-semibold text-slate-blue">{label}</span>
+        <div className="min-w-0 space-y-4">
+          {node && <HealthIssues health={node.content_health} />}
+
+          {node && (
+            <section className="sheet overflow-hidden">
+              <CardHeader icon={<Target className="h-4 w-4" />} title="Coverage" />
+              <div className="flex flex-wrap gap-2 px-5 py-4">
+                {Object.entries(node.coverage_counts).map(([k, v]) => (
+                  <span
+                    key={k}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-reading-surface px-2.5 py-1.5 text-2xs font-semibold text-slate-blue ring-1 ring-inset ring-muted-gray/70"
+                  >
+                    {k.replace(/_/g, ' ')}
+                    <span className="font-mono font-bold text-focus-navy tabular-nums">{v}</span>
+                  </span>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {detail && (
+            <>
+              <section className="sheet overflow-hidden">
+                <CardHeader icon={<Target className="h-4 w-4" />} title={detail.details.skill_name} />
+                <div className="px-5 py-4">
+                  <p className="text-sm text-ink">{detail.details.description}</p>
+                  <div className="mt-2 grid gap-x-6 sm:grid-cols-2">
+                    <Meta label="Code" value={<span className="font-mono text-xs">{detail.details.skill_code}</span>} />
+                    <Meta label="Priority" value={detail.details.assessment_priority} />
+                    <Meta label="Status" value={detail.details.status} />
+                    <Meta label="Version" value={detail.details.version} />
+                  </div>
                 </div>
-              ))}
-            </div>
-          </section>
-        ))}
+              </section>
+
+              <section className="sheet overflow-hidden">
+                <CardHeader
+                  icon={<HelpCircle className="h-4 w-4" />}
+                  title={`Linked Questions · ${detail.linked_questions.length}`}
+                />
+                <ul>
+                  {detail.linked_questions.map((q) => (
+                    <li key={q.question_id} className="border-b border-muted-gray/50 px-5 py-3 last:border-0">
+                      <p className="text-sm text-ink">{q.question_text}</p>
+                      <div className="mt-1 flex flex-wrap gap-2 text-2xs text-slate-blue">
+                        <span className="font-mono">{q.question_id}</span>
+                        <span>{q.phase}</span>
+                        <span>{q.question_role}</span>
+                      </div>
+                    </li>
+                  ))}
+                  {detail.linked_questions.length === 0 && (
+                    <li className="px-5 py-6 text-center text-sm text-slate-blue">No questions cover this skill yet.</li>
+                  )}
+                </ul>
+              </section>
+
+              <section className="sheet overflow-hidden">
+                <CardHeader
+                  icon={<Link2 className="h-4 w-4" />}
+                  title={`Linked Misconceptions · ${detail.linked_misconceptions.length}`}
+                />
+                <ul>
+                  {detail.linked_misconceptions.map((m) => (
+                    <li key={m.misconception_id} className="border-b border-muted-gray/50 px-5 py-3 last:border-0">
+                      <p className="text-sm font-semibold text-focus-navy">{m.name}</p>
+                      <p className="mt-0.5 text-xs text-slate-blue">{m.description}</p>
+                    </li>
+                  ))}
+                  {detail.linked_misconceptions.length === 0 && (
+                    <li className="px-5 py-6 text-center text-sm text-slate-blue">No misconceptions linked.</li>
+                  )}
+                </ul>
+              </section>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );

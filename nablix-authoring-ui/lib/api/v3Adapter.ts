@@ -16,7 +16,7 @@ import type {
   MisconceptionsData,
   OrientationData,
   PageResponse,
-  Phase,
+  QuestionPhase,
   PreviewPublishData,
   QuestionsData,
   ReviewQueueData,
@@ -28,7 +28,7 @@ import type {
 
 const PAGES = (sample as { page_samples: Record<string, PageResponse<unknown>> }).page_samples;
 
-const QUESTION_PAGE: Record<Phase, string> = {
+const QUESTION_PAGE: Record<QuestionPhase, string> = {
   PHASE_0_DIAGNOSTIC: '08_questions_diagnostic',
   PHASE_2_GUIDED_LEARNING: '09_questions_guided',
   PHASE_3_INDEPENDENT_PRACTICE: '10_questions_independent',

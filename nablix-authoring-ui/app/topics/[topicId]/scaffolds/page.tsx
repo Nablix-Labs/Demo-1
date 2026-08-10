@@ -1,22 +1,46 @@
 'use client';
 
+/**
+ * Scaffolds & Parallel Examples — v3 page 13. Two tabs over different
+ * hierarchies: Topic → Scaffold → steps/question links, and Misconception →
+ * Parallel Examples. Switching tabs clears the other tab's editor state
+ * (guide §10.1). Steps render in stage_no order.
+ */
 import { useEffect, useState } from 'react';
-import { Layers, Plus, ArrowRight, CornerDownRight, Copy } from 'lucide-react';
-import { useContent } from '@/lib/workspace-context';
+import { Layers, Plus, ListOrdered, Link2, Copy } from 'lucide-react';
+import { useParams } from 'next/navigation';
 import { CardHeader } from '@/components/nablix/GlassCard';
-import { SectionHeader, Meta, Toggle, SectionLoading, MoveControls } from '@/components/nablix/SectionHeader';
-import { moveItem } from '@/lib/utils';
-import type { Scaffold } from '@/lib/api/contracts';
+import { SectionHeader, SectionLoading, Meta } from '@/components/nablix/SectionHeader';
+import { HealthBadge, HealthIssues } from '@/components/nablix/HealthBadge';
+import { apiV3 } from '@/lib/api/v3Adapter';
+import type { ScaffoldsData } from '@/lib/api/v3-contracts';
+import { cn } from '@/lib/utils';
 
 export default function ScaffoldsPage() {
-  const c = useContent();
-  const [scaffolds, setScaffolds] = useState<Scaffold[]>([]);
+  const { topicId } = useParams<{ topicId: string }>();
+  const [data, setData] = useState<ScaffoldsData | null>(null);
+  const [tab, setTab] = useState<string>('SCAFFOLDS');
+  const [selected, setSelected] = useState<string | null>(null);
+
   useEffect(() => {
-    if (c) setScaffolds(c.scaffolds);
-  }, [c]);
-  const moveStage = (id: string, i: number, dir: -1 | 1) =>
-    setScaffolds((xs) => xs.map((s) => (s.scaffold_id === id ? { ...s, steps: moveItem(s.steps, i, dir) } : s)));
-  if (!c) return <SectionLoading />;
+    apiV3.getScaffolds(topicId).then((d) => {
+      setData(d);
+      setTab(d.default_selection.tab_id);
+      setSelected(d.default_selection.scaffold_id);
+    });
+  }, [topicId]);
+
+  if (!data) return <SectionLoading />;
+
+  const scaffolds = data.hierarchy.scaffolds;
+  const groups = data.hierarchy.parallel_examples_by_misconception;
+  const isScaffoldTab = tab === data.tabs[0]?.tab_id;
+  const node = isScaffoldTab ? scaffolds.find((s) => s.scaffold_id === selected) ?? null : null;
+
+  function selectTab(next: string) {
+    setTab(next);
+    setSelected(next === data!.tabs[0]?.tab_id ? (scaffolds[0]?.scaffold_id ?? null) : null);
+  }
 
   return (
     <div className="lg-anim-rise space-y-4 p-5">
@@ -24,74 +48,153 @@ export default function ScaffoldsPage() {
         eyebrow="Topic · Scaffolds & Parallel Examples"
         icon={<Layers className="h-3.5 w-3.5" />}
         title="Scaffolds & Parallel Examples"
-        description="Step-by-step recovery routes and fresh parallel problems that target a specific misconception."
+        description="Step-by-step rescue routes, and the fresh examples used to re-test a repaired misconception."
         action={
           <button className="btn btn-primary">
-            <Plus className="h-4 w-4" /> New Scaffold
+            <Plus className="h-4 w-4" /> Add {isScaffoldTab ? 'Scaffold' : 'Parallel Example'}
           </button>
         }
       />
 
-      {scaffolds.map((s) => (
-        <section key={s.scaffold_id} className="sheet">
-          <CardHeader icon={<Layers className="h-4 w-4" />} title={s.scaffold_name} action={<Toggle on={s.active} />} />
-          <div className="px-5 py-3">
-            <Meta label="Trigger" value={s.trigger_rule} />
-            <Meta label="Completion" value={s.completion_rule} />
-          </div>
-          <div className="border-t border-muted-gray/60 px-4 py-3">
-            <div className="mb-2 text-2xs font-bold uppercase tracking-wide text-slate-blue">Stages</div>
-            <ol className="space-y-2">
-              {s.steps.map((step, i) => (
-                <li key={step.stage_no} className="rounded-lg border border-muted-gray/70 bg-white p-3">
-                  <div className="flex items-center gap-2">
-                    <MoveControls
-                      onUp={() => moveStage(s.scaffold_id, i, -1)}
-                      onDown={() => moveStage(s.scaffold_id, i, 1)}
-                      canUp={i > 0}
-                      canDown={i < s.steps.length - 1}
-                    />
-                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-focus-navy font-mono text-2xs font-bold text-white">
-                      {i + 1}
-                    </span>
-                    <p className="text-sm font-medium text-ink">{step.prompt}</p>
-                  </div>
-                  <div className="mt-2 grid gap-1.5 pl-8 text-2xs sm:grid-cols-2">
-                    <div className="text-slate-blue">
-                      expected: <span className="font-mono text-focus-navy">{step.expected_response}</span>
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <span className="flex items-center gap-1 text-[#5c6b58]">
-                        <ArrowRight className="h-3 w-3" /> correct → <span className="font-mono">{step.next_on_correct}</span>
-                      </span>
-                      <span className="flex items-center gap-1 text-action-orange">
-                        <CornerDownRight className="h-3 w-3" /> incorrect → <span className="font-mono">{step.next_on_incorrect}</span>
-                      </span>
-                    </div>
-                  </div>
-                </li>
-              ))}
-            </ol>
-          </div>
-        </section>
-      ))}
+      <div className="flex flex-wrap items-center gap-1 border-b border-muted-gray/70">
+        {data.tabs.map((t) => (
+          <button
+            key={t.tab_id}
+            onClick={() => selectTab(t.tab_id)}
+            className={cn(
+              'rounded-t-lg px-3 py-2 text-sm font-semibold',
+              tab === t.tab_id ? 'bg-white text-focus-navy shadow-[inset_0_-2px_0_0_var(--lime)]' : 'text-slate-blue hover:text-ink',
+            )}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
 
-      {/* Parallel examples */}
-      <section className="sheet overflow-hidden">
-        <CardHeader icon={<Copy className="h-4 w-4" />} title={`Parallel Examples · ${c.parallel_examples.length}`} />
-        <ul>
-          {c.parallel_examples.map((p) => (
-            <li key={p.parallel_example_id} className="border-b border-muted-gray/50 px-5 py-3 last:border-0">
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-2xs font-bold text-learning-blue">{p.misconception_id}</span>
-                <Toggle on={p.active} />
-              </div>
-              <p className="mt-1 text-sm text-ink">{p.problem_statement}</p>
-              <div className="mt-0.5 font-mono text-xs text-slate-blue">answer: {p.final_answer}</div>
-            </li>
+      {isScaffoldTab ? (
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
+          <section className="sheet overflow-hidden self-start">
+            <CardHeader icon={<Layers className="h-4 w-4" />} title={`Scaffolds · ${scaffolds.length}`} />
+            <ul>
+              {scaffolds.map((s) => {
+                const active = s.scaffold_id === selected;
+                return (
+                  <li key={s.scaffold_id}>
+                    <button
+                      onClick={() => setSelected(s.scaffold_id)}
+                      className={cn(
+                        'flex w-full items-start gap-3 border-b border-muted-gray/50 px-4 py-3 text-left last:border-0',
+                        active ? 'bg-focus-navy text-white' : 'hover:bg-reading-surface',
+                      )}
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className={cn('block truncate text-sm font-semibold', active ? 'text-white' : 'text-focus-navy')}>
+                          {s.label}
+                        </span>
+                        <span className={cn('mt-0.5 block text-2xs', active ? 'text-white/70' : 'text-slate-blue')}>
+                          {s.children.steps.length} stages · {s.children.question_links.length} questions
+                        </span>
+                      </span>
+                      <HealthBadge health={s.content_health} />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+
+          {node && (
+            <div className="min-w-0 space-y-4">
+              <HealthIssues health={node.content_health} />
+
+              <section className="sheet overflow-hidden">
+                <CardHeader icon={<Layers className="h-4 w-4" />} title={node.details.scaffold_name} />
+                <div className="px-5 py-4">
+                  <Meta label="Trigger" value={node.details.trigger_rule} />
+                  <Meta label="Completion" value={node.details.completion_rule} />
+                  <Meta label="Active" value={node.details.active ? 'Yes' : 'No'} />
+                </div>
+              </section>
+
+              <section className="sheet overflow-hidden">
+                <CardHeader icon={<ListOrdered className="h-4 w-4" />} title={`Stages · ${node.children.steps.length}`} />
+                {node.children.steps.length === 0 ? (
+                  <div className="px-5 py-6 text-center text-sm font-semibold text-danger">
+                    This scaffold has no stages — that blocks review.
+                  </div>
+                ) : (
+                  <ol>
+                    {node.children.steps.map((s) => (
+                      <li key={s.scaffold_step_id} className="flex gap-3 border-b border-muted-gray/50 px-5 py-3 last:border-0">
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-focus-navy font-mono text-2xs font-bold text-white">
+                          {s.stage_no}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm text-ink">{s.prompt}</p>
+                          {s.partial_content && <p className="mt-1 text-xs text-slate-blue">{s.partial_content}</p>}
+                          <p className="mt-1 text-2xs text-slate-blue">Expects: {s.expected_response}</p>
+                          <div className="mt-1 flex flex-wrap gap-2 text-2xs">
+                            <span className="rounded bg-success-sage/15 px-1.5 py-0.5 text-[#5c6b58]">
+                              correct → {s.next_on_correct}
+                            </span>
+                            <span className="rounded bg-highlight-amber/15 px-1.5 py-0.5 text-action-orange">
+                              incorrect → {s.next_on_incorrect}
+                            </span>
+                          </div>
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </section>
+
+              <section className="sheet overflow-hidden">
+                <CardHeader
+                  icon={<Link2 className="h-4 w-4" />}
+                  title={`Question Links · ${node.children.question_links.length}`}
+                />
+                <ul>
+                  {node.children.question_links.map((q) => (
+                    <li key={`${q.question_id}-${q.micro_skill_id}`} className="border-b border-muted-gray/50 px-5 py-3 last:border-0">
+                      <p className="text-sm text-ink">{q.question_text}</p>
+                      <div className="mt-1 flex flex-wrap gap-2 text-2xs text-slate-blue">
+                        <span className="font-mono">{q.question_id}</span>
+                        <span>{q.micro_skill_name}</span>
+                        <span>priority {q.priority}</span>
+                      </div>
+                    </li>
+                  ))}
+                  {node.children.question_links.length === 0 && (
+                    <li className="px-5 py-6 text-center text-sm text-slate-blue">Not attached to any question.</li>
+                  )}
+                </ul>
+              </section>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {groups.map((g) => (
+            <section key={g.misconception_id} className="sheet overflow-hidden">
+              <CardHeader icon={<Copy className="h-4 w-4" />} title={`${g.label} · ${g.items.length}`} />
+              <ul>
+                {g.items.map((item, i) => (
+                  <li key={i} className="flex items-center gap-3 border-b border-muted-gray/50 px-5 py-3 last:border-0">
+                    <span className="min-w-0 flex-1 text-sm text-ink">{String(item.label ?? '—')}</span>
+                    <span className="font-mono text-2xs text-slate-blue">{String(item.parallel_example_id ?? '')}</span>
+                  </li>
+                ))}
+                {g.items.length === 0 && (
+                  <li className="px-5 py-6 text-center text-sm text-slate-blue">No parallel examples.</li>
+                )}
+              </ul>
+            </section>
           ))}
-        </ul>
-      </section>
+          {groups.length === 0 && (
+            <div className="sheet px-5 py-8 text-center text-sm text-slate-blue">No parallel examples in this topic.</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

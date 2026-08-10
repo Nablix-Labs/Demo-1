@@ -20,30 +20,31 @@ import type {
   HintsVisualCuesData,
   MisconceptionGroup,
   SupportChild,
-  SupportType,
+  SupportTabId,
 } from '@/lib/api/v3-contracts';
+import { TAB_FOR_SUPPORT } from '@/lib/api/v3-contracts';
 import { cn } from '@/lib/utils';
 
 const childId = (c: SupportChild) => c.hint_id ?? c.visual_cue_id ?? '';
 
 /** The children of a group for the active tab — the parent/child filter itself. */
-function childrenFor(group: MisconceptionGroup | undefined, tab: SupportType): SupportChild[] {
+function childrenFor(group: MisconceptionGroup | undefined, tab: SupportTabId): SupportChild[] {
   if (!group) return [];
-  return tab === 'HINT' ? group.hints : group.visual_cues;
+  return tab === 'HINTS' ? group.hints : group.visual_cues;
 }
 
 export default function HintsCuesPage() {
   const { topicId } = useParams<{ topicId: string }>();
   const [data, setData] = useState<HintsVisualCuesData | null>(null);
   const [parentId, setParentId] = useState<string | null>(null);
-  const [tab, setTab] = useState<SupportType>('HINT');
+  const [tab, setTab] = useState<SupportTabId>('HINTS');
   const [childSelected, setChildSelected] = useState<string | null>(null);
 
   useEffect(() => {
     apiV3.getSupportAssets(topicId).then((d) => {
       setData(d);
       setParentId(d.default_selection.misconception_id);
-      setTab(d.default_selection.support_type);
+      setTab(TAB_FOR_SUPPORT[d.default_selection.support_type]);
       setChildSelected(d.default_selection.support_id);
     });
   }, [topicId]);
@@ -62,7 +63,7 @@ export default function HintsCuesPage() {
     setChildSelected(next.length ? childId(next[0]) : null);
   }
 
-  function selectTab(next: SupportType) {
+  function selectTab(next: SupportTabId) {
     setTab(next);
     const list = childrenFor(parent, next);
     setChildSelected(list.length ? childId(list[0]) : null);
@@ -74,7 +75,7 @@ export default function HintsCuesPage() {
   /** The API's detail payload is only valid for the selection it was built for. */
   const detail =
     data.selected_item.parent_context.selected_misconception.misconception_id === parentId &&
-    data.selected_item.entity_type === tab &&
+    TAB_FOR_SUPPORT[data.selected_item.entity_type] === tab &&
     (data.selected_item.hint_id ?? data.selected_item.visual_cue_id) === childSelected
       ? data.selected_item
       : null;
@@ -88,7 +89,7 @@ export default function HintsCuesPage() {
         description="Support content lives under the misconception it repairs. Select a misconception to see only its support."
         action={
           <button className="btn btn-primary">
-            <Plus className="h-4 w-4" /> Add {tab === 'HINT' ? 'Hint' : 'Visual Cue'}
+            <Plus className="h-4 w-4" /> Add {tab === 'HINTS' ? 'Hint' : 'Visual Cue'}
           </button>
         }
       />
@@ -132,7 +133,7 @@ export default function HintsCuesPage() {
               {data.tabs.map((t) => (
                 <button
                   key={t.tab_id}
-                  onClick={() => selectTab(t.tab_id as SupportType)}
+                  onClick={() => selectTab(t.tab_id)}
                   className={cn(
                     'rounded-t-lg px-3 py-2 text-sm font-semibold',
                     tab === t.tab_id
@@ -149,10 +150,10 @@ export default function HintsCuesPage() {
               /* Deliberate authoring state — never fall back to another parent */
               <div className="px-5 py-8 text-center">
                 <p className="text-sm font-semibold text-action-orange">
-                  No {tab === 'HINT' ? 'hints have' : 'visual cues have'} been created for this misconception.
+                  No {tab === 'HINTS' ? 'hints have' : 'visual cues have'} been created for this misconception.
                 </p>
                 <button className="btn btn-secondary mt-3">
-                  <Plus className="h-4 w-4" /> Add {tab === 'HINT' ? 'Hint' : 'Visual Cue'}
+                  <Plus className="h-4 w-4" /> Add {tab === 'HINTS' ? 'Hint' : 'Visual Cue'}
                 </button>
               </div>
             ) : (
@@ -194,7 +195,7 @@ export default function HintsCuesPage() {
           {selectedChild && (
             <section className="sheet overflow-hidden">
               <CardHeader
-                icon={tab === 'HINT' ? <Lightbulb className="h-4 w-4" /> : <ImageIcon className="h-4 w-4" />}
+                icon={tab === 'HINTS' ? <Lightbulb className="h-4 w-4" /> : <ImageIcon className="h-4 w-4" />}
                 title={selectedChild.label}
                 action={<Toggle on={selectedChild.active} />}
               />
