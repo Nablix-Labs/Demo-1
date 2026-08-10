@@ -1,26 +1,25 @@
-import { Lightbulb } from 'lucide-react';
+'use client';
+
+import { useId } from 'react';
 
 /**
  * A hint, as a sticky note stuck to the canvas.
  *
- * It used to be a white rounded card, which read as another piece of app
- * chrome — the same visual weight as the toolbar and the status pills. A hint
- * is not chrome: it is something the tutor has left for the student, and it
- * should look placed rather than rendered.
+ * It used to be a white rounded card with the same visual weight as the toolbar
+ * and the status pills, so it read as app chrome. A hint is not chrome: it is
+ * something the tutor has left for the student, and it should look placed
+ * rather than rendered.
  *
- * Hence paper rather than a panel — warm stock, squared corners (post-its are
- * barely rounded), a slight rotation so it is not aligned to the grid, and a
- * shadow weighted to the bottom edge so the paper looks like it is lifting off
- * the surface. Amber matches the hint accent already used in the session trail,
- * so the two read as the same thing in different places.
- *
- * Positioning belongs entirely to the caller. The note deliberately sets no
- * position class of its own: an earlier version hardcoded `relative`, which
- * collided with the `absolute` callers pass in — same specificity, so the
- * winner came down to Tailwind's emit order rather than intent, and notes
- * silently ignored their placement. The decorations hang off an inner wrapper
- * instead.
+ * The silhouette is an SVG clip path rather than a rectangle — real paper does
+ * not have four straight edges, and the slight lift along the bottom is what
+ * stops it reading as a coloured div. Written in the same hand the tutor writes
+ * on the canvas with, because it is the same tutor.
  */
+
+/** Paper edge: square top, a shallow curl lifting along the bottom. */
+const PAPER_PATH =
+  'M 0 0 Q 0 0.69, 0.03 0.96 0.03 0.96, 1 0.96 Q 0.96 0.69, 0.96 0 0.96 0, 0 0';
+
 export default function HintNote({
   children,
   label = 'Gentle hint',
@@ -30,60 +29,54 @@ export default function HintNote({
   label?: string;
   className?: string;
 }) {
+  // Every note needs its own clip id — a shared literal id would be duplicated
+  // in the document the moment two hints are on screen at once.
+  const clipId = useId().replace(/:/g, '');
+
   return (
-    <div
-      className={`max-w-[19rem] select-none ${className}`}
-      style={{
-        transform: 'rotate(-1.6deg)',
-        background: 'linear-gradient(180deg, #FFF1C9 0%, #FFE9AE 100%)',
-        borderRadius: 3,
-        // Two shadows: a tight contact shadow under the paper, and a softer
-        // cast further out. One shadow alone reads as a floating rectangle.
-        boxShadow: '0 1px 2px rgba(90,64,10,.18), 0 10px 22px -6px rgba(90,64,10,.30)',
-      }}
-      role="note"
-    >
-      <div style={{ position: 'relative', padding: '13px 15px 15px' }}>
-        {/* The adhesive strip along the top — slightly darker stock, the way
-            the glued band on a real pad shows through. */}
+    <div className={`w-[248px] ${className}`}>
+      <div className="relative">
+        {/* Shadow sits behind and slightly below the paper: the note is resting
+            on the canvas, not floating above it. Inset from the edges so it
+            never shows past the curl. */}
         <span
           aria-hidden="true"
+          className="absolute left-[6px] top-[16%] h-[76%] w-[92%]"
           style={{
-            position: 'absolute',
-            inset: '0 0 auto 0',
-            height: 16,
-            borderRadius: '3px 3px 0 0',
-            background: 'linear-gradient(180deg, rgba(180,140,30,.14), rgba(180,140,30,0))',
-            pointerEvents: 'none',
+            background: 'rgba(92, 66, 12, .16)',
+            boxShadow: '-2px 3px 16px 0 rgba(92, 66, 12, .38)',
           }}
         />
 
-        <div className="relative flex items-start gap-2.5">
-          <Lightbulb size={15} strokeWidth={1.9} className="mt-[1px] flex-shrink-0 text-[#8A6407]" />
-          <div className="min-w-0">
-            <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-widest text-[#8A6407]">
-              {label}
-            </div>
-            <p className="text-[12.5px] leading-snug text-[#3A2E10]">{children}</p>
-          </div>
-        </div>
+        <svg width="0" height="0" aria-hidden="true" style={{ position: 'absolute' }}>
+          <defs>
+            <clipPath id={clipId} clipPathUnits="objectBoundingBox">
+              <path d={PAPER_PATH} strokeLinejoin="round" strokeLinecap="square" />
+            </clipPath>
+          </defs>
+        </svg>
 
-        {/* Turned-up bottom-right corner. The lighter wedge is the underside of
-            the paper; the shadow under it is what sells the lift. */}
-        <span
-          aria-hidden="true"
+        <div
+          role="note"
+          className="relative flex min-h-[214px] flex-col justify-center px-6 py-7"
           style={{
-            position: 'absolute',
-            right: 0,
-            bottom: 0,
-            width: 18,
-            height: 18,
+            // Warm amber stock, matching the hint accent the session trail
+            // already uses, so the two read as the same thing in two places.
             background:
-              'linear-gradient(135deg, rgba(0,0,0,.10) 0%, rgba(0,0,0,.02) 45%, #FFF6DA 46%)',
-            borderRadius: '3px 0 3px 0',
-            pointerEvents: 'none',
+              'linear-gradient(180deg, #FFF3CE 0%, #FFF0C2 12%, #FCE49B 75%, #FFF1C6 100%)',
+            clipPath: `url(#${clipId})`,
           }}
-        />
+        >
+          <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-widest text-[#8A6407]">
+            {label}
+          </div>
+          <p
+            className="text-[19px] leading-[1.35] text-[#3A2E10]"
+            style={{ fontFamily: 'var(--font-tutor-hand), cursive' }}
+          >
+            {children}
+          </p>
+        </div>
       </div>
     </div>
   );
