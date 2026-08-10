@@ -7,7 +7,9 @@ from app.models.adapters import (
     ConversationMessage,
     ExpectedStudentResponse,
     VisualCue,
+    VisionOCRResult,
 )
+from app.models.canvas import CanvasDrawPayload, CanvasLatency
 from app.models.fields import (
     BoundedText,
     ConceptId,
@@ -94,10 +96,12 @@ class InteractionResponse(BaseModel):
 
     session_id: str
     student_id: str
+    submission_id: str | None = None
     status: Literal[
         "DUPLICATE_TURN",
         "CLARIFICATION_REQUIRED",
         "NUDGE_SUPPRESSED",
+        "processed",
     ] | None = None
     accepted_turn_id: TurnId | None = None
     interaction_state_version: int = Field(default=0, ge=0)
@@ -161,6 +165,9 @@ class InteractionResponse(BaseModel):
     prerequisite_repair: PrerequisiteRepair | None = None
     inactivity_policy: InactivityPolicy | None = None
     nudge_delivery: NudgeDeliveryRecord | None = None
+    canvas_draw: list[CanvasDrawPayload] = Field(default_factory=list)
+    ocr: VisionOCRResult | None = None
+    latency: CanvasLatency | None = None
 
 
 class StaleTurnResponse(BaseModel):

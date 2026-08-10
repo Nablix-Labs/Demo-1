@@ -130,28 +130,3 @@ class CanvasSubmissionRecord(BaseModel):
     tutor: TutorResult
     latency: CanvasLatency
     submitted_at: datetime
-
-
-class CanvasSubmitResponse(BaseModel):
-    """Processed canvas submission with its OCR result and tutor feedback."""
-
-    session_id: str
-    student_id: str
-    status: Literal["processed"]
-    submission_id: str
-    snapshot_reference: str
-    ocr: VisionOCRResult
-    tutor: TutorResult
-    latency: CanvasLatency
-    canvas_draw: list[CanvasDrawPayload] = Field(default_factory=list)
-    # Phase state after this submission — same contract as InteractionResponse,
-    # so canvas turns can drive the frontend's phase routing.
-    phase_changed: bool = False
-    previous_phase: Phase | None = None
-    current_phase: Phase
-    current_question: str
-    question_id: str
-    ui_state: str
-    recommended_entry_phase: str | None = None
-    phase_transition_message: str | None = None
-    phase_transition_voice: str | None = None

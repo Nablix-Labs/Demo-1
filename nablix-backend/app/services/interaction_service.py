@@ -1313,7 +1313,11 @@ def _turn_is_stale(request: InteractionRequest, session: SessionRecord) -> bool:
 
 
 def _response_from(
-    request: InteractionRequest,
+    session_id: str,
+    student_id: str,
+    turn_id: str,
+    interaction_type: str,
+    nudge_id: str | None,
     session: SessionRecord,
     message: str,
     message_voice: str,
@@ -1322,8 +1326,7 @@ def _response_from(
     session_summary: SessionSummary | None,
     conversation_action: ConversationAction,
     attempt_increment: int,
-    status: Literal["CLARIFICATION_REQUIRED", "NUDGE_SUPPRESSED"] | None,
-
+    status: Literal["CLARIFICATION_REQUIRED", "NUDGE_SUPPRESSED", "processed"] | None,
     retry_safe: bool | None,
     previous_phase: Phase | None = None,
 ) -> InteractionResponse:
@@ -1366,13 +1369,13 @@ def _response_from(
     )
     active_objective = session.active_teaching_objective
     nudge_delivery = (
-        nudge_delivery_for(session.session_id, request.nudge_id or request.turn_id)
-        if request.interaction_type in {"INACTIVITY_NUDGE", "NUDGE_PRESENTED"}
+        nudge_delivery_for(session.session_id, nudge_id or turn_id)
+        if interaction_type in {"INACTIVITY_NUDGE", "NUDGE_PRESENTED"}
         else None
     )
     return InteractionResponse(
-        session_id=request.session_id,
-        student_id=request.student_id,
+        session_id=session_id,
+        student_id=student_id,
         status=status,
         accepted_turn_id=session.last_processed_turn_id,
         interaction_state_version=session.interaction_state_version,
@@ -1716,17 +1719,21 @@ def _side_channel_response(
 ) -> InteractionResponse:
     updated_session = update_side_channel_state(session, state_updates)
     response = _response_from(
-        request,
-        updated_session,
-        message,
-        message_voice,
-        None,
-        updated_session.scaffold_steps,
-        None,
-        conversation_action,
-        0,
-        None,
-        True,
+        session_id=request.session_id,
+        student_id=request.student_id,
+        turn_id=request.turn_id or "TURN-0000",
+        interaction_type=request.interaction_type,
+        nudge_id=request.nudge_id,
+        session=updated_session,
+        message=message,
+        message_voice=message_voice,
+        visual_cue=None,
+        scaffold_steps=updated_session.scaffold_steps,
+        session_summary=None,
+        conversation_action=conversation_action,
+        attempt_increment=0,
+        status=None,
+        retry_safe=True,
     )
     return _cache_response(request, response)
 
@@ -1786,17 +1793,21 @@ def _nudge_response(
         state_updates,
     )
     response = _response_from(
-        request,
-        updated_session,
-        message,
-        message,
-        None,
-        updated_session.scaffold_steps,
-        None,
-        "WAIT_FOR_STUDENT",
-        0,
-        "NUDGE_SUPPRESSED" if status is None else None,
-        True,
+        session_id=request.session_id,
+        student_id=request.student_id,
+        turn_id=request.turn_id or "TURN-0000",
+        interaction_type=request.interaction_type,
+        nudge_id=request.nudge_id,
+        session=updated_session,
+        message=message,
+        message_voice=message,
+        visual_cue=None,
+        scaffold_steps=updated_session.scaffold_steps,
+        session_summary=None,
+        conversation_action="WAIT_FOR_STUDENT",
+        attempt_increment=0,
+        status="NUDGE_SUPPRESSED" if status is None else None,
+        retry_safe=True,
     )
     delivery = (
         NudgeDelivery(
@@ -2052,17 +2063,21 @@ def _explain_again_interaction_response(
         },
     )
     response = _response_from(
-        request,
-        updated_session,
-        result.tutor_message,
-        result.tutor_message_voice_optimised,
-        visual_cue,
-        updated_session.scaffold_steps,
-        None,
-        "ASK_QUESTION",
-        0,
-        None,
-        True,
+        session_id=request.session_id,
+        student_id=request.student_id,
+        turn_id=request.turn_id or "TURN-0000",
+        interaction_type=request.interaction_type,
+        nudge_id=request.nudge_id,
+        session=updated_session,
+        message=result.tutor_message,
+        message_voice=result.tutor_message_voice_optimised,
+        visual_cue=visual_cue,
+        scaffold_steps=updated_session.scaffold_steps,
+        session_summary=None,
+        conversation_action="ASK_QUESTION",
+        attempt_increment=0,
+        status=None,
+        retry_safe=True,
     ).model_copy(
         update={
             "guided_student_state": result.guided_student_state,
@@ -2181,17 +2196,21 @@ async def _process_interaction(
         return _cache_response(
             request,
             _response_from(
-                request,
-                updated_session,
-                _LOW_CONFIDENCE_MESSAGE,
-                _LOW_CONFIDENCE_MESSAGE,
-                None,
-                [],
-                None,
-                "REQUEST_CLARIFICATION",
-                0,
-                "CLARIFICATION_REQUIRED",
-                None,
+                session_id=request.session_id,
+                student_id=request.student_id,
+                turn_id=request.turn_id or "TURN-0000",
+                interaction_type=request.interaction_type,
+                nudge_id=request.nudge_id,
+                session=updated_session,
+                message=_LOW_CONFIDENCE_MESSAGE,
+                message_voice=_LOW_CONFIDENCE_MESSAGE,
+                visual_cue=None,
+                scaffold_steps=[],
+                session_summary=None,
+                conversation_action="REQUEST_CLARIFICATION",
+                attempt_increment=0,
+                status="CLARIFICATION_REQUIRED",
+                retry_safe=None,
             ),
         )
 
@@ -2323,17 +2342,21 @@ async def _process_interaction(
         return _cache_response(
             request,
             _response_from(
-                request,
-                updated_session,
-                fallback,
-                fallback,
-                None,
-                [],
-                None,
-                "WAIT_FOR_STUDENT",
-                0,
-                None,
-                None,
+                session_id=request.session_id,
+                student_id=request.student_id,
+                turn_id=request.turn_id or "TURN-0000",
+                interaction_type=request.interaction_type,
+                nudge_id=request.nudge_id,
+                session=updated_session,
+                message=fallback,
+                message_voice=fallback,
+                visual_cue=None,
+                scaffold_steps=[],
+                session_summary=None,
+                conversation_action="WAIT_FOR_STUDENT",
+                attempt_increment=0,
+                status=None,
+                retry_safe=None,
             ),
         )
 
@@ -2613,17 +2636,21 @@ async def _process_interaction(
     )
 
     response = _response_from(
-        request,
-        updated_session,
-        tutor_message,
-        tutor_message_voice,
-        visual_cue,
-        scaffold_steps,
-        None,
-        conversation_action,
-        effective_attempt_increment,
-        None,
-        None,
+        session_id=request.session_id,
+        student_id=request.student_id,
+        turn_id=request.turn_id or "TURN-0000",
+        interaction_type=request.interaction_type,
+        nudge_id=request.nudge_id,
+        session=updated_session,
+        message=tutor_message,
+        message_voice=tutor_message_voice,
+        visual_cue=visual_cue,
+        scaffold_steps=scaffold_steps,
+        session_summary=None,
+        conversation_action=conversation_action,
+        attempt_increment=effective_attempt_increment,
+        status=None,
+        retry_safe=None,
         previous_phase=session.current_phase if new_phase is not None else None,
     )
     support_served = (

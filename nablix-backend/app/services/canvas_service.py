@@ -18,8 +18,8 @@ from app.models.canvas import (
     CanvasLatency,
     CanvasSubmissionRecord,
     CanvasSubmitRequest,
-    CanvasSubmitResponse,
 )
+from app.models.interaction import InteractionResponse
 from app.services.canvas_annotations import assign_step_ids, plan_canvas_draw
 from app.services.interaction_service import (
     _current_hint_level_from,
@@ -29,13 +29,13 @@ from app.services.interaction_service import (
     _schema_question,
     _scaffold_evaluation_context,
     process_answer_with_session_event,
+    _response_from,
 )
 from app.services.session_service import (
     _get_owned_session,
     record_canvas_attachment,
     record_canvas_submission,
 )
-from app.services.phase_transition import DEFAULT_TRANSITION_MESSAGE, TRANSITION_MESSAGES
 from app.services.snapshot_store import build_reference, store_snapshot
 
 
@@ -84,7 +84,7 @@ def _attachment_result(ocr: VisionOCRResult) -> TutorResult:
 async def submit_canvas(
     request: CanvasSubmitRequest,
     access_token: str,
-) -> CanvasSubmitResponse:
+) -> InteractionResponse:
     """Recognize a canvas snapshot, run it through the tutor, and store the result."""
 
     settings = get_settings()
@@ -192,11 +192,6 @@ async def submit_canvas(
         tutor = tutor.model_copy(
             update={"next_phase_recommendation": student_result.recommended_entry_phase}
         )
-    recommended_entry_phase = (
-        student_result.recommended_entry_phase
-        if student_result is not None
-        else updated_session.recommended_entry_phase
-    )
     tutor_latency_ms = (perf_counter() - tutor_started) * 1000
     canvas_draw = plan_canvas_draw(tutor, canvas_regions)
 
@@ -238,31 +233,33 @@ async def submit_canvas(
             student_result,
         )
     phase_changed = updated_session.current_phase != previous_session.current_phase
-    transition_message = (
-        TRANSITION_MESSAGES.get(
-            (previous_session.current_phase, updated_session.current_phase),
-            DEFAULT_TRANSITION_MESSAGE,
-        )
-        if phase_changed
-        else None
+    status_to_return = (
+        "processed"
+        if request.submission_role == "VOICE_ATTACHMENT"
+        else "CLARIFICATION_REQUIRED"
+        if tutor.evaluation == "UNCLEAR"
+        else "processed"
     )
-    return CanvasSubmitResponse(
+    response = _response_from(
         session_id=request.session_id,
         student_id=request.student_id,
-        status="processed",
-        submission_id=record.submission_id,
-        snapshot_reference=snapshot_reference,
-        ocr=ocr,
-        tutor=tutor,
-        latency=latency,
-        canvas_draw=canvas_draw,
-        phase_changed=phase_changed,
+        turn_id=submission_id,
+        interaction_type="ANSWER_SUBMISSION",
+        nudge_id=None,
+        session=updated_session,
+        message=tutor.tutor_message,
+        message_voice=tutor.tutor_message_voice,
+        visual_cue=tutor.visual_cue if tutor.visual_cue.show else None,
+        scaffold_steps=tutor.scaffold_steps_delivered,
+        session_summary=None,
+        conversation_action=tutor.recommended_conversation_action,
+        attempt_increment=tutor.attempt_increment,
+        status=status_to_return,
+        retry_safe=None,
         previous_phase=previous_session.current_phase if phase_changed else None,
-        current_phase=updated_session.current_phase,
-        current_question=str(updated_session.current_question),
-        question_id=str(updated_session.question_id),
-        ui_state=updated_session.ui_state,
-        recommended_entry_phase=recommended_entry_phase,
-        phase_transition_message=transition_message,
-        phase_transition_voice=transition_message,
     )
+    response.submission_id = submission_id
+    response.canvas_draw = canvas_draw
+    response.ocr = ocr
+    response.latency = latency
+    return response
