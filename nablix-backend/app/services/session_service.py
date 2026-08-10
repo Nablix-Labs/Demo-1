@@ -636,17 +636,6 @@ def _apply_schema_event(
             status_code=503,
             detail="Student Model returned no phase payload for the active phase.",
         )
-    next_phase = PHASE_FROM_STUDENT_MODEL[payload.phase]
-    transition = resolve_transition(session.current_phase, next_phase)
-    if next_phase != session.current_phase and transition is None:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Student Model returned an invalid phase transition "
-                f"{session.current_phase} -> {next_phase}."
-            ),
-        )
-
     has_questions = (
         payload.question_set is not None and bool(payload.question_set.questions)
     )
@@ -656,11 +645,34 @@ def _apply_schema_event(
         "SCAFFOLD",
         "RESCUE_AND_FRESH_QUESTION",
     } and not has_questions:
+        if payload.phase == "PHASE_3_INDEPENDENT_PRACTICE":
+            logger.warning(
+                "Phase 3 content exhausted — no questions in payload. "
+                "Auto-transitioning session to REVIEW phase."
+            )
+            payload = StudentModelPhasePayload(
+                phase="REVIEW",
+                payload_type="REVIEW_SUMMARY",
+                review_summary=_build_content_exhausted_review_summary(event),
+            )
+            event = event.model_copy(update={"phase_payload": payload})
+        else:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Student Model returned no active question for "
+                    f"{payload.phase}."
+                ),
+            )
+
+    next_phase = PHASE_FROM_STUDENT_MODEL[payload.phase]
+    transition = resolve_transition(session.current_phase, next_phase)
+    if next_phase != session.current_phase and transition is None:
         raise HTTPException(
-            status_code=503,
+            status_code=409,
             detail=(
-                "Student Model returned no active question for "
-                f"{payload.phase}."
+                "Student Model returned an invalid phase transition "
+                f"{session.current_phase} -> {next_phase}."
             ),
         )
 
