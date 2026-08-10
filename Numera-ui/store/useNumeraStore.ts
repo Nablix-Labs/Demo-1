@@ -476,7 +476,9 @@ export interface NumeraState {
   /** Position within this phase's question set, for the progress rail. */
   setQuestionProgress: (index: number, total: number) => void;
   toggleVisualCue: () => void;
-  addTranscriptMessage: (msg: Omit<TranscriptMessage, 'id' | 'timestamp'>) => void;
+  /** Returns the new message's id, so a caller can later retract it. */
+  addTranscriptMessage: (msg: Omit<TranscriptMessage, 'id' | 'timestamp'>) => string;
+  removeTranscriptMessage: (id: string) => void;
   setTranscript: (msgs: Pick<TranscriptMessage, 'role' | 'text'>[]) => void;
   updatePartialTranscript: (text: string) => void;
   commitPartialTranscript: (text: string) => void;
@@ -544,7 +546,7 @@ const initial: Omit<
   | 'setQuestionText' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'markTutorTurnFailed'
   | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue'
   | 'setSupportShown' | 'setLastHintText' | 'setQuestionProgress' | 'setAppliedResponse' | 'setInactivityPolicy'
-  | 'addTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript' | 'commitPartialTranscript'
+  | 'addTranscriptMessage' | 'removeTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript' | 'commitPartialTranscript'
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
   | 'setShapeKind' | 'setEraserMode'
   | 'setStrokeColor' | 'setStrokeWidth' | 'addItem' | 'removeItem' | 'undo' | 'redo'
@@ -805,7 +807,8 @@ export const useNumeraStore = create<NumeraState>()(
     set({ activeSlide: Math.max(0, index), totalSlides: Math.max(0, total) }),
   toggleVisualCue: () => set((s) => ({ visualCueVisible: !s.visualCueVisible })),
 
-  addTranscriptMessage: (msg) =>
+  addTranscriptMessage: (msg) => {
+    const id = uid();
     set((s) => ({
       // Anything the tutor says ends the student's turn, so the next thing they
       // say starts a new bubble instead of joining the last one. This is the
@@ -815,9 +818,14 @@ export const useNumeraStore = create<NumeraState>()(
         ...(msg.role === 'ai'
           ? s.transcript.map((m) => (m.open ? { ...m, open: false } : m))
           : s.transcript),
-        { ...msg, id: uid(), timestamp: Date.now() },
+        { ...msg, id, timestamp: Date.now() },
       ],
-    })),
+    }));
+    return id;
+  },
+
+  removeTranscriptMessage: (id) =>
+    set((s) => ({ transcript: s.transcript.filter((m) => m.id !== id) })),
 
   setTranscript: (msgs) =>
     set({
