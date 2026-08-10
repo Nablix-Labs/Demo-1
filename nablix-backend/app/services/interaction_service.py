@@ -11,7 +11,11 @@ from app.ai_engine.classifier import (
     build_openai_ai_engine_client,
     contains_answer_reveal,
     detect_student_intent,
+    generate_explain_again_response,
+    guided_error_definitions,
+    initial_guided_objective,
     normalize_exact_notation,
+    resolve_guided_rubric,
 )
 
 from app.ai_engine.classifier_config import ClassifierRulesConfig, load_classifier_rules
@@ -1311,6 +1315,38 @@ def _turn_is_stale(request: InteractionRequest, session: SessionRecord) -> bool:
     )
 
 
+def _guided_support_levels(session: SessionRecord) -> tuple[SupportUsed, SupportUsed]:
+    stored_event = session.student_model_event
+    guided = (
+        stored_event.journey_state.phase_2_guided_learning
+        if stored_event is not None
+        else None
+    )
+    support = (
+        stored_event.phase_payload.support_to_serve
+        if stored_event is not None and stored_event.phase_payload is not None
+        else None
+    )
+    support_type = support.get("support_type") if support is not None else None
+    active_support_level: SupportUsed = (
+        support_type
+        if support_type in _SUPPORT_RANK
+        else "VISUAL_CUE"
+        if support_type == "HINT_AND_VISUAL_CUE"
+        else "NONE"
+    )
+    highest_support_used: SupportUsed = (
+        max(
+            guided.highest_support_used_by_skill.values(),
+            key=_SUPPORT_RANK.index,
+            default="NONE",
+        )
+        if guided is not None
+        else "NONE"
+    )
+    return active_support_level, highest_support_used
+
+
 def _response_from(
     request: InteractionRequest,
     session: SessionRecord,
@@ -1673,21 +1709,7 @@ def _nudge_response(
     status: Literal["GENERATED", "PRESENTED"] | None,
     state_updates: dict[str, object],
 ) -> InteractionResponse:
-    updated_session = update_interaction_state(
-        request.session_id,
-        request.student_id,
-        session,
-        session.current_phase,
-        session.hint_count,
-        session.current_phase,
-        request.transcript_confidence,
-        request.canvas_snapshot_id,
-        None,
-        session.show_visual_cue,
-        session.show_scaffold_panel,
-        session.scaffold_steps,
-        state_updates,
-    )
+    updated_session = update_side_channel_state(session, state_updates)
     response = _response_from(
         request,
         updated_session,
@@ -1716,7 +1738,12 @@ def _nudge_response(
 
     return _cache_response(
         request,
-        response.model_copy(update={"nudge_delivery": delivery}),
+        response.model_copy(
+            update={
+                "accepted_turn_id": request.turn_id,
+                "nudge_delivery": delivery,
+            }
+        ),
     )
 
 
@@ -1725,11 +1752,7 @@ def _claim_inactivity_nudge(
     session: SessionRecord,
 ) -> InteractionResponse:
     now = datetime.now(timezone.utc)
-    base_updates: dict[str, object] = {
-        "last_processed_turn_id": request.turn_id,
-        "last_tutor_action": session.last_tutor_action,
-        "expected_student_response": session.expected_student_response,
-    }
+    base_updates: dict[str, object] = {}
     if not _nudge_eligible(session, now):
         return _nudge_response(
             request,
@@ -1782,9 +1805,6 @@ def _acknowledge_inactivity_nudge(
         session.pending_nudge_message,
         "PRESENTED",
         {
-            "last_processed_turn_id": request.turn_id,
-            "last_tutor_action": session.last_tutor_action,
-            "expected_student_response": session.expected_student_response,
             "nudge_presented_count": session.nudge_presented_count + 1,
             "pending_nudge_id": None,
             "pending_nudge_message": None,
@@ -1949,8 +1969,6 @@ def _explain_again_interaction_response(
         session.scaffold_steps,
         {
             **_turn_updates(request, "ASKED_QUESTION", "ANSWER"),
-            "generated_question_rubric": rubric,
-            "active_teaching_objective": objective,
             "conversation_history": history,
         },
     )

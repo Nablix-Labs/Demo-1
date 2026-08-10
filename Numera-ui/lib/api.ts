@@ -411,6 +411,10 @@ export interface SessionRecord {
   canvas_state: CanvasState;
   ui_state: string;
   message: string;
+  conversation_history?: Array<{
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+  }>;
   diagnostic_transition_message?: string | null;
   diagnostic_transition_messages?: string[];
   orientation_messages?: OrientationMessages | null;
