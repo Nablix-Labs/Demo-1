@@ -9,6 +9,7 @@ from app.core.config import Settings
 from app.core.exceptions import AdapterError
 from app.main import app
 from app.ai_engine.classifier_config import load_classifier_rules
+from app.models.adapters import TutorResult
 from app.services import interaction_service, session_service
 
 
@@ -17,6 +18,41 @@ SessionEventPost = Callable[
     [str, str, dict[str, object], dict[str, str], int, int],
     Awaitable[dict[str, object]],
 ]
+
+
+def test_guided_support_failure_distinguishes_wrong_partial_from_defence() -> None:
+    wrong_partial = TutorResult.model_construct(
+        guided_student_state="PARTIAL",
+        evaluation="PARTIALLY_CORRECT",
+        intent="SUBMITTING_ANSWER",
+        answer_value_confirmed=False,
+    )
+    defence_partial = wrong_partial.model_copy(
+        update={"answer_value_confirmed": True}
+    )
+    stuck = wrong_partial.model_copy(
+        update={"intent": "EXPRESSING_CONFUSION"}
+    )
+
+    assert interaction_service._is_support_failure(wrong_partial)
+    assert not interaction_service._is_support_failure(defence_partial)
+    assert not interaction_service._is_support_failure(stuck)
+
+
+def test_unresolved_partial_advances_the_authoritative_support_ladder() -> None:
+    rules = load_classifier_rules()
+    unresolved = TutorResult.model_construct(
+        guided_student_state="PARTIAL",
+        evaluation="PARTIALLY_CORRECT",
+        intent="SUBMITTING_ANSWER",
+        answer_value_confirmed=False,
+    )
+    defence = unresolved.model_copy(update={"answer_value_confirmed": True})
+
+    assert interaction_service._guided_attempt_event_type(unresolved, rules) == (
+        "INCORRECT_ATTEMPT"
+    )
+    assert interaction_service._guided_attempt_event_type(defence, rules) is None
 
 
 def test_scaffold_response_matching_accepts_safe_variants() -> None:
@@ -48,6 +84,7 @@ def test_scaffold_response_matching_accepts_safe_variants() -> None:
             student_message,
             expected_response,
             "INCORRECT",
+            "n + 5",
             rules,
         )
     for student_message, expected_response in rejected:
@@ -55,6 +92,16 @@ def test_scaffold_response_matching_accepts_safe_variants() -> None:
             student_message,
             expected_response,
             "PARTIALLY_CORRECT",
+            "n + 5",
+            rules,
+        )
+
+    for student_message in ["the starting variable", "n"]:
+        assert interaction_service._scaffold_response_is_correct(
+            student_message,
+            "Starting number",
+            "INCORRECT",
+            "n + 5",
             rules,
         )
 
@@ -1572,7 +1619,8 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert guided_incorrect.json()["show_visual_cue"] is True
     assert guided_incorrect.json()["visual_cue"] == {
         "show": True,
-            "cue_type": "VC-T02-COEFFICIENT-COUNT",
+            "cue_id": "VC-T02-COEFFICIENT-COUNT",
+            "cue_type": None,
             "description": "Count the equal letter terms.",
             "actions": [
                 {
