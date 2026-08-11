@@ -198,11 +198,17 @@ class InteractionResponse(BaseModel):
     feedback_type: Literal["PRAISE", "HINT", "CORRECTION", "CLARIFICATION"] | None = None
     phase3_submission_confirmed: bool | None = None
     phase3_submission_kind: Literal["CANVAS", "CHOICE"] | None = None
-    independent_outcome: Literal["CORRECT", "INCORRECT"] | None = None
+    independent_outcome: Literal[
+        "AWAITING_SUBMISSION",
+        "INPUT_UNCLEAR",
+        "INDEPENDENTLY_VERIFIED",
+        "RESCUE_REQUIRED",
+    ] | None = None
     independent_success: bool | None = None
     independent_attempt_terminal: bool | None = None
     phase3_locked_question_id: str | None = None
     first_error_step: str | None = None
+    phase3_review_evidence: dict[str, object] | None = None
 
 
 class StaleTurnResponse(BaseModel):

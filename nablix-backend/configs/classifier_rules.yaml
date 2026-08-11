@@ -313,6 +313,11 @@ strategy_rules:
   stuck_scaffold_min_count: 2
   scaffold_min_attempt_count: 3
   worked_example_min_attempt_count: 4
+independent_practice:
+  answer_recorded_message: "Answer recorded."
+  rescue_required_message: "We'll review this one before a fresh independent check."
+  awaiting_submission_message: "Please submit your best answer using the canvas or an approved choice."
+  input_unclear_message: "Please rewrite your answer clearly on the canvas, then submit it again."
 scaffold_response_rules:
   aliases:
     "½":

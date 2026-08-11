@@ -2774,6 +2774,61 @@ def test_canvas_math_review_suppresses_feedback_and_annotations_in_phase_3() -> 
     assert response.annotation_intents == []
 
 
+def test_phase3_choice_submission_returns_terminal_independent_outcome() -> None:
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-IP-1",
+            question_type="SINGLE_CHOICE",
+            question="Choose A.",
+            correct_answer="A",
+            answer_spec=AnswerSpec(
+                answer_spec_id="AS-IP-1",
+                canonical_answer="A",
+                accepted_answers=[],
+                verification_method="EXACT_CHOICE_MATCH",
+            ),
+            student_input="A",
+            current_phase="INDEPENDENT_PRACTICE",
+            input_source="CHOICE",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+            phase3_submission_confirmed=True,
+            phase3_submission_kind="CHOICE",
+        )
+    )
+
+    assert response.independent_outcome == "INDEPENDENTLY_VERIFIED"
+    assert response.attempt_increment == 1
+    assert response.independent_attempt_terminal is True
+    assert response.visual_cue.show is False
+    assert response.annotation_intents == []
+
+
+def test_phase3_non_submission_does_not_mutate_independent_progression() -> None:
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-IP-1",
+            question_type="SHORT_RESPONSE",
+            question="Write an expression.",
+            correct_answer="t - 3",
+            student_input="Can you help?",
+            current_phase="INDEPENDENT_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=0,
+            current_hint_level=None,
+            phase3_submission_confirmed=False,
+            phase3_submission_kind=None,
+        )
+    )
+
+    assert response.independent_outcome == "AWAITING_SUBMISSION"
+    assert response.attempt_increment == 0
+    assert response.independent_attempt_terminal is False
+    assert response.student_model_events == []
+
+
 def test_canvas_math_review_marks_first_mistake_in_diagnostic_phase() -> None:
     response = classify_student_response(
         ClassificationRequest(

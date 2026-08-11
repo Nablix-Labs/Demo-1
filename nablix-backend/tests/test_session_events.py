@@ -1317,19 +1317,18 @@ def test_restored_not_started_phase_initializes_before_answer(
     )
 
     assert answered.status_code == 200
+    if phase == "PHASE_3_INDEPENDENT_PRACTICE":
+        assert [event["event_type"] for event in events] == ["SESSION_OPENED"]
+        assert answered.json()["independent_outcome"] == "AWAITING_SUBMISSION"
+        assert answered.json()["attempt_increment"] == 0
+        return
     assert [event["event_type"] for event in events[:3]] == [
         "SESSION_OPENED",
         expected_initializer,
         "INCORRECT_ATTEMPT",
     ]
     assert events[2]["question_id"] == "Q-T02-INITIALIZED"
-    if phase == "PHASE_3_INDEPENDENT_PRACTICE":
-        assert events[1]["phase2_repair_results"] == [
-            {"micro_skill_id": "T02.M1", "highest_support_used": "NONE"}
-        ]
-        assert events[1]["used_question_ids"] == []
-    else:
-        assert events[1]["target_micro_skill_ids"] == ["T02.M1"]
+    assert events[1]["target_micro_skill_ids"] == ["T02.M1"]
 def test_student_model_request_ids_are_stable_across_retries() -> None:
     first = session_service._student_model_request_id(
         "SESSION001",

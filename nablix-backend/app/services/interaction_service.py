@@ -145,7 +145,7 @@ _NUMBER_WORD_VALUES: Final[dict[str, str]] = {
 @dataclass(frozen=True)
 class Phase3TerminalAttempt:
     question_id: str
-    outcome: Literal["CORRECT", "INCORRECT"]
+    outcome: Literal["INDEPENDENTLY_VERIFIED", "RESCUE_REQUIRED"]
     selected_error_code: str | None
 
 
@@ -1793,7 +1793,7 @@ def _response_from(
         outcome = phase3_attempt.outcome
         message = (
             "Answer recorded."
-            if outcome == "CORRECT"
+            if outcome == "INDEPENDENTLY_VERIFIED"
             else "We'll review this one before a fresh independent check."
         )
         message_voice = ""
@@ -1875,7 +1875,7 @@ def _response_from(
         phase3_submission_confirmed=phase3_attempt is not None if phase3_silent else None,
         independent_outcome=(phase3_attempt.outcome if phase3_attempt else None),
         independent_success=(
-            phase3_attempt.outcome == "CORRECT" if phase3_attempt else None
+            phase3_attempt.outcome == "INDEPENDENTLY_VERIFIED" if phase3_attempt else None
         ),
         independent_attempt_terminal=phase3_attempt is not None if phase3_silent else None,
         phase3_locked_question_id=(
@@ -1897,9 +1897,12 @@ def _phase3_terminal_attempt(
     if not isinstance(attempt, dict):
         return None
     question_id = attempt.get("question_id")
-    outcome = attempt.get("evaluation")
-    if not isinstance(question_id, str) or outcome not in {"CORRECT", "INCORRECT"}:
+    evaluation = attempt.get("evaluation")
+    if not isinstance(question_id, str) or evaluation not in {"CORRECT", "INCORRECT"}:
         return None
+    outcome: Literal["INDEPENDENTLY_VERIFIED", "RESCUE_REQUIRED"] = (
+        "INDEPENDENTLY_VERIFIED" if evaluation == "CORRECT" else "RESCUE_REQUIRED"
+    )
     detected_errors = stored_event.event_result.get("detected_errors")
     first_error = (
         detected_errors[0]
@@ -2730,8 +2733,22 @@ async def _process_interaction(
         if request.interaction_type in {"HELP_REQUEST", "SUPPORT_REPLAY", "EXPLAIN_AGAIN"}:
             raise HTTPException(status_code=409, detail="Teaching support is unavailable during Independent Practice.")
         if request.interaction_type == "ANSWER_SUBMISSION":
-            if request.input_source == "VOICE":
-                raise HTTPException(status_code=409, detail="Voice cannot submit an Independent Practice answer.")
+            if request.input_source in {"TEXT", "VOICE"}:
+                response = _response_from(
+                    session_id=request.session_id, student_id=request.student_id,
+                    turn_id=request.turn_id or "TURN-0000", interaction_type=request.interaction_type,
+                    nudge_id=None, session=session,
+                    message="Please submit your best answer using the canvas or an approved choice.",
+                    message_voice="", visual_cue=None, scaffold_steps=[], session_summary=None,
+                    conversation_action="WAIT_FOR_STUDENT", attempt_increment=0,
+                    status="processed", retry_safe=True,
+                )
+                return _cache_response(request, response.model_copy(update={
+                    "phase3_submission_confirmed": False,
+                    "independent_outcome": "AWAITING_SUBMISSION",
+                    "independent_attempt_terminal": False,
+                    "independent_success": None,
+                }))
             if request.input_source != "CHOICE":
                 raise HTTPException(
                     status_code=409,
@@ -3026,6 +3043,19 @@ async def _process_interaction(
         spatial_tokens=(canvas_evidence.spatial_tokens if canvas_evidence is not None else []),
         has_canvas_evidence=canvas_evidence is not None,
         canvas_solution_complete_candidate=canvas_solution_complete_candidate,
+        phase3_submission_confirmed=(
+            request.interaction_type == "ANSWER_SUBMISSION"
+            and session.current_phase == "INDEPENDENT_PRACTICE"
+            and request.input_source == "CHOICE"
+        ),
+        phase3_submission_kind=(
+            "CHOICE"
+            if request.interaction_type == "ANSWER_SUBMISSION"
+            and session.current_phase == "INDEPENDENT_PRACTICE"
+            and request.input_source == "CHOICE"
+            else None
+        ),
+        phase3_allowed_error_definitions=_schema_question(session).tutor_view.potential_errors,
     )
     if ocr is not None and ocr.needs_clarification:
         message = "I’m having trouble reading your working on the board. Please rewrite it clearly and try again."
@@ -3575,6 +3605,11 @@ async def _process_interaction(
                 if tutor.evaluation in {"INCORRECT", "PARTIALLY_CORRECT"}
                 else "HINT"
             ),
+            "independent_outcome": tutor.independent_outcome,
+            "independent_success": tutor.independent_success,
+            "independent_attempt_terminal": tutor.independent_attempt_terminal,
+            "first_error_step": tutor.first_error_step,
+            "phase3_review_evidence": tutor.phase3_review_evidence,
         }
     )
     if turn_session.current_phase == "INDEPENDENT_PRACTICE":
@@ -3594,6 +3629,8 @@ async def _process_interaction(
                 "canvas_draw": [],
                 "is_canvas_solution_correct": None,
                 "feedback_type": None,
+                "phase3_submission_confirmed": tutor.independent_outcome is not None,
+                "phase3_submission_kind": "CHOICE" if request.input_source == "CHOICE" else None,
             }
         )
     return _cache_response(request, response)

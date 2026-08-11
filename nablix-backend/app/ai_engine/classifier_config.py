@@ -117,6 +117,13 @@ class ReasoningCompletionConfig(StrictSchema):
     explanation_accepted_message: str
 
 
+class IndependentPracticeConfig(StrictSchema):
+    answer_recorded_message: str
+    rescue_required_message: str
+    awaiting_submission_message: str
+    input_unclear_message: str
+
+
 class CanvasReviewMessagesConfig(StrictSchema):
     ARITHMETIC_ERROR: str
     SIGN_ERROR: str
@@ -223,6 +230,7 @@ class ClassifierRulesConfig(StrictSchema):
     progressive_hint_messages: dict[ErrorType, list[str]]
     messages: MessageConfig
     guided_learning: GuidedLearningConfig
+    independent_practice: IndependentPracticeConfig
 
 
 @lru_cache(maxsize=1)

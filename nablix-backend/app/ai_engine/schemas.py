@@ -63,7 +63,14 @@ ResponseStrategy = Literal[
     "CONTINUE",
 ]
 
-InputSource = Literal["TEXT", "VOICE", "CANVAS"]
+InputSource = Literal["TEXT", "VOICE", "CANVAS", "CHOICE"]
+Phase3SubmissionKind = Literal["CANVAS", "CHOICE"]
+IndependentOutcome = Literal[
+    "AWAITING_SUBMISSION",
+    "INPUT_UNCLEAR",
+    "INDEPENDENTLY_VERIFIED",
+    "RESCUE_REQUIRED",
+]
 
 LearningPhase = Literal[
     "DIAGNOSTIC",
@@ -263,6 +270,17 @@ class StudentModelEvent(StrictSchema):
     independent_success: StrictBool
 
 
+class Phase3ReviewEvidence(StrictSchema):
+    question_id: str
+    submission_kind: Phase3SubmissionKind | None
+    submitted_work_present: StrictBool
+    ocr_clear: StrictBool | None
+    evaluation: EvaluationCategory | None
+    selected_error_code: str | None
+    first_error_step: str | None
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
 class TutorResponse(StrictSchema):
     evaluation: EvaluationCategory | None
     error_type: ErrorType | None
@@ -296,6 +314,11 @@ class TutorResponse(StrictSchema):
     active_teaching_objective: ActiveTeachingObjective | None = None
     guided_teaching_state: GuidedTeachingState | None = None
     scaffold_original_answer_correct: StrictBool = False
+    independent_outcome: IndependentOutcome | None = None
+    independent_success: StrictBool | None = None
+    independent_attempt_terminal: StrictBool = False
+    first_error_step: str | None = None
+    phase3_review_evidence: Phase3ReviewEvidence | None = None
 
 
 class ExplainAgainResult(StrictSchema):
@@ -330,5 +353,4 @@ class OpenAIExplainAgainMessage(StrictSchema):
 class RecordedMisconception(StrictSchema):
     error_code: str
     description: str
-
 
