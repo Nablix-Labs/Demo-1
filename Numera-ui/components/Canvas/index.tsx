@@ -78,6 +78,7 @@ export default function CanvasStage() {
   const selectedOptionId = useNumeraStore((s) => s.selectedOptionId);
   const setSelectedOption = useNumeraStore((s) => s.setSelectedOption);
   const setTextInput = useNumeraStore((s) => s.setTextInput);
+  const { explainAgain, explainAgainPending, selectOption, submitTeachBack } = tutor;
   const pickOption = useCallback(
     (option: SchemaQuestionOption) => {
       const s = useNumeraStore.getState();
@@ -87,10 +88,10 @@ export default function CanvasStage() {
         : s.textInput.trimStart();
       setSelectedOption(option.option_id);
       setTextInput(trailing ? `${option.text} ${trailing}` : option.text);
+      void selectOption(option.option_id, option.text);
     },
-    [setSelectedOption, setTextInput],
+    [setSelectedOption, setTextInput, selectOption],
   );
-  const { explainAgain, explainAgainPending } = tutor;
   const replayCue = useCallback(() => {
     if (!explainAgainPending) void explainAgain();
   }, [explainAgain, explainAgainPending]);
@@ -216,7 +217,7 @@ export default function CanvasStage() {
       </div>
 
       {/* Teaching-back prompt */}
-      <TeachBack />
+      <TeachBack onSubmit={submitTeachBack} />
 
       {/* Check-work feedback toast */}
       {toast && (

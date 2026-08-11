@@ -3,13 +3,13 @@
 /**
  * TeachBack — a "teaching back" moment inside guided learning. The tutor asks
  * the student to explain a step in their own words; articulating it is how the
- * understanding sticks. (The AI's response is mocked; backend would assess it.)
+ * understanding sticks. The response is evaluated as a normal guided answer.
  */
 
 import { useState } from 'react';
 import { GraduationCap, X, Check } from 'lucide-react';
 
-export default function TeachBack() {
+export default function TeachBack({ onSubmit }: { onSubmit: (text: string) => Promise<boolean> }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState('');
   const [submitted, setSubmitted] = useState(false);
@@ -49,7 +49,12 @@ export default function TeachBack() {
                   className="w-full rounded-md border border-muted-gray px-3 py-2 text-[12.5px] outline-none focus:border-ai-cyan resize-none"
                 />
                 <button
-                  onClick={() => setSubmitted(true)}
+                  onClick={async () => {
+                    const accepted = await onSubmit(text);
+                    if (accepted) {
+                      setSubmitted(true);
+                    }
+                  }}
                   disabled={!text.trim()}
                   className={
                     'mt-3 w-full rounded-md px-4 py-2 text-[12.5px] font-semibold transition-opacity ' +

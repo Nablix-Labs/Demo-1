@@ -172,6 +172,92 @@ def test_final_partial_wording_asks_only_the_reconciled_missing_component() -> N
     assert "wrong component" not in aligned.tutor_message
 
 
+@pytest.mark.parametrize("student_input", ["NPlus5", "n plus 5", "The general rule is NPlus5"])
+def test_compact_spoken_general_rule_is_symbolically_equivalent(
+    student_input: str,
+) -> None:
+    assert classifier.is_symbolically_equivalent(student_input, ["n + 5"])
+
+
+def test_short_reason_does_not_confirm_general_rule_selection() -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-004",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="GENERAL_RULE_SELECTION",
+                description="Selects n + 4 as the general rule.",
+                required=True,
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="selection-rubric",
+        prompt_version="1.0.0",
+    )
+    evaluation = GuidedEvaluation(
+        student_state="PARTIAL",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=["GENERAL_RULE_SELECTION"],
+        selected_error_code=None,
+        confidence=0.95,
+        next_objective=None,
+        tutor_message="Which rule works?",
+        tutor_message_voice="Which rule works?",
+    )
+
+    merged = classifier.merge_authored_component_evidence(
+        evaluation,
+        rubric,
+        "because n changes",
+    )
+
+    assert merged.newly_confirmed_concept_ids == []
+
+
+def test_short_reason_turn_becomes_partial_instead_of_repeating_a_wrong_prompt() -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-004",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="GENERAL_RULE_SELECTION",
+                description="Selects n + 4 as the general rule.",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="EXPLANATION_FOR_SELECTION",
+                description="Explains why n + 4 works for every starting value.",
+                required=True,
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="selection-reason-rubric",
+        prompt_version="1.0.0",
+    )
+    evaluation = GuidedEvaluation(
+        student_state="WRONG",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=["GENERAL_RULE_SELECTION", "EXPLANATION_FOR_SELECTION"],
+        selected_error_code=None,
+        confidence=0.95,
+        next_objective=None,
+        tutor_message="Try again.",
+        tutor_message_voice="Try again.",
+    )
+
+    merged = classifier.merge_authored_component_evidence(
+        evaluation,
+        rubric,
+        "because n is a variable and can change",
+    )
+
+    assert merged.student_state == "PARTIAL"
+    assert merged.newly_confirmed_concept_ids == ["EXPLANATION_FOR_SELECTION"]
+    assert merged.missing_concept_ids == ["GENERAL_RULE_SELECTION"]
+
+
 def test_contradicted_role_cannot_enter_persistent_component_evidence() -> None:
     evaluation = GuidedEvaluation(
         student_state="PARTIAL",

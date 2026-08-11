@@ -249,6 +249,8 @@ export type InteractionMode = 'VOICE' | 'TEXT';
 export type InputSource = 'TEXT' | 'VOICE' | 'CANVAS' | 'SYSTEM';
 export type InteractionType =
   | 'ANSWER_SUBMISSION'
+  | 'OPTION_SELECTED'
+  | 'TEACH_BACK_SUBMISSION'
   // Replay the current explanation. Neither an answer nor a help escalation:
   // the backend returns attempt_increment 0 and emits no Student Model event
   // (Phase 2 handoff, Chirudeva — Explain Again).
@@ -798,6 +800,8 @@ export interface InteractionPayload {
   input_source: InputSource;
   /** 1–500 chars for TEXT input. */
   text_input?: string;
+  /** Authoritative option identifier selected on a choice question. */
+  selected_option_id?: string;
   /** Use for VOICE input instead of text_input. */
   voice_transcript?: string;
   transcript_confidence?: number;

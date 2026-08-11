@@ -78,6 +78,8 @@ Phase = Literal[
 InteractionMode = Literal["VOICE", "TEXT"]
 InteractionType = Literal[
     "ANSWER_SUBMISSION",
+    "OPTION_SELECTED",
+    "TEACH_BACK_SUBMISSION",
     "CANVAS_SUBMISSION",
     "EXPLAIN_AGAIN",
     "INACTIVITY_NUDGE",

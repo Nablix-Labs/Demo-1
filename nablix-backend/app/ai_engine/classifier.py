@@ -1102,6 +1102,23 @@ def authored_component_is_demonstrated(
     return bool(required_tokens) and required_tokens.issubset(response_tokens)
 
 
+def concise_explanation_is_demonstrated(
+    component: GeneratedConcept,
+    response_tokens: set[str],
+) -> bool:
+    """Recognise a short valid reason without demanding a fixed sentence form."""
+
+    component_kind = f"{component.concept_id} {component.description}".casefold()
+    is_reason_component = any(
+        term in component_kind
+        for term in ("explanation", "explain", "reason", "why")
+    )
+    if not is_reason_component:
+        return False
+    justification_tokens = {"variable", "change", "different", "any", "represent"}
+    return bool(response_tokens.intersection(justification_tokens))
+
+
 def merge_authored_component_evidence(
     evaluation: GuidedEvaluation,
     rubric: GeneratedQuestionRubric,
@@ -1116,20 +1133,42 @@ def merge_authored_component_evidence(
     demonstrated_ids = {
         component.concept_id
         for component in rubric.required_concepts
-        if authored_component_is_demonstrated(
-            component,
-            response_tokens,
-            normalized_response,
+        if (
+            authored_component_is_demonstrated(
+                component,
+                response_tokens,
+                normalized_response,
+            )
+            or concise_explanation_is_demonstrated(component, response_tokens)
         )
     }
     if not demonstrated_ids:
         return evaluation
     contradicted_ids = set(evaluation.contradicted_concept_ids)
-    confirmed_ids = (
+    newly_confirmed_ids = (
         set(evaluation.newly_confirmed_concept_ids) | demonstrated_ids
     ) - contradicted_ids
+    confirmed_ids = (
+        newly_confirmed_ids | set(evaluation.preserved_concept_ids)
+    ) - contradicted_ids
+    required_ids = {
+        component.concept_id
+        for component in rubric.required_concepts
+        if component.required
+    }
+    missing_ids = required_ids - confirmed_ids - contradicted_ids
+    # A small lexical reason can prevent a repeat loop, but it cannot by itself
+    # promote an answer to complete; only deterministic completion or validated
+    # semantic evaluation may do that.
+    student_state: GuidedStudentState = (
+        "CORRECT" if evaluation.student_state == "CORRECT" else "PARTIAL"
+    )
     return evaluation.model_copy(
-        update={"newly_confirmed_concept_ids": sorted(confirmed_ids)}
+        update={
+            "student_state": student_state,
+            "newly_confirmed_concept_ids": sorted(newly_confirmed_ids),
+            "missing_concept_ids": sorted(missing_ids),
+        }
     )
 
 
@@ -1282,6 +1321,7 @@ def validate_guided_evaluation(
         return reconcile_guided_evaluation(
             evaluation,
             objective,
+            rubric,
             rules,
             f"unknown concept IDs: {sorted(returned_ids - concept_ids)}",
         )
@@ -1297,6 +1337,7 @@ def validate_guided_evaluation(
         return reconcile_guided_evaluation(
             evaluation,
             objective,
+            rubric,
             rules,
             f"disallowed error code: {evaluation.selected_error_code}",
         )
@@ -1320,6 +1361,7 @@ def validate_guided_evaluation(
         return reconcile_guided_evaluation(
             evaluation,
             objective,
+            rubric,
             rules,
             (
                 f"confidence {evaluation.confidence} below "
@@ -1364,6 +1406,7 @@ def validate_guided_evaluation(
         return reconcile_guided_evaluation(
             evaluation,
             objective,
+            rubric,
             rules,
             "CORRECT left required concepts missing",
         )
@@ -1382,6 +1425,7 @@ def validate_guided_evaluation(
         return reconcile_guided_evaluation(
             evaluation,
             objective,
+            rubric,
             rules,
             "PARTIAL did not contain both confirmed and missing concepts",
         )
@@ -1392,6 +1436,7 @@ def validate_guided_evaluation(
         return reconcile_guided_evaluation(
             evaluation,
             objective,
+            rubric,
             rules,
             f"{evaluation.student_state} attempted to create evidence",
         )
@@ -1423,6 +1468,7 @@ def validate_guided_evaluation(
 def reconcile_guided_evaluation(
     evaluation: GuidedEvaluation,
     objective: ActiveTeachingObjective,
+    rubric: GeneratedQuestionRubric,
     rules: ClassifierRulesConfig,
     reason: str,
 ) -> GuidedEvaluation:
@@ -1434,7 +1480,11 @@ def reconcile_guided_evaluation(
             "reason": reason,
         },
     )
-    message = rules.guided_learning.reconciliation_message
+    message = focused_unresolved_prompt(
+        rubric,
+        objective,
+        rules.guided_learning.reconciliation_message,
+    )
     return evaluation.model_copy(
         update={
             "student_state": "UNCLEAR",
@@ -2304,27 +2354,59 @@ def is_symbolically_equivalent(
     from sympy import Symbol, simplify, sympify
 
     allowed_pattern = r"[A-Za-z0-9+\-*/^().\s]+"
-    if re.fullmatch(allowed_pattern, student_input) is None:
+    normalized_student = normalize_compact_spoken_expression(student_input)
+    candidates = [normalized_student]
+    candidates.extend(
+        match.group(0)
+        for match in re.finditer(r"\b[A-Za-z]\s*[+\-*/]\s*\d+(?:\.\d+)?\b", normalized_student)
+    )
+    if not candidates or all(re.fullmatch(allowed_pattern, candidate) is None for candidate in candidates):
         return False
-    expressions = [student_input, *accepted_answers]
-    symbol_names = set(re.findall(r"[A-Za-z]+", " ".join(expressions)))
-    symbols = {name: Symbol(name) for name in symbol_names}
-    try:
-        student_expression = sympify(
-            student_input.replace("^", "**"),
-            locals=symbols,
+    for candidate in candidates:
+        if re.fullmatch(allowed_pattern, candidate) is None:
+            continue
+        expressions = [candidate, *accepted_answers]
+        symbol_names = set(re.findall(r"[A-Za-z]+", " ".join(expressions)))
+        symbols = {name: Symbol(name) for name in symbol_names}
+        try:
+            student_expression = sympify(candidate.replace("^", "**"), locals=symbols)
+            if any(
+                simplify(
+                    student_expression
+                    - sympify(answer.replace("^", "**"), locals=symbols)
+                )
+                == 0
+                for answer in accepted_answers
+                if re.fullmatch(allowed_pattern, answer) is not None
+            ):
+                return True
+        except (TypeError, ValueError, SyntaxError):
+            continue
+    return False
+
+
+def normalize_compact_spoken_expression(value: str) -> str:
+    """Turn unspaced spoken algebra such as ``NPlus5`` into safe notation."""
+
+    normalized = unicodedata.normalize("NFKC", value).replace("−", "-")
+    operations = {
+        "plus": "+",
+        "add": "+",
+        "minus": "-",
+        "subtract": "-",
+        "times": "*",
+        "multiply": "*",
+        "dividedby": "/",
+        "divide": "/",
+    }
+    for word, symbol in operations.items():
+        normalized = re.sub(
+            rf"\b([A-Za-z])\s*{word}\s*(-?\d+(?:\.\d+)?)\b",
+            rf"\1 {symbol} \2",
+            normalized,
+            flags=re.IGNORECASE,
         )
-        return any(
-            simplify(
-                student_expression
-                - sympify(answer.replace("^", "**"), locals=symbols)
-            )
-            == 0
-            for answer in accepted_answers
-            if re.fullmatch(allowed_pattern, answer) is not None
-        )
-    except (TypeError, ValueError, SyntaxError):
-        return False
+    return normalized.casefold()
 
 
 def classify_student_error(
