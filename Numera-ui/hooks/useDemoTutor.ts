@@ -100,7 +100,7 @@ export function resetSessionStart(): void {
  * dead session is not something to tell a student about when the next line of
  * code opens them a live one.
  */
-function recoverIfStaleSession(err: unknown): boolean {
+export function recoverIfStaleSession(err: unknown): boolean {
   if (!isStaleSessionError(err)) return false;
   console.warn('[session] backend no longer has this session — starting a fresh one');
   resetSessionStart();
@@ -512,6 +512,7 @@ export function useDemoTutor() {
         tutorSay(spoken, { afterMarks: drew });
         return res;
       } catch (err) {
+        if (recoverIfStaleSession(err)) return null;
         reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage, '/interaction (answer)');
         addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Tutor unavailable.') });
         return null;

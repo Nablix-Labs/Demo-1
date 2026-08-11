@@ -762,7 +762,11 @@ export const useNumeraStore = create<NumeraState>()(
   setBackendSession: (backendSession) => set({ backendSession }),
   setSessionSummary: (sessionSummary) => set({ sessionSummary }),
   setSessionReview: (sessionReview) => set({ sessionReview }),
-  clearSessionId: () => set({ sessionId: null, appliedResponse: EMPTY_APPLIED }),
+  clearSessionId: () => set({
+    sessionId: null,
+    backendSession: null,
+    appliedResponse: EMPTY_APPLIED,
+  }),
 
   // Mute is orthogonal to the turn phase (voice contract §12): the LISTENING/
   // PROCESSING/SPEAKING phase is owned by the turn machine (beginListeningTurn /
