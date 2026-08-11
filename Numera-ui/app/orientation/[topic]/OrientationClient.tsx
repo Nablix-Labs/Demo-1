@@ -35,7 +35,7 @@ import {
   type OrientationMedia,
 } from '@/lib/demoContent';
 import { useNumeraStore, type TutorElement } from '@/store/useNumeraStore';
-import { beginSession, sessionStartError } from '@/hooks/useDemoTutor';
+import { beginSession, resumeSession, sessionStartError } from '@/hooks/useDemoTutor';
 import { useAuthStore } from '@/store/useAuthStore';
 import {
   completeOrientation,
@@ -544,11 +544,15 @@ function BackendOrientation({ topicId }: { topicId: string }) {
     setStatus('loading');
     setError(null);
     try {
+      if (sessionId) {
+        await resumeSession();
+      }
+      const currentSessionId = useNumeraStore.getState().sessionId;
       // No local session — a returning student on a fresh load. Open one; the
       // backend always starts it in DIAGNOSTIC, and usePhaseRouting then moves
       // them to the phase it actually reports. (A true mid-journey resume needs
       // the backend change tracked as ask #3.)
-      const active = sessionId ?? (await beginSession(activeConceptId, 'TEXT'))?.session_id;
+      const active = currentSessionId ?? (await beginSession(activeConceptId, 'TEXT'))?.session_id;
       if (!active) {
         setError(sessionStartError() ?? "Couldn't reach the tutor to load this topic.");
         setStatus('error');
@@ -1105,4 +1109,3 @@ function stepElements(
     },
   ];
 }
-

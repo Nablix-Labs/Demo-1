@@ -1169,11 +1169,11 @@ async def complete_orientation(
     return await _apply_schema_event(session, response)
 
 
-async def get_session(session_id: str) -> SessionRecord:
-    """Return a stored mock session or raise a standard 404."""
+async def get_session(session_id: str, student_id: str) -> SessionRecord:
+    """Return a session only when it belongs to the requesting student."""
 
     session: SessionRecord | None = _sessions.get(session_id)
-    if session is None:
+    if session is None or session.student_id != student_id:
         raise _session_not_found(session_id)
     return session
 

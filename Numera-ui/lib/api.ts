@@ -668,9 +668,11 @@ export function requiredOrientationContent(record: SessionRecord | null | undefi
 }
 
 // ── GET /session/{session_id} ─────────────────────────────────────────────────
-/** GET /session/{session_id} — metadata + canvas submissions only (no transcript). */
-export async function getSession(sessionId: string) {
-  const res = await api.get<SessionRecord>(`/session/${sessionId}`);
+/** GET /session/{session_id} — restore one student-owned session. */
+export async function getSession(sessionId: string, student: string = studentId()) {
+  const res = await api.get<SessionRecord>(`/session/${sessionId}`, {
+    params: { student_id: student },
+  });
   return res.data;
 }
 
