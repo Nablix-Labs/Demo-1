@@ -176,6 +176,7 @@ class StudentModelEvent(BaseModel):
 
 class VisualCue(BaseModel):
     show: bool = False
+    cue_id: str | None = None
     cue_type: str | None = None
     description: str | None = None
     actions: list[dict[str, object]] = Field(default_factory=list)
