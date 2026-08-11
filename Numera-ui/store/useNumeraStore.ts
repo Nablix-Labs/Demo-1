@@ -767,6 +767,17 @@ export const useNumeraStore = create<NumeraState>()(
               // would show the next question opening with an answer already
               // chosen.
               selectedOptionId: null,
+              // So does the working. Nothing cleared the student's ink on a
+              // question change, so the next question opened underneath the
+              // last one's solution — and since the canvas is what gets
+              // submitted, the OCR then read both (row 32, 11 Aug).
+              items: [],
+              undone: [],
+              // The tutor's marks belong to the question they annotated.
+              tutorElements: [],
+              // Ink and marks are gone, so a Phase 3 lock on the question just
+              // left has nothing to hold; keeping it would freeze the new one.
+              phase3LockedQuestionId: null,
             }
           : {}),
       };

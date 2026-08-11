@@ -73,6 +73,63 @@ describe('applyBackendPhase', () => {
     expect(state().questionText).toBe('A box holds x counters. You add 4 and end up with 9.');
   });
 
+  it('clears the working when the question changes', () => {
+    // Row 32, 11 Aug: nothing cleared student ink on a question change, so the
+    // next question opened underneath the last one's solution — and since the
+    // canvas is what gets submitted, the OCR then read both answers at once.
+    useNumeraStore.setState({
+      activeQuestionId: 'Q-1',
+      items: [{ id: 'i1', kind: 'line', points: [0, 0, 5, 5] }] as never,
+      undone: [{ id: 'i0', kind: 'line', points: [1, 1, 2, 2] }] as never,
+      tutorElements: [{ id: 't1', kind: 'line', points: [0, 0, 1, 1] }] as never,
+    });
+
+    state().applyBackendPhase({
+      phase: 'GUIDED_PRACTICE',
+      questionId: 'Q-2',
+      questionText: 'Next one: 7 + 5',
+    });
+
+    expect(state().items).toEqual([]);
+    expect(state().undone).toEqual([]);
+    expect(state().tutorElements).toEqual([]);
+  });
+
+  it('leaves the working alone while the student is on the same question', () => {
+    // The opposite failure, and the more damaging one: a conversational reply
+    // that omits the question must not wipe work in progress.
+    useNumeraStore.setState({
+      currentPhase: 'GUIDED_PRACTICE',
+      activeQuestionId: 'Q-1',
+      items: [{ id: 'i1', kind: 'line', points: [0, 0, 5, 5] }] as never,
+    });
+
+    state().applyBackendPhase({
+      phase: 'GUIDED_PRACTICE',
+      questionId: null,
+      questionText: null,
+    });
+
+    expect(state().items).toHaveLength(1);
+  });
+
+  it('releases a Phase 3 lock when the rescue question arrives', () => {
+    // Phase 3 spec §3.4: "Clear the previous lock only for the new question ID."
+    useNumeraStore.setState({
+      currentPhase: 'INDEPENDENT_PRACTICE',
+      activeQuestionId: 'Q-3',
+      phase3LockedQuestionId: 'Q-3',
+    });
+
+    state().applyBackendPhase({
+      phase: 'INDEPENDENT_PRACTICE',
+      questionId: 'Q-3-RESCUE',
+      questionText: 'Try this one instead',
+    });
+
+    expect(state().phase3LockedQuestionId).toBeNull();
+  });
+
   it('drops the previous phase’s options when the phase moves', () => {
     // Manjusha, 8 Aug: the canvas asked the Phase 2 question (3 + 5, 9 + 5,
     // 14 + 5) while the choices below it were still the diagnostic's
