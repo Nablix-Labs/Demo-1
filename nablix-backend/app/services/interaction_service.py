@@ -1884,7 +1884,13 @@ def _is_explicit_help_request(request: InteractionRequest) -> bool:
 
 def _support_presentation(
     event: StudentModelSessionEventResponse,
-) -> tuple[str, VisualCue | None, list[str], ConversationAction, SupportUsed]:
+) -> tuple[
+    str | None,
+    VisualCue | None,
+    list[str],
+    ConversationAction | None,
+    SupportUsed | None,
+]:
     """Validate and unpack exactly one Student Model support rung."""
     payload = event.phase_payload
     support = payload.support_to_serve if payload is not None else None
@@ -1902,9 +1908,17 @@ def _support_presentation(
         return hint, None, [], "GIVE_HINT", "HINT"
     if support_type in {"VISUAL_CUE", "HINT_AND_VISUAL_CUE"}:
         if visual_cue is None:
-            raise RuntimeError(
-                f"Student Model returned {support_type} without visual cue content."
+            logger.warning(
+                "guided_support_content_missing",
+                extra={
+                    "request_id": event.request_id,
+                    "support_type": support_type,
+                    "missing_content": "visual_cue",
+                },
             )
+            if hint is not None:
+                return hint, None, [], "GIVE_HINT", "HINT"
+            return None, None, [], None, None
         message = hint or visual_cue.description
         if not message:
             raise RuntimeError(

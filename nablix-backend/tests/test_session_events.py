@@ -55,6 +55,28 @@ def test_unresolved_partial_advances_the_authoritative_support_ladder() -> None:
     assert interaction_service._guided_attempt_event_type(defence, rules) is None
 
 
+def test_empty_visual_cue_keeps_the_tutor_response_available() -> None:
+    response = _event_response("INCORRECT_ATTEMPT", "REQ-EMPTY-VISUAL")
+    phase_payload = response["phase_payload"]
+    assert isinstance(phase_payload, dict)
+    phase_payload["support_to_serve"] = {
+        "support_type": "VISUAL_CUE",
+        "items": [],
+        "retry_same_question": True,
+    }
+    event = session_service.StudentModelSessionEventResponse.model_validate(response)
+
+    message, visual_cue, steps, action, support_used = (
+        interaction_service._support_presentation(event)
+    )
+
+    assert message is None
+    assert visual_cue is None
+    assert steps == []
+    assert action is None
+    assert support_used is None
+
+
 def test_scaffold_response_matching_accepts_safe_variants() -> None:
     rules = load_classifier_rules()
     accepted = [
