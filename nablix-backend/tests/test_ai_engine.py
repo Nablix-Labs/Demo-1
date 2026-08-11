@@ -258,6 +258,127 @@ def test_short_reason_turn_becomes_partial_instead_of_repeating_a_wrong_prompt()
     assert merged.missing_concept_ids == ["GENERAL_RULE_SELECTION"]
 
 
+def test_compact_expression_component_gets_a_general_rule_prompt() -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-001",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="REQUIRED_COMPONENT_1",
+                description="n + 5",
+                required=True,
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="expression-rubric",
+        prompt_version="1.0.0",
+    )
+    objective = ActiveTeachingObjective(
+        objective_type="ANSWER_QUESTION",
+        target_concept_ids=["REQUIRED_COMPONENT_1"],
+        confirmed_concept_ids=[],
+        missing_concept_ids=["REQUIRED_COMPONENT_1"],
+    )
+
+    assert classifier.focused_unresolved_prompt(rubric, objective, "fallback") == (
+        "What general rule represents this situation?"
+    )
+
+
+def test_wrong_choice_comparison_does_not_treat_yes_as_progress() -> None:
+    objective = ActiveTeachingObjective(
+        objective_type="ANSWER_QUESTION",
+        target_concept_ids=["GENERAL_RULE_SELECTION"],
+        confirmed_concept_ids=[],
+        missing_concept_ids=["GENERAL_RULE_SELECTION"],
+    )
+    follow_up = classifier.option_comparison_follow_up(
+        [
+            ConversationMessage(
+                role="assistant",
+                content=(
+                    "You chose that option. Compare it with the situation: can one "
+                    "fixed starting number describe every possible case?"
+                ),
+            )
+        ],
+        "yes",
+        objective,
+    )
+
+    assert follow_up is not None
+    assert follow_up.student_state == "WRONG"
+    assert "Not quite" in follow_up.tutor_message
+
+
+def test_wrong_choice_comparison_accepts_a_negative_correction_without_completion() -> None:
+    objective = ActiveTeachingObjective(
+        objective_type="ANSWER_QUESTION",
+        target_concept_ids=["GENERAL_RULE_SELECTION"],
+        confirmed_concept_ids=[],
+        missing_concept_ids=["GENERAL_RULE_SELECTION"],
+    )
+    follow_up = classifier.option_comparison_follow_up(
+        [
+            ConversationMessage(
+                role="assistant",
+                content=(
+                    "You chose that option. Compare it with the situation: can one "
+                    "fixed starting number describe every possible case?"
+                ),
+            )
+        ],
+        "it's false",
+        objective,
+    )
+
+    assert follow_up is not None
+    assert follow_up.student_state == "PARTIAL"
+    assert "cannot describe every case" in follow_up.tutor_message
+
+
+def test_reversed_fixed_component_is_not_praised_as_correct() -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-006",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="CHANGING_VALUE",
+                description="c changes",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="FIXED_INCREMENT",
+                description="+4 stays fixed",
+                required=True,
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="counter-rubric",
+        prompt_version="1.0.0",
+    )
+    evaluation = GuidedEvaluation(
+        student_state="PARTIAL",
+        newly_confirmed_concept_ids=["CHANGING_VALUE"],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=["FIXED_INCREMENT"],
+        selected_error_code=None,
+        confidence=0.95,
+        next_objective=None,
+        tutor_message="Good.",
+        tutor_message_voice="Good.",
+    )
+
+    merged = classifier.merge_authored_component_evidence(
+        evaluation,
+        rubric,
+        "+4 changes",
+    )
+
+    assert merged.student_state == "WRONG"
+    assert merged.newly_confirmed_concept_ids == []
+    assert merged.contradicted_concept_ids == ["FIXED_INCREMENT"]
+
+
 def test_contradicted_role_cannot_enter_persistent_component_evidence() -> None:
     evaluation = GuidedEvaluation(
         student_state="PARTIAL",
@@ -2642,7 +2763,8 @@ def test_guided_evaluator_retries_answer_revealing_wording(monkeypatch) -> None:
 
     assert response.guided_student_state == "PARTIAL"
     assert response.tutor_message == (
-        "You identified multiplication. What do the two letters represent?"
+        "Good—let’s focus on the remaining part. What do the letters represent "
+        "when the expression is expanded?"
     )
     assert feedback[0] is None
     assert feedback[1] is not None
@@ -3021,8 +3143,8 @@ def test_guided_partial_without_confirmed_concepts_becomes_safe_unclear(
     assert response.attempt_increment == 0
     assert response.question_completed is False
     assert response.tutor_message == (
-        "I want to make sure I understood that. "
-        "Please explain the part that is still unresolved."
+        "I couldn’t connect that response to the question. "
+        "What else does the question ask you to state?"
     )
 
 
@@ -3986,7 +4108,8 @@ def test_guided_exact_notation_stuck_uses_question_aware_llm_message(
 
     assert response.guided_student_state == "STUCK"
     assert response.tutor_message == (
-        "Let’s make it smaller. Which letter is repeated?"
+        "That’s okay—we’ll take it one part at a time. "
+        "What else does the question ask you to state?"
     )
     assert "x" not in response.tutor_message
     assert response.attempt_increment == 0
