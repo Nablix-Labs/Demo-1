@@ -170,12 +170,6 @@ export function studentFacingError(err: unknown): string | null {
   if (code === 'JOURNEY_VERSION_CONFLICT') {
     return 'Two submissions arrived together. Your work is safe—please press Check once more.';
   }
-  if (
-    res?.status === 409
-    && backendMessage === 'Independent Practice answers require explicit submission confirmation.'
-  ) {
-    return 'Your answer wasn’t submitted because the practice submission was missing the required confirmation. Your work is still saved. Please try again; if it continues, refresh the page and resubmit.';
-  }
   if (res?.status === 409) {
     // Not every 409 is the resume case. On 2026-07-29 a guided-practice turn
     // came back 409 "Student Model did not return metadata for
@@ -813,8 +807,6 @@ export interface InteractionPayload {
   /** Frozen at voice-turn end so speech and board work are evaluated together. */
   canvas_state?: InteractionCanvasState;
   selected_option_id?: string;
-  phase3_submission_confirmed?: boolean;
-  phase3_submission_kind?: 'CANVAS' | 'CHOICE';
   idle_duration_ms?: number;
   nudge_id?: string;
   current_phase: string;
@@ -1188,10 +1180,6 @@ export async function submitCanvas(
     student_id: student,
     snapshot_data_url: snapshotDataUrl,
     submission_role: submissionRole,
-    phase3_submission_confirmed:
-      submissionRole === 'STANDALONE_ATTEMPT' ? true : undefined,
-    phase3_submission_kind:
-      submissionRole === 'STANDALONE_ATTEMPT' ? 'CANVAS' : undefined,
   });
   return res.data;
 }

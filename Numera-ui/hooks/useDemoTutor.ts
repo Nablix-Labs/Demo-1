@@ -493,8 +493,6 @@ export function useDemoTutor() {
           input_source: phase3Choice ? 'CHOICE' : 'TEXT',
           text_input: text,
           selected_option_id: phase3Choice ? state.selectedOptionId ?? undefined : undefined,
-          phase3_submission_confirmed: phase3Choice ? true : undefined,
-          phase3_submission_kind: phase3Choice ? 'CHOICE' : undefined,
           current_phase: state.currentPhase,
           concept_id: ctx.concept_id,
           question_id: questionId,

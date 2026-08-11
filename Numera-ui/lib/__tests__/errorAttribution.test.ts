@@ -81,14 +81,6 @@ describe('the cases that were already right stay right', () => {
     expect(msg).not.toContain('ALG_1STEP_GP_F01');
   });
 
-  it('explains a missing Phase 3 submission confirmation', () => {
-    expect(studentFacingError(err(409, {
-      message: 'Independent Practice answers require explicit submission confirmation.',
-    }))).toBe(
-      'Your answer wasn’t submitted because the practice submission was missing the required confirmation. Your work is still saved. Please try again; if it continues, refresh the page and resubmit.',
-    );
-  });
-
   it('never exposes a Student Model error-code rejection in learner chat', () => {
     const msg = studentFacingError(
       err(409, {
