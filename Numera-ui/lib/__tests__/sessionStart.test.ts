@@ -35,10 +35,10 @@ const RECORD = {
 async function loadTutor() {
   vi.resetModules();
   process.env.NEXT_PUBLIC_API_BASE_URL = '/api';
-  const { beginSession, resetSessionStart, resumeSession } = await import('@/hooks/useDemoTutor');
+  const { beginSession, recoverIfStaleSession, resetSessionStart, resumeSession } = await import('@/hooks/useDemoTutor');
   const { useNumeraStore } = await import('@/store/useNumeraStore');
   useNumeraStore.setState({ sessionId: null, backendSession: null });
-  return { beginSession, resetSessionStart, resumeSession, useNumeraStore };
+  return { beginSession, recoverIfStaleSession, resetSessionStart, resumeSession, useNumeraStore };
 }
 
 describe('session start', () => {
@@ -78,6 +78,22 @@ describe('session start', () => {
     resetSessionStart();
     expect(await beginSession('ALG_LINEAR_ONE_STEP')).toEqual(RECORD);
     expect(startSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops a backend-forgotten session so the lesson can restart', async () => {
+    const { recoverIfStaleSession, useNumeraStore } = await loadTutor();
+    useNumeraStore.setState({ sessionId: 'SESSION-FORGOTTEN', backendSession: RECORD });
+
+    const recovered = recoverIfStaleSession({
+      response: {
+        status: 404,
+        data: { message: 'Session with ID SESSION-FORGOTTEN was not found.' },
+      },
+    });
+
+    expect(recovered).toBe(true);
+    expect(useNumeraStore.getState().sessionId).toBeNull();
+    expect(useNumeraStore.getState().backendSession).toBeNull();
   });
 
   it('restores the complete tutor-turn contract after a refresh', async () => {

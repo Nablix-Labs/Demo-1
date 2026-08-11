@@ -10,6 +10,7 @@ from app.core.exceptions import AdapterError
 from app.main import app
 from app.ai_engine.classifier_config import load_classifier_rules
 from app.models.adapters import TutorResult
+from app.models.guided_learning import GuidedRescue
 from app.services import interaction_service, session_service
 
 
@@ -55,12 +56,15 @@ def test_unresolved_partial_advances_the_authoritative_support_ladder() -> None:
     assert interaction_service._guided_attempt_event_type(defence, rules) is None
 
 
-def test_empty_visual_cue_keeps_the_tutor_response_available() -> None:
+@pytest.mark.parametrize("support_type", ["HINT", "VISUAL_CUE", "SCAFFOLD"])
+def test_empty_support_keeps_the_tutor_response_available(
+    support_type: str,
+) -> None:
     response = _event_response("INCORRECT_ATTEMPT", "REQ-EMPTY-VISUAL")
     phase_payload = response["phase_payload"]
     assert isinstance(phase_payload, dict)
     phase_payload["support_to_serve"] = {
-        "support_type": "VISUAL_CUE",
+        "support_type": support_type,
         "items": [],
         "retry_same_question": True,
     }
@@ -75,6 +79,22 @@ def test_empty_visual_cue_keeps_the_tutor_response_available() -> None:
     assert steps == []
     assert action is None
     assert support_used is None
+
+
+@pytest.mark.parametrize("rescue_type", ["PARALLEL_EXAMPLE", "TUTOR_SOLVED"])
+def test_empty_rescue_keeps_the_tutor_response_available(
+    rescue_type: str,
+) -> None:
+    rescue = GuidedRescue.model_validate(
+        {
+            "rescue_type": rescue_type,
+            "micro_skill_id": "T01.M1",
+            "parallel_example": None,
+            "tutor_solved": None,
+        }
+    )
+
+    assert interaction_service._guided_rescue_message(rescue) is None
 
 
 def test_scaffold_response_matching_accepts_safe_variants() -> None:

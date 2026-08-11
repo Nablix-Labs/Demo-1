@@ -432,6 +432,27 @@ def resolve_guided_rubric(
 ) -> GeneratedQuestionRubric:
     """Return the persisted runtime rubric or generate it once from existing content."""
 
+    rubric = existing_rubric
+    if rubric is not None and rubric.question_id == question_id:
+        try:
+            validate_generated_rubric(
+                rubric,
+                question_id,
+                question_type,
+                answer_spec,
+                rules,
+            )
+            return rubric
+        except AdapterError as error:
+            logger.warning(
+                "guided_persisted_rubric_replaced",
+                extra={
+                    "question_id": question_id,
+                    "detail": error.detail,
+                },
+            )
+            rubric = None
+
     authored_rubric = rubric_from_authored_answer_parts(
         question_id,
         question_type,
@@ -441,7 +462,6 @@ def resolve_guided_rubric(
     if authored_rubric is not None:
         return authored_rubric
 
-    rubric = existing_rubric
     if rubric is None or rubric.question_id != question_id:
         rubric_error: AdapterError | None = None
         for attempt in range(rules.guided_learning.maximum_retries + 1):
@@ -496,6 +516,53 @@ def rubric_from_authored_answer_parts(
     prompt_version: str,
 ) -> GeneratedQuestionRubric | None:
     """Build stable multipart components from the existing authored contract."""
+
+    explanation_components: dict[
+        QuestionType,
+        tuple[tuple[str, str], tuple[str, str]],
+    ] = {
+        "CHOICE_WITH_EXPLANATION": (
+            ("ANSWER_SELECTION", "Selects the correct option or answer value."),
+            (
+                "ANSWER_EXPLANATION",
+                "Explains why the selected answer satisfies the question.",
+            ),
+        ),
+        "TRUE_FALSE_WITH_EXPLANATION": (
+            ("ANSWER_SELECTION", "States the correct true-or-false judgement."),
+            (
+                "ANSWER_EXPLANATION",
+                "Explains why the stated judgement satisfies the question.",
+            ),
+        ),
+    }
+    explanation_parts = explanation_components.get(question_type)
+    if explanation_parts is not None:
+        cache_source = json.dumps(
+            {
+                "question_id": question_id,
+                "question_type": question_type,
+                "answer_spec_id": answer_spec.answer_spec_id,
+                "prompt_version": prompt_version,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        return GeneratedQuestionRubric(
+            question_id=question_id,
+            required_concepts=[
+                GeneratedConcept(
+                    concept_id=component_id,
+                    description=description,
+                    required=True,
+                )
+                for component_id, description in explanation_parts
+            ],
+            completion_rule="ALL_REQUIRED_CONCEPTS",
+            cache_key=hashlib.sha256(cache_source.encode("utf-8")).hexdigest(),
+            prompt_version=prompt_version,
+        )
 
     if question_type != "MULTI_PART_SHORT_RESPONSE":
         return None

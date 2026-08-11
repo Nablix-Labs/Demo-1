@@ -353,11 +353,11 @@ def _guided_rescue(
         ) from error
 
 
-def _guided_rescue_message(rescue: GuidedRescue) -> str:
+def _guided_rescue_message(rescue: GuidedRescue) -> str | None:
     if rescue.rescue_type == "PARALLEL_EXAMPLE":
         example = rescue.parallel_example
         if example is None:
-            raise RuntimeError("Parallel rescue has no parallel example.")
+            return None
         worked_steps = " ".join(example.worked_steps)
         return (
             f"Let’s work through a similar example. {example.problem} "
@@ -366,7 +366,7 @@ def _guided_rescue_message(rescue: GuidedRescue) -> str:
         )
     solved = rescue.tutor_solved
     if solved is None:
-        raise RuntimeError("Tutor-solved rescue has no solved explanation.")
+        return None
     answer_steps = " ".join(solved.answer_steps)
     return " ".join(
         part
@@ -387,6 +387,15 @@ def _tutor_with_guided_rescue(
     if rescue is None:
         return tutor
     message = _guided_rescue_message(rescue)
+    if message is None:
+        logger.warning(
+            "guided_rescue_content_missing",
+            extra={
+                "request_id": event.request_id,
+                "rescue_type": rescue.rescue_type,
+            },
+        )
+        return tutor
     parallel = rescue.rescue_type == "PARALLEL_EXAMPLE"
     return tutor.model_copy(
         update={
@@ -1904,7 +1913,15 @@ def _support_presentation(
     scaffold_steps = _schema_support_steps(event)
     if support_type == "HINT":
         if hint is None:
-            raise RuntimeError("Student Model returned HINT without hint content.")
+            logger.warning(
+                "guided_support_content_missing",
+                extra={
+                    "request_id": event.request_id,
+                    "support_type": support_type,
+                    "missing_content": "hint",
+                },
+            )
+            return None, None, [], None, None
         return hint, None, [], "GIVE_HINT", "HINT"
     if support_type in {"VISUAL_CUE", "HINT_AND_VISUAL_CUE"}:
         if visual_cue is None:
@@ -1933,9 +1950,17 @@ def _support_presentation(
             or scaffold_state.get("current_scaffold_step_id") is None
             or scaffold_state.get("scaffold_expected_response") is None
         ):
-            raise RuntimeError(
-                "Student Model returned an incomplete SCAFFOLD support contract."
+            logger.warning(
+                "guided_support_content_missing",
+                extra={
+                    "request_id": event.request_id,
+                    "support_type": support_type,
+                    "missing_content": "scaffold",
+                },
             )
+            if hint is not None:
+                return hint, None, [], "GIVE_HINT", "HINT"
+            return None, None, [], None, None
         return scaffold_steps[0], None, scaffold_steps, "ASK_QUESTION", "SCAFFOLD"
     raise RuntimeError(
         f"Student Model returned unsupported guided support_type={support_type!r}."
