@@ -321,6 +321,7 @@ class GuidedAttemptEvent(MutatingSessionEventBase):
 
 class GuidedSupportEvent(MutatingSessionEventBase):
     event_type: Literal[
+        "GUIDED_SUPPORT_REQUESTED",
         "GUIDED_SUPPORT_ESCALATION_REQUIRED",
         "MAXIMUM_GUIDED_SUPPORT_PARALLEL",
         "MAXIMUM_GUIDED_SUPPORT_REQUIRED",

@@ -56,6 +56,8 @@ from app.models.guided_learning import (
     GuidedPromptType,
     GuidedStudentState,
     GuidedTeachingState,
+    GuidedTeachingPlanStep,
+    GuidedTutorContext,
     ScaffoldEvaluationContext,
     ScaffoldStepEvaluation,
 )
@@ -969,6 +971,21 @@ def _controller_evaluation(
     )
 
 
+def _describes_changing_starting_value(student_input: str) -> bool:
+    """Return whether a response identifies that the starting value varies."""
+
+    normalized = re.sub(r"\s+", " ", student_input.casefold()).strip()
+    describes_change = any(
+        marker in normalized for marker in ("change", "vary", "different")
+    )
+    describes_start = any(marker in normalized for marker in ("starting", "first"))
+    describes_value = any(marker in normalized for marker in ("number", "value"))
+    numeric_values = re.findall(r"\b\d+\b", normalized)
+    return describes_change and (
+        (describes_start and describes_value) or len(set(numeric_values)) >= 2
+    )
+
+
 def deterministic_teaching_step_evaluation(
     request: ClassificationRequest,
     rubric: GeneratedQuestionRubric,
@@ -1015,6 +1032,12 @@ def deterministic_teaching_step_evaluation(
             if changing is not None:
                 message = f"A general rule works for every starting number. {changing.prompt}"
                 return _controller_evaluation("PARTIAL", objective, message, None, rubric)
+        if _describes_changing_starting_value(request.student_input):
+            message = (
+                "Yes—the starting number changes. Replace it with a letter and keep "
+                "the operation that stays the same."
+            )
+            return _controller_evaluation("PARTIAL", objective, message, None, rubric)
         return None
 
     if step.step_id == "CHANGING_VALUE":
@@ -1030,7 +1053,11 @@ def deterministic_teaching_step_evaluation(
         valid_variable_statement = variable in normalized and any(
             marker in normalized for marker in ("change", "vary", "different")
         )
-        if normalized in exact_aliases or valid_variable_statement:
+        if (
+            normalized in exact_aliases
+            or valid_variable_statement
+            or _describes_changing_starting_value(request.student_input)
+        ):
             question = request.question.casefold()
             if (
                 "general rule" in question
@@ -1130,6 +1157,66 @@ def teaching_state_for(
         awaiting_response=objective is not None,
         active_step_id=active_step_id,
         teaching_step_ids=[step.step_id for step in teaching_steps],
+    )
+
+
+def guided_tutor_context_for(
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+) -> GuidedTutorContext:
+    """Build the durable teaching context that is authoritative over chat prose."""
+
+    teaching_steps = teaching_steps_for(request)
+    active_step = active_teaching_step(request)
+    active_question = (
+        active_step.prompt
+        if active_step is not None
+        else focused_unresolved_prompt(
+            rubric,
+            objective,
+            "Which part should we look at first?",
+        )
+    )
+    phase_context = request.phase_2_prompt_context
+    support_state = phase_context.support_state if phase_context is not None else {}
+    current_support = (
+        phase_context.current_support if phase_context is not None else None
+    )
+    current_scaffold_step_number = (
+        phase_context.current_scaffold_step_number
+        if phase_context is not None
+        else 0
+    )
+    consecutive_stuck_count = (
+        phase_context.consecutive_stuck_count if phase_context is not None else 0
+    )
+    conversation_state_summary = (
+        "Confirmed concepts: "
+        f"{', '.join(objective.confirmed_concept_ids) or 'none'}. "
+        "Missing concepts: "
+        f"{', '.join(objective.missing_concept_ids) or 'none'}. "
+        f"Active question: {active_question} "
+        "The backend owns progression and support selection; do not advance "
+        "or request a support rung."
+    )
+    return GuidedTutorContext(
+        active_tutor_question=active_question,
+        active_step_id=active_step.step_id if active_step is not None else None,
+        ordered_teaching_steps=[
+            GuidedTeachingPlanStep(
+                step_id=teaching_step.step_id,
+                tutor_question=teaching_step.prompt,
+            )
+            for teaching_step in teaching_steps
+        ],
+        confirmed_concept_ids=objective.confirmed_concept_ids,
+        missing_concept_ids=objective.missing_concept_ids,
+        support_state=support_state,
+        current_support=current_support,
+        current_scaffold_step_number=current_scaffold_step_number,
+        consecutive_stuck_count=consecutive_stuck_count,
+        conversation_state_summary=conversation_state_summary,
     )
 
 
@@ -1447,6 +1534,7 @@ def classify_guided_learning_response(
     last_error: AdapterError | None = None
     rejected_evaluation: GuidedEvaluation | None = None
     validation_feedback: str | None = None
+    guided_tutor_context = guided_tutor_context_for(request, rubric, objective)
     for attempt in range(rules.guided_learning.maximum_retries + 1):
         try:
             candidate = openai_client.evaluate_guided_turn(
@@ -1456,6 +1544,7 @@ def classify_guided_learning_response(
                 deterministic_evaluation=evaluate_answer_contract(request),
                 generated_rubric=rubric,
                 active_objective=objective,
+                guided_tutor_context=guided_tutor_context,
                 student_response=request.student_input,
                 input_source=request.input_source,
                 allowed_error_codes=allowed_errors,
@@ -2343,11 +2432,6 @@ def build_guided_tutor_response(
     response_strategy: ResponseStrategy = (
         "CONFIRM_CORRECT"
         if state == "CORRECT"
-        else "SCAFFOLD"
-        if state == "STUCK"
-        and request.phase_2_prompt_context is not None
-        and request.phase_2_prompt_context.consecutive_stuck_count + 1
-        >= rules.guided_learning.stuck_escalation_count
         else "CLARIFY"
         if state in {"PARTIAL", "STUCK", "UNCLEAR"}
         else "ENCOURAGE_RETRY"

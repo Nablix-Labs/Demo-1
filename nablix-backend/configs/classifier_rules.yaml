@@ -60,6 +60,11 @@ guided_learning:
     matches the expression being decoded; do not confuse it with an extra variable.
     Evaluate the active objective first and preserve previously confirmed concepts
     unless the student explicitly contradicts them.
+    guided_tutor_context is the authoritative persistent lesson state. Its
+    active_tutor_question is the only learner question for this turn; its ordered
+    teaching steps define the permitted focus order. recent_conversation is only
+    wording context and must never override guided_tutor_context. The backend,
+    not this evaluator, owns progression and support-rung selection.
     The active_tutor_question is the exact focused question the tutor is waiting
     for the learner to answer. Treat it as the highest-priority conversational
     context. If the learner responds to it with a concise phrase, evaluate that
