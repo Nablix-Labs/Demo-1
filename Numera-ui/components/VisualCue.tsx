@@ -27,6 +27,11 @@ export default function VisualCue() {
   const description = useNumeraStore((s) => s.visualCueDescription);
   const panelSide = useNumeraStore((s) => s.panelSide);
   const card = resolveCueCard(cueType);
+  // A note with no authored card is the tutor's own guidance text — the hint
+  // rung of the support ladder, not a cue card. Titling it "Visual cue" told
+  // the student a hint was something else (Manjusha, 10 Aug). The card's own
+  // title stands when there is one.
+  const label = card?.title ?? 'Hint';
 
   // Small entrance (fade + rise) without depending on a motion library.
   const [shown, setShown] = useState(false);
@@ -54,12 +59,12 @@ export default function VisualCue() {
         opacity: shown ? 1 : 0,
         transform: shown ? 'translateY(0)' : 'translateY(-6px)',
       }}
-      aria-label={`Visual cue: ${card?.title ?? 'guidance'}`}
+      aria-label={label}
     >
       <div className="relative">
         <button
           onClick={() => setVisible(false)}
-          aria-label="Dismiss visual cue"
+          aria-label={`Dismiss ${label.toLowerCase()}`}
           className="absolute -right-1 -top-1 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-white/70 text-[#8A6407] shadow-sm hover:bg-white"
         >
           <X size={13} strokeWidth={2.2} />
@@ -68,7 +73,7 @@ export default function VisualCue() {
         {/* Amber is the cue tone: "notice something", the default nudge. The
             steps are the tutor's words about the example, so they sit under it
             as the annotation rather than beside it. */}
-        <StickyNote tone="amber" label={card?.title ?? 'Visual cue'} lines={card ? [card.example] : undefined}>
+        <StickyNote tone="amber" label={label} lines={card ? [card.example] : undefined}>
           {card?.caption}
           {description ? <span className="mt-2 block">{description}</span> : null}
         </StickyNote>

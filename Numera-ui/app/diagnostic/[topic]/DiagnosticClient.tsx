@@ -93,7 +93,7 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
   const backendSession = useNumeraStore((s) => s.backendSession);
   const setBackendSession = useNumeraStore((s) => s.setBackendSession);
   const activeConceptId = useNumeraStore((s) => s.activeConceptId);
-  const setCurrentPhase = useNumeraStore((s) => s.setCurrentPhase);
+  const applyBackendPhase = useNumeraStore((s) => s.applyBackendPhase);
 
   const [status, setStatus] = useState<Status>('loading');
   const [error, setError] = useState<string | null>(null);
@@ -243,11 +243,18 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
       setBackendSession(rec);
       // Drives usePhaseRouting to whichever phase the backend chose. The record
       // carries question_id: null here, which the store now keeps as null.
-      useNumeraStore.setState({
-        activeQuestionId: rec.question_id,
-        questionText: rec.current_question?.trim() ?? '',
+      //
+      // Must go through applyBackendPhase, not a raw setState: writing the
+      // question text alone left the DIAGNOSTIC's options in place under the
+      // Phase 2 question — canvas asking "3 + 5, 9 + 5, 14 + 5" above choices
+      // reading "2 + 4, 7 + 4, 12 + 4" (Manjusha, 8 Aug). applyBackendPhase
+      // swaps text, type and options together and clears the per-question
+      // support state that also belongs to the question being left behind.
+      applyBackendPhase({
+        phase: rec.current_phase,
+        questionId: rec.question_id,
+        questionText: rec.current_question ?? null,
       });
-      setCurrentPhase(rec.current_phase);
     } catch {
       setError("Couldn't send your answers. Please try again.");
       setStatus('ready');
