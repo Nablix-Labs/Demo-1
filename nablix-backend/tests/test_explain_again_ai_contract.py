@@ -132,7 +132,16 @@ def test_generate_explain_again_uses_strict_state_preserving_contract(
 
     assert response.attempt_increment == 0
     assert response.progression_change_requested is False
-    user_payload = json.loads(request_bodies[0]["input"][1]["content"])
+    user_messages = [
+        message
+        for message in request_bodies[0]["input"]
+        if message["role"] == "user"
+    ]
+    assert {
+        "role": "assistant",
+        "content": "Think about multiplication.",
+    } in request_bodies[0]["input"]
+    user_payload = json.loads(user_messages[-1]["content"])
     assert user_payload["component"] == "explain_again_response"
     assert user_payload["first_unresolved_concept_id"] == "PRODUCT_MEANING"
     assert user_payload["active_scaffold"]["current_step_id"] == "S-1-STEP-1"

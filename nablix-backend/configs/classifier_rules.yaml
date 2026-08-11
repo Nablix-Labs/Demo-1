@@ -60,6 +60,12 @@ guided_learning:
     matches the expression being decoded; do not confuse it with an extra variable.
     Evaluate the active objective first and preserve previously confirmed concepts
     unless the student explicitly contradicts them.
+    The active_tutor_question is the exact focused question the tutor is waiting
+    for the learner to answer. Treat it as the highest-priority conversational
+    context. If the learner responds to it with a concise phrase, evaluate that
+    phrase against the active_tutor_question rather than treating it as unrelated
+    to the full original question. Do not replace it with a generic question when
+    it remains unanswered; restate or narrow that same focused question instead.
     Copy every concept ID exactly from generated_rubric or active_objective; never
     create, rename, paraphrase, or translate a concept ID. The backend derives
     preserved concepts, missing concepts, and the next objective from confirmed

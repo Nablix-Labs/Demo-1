@@ -205,8 +205,7 @@ def test_guided_component_question_stays_specific_after_confusion_and_wrong_valu
     assert wrong.tutor_message.endswith("Which part can take different possible values?")
 
 
-def test_final_partial_wording_asks_only_the_reconciled_missing_component() -> None:
-    rules = classifier.load_classifier_rules()
+def test_final_partial_wording_is_preserved_after_state_reconciliation() -> None:
     rubric = _guided_rubric()
     objective = ActiveTeachingObjective(
         objective_type="ANSWER_QUESTION",
@@ -233,11 +232,7 @@ def test_final_partial_wording_asks_only_the_reconciled_missing_component() -> N
         objective,
     )
 
-    assert aligned.tutor_message == (
-        "Good—let’s focus on the remaining part. "
-        "What do the letters represent when the expression is expanded?"
-    )
-    assert "wrong component" not in aligned.tutor_message
+    assert aligned.tutor_message == "You identified the wrong component."
 
 
 @pytest.mark.parametrize("student_input", ["NPlus5", "n plus 5", "The general rule is NPlus5"])
@@ -404,6 +399,32 @@ def test_wrong_choice_comparison_accepts_a_negative_correction_without_completio
     assert follow_up is not None
     assert follow_up.student_state == "PARTIAL"
     assert "cannot describe every case" in follow_up.tutor_message
+
+
+def test_choice_reaffirmation_keeps_the_existing_comparison_question() -> None:
+    objective = ActiveTeachingObjective(
+        objective_type="ANSWER_QUESTION",
+        target_concept_ids=["GENERAL_RULE_SELECTION"],
+        confirmed_concept_ids=[],
+        missing_concept_ids=["GENERAL_RULE_SELECTION"],
+    )
+    state = GuidedTeachingState(
+        question_id="Q-T01-004",
+        objective_component_ids=["GENERAL_RULE_SELECTION"],
+        confirmed_component_ids=[],
+        missing_component_ids=["GENERAL_RULE_SELECTION"],
+        active_component_id="GENERAL_RULE_SELECTION",
+        last_tutor_question_type="OPTION_COMPARISON",
+        selected_option_id="A",
+        awaiting_response=True,
+    )
+
+    follow_up = classifier.option_comparison_follow_up([], "I choose option A", objective, state)
+
+    assert follow_up is not None
+    assert follow_up.student_state == "PARTIAL"
+    assert "already chosen" in follow_up.tutor_message
+    assert "can one fixed starting number" in follow_up.tutor_message
 
 
 def test_copied_numeric_example_is_repaired_before_the_general_rule(
@@ -2958,8 +2979,7 @@ def test_guided_evaluator_retries_answer_revealing_wording(monkeypatch) -> None:
 
     assert response.guided_student_state == "PARTIAL"
     assert response.tutor_message == (
-        "Good—let’s focus on the remaining part. What do the letters represent "
-        "when the expression is expanded?"
+        "You identified multiplication. What do the two letters represent?"
     )
     assert feedback[0] is None
     assert feedback[1] is not None
@@ -3337,10 +3357,7 @@ def test_guided_partial_without_confirmed_concepts_becomes_safe_unclear(
     assert response.student_model_events == []
     assert response.attempt_increment == 0
     assert response.question_completed is False
-    assert response.tutor_message == (
-        "I couldn’t connect that response to the question. "
-        "State the remaining idea in your own words."
-    )
+    assert response.tutor_message == "State the remaining idea in your own words."
 
 
 def test_guided_error_definitions_preserve_student_model_metadata() -> None:
@@ -4483,7 +4500,7 @@ def test_multi_part_accepted_fragment_is_not_treated_as_complete(
     assert response.question_completed is False
 
 
-def test_guided_rubric_uses_only_the_compact_specialized_prompt(
+def test_guided_rubric_uses_phase_prompt_and_specialized_contract(
     monkeypatch,
 ) -> None:
     request_bodies: list[dict[str, object]] = []
@@ -4546,14 +4563,12 @@ def test_guided_rubric_uses_only_the_compact_specialized_prompt(
     assert len(request_bodies) == 1
     messages = request_bodies[0]["input"]
     assert isinstance(messages, list)
-    assert messages == [
-        {"role": "system", "content": system_prompt},
-        {
-            "role": "user",
-            "content": messages[1]["content"],
-        },
-    ]
-    assert "You are Numera" not in str(messages)
+    assert messages[0]["role"] == "system"
+    assert "Nablix AI Math Tutor" in messages[0]["content"]
+    assert messages[1]["role"] == "system"
+    assert "PHASE 2" in messages[1]["content"]
+    assert messages[3] == {"role": "system", "content": system_prompt}
+    assert messages[-1]["role"] == "user"
 
 
 def test_focused_component_schema_requires_the_requested_component_id() -> None:
