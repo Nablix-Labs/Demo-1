@@ -1530,37 +1530,10 @@ def align_guided_follow_up(
     rubric: GeneratedQuestionRubric,
     objective: ActiveTeachingObjective | None,
 ) -> GuidedEvaluation:
-    """Make tutor wording agree with the backend's reconciled objective."""
-    if objective is None or evaluation.student_state == "CORRECT":
-        return evaluation
-    prompt = focused_unresolved_prompt(
-        rubric,
-        objective,
-        "What else does the question ask you to state?",
-    )
-    if prompt.startswith("You have given the answer."):
-        return evaluation.model_copy(
-            update={
-                "tutor_message": prompt,
-                "tutor_message_voice": prompt,
-            }
-        )
-    prefix_by_state = {
-        "PARTIAL": "Good—let’s focus on the remaining part.",
-        "WRONG": "Let’s try one part at a time.",
-        "UNCLEAR": "I couldn’t connect that response to the question.",
-        "STUCK": "That’s okay—we’ll take it one part at a time.",
-    }
-    prefix = prefix_by_state.get(evaluation.student_state)
-    if prefix is None:
-        return evaluation
-    message = f"{prefix} {prompt}"
-    return evaluation.model_copy(
-        update={
-            "tutor_message": message,
-            "tutor_message_voice": message,
-        }
-    )
+    """Keep LLM wording after the backend has reconciled the teaching state."""
+
+    del rubric, objective
+    return evaluation
 
 
 def authoritative_guided_completion(

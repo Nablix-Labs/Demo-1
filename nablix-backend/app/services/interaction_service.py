@@ -2052,110 +2052,26 @@ def _support_presentation(
 async def _guided_help_response(
     request: InteractionRequest,
     session: SessionRecord,
-    access_token: str,
 ) -> InteractionResponse:
     if session.current_phase != "GUIDED_PRACTICE":
         raise HTTPException(
             status_code=409,
             detail="HELP_REQUEST is available only during Guided Practice.",
         )
-    if session.student_model_event is None or session.question_id is None:
+    support_message = _active_support_message(session)
+    if support_message is None:
         raise HTTPException(
             status_code=409,
-            detail="HELP_REQUEST requires an active Student Model question.",
+            detail="NO_ACTIVE_SUPPORT: this session has no support to replay.",
         )
-    micro_skill_ids = _schema_event_micro_skills(session)
-    stored_event = session.student_model_event
-    event = await get_adapters().student_model.send_session_event(
-        GuidedSupportEvent(
-            request_id=_schema_interaction_request_id(
-                session,
-                request.turn_id,
-                "GUIDED_SUPPORT_REQUESTED",
-            ),
-            event_type="GUIDED_SUPPORT_REQUESTED",
-            source_turn_id=request.turn_id,
-            expected_journey_version=stored_event.journey_state.version,
-            topic_id=stored_event.journey_state.topic_id,
-            student_id=session.student_id,
-            timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            question_id=session.question_id,
-            micro_skill_id=micro_skill_ids[0],
-        ),
-        access_token,
+    return await _side_channel_response(
+        request,
+        session,
+        support_message,
+        support_message,
+        "GIVE_HINT",
+        _tutor_side_channel_updates(request, session, support_message),
     )
-    message, visual_cue, scaffold_steps, conversation_action, support_level = (
-        _support_presentation(event)
-    )
-    # Content gaps (for example a VISUAL_CUE payload with items: []) must not
-    # break the student's session or falsely claim that support was displayed.
-    if message is None:
-        message = _contextual_nudge_message(session)
-        conversation_action = "ASK_QUESTION"
-        support_level = None
-    rules = load_classifier_rules()
-    for scaffold_prompt in scaffold_steps:
-        _validate_scaffold_prompt(
-            scaffold_prompt,
-            session.correct_answer,
-            rules,
-        )
-    event_session = await _apply_schema_event(session, event)
-    history = _updated_conversation_history(
-        session.conversation_history,
-        request.text_input or request.voice_transcript or "Help requested.",
-        message,
-        rules.conversation_rules.max_recent_messages,
-    )
-    last_action, expected_response = _conversation_state_for(
-        conversation_action,
-        False,
-        None,
-    )
-    updated_session = await update_interaction_state(
-        request.session_id,
-        request.student_id,
-        event_session,
-        event_session.current_phase,
-        _next_hint_count_from(event_session),
-        event_session.current_phase,
-        request.transcript_confidence,
-        request.canvas_snapshot_id,
-        None,
-        visual_cue is not None,
-        bool(scaffold_steps),
-        scaffold_steps,
-        {
-            "interaction_state_version": session.interaction_state_version + 1,
-            "conversation_history": history,
-            **_schema_scaffold_state(event),
-            **_turn_updates(request, last_action, expected_response),
-        },
-    )
-    response = _response_from(
-        session_id=request.session_id,
-        student_id=request.student_id,
-        turn_id=request.turn_id,
-        interaction_type="HELP_REQUEST",
-        nudge_id=None,
-        session=updated_session,
-        message=message,
-        message_voice=message,
-        visual_cue=visual_cue,
-        scaffold_steps=scaffold_steps,
-        session_summary=None,
-        conversation_action=conversation_action,
-        attempt_increment=0,
-        status=None,
-        retry_safe=True,
-    ).model_copy(
-        update={
-            "support_served_this_turn": support_level,
-            "active_support_level": support_level,
-            "routing_reason_code": event.routing.reason_code,
-        }
-    )
-    return _cache_response(request, response)
 
 
 def _active_scaffold(session: SessionRecord) -> ActiveScaffold | None:
@@ -2827,7 +2743,7 @@ async def _process_interaction(
             )
 
     if request.interaction_type == "HELP_REQUEST" or _is_explicit_help_request(request):
-        return await _guided_help_response(request, session, access_token)
+        return await _guided_help_response(request, session)
     if request.interaction_type == "SUPPORT_REPLAY":
         support_message = _active_support_message(session)
         if support_message is None:

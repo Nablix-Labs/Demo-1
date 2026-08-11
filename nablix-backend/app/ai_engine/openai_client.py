@@ -47,6 +47,24 @@ from app.models.student_model_session import AnswerSpec, QuestionType
 _OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 
 
+def _guided_conversation_history(
+    user_payload: dict[str, object],
+) -> list[ConversationMessage]:
+    raw_history = user_payload.get("recent_conversation", [])
+    if not isinstance(raw_history, list):
+        raise AdapterError(
+            "openai_ai_engine",
+            "Guided evaluator recent_conversation must be a list.",
+        )
+    try:
+        return [ConversationMessage.model_validate(message) for message in raw_history]
+    except ValidationError as error:
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Guided evaluator received invalid conversation history: {error}",
+        ) from error
+
+
 def focused_component_evidence_schema(
     component_id: str,
 ) -> dict[str, object]:
@@ -445,18 +463,39 @@ class OpenAIAIEngineClient:
         system_prompt: str,
         user_payload: dict[str, object],
     ) -> dict[str, object]:
+        recent_conversation = _guided_conversation_history(user_payload)
+        session_context = {
+            key: value
+            for key, value in user_payload.items()
+            if key != "recent_conversation"
+        }
+        active_tutor_question = next(
+            (
+                message.content
+                for message in reversed(recent_conversation)
+                if message.role == "assistant"
+            ),
+            None,
+        )
+        if active_tutor_question is not None:
+            session_context["active_tutor_question"] = active_tutor_question
         request_content = json.dumps(
-            {"component": name, **user_payload},
+            {"component": name, **session_context},
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
         )
+        messages = build_openai_tutor_messages(
+            phase="GUIDED_PRACTICE",
+            active_triggers=[],
+            session_context={"component": name, **session_context},
+            conversation_history=[message.model_dump() for message in recent_conversation],
+            current_user_input=request_content,
+        )
+        messages.insert(3, {"role": "system", "content": system_prompt})
         request_body: dict[str, object] = {
             "model": self._model,
-            "input": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": request_content},
-            ],
+            "input": messages,
             "store": self._store_responses,
             "text": {
                 "format": {
