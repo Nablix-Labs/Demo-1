@@ -4,6 +4,7 @@ from typing import cast
 
 from fastapi.testclient import TestClient
 import pytest
+from pydantic import ValidationError
 
 from app.adapters.tutor_engine import TutorEngineServiceAdapter, apply_retrieved_content
 from app.ai_engine import classifier, openai_client
@@ -17,12 +18,14 @@ from app.ai_engine.prompt_registry import (
 )
 from app.ai_engine.schemas import (
     ActiveScaffoldState,
+    AuthoredErrorDefinition,
     AuthoredAnswerSpec,
     AuthoredRequiredComponent,
     CanvasTextRegion,
     CanvasTokenDiagnosis,
     ExplainAgainRequest,
     OpenAIExplainAgainMessage,
+    Phase3ErrorAttribution,
     RecordedMisconception,
     SpatialMathToken,
     VisualCue,
@@ -2450,14 +2453,391 @@ def test_canvas_math_review_suppresses_feedback_and_annotations_in_phase_3() -> 
             transcript_confidence=None,
             attempt_count=1,
             current_hint_level=None,
+            phase3_submission_confirmed=True,
+            phase3_submission_kind="CANVAS",
             canvas_regions=[_canvas_region("step-1", "x = 9 + 4", 0.95)],
         )
     )
 
-    assert response.mistake_classification is not None
-    assert response.mistake_classification.status == "mistake_found"
+    assert response.mistake_classification is None
     assert response.canvas_feedback.has_feedback is False
     assert response.annotation_intents == []
+    assert response.phase3_review_evidence is not None
+    assert response.phase3_review_evidence.first_error_step == "step-1"
+    assert response.phase3_review_evidence.canvas_submitted is True
+    assert response.phase3_review_evidence.ocr_clear is True
+    assert response.phase3_review_evidence.review_material_available is False
+
+
+def _phase_three_request(
+    student_input: str,
+    input_source: str,
+    submission_confirmed: bool,
+) -> ClassificationRequest:
+    return ClassificationRequest(
+        question="A temperature starts at t and falls by 3 degrees. Write the general rule.",
+        correct_answer="t - 3",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-005",
+            canonical_answer="t - 3",
+            accepted_answers=["t-3"],
+            verification_method="SYMBOLIC_EQUIVALENCE",
+            explanation_required=False,
+        ),
+        student_input=student_input,
+        current_phase="INDEPENDENT_PRACTICE",
+        input_source=input_source,
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+        phase3_submission_confirmed=submission_confirmed,
+        phase3_submission_kind=(
+            "CANVAS"
+            if submission_confirmed and input_source == "CANVAS"
+            else "CHOICE"
+            if submission_confirmed
+            else None
+        ),
+    )
+
+
+def test_phase_three_correct_answer_is_recorded_without_reasoning_request() -> None:
+    response = classify_student_response(_phase_three_request("t - 3", "CANVAS", True))
+
+    assert response.evaluation == "CORRECT"
+    assert response.question_completed is True
+    assert response.reasoning_complete is True
+    assert response.response_strategy == "CONFIRM_CORRECT"
+    assert response.tutor_message == "Answer recorded."
+    assert response.attempt_increment == 1
+    assert response.independent_outcome == "INDEPENDENTLY_VERIFIED"
+    assert response.independent_success is True
+    assert response.independent_attempt_terminal is True
+    assert response.hint_level is None
+    assert response.visual_cue.show is False
+    assert response.canvas_feedback.has_feedback is False
+    assert response.annotation_intents == []
+    assert response.student_model_events[0].independent_success is True
+
+
+@pytest.mark.parametrize("student_input", ["t + 3", "3 - t", "7", "subtract 3"])
+def test_phase_three_noncorrect_answer_requires_rescue_without_coaching(
+    student_input: str,
+) -> None:
+    response = classify_student_response(
+        _phase_three_request(student_input, "CANVAS", True)
+    )
+
+    assert response.evaluation in {"INCORRECT", "PARTIALLY_CORRECT"}
+    assert response.response_strategy == "INDEPENDENT_RESCUE_REQUIRED"
+    assert response.tutor_message == (
+        "We'll review this one before a fresh independent check."
+    )
+    assert response.attempt_increment == 1
+    assert response.independent_outcome == "RESCUE_REQUIRED"
+    assert response.independent_success is False
+    assert response.independent_attempt_terminal is True
+    assert response.hint_level is None
+    assert response.visual_cue.show is False
+    assert response.canvas_feedback.has_feedback is False
+    assert response.annotation_intents == []
+    assert response.student_model_events[0].independent_success is False
+
+
+def test_phase_three_help_request_is_neutral_and_does_not_use_the_llm(monkeypatch) -> None:
+    def unexpected_openai_call(*args, **kwargs) -> object:
+        raise AssertionError("Phase 3 must not generate tutor prose with the LLM")
+
+    monkeypatch.setattr(classifier, "generate_tutor_turn_with_openai", unexpected_openai_call)
+
+    response = classify_student_response(
+        _phase_three_request(
+            "Can you tell me what sign to use?",
+            "TEXT",
+            submission_confirmed=False,
+        )
+    )
+
+    assert response.response_strategy == "CONTINUE"
+    assert response.tutor_message == (
+        "Use your best judgement and submit the answer you think is right."
+    )
+    assert response.attempt_increment == 0
+    assert response.independent_outcome == "AWAITING_SUBMISSION"
+    assert response.independent_success is False
+    assert response.independent_attempt_terminal is False
+    assert response.hint_level is None
+    assert response.visual_cue.show is False
+    assert response.student_model_events == []
+
+
+def test_phase_three_empty_submission_preserves_the_attempt() -> None:
+    response = classify_student_response(_phase_three_request("", "CANVAS", True))
+
+    assert response.evaluation is None
+    assert response.independent_outcome == "AWAITING_SUBMISSION"
+    assert response.tutor_message == "Enter your answer on the canvas before submitting."
+    assert response.attempt_increment == 0
+    assert response.independent_success is False
+    assert response.independent_attempt_terminal is False
+    assert response.student_model_events == []
+
+
+def test_phase_three_unclear_ocr_preserves_the_attempt() -> None:
+    request = _phase_three_request("t + 3", "CANVAS", True).model_copy(
+        update={
+            "canvas_regions": [_canvas_region("step-1", "t + ?", 0.5)],
+        }
+    )
+
+    response = classify_student_response(request)
+
+    assert response.evaluation == "UNCLEAR"
+    assert response.response_strategy == "CLARIFY"
+    assert response.independent_outcome == "INPUT_UNCLEAR"
+    assert response.tutor_message == "I could not read that clearly. Please write your answer again."
+    assert response.attempt_increment == 0
+    assert response.independent_success is False
+    assert response.independent_attempt_terminal is False
+    assert response.student_model_events == []
+    assert response.annotation_intents == []
+
+
+def test_phase_three_requires_explicit_submission_contract() -> None:
+    with pytest.raises(ValidationError, match="phase3_submission_confirmed"):
+        ClassificationRequest(
+            question="A temperature starts at t and falls by 3 degrees.",
+            correct_answer="t - 3",
+            student_input="t - 3",
+            current_phase="INDEPENDENT_PRACTICE",
+            input_source="CANVAS",
+            transcript_confidence=None,
+            attempt_count=0,
+            current_hint_level=None,
+        )
+
+
+def test_phase_three_rejects_a_submission_kind_with_the_wrong_input_source() -> None:
+    with pytest.raises(ValidationError, match="CHOICE Phase 3 submission"):
+        _phase_three_request("t - 3", "VOICE", True)
+
+
+class _Phase3AttributionClient:
+    def __init__(self, attribution: Phase3ErrorAttribution) -> None:
+        self.attribution = attribution
+        self.calls = 0
+
+    def classify_phase3_error(
+        self,
+        question: str,
+        submitted_work: str,
+        allowed_error_definitions: list[AuthoredErrorDefinition],
+        prompt_version: str,
+        system_prompt: str,
+    ) -> openai_client.Phase3ErrorAttributionResult:
+        self.calls += 1
+        return openai_client.Phase3ErrorAttributionResult(
+            attribution=self.attribution,
+            request_id="resp_phase3_test",
+            latency_ms=12.5,
+        )
+
+
+def _phase3_error_definition(error_code: str, definition: str) -> AuthoredErrorDefinition:
+    return AuthoredErrorDefinition(error_code=error_code, definition=definition)
+
+
+@pytest.mark.parametrize(
+    ("student_input", "selected_error_code"),
+    [
+        ("t + 3", "ERR-DIRECTION-REVERSED"),
+        ("3 - t", "ERR-ORDER-REVERSED"),
+    ],
+)
+def test_phase_three_llm_attribution_accepts_a_confident_authored_error(
+    monkeypatch,
+    student_input: str,
+    selected_error_code: str,
+) -> None:
+    client = _Phase3AttributionClient(
+        Phase3ErrorAttribution(
+            selected_error_code=selected_error_code,
+            evidence="The submitted expression reverses the authored operation.",
+            confidence=0.91,
+        )
+    )
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: client,
+    )
+    request = _phase_three_request(student_input, "CANVAS", True).model_copy(
+        update={
+            "phase3_allowed_error_definitions": [
+                _phase3_error_definition(
+                    "ERR-DIRECTION-REVERSED",
+                    "Uses an increase when the question describes a decrease.",
+                ),
+                _phase3_error_definition(
+                    "ERR-ORDER-REVERSED",
+                    "Reverses the starting quantity and the change.",
+                ),
+            ]
+        }
+    )
+
+    response = classify_student_response(request)
+
+    assert response.independent_outcome == "RESCUE_REQUIRED"
+    assert response.selected_error_code == selected_error_code
+    assert response.attempt_increment == 1
+    assert response.independent_attempt_terminal is True
+    assert response.tutor_message == (
+        "We'll review this one before a fresh independent check."
+    )
+    assert "t + 3" not in response.tutor_message
+    assert "wrong" not in response.tutor_message.lower()
+    assert response.mistake_classification is None
+    assert response.annotation_intents == []
+    assert response.phase3_review_evidence is not None
+    assert response.phase3_review_evidence.evaluation == response.evaluation
+    assert response.phase3_review_evidence.independent_outcome == "RESCUE_REQUIRED"
+    assert response.phase3_review_evidence.selected_error_code == selected_error_code
+    assert response.phase3_review_evidence.canvas_submitted is True
+    assert response.phase3_review_evidence.ocr_clear is True
+    assert response.phase3_review_evidence.review_material_available is False
+    payload = response.model_dump()
+    assert "answer_steps" not in payload
+    assert payload["mistake_classification"] is None
+    assert payload["annotation_intents"] == []
+    assert client.calls == 1
+
+
+def test_phase_three_llm_attribution_rejects_ambiguous_or_unapproved_errors(
+    monkeypatch,
+) -> None:
+    client = _Phase3AttributionClient(
+        Phase3ErrorAttribution(
+            selected_error_code="ERR-INVENTED",
+            evidence="The work is ambiguous.",
+            confidence=0.99,
+        )
+    )
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: client,
+    )
+    request = _phase_three_request("7", "CANVAS", True).model_copy(
+        update={
+            "phase3_allowed_error_definitions": [
+                _phase3_error_definition(
+                    "ERR-DIRECTION-REVERSED",
+                    "Uses an increase when the question describes a decrease.",
+                )
+            ]
+        }
+    )
+
+    response = classify_student_response(request)
+
+    assert response.independent_outcome == "RESCUE_REQUIRED"
+    assert response.selected_error_code is None
+    assert response.attempt_increment == 1
+    assert response.independent_attempt_terminal is True
+
+
+def test_phase_three_llm_attribution_rejects_an_under_threshold_error(
+    monkeypatch,
+) -> None:
+    client = _Phase3AttributionClient(
+        Phase3ErrorAttribution(
+            selected_error_code="ERR-DIRECTION-REVERSED",
+            evidence="The submitted work uses addition.",
+            confidence=0.84,
+        )
+    )
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: client,
+    )
+    request = _phase_three_request("t + 3", "CANVAS", True).model_copy(
+        update={
+            "phase3_allowed_error_definitions": [
+                _phase3_error_definition(
+                    "ERR-DIRECTION-REVERSED",
+                    "Uses an increase when the question describes a decrease.",
+                )
+            ]
+        }
+    )
+
+    response = classify_student_response(request)
+
+    assert response.independent_outcome == "RESCUE_REQUIRED"
+    assert response.selected_error_code is None
+    assert response.attempt_increment == 1
+
+
+def test_phase_three_error_attribution_prompt_excludes_support_and_solution_data(
+    monkeypatch,
+) -> None:
+    request_bodies: list[dict[str, object]] = []
+
+    class _Phase3AttributionOpenAIClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self) -> "_Phase3AttributionOpenAIClient":
+            return self
+
+        def __exit__(self, *exc) -> bool:
+            return False
+
+        def post(self, *args, **kwargs) -> _FakeOpenAIResponse:
+            request_bodies.append(kwargs["json"])
+            return _FakeOpenAIResponse(
+                '{"selected_error_code":"ERR-DIRECTION-REVERSED",'
+                '"evidence":"The submitted work uses addition.","confidence":0.91}'
+            )
+
+    monkeypatch.setattr(openai_client.httpx, "Client", _Phase3AttributionOpenAIClient)
+    client = openai_client.OpenAIAIEngineClient(
+        api_key="test-key",
+        model="test-model",
+        timeout_seconds=10,
+        prompt_cache_key_enabled=False,
+        store_responses=False,
+        retry_count=0,
+    )
+
+    result = client.classify_phase3_error(
+        question="A temperature starts at t and falls by 3 degrees.",
+        submitted_work="t + 3",
+        allowed_error_definitions=[
+            _phase3_error_definition(
+                "ERR-DIRECTION-REVERSED",
+                "Uses an increase when the question describes a decrease.",
+            )
+        ],
+        prompt_version="phase3-error-attribution-v1",
+        system_prompt="Classify only the allowed error.",
+    )
+
+    payload = json.loads(request_bodies[0]["input"][1]["content"])
+    assert payload["question"] == "A temperature starts at t and falls by 3 degrees."
+    assert payload["submitted_work"] == "t + 3"
+    assert payload["allowed_error_definitions"] == [
+        {
+            "error_code": "ERR-DIRECTION-REVERSED",
+            "definition": "Uses an increase when the question describes a decrease.",
+        }
+    ]
+    assert "correct_answer" not in payload
+    assert "answer_spec" not in payload
+    assert "support_catalog" not in payload
+    assert result.attribution.selected_error_code == "ERR-DIRECTION-REVERSED"
 
 
 def test_canvas_math_review_marks_first_mistake_in_diagnostic_phase() -> None:

@@ -56,9 +56,17 @@ ResponseStrategy = Literal[
     "MASTERY_CONFIRM",
     "SAFETY_RESPONSE",
     "CONTINUE",
+    "INDEPENDENT_RESCUE_REQUIRED",
 ]
 
 InputSource = Literal["TEXT", "VOICE", "CANVAS"]
+Phase3SubmissionKind = Literal["CANVAS", "CHOICE"]
+IndependentOutcome = Literal[
+    "INDEPENDENTLY_VERIFIED",
+    "RESCUE_REQUIRED",
+    "INPUT_UNCLEAR",
+    "AWAITING_SUBMISSION",
+]
 
 LearningPhase = Literal[
     "DIAGNOSTIC",
@@ -172,6 +180,28 @@ class CanvasTokenDiagnosis(StrictSchema):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
+class AuthoredErrorDefinition(StrictSchema):
+    error_code: str = Field(pattern=r"^ERR-[A-Z0-9-]+$")
+    definition: str = Field(min_length=1, max_length=500)
+
+
+class Phase3ErrorAttribution(StrictSchema):
+    selected_error_code: str | None
+    evidence: str = Field(min_length=1, max_length=280)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class Phase3ReviewEvidence(StrictSchema):
+    evaluation: EvaluationCategory | None
+    independent_outcome: IndependentOutcome
+    generic_error_type: ErrorType | None
+    selected_error_code: str | None
+    first_error_step: str | None
+    canvas_submitted: StrictBool
+    ocr_clear: StrictBool | None
+    review_material_available: StrictBool = False
+
+
 class CanvasMistakeClassification(StrictSchema):
     status: MistakeStatus
     mistake_step_id: str | None
@@ -252,6 +282,11 @@ class TutorResponse(StrictSchema):
     generated_question_rubric: GeneratedQuestionRubric | None = None
     active_teaching_objective: ActiveTeachingObjective | None = None
     scaffold_original_answer_correct: StrictBool = False
+    independent_outcome: IndependentOutcome | None = None
+    independent_success: StrictBool | None = None
+    independent_attempt_terminal: StrictBool = False
+    first_error_step: str | None = None
+    phase3_review_evidence: Phase3ReviewEvidence | None = None
 
 
 class AuthoredRequiredComponent(StrictSchema):

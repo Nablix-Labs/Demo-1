@@ -6,12 +6,13 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from app.ai_engine.canvas_math_review import review_canvas_math
 from app.ai_engine.classifier_config import ClassifierRulesConfig, load_classifier_rules
 from app.ai_engine.prompt_registry import Trigger
 from app.ai_engine.schemas import (
+    AuthoredErrorDefinition,
     CanvasAnnotationIntent,
     CanvasFeedback,
     CanvasMathReview,
@@ -25,6 +26,7 @@ from app.ai_engine.schemas import (
     GuardrailCheck,
     HintLevel,
     InputSource,
+    IndependentOutcome,
     IntentType,
     LearningEventType,
     LearningPhase,
@@ -35,6 +37,8 @@ from app.ai_engine.schemas import (
     StudentModelEvent,
     TutorResponse,
     VisualCue,
+    Phase3SubmissionKind,
+    Phase3ReviewEvidence,
 )
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AdapterError
@@ -91,6 +95,39 @@ class ClassificationRequest(StrictSchema):
     generated_question_rubric: GeneratedQuestionRubric | None = None
     active_teaching_objective: ActiveTeachingObjective | None = None
     scaffold_evaluation_context: ScaffoldEvaluationContext | None = None
+    phase3_allowed_error_definitions: list[AuthoredErrorDefinition] = Field(
+        default_factory=list
+    )
+    phase3_submission_confirmed: bool | None = None
+    phase3_submission_kind: Phase3SubmissionKind | None = None
+
+    @model_validator(mode="after")
+    def validate_phase_three_submission(self) -> "ClassificationRequest":
+        if self.current_phase != "INDEPENDENT_PRACTICE":
+            return self
+        if self.phase3_submission_confirmed is None:
+            raise ValueError(
+                "phase3_submission_confirmed is required for INDEPENDENT_PRACTICE."
+            )
+        if self.phase3_submission_confirmed and self.phase3_submission_kind is None:
+            raise ValueError(
+                "phase3_submission_kind is required for a confirmed Phase 3 submission."
+            )
+        if not self.phase3_submission_confirmed and self.phase3_submission_kind is not None:
+            raise ValueError(
+                "phase3_submission_kind is only valid for a confirmed Phase 3 submission."
+            )
+        if (
+            self.phase3_submission_kind == "CANVAS"
+            and self.input_source != "CANVAS"
+        ):
+            raise ValueError("A CANVAS Phase 3 submission requires CANVAS input_source.")
+        if (
+            self.phase3_submission_kind == "CHOICE"
+            and self.input_source != "TEXT"
+        ):
+            raise ValueError("A CHOICE Phase 3 submission requires TEXT input_source.")
+        return self
 
 
 @dataclass(frozen=True)
@@ -211,18 +248,22 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
             deterministic_decision.canvas_review,
             request.canvas_regions,
         )
-        openai_message: OpenAITutorMessage | None = build_tutor_message_with_openai(
-            request=request,
-            rules=rules,
-            intent=deterministic_decision.intent,
-            evaluation=deterministic_decision.evaluation,
-            error_type=deterministic_decision.error_type,
-            response_strategy=deterministic_decision.response_strategy,
-            hint_level=deterministic_decision.hint_level,
-            canvas_context=canvas_context,
-            openai_client=openai_client,
+        openai_message: OpenAITutorMessage | None = (
+            None
+            if is_silent_independent_practice(request, rules)
+            else build_tutor_message_with_openai(
+                request=request,
+                rules=rules,
+                intent=deterministic_decision.intent,
+                evaluation=deterministic_decision.evaluation,
+                error_type=deterministic_decision.error_type,
+                response_strategy=deterministic_decision.response_strategy,
+                hint_level=deterministic_decision.hint_level,
+                canvas_context=canvas_context,
+                openai_client=openai_client,
+            )
         )
-        return build_tutor_response(
+        response = build_tutor_response(
             request=request,
             rules=rules,
             safety_check=safety_check,
@@ -238,9 +279,15 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
                 else None
             ),
         )
+        return apply_phase3_error_attribution(
+            response,
+            request,
+            rules,
+            openai_client,
+        )
 
     if should_use_deterministic_tutor_turn(request, intent, rules):
-        return build_tutor_response(
+        response = build_tutor_response(
             request=request,
             rules=rules,
             safety_check=safety_check,
@@ -249,6 +296,12 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
             confidence=rules.confidence.standard_response,
             tutor_message_override=None,
             voice_message_override=None,
+        )
+        return apply_phase3_error_attribution(
+            response,
+            request,
+            rules,
+            openai_client,
         )
 
     openai_turn: OpenAITutorTurn | None = generate_tutor_turn_with_openai(
@@ -1315,6 +1368,8 @@ def should_use_deterministic_tutor_turn(
     intent: IntentType,
     rules: ClassifierRulesConfig,
 ) -> bool:
+    if is_silent_independent_practice(request, rules):
+        return True
     if evaluate_answer_contract(request) == "CORRECT":
         return True
     if intent in {"REQUESTING_ANSWER", "ATTEMPTING_OVERRIDE"}:
@@ -1785,6 +1840,19 @@ def select_response_strategy(
     attempt_count: int,
     rules: ClassifierRulesConfig,
 ) -> ResponseStrategy:
+    if current_phase == rules.strategy_rules.independent_practice_phase:
+        if intent in {
+            "REQUESTING_ANSWER",
+            "ATTEMPTING_OVERRIDE",
+            "REQUESTING_HINT",
+            "ASKING_QUESTION",
+            "EXPRESSING_CONFUSION",
+        }:
+            return "CONTINUE"
+        if evaluation in {"INCORRECT", "PARTIALLY_CORRECT"}:
+            return "INDEPENDENT_RESCUE_REQUIRED"
+        if evaluation == "CORRECT":
+            return "CONFIRM_CORRECT"
     if intent == "ACKNOWLEDGEMENT":
         return "CONTINUE"
     if (
@@ -1812,11 +1880,6 @@ def select_response_strategy(
         if attempt_count >= rules.strategy_rules.scaffold_min_attempt_count:
             return "SCAFFOLD"
         return "GUIDED_HINT"
-    if (
-        evaluation in {"INCORRECT", "PARTIALLY_CORRECT"}
-        and current_phase == rules.strategy_rules.independent_practice_phase
-    ):
-        return "ENCOURAGE_RETRY"
     if evaluation in {"INCORRECT", "PARTIALLY_CORRECT"} and current_phase == rules.strategy_rules.review_phase:
         return "GUIDED_HINT"
 
@@ -2133,6 +2196,14 @@ def build_tutor_response(
     reasoning_complete: bool = (
         not reasoning_required or decision.reasoning_complete
     )
+    independent_outcome = select_independent_outcome(
+        request,
+        decision,
+        rules,
+    )
+    if independent_outcome in {"AWAITING_SUBMISSION", "INPUT_UNCLEAR"}:
+        answer_value_confirmed = False
+        reasoning_complete = False
     question_completed: bool = (
         request.question_completed
         or (
@@ -2168,7 +2239,16 @@ def build_tutor_response(
         else canvas_fallback or fallback_message
     )
     voice_message: str = voice_message_override if voice_message_override is not None else tutor_message
-    if explanation_required:
+    independent_message = independent_practice_message(
+        request,
+        decision,
+        independent_outcome,
+        rules,
+    )
+    if independent_message is not None:
+        tutor_message = independent_message
+        voice_message = independent_message
+    elif explanation_required:
         tutor_message = (
             rules.reasoning_completion.explanation_reason_message
             if (
@@ -2194,6 +2274,10 @@ def build_tutor_response(
         if completed_reasoning_turn
         else decision.evaluation
     )
+    if independent_outcome == "INPUT_UNCLEAR":
+        response_evaluation = "UNCLEAR"
+    elif independent_outcome == "AWAITING_SUBMISSION":
+        response_evaluation = None
     response_error_type: ErrorType | None = (
         "INSUFFICIENT_INFORMATION"
         if explanation_required
@@ -2201,8 +2285,32 @@ def build_tutor_response(
         if completed_reasoning_turn
         else decision.error_type
     )
+    if independent_outcome in {"AWAITING_SUBMISSION", "INPUT_UNCLEAR"}:
+        response_error_type = None
+    independent_attempt_terminal = independent_outcome in {
+        "INDEPENDENTLY_VERIFIED",
+        "RESCUE_REQUIRED",
+    }
+    independent_success = (
+        independent_outcome == "INDEPENDENTLY_VERIFIED"
+        if independent_outcome is not None
+        else None
+    )
+    first_error_step = (
+        canvas_review.mistake_classification.mistake_step_id
+        if (
+            independent_outcome == "RESCUE_REQUIRED"
+            and canvas_review is not None
+            and canvas_review.mistake_classification.status == "mistake_found"
+        )
+        else None
+    )
     events: list[StudentModelEvent] = []
-    if should_emit_student_model_event(decision) and not explanation_required:
+    if (
+        independent_outcome not in {"AWAITING_SUBMISSION", "INPUT_UNCLEAR"}
+        and should_emit_student_model_event(decision)
+        and not explanation_required
+    ):
         events = [
             build_student_model_event(
                 response_evaluation,
@@ -2227,13 +2335,31 @@ def build_tutor_response(
     annotation_intents: list[CanvasAnnotationIntent] = (
         canvas_review.annotation_intents if canvas_review is not None else []
     )
+    phase3_review_evidence = build_phase3_review_evidence(
+        request,
+        response_evaluation,
+        response_error_type,
+        independent_outcome,
+        first_error_step,
+        rules,
+    )
+    if is_silent_independent_practice(request, rules):
+        canvas_feedback = CanvasFeedback(
+            has_feedback=False,
+            step_feedback=[],
+            highlight_instruction=None,
+        )
+        mistake_classification = None
+        annotation_intents = []
 
     response: TutorResponse = TutorResponse(
         evaluation=response_evaluation,
         error_type=response_error_type,
         intent=decision.intent,
-        response_strategy=(
-            "CLARIFY" if explanation_required else decision.response_strategy
+        response_strategy=select_response_strategy_for_outcome(
+            decision,
+            independent_outcome,
+            explanation_required,
         ),
         tutor_message=tutor_message,
         tutor_message_voice_optimised=voice_message,
@@ -2253,20 +2379,259 @@ def build_tutor_response(
         guardrail_check=GuardrailCheck(passed=True, violation_type=None, action_taken=None),
         student_model_events=events,
         attempt_increment=(
-            0
-            if request.answer_value_confirmed
-            else select_attempt_increment(decision)
+            independent_attempt_increment(independent_outcome)
+            if independent_outcome is not None
+            else (
+                0
+                if request.answer_value_confirmed
+                else select_attempt_increment(decision)
+            )
         ),
-        recommended_conversation_action=(
-            "REQUEST_EXPLANATION"
-            if explanation_required
-            else select_conversation_action(decision)
+        recommended_conversation_action=select_conversation_action_for_outcome(
+            decision,
+            independent_outcome,
+            explanation_required,
         ),
         question_completed=question_completed,
         answer_value_confirmed=answer_value_confirmed,
         reasoning_complete=reasoning_complete,
+        independent_outcome=independent_outcome,
+        independent_success=independent_success,
+        independent_attempt_terminal=independent_attempt_terminal,
+        first_error_step=first_error_step,
+        phase3_review_evidence=phase3_review_evidence,
     )
     return apply_answer_reveal_guardrail(response, request.correct_answer, rules)
+
+
+def is_silent_independent_practice(
+    request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
+) -> bool:
+    return request.current_phase == rules.strategy_rules.independent_practice_phase
+
+
+def independent_practice_message(
+    request: ClassificationRequest,
+    decision: TutorDecision,
+    outcome: IndependentOutcome | None,
+    rules: ClassifierRulesConfig,
+) -> str | None:
+    if not is_silent_independent_practice(request, rules):
+        return None
+    if outcome == "INPUT_UNCLEAR":
+        return rules.independent_practice.input_unclear_message
+    if outcome == "AWAITING_SUBMISSION":
+        if request.phase3_submission_confirmed:
+            return rules.independent_practice.awaiting_submission_message
+        return rules.independent_practice.submit_your_best_message
+    if decision.intent in {
+        "REQUESTING_ANSWER",
+        "ATTEMPTING_OVERRIDE",
+        "REQUESTING_HINT",
+        "ASKING_QUESTION",
+        "EXPRESSING_CONFUSION",
+    }:
+        return rules.independent_practice.submit_your_best_message
+    if outcome == "INDEPENDENTLY_VERIFIED":
+        return rules.independent_practice.answer_recorded_message
+    if outcome == "RESCUE_REQUIRED":
+        return rules.independent_practice.rescue_required_message
+    return None
+
+
+def select_independent_outcome(
+    request: ClassificationRequest,
+    decision: TutorDecision,
+    rules: ClassifierRulesConfig,
+) -> IndependentOutcome | None:
+    if not is_silent_independent_practice(request, rules):
+        return None
+    if not request.phase3_submission_confirmed:
+        return "AWAITING_SUBMISSION"
+    if request.student_input.strip() == "" or decision.evaluation == "NO_ATTEMPT":
+        return "AWAITING_SUBMISSION"
+    if has_unclear_phase_three_canvas_input(request, rules):
+        return "INPUT_UNCLEAR"
+    if decision.evaluation == "CORRECT":
+        return "INDEPENDENTLY_VERIFIED"
+    if decision.evaluation in {"INCORRECT", "PARTIALLY_CORRECT"}:
+        return "RESCUE_REQUIRED"
+    return "AWAITING_SUBMISSION"
+
+
+def has_unclear_phase_three_canvas_input(
+    request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
+) -> bool:
+    return (
+        request.input_source == "CANVAS"
+        and len(request.canvas_regions) > 0
+        and any(
+            region.confidence < rules.canvas_review.min_region_confidence
+            or "?" in region.text
+            for region in request.canvas_regions
+        )
+    )
+
+
+def independent_attempt_increment(outcome: IndependentOutcome) -> int:
+    return int(outcome in {"INDEPENDENTLY_VERIFIED", "RESCUE_REQUIRED"})
+
+
+def select_response_strategy_for_outcome(
+    decision: TutorDecision,
+    outcome: IndependentOutcome | None,
+    explanation_required: bool,
+) -> ResponseStrategy:
+    if outcome == "INPUT_UNCLEAR":
+        return "CLARIFY"
+    if outcome == "AWAITING_SUBMISSION":
+        return "CONTINUE"
+    if explanation_required:
+        return "CLARIFY"
+    return decision.response_strategy
+
+
+def select_conversation_action_for_outcome(
+    decision: TutorDecision,
+    outcome: IndependentOutcome | None,
+    explanation_required: bool,
+) -> ConversationAction:
+    if outcome == "INPUT_UNCLEAR":
+        return "REQUEST_CLARIFICATION"
+    if outcome == "AWAITING_SUBMISSION":
+        return "WAIT_FOR_STUDENT"
+    if explanation_required:
+        return "REQUEST_EXPLANATION"
+    return select_conversation_action(decision)
+
+
+def build_phase3_review_evidence(
+    request: ClassificationRequest,
+    evaluation: EvaluationCategory | None,
+    generic_error_type: ErrorType | None,
+    independent_outcome: IndependentOutcome | None,
+    first_error_step: str | None,
+    rules: ClassifierRulesConfig,
+) -> Phase3ReviewEvidence | None:
+    if not is_silent_independent_practice(request, rules) or independent_outcome is None:
+        return None
+    canvas_submitted = (
+        request.phase3_submission_confirmed is True
+        and request.phase3_submission_kind == "CANVAS"
+    )
+    ocr_clear = (
+        not has_unclear_phase_three_canvas_input(request, rules)
+        if canvas_submitted and request.student_input.strip() != ""
+        else None
+    )
+    return Phase3ReviewEvidence(
+        evaluation=evaluation,
+        independent_outcome=independent_outcome,
+        generic_error_type=generic_error_type,
+        selected_error_code=None,
+        first_error_step=first_error_step,
+        canvas_submitted=canvas_submitted,
+        ocr_clear=ocr_clear,
+        review_material_available=False,
+    )
+
+
+def apply_phase3_error_attribution(
+    response: TutorResponse,
+    request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
+    openai_client: OpenAIAIEngineClient | None,
+) -> TutorResponse:
+    attribution_config = rules.independent_practice.error_attribution
+    if (
+        response.independent_outcome != "RESCUE_REQUIRED"
+        or not attribution_config.enabled
+    ):
+        return response
+    if len(request.phase3_allowed_error_definitions) == 0:
+        logger.info(
+            "phase3_error_attribution",
+            extra={
+                "question_id": request.question_id,
+                "model_request_id": None,
+                "latency_ms": None,
+                "selected_error_code": None,
+                "confidence": None,
+                "validation_result": "no_authored_error_definitions",
+            },
+        )
+        return response
+    if openai_client is None:
+        logger.warning(
+            "phase3_error_attribution_unavailable",
+            extra={"question_id": request.question_id},
+        )
+        return response
+
+    result = None
+    last_error: AdapterError | None = None
+    for attempt in range(attribution_config.maximum_retries + 1):
+        try:
+            result = openai_client.classify_phase3_error(
+                question=request.question,
+                submitted_work=request.student_input,
+                allowed_error_definitions=request.phase3_allowed_error_definitions,
+                prompt_version=attribution_config.prompt_version,
+                system_prompt=attribution_config.system_prompt,
+            )
+            break
+        except AdapterError as error:
+            last_error = error
+            logger.warning(
+                "phase3_error_attribution_retry",
+                extra={
+                    "question_id": request.question_id,
+                    "attempt": attempt + 1,
+                    "detail": error.detail,
+                },
+            )
+    if result is None:
+        raise last_error or AdapterError(
+            "openai_ai_engine",
+            "Phase 3 error attribution failed without a response.",
+        )
+    selected_error_code = result.attribution.selected_error_code
+    allowed_codes = {
+        definition.error_code
+        for definition in request.phase3_allowed_error_definitions
+    }
+    accepted = (
+        selected_error_code is not None
+        and selected_error_code in allowed_codes
+        and result.attribution.confidence >= attribution_config.confidence_threshold
+    )
+    logger.info(
+        "phase3_error_attribution",
+        extra={
+            "question_id": request.question_id,
+            "model_request_id": result.request_id,
+            "latency_ms": round(result.latency_ms, 3),
+            "selected_error_code": selected_error_code,
+            "confidence": result.attribution.confidence,
+            "validation_result": "accepted" if accepted else "rejected",
+        },
+    )
+    approved_error_code = selected_error_code if accepted else None
+    review_evidence = response.phase3_review_evidence
+    return response.model_copy(
+        update={
+            "selected_error_code": approved_error_code,
+            "phase3_review_evidence": (
+                review_evidence.model_copy(
+                    update={"selected_error_code": approved_error_code}
+                )
+                if review_evidence is not None
+                else None
+            ),
+        }
+    )
 
 
 def select_visual_cue(

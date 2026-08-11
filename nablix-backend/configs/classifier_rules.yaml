@@ -360,7 +360,6 @@ reasoning_completion:
     - DIAGNOSTIC
     - CONCEPT_ORIENTATION
     - GUIDED_PRACTICE
-    - INDEPENDENT_PRACTICE
     - REVIEW
   explanation_terms:
     - because
@@ -429,6 +428,23 @@ canvas_token_diagnosis:
     If no precise token-level correction is justified, return status uncertain
     with empty target_token_ids and null token/error fields. Do not reveal the
     final answer unless it is already explicitly present in the student work.
+independent_practice:
+  answer_recorded_message: Answer recorded.
+  rescue_required_message: We'll review this one before a fresh independent check.
+  submit_your_best_message: Use your best judgement and submit the answer you think is right.
+  awaiting_submission_message: Enter your answer on the canvas before submitting.
+  input_unclear_message: I could not read that clearly. Please write your answer again.
+  error_attribution:
+    enabled: true
+    confidence_threshold: 0.85
+    maximum_retries: 1
+    prompt_version: phase3-error-attribution-v1
+    system_prompt: >-
+      Classify only the likely authored error in the submitted independent-practice
+      work. Return strict JSON using only an allowed ERR-* code or null. Do not
+      evaluate correctness, provide tutoring, reveal a solution, select support,
+      or infer an error code that is not supplied. Keep evidence concise and
+      grounded only in the submitted work.
 progressive_hint_messages:
   ARITHMETIC_ERROR:
     - Good try. Your method is close, so check the arithmetic carefully.

@@ -17,6 +17,7 @@ from app.ai_engine.prompt_registry import (
     sha256_text,
 )
 from app.ai_engine.schemas import (
+    AuthoredErrorDefinition,
     CanvasTokenDiagnosis,
     ErrorType,
     EvaluationCategory,
@@ -26,6 +27,7 @@ from app.ai_engine.schemas import (
     IntentType,
     LearningPhase,
     OpenAIExplainAgainMessage,
+    Phase3ErrorAttribution,
     ResponseStrategy,
     StrictSchema,
     SpatialMathToken,
@@ -71,6 +73,13 @@ class OpenAIUsageMetrics:
     input_tokens: int | None
     output_tokens: int | None
     total_tokens: int | None
+
+
+@dataclass(frozen=True)
+class Phase3ErrorAttributionResult:
+    attribution: Phase3ErrorAttribution
+    request_id: str | None
+    latency_ms: float
 
 
 class OpenAIAIEngineClient:
@@ -307,6 +316,73 @@ class OpenAIAIEngineClient:
                 "openai_ai_engine",
                 f"invalid canvas token diagnosis: {error}",
             ) from error
+
+    def classify_phase3_error(
+        self,
+        question: str,
+        submitted_work: str,
+        allowed_error_definitions: list[AuthoredErrorDefinition],
+        prompt_version: str,
+        system_prompt: str,
+    ) -> Phase3ErrorAttributionResult:
+        request_body: dict[str, object] = {
+            "model": self._model,
+            "input": [
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "component": "phase3_error_attribution",
+                            "question": question,
+                            "submitted_work": submitted_work,
+                            "allowed_error_definitions": [
+                                definition.model_dump()
+                                for definition in allowed_error_definitions
+                            ],
+                            "prompt_version": prompt_version,
+                            "answer_reveal_allowed": False,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+            "store": self._store_responses,
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "phase3_error_attribution",
+                    "schema": Phase3ErrorAttribution.model_json_schema(),
+                    "strict": True,
+                }
+            },
+        }
+        if self._prompt_cache_key_enabled:
+            request_body["prompt_cache_key"] = sha256_text(system_prompt)
+        response, latency_ms = self._post_with_retries(request_body)
+        if response.status_code != 200:
+            raise AdapterError(
+                "openai_ai_engine",
+                f"status={response.status_code} body={response.text}",
+            )
+        try:
+            response_payload = response.json()
+            attribution = Phase3ErrorAttribution.model_validate(
+                json.loads(_extract_response_text(response_payload))
+            )
+        except (TypeError, ValueError, KeyError, ValidationError) as error:
+            raise AdapterError(
+                "openai_ai_engine",
+                f"invalid Phase 3 error attribution response: {error}; body={response.text}",
+            ) from error
+        request_id = response_payload.get("id") if isinstance(response_payload, dict) else None
+        return Phase3ErrorAttributionResult(
+            attribution=attribution,
+            request_id=request_id if isinstance(request_id, str) else None,
+            latency_ms=latency_ms,
+        )
 
     def _request_guided_json(
         self,

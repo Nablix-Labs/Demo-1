@@ -141,6 +141,23 @@ class CanvasTokenDiagnosisConfig(StrictSchema):
     system_prompt: str
 
 
+class IndependentPracticeErrorAttributionConfig(StrictSchema):
+    enabled: bool
+    confidence_threshold: float = Field(ge=0.0, le=1.0)
+    maximum_retries: int = Field(ge=0)
+    prompt_version: str
+    system_prompt: str
+
+
+class IndependentPracticePolicyConfig(StrictSchema):
+    answer_recorded_message: str
+    rescue_required_message: str
+    submit_your_best_message: str
+    awaiting_submission_message: str
+    input_unclear_message: str
+    error_attribution: IndependentPracticeErrorAttributionConfig
+
+
 class MessageConfig(StrictSchema):
     SAFETY_RESPONSE: str
     REQUESTING_ANSWER_OR_OVERRIDE: str
@@ -225,6 +242,7 @@ class ClassifierRulesConfig(StrictSchema):
     reasoning_completion: ReasoningCompletionConfig
     canvas_review: CanvasReviewConfig
     canvas_token_diagnosis: CanvasTokenDiagnosisConfig
+    independent_practice: IndependentPracticePolicyConfig
     progressive_hint_messages: dict[ErrorType, list[str]]
     messages: MessageConfig
     guided_learning: GuidedLearningConfig
