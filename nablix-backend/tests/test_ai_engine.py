@@ -3655,7 +3655,7 @@ def test_guided_multipart_completes_from_accumulated_component_evidence(
     assert second.recommended_conversation_action == "ADVANCE_TO_NEXT_QUESTION"
 
 
-def test_guided_multipart_reconciles_completion_with_unconfirmed_required_parts(
+def test_guided_multipart_expression_starts_the_next_specific_teaching_step(
     monkeypatch,
 ) -> None:
     rubric = GeneratedQuestionRubric(
@@ -3729,17 +3729,19 @@ def test_guided_multipart_reconciles_completion_with_unconfirmed_required_parts(
         )
     )
 
-    assert response.guided_student_state == "UNCLEAR"
+    assert response.guided_student_state == "PARTIAL"
     assert response.student_model_events == []
     assert response.attempt_increment == 0
     assert response.question_completed is False
     assert response.active_teaching_objective is not None
-    assert response.active_teaching_objective.confirmed_concept_ids == []
+    assert response.active_teaching_objective.confirmed_concept_ids == [
+        "REQUIRED_COMPONENT_1"
+    ]
     assert response.active_teaching_objective.missing_concept_ids == [
-        "REQUIRED_COMPONENT_1",
         "REQUIRED_COMPONENT_2",
         "REQUIRED_COMPONENT_3",
     ]
+    assert "Which part can take different possible values?" in response.tutor_message
 
 
 @pytest.mark.parametrize(
