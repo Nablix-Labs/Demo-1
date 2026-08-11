@@ -58,6 +58,19 @@ describe('the Phase 3 lock', () => {
     expect(state().phase3LockedQuestionId).toBe('Q-T03-001');
   });
 
+  it('does not outlive its session', () => {
+    // The lock is persisted so a refresh cannot reopen closed evidence — which
+    // means it can otherwise survive into the NEXT session and freeze its first
+    // question, since a lock held with no active question reads as locked.
+    state().lockPhase3Attempt('Q-OLD');
+    state().setSessionId('SESSION-NEW');
+    expect(state().phase3LockedQuestionId).toBeNull();
+
+    state().lockPhase3Attempt('Q-OLD');
+    state().clearSessionId();
+    expect(state().phase3LockedQuestionId).toBeNull();
+  });
+
   it('is persisted, so a refresh cannot reopen a closed attempt', () => {
     // Spec §3.3: "Keep the locked state through reconnect." Canvas and
     // transcript are deliberately per-session; this is not, because a student

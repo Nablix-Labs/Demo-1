@@ -697,7 +697,12 @@ export const useNumeraStore = create<NumeraState>()(
   // monotonic WITHIN a session, so a fresh session starts counting again — and
   // carrying the previous session's high-water mark forward would make every
   // reply in the new one look stale and be dropped, freezing the lesson.
-  setSessionId: (id) => set({ sessionId: id, appliedResponse: EMPTY_APPLIED }),
+  // A Phase 3 lock belongs to the session that took the attempt. Persisting it
+  // (so a refresh cannot reopen closed evidence) means it can otherwise outlive
+  // its session and freeze the FIRST question of the next one, because a lock
+  // held with no active question yet reads as locked by design.
+  setSessionId: (id) =>
+    set({ sessionId: id, appliedResponse: EMPTY_APPLIED, phase3LockedQuestionId: null }),
   setSessionState: (sessionState) => set({ sessionState }),
   setActiveSlide: (activeSlide) => set({ activeSlide }),
   setTotalSlides: (totalSlides) => set({ totalSlides }),
@@ -804,6 +809,7 @@ export const useNumeraStore = create<NumeraState>()(
     sessionId: null,
     backendSession: null,
     appliedResponse: EMPTY_APPLIED,
+    phase3LockedQuestionId: null,
   }),
 
   // Mute is orthogonal to the turn phase (voice contract §12): the LISTENING/
