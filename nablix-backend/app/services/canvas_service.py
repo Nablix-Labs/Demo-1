@@ -116,7 +116,7 @@ async def submit_canvas(
         access_token,
     )
     schema_question = _schema_question(session)
-    previous_session = session
+    turn_session = session
 
     submission_id = request.turn_id or uuid4().hex
     snapshot_reference = build_reference(submission_id)
@@ -244,11 +244,12 @@ async def submit_canvas(
             request.session_id,
             request.student_id,
             updated_session,
+            turn_session,
             record,
             updated_history,
             student_result,
         )
-    phase_changed = updated_session.current_phase != previous_session.current_phase
+    phase_changed = updated_session.current_phase != turn_session.current_phase
     status_to_return = (
         "processed"
         if request.submission_role == "VOICE_ATTACHMENT"
@@ -272,7 +273,7 @@ async def submit_canvas(
         attempt_increment=tutor.attempt_increment,
         status=status_to_return,
         retry_safe=None,
-        previous_phase=previous_session.current_phase if phase_changed else None,
+        previous_phase=turn_session.current_phase if phase_changed else None,
     )
     response.submission_id = submission_id
     response.snapshot_reference = snapshot_reference

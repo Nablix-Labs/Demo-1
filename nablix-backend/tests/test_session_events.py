@@ -9,6 +9,8 @@ from app.core.config import Settings
 from app.core.exceptions import AdapterError
 from app.main import app
 from app.ai_engine.classifier_config import load_classifier_rules
+from app.models.adapters import TutorResult
+from app.models.guided_learning import GuidedRescue
 from app.services import interaction_service, session_service
 
 
@@ -17,6 +19,80 @@ SessionEventPost = Callable[
     [str, str, dict[str, object], dict[str, str], int, int],
     Awaitable[dict[str, object]],
 ]
+
+
+def test_guided_partial_answers_do_not_advance_wrong_support() -> None:
+    wrong_partial = TutorResult.model_construct(
+        guided_student_state="PARTIAL",
+        evaluation="PARTIALLY_CORRECT",
+        intent="SUBMITTING_ANSWER",
+        answer_value_confirmed=False,
+    )
+    defence_partial = wrong_partial.model_copy(
+        update={"answer_value_confirmed": True}
+    )
+    stuck = wrong_partial.model_copy(
+        update={"intent": "EXPRESSING_CONFUSION"}
+    )
+
+    assert not interaction_service._is_support_failure(wrong_partial)
+    assert not interaction_service._is_support_failure(defence_partial)
+    assert not interaction_service._is_support_failure(stuck)
+
+
+def test_unresolved_partial_does_not_emit_an_incorrect_attempt() -> None:
+    rules = load_classifier_rules()
+    unresolved = TutorResult.model_construct(
+        guided_student_state="PARTIAL",
+        evaluation="PARTIALLY_CORRECT",
+        intent="SUBMITTING_ANSWER",
+        answer_value_confirmed=False,
+    )
+    defence = unresolved.model_copy(update={"answer_value_confirmed": True})
+
+    assert interaction_service._guided_attempt_event_type(unresolved, rules) is None
+    assert interaction_service._guided_attempt_event_type(defence, rules) is None
+
+
+@pytest.mark.parametrize("support_type", ["HINT", "VISUAL_CUE", "SCAFFOLD"])
+def test_empty_support_keeps_the_tutor_response_available(
+    support_type: str,
+) -> None:
+    response = _event_response("INCORRECT_ATTEMPT", "REQ-EMPTY-VISUAL")
+    phase_payload = response["phase_payload"]
+    assert isinstance(phase_payload, dict)
+    phase_payload["support_to_serve"] = {
+        "support_type": support_type,
+        "items": [],
+        "retry_same_question": True,
+    }
+    event = session_service.StudentModelSessionEventResponse.model_validate(response)
+
+    message, visual_cue, steps, action, support_used = (
+        interaction_service._support_presentation(event)
+    )
+
+    assert message is None
+    assert visual_cue is None
+    assert steps == []
+    assert action is None
+    assert support_used is None
+
+
+@pytest.mark.parametrize("rescue_type", ["PARALLEL_EXAMPLE", "TUTOR_SOLVED"])
+def test_empty_rescue_keeps_the_tutor_response_available(
+    rescue_type: str,
+) -> None:
+    rescue = GuidedRescue.model_validate(
+        {
+            "rescue_type": rescue_type,
+            "micro_skill_id": "T01.M1",
+            "parallel_example": None,
+            "tutor_solved": None,
+        }
+    )
+
+    assert interaction_service._guided_rescue_message(rescue) is None
 
 
 def test_scaffold_response_matching_accepts_safe_variants() -> None:
@@ -48,6 +124,7 @@ def test_scaffold_response_matching_accepts_safe_variants() -> None:
             student_message,
             expected_response,
             "INCORRECT",
+            "n + 5",
             rules,
         )
     for student_message, expected_response in rejected:
@@ -55,6 +132,16 @@ def test_scaffold_response_matching_accepts_safe_variants() -> None:
             student_message,
             expected_response,
             "PARTIALLY_CORRECT",
+            "n + 5",
+            rules,
+        )
+
+    for student_message in ["the starting variable", "n"]:
+        assert interaction_service._scaffold_response_is_correct(
+            student_message,
+            "Starting number",
+            "INCORRECT",
+            "n + 5",
             rules,
         )
 
@@ -437,7 +524,7 @@ def _event_response(
                 "next_action": "WAIT_FOR_STUDENT_RESPONSE",
             }
         )
-    elif event_type == "INCORRECT_ATTEMPT":
+    elif event_type in {"INCORRECT_ATTEMPT", "GUIDED_SUPPORT_REQUESTED"}:
         response = _event_response("ORIENTATION_COMPLETED", request_id)
         journey = response["journey_state"]
         payload = response["phase_payload"]
@@ -519,7 +606,10 @@ def _event_response(
                 "next_action": "START_INDEPENDENT",
             }
         )
-    elif event_type == "GUIDED_SUPPORT_ESCALATION_REQUIRED":
+    elif event_type in {
+        "GUIDED_SUPPORT_ESCALATION_REQUIRED",
+        "GUIDED_STUCK_SUPPORT_REQUIRED",
+    }:
         response = _event_response("ORIENTATION_COMPLETED", request_id)
         journey = response["journey_state"]
         payload = response["phase_payload"]
@@ -1406,7 +1496,7 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
             assert stuck.json()["current_scaffold_step_id"] is None
         else:
             assert len(events) == event_count_before_stuck + 1
-            assert events[-1]["event_type"] == "GUIDED_SUPPORT_ESCALATION_REQUIRED"
+            assert events[-1]["event_type"] == "GUIDED_STUCK_SUPPORT_REQUIRED"
             assert events[-1]["micro_skill_id"] == "T02.M1"
             assert events[-1].get("triggering_response") is None
             assert events[-1].get("error_code") is None
@@ -1572,7 +1662,8 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert guided_incorrect.json()["show_visual_cue"] is True
     assert guided_incorrect.json()["visual_cue"] == {
         "show": True,
-            "cue_type": "VC-T02-COEFFICIENT-COUNT",
+            "cue_id": "VC-T02-COEFFICIENT-COUNT",
+            "cue_type": None,
             "description": "Count the equal letter terms.",
             "actions": [
                 {
@@ -1582,10 +1673,7 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
                 }
             ],
         }
-    assert guided_incorrect.json()["message"] == (
-        "Let us review the equation and try the next step carefully. "
-        "Undo the addition first."
-    )
+    assert guided_incorrect.json()["message"] == "Undo the addition first."
 
     for wrong_number in range(2, 5):
         guided_incorrect = client.post(

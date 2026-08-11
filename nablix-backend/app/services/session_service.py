@@ -1455,13 +1455,19 @@ async def record_canvas_submission(
     session_id: str,
     student_id: str,
     session: SessionRecord,
+    turn_session: SessionRecord,
     record: CanvasSubmissionRecord,
     conversation_history: list[ConversationMessage],
     last_student_model: StudentModelResult | None,
 ) -> SessionRecord:
     """Append a reviewed canvas submission without replacing Schema 3.0 state."""
 
-    if session.session_id != session_id or session.student_id != student_id:
+    if (
+        session.session_id != session_id
+        or session.student_id != student_id
+        or turn_session.session_id != session_id
+        or turn_session.student_id != student_id
+    ):
         raise ValueError("Canvas session identity does not match the request.")
     if session.status == "ended":
         raise HTTPException(
@@ -1471,7 +1477,7 @@ async def record_canvas_submission(
 
     per_question_history: list[QuestionAttemptRecord] = session.per_question_history
     if record.tutor.evaluation != "UNCLEAR":
-        if session.question_id is None or session.current_question is None:
+        if turn_session.question_id is None or turn_session.current_question is None:
             raise HTTPException(
                 status_code=409,
                 detail="The current phase has no active question.",
@@ -1479,9 +1485,9 @@ async def record_canvas_submission(
         per_question_history = [
             *per_question_history,
             QuestionAttemptRecord(
-                question_id=session.question_id,
-                question_text=session.current_question,
-                phase=session.current_phase,
+                question_id=turn_session.question_id,
+                question_text=turn_session.current_question,
+                phase=turn_session.current_phase,
                 evaluation=record.tutor.evaluation,
                 error_type=(
                     record.tutor.error_type

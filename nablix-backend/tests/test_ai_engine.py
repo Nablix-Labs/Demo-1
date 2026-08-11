@@ -3331,45 +3331,23 @@ def test_explanation_question_does_not_complete_from_the_answer_alone(
     student_input,
 ) -> None:
     captured: dict[str, object] = {}
-    rubric = GeneratedQuestionRubric(
-        question_id="Q-EXPLANATION",
-        required_concepts=[
-            GeneratedConcept(
-                concept_id="ANSWER",
-                description="Selects the correct answer.",
-                required=True,
-            ),
-            GeneratedConcept(
-                concept_id="EXPLANATION",
-                description="Explains the mathematical reason.",
-                required=True,
-            ),
-        ],
-        completion_rule="ALL_REQUIRED_CONCEPTS",
-        cache_key="explanation-rubric",
-        prompt_version="1.1.0",
-    )
 
     class _GuidedClient:
-        def generate_guided_rubric(self, **kwargs):
-            captured["rubric_question_type"] = kwargs["question_type"]
-            return rubric
-
         def evaluate_guided_turn(self, **kwargs):
             captured["evaluation_question_type"] = kwargs["question_type"]
             return GuidedEvaluation(
                 student_state="PARTIAL",
-                newly_confirmed_concept_ids=["ANSWER"],
+                newly_confirmed_concept_ids=["ANSWER_SELECTION"],
                 preserved_concept_ids=[],
                 contradicted_concept_ids=[],
-                missing_concept_ids=["EXPLANATION"],
+                missing_concept_ids=["ANSWER_EXPLANATION"],
                 selected_error_code=None,
                 confidence=0.98,
                 next_objective=ActiveTeachingObjective(
                     objective_type="EXPLAIN_REASONING",
-                    target_concept_ids=["EXPLANATION"],
+                    target_concept_ids=["ANSWER_EXPLANATION"],
                     confirmed_concept_ids=[],
-                    missing_concept_ids=["EXPLANATION"],
+                    missing_concept_ids=["ANSWER_EXPLANATION"],
                 ),
                 tutor_message="That answer is selected. What mathematical reason supports it?",
                 tutor_message_voice="That answer is selected. What mathematical reason supports it?",
@@ -3403,68 +3381,99 @@ def test_explanation_question_does_not_complete_from_the_answer_alone(
         )
     )
 
-    assert captured == {
-        "rubric_question_type": question_type,
-        "evaluation_question_type": question_type,
-    }
+    assert captured == {"evaluation_question_type": question_type}
     assert response.guided_student_state == "PARTIAL"
     assert response.question_completed is False
     assert response.student_model_events == []
     assert response.active_teaching_objective is not None
-    assert response.active_teaching_objective.confirmed_concept_ids == ["ANSWER"]
-    assert response.active_teaching_objective.missing_concept_ids == ["EXPLANATION"]
+    assert response.active_teaching_objective.confirmed_concept_ids == [
+        "ANSWER_SELECTION"
+    ]
+    assert response.active_teaching_objective.missing_concept_ids == [
+        "ANSWER_EXPLANATION"
+    ]
 
 
-def test_explanation_question_rejects_a_single_component_rubric(
-    monkeypatch,
+@pytest.mark.parametrize(
+    "question_type",
+    ["CHOICE_WITH_EXPLANATION", "TRUE_FALSE_WITH_EXPLANATION"],
+)
+def test_explanation_question_uses_a_stable_two_component_rubric(
+    question_type,
 ) -> None:
-    class _InvalidGuidedClient:
-        def generate_guided_rubric(self, **kwargs):
-            return GeneratedQuestionRubric(
-                question_id="Q-EXPLANATION",
-                required_concepts=[
-                    GeneratedConcept(
-                        concept_id="ANSWER",
-                        description="Selects the correct answer.",
-                        required=True,
-                    )
-                ],
-                completion_rule="ALL_REQUIRED_CONCEPTS",
-                cache_key="invalid-explanation-rubric",
-                prompt_version="1.1.0",
-            )
-
-    monkeypatch.setattr(
-        classifier,
-        "build_openai_ai_engine_client",
-        lambda settings: _InvalidGuidedClient(),
+    rubric = classifier.rubric_from_authored_answer_parts(
+        question_id="Q-EXPLANATION",
+        question_type=question_type,
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-EXPLANATION",
+            canonical_answer="B",
+            accepted_answers=["B"],
+            verification_method="CHOICE_AND_CONCEPT_MATCH",
+            explanation_required=True,
+        ),
+        prompt_version="1.1.0",
     )
-    with pytest.raises(
-        AdapterError,
-        match="separate required concepts for every answer component",
-    ):
-        classify_student_response(
-            ClassificationRequest(
-                question_id="Q-EXPLANATION",
-                question_type="CHOICE_WITH_EXPLANATION",
-                question="Which statement is correct? Select one and explain why.",
-                correct_answer="B",
-                answer_spec=AnswerSpec(
-                    answer_spec_id="ANS-EXPLANATION",
-                    canonical_answer="B",
-                    accepted_answers=["B"],
-                    verification_method="EXACT_CHOICE_MATCH",
-                    explanation_required=True,
-                ),
-                phase_2_prompt_context=_guided_context(0),
-                student_input="B",
-                current_phase="GUIDED_PRACTICE",
-                input_source="TEXT",
-                transcript_confidence=None,
-                attempt_count=1,
-                current_hint_level=None,
-            )
-        )
+
+    assert rubric is not None
+    assert [
+        component.concept_id for component in rubric.required_concepts
+    ] == ["ANSWER_SELECTION", "ANSWER_EXPLANATION"]
+
+
+def test_component_adjudication_ignores_an_already_confirmed_claim() -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-EXPLANATION",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="ANSWER_SELECTION",
+                description="Selects the correct answer.",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="ANSWER_EXPLANATION",
+                description="Explains why the selected answer is true.",
+                required=True,
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="explanation-rubric",
+        prompt_version="1.1.0",
+    )
+    objective = ActiveTeachingObjective(
+        objective_type="EXPLAIN_REASONING",
+        target_concept_ids=["ANSWER_EXPLANATION"],
+        confirmed_concept_ids=["ANSWER_SELECTION"],
+        missing_concept_ids=["ANSWER_EXPLANATION"],
+    )
+    evaluation = GuidedEvaluation(
+        student_state="PARTIAL",
+        newly_confirmed_concept_ids=["ANSWER_SELECTION"],
+        preserved_concept_ids=["ANSWER_SELECTION"],
+        contradicted_concept_ids=[],
+        missing_concept_ids=["ANSWER_EXPLANATION"],
+        selected_error_code=None,
+        confidence=0.95,
+        next_objective=objective,
+        tutor_message="Explain why.",
+        tutor_message_voice="Explain why.",
+    )
+
+    targets = classifier.component_adjudication_targets(
+        evaluation=evaluation,
+        objective=objective,
+        rubric=rubric,
+        student_response="because n is a variable",
+        question="Which is the general rule: 12 + 4 or n + 4? Explain why.",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-EXPLANATION",
+            canonical_answer="n + 4",
+            accepted_answers=["n + 4 because n can vary"],
+            verification_method="CHOICE_AND_CONCEPT_MATCH",
+            explanation_required=True,
+        ),
+    )
+
+    assert [target.concept_id for target in targets] == ["ANSWER_EXPLANATION"]
 
 
 def test_guided_llm_repeated_stuck_requests_one_scaffold_escalation(
@@ -4030,6 +4039,17 @@ def test_guided_rubric_uses_only_the_compact_specialized_prompt(
         },
     ]
     assert "You are Numera" not in str(messages)
+
+
+def test_focused_component_schema_requires_the_requested_component_id() -> None:
+    schema = openai_client.focused_component_evidence_schema(
+        "CONCEPT-NUMERIC_CASE"
+    )
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    component_id = properties["component_id"]
+    assert isinstance(component_id, dict)
+    assert component_id["enum"] == ["CONCEPT-NUMERIC_CASE"]
 
 
 def test_guided_learning_supports_every_authored_answer_verification_method() -> None:

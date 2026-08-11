@@ -432,6 +432,27 @@ def resolve_guided_rubric(
 ) -> GeneratedQuestionRubric:
     """Return the persisted runtime rubric or generate it once from existing content."""
 
+    rubric = existing_rubric
+    if rubric is not None and rubric.question_id == question_id:
+        try:
+            validate_generated_rubric(
+                rubric,
+                question_id,
+                question_type,
+                answer_spec,
+                rules,
+            )
+            return rubric
+        except AdapterError as error:
+            logger.warning(
+                "guided_persisted_rubric_replaced",
+                extra={
+                    "question_id": question_id,
+                    "detail": error.detail,
+                },
+            )
+            rubric = None
+
     authored_rubric = rubric_from_authored_answer_parts(
         question_id,
         question_type,
@@ -441,7 +462,6 @@ def resolve_guided_rubric(
     if authored_rubric is not None:
         return authored_rubric
 
-    rubric = existing_rubric
     if rubric is None or rubric.question_id != question_id:
         rubric_error: AdapterError | None = None
         for attempt in range(rules.guided_learning.maximum_retries + 1):
@@ -496,6 +516,53 @@ def rubric_from_authored_answer_parts(
     prompt_version: str,
 ) -> GeneratedQuestionRubric | None:
     """Build stable multipart components from the existing authored contract."""
+
+    explanation_components: dict[
+        QuestionType,
+        tuple[tuple[str, str], tuple[str, str]],
+    ] = {
+        "CHOICE_WITH_EXPLANATION": (
+            ("ANSWER_SELECTION", "Selects the correct option or answer value."),
+            (
+                "ANSWER_EXPLANATION",
+                "Explains why the selected answer satisfies the question.",
+            ),
+        ),
+        "TRUE_FALSE_WITH_EXPLANATION": (
+            ("ANSWER_SELECTION", "States the correct true-or-false judgement."),
+            (
+                "ANSWER_EXPLANATION",
+                "Explains why the stated judgement satisfies the question.",
+            ),
+        ),
+    }
+    explanation_parts = explanation_components.get(question_type)
+    if explanation_parts is not None:
+        cache_source = json.dumps(
+            {
+                "question_id": question_id,
+                "question_type": question_type,
+                "answer_spec_id": answer_spec.answer_spec_id,
+                "prompt_version": prompt_version,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        return GeneratedQuestionRubric(
+            question_id=question_id,
+            required_concepts=[
+                GeneratedConcept(
+                    concept_id=component_id,
+                    description=description,
+                    required=True,
+                )
+                for component_id, description in explanation_parts
+            ],
+            completion_rule="ALL_REQUIRED_CONCEPTS",
+            cache_key=hashlib.sha256(cache_source.encode("utf-8")).hexdigest(),
+            prompt_version=prompt_version,
+        )
 
     if question_type != "MULTI_PART_SHORT_RESPONSE":
         return None
@@ -583,6 +650,8 @@ def focused_unresolved_prompt(
         return "What operation or amount stays fixed?"
     if any(term in component_kind for term in ("general_rule", "general rule", "expression")):
         return "What general rule represents this situation?"
+    if any(term in component_kind for term in ("expanded", "repeated", "adjacent")):
+        return "What do the letters represent when the expression is expanded?"
     if any(term in component_kind for term in ("choice", "selection", "option")):
         return "Which option do you choose?"
     return "What else does the question ask you to state?"
@@ -630,6 +699,33 @@ def classify_guided_learning_response(
         openai_client=openai_client,
     )
     objective = objective_for_rubric(request.active_teaching_objective, rubric)
+    if detect_student_intent(request.student_input, rules) == "EXPRESSING_CONFUSION":
+        focused_prompt = focused_unresolved_prompt(
+            rubric,
+            objective,
+            "Which part should we look at first?",
+        )
+        message = f"That’s okay—we’ll take it one part at a time. {focused_prompt}"
+        evaluation = GuidedEvaluation(
+            student_state="STUCK",
+            newly_confirmed_concept_ids=[],
+            preserved_concept_ids=objective.confirmed_concept_ids,
+            contradicted_concept_ids=[],
+            missing_concept_ids=objective.missing_concept_ids,
+            selected_error_code=None,
+            confidence=rules.confidence.standard_response,
+            next_objective=objective,
+            tutor_message=message,
+            tutor_message_voice=message,
+        )
+        return build_guided_tutor_response(
+            request,
+            rules,
+            safety_check,
+            rubric,
+            evaluation,
+            objective,
+        )
     evaluation: GuidedEvaluation | None = None
     raw_student_state: GuidedStudentState | None = None
     raw_confidence: float | None = None
@@ -733,7 +829,7 @@ def classify_guided_learning_response(
                 "openai_ai_engine",
                 "Guided turn evaluation failed without a validated response.",
             )
-    adjudication_target = component_adjudication_target(
+    adjudication_targets = component_adjudication_targets(
         evaluation,
         objective,
         rubric,
@@ -742,37 +838,48 @@ def classify_guided_learning_response(
         request.answer_spec,
     )
     adjudicator = getattr(openai_client, "adjudicate_component_evidence", None)
-    if adjudication_target is not None and callable(adjudicator):
-        logger.info(
-            "guided_component_adjudication_started",
-            extra={
-                "question_id": request.question_id,
-                "component_id": adjudication_target.concept_id,
-            },
-        )
-        evidence = adjudicator(
-            question_type=request.question_type,
-            question=request.question,
-            answer_spec=request.answer_spec,
-            target_component=adjudication_target,
-            active_objective=objective,
-            student_response=request.student_input,
-            input_source=request.input_source,
-            recent_conversation=request.conversation_history[
-                -rules.guided_learning.maximum_recent_history_turns:
-            ],
-            prompt_version=(
-                rules.guided_learning.component_adjudicator_prompt_version
-            ),
-            system_prompt=(
-                rules.guided_learning.component_adjudicator_system_prompt
-            ),
-        )
-        evaluation = apply_focused_component_evidence(
-            evaluation,
-            evidence,
-            rules.guided_learning.component_adjudicator_confidence_threshold,
-        )
+    if adjudication_targets and callable(adjudicator):
+        for adjudication_target in adjudication_targets:
+            logger.info(
+                "guided_component_adjudication_started",
+                extra={
+                    "question_id": request.question_id,
+                    "component_id": adjudication_target.concept_id,
+                },
+            )
+            evidence = adjudicator(
+                question_type=request.question_type,
+                question=request.question,
+                answer_spec=request.answer_spec,
+                target_component=adjudication_target,
+                active_objective=objective,
+                student_response=request.student_input,
+                input_source=request.input_source,
+                recent_conversation=request.conversation_history[
+                    -rules.guided_learning.maximum_recent_history_turns:
+                ],
+                prompt_version=(
+                    rules.guided_learning.component_adjudicator_prompt_version
+                ),
+                system_prompt=(
+                    rules.guided_learning.component_adjudicator_system_prompt
+                ),
+            )
+            evaluation = apply_focused_component_evidence(
+                evaluation,
+                evidence,
+                rules.guided_learning.component_adjudicator_confidence_threshold,
+            )
+            logger.info(
+                "guided_component_adjudication_completed",
+                extra={
+                    "question_id": request.question_id,
+                    "component_id": evidence.component_id,
+                    "status": evidence.status,
+                    "confidence": evidence.confidence,
+                    "student_state": evaluation.student_state,
+                },
+            )
         evaluation = validate_guided_evaluation(
             evaluation,
             rubric,
@@ -780,19 +887,14 @@ def classify_guided_learning_response(
             allowed_errors,
             rules,
         )
-        logger.info(
-            "guided_component_adjudication_completed",
-            extra={
-                "question_id": request.question_id,
-                "component_id": evidence.component_id,
-                "status": evidence.status,
-                "confidence": evidence.confidence,
-                "student_state": evaluation.student_state,
-            },
-        )
     if is_authoritative_guided_completion(request):
         evaluation = authoritative_guided_completion(evaluation, rules)
     next_objective = normalized_guided_objective(evaluation, objective)
+    evaluation = align_guided_follow_up(
+        evaluation,
+        rubric,
+        next_objective,
+    )
     logger.info(
         "guided_state_evaluated",
         extra={
@@ -817,6 +919,37 @@ def classify_guided_learning_response(
         rubric,
         evaluation,
         next_objective,
+    )
+
+
+def align_guided_follow_up(
+    evaluation: GuidedEvaluation,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective | None,
+) -> GuidedEvaluation:
+    """Make tutor wording agree with the backend's reconciled objective."""
+    if objective is None or evaluation.student_state == "CORRECT":
+        return evaluation
+    prompt = focused_unresolved_prompt(
+        rubric,
+        objective,
+        "What else does the question ask you to state?",
+    )
+    prefix_by_state = {
+        "PARTIAL": "Good—let’s focus on the remaining part.",
+        "WRONG": "Let’s try one part at a time.",
+        "UNCLEAR": "I couldn’t connect that response to the question.",
+        "STUCK": "That’s okay—we’ll take it one part at a time.",
+    }
+    prefix = prefix_by_state.get(evaluation.student_state)
+    if prefix is None:
+        return evaluation
+    message = f"{prefix} {prompt}"
+    return evaluation.model_copy(
+        update={
+            "tutor_message": message,
+            "tutor_message_voice": message,
+        }
     )
 
 
@@ -1037,15 +1170,26 @@ def significant_component_tokens(value: str) -> set[str]:
     }
 
 
-def component_adjudication_target(
+def component_adjudication_targets(
     evaluation: GuidedEvaluation,
     objective: ActiveTeachingObjective,
     rubric: GeneratedQuestionRubric,
     student_response: str,
     question: str,
     answer_spec: AnswerSpec,
-) -> GeneratedConcept | None:
-    """Select one unresolved component only for a relevant PARTIAL response."""
+) -> list[GeneratedConcept]:
+    """Verify claimed evidence before it can enter persistent guided state."""
+
+    claimed_ids = set(evaluation.newly_confirmed_concept_ids) - set(
+        objective.confirmed_concept_ids
+    )
+    claimed = [
+        component
+        for component in rubric.required_concepts
+        if component.required and component.concept_id in claimed_ids
+    ]
+    if claimed:
+        return claimed
 
     if (
         evaluation.student_state != "PARTIAL"
@@ -1054,7 +1198,7 @@ def component_adjudication_target(
         or not evaluation.missing_concept_ids
         or not student_response.strip()
     ):
-        return None
+        return []
     missing_ids = set(evaluation.missing_concept_ids)
     target = next(
         (
@@ -1065,7 +1209,7 @@ def component_adjudication_target(
         None,
     )
     if target is None:
-        return None
+        return []
     response_tokens = significant_component_tokens(student_response)
     context = " ".join(
         [
@@ -1076,8 +1220,8 @@ def component_adjudication_target(
         ]
     )
     if not response_tokens.intersection(significant_component_tokens(context)):
-        return None
-    return target
+        return []
+    return [target]
 
 
 def apply_focused_component_evidence(
@@ -1085,17 +1229,24 @@ def apply_focused_component_evidence(
     evidence: FocusedComponentEvidence,
     confidence_threshold: float,
 ) -> GuidedEvaluation:
-    """Use the focused pass only to correct a high-confidence false negative."""
+    """Apply independently verified evidence to one authored component."""
 
-    if (
-        evidence.status != "DEMONSTRATED"
-        or evidence.confidence < confidence_threshold
-    ):
+    if evidence.confidence < confidence_threshold:
         return evaluation
     confirmed_ids = set(evaluation.newly_confirmed_concept_ids)
-    confirmed_ids.add(evidence.component_id)
+    contradicted_ids = set(evaluation.contradicted_concept_ids)
+    if evidence.status == "DEMONSTRATED":
+        confirmed_ids.add(evidence.component_id)
+        contradicted_ids.discard(evidence.component_id)
+    else:
+        confirmed_ids.discard(evidence.component_id)
+        if evidence.status == "CONTRADICTED":
+            contradicted_ids.add(evidence.component_id)
     return evaluation.model_copy(
-        update={"newly_confirmed_concept_ids": sorted(confirmed_ids)}
+        update={
+            "newly_confirmed_concept_ids": sorted(confirmed_ids),
+            "contradicted_concept_ids": sorted(contradicted_ids),
+        }
     )
 
 

@@ -50,6 +50,7 @@ import {
   type SchemaWorkedExample,
   type SchemaWorkedExampleStep,
 } from '@/lib/api';
+import { applyPhaseHandoff } from '@/lib/phaseHandoff';
 import { speakTutor, stopTutorSpeech } from '@/lib/tts';
 import { cn } from '@/lib/cn';
 import { Skeleton } from '@/components/PageShell';
@@ -503,7 +504,6 @@ function BackendOrientation({ topicId }: { topicId: string }) {
   const activeConceptId = useNumeraStore((s) => s.activeConceptId);
   const backendSession = useNumeraStore((s) => s.backendSession);
   const setBackendSession = useNumeraStore((s) => s.setBackendSession);
-  const setCurrentPhase = useNumeraStore((s) => s.setCurrentPhase);
 
   const [status, setStatus] = useState<Status>('loading');
   // Position in the delivery sequence — the video, then the worked example.
@@ -619,11 +619,12 @@ function BackendOrientation({ topicId }: { topicId: string }) {
       });
       setBackendSession(rec);
       // usePhaseRouting follows this to the next phase's screen.
-      useNumeraStore.setState({
-        activeQuestionId: rec.question_id,
-        questionText: rec.current_question?.trim() ?? '',
-      });
-      setCurrentPhase(rec.current_phase);
+      //
+      // Through applyBackendPhase rather than a raw setState: it swaps the
+      // question text, type and options together, so the phase being left
+      // cannot leave its choices sitting under the next phase's question
+      // (Manjusha, 8 Aug — diagnostic options under a Phase 2 question).
+      applyPhaseHandoff(rec);
     } catch {
       setError("Couldn't mark this as done. Please try again.");
       setFinishing(false);

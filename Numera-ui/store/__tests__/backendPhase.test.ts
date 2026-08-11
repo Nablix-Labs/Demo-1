@@ -72,4 +72,31 @@ describe('applyBackendPhase', () => {
     });
     expect(state().questionText).toBe('A box holds x counters. You add 4 and end up with 9.');
   });
+
+  it('drops the previous phase’s options when the phase moves', () => {
+    // Manjusha, 8 Aug: the canvas asked the Phase 2 question (3 + 5, 9 + 5,
+    // 14 + 5) while the choices below it were still the diagnostic's
+    // (2 + 4, 7 + 4, 12 + 4). The options were written by one screen and never
+    // cleared by the next, so they outlived the question they belonged to.
+    useNumeraStore.setState({
+      currentPhase: 'DIAGNOSTIC',
+      questionText: 'Which is the general rule?',
+      activeQuestionId: 'Q-D1',
+      questionType: 'SINGLE_CHOICE',
+      questionOptions: [
+        { option_id: 'A', text: '12 + 4' },
+        { option_id: 'B', text: 'n + 4' },
+      ],
+      selectedOptionId: 'B',
+    });
+
+    state().applyBackendPhase({
+      phase: 'GUIDED_PRACTICE',
+      questionId: 'Q-T01-001',
+      questionText: '3 + 5, 9 + 5, 14 + 5 — what is the general rule?',
+    });
+
+    expect(state().questionOptions).toEqual([]);
+    expect(state().selectedOptionId).toBeNull();
+  });
 });

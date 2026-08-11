@@ -10,6 +10,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import type { LearningPhase } from '@/lib/phases';
 import type { FlowStage } from '@/lib/flow';
 import { TOPICS } from '@/lib/topics';
+import { isPhase3 } from '@/lib/phase3';
 import {
   DEMO_CONCEPT_ID,
   studentViewFor,
@@ -29,6 +30,45 @@ import type { InactivityPolicy } from '@/lib/inactivity';
 // reconnects. A module-local counter restarted at TURN-0001 after refresh and
 // collided with the backend's cached turns from the same session.
 const nextTurnId = (): string => `TURN-${uid()}`;
+
+/**
+ * Tutor panel width.
+ *
+ * The default is the width the panel was designed at. The minimum is where the
+ * chat bubbles stop being readable; below it the panel should be collapsed, not
+ * shrunk, which is what the collapse control is for.
+ *
+ * The maximum is a share of the window rather than a fixed number of pixels,
+ * because the thing actually being protected is the canvas — a student writing
+ * maths needs room whatever monitor they are on. Half the window is generous
+ * and still leaves the canvas usable.
+ */
+export const PANEL_WIDTH_DEFAULT = 234;
+export const PANEL_WIDTH_MIN = 200;
+const PANEL_WIDTH_MAX_FRACTION = 0.5;
+/** Fallback for SSR and tests, where there is no window to measure. */
+const PANEL_WIDTH_MAX_FALLBACK = 560;
+
+export function panelWidthMax(viewportWidth?: number): number {
+  const w = viewportWidth ?? (typeof window === 'undefined' ? undefined : window.innerWidth);
+  if (w === undefined) return PANEL_WIDTH_MAX_FALLBACK;
+  // Never below the minimum: on a narrow window the fraction alone would invert
+  // the bounds and clamp() would then throw the two ends the wrong way round.
+  return Math.max(PANEL_WIDTH_MIN, Math.round(w * PANEL_WIDTH_MAX_FRACTION));
+}
+
+/**
+ * Clamped on write, not on read.
+ *
+ * A width dragged wide on an external monitor and restored on a laptop would
+ * otherwise leave the canvas a sliver, and the student would have to go find
+ * the drag handle before they could work. Rounded because a fractional width
+ * makes the panel's inner text land on half-pixels and blur.
+ */
+export function clampPanelWidth(px: number, viewportWidth?: number): number {
+  if (!Number.isFinite(px)) return PANEL_WIDTH_DEFAULT;
+  return Math.round(Math.min(Math.max(px, PANEL_WIDTH_MIN), panelWidthMax(viewportWidth)));
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -251,6 +291,20 @@ export interface NumeraState {
   // opens the mic when both are true.
   expectsStudentResponse: boolean;
   allowVoiceInput: boolean;
+  /**
+   * The tutor's last turn failed and nothing has replaced it.
+   *
+   * A failed turn leaves `expectsStudentResponse` true — deliberately, so the
+   * student can retry — and leaves `lastTutorTurnId` pointing at the last turn
+   * that DID work. To the inactivity controller that is indistinguishable from a
+   * student who has gone quiet on a live question, so it nudges them: the tutor
+   * errors twice, the student stops, and the third bubble asks "what is the
+   * first thing you would try?" (10 Aug). They already tried. Twice.
+   *
+   * Cleared by `setTutorTurn`, which is the only place a real tutor turn is
+   * established, so recovery needs no separate signal.
+   */
+  tutorTurnFailed: boolean;
 
   // Visual cue card — supporting guidance shown when the AI Engine flags a
   // mistake. `visualCueType` is the backend cue_type (picks which card renders);
@@ -275,6 +329,24 @@ export interface NumeraState {
   // has been removed from the backend. Both reset when the question changes.
   supportShown: SupportRung | null;
   lastHintText: string | null;
+  /**
+   * The question whose Phase 3 attempt has been accepted and locked.
+   *
+   * Keyed by question id, not a flag: the lock must survive a reconnect and a
+   * duplicate reply (replaying it changes nothing) and must lift for a rescue
+   * question by virtue of its different id — Phase 3 spec §3.3/§3.4.
+   */
+  phase3LockedQuestionId: string | null;
+  /**
+   * A tutor line that has been shown but not yet spoken.
+   *
+   * Set when one screen hands the student to another: the phase-entry line
+   * belongs to the screen being ENTERED, so the departing screen cannot speak
+   * it — starting speech on a route that is unmounting is how this codebase
+   * previously ended up with two tutor voices at once. The arriving screen
+   * claims it, speaks it, and clears it.
+   */
+  pendingTutorSpeech: string | null;
 
   // Ordering guard for interaction responses (Phase 2 handoff item 2). Holds the
   // highest interaction_state_version applied and the accepted_turn_ids already
@@ -312,6 +384,14 @@ export interface NumeraState {
   // UI preferences (guided-learning layout)
   panelSide: 'left' | 'right';        // assistant panel side relative to canvas
   panelCollapsed: boolean;            // panel collapsed to a thin edge tab, giving canvas the width back
+  /**
+   * Tutor panel width in px, dragged by the student and kept across reloads.
+   *
+   * Clamped on write rather than on read: a width persisted on a wide monitor
+   * and restored on a laptop would otherwise leave the canvas a sliver, and the
+   * student would have to find the handle to get their work back.
+   */
+  panelWidth: number;
   transcriptVisible: boolean;         // transcript can be hidden
   toolbarPos: { x: number; y: number } | null; // null = default docked position
   toolbarCollapsed: boolean;          // collapsed to a small bubble
@@ -402,6 +482,8 @@ export interface NumeraState {
   /** Record the tutor's reply turn (voice contract §11): store its tutor_turn_id
    *  as the next previous_tutor_turn_id, and the backend gating for the next turn. */
   setTutorTurn: (tutorTurnId: string | null, gating: { expects: boolean; allow: boolean }) => void;
+  /** The tutor turn failed; the student is owed a reply, not a nudge. */
+  markTutorTurnFailed: () => void;
   setVisualCueVisible: (v: boolean) => void;
   setActiveScaffold: (s: ActiveScaffold | null) => void;
 
@@ -410,10 +492,17 @@ export interface NumeraState {
   setAppliedResponse: (a: AppliedState) => void;
   setInactivityPolicy: (p: InactivityPolicy | null) => void;
   setLastHintText: (text: string | null) => void;
+  lockPhase3Attempt: (questionId: string | null) => void;
+  /** Queue a line for the next screen to speak. */
+  setPendingTutorSpeech: (text: string | null) => void;
+  /** Take the queued line, clearing it — so two mounts cannot speak it twice. */
+  claimPendingTutorSpeech: () => string | null;
   /** Position within this phase's question set, for the progress rail. */
   setQuestionProgress: (index: number, total: number) => void;
   toggleVisualCue: () => void;
-  addTranscriptMessage: (msg: Omit<TranscriptMessage, 'id' | 'timestamp'>) => void;
+  /** Returns the new message's id, so a caller can later retract it. */
+  addTranscriptMessage: (msg: Omit<TranscriptMessage, 'id' | 'timestamp'>) => string;
+  removeTranscriptMessage: (id: string) => void;
   setTranscript: (msgs: Pick<TranscriptMessage, 'role' | 'text'>[]) => void;
   updatePartialTranscript: (text: string) => void;
   commitPartialTranscript: (text: string) => void;
@@ -434,6 +523,10 @@ export interface NumeraState {
   setInputMode: (m: InputMode) => void;
   setTextInput: (v: string) => void;
   setPanelSide: (s: 'left' | 'right') => void;
+  /** Drag the panel edge. Clamped — see `clampPanelWidth`. */
+  setPanelWidth: (px: number) => void;
+  /** Back to the designed width (double-click the handle). */
+  resetPanelWidth: () => void;
   togglePanelSide: () => void;
   togglePanelCollapsed: () => void;
   toggleTranscript: () => void;
@@ -474,15 +567,16 @@ export interface NumeraState {
 const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
-  | 'setQuestionText' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn'
+  | 'setQuestionText' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'markTutorTurnFailed'
   | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue'
-  | 'setSupportShown' | 'setLastHintText' | 'setQuestionProgress' | 'setAppliedResponse' | 'setInactivityPolicy'
-  | 'addTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript' | 'commitPartialTranscript'
+  | 'setSupportShown' | 'setLastHintText' | 'lockPhase3Attempt'
+  | 'setPendingTutorSpeech' | 'claimPendingTutorSpeech' | 'setQuestionProgress' | 'setAppliedResponse' | 'setInactivityPolicy'
+  | 'addTranscriptMessage' | 'removeTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript' | 'commitPartialTranscript'
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
   | 'setShapeKind' | 'setEraserMode'
   | 'setStrokeColor' | 'setStrokeWidth' | 'addItem' | 'removeItem' | 'undo' | 'redo'
   | 'clearCanvas' | 'applyCanvasDraw' | 'clearTutorMarks'
-  | 'setInputMode' | 'setTextInput' | 'setPanelSide' | 'togglePanelSide' | 'togglePanelCollapsed'
+  | 'setInputMode' | 'setTextInput' | 'setPanelSide' | 'setPanelWidth' | 'resetPanelWidth' | 'togglePanelSide' | 'togglePanelCollapsed'
   | 'toggleTranscript' | 'setToolbarPos' | 'toggleToolbarCollapsed' | 'setToolbarOrientation' | 'setMicButtonPos' | 'setCanvasGrid' | 'setTtsVoice' | 'setActiveScaffold'
   | 'setCanvasExporter' | 'startGroupSession' | 'endGroupSession'
   | 'upsertParticipant' | 'removeParticipant' | 'setParticipantCursor'
@@ -531,12 +625,15 @@ const initial: Omit<
   lastTutorTurnId: null,
   expectsStudentResponse: true,
   allowVoiceInput: true,
+  tutorTurnFailed: false,
   activeScaffold: null as ActiveScaffold | null,
   visualCueVisible: false,
   visualCueType: null,
   visualCueDescription: null,
   supportShown: null as SupportRung | null,
   lastHintText: null as string | null,
+  phase3LockedQuestionId: null as string | null,
+  pendingTutorSpeech: null as string | null,
   appliedResponse: EMPTY_APPLIED,
   inactivityPolicy: null as InactivityPolicy | null,
   // Empty. This used to seed a three-message demo conversation about
@@ -558,6 +655,7 @@ const initial: Omit<
   textInput: '',
   panelSide: 'left',
   panelCollapsed: false,
+  panelWidth: PANEL_WIDTH_DEFAULT,
   transcriptVisible: true,
   toolbarPos: null,
   toolbarCollapsed: false,
@@ -592,7 +690,7 @@ const initial: Omit<
 
 export const useNumeraStore = create<NumeraState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
   ...initial,
 
   // Opening a session resets the ordering guard. interaction_state_version is
@@ -691,7 +789,11 @@ export const useNumeraStore = create<NumeraState>()(
   setBackendSession: (backendSession) => set({ backendSession }),
   setSessionSummary: (sessionSummary) => set({ sessionSummary }),
   setSessionReview: (sessionReview) => set({ sessionReview }),
-  clearSessionId: () => set({ sessionId: null, appliedResponse: EMPTY_APPLIED }),
+  clearSessionId: () => set({
+    sessionId: null,
+    backendSession: null,
+    appliedResponse: EMPTY_APPLIED,
+  }),
 
   // Mute is orthogonal to the turn phase (voice contract §12): the LISTENING/
   // PROCESSING/SPEAKING phase is owned by the turn machine (beginListeningTurn /
@@ -717,7 +819,11 @@ export const useNumeraStore = create<NumeraState>()(
       lastTutorTurnId: tutorTurnId,
       expectsStudentResponse: expects,
       allowVoiceInput: allow,
+      // A turn landed, so whatever failed before it is over.
+      tutorTurnFailed: false,
     }),
+
+  markTutorTurnFailed: () => set({ tutorTurnFailed: true }),
 
   setVisualCueVisible: (visualCueVisible) => set({ visualCueVisible }),
   setActiveScaffold: (activeScaffold) => set({ activeScaffold }),
@@ -728,11 +834,26 @@ export const useNumeraStore = create<NumeraState>()(
   setAppliedResponse: (appliedResponse) => set({ appliedResponse }),
   setInactivityPolicy: (inactivityPolicy) => set({ inactivityPolicy }),
   setLastHintText: (lastHintText) => set({ lastHintText }),
+
+  // Idempotent by construction: locking the same question twice is the same
+  // state, which is what makes a duplicate reply harmless.
+  lockPhase3Attempt: (phase3LockedQuestionId) => set({ phase3LockedQuestionId }),
+
+  setPendingTutorSpeech: (pendingTutorSpeech) => set({ pendingTutorSpeech }),
+
+  // Claim-and-clear in one call: React mounts effects twice in development, and
+  // a read-then-clear pair would speak the line twice before the clear landed.
+  claimPendingTutorSpeech: () => {
+    const { pendingTutorSpeech } = get();
+    if (pendingTutorSpeech !== null) set({ pendingTutorSpeech: null });
+    return pendingTutorSpeech;
+  },
   setQuestionProgress: (index, total) =>
     set({ activeSlide: Math.max(0, index), totalSlides: Math.max(0, total) }),
   toggleVisualCue: () => set((s) => ({ visualCueVisible: !s.visualCueVisible })),
 
-  addTranscriptMessage: (msg) =>
+  addTranscriptMessage: (msg) => {
+    const id = uid();
     set((s) => ({
       // Anything the tutor says ends the student's turn, so the next thing they
       // say starts a new bubble instead of joining the last one. This is the
@@ -742,9 +863,14 @@ export const useNumeraStore = create<NumeraState>()(
         ...(msg.role === 'ai'
           ? s.transcript.map((m) => (m.open ? { ...m, open: false } : m))
           : s.transcript),
-        { ...msg, id: uid(), timestamp: Date.now() },
+        { ...msg, id, timestamp: Date.now() },
       ],
-    })),
+    }));
+    return id;
+  },
+
+  removeTranscriptMessage: (id) =>
+    set((s) => ({ transcript: s.transcript.filter((m) => m.id !== id) })),
 
   setTranscript: (msgs) =>
     set({
@@ -859,6 +985,12 @@ export const useNumeraStore = create<NumeraState>()(
 
   applyCanvasDraw: (payload) =>
     set((s) => {
+      // Phase 3 spec §3.2/§1.5: no tutor ink or correction overlays during an
+      // independent attempt, and no canvas_draw built from Phase 3 metadata.
+      // Refused HERE rather than hidden at the render, so a drawing the backend
+      // still sends never enters the tutor layer at all — hiding it would leave
+      // it waiting to appear the moment the phase changed.
+      if (isPhase3(s.currentPhase)) return {};
       // The WS path delivers one action per message; REST responses deliver a
       // list of actions. Accept both here so no caller has to care.
       const actions = Array.isArray(payload) ? payload : [payload];
@@ -891,6 +1023,8 @@ export const useNumeraStore = create<NumeraState>()(
   setInputMode: (inputMode) => set({ inputMode }),
   setTextInput: (textInput) => set({ textInput }),
 
+  setPanelWidth: (px) => set({ panelWidth: clampPanelWidth(px) }),
+  resetPanelWidth: () => set({ panelWidth: PANEL_WIDTH_DEFAULT }),
   setPanelSide: (panelSide) => set({ panelSide }),
   togglePanelSide: () => set((s) => ({ panelSide: s.panelSide === 'left' ? 'right' : 'left' })),
   togglePanelCollapsed: () => set((s) => ({ panelCollapsed: !s.panelCollapsed })),
@@ -1006,8 +1140,14 @@ export const useNumeraStore = create<NumeraState>()(
       // from that, rather than leaving the lesson wedged.
       partialize: (s) => ({
         sessionId: s.sessionId,
+        // Phase 3 spec §3.3: "Keep the locked state through reconnect." The
+        // canvas and transcript are deliberately per-session below, but an
+        // accepted independent attempt must NOT come back editable after a
+        // refresh — that would let a student reopen closed evidence.
+        phase3LockedQuestionId: s.phase3LockedQuestionId,
         panelSide: s.panelSide,
         panelCollapsed: s.panelCollapsed,
+        panelWidth: s.panelWidth,
         transcriptVisible: s.transcriptVisible,
         toolbarPos: s.toolbarPos,
         toolbarCollapsed: s.toolbarCollapsed,

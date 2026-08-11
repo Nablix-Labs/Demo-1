@@ -41,9 +41,19 @@ interface DrawingCanvasProps {
    * middle of the tutor's demonstration.
    */
   tutorOnly?: boolean;
+  /**
+   * The student's work is frozen: they cannot draw, but everything they wrote
+   * stays on screen. Distinct from `tutorOnly`, which also HIDES student ink —
+   * here the ink is the point. Phase 3 locks an accepted independent answer
+   * this way, so the student sees what was submitted and cannot revise it
+   * after the fact.
+   */
+  readOnly?: boolean;
 }
 
-export default function DrawingCanvas({ onExportReady, tutorOnly = false }: DrawingCanvasProps) {
+export default function DrawingCanvas({ onExportReady, tutorOnly = false, readOnly = false }: DrawingCanvasProps) {
+  // Both mean "this student cannot draw"; they differ only in whose ink shows.
+  const inputBlocked = tutorOnly || readOnly;
   const stageRef = useRef<Konva.Stage>(null);
   const isDrawing = useRef(false);
   const startPos = useRef<{ x: number; y: number } | null>(null);
@@ -66,7 +76,7 @@ export default function DrawingCanvas({ onExportReady, tutorOnly = false }: Draw
     setDraft(item);
   }, []);
 
-  const objectErase = !tutorOnly && activeTool === 'eraser' && eraserMode === 'object';
+  const objectErase = !inputBlocked && activeTool === 'eraser' && eraserMode === 'object';
 
   // ── Resize observer ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -115,7 +125,7 @@ export default function DrawingCanvas({ onExportReady, tutorOnly = false }: Draw
   // ── Pointer handlers ─────────────────────────────────────────────────────────
   const handleDown = useCallback(
     (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
-      if (tutorOnly) return; // tutor-only canvas — the student can't draw
+      if (inputBlocked) return; // tutor-only canvas, or a locked Phase 3 answer
       // Object-eraser deletes via clicking a shape, not by drawing.
       if (activeTool === 'eraser' && eraserMode === 'object') return;
       const pos = e.target.getStage()?.getPointerPosition();
@@ -156,7 +166,7 @@ export default function DrawingCanvas({ onExportReady, tutorOnly = false }: Draw
         }
       }
     },
-    [tutorOnly, activeTool, eraserMode, shapeKind, strokeColor, strokeWidth, setDraftItem]
+    [inputBlocked, activeTool, eraserMode, shapeKind, strokeColor, strokeWidth, setDraftItem]
   );
 
   const handleMove = useCallback(
@@ -291,7 +301,7 @@ export default function DrawingCanvas({ onExportReady, tutorOnly = false }: Draw
   };
 
   const cursor =
-    tutorOnly ? 'default'
+    inputBlocked ? 'default'
     : activeTool === 'eraser' ? (eraserMode === 'object' ? 'pointer' : 'cell')
     : (activeTool === 'pen' || activeTool === 'pencil' || activeTool === 'highlighter') ? 'crosshair'
     : 'copy';

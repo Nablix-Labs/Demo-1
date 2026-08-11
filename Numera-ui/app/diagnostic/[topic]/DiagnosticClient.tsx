@@ -31,6 +31,7 @@ import {
   type DiagnosticAnswer,
   type SchemaQuestion,
 } from '@/lib/api';
+import { applyPhaseHandoff } from '@/lib/phaseHandoff';
 import { speakTutor, stopTutorSpeech } from '@/lib/tts';
 import { cn } from '@/lib/cn';
 import { CenteredScreen, ScreenIcon } from '@/components/CenteredScreen';
@@ -93,7 +94,6 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
   const backendSession = useNumeraStore((s) => s.backendSession);
   const setBackendSession = useNumeraStore((s) => s.setBackendSession);
   const activeConceptId = useNumeraStore((s) => s.activeConceptId);
-  const setCurrentPhase = useNumeraStore((s) => s.setCurrentPhase);
 
   const [status, setStatus] = useState<Status>('loading');
   const [error, setError] = useState<string | null>(null);
@@ -243,11 +243,8 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
       setBackendSession(rec);
       // Drives usePhaseRouting to whichever phase the backend chose. The record
       // carries question_id: null here, which the store now keeps as null.
-      useNumeraStore.setState({
-        activeQuestionId: rec.question_id,
-        questionText: rec.current_question?.trim() ?? '',
-      });
-      setCurrentPhase(rec.current_phase);
+      //
+      applyPhaseHandoff(rec);
     } catch {
       setError("Couldn't send your answers. Please try again.");
       setStatus('ready');

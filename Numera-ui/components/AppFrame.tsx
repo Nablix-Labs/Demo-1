@@ -122,7 +122,7 @@ export default function AppFrame({ children }: { children: ReactNode }) {
     // only mounts inside MediaPanel on the lesson route. Since routing follows
     // the backend phase, a tester now spends most of their time on diagnostic /
     // orientation / teach and could never reach the picker at all.
-    return (
+    const page = (
       <div className="flex-1 flex min-w-0 relative">
         {children}
         {!preAuth && (
@@ -133,6 +133,16 @@ export default function AppFrame({ children }: { children: ReactNode }) {
         )}
       </div>
     );
+    // Focus mode is a LAYOUT choice, not an access one. Returning the page bare
+    // meant /diagnostic, /orientation, /teach and /complete ran the access
+    // decision never — and since routing follows the backend phase, that is
+    // where a student spends most of the lesson. An expired login stayed on
+    // screen indefinitely there (Manjusha, 11 Aug).
+    //
+    // The pre-auth screens must stay outside the gate: they are where someone
+    // with no session is meant to land, and gating /login would bounce them to
+    // /login.
+    return preAuth ? page : <AuthGate>{page}</AuthGate>;
   }
 
   // The AI tutor panel belongs to the live lesson only; every other in-app

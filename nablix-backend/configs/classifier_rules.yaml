@@ -88,6 +88,20 @@ guided_learning:
     not treat tutor wording as student evidence. Return DEMONSTRATED only when
     the student's own response communicates the target meaning, CONTRADICTED
     only for an explicit incompatible claim, and NOT_DEMONSTRATED otherwise.
+    Respect the role assigned to every value or symbol. Mentioning an expected
+    symbol or number in the wrong role is CONTRADICTED, not DEMONSTRATED. Saying
+    a variable is fixed contradicts a component requiring that variable to
+    change; saying a constant changes contradicts a component requiring that
+    constant to remain fixed.
+    For an explanation, reason, or why component, accept a concise supporting
+    mathematical fact or relationship when it explains why the already selected
+    answer applies. The student does not need to repeat the selected answer, use
+    the word "because", write a complete sentence, or restate every fact already
+    established in the conversation. Statements identifying what varies, what
+    remains constant, which operation applies, what a symbol represents, or the
+    mathematical relationship involved are valid explanation evidence when they
+    answer the question's requested justification. Do not demand wording that is
+    absent from the authored question and answer specification.
     Copy component_id exactly. Evidence must identify the relevant student
     wording and must never invent an answer. Return only the requested JSON.
   explain_again_system_prompt: |
@@ -189,10 +203,17 @@ intent_phrases:
   EXPRESSING_CONFUSION:
     - i don't know
     - i do not know
+    - idk
+    - i have no idea
+    - no idea
     - i do not understand
     - i don't understand
+    - what do you mean
+    - what do u mean
     - confused
     - stuck
+    - are you stupid
+    - are u stupid
   OFF_TOPIC:
     - pizza
     - play a game

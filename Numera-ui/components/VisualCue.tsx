@@ -14,10 +14,12 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Lightbulb, Info, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import { useNumeraStore } from '@/store/useNumeraStore';
+import { isPhase3 } from '@/lib/phase3';
 import { resolveCueCard } from '@/lib/visualCueCards';
 import { cn } from '@/lib/cn';
+import StickyNote from '@/components/StickyNote';
 
 export default function VisualCue() {
   const visible = useNumeraStore((s) => s.visualCueVisible);
@@ -25,7 +27,13 @@ export default function VisualCue() {
   const cueType = useNumeraStore((s) => s.visualCueType);
   const description = useNumeraStore((s) => s.visualCueDescription);
   const panelSide = useNumeraStore((s) => s.panelSide);
+  const currentPhase = useNumeraStore((s) => s.currentPhase);
   const card = resolveCueCard(cueType);
+  // A note with no authored card is the tutor's own guidance text — the hint
+  // rung of the support ladder, not a cue card. Titling it "Visual cue" told
+  // the student a hint was something else (Manjusha, 10 Aug). The card's own
+  // title stands when there is one.
+  const label = card?.title ?? 'Hint';
 
   // Small entrance (fade + rise) without depending on a motion library.
   const [shown, setShown] = useState(false);
@@ -40,71 +48,41 @@ export default function VisualCue() {
   // Nothing authored and nothing to say — show nothing, rather than a card
   // about an equation the student isn't working on.
   if (!visible || (!card && !description)) return null;
+  // Phase 3 is answered alone: no visual cues during an independent attempt
+  // (Phase 3 spec §3.2). Suppressed at the render rather than at the source so
+  // a cue the backend still sends cannot leak onto the screen.
+  if (isPhase3(currentPhase)) return null;
 
   return (
     <aside
       // Right side (matches the design mockup: canvas left, cue right). Sits
       // below the "Explain it back" chrome so it stacks under it, not over it.
       className={cn(
-        'lg-glass fixed top-[84px] z-30 w-72 max-w-[calc(100vw-2rem)] rounded-card overflow-hidden transition-all duration-300',
+        'fixed top-[84px] z-30 transition-all duration-300',
         panelSide === 'right' ? 'left-4' : 'right-4',
       )}
       style={{
         opacity: shown ? 1 : 0,
         transform: shown ? 'translateY(0)' : 'translateY(-6px)',
       }}
-      aria-label={`Visual cue: ${card?.title ?? 'guidance'}`}
+      aria-label={label}
     >
-      <div className="flex items-center justify-between px-3 py-2 border-b border-muted-gray bg-reading-surface">
-        <div className="flex items-center gap-1.5 text-[12px] font-semibold text-slate-blue">
-          <Lightbulb size={14} strokeWidth={1.9} /> Visual cue{card ? `: ${card.title}` : ''}
-        </div>
+      <div className="relative">
         <button
           onClick={() => setVisible(false)}
-          aria-label="Dismiss visual cue"
-          className="w-5 h-5 rounded flex items-center justify-center text-slate-blue hover:bg-muted-gray/50 hover:text-ink transition-colors"
+          aria-label={`Dismiss ${label.toLowerCase()}`}
+          className="absolute -right-1 -top-1 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-white/70 text-[#8A6407] shadow-sm hover:bg-white"
         >
-          <X size={14} strokeWidth={2} />
+          <X size={13} strokeWidth={2.2} />
         </button>
-      </div>
 
-      <div className="p-3 space-y-3">
-        {/* The illustrated card, only when the backend named a cue_type we
-            actually have artwork for. Everything in here is authored on our
-            side, so it must never stand in for a cue the backend didn't ask
-            for — see resolveCueCard. */}
-        {card && (
-          <>
-            {/* Worked example — the equation this card is guiding, not the answer. */}
-            <div className="rounded-lg bg-reading-surface border border-muted-gray py-3 px-2 text-center">
-              <span className="text-[16px] font-semibold text-ink" style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}>
-                {card.example}
-              </span>
-            </div>
-
-            {/* Steps toward the next move. */}
-            <ol className="space-y-1.5">
-              {card.steps.map((step, i) => (
-                <li key={i} className="flex gap-2 text-[12px] text-ink leading-snug">
-                  <span className="flex-shrink-0 w-4 h-4 mt-[1px] rounded-full bg-slate-blue/15 text-slate-blue text-[10px] font-bold flex items-center justify-center">
-                    {i + 1}
-                  </span>
-                  {step}
-                </li>
-              ))}
-            </ol>
-
-            <p className="text-[12px] text-ink leading-snug font-medium">{card.caption}</p>
-          </>
-        )}
-
-        {/* Backend's instructional description, when provided. */}
-        {description && (
-          <div className="flex gap-1.5 rounded-lg bg-slate-blue/[0.08] border border-slate-blue/20 px-2.5 py-2">
-            <Info size={13} strokeWidth={2} className="flex-shrink-0 mt-[1px] text-slate-blue" />
-            <p className="text-[11px] text-slate-blue leading-snug">{description}</p>
-          </div>
-        )}
+        {/* Amber is the cue tone: "notice something", the default nudge. The
+            steps are the tutor's words about the example, so they sit under it
+            as the annotation rather than beside it. */}
+        <StickyNote tone="amber" label={label} lines={card ? [card.example] : undefined}>
+          {card?.caption}
+          {description ? <span className="mt-2 block">{description}</span> : null}
+        </StickyNote>
       </div>
     </aside>
   );

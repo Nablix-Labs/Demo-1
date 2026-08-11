@@ -15,6 +15,7 @@ import axios from 'axios';
 import type { CanvasDrawPayload } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { allowAnonTutorCalls } from '@/lib/runtimeConfig';
+import type { Phase3ResponseFields } from '@/lib/phase3';
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
 
@@ -912,7 +913,7 @@ export type SupportLevel =
   | 'PARALLEL_EXAMPLE'
   | 'TUTOR_SOLVED';
 
-export interface InteractionResponse extends GuidedStateFields {
+export interface InteractionResponse extends GuidedStateFields, Phase3ResponseFields {
   session_id: string;
   student_id: string;
   current_phase: string;
@@ -1120,7 +1121,7 @@ export interface CanvasLatency {
   total_latency_ms: number;
 }
 
-export interface CanvasSubmissionResult {
+export interface CanvasSubmissionResult extends Phase3ResponseFields {
   session_id: string;
   student_id: string;
   status: string;
@@ -1137,8 +1138,8 @@ export interface CanvasSubmissionResult {
   phase_changed?: boolean;
   previous_phase?: string | null;
   current_phase?: string;
-  current_question?: string;
-  question_id?: string;
+  current_question?: string | null;
+  question_id?: string | null;
   ui_state?: string;
   recommended_entry_phase?: string | null;
   phase_transition_message?: string | null;
