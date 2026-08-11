@@ -78,6 +78,15 @@ describe('applyPhaseHandoff', () => {
     expect(state().claimPendingTutorSpeech()).toBeNull();
   });
 
+  it('speaks the current line on a resume, never the restored history', () => {
+    // Sanya, 11 Aug: "we need it spoken on every session resume". Replaying a
+    // whole restored conversation aloud would be worse than silence, so only
+    // the record's own current line is queued.
+    useNumeraStore.setState({ pendingTutorSpeech: null });
+    applyPhaseHandoff(enteringGuidedPractice({ message: 'Welcome back — here is where we were.' }));
+    expect(state().pendingTutorSpeech).toBe('Welcome back — here is where we were.');
+  });
+
   it('queues nothing to speak when there is nothing to say', () => {
     applyPhaseHandoff(enteringGuidedPractice({ message: '   ' }));
     expect(state().pendingTutorSpeech).toBeNull();

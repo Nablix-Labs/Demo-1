@@ -24,6 +24,7 @@ import QuestionDisplay from '@/components/QuestionDisplay';
 import StickyNote from '@/components/StickyNote';
 import PhaseGate from '@/components/PhaseGate';
 import Toolbar from '@/components/Canvas/Toolbar';
+import { speakTutor } from '@/lib/tts';
 import { cn } from '@/lib/cn';
 
 const DrawingCanvas = dynamic(() => import('@/components/Canvas/DrawingCanvas'), { ssr: false });
@@ -119,6 +120,18 @@ export default function PracticePage() {
   const handleExportReady = useCallback((fn: CanvasExporter) => {
     setCanvasExporter(fn);
   }, [setCanvasExporter]);
+
+  // Speak the line queued by a phase handoff or a session resume.
+  //
+  // Silent mode silences HELP, not the tutor's own place-setting: telling the
+  // student which phase they are in is neither a hint nor a correction. Without
+  // this, arriving in Phase 3 or resuming into it was completely wordless.
+  const pendingSpeech = useNumeraStore((s) => s.pendingTutorSpeech);
+  useEffect(() => {
+    if (!pendingSpeech) return;
+    const queued = useNumeraStore.getState().claimPendingTutorSpeech();
+    if (queued) speakTutor(queued);
+  }, [pendingSpeech]);
 
   // §3.4: a rescue or fresh question arrives as a NEW question, not as feedback
   // on the closed one. When the id moves, the previous attempt's notice goes

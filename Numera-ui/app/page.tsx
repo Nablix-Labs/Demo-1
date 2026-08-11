@@ -176,14 +176,19 @@ export default function LessonPage() {
   // showed the line and queued the voice; this claims it. Claim-and-clear is
   // atomic in the store so React's double-mount in development cannot say it
   // twice (row 4, "displayed but not spoken", 11 Aug).
+  //
+  // Watches the queue rather than firing once on mount: a resume sets it AFTER
+  // this screen has mounted (the fetch has to come back first), so a mount-only
+  // effect would miss every resumed session.
+  const pendingSpeech = useNumeraStore((s) => s.pendingTutorSpeech);
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || !pendingSpeech) return;
     const queued = useNumeraStore.getState().claimPendingTutorSpeech();
     if (!queued) return;
     setStudentWriting(false);
     useNumeraStore.getState().setVoiceStatus('speaking');
     tutorSay(queued, { onEnd: () => useNumeraStore.getState().beginListeningTurn() });
-  }, [hydrated]);
+  }, [hydrated, pendingSpeech]);
 
   // Mic capture is half-duplex (voice contract §12): it runs ONLY during the
   // student's LISTENING turn and while unmuted. During PROCESSING (request in
