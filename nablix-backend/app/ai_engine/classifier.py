@@ -650,11 +650,64 @@ def focused_unresolved_prompt(
         return "What operation or amount stays fixed?"
     if any(term in component_kind for term in ("general_rule", "general rule", "expression")):
         return "What general rule represents this situation?"
+    if re.search(
+        r"\b[a-z]\s*(?:[+\-*/]|add|subtract|multiply|divide)\s*\d+\b",
+        component_kind,
+    ):
+        return "What general rule represents this situation?"
     if any(term in component_kind for term in ("expanded", "repeated", "adjacent")):
         return "What do the letters represent when the expression is expanded?"
     if any(term in component_kind for term in ("choice", "selection", "option")):
         return "Which option do you choose?"
     return "What else does the question ask you to state?"
+
+
+def option_comparison_follow_up(
+    conversation_history: list[ConversationMessage],
+    student_input: str,
+    objective: ActiveTeachingObjective,
+) -> GuidedEvaluation | None:
+    """Resolve the yes/no check that follows a wrong multiple-choice selection."""
+
+    last_tutor_message = next(
+        (
+            message.content.casefold()
+            for message in reversed(conversation_history)
+            if message.role == "assistant"
+        ),
+        "",
+    )
+    if "can one fixed starting number describe every possible case" not in last_tutor_message:
+        return None
+
+    normalized_response = re.sub(r"[^a-z]", "", student_input.casefold())
+    if normalized_response in {"yes", "yeah", "yep", "correct", "true"}:
+        message = (
+            "Not quite. A fixed starting number only describes one case. "
+            "Try another starting number: would the option you chose still work?"
+        )
+        state: GuidedStudentState = "WRONG"
+    elif normalized_response in {"no", "nope", "false", "incorrect", "itsfalse", "itisfalse"}:
+        message = (
+            "Right. One fixed starting number cannot describe every case. "
+            "Choose the option that uses a changing value, then explain why it works."
+        )
+        state = "PARTIAL"
+    else:
+        return None
+
+    return GuidedEvaluation(
+        student_state=state,
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=objective.confirmed_concept_ids,
+        contradicted_concept_ids=[],
+        missing_concept_ids=objective.missing_concept_ids,
+        selected_error_code=None,
+        confidence=1.0,
+        next_objective=objective,
+        tutor_message=message,
+        tutor_message_voice=message,
+    )
 
 
 def classify_guided_learning_response(
@@ -699,6 +752,20 @@ def classify_guided_learning_response(
         openai_client=openai_client,
     )
     objective = objective_for_rubric(request.active_teaching_objective, rubric)
+    choice_follow_up = option_comparison_follow_up(
+        request.conversation_history,
+        request.student_input,
+        objective,
+    )
+    if choice_follow_up is not None:
+        return build_guided_tutor_response(
+            request,
+            rules,
+            safety_check,
+            rubric,
+            choice_follow_up,
+            objective,
+        )
     if detect_student_intent(request.student_input, rules) == "EXPRESSING_CONFUSION":
         focused_prompt = focused_unresolved_prompt(
             rubric,
@@ -935,6 +1002,13 @@ def align_guided_follow_up(
         objective,
         "What else does the question ask you to state?",
     )
+    if prompt.startswith("You have given the answer."):
+        return evaluation.model_copy(
+            update={
+                "tutor_message": prompt,
+                "tutor_message_voice": prompt,
+            }
+        )
     prefix_by_state = {
         "PARTIAL": "Good—let’s focus on the remaining part.",
         "WRONG": "Let’s try one part at a time.",
@@ -1119,6 +1193,50 @@ def concise_explanation_is_demonstrated(
     return bool(response_tokens.intersection(justification_tokens))
 
 
+def contradicted_authored_component_ids(
+    rubric: GeneratedQuestionRubric,
+    student_input: str,
+) -> set[str]:
+    """Detect a direct reversal such as saying a fixed addend changes."""
+
+    response_tokens = component_evidence_tokens(normalize_semantic_answer(student_input))
+    property_tokens = {"change", "fixed"}
+    operation_tokens = {"add", "subtract", "multiply", "divide"}
+    response_property = next(
+        (token for token in property_tokens if token in response_tokens),
+        None,
+    )
+    if response_property is None:
+        return set()
+    normalized_input = student_input.casefold()
+    contradicted: set[str] = set()
+    for component in rubric.required_concepts:
+        component_tokens = component_evidence_tokens(component.description)
+        component_property = next(
+            (token for token in property_tokens if token in component_tokens),
+            None,
+        )
+        component_terms = component_tokens - property_tokens - operation_tokens
+        describes_reversed_component = any(
+            re.search(
+                (
+                    rf"(?<![a-z0-9]){re.escape(term)}(?:\s+is)?\s+"
+                    rf"{response_property}(?:s|d|ing)?\b"
+                ),
+                normalized_input,
+            )
+            is not None
+            for term in component_terms
+        )
+        if (
+            component_property is not None
+            and component_property != response_property
+            and describes_reversed_component
+        ):
+            contradicted.add(component.concept_id)
+    return contradicted
+
+
 def merge_authored_component_evidence(
     evaluation: GuidedEvaluation,
     rubric: GeneratedQuestionRubric,
@@ -1130,6 +1248,27 @@ def merge_authored_component_evidence(
         return evaluation
     normalized_response = normalize_semantic_answer(student_input)
     response_tokens = component_evidence_tokens(normalized_response)
+    directly_contradicted_ids = contradicted_authored_component_ids(
+        rubric,
+        student_input,
+    )
+    if directly_contradicted_ids:
+        required_ids = {
+            component.concept_id
+            for component in rubric.required_concepts
+            if component.required
+        }
+        return evaluation.model_copy(
+            update={
+                "student_state": "WRONG",
+                "newly_confirmed_concept_ids": [],
+                "contradicted_concept_ids": sorted(
+                    set(evaluation.contradicted_concept_ids)
+                    | directly_contradicted_ids
+                ),
+                "missing_concept_ids": sorted(required_ids),
+            }
+        )
     demonstrated_ids = {
         component.concept_id
         for component in rubric.required_concepts
