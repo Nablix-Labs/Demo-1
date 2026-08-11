@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -12,6 +13,8 @@ from app.ai_engine.prompt_registry import load_prompt_registry
 from app.core.config import get_settings
 from app.core.logger import logger
 from app.middleware.request_logging import log_requests
+from app.services import session_service
+from app.services.session_store import close_session_store, open_session_store
 
 
 prompt_registry = load_prompt_registry()
@@ -23,11 +26,25 @@ logger.info(
         "validation_status": "passed",
     },
 )
+settings = get_settings()
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    restored_sessions = await open_session_store(settings.database_url)
+    session_service._sessions.clear()
+    session_service._sessions.update(restored_sessions)
+    try:
+        yield
+    finally:
+        await close_session_store()
+
+
 app: FastAPI = FastAPI(
     title="Nablix AI Math Tutor API",
     version="1.0.0",
+    lifespan=lifespan,
 )
-settings = get_settings()
 
 # Registering middleware for logging requests and responses
 app.middleware("http")(log_requests)

@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     voice_service_url: str = "http://localhost:8004" #chiru+aditya
     safety_service_url: str = "http://localhost:8004" #manjusha
     student_model_url: str = ""
+    database_url: str = ""
     student_model_topic_ids: dict[str, int] = Field(default_factory=dict)
     student_model_topic_codes: dict[str, str] = Field(default_factory=dict)
     cors_allowed_origins: list[str] = [
