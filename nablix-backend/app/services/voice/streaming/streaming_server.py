@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.websockets import WebSocketState
 
 import websockets
 
@@ -41,6 +42,32 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+
+
+def _websocket_is_connected(ws: WebSocket) -> bool:
+    """Return whether both sides of the ASGI WebSocket remain connected."""
+    client_state = getattr(ws, "client_state", WebSocketState.CONNECTED)
+    application_state = getattr(ws, "application_state", WebSocketState.CONNECTED)
+    return (
+        client_state == WebSocketState.CONNECTED
+        and application_state == WebSocketState.CONNECTED
+    )
+
+
+async def _send_json_if_connected(
+    ws: WebSocket,
+    payload: dict[str, object],
+) -> bool:
+    """Send once, returning false only when the peer closed concurrently."""
+    if not _websocket_is_connected(ws):
+        return False
+    try:
+        await ws.send_json(payload)
+        return True
+    except RuntimeError:
+        if not _websocket_is_connected(ws):
+            return False
+        raise
 logger = logging.getLogger("streaming")
 
 DEEPGRAM_WS_URL = "wss://api.deepgram.com/v1/listen"
@@ -685,7 +712,7 @@ async def process_and_respond(
         logger.info(f"[{session_id}] Backend tutor call took {tutor_ms}ms")
     except Exception as e:
         logger.error(f"[{session_id}] Main backend tutor call failed: {e}")
-        await ws.send_json({
+        await _send_json_if_connected(ws, {
             "type": "error",
             "message": "Tutor unavailable. Please try again.",
             "fallback_mode": "TEXT",
@@ -700,7 +727,7 @@ async def process_and_respond(
     # NOTE: audio_base64 is NOT included here anymore.
     text_sent_ms = int((time.time() - pipeline_start) * 1000)
 
-    await ws.send_json({
+    text_sent = await _send_json_if_connected(ws, {
         **tutor_response,
         "type": "tutor_response",
         "transcript": transcript,
@@ -712,6 +739,9 @@ async def process_and_respond(
         "text_latency_ms": text_sent_ms,
         "canvas_draw": canvas_draw,
     })
+    if not text_sent:
+        logger.info(f"[{session_id}] Client closed before tutor response delivery")
+        return
 
     logger.info(f"[{session_id}] Text sent to frontend: {text_sent_ms}ms")
 
@@ -726,6 +756,9 @@ async def process_and_respond(
 
     if supports_streaming and tutor_voice_text:
         # -- Streaming path (OpenAI) --
+        if not _websocket_is_connected(ws):
+            logger.info(f"[{session_id}] Client closed before audio streaming")
+            return
         tts_start = time.time()
         chunk_index = 0
 
@@ -735,13 +768,19 @@ async def process_and_respond(
                 voice=use_voice,
                 audio_format="mp3",
             ):
+                if not _websocket_is_connected(ws):
+                    logger.info(f"[{session_id}] Client closed during audio streaming")
+                    return
                 chunk_b64 = base64.b64encode(chunk).decode("utf-8")
 
-                await ws.send_json({
+                sent = await _send_json_if_connected(ws, {
                     "type": "tutor_audio_chunk",
                     "chunk": chunk_b64,
                     "chunk_index": chunk_index,
                 })
+                if not sent:
+                    logger.info(f"[{session_id}] Client closed during audio streaming")
+                    return
 
                 if chunk_index == 0:
                     first_chunk_ms = int((time.time() - tts_start) * 1000)
@@ -754,7 +793,7 @@ async def process_and_respond(
             tts_latency = int((time.time() - tts_start) * 1000)
 
             # Step 3: Tell frontend that audio is done
-            await ws.send_json({
+            await _send_json_if_connected(ws, {
                 "type": "tutor_audio_end",
                 "total_chunks": chunk_index,
                 "tts_latency_ms": tts_latency,
@@ -768,7 +807,7 @@ async def process_and_respond(
         except Exception as e:
             logger.error(f"[{session_id}] Streaming TTS failed: {e}")
             # Tell frontend audio won't be coming
-            await ws.send_json({
+            await _send_json_if_connected(ws, {
                 "type": "tutor_audio_end",
                 "total_chunks": 0,
                 "tts_latency_ms": 0,
@@ -795,13 +834,16 @@ async def process_and_respond(
             audio_b64 = base64.b64encode(audio_data).decode("utf-8")
 
             # Send as single chunk so frontend uses same handling
-            await ws.send_json({
+            audio_sent = await _send_json_if_connected(ws, {
                 "type": "tutor_audio_chunk",
                 "chunk": audio_b64,
                 "chunk_index": 0,
             })
+            if not audio_sent:
+                logger.info(f"[{session_id}] Client closed before audio delivery")
+                return
 
-            await ws.send_json({
+            await _send_json_if_connected(ws, {
                 "type": "tutor_audio_end",
                 "total_chunks": 1,
                 "tts_latency_ms": tts_latency,
@@ -811,7 +853,7 @@ async def process_and_respond(
 
         except Exception as e:
             logger.error(f"[{session_id}] TTS fallback failed: {e}")
-            await ws.send_json({
+            await _send_json_if_connected(ws, {
                 "type": "tutor_audio_end",
                 "total_chunks": 0,
                 "tts_latency_ms": 0,
@@ -820,7 +862,7 @@ async def process_and_respond(
 
     else:
         # No voice text to synthesize
-        await ws.send_json({
+        await _send_json_if_connected(ws, {
             "type": "tutor_audio_end",
             "total_chunks": 0,
             "tts_latency_ms": 0,
