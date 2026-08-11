@@ -400,6 +400,7 @@ export interface SchemaPhasePayload {
   payload_type: string;
   question_set: SchemaQuestionSet | null;
   orientation_bundle: SchemaOrientationBundle | null;
+  review_summary?: Record<string, unknown> | null;
 }
 
 export interface StudentModelEvent {
@@ -1182,6 +1183,8 @@ export interface CanvasSubmissionResult extends Phase3ResponseFields {
   current_phase?: string;
   current_question?: string | null;
   question_id?: string | null;
+  student_model_event?: StudentModelEvent | null;
+  student_model_state?: StudentModelState | null;
   ui_state?: string;
   recommended_entry_phase?: string | null;
   phase_transition_message?: string | null;
