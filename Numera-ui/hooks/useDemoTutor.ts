@@ -432,6 +432,16 @@ export async function resumeSession(): Promise<void> {
           s.setTranscript([{ role: 'ai', text: rec.message }]);
         }
       }
+      // Say where we are, out loud, on every resume.
+      //
+      // A resumed session restored the conversation silently: the student came
+      // back to a wall of text and a tutor that said nothing, on a voice-first
+      // product (Sanya, 11 Aug — "we need it spoken on every session resume").
+      // Only the CURRENT line is spoken, never the restored history — replaying
+      // a whole conversation aloud would be worse than saying nothing.
+      if (rec.message.trim()) {
+        useNumeraStore.getState().setPendingTutorSpeech(rec.message.trim());
+      }
     } catch (err) {
       const status = (err as { response?: { status?: number } })?.response?.status;
       if (isStaleSessionError(err) || status === 404) {
