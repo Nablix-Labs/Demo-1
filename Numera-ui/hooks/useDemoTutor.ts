@@ -490,7 +490,15 @@ export function useDemoTutor() {
           interaction_type: 'ANSWER_SUBMISSION',
           input_source: 'TEXT',
           text_input: text,
-          selected_option_id: phase3Choice ? state.selectedOptionId ?? undefined : undefined,
+          // Tell the tutor WHICH option was picked, in every phase.
+          //
+          // The Phase 3 confirmation payloads that used to gate this were
+          // removed in 2950941; the gate variable went with them and left this
+          // line referring to a name that no longer exists, so main did not
+          // compile. Sending the id whenever there is one is also what row 23
+          // asks for — without it the tutor sees the option's text and has no
+          // idea which choice it corresponds to.
+          selected_option_id: state.selectedOptionId ?? undefined,
           current_phase: state.currentPhase,
           concept_id: ctx.concept_id,
           question_id: questionId,
