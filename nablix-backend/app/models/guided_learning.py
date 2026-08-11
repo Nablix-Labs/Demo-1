@@ -86,6 +86,28 @@ class GuidedTeachingState(GuidedLearningModel):
     teaching_step_ids: list[str] = Field(default_factory=list)
 
 
+class GuidedTeachingPlanStep(GuidedLearningModel):
+    """One ordered learner-facing focus in a Guided Learning question."""
+
+    step_id: str
+    tutor_question: str
+
+
+class GuidedTutorContext(GuidedLearningModel):
+    """Authoritative lesson state supplied to the guided-turn evaluator."""
+
+    active_tutor_question: str
+    active_step_id: str | None
+    ordered_teaching_steps: list[GuidedTeachingPlanStep]
+    confirmed_concept_ids: list[str]
+    missing_concept_ids: list[str]
+    support_state: dict[str, object]
+    current_support: dict[str, object] | None
+    current_scaffold_step_number: int
+    consecutive_stuck_count: int
+    conversation_state_summary: str
+
+
 class ActiveScaffold(GuidedLearningModel):
     scaffold_id: str
     current_step_id: str

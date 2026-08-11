@@ -205,6 +205,81 @@ def test_guided_component_question_stays_specific_after_confusion_and_wrong_valu
     assert wrong.tutor_message.endswith("Which part can take different possible values?")
 
 
+def test_guided_evaluator_context_preserves_active_step_and_support_state() -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-COMPONENTS",
+        required_concepts=[
+            GeneratedConcept(concept_id="CHANGING_VALUE", description="m changes", required=True),
+            GeneratedConcept(concept_id="FIXED_VALUE", description="7 stays fixed", required=True),
+            GeneratedConcept(concept_id="OPERATION", description="addition", required=True),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="component-rubric",
+        prompt_version="1.0.0",
+    )
+    objective = ActiveTeachingObjective(
+        objective_type="ANSWER_QUESTION",
+        target_concept_ids=["FIXED_VALUE"],
+        confirmed_concept_ids=["CHANGING_VALUE"],
+        missing_concept_ids=["FIXED_VALUE", "OPERATION"],
+    )
+    request = ClassificationRequest(
+        question_id="Q-T01-COMPONENTS",
+        question_type="MULTI_PART_SHORT_RESPONSE",
+        question="In m + 7, identify the changing quantity, the fixed value and the operation.",
+        correct_answer="m; 7; addition",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-COMPONENTS",
+            canonical_answer="m; 7; addition",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=True,
+        ),
+        phase_2_prompt_context=_guided_context(2).model_copy(
+            update={
+                "support_state": {"hint_level": 2},
+                "current_support": {"support_type": "VISUAL_CUE"},
+                "current_scaffold_step_number": 1,
+            }
+        ),
+        generated_question_rubric=rubric,
+        active_teaching_objective=objective,
+        guided_teaching_state=GuidedTeachingState(
+            question_id="Q-T01-COMPONENTS",
+            objective_component_ids=["CHANGING_VALUE", "FIXED_VALUE", "OPERATION"],
+            confirmed_component_ids=["CHANGING_VALUE"],
+            missing_component_ids=["FIXED_VALUE", "OPERATION"],
+            active_component_id="FIXED_VALUE",
+            last_tutor_question_type="COMPONENT",
+            selected_option_id=None,
+            awaiting_response=True,
+            active_step_id="FIXED_VALUE",
+            teaching_step_ids=["CHANGING_VALUE", "FIXED_VALUE", "OPERATION"],
+        ),
+        student_input="7 stays fixed",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=2,
+        current_hint_level=2,
+    )
+
+    context = classifier.guided_tutor_context_for(request, rubric, objective)
+
+    assert context.active_step_id == "FIXED_VALUE"
+    assert context.active_tutor_question == "Which value stays fixed in this rule?"
+    assert [step.step_id for step in context.ordered_teaching_steps] == [
+        "CHANGING_VALUE",
+        "FIXED_VALUE",
+        "OPERATION",
+    ]
+    assert context.confirmed_concept_ids == ["CHANGING_VALUE"]
+    assert context.missing_concept_ids == ["FIXED_VALUE", "OPERATION"]
+    assert context.current_support == {"support_type": "VISUAL_CUE"}
+    assert context.current_scaffold_step_number == 1
+    assert context.consecutive_stuck_count == 2
+
+
 def test_final_partial_wording_is_preserved_after_state_reconciliation() -> None:
     rubric = _guided_rubric()
     objective = ActiveTeachingObjective(
@@ -482,6 +557,67 @@ def test_copied_numeric_example_is_repaired_before_the_general_rule(
     assert "14 + 5, not 14 + 4" in response.tutor_message
     assert response.guided_teaching_state is not None
     assert response.guided_teaching_state.last_tutor_question_type == "SOURCE_CORRECTION"
+
+
+def test_changing_starting_numbers_are_acknowledged_before_requesting_the_rule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _NoEvaluationClient:
+        def evaluate_guided_turn(self, **kwargs: object) -> GuidedEvaluation:
+            raise AssertionError("the active teaching-step response is deterministic")
+
+    rubric = GeneratedQuestionRubric(
+        question_id="CT-T01-P3",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="GENERAL_RULE",
+                description="States the general rule.",
+                required=True,
+            )
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="changing-starting-numbers",
+        prompt_version="1.0.0",
+    )
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _NoEvaluationClient(),
+    )
+
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="CT-T01-P3",
+            question_type="SHORT_RESPONSE",
+            question=(
+                "3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number. "
+                "Write the general rule."
+            ),
+            correct_answer="n + 5",
+            answer_spec=AnswerSpec(
+                answer_spec_id="ANS-CT-T01-P3",
+                canonical_answer="n + 5",
+                accepted_answers=[],
+                verification_method="STRUCTURED_TEXT_MATCH",
+                explanation_required=False,
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            generated_question_rubric=rubric,
+            active_teaching_objective=classifier.initial_guided_objective(rubric),
+            student_input="the first numbers, starting numbers change",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.guided_student_state == "PARTIAL"
+    assert response.tutor_message == (
+        "Yes—the starting number changes. Replace it with a letter and keep "
+        "the operation that stays the same."
+    )
 
 
 def test_source_correction_keeps_the_same_active_component(
@@ -4139,7 +4275,7 @@ def test_guided_llm_repeated_stuck_requests_one_scaffold_escalation(
     )
 
     assert response.guided_student_state == "STUCK"
-    assert response.response_strategy == "SCAFFOLD"
+    assert response.response_strategy == "CLARIFY"
     assert response.student_model_events == []
     assert response.attempt_increment == 0
 
@@ -4300,7 +4436,7 @@ def test_guided_explicit_stuck_is_not_downgraded_by_semantic_confidence(
     )
 
     assert response.guided_student_state == "STUCK"
-    assert response.response_strategy == "SCAFFOLD"
+    assert response.response_strategy == "CLARIFY"
     assert response.attempt_increment == 0
 
 

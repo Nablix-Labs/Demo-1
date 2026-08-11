@@ -40,6 +40,7 @@ from app.models.guided_learning import (
     GuidedEvaluation,
     ScaffoldEvaluationContext,
     ScaffoldStepEvaluation,
+    GuidedTutorContext,
 )
 from app.models.student_model_session import AnswerSpec, QuestionType
 
@@ -324,6 +325,7 @@ class OpenAIAIEngineClient:
         deterministic_evaluation: EvaluationCategory | None,
         generated_rubric: GeneratedQuestionRubric,
         active_objective: ActiveTeachingObjective,
+        guided_tutor_context: GuidedTutorContext,
         student_response: str,
         input_source: InputSource,
         allowed_error_codes: list[dict[str, object]],
@@ -343,6 +345,7 @@ class OpenAIAIEngineClient:
                 "deterministic_evaluation": deterministic_evaluation,
                 "generated_rubric": generated_rubric.model_dump(),
                 "active_objective": active_objective.model_dump(),
+                "guided_tutor_context": guided_tutor_context.model_dump(),
                 "student_response": student_response,
                 "input_source": input_source,
                 "allowed_error_codes": allowed_error_codes,

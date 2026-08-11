@@ -542,7 +542,7 @@ async def process_answer_with_session_event(
         and _is_support_failure(tutor)
         and wrong_attempt_count >= 4
     )
-    stuck_escalation = (
+    stuck_support_request = (
         schema_managed
         and session.current_phase == "GUIDED_PRACTICE"
         and tutor.intent == "EXPRESSING_CONFUSION"
@@ -552,7 +552,7 @@ async def process_answer_with_session_event(
             >= rules.strategy_rules.stuck_scaffold_min_count
         )
     )
-    support_escalation = wrong_four_escalation or stuck_escalation
+    support_escalation = wrong_four_escalation or stuck_support_request
     if not schema_managed or (event_type is None and not support_escalation):
         return student, tutor, None, None, session
 
@@ -567,6 +567,7 @@ async def process_answer_with_session_event(
     )
     if support_escalation:
         escalation_type: Literal[
+            "GUIDED_SUPPORT_REQUESTED",
             "GUIDED_SUPPORT_ESCALATION_REQUIRED",
             "GUIDED_STUCK_SUPPORT_REQUIRED",
             "MAXIMUM_GUIDED_SUPPORT_PARALLEL",
@@ -576,8 +577,8 @@ async def process_answer_with_session_event(
             if highest_guided_support == "PARALLEL_EXAMPLE"
             else "MAXIMUM_GUIDED_SUPPORT_PARALLEL"
             if highest_guided_support == "SCAFFOLD"
-            else "GUIDED_STUCK_SUPPORT_REQUIRED"
-            if stuck_escalation and not wrong_four_escalation
+            else "GUIDED_SUPPORT_REQUESTED"
+            if stuck_support_request and not wrong_four_escalation
             else "GUIDED_SUPPORT_ESCALATION_REQUIRED"
         )
         escalation_error_code = _validated_error_code(
