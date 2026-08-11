@@ -52,7 +52,6 @@ export interface Phase3ResponseFields {
   independent_attempt_terminal?: boolean | null;
   phase3_submission_confirmed?: boolean | null;
   phase3_submission_kind?: 'CANVAS' | 'CHOICE' | null;
-  phase3_locked_question_id?: string | null;
   /** Turn-level status; CLARIFICATION_REQUIRED means the OCR was unreadable. */
   status?: string;
   question_id?: string | null;

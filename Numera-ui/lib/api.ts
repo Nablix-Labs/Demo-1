@@ -247,10 +247,9 @@ export type InteractionMode = 'VOICE' | 'TEXT';
  * originated, which today means inactivity nudges. Keeping it distinct is what
  * stops a nudge being counted as a learner interaction anywhere downstream.
  */
-export type InputSource = 'TEXT' | 'VOICE' | 'CANVAS' | 'CHOICE' | 'SYSTEM';
+export type InputSource = 'TEXT' | 'VOICE' | 'CANVAS' | 'SYSTEM';
 export type InteractionType =
   | 'ANSWER_SUBMISSION'
-  | 'CLARIFICATION_REQUEST'
   // Replay the current explanation. Neither an answer nor a help escalation:
   // the backend returns attempt_increment 0 and emits no Student Model event
   // (Phase 2 handoff, Chirudeva — Explain Again).
@@ -262,7 +261,8 @@ export type InteractionType =
   //   NUDGE_PRESENTED   — acknowledgement that one was actually shown or spoken
   | 'INACTIVITY_NUDGE'
   | 'NUDGE_PRESENTED'
-  | 'HINT_REQUEST'
+  | 'HELP_REQUEST'
+  | 'SUPPORT_REPLAY'
   | 'CANVAS_SUBMISSION'
   | 'SESSION_START'
   | 'SESSION_END';
@@ -806,9 +806,6 @@ export interface InteractionPayload {
   canvas_snapshot_id?: string;
   /** Frozen at voice-turn end so speech and board work are evaluated together. */
   canvas_state?: InteractionCanvasState;
-  selected_option_id?: string;
-  phase3_submission_confirmed?: boolean;
-  phase3_submission_kind?: 'CANVAS' | 'CHOICE';
   idle_duration_ms?: number;
   nudge_id?: string;
   current_phase: string;
@@ -830,6 +827,7 @@ export interface InteractionPayload {
  *  which visual to render. Matches the backend VisualCue model. */
 export interface VisualCue {
   show: boolean;
+  cue_id?: string | null;
   cue_type: string | null;
   description: string | null;
   /** Structured cue actions (backend adapters.py:175). Not rendered yet — Phase 2 §6. */
@@ -1132,7 +1130,7 @@ export interface CanvasSubmissionResult extends Phase3ResponseFields {
   submission_id: string;
   snapshot_reference: string;
   ocr: OcrResult;
-  tutor: TutorResult | null;
+  tutor: TutorResult;
   latency: CanvasLatency;
   /** Tutor drawing actions (e.g. mark up the student's working). The backend
    *  sends a LIST of draw actions here, unlike the WS path (one per message). */
@@ -1182,10 +1180,6 @@ export async function submitCanvas(
     student_id: student,
     snapshot_data_url: snapshotDataUrl,
     submission_role: submissionRole,
-    phase3_submission_confirmed:
-      submissionRole === 'STANDALONE_ATTEMPT' ? true : undefined,
-    phase3_submission_kind:
-      submissionRole === 'STANDALONE_ATTEMPT' ? 'CANVAS' : undefined,
   });
   return res.data;
 }

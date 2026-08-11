@@ -17,6 +17,7 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import { Stage, Layer, Line, Rect, Ellipse, Group, Text } from 'react-konva';
 import type Konva from 'konva';
+import { useShallow } from 'zustand/react/shallow';
 import { useNumeraStore, type CanvasExporter, type CanvasStrokeSnapshot, type DrawnItem } from '@/store/useNumeraStore';
 import { uid } from '@/lib/uid';
 import { setStudentWriting } from '@/lib/tutorSpeech';
@@ -58,10 +59,20 @@ export default function DrawingCanvas({ onExportReady, tutorOnly = false, readOn
   const isDrawing = useRef(false);
   const startPos = useRef<{ x: number; y: number } | null>(null);
 
+  // Shallow-selected — a bare useNumeraStore() re-rendered every Konva layer
+  // on every partial transcript while the student spoke (audit F-14), which is
+  // the worst possible place to spend main-thread time mid-stroke.
   const {
     activeTool, shapeKind, eraserMode, strokeColor, strokeWidth,
     items, remoteItems, addItem, removeItem, undo, redo,
-  } = useNumeraStore();
+  } = useNumeraStore(
+    useShallow((s) => ({
+      activeTool: s.activeTool, shapeKind: s.shapeKind, eraserMode: s.eraserMode,
+      strokeColor: s.strokeColor, strokeWidth: s.strokeWidth,
+      items: s.items, remoteItems: s.remoteItems, addItem: s.addItem,
+      removeItem: s.removeItem, undo: s.undo, redo: s.redo,
+    })),
+  );
 
   const [draft, setDraft] = useState<DrawnItem | null>(null);
   const draftRef = useRef<DrawnItem | null>(null);
