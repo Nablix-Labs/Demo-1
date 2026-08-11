@@ -46,7 +46,7 @@ def _coerce_learning_phase(value: str | None) -> LearningPhase:
 
 
 def _coerce_input_source(value: str | None) -> InputSource:
-    if value in {"TEXT", "VOICE", "CANVAS"}:
+    if value in {"TEXT", "VOICE", "CANVAS", "CHOICE"}:
         return cast(InputSource, value)
     return "TEXT"
 
@@ -126,6 +126,9 @@ class TutorEngineServiceAdapter:
                     active_teaching_objective=context.active_teaching_objective,
                     guided_teaching_state=context.guided_teaching_state,
                     scaffold_evaluation_context=context.scaffold_evaluation_context,
+                    phase3_submission_confirmed=context.phase3_submission_confirmed,
+                    phase3_submission_kind=context.phase3_submission_kind,
+                    phase3_allowed_error_definitions=context.phase3_allowed_error_definitions,
                 )
             )
             return _tutor_result_from_ai_response(ai_response)
@@ -272,6 +275,15 @@ def _tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:
         active_teaching_objective=response.active_teaching_objective,
         guided_teaching_state=response.guided_teaching_state,
         scaffold_original_answer_correct=response.scaffold_original_answer_correct,
+        independent_outcome=response.independent_outcome,
+        independent_success=response.independent_success,
+        independent_attempt_terminal=response.independent_attempt_terminal,
+        first_error_step=response.first_error_step,
+        phase3_review_evidence=(
+            response.phase3_review_evidence.model_dump()
+            if response.phase3_review_evidence is not None
+            else None
+        ),
     )
 
 

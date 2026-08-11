@@ -29,6 +29,8 @@ from app.ai_engine.schemas import (
     IntentType,
     LearningEventType,
     LearningPhase,
+    IndependentOutcome,
+    Phase3ReviewEvidence,
     ResponseStrategy,
     SafetyCheck,
     StrictSchema,
@@ -97,6 +99,9 @@ class ClassificationRequest(StrictSchema):
     active_teaching_objective: ActiveTeachingObjective | None = None
     guided_teaching_state: GuidedTeachingState | None = None
     scaffold_evaluation_context: ScaffoldEvaluationContext | None = None
+    phase3_submission_confirmed: bool | None = None
+    phase3_submission_kind: str | None = None
+    phase3_allowed_error_definitions: list[dict[str, object]] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -116,6 +121,12 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
     openai_client: OpenAIAIEngineClient | None = build_openai_ai_engine_client(settings)
     safety_check: SafetyCheck = check_student_message_safety(request.student_input, rules)
     intent: IntentType = detect_student_intent(request.student_input, rules)
+
+    if (
+        request.current_phase == "INDEPENDENT_PRACTICE"
+        and request.phase3_submission_confirmed is not None
+    ):
+        return classify_independent_practice_response(request, rules, safety_check, intent)
 
     if safety_check.passed is False:
         safety_decision = TutorDecision(
@@ -385,6 +396,105 @@ def classify_scaffold_response(
         update={
             "scaffold_original_answer_correct": original_answer_correct,
         }
+    )
+
+
+def classify_independent_practice_response(
+    request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
+    safety_check: SafetyCheck,
+    intent: IntentType,
+) -> TutorResponse:
+    """Evaluate a final independent submission without generating tutoring."""
+
+    submitted = request.phase3_submission_confirmed is True
+    kind = request.phase3_submission_kind
+    canvas_unclear = (
+        kind == "CANVAS"
+        and (
+            request.has_canvas_evidence is False
+            or any(
+                region.confidence < rules.canvas_review.min_region_confidence
+                for region in request.canvas_regions
+            )
+        )
+    )
+    evaluation = evaluate_answer_attempt(request, intent, rules) if submitted else None
+    if not submitted or kind not in {"CANVAS", "CHOICE"}:
+        outcome: IndependentOutcome = "AWAITING_SUBMISSION"
+    elif canvas_unclear or evaluation in {"UNCLEAR", "NO_ATTEMPT", None}:
+        outcome = "INPUT_UNCLEAR" if kind == "CANVAS" else "AWAITING_SUBMISSION"
+    elif evaluation == "CORRECT":
+        outcome = "INDEPENDENTLY_VERIFIED"
+    else:
+        outcome = "RESCUE_REQUIRED"
+    terminal = outcome in {"INDEPENDENTLY_VERIFIED", "RESCUE_REQUIRED"}
+    response_evaluation: EvaluationCategory | None = (
+        "CORRECT" if outcome == "INDEPENDENTLY_VERIFIED"
+        else "INCORRECT" if outcome == "RESCUE_REQUIRED"
+        else "UNCLEAR" if outcome == "INPUT_UNCLEAR"
+        else None
+    )
+    message = (
+        rules.independent_practice.answer_recorded_message
+        if outcome == "INDEPENDENTLY_VERIFIED"
+        else rules.independent_practice.rescue_required_message
+        if outcome == "RESCUE_REQUIRED"
+        else rules.independent_practice.input_unclear_message
+        if outcome == "INPUT_UNCLEAR"
+        else rules.independent_practice.awaiting_submission_message
+    )
+    first_error_step = (
+        request.canvas_regions[0].step_id
+        if outcome == "RESCUE_REQUIRED" and kind == "CANVAS" and request.canvas_regions
+        else None
+    )
+    generic_error = (
+        classify_student_error(request, response_evaluation, rules)
+        if outcome == "RESCUE_REQUIRED"
+        else None
+    )
+    return TutorResponse(
+        evaluation=response_evaluation,
+        error_type=generic_error,
+        intent="SUBMITTING_ANSWER" if submitted else intent,
+        response_strategy="CONFIRM_CORRECT" if outcome == "INDEPENDENTLY_VERIFIED" else "CLARIFY",
+        tutor_message=message,
+        tutor_message_voice_optimised="",
+        voice_optimised=True,
+        hint_level=None,
+        scaffold_steps_delivered=[],
+        visual_cue=VisualCue(show=False, cue_type=None, description=None),
+        canvas_feedback=CanvasFeedback(has_feedback=False, step_feedback=[], highlight_instruction=None),
+        mistake_classification=None,
+        annotation_intents=[],
+        next_phase_recommendation=request.current_phase,
+        answer_reveal_allowed=False,
+        confidence=rules.confidence.standard_response,
+        input_source=request.input_source,
+        transcript_confidence=request.transcript_confidence,
+        safety_check=safety_check,
+        guardrail_check=GuardrailCheck(passed=True, violation_type=None, action_taken=None),
+        student_model_events=[],
+        attempt_increment=1 if terminal else 0,
+        recommended_conversation_action="ADVANCE_TO_NEXT_QUESTION" if terminal else "WAIT_FOR_STUDENT",
+        question_completed=terminal,
+        answer_value_confirmed=outcome == "INDEPENDENTLY_VERIFIED",
+        reasoning_complete=terminal,
+        independent_outcome=outcome,
+        independent_success=(outcome == "INDEPENDENTLY_VERIFIED") if terminal else None,
+        independent_attempt_terminal=terminal,
+        first_error_step=first_error_step,
+        phase3_review_evidence=Phase3ReviewEvidence(
+            question_id=request.question_id or "",
+            submission_kind=kind if kind in {"CANVAS", "CHOICE"} else None,
+            submitted_work_present=bool(request.student_input.strip()),
+            ocr_clear=(not canvas_unclear) if kind == "CANVAS" else None,
+            evaluation=response_evaluation,
+            selected_error_code=None,
+            first_error_step=first_error_step,
+            confidence=rules.confidence.standard_response,
+        ),
     )
 
 

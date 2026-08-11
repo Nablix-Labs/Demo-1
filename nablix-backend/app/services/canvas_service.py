@@ -184,6 +184,18 @@ async def submit_canvas(
         scaffold_evaluation_context=(
             _scaffold_evaluation_context(session) if scaffold_turn else None
         ),
+        has_canvas_evidence=session.current_phase == "INDEPENDENT_PRACTICE",
+        phase3_submission_confirmed=(
+            session.current_phase == "INDEPENDENT_PRACTICE"
+            and request.submission_role != "VOICE_ATTACHMENT"
+        ),
+        phase3_submission_kind=(
+            "CANVAS"
+            if session.current_phase == "INDEPENDENT_PRACTICE"
+            and request.submission_role != "VOICE_ATTACHMENT"
+            else None
+        ),
+        phase3_allowed_error_definitions=schema_question.tutor_view.potential_errors,
     )
 
     tutor_started = perf_counter()
@@ -286,4 +298,28 @@ async def submit_canvas(
     if phase3_silent:
         response.phase3_submission_kind = "CANVAS"
         response.tutor = None
+        if tutor.evaluation == "UNCLEAR":
+            response.message = "Please rewrite your answer clearly on the canvas, then submit it again."
+            response.message_voice = ""
+            response.phase3_submission_confirmed = True
+            response.independent_outcome = "INPUT_UNCLEAR"
+            response.independent_success = None
+            response.independent_attempt_terminal = False
+            response.phase3_review_evidence = {
+                "question_id": turn_session.question_id,
+                "submission_kind": "CANVAS",
+                "submitted_work_present": bool(message.strip()),
+                "ocr_clear": False,
+                "evaluation": "UNCLEAR",
+                "selected_error_code": None,
+                "first_error_step": None,
+                "confidence": ocr.confidence,
+            }
+        else:
+            response.phase3_submission_confirmed = tutor.independent_outcome is not None
+            response.independent_outcome = tutor.independent_outcome
+            response.independent_success = tutor.independent_success
+            response.independent_attempt_terminal = tutor.independent_attempt_terminal
+            response.first_error_step = tutor.first_error_step
+            response.phase3_review_evidence = tutor.phase3_review_evidence
     return response
