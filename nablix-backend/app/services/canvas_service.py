@@ -180,6 +180,7 @@ async def submit_canvas(
         conversation_history=recent_history,
         generated_question_rubric=session.generated_question_rubric,
         active_teaching_objective=session.active_teaching_objective,
+        guided_teaching_state=session.guided_teaching_state,
         scaffold_evaluation_context=(
             _scaffold_evaluation_context(session) if scaffold_turn else None
         ),

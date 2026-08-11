@@ -149,6 +149,17 @@ export interface ApiError {
  * student gets. It says the tutor failed rather than implying the student did,
  * and it says what to do next.
  */
+/**
+ * What to say when the transcript was too unclear to answer.
+ *
+ * Not a failure — nothing broke, the words just did not come through. It has
+ * to say so in a way an eleven-year-old cannot read as their fault, and it has
+ * to ask for the one thing that helps: saying it again.
+ */
+export function transcriptUnclearMessage(): string {
+  return "I didn't quite catch that. Could you say it once more?";
+}
+
 export function voiceTurnFailedMessage(serverMessage?: string): string {
   const raw = (serverMessage ?? '').toLowerCase();
   if (/auth|token|unauthor|forbidden/.test(raw)) {

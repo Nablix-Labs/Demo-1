@@ -26,8 +26,12 @@ import { phaseAnnouncement, withTransitionVoice } from '@/lib/phaseTransition';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { tutorAudioStream, effectiveVoice } from '@/lib/tts';
+import { tutorSay } from '@/lib/tutorSpeech';
 import { buildVoiceStreamUrl, voiceStreamingEnabled, allowAnonTutorCalls } from '@/lib/runtimeConfig';
-import { ANON_ACCESS_TOKEN, studentId, voiceTurnFailedMessage, type QuestionType } from '@/lib/api';
+import {
+  ANON_ACCESS_TOKEN, studentId, voiceTurnFailedMessage, transcriptUnclearMessage,
+  type QuestionType,
+} from '@/lib/api';
 import { resetSessionStart } from '@/hooks/useDemoTutor';
 import { applyInteractionSupport, acceptResponse, type SupportPresentation } from '@/lib/interactionPresentation';
 import { TurnWatchdog } from '@/lib/turnWatchdog';
@@ -325,6 +329,29 @@ export function useWebSocket(sessionId: string | null) {
             );
             if (enteringPhase) {
               addTranscriptMessage({ role: 'ai', text: enteringPhase.text });
+            }
+            // The server could not make out what the student said.
+            //
+            // A below-threshold transcript comes back with no tutor turn behind
+            // it — the backend returns immediately without evaluating anything.
+            // Nothing here read that flag, so the reply was rendered as an
+            // ordinary turn: an empty or near-empty bubble, no audio, and a
+            // watchdog stood down because a `tutor_response` had technically
+            // arrived. The student was left in silence having been understood
+            // by nobody. Deepgram's threshold moved 0.5 -> 0.8 on 11 Aug, so
+            // this path is now reached far more often.
+            //
+            // Say so, and hand the floor straight back rather than waiting for
+            // an answer to a question the tutor never asked.
+            if (msg.needs_clarification === true) {
+              addTranscriptMessage({ role: 'ai', text: transcriptUnclearMessage() });
+              tutorSay(transcriptUnclearMessage(), {
+                onEnd: () => {
+                  useNumeraStore.getState().beginListeningTurn();
+                  sendTurnContext();
+                },
+              });
+              break;
             }
             addTranscriptMessage({ role: 'ai', text: msg.text as string });
             // applyInteractionSupport returns the line the tutor should SAY —

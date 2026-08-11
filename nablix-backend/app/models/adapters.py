@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.models.student_model_session import AnswerSpec, QuestionType
 from app.models.guided_learning import (
     ActiveTeachingObjective,
+    GuidedTeachingState,
     GeneratedQuestionRubric,
     GuidedStudentState,
     ScaffoldEvaluationContext,
@@ -119,6 +120,7 @@ class AdapterContext(BaseModel):
     conversation_state: ConversationState | None = None
     generated_question_rubric: GeneratedQuestionRubric | None = None
     active_teaching_objective: ActiveTeachingObjective | None = None
+    guided_teaching_state: GuidedTeachingState | None = None
     scaffold_evaluation_context: ScaffoldEvaluationContext | None = None
 
 
@@ -174,6 +176,7 @@ class StudentModelEvent(BaseModel):
 
 class VisualCue(BaseModel):
     show: bool = False
+    cue_id: str | None = None
     cue_type: str | None = None
     description: str | None = None
     actions: list[dict[str, object]] = Field(default_factory=list)
@@ -268,6 +271,7 @@ class TutorResult(BaseModel):
     selected_error_code: str | None = None
     generated_question_rubric: GeneratedQuestionRubric | None = None
     active_teaching_objective: ActiveTeachingObjective | None = None
+    guided_teaching_state: GuidedTeachingState | None = None
     scaffold_original_answer_correct: bool = False
 
 
