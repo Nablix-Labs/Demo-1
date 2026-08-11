@@ -10,6 +10,7 @@ from app.models.guided_learning import (
     ActiveTeachingObjective,
     GeneratedQuestionRubric,
     GuidedStudentState,
+    GuidedTeachingState,
 )
 
 
@@ -293,6 +294,7 @@ class TutorResponse(StrictSchema):
     selected_error_code: str | None = None
     generated_question_rubric: GeneratedQuestionRubric | None = None
     active_teaching_objective: ActiveTeachingObjective | None = None
+    guided_teaching_state: GuidedTeachingState | None = None
     scaffold_original_answer_correct: StrictBool = False
 
 
@@ -328,7 +330,5 @@ class OpenAIExplainAgainMessage(StrictSchema):
 class RecordedMisconception(StrictSchema):
     error_code: str
     description: str
-
-
 
 

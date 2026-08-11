@@ -24,6 +24,7 @@ from app.models.fields import (
 )
 from app.models.guided_learning import (
     ActiveTeachingObjective,
+    GuidedTeachingState,
     GeneratedQuestionRubric,
     GuidedStudentState,
     InactivityPolicy,
@@ -231,6 +232,7 @@ class SessionRecord(BaseModel):
     explanation_request_count: int = 0
     generated_question_rubric: GeneratedQuestionRubric | None = None
     active_teaching_objective: ActiveTeachingObjective | None = None
+    guided_teaching_state: GuidedTeachingState | None = None
     guided_student_state: GuidedStudentState | None = None
     selected_error_code: str | None = None
     question_completed: bool = False

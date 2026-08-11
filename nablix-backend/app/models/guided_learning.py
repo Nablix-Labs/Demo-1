@@ -5,6 +5,11 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 
 GuidedStudentState = Literal["CORRECT", "PARTIAL", "WRONG", "STUCK", "UNCLEAR"]
+GuidedPromptType = Literal[
+    "COMPONENT",
+    "OPTION_COMPARISON",
+    "SOURCE_CORRECTION",
+]
 ComponentEvidenceStatus = Literal[
     "DEMONSTRATED",
     "CONTRADICTED",
@@ -60,6 +65,23 @@ class ActiveTeachingObjective(GuidedLearningModel):
     target_concept_ids: list[str]
     confirmed_concept_ids: list[str]
     missing_concept_ids: list[str]
+
+
+class GuidedTeachingState(GuidedLearningModel):
+    """Persisted controller state for one Guided Learning question.
+
+    The LLM may interpret a learner's wording, but this state is the source of
+    truth for which sub-question is currently awaiting an answer.
+    """
+
+    question_id: str
+    objective_component_ids: list[str]
+    confirmed_component_ids: list[str]
+    missing_component_ids: list[str]
+    active_component_id: str | None
+    last_tutor_question_type: GuidedPromptType
+    selected_option_id: str | None
+    awaiting_response: StrictBool
 
 
 class ActiveScaffold(GuidedLearningModel):

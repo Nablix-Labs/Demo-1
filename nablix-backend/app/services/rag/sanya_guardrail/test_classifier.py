@@ -4,9 +4,19 @@ from dataclasses import dataclass
 
 import pytest
 
-from app.classifier import ClassificationRequest, apply_answer_reveal_guardrail, classify_student_response
-from app.classifier_config import load_classifier_rules
-from app.schemas import ErrorType, EvaluationCategory, IntentType, ResponseStrategy, TutorResponse
+from app.ai_engine.classifier import (
+    ClassificationRequest,
+    apply_answer_reveal_guardrail,
+    classify_student_response,
+)
+from app.ai_engine.classifier_config import load_classifier_rules
+from app.ai_engine.schemas import (
+    ErrorType,
+    EvaluationCategory,
+    IntentType,
+    ResponseStrategy,
+    TutorResponse,
+)
 
 
 @dataclass(frozen=True)
