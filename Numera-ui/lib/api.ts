@@ -247,9 +247,12 @@ export type InteractionMode = 'VOICE' | 'TEXT';
  * originated, which today means inactivity nudges. Keeping it distinct is what
  * stops a nudge being counted as a learner interaction anywhere downstream.
  */
-export type InputSource = 'TEXT' | 'VOICE' | 'CANVAS' | 'SYSTEM';
+export type InputSource = 'TEXT' | 'VOICE' | 'CANVAS' | 'CHOICE' | 'SYSTEM';
 export type InteractionType =
   | 'ANSWER_SUBMISSION'
+  | 'OPTION_SELECTED'
+  | 'TEACH_BACK_SUBMISSION'
+  | 'CLARIFICATION_REQUEST'
   // Replay the current explanation. Neither an answer nor a help escalation:
   // the backend returns attempt_increment 0 and emits no Student Model event
   // (Phase 2 handoff, Chirudeva — Explain Again).
@@ -799,6 +802,8 @@ export interface InteractionPayload {
   input_source: InputSource;
   /** 1–500 chars for TEXT input. */
   text_input?: string;
+  /** Authoritative option identifier selected on a choice question. */
+  selected_option_id?: string;
   /** Use for VOICE input instead of text_input. */
   voice_transcript?: string;
   transcript_confidence?: number;
@@ -806,7 +811,6 @@ export interface InteractionPayload {
   canvas_snapshot_id?: string;
   /** Frozen at voice-turn end so speech and board work are evaluated together. */
   canvas_state?: InteractionCanvasState;
-  selected_option_id?: string;
   idle_duration_ms?: number;
   nudge_id?: string;
   current_phase: string;

@@ -66,6 +66,7 @@ class InteractionRequest(BaseModel):
     interaction_type: InteractionType
     input_source: InputSource
     text_input: BoundedText | None = None
+    selected_option_id: str | None = None
     voice_transcript: str | None = None
     transcript_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     turn_id: TurnId
@@ -73,7 +74,6 @@ class InteractionRequest(BaseModel):
     transcript_final: bool | None = None
     canvas_snapshot_id: str | None = None
     canvas_state: InteractionCanvasState | None = None
-    selected_option_id: str | None = None
     current_phase: Phase
     concept_id: ConceptId
     question_id: QuestionId
@@ -98,6 +98,10 @@ class InteractionRequest(BaseModel):
             )
         if self.interaction_type == "NUDGE_PRESENTED" and self.nudge_id is None:
             raise ValueError("nudge_id is required for NUDGE_PRESENTED.")
+        if self.interaction_type == "OPTION_SELECTED" and self.selected_option_id is None:
+            raise ValueError("selected_option_id is required for OPTION_SELECTED.")
+        if self.interaction_type == "TEACH_BACK_SUBMISSION" and self.text_input is None:
+            raise ValueError("text_input is required for TEACH_BACK_SUBMISSION.")
         if self.interaction_type in system_interactions and self.previous_tutor_turn_id is None:
             raise ValueError(
                 "previous_tutor_turn_id is required for inactivity interactions."

@@ -2087,6 +2087,12 @@ async def _guided_help_response(
     message, visual_cue, scaffold_steps, conversation_action, support_level = (
         _support_presentation(event)
     )
+    # Content gaps (for example a VISUAL_CUE payload with items: []) must not
+    # break the student's session or falsely claim that support was displayed.
+    if message is None:
+        message = _contextual_nudge_message(session)
+        conversation_action = "ASK_QUESTION"
+        support_level = None
     rules = load_classifier_rules()
     for scaffold_prompt in scaffold_steps:
         _validate_scaffold_prompt(
@@ -2313,6 +2319,15 @@ def _side_channel_response(
 
 
 def _contextual_nudge_message(session: SessionRecord) -> str:
+    objective = session.active_teaching_objective
+    if objective is not None and objective.missing_concept_ids:
+        component_id = objective.missing_concept_ids[0].casefold()
+        if any(token in component_id for token in ("explanation", "reason", "why")):
+            return "I’m still here with you. What makes your answer true for every possible starting value?"
+        if any(token in component_id for token in ("changing", "variable")):
+            return "I’m still here with you. Which part can take different values?"
+        if any(token in component_id for token in ("fixed", "constant", "increment")):
+            return "I’m still here with you. Which part stays the same each time?"
     if session.current_scaffold_step_id is not None and session.scaffold_steps:
         return (
             "I'm still here with you. Look at the current step: "
@@ -2324,6 +2339,88 @@ def _contextual_nudge_message(session: SessionRecord) -> str:
             "thing you would try?"
         )
     return "I'm still here with you. Tell me what you are thinking so far."
+
+
+def _selected_option_message(session: SessionRecord, option_id: str) -> tuple[str, str]:
+    """Build a focused response for a recorded choice without grading an attempt."""
+
+    question = _schema_question(session)
+    option = next(
+        (item for item in question.student_view.options if item.option_id == option_id),
+        None,
+    )
+    if option is None:
+        raise HTTPException(status_code=422, detail="selected_option_id is not valid for the active question.")
+    answer_spec = question.tutor_view.answer_spec
+    accepted = {
+        answer.strip().casefold()
+        for answer in [answer_spec.canonical_answer, *answer_spec.accepted_answers]
+    }
+    selection = f"Selected {option.option_id}: {option.text}"
+    if option.option_id.casefold() in accepted or option.text.strip().casefold() in accepted:
+        return (
+            selection,
+            "You chose that option. Now explain why it works for every possible starting value.",
+        )
+    return (
+        selection,
+        "You chose that option. Compare it with the situation: can one fixed starting number describe every possible case?",
+    )
+
+
+def _option_selected_interaction_response(
+    request: InteractionRequest,
+    session: SessionRecord,
+) -> InteractionResponse:
+    if session.current_phase != "GUIDED_PRACTICE":
+        raise HTTPException(status_code=409, detail="OPTION_SELECTED is available only in Guided Practice.")
+    if request.selected_option_id is None:
+        raise HTTPException(status_code=422, detail="selected_option_id is required.")
+    selection, message = _selected_option_message(session, request.selected_option_id)
+    rules = load_classifier_rules()
+    updated_session = update_interaction_state(
+        request.session_id,
+        request.student_id,
+        session,
+        session.current_phase,
+        session.hint_count,
+        session.current_phase,
+        request.transcript_confidence,
+        request.canvas_snapshot_id,
+        None,
+        session.show_visual_cue,
+        session.show_scaffold_panel,
+        session.scaffold_steps,
+        {
+            "conversation_history": _updated_conversation_history(
+                session.conversation_history,
+                selection,
+                message,
+                rules.conversation_rules.max_recent_messages,
+            ),
+            **_turn_updates(request, "REQUESTED_EXPLANATION", "EXPLANATION"),
+        },
+    )
+    return _cache_response(
+        request,
+        _response_from(
+            session_id=request.session_id,
+            student_id=request.student_id,
+            turn_id=request.turn_id,
+            interaction_type=request.interaction_type,
+            nudge_id=None,
+            session=updated_session,
+            message=message,
+            message_voice=message,
+            visual_cue=None,
+            scaffold_steps=updated_session.scaffold_steps,
+            session_summary=None,
+            conversation_action="REQUEST_EXPLANATION",
+            attempt_increment=0,
+            status=None,
+            retry_safe=True,
+        ),
+    )
 
 
 def _nudge_eligible(session: SessionRecord, now: datetime) -> bool:
@@ -2747,12 +2844,20 @@ async def _process_interaction(
         )
     if request.interaction_type == "EXPLAIN_AGAIN":
         return _explain_again_interaction_response(request, session)
+    if request.interaction_type == "OPTION_SELECTED":
+        return _option_selected_interaction_response(request, session)
     if request.interaction_type == "INACTIVITY_NUDGE":
         nudge_res = _claim_inactivity_nudge(request, session)
         return nudge_res
 
     if request.interaction_type == "NUDGE_PRESENTED":
         return _acknowledge_inactivity_nudge(request, session)
+
+    # Teach-back is a real learner explanation. It follows the normal answer
+    # pipeline so it can confirm evidence or receive support; the distinct
+    # request type exists only for UI and audit semantics.
+    if request.interaction_type == "TEACH_BACK_SUBMISSION":
+        request = request.model_copy(update={"interaction_type": "ANSWER_SUBMISSION"})
 
 
     student_message = _student_message_from(request)

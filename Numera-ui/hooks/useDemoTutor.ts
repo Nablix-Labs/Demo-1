@@ -490,14 +490,6 @@ export function useDemoTutor() {
           interaction_type: 'ANSWER_SUBMISSION',
           input_source: 'TEXT',
           text_input: text,
-          // Tell the tutor WHICH option was picked, in every phase.
-          //
-          // The Phase 3 confirmation payloads that used to gate this were
-          // removed in 2950941; the gate variable went with them and left this
-          // line referring to a name that no longer exists, so main did not
-          // compile. Sending the id whenever there is one is also what row 23
-          // asks for — without it the tutor sees the option's text and has no
-          // idea which choice it corresponds to.
           selected_option_id: state.selectedOptionId ?? undefined,
           current_phase: state.currentPhase,
           concept_id: ctx.concept_id,
@@ -1010,6 +1002,69 @@ export function useDemoTutor() {
     [sessionId, canvasExporter, addTranscriptMessage, addTrailEntry]
   );
 
+  const selectOption = useCallback(async (optionId: string, optionText: string): Promise<void> => {
+    const state = useNumeraStore.getState();
+    if (!apiEnabled() || !sessionId || !state.activeQuestionId) return;
+    const turnId = state.beginSubmissionTurn();
+    const selection = `Selected ${optionId}: ${optionText}`;
+    addTranscriptMessage({ role: 'student', text: selection });
+    addTrailEntry({ kind: 'answer', text: selection, meta: 'option selected' });
+    try {
+      const res = await sendSynchronizedInteraction({
+        session_id: sessionId,
+        student_id: studentId(),
+        interaction_type: 'OPTION_SELECTED',
+        input_source: 'CHOICE',
+        selected_option_id: optionId,
+        current_phase: state.currentPhase,
+        concept_id: state.activeConceptId,
+        question_id: state.activeQuestionId,
+        hint_count: state.lastHintText ? 1 : 0,
+        turn_id: turnId,
+        previous_tutor_turn_id: state.lastTutorTurnId,
+      });
+      if (!acceptResponse(res)) return;
+      syncBackendSession(res);
+      addTranscriptMessage({ role: 'ai', text: res.message });
+      addTrailEntry({ kind: 'tutor', text: res.message, meta: 'option selected' });
+      tutorSay(res.message);
+    } catch (err) {
+      reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage, '/interaction (option selected)');
+    }
+  }, [sessionId, addTranscriptMessage, addTrailEntry]);
+
+  const submitTeachBack = useCallback(async (text: string): Promise<boolean> => {
+    const state = useNumeraStore.getState();
+    if (!apiEnabled() || !sessionId || !state.activeQuestionId || !text.trim()) return false;
+    const turnId = state.beginSubmissionTurn();
+    addTranscriptMessage({ role: 'student', text });
+    addTrailEntry({ kind: 'answer', text, meta: 'teach back' });
+    try {
+      const res = await sendSynchronizedInteraction({
+        session_id: sessionId,
+        student_id: studentId(),
+        interaction_type: 'TEACH_BACK_SUBMISSION',
+        input_source: 'TEXT',
+        text_input: text,
+        current_phase: state.currentPhase,
+        concept_id: state.activeConceptId,
+        question_id: state.activeQuestionId,
+        hint_count: state.lastHintText ? 1 : 0,
+        turn_id: turnId,
+        previous_tutor_turn_id: state.lastTutorTurnId,
+      });
+      if (!acceptResponse(res)) return false;
+      syncBackendSession(res);
+      addTranscriptMessage({ role: 'ai', text: res.message });
+      addTrailEntry({ kind: 'tutor', text: res.message, meta: 'teach back feedback' });
+      tutorSay(applyInteractionSupport(res));
+      return true;
+    } catch (err) {
+      reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage, '/interaction (teach back)');
+      return false;
+    }
+  }, [sessionId, addTranscriptMessage, addTrailEntry]);
+
   /**
    * End the session and capture its summary + engine review for the Review
    * screen.
@@ -1041,6 +1096,8 @@ export function useDemoTutor() {
     answer,
     submitCanvasWork,
     submitVoiceTurn,
+    selectOption,
+    submitTeachBack,
     hint,
     explainAgain,
     explainAgainPending,
