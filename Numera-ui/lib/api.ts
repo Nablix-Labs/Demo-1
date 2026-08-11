@@ -170,6 +170,12 @@ export function studentFacingError(err: unknown): string | null {
   if (code === 'JOURNEY_VERSION_CONFLICT') {
     return 'Two submissions arrived together. Your work is safe—please press Check once more.';
   }
+  if (
+    res?.status === 409
+    && backendMessage === 'Independent Practice answers require explicit submission confirmation.'
+  ) {
+    return 'Your answer wasn’t submitted because the practice submission was missing the required confirmation. Your work is still saved. Please try again; if it continues, refresh the page and resubmit.';
+  }
   if (res?.status === 409) {
     // Not every 409 is the resume case. On 2026-07-29 a guided-practice turn
     // came back 409 "Student Model did not return metadata for
