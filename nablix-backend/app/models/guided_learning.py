@@ -82,6 +82,8 @@ class GuidedTeachingState(GuidedLearningModel):
     last_tutor_question_type: GuidedPromptType
     selected_option_id: str | None
     awaiting_response: StrictBool
+    active_step_id: str | None = None
+    teaching_step_ids: list[str] = Field(default_factory=list)
 
 
 class ActiveScaffold(GuidedLearningModel):
