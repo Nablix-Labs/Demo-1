@@ -174,3 +174,28 @@ export function isTokenValid(token: string | null | undefined): boolean {
   if (!claims?.exp) return false;
   return claims.exp * 1000 > Date.now() + 5_000; // small clock-skew margin
 }
+
+/** setTimeout stores its delay in a signed 32-bit int; anything longer fires
+ *  immediately. ~24.8 days, so a re-arm rather than a single long sleep. */
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
+/**
+ * Milliseconds until `token` stops being valid, for scheduling a re-check.
+ *
+ * Null when there is nothing to wait for: no token, or no `exp` claim to
+ * expire. 0 when it has already lapsed.
+ *
+ * Expiry is the one access change no user action announces — the token simply
+ * goes stale while the student sits on a page. Without a timer the app finds
+ * out at the next navigation, which for a student left on the lesson screen is
+ * never: "it never logs me out, even after hours" (Manjusha, 11 Aug).
+ */
+export function msUntilExpiry(token: string | null | undefined): number | null {
+  if (!token) return null;
+  const claims = decodeJwt(token);
+  if (!claims?.exp) return null;
+  // Matches isTokenValid's skew margin, so the re-check lands after the token
+  // is already considered invalid rather than a beat before.
+  const remaining = claims.exp * 1000 - 5_000 - Date.now();
+  return Math.min(Math.max(remaining, 0), MAX_TIMEOUT_MS);
+}
