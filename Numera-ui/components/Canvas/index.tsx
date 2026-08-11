@@ -12,7 +12,6 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
-import { useShallow } from 'zustand/react/shallow';
 import { useNumeraStore, type CanvasExporter } from '@/store/useNumeraStore';
 import { useAuthStore, isConsentActive } from '@/store/useAuthStore';
 import type { SchemaQuestionOption } from '@/lib/api';
@@ -37,16 +36,7 @@ const HELP_TIPS = [
 ];
 
 export default function CanvasStage() {
-  // Selected, not destructured off the whole store: a bare useNumeraStore()
-  // subscribes to every write, and the transcript writes several times a
-  // second while the student speaks — which re-rendered the entire canvas per
-  // partial transcript (audit F-14).
-  const { questionText, questionNumber, items, setCanvasExporter, canvasGrid, setCanvasGrid } = useNumeraStore(
-    useShallow((s) => ({
-      questionText: s.questionText, questionNumber: s.questionNumber, items: s.items,
-      setCanvasExporter: s.setCanvasExporter, canvasGrid: s.canvasGrid, setCanvasGrid: s.setCanvasGrid,
-    })),
-  );
+  const { questionText, questionNumber, items, setCanvasExporter, canvasGrid, setCanvasGrid } = useNumeraStore();
   const activeScaffold = useNumeraStore((s) => s.activeScaffold);
   const visualCueType = useNumeraStore((s) => s.visualCueType);
   const visualCueDescription = useNumeraStore((s) => s.visualCueDescription);
@@ -156,8 +146,7 @@ export default function CanvasStage() {
 
           150px because that button measures 131px with the app's own styles;
           the rest is the gap. If its label changes, re-measure. */}
-      <div className="absolute top-[26px] left-[34px] right-[34px] z-10">
-      <div className="flex items-start gap-3 pr-[150px]">
+      <div className="absolute top-[26px] left-[34px] right-[34px] flex items-start gap-3 z-10 pr-[150px]">
         <div className="w-[30px] h-[30px] rounded-md border border-muted-gray bg-reading-surface flex items-center justify-center text-xs font-semibold text-slate-blue flex-shrink-0">
           {questionNumber}
         </div>
@@ -189,19 +178,12 @@ export default function CanvasStage() {
           column. It was in the 234px chat panel, where a guiding question wrapped
           over four lines and read as another chat bubble (Manjusha, 2026-07-29).
           Here it sits under the question it is helping with, on the surface the
-          student is actually working on.
-
-          In FLOW beneath the question, not at a fixed offset. It used to be
-          pinned at top-[76px], which is 50px below the question strip — exactly
-          one line of it. A question that wrapped to two lines, or carried
-          multiple-choice options, was covered by the card that was supposed to
-          be helping with it (Manjusha, 10 Aug). */}
+          student is actually working on. */}
       {activeScaffold && (
-        <div className="mt-3 w-[min(560px,100%)]">
+        <div className="absolute top-[76px] left-[34px] z-10 w-[min(560px,calc(100%-68px))]">
           <ScaffoldPanel scaffold={activeScaffold} />
         </div>
       )}
-      </div>
 
       {/* §14: canvas consent missing */}
       {!canvasAllowed && (

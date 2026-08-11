@@ -32,7 +32,6 @@ def schema_visual_cue(
         if not isinstance(item, dict) or item.get("content_type") != "VISUAL_CUE":
             continue
         content_id = item.get("content_id")
-        cue_type = item.get("cue_type", item.get("visual_cue_type"))
         description = item.get("description")
         actions = item.get("actions", [])
         if not isinstance(content_id, str) or not isinstance(description, str):
@@ -43,8 +42,7 @@ def schema_visual_cue(
             raise RuntimeError("Student Model returned malformed visual cue actions.")
         return VisualCue(
             show=True,
-            cue_id=content_id,
-            cue_type=cue_type if isinstance(cue_type, str) else None,
+            cue_type=content_id,
             description=description,
             actions=actions,
         )

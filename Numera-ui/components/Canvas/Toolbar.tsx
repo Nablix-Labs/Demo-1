@@ -5,7 +5,6 @@ import {
   Pen, Pencil, Highlighter, Eraser, Ruler, Square, Circle, Triangle,
   Undo2, Redo2, CheckCircle2, Trash2, MousePointerClick, Brush, Sparkles,
 } from 'lucide-react';
-import { useShallow } from 'zustand/react/shallow';
 import { useNumeraStore, type ShapeKind, type EraserMode } from '@/store/useNumeraStore';
 import { cn } from '@/lib/cn';
 
@@ -26,26 +25,13 @@ const OPEN_MS = 420;
 const DRAG_THRESHOLD = 4; // px before a press on the head counts as a drag, not a tap
 
 export default function Toolbar({ onCheckWork }: ToolbarProps) {
-  // Shallow-selected — a bare useNumeraStore() re-rendered the toolbar on
-  // every partial transcript while the student spoke (audit F-14).
   const {
     activeTool, shapeKind, eraserMode, strokeColor, strokeWidth, items, undone,
     setActiveTool, setShapeKind, setEraserMode, setStrokeColor, setStrokeWidth,
     undo, redo, clearCanvas, clearTutorMarks,
     toolbarPos, setToolbarPos, toolbarCollapsed, toggleToolbarCollapsed,
     toolbarOrientation, setToolbarOrientation,
-  } = useNumeraStore(
-    useShallow((s) => ({
-      activeTool: s.activeTool, shapeKind: s.shapeKind, eraserMode: s.eraserMode,
-      strokeColor: s.strokeColor, strokeWidth: s.strokeWidth, items: s.items, undone: s.undone,
-      setActiveTool: s.setActiveTool, setShapeKind: s.setShapeKind, setEraserMode: s.setEraserMode,
-      setStrokeColor: s.setStrokeColor, setStrokeWidth: s.setStrokeWidth,
-      undo: s.undo, redo: s.redo, clearCanvas: s.clearCanvas, clearTutorMarks: s.clearTutorMarks,
-      toolbarPos: s.toolbarPos, setToolbarPos: s.setToolbarPos,
-      toolbarCollapsed: s.toolbarCollapsed, toggleToolbarCollapsed: s.toggleToolbarCollapsed,
-      toolbarOrientation: s.toolbarOrientation, setToolbarOrientation: s.setToolbarOrientation,
-    })),
-  );
+  } = useNumeraStore();
 
   const [menu, setMenu] = useState<'color' | 'shapes' | 'eraser' | null>(null);
   const [dragging, setDragging] = useState(false);

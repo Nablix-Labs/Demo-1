@@ -18,7 +18,7 @@ import { DEMO_CONCEPT_ID, DEMO_PHASE } from '@/lib/api';
 import { demoFor } from '@/lib/demoContent';
 import { LADDER_EXHAUSTED } from '@/lib/supportLadder';
 import QuestionDisplay from '@/components/QuestionDisplay';
-import StickyNote from '@/components/StickyNote';
+import HintNote from '@/components/HintNote';
 import PhaseGate from '@/components/PhaseGate';
 import Toolbar from '@/components/Canvas/Toolbar';
 import { cn } from '@/lib/cn';
@@ -228,7 +228,7 @@ export default function PracticePage() {
 
         {/* Hint — a sticky note left on the canvas, not another panel */}
         {mode === 'hint' && !done && hintBody && (
-          <StickyNote tone="amber" label="Gentle hint" className="absolute top-5 left-6 z-20">{hintBody}</StickyNote>
+          <HintNote className="absolute top-5 left-6 z-20">{hintBody}</HintNote>
         )}
 
         {/* Quiet/distress reassurance */}

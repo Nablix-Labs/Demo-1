@@ -45,22 +45,6 @@ describe('capturing the hint rung off a turn (§6)', () => {
 });
 
 describe('the ladder resets with the question', () => {
-  it('keeps an authorised visual cue through later scaffold turns', () => {
-    useNumeraStore.setState({
-      visualCueVisible: true,
-      visualCueType: null,
-      visualCueDescription: 'Notice which part changes and which part stays fixed.',
-    });
-
-    applyInteractionSupport(turn({ show_visual_cue: false }));
-
-    const s = useNumeraStore.getState();
-    expect(s.visualCueVisible).toBe(true);
-    expect(s.visualCueDescription).toBe(
-      'Notice which part changes and which part stays fixed.',
-    );
-  });
-
   it('drops the hint and the climbed rung when the question changes', () => {
     useNumeraStore.setState({ lastHintText: 'Hint for Q1.', supportShown: 'SCAFFOLD' });
 

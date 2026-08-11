@@ -28,11 +28,7 @@ export default function TutorTile() {
   return (
     <div
       className="relative border border-muted-gray rounded-md overflow-hidden bg-reading-surface"
-      // Capped, now that the panel is draggable. On 4/3 alone a panel widened
-      // to 480 gave the tile a 360px-tall box holding one 80px avatar, and the
-      // transcript — the thing the student widened the panel to read — got the
-      // squeeze. Past ~230px wide the extra width goes to the conversation.
-      style={{ aspectRatio: '4/3', maxHeight: 176 }}
+      style={{ aspectRatio: '4/3' }}
       aria-label="AI tutor"
     >
       <div className="absolute inset-0 flex items-center justify-center">

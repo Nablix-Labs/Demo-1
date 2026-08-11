@@ -30,45 +30,6 @@ import type { InactivityPolicy } from '@/lib/inactivity';
 // collided with the backend's cached turns from the same session.
 const nextTurnId = (): string => `TURN-${uid()}`;
 
-/**
- * Tutor panel width.
- *
- * The default is the width the panel was designed at. The minimum is where the
- * chat bubbles stop being readable; below it the panel should be collapsed, not
- * shrunk, which is what the collapse control is for.
- *
- * The maximum is a share of the window rather than a fixed number of pixels,
- * because the thing actually being protected is the canvas — a student writing
- * maths needs room whatever monitor they are on. Half the window is generous
- * and still leaves the canvas usable.
- */
-export const PANEL_WIDTH_DEFAULT = 234;
-export const PANEL_WIDTH_MIN = 200;
-const PANEL_WIDTH_MAX_FRACTION = 0.5;
-/** Fallback for SSR and tests, where there is no window to measure. */
-const PANEL_WIDTH_MAX_FALLBACK = 560;
-
-export function panelWidthMax(viewportWidth?: number): number {
-  const w = viewportWidth ?? (typeof window === 'undefined' ? undefined : window.innerWidth);
-  if (w === undefined) return PANEL_WIDTH_MAX_FALLBACK;
-  // Never below the minimum: on a narrow window the fraction alone would invert
-  // the bounds and clamp() would then throw the two ends the wrong way round.
-  return Math.max(PANEL_WIDTH_MIN, Math.round(w * PANEL_WIDTH_MAX_FRACTION));
-}
-
-/**
- * Clamped on write, not on read.
- *
- * A width dragged wide on an external monitor and restored on a laptop would
- * otherwise leave the canvas a sliver, and the student would have to go find
- * the drag handle before they could work. Rounded because a fractional width
- * makes the panel's inner text land on half-pixels and blur.
- */
-export function clampPanelWidth(px: number, viewportWidth?: number): number {
-  if (!Number.isFinite(px)) return PANEL_WIDTH_DEFAULT;
-  return Math.round(Math.min(Math.max(px, PANEL_WIDTH_MIN), panelWidthMax(viewportWidth)));
-}
-
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type SessionState =
@@ -290,20 +251,6 @@ export interface NumeraState {
   // opens the mic when both are true.
   expectsStudentResponse: boolean;
   allowVoiceInput: boolean;
-  /**
-   * The tutor's last turn failed and nothing has replaced it.
-   *
-   * A failed turn leaves `expectsStudentResponse` true — deliberately, so the
-   * student can retry — and leaves `lastTutorTurnId` pointing at the last turn
-   * that DID work. To the inactivity controller that is indistinguishable from a
-   * student who has gone quiet on a live question, so it nudges them: the tutor
-   * errors twice, the student stops, and the third bubble asks "what is the
-   * first thing you would try?" (10 Aug). They already tried. Twice.
-   *
-   * Cleared by `setTutorTurn`, which is the only place a real tutor turn is
-   * established, so recovery needs no separate signal.
-   */
-  tutorTurnFailed: boolean;
 
   // Visual cue card — supporting guidance shown when the AI Engine flags a
   // mistake. `visualCueType` is the backend cue_type (picks which card renders);
@@ -365,14 +312,6 @@ export interface NumeraState {
   // UI preferences (guided-learning layout)
   panelSide: 'left' | 'right';        // assistant panel side relative to canvas
   panelCollapsed: boolean;            // panel collapsed to a thin edge tab, giving canvas the width back
-  /**
-   * Tutor panel width in px, dragged by the student and kept across reloads.
-   *
-   * Clamped on write rather than on read: a width persisted on a wide monitor
-   * and restored on a laptop would otherwise leave the canvas a sliver, and the
-   * student would have to find the handle to get their work back.
-   */
-  panelWidth: number;
   transcriptVisible: boolean;         // transcript can be hidden
   toolbarPos: { x: number; y: number } | null; // null = default docked position
   toolbarCollapsed: boolean;          // collapsed to a small bubble
@@ -463,8 +402,6 @@ export interface NumeraState {
   /** Record the tutor's reply turn (voice contract §11): store its tutor_turn_id
    *  as the next previous_tutor_turn_id, and the backend gating for the next turn. */
   setTutorTurn: (tutorTurnId: string | null, gating: { expects: boolean; allow: boolean }) => void;
-  /** The tutor turn failed; the student is owed a reply, not a nudge. */
-  markTutorTurnFailed: () => void;
   setVisualCueVisible: (v: boolean) => void;
   setActiveScaffold: (s: ActiveScaffold | null) => void;
 
@@ -476,9 +413,7 @@ export interface NumeraState {
   /** Position within this phase's question set, for the progress rail. */
   setQuestionProgress: (index: number, total: number) => void;
   toggleVisualCue: () => void;
-  /** Returns the new message's id, so a caller can later retract it. */
-  addTranscriptMessage: (msg: Omit<TranscriptMessage, 'id' | 'timestamp'>) => string;
-  removeTranscriptMessage: (id: string) => void;
+  addTranscriptMessage: (msg: Omit<TranscriptMessage, 'id' | 'timestamp'>) => void;
   setTranscript: (msgs: Pick<TranscriptMessage, 'role' | 'text'>[]) => void;
   updatePartialTranscript: (text: string) => void;
   commitPartialTranscript: (text: string) => void;
@@ -499,10 +434,6 @@ export interface NumeraState {
   setInputMode: (m: InputMode) => void;
   setTextInput: (v: string) => void;
   setPanelSide: (s: 'left' | 'right') => void;
-  /** Drag the panel edge. Clamped — see `clampPanelWidth`. */
-  setPanelWidth: (px: number) => void;
-  /** Back to the designed width (double-click the handle). */
-  resetPanelWidth: () => void;
   togglePanelSide: () => void;
   togglePanelCollapsed: () => void;
   toggleTranscript: () => void;
@@ -543,15 +474,15 @@ export interface NumeraState {
 const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
-  | 'setQuestionText' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'markTutorTurnFailed'
+  | 'setQuestionText' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn'
   | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue'
   | 'setSupportShown' | 'setLastHintText' | 'setQuestionProgress' | 'setAppliedResponse' | 'setInactivityPolicy'
-  | 'addTranscriptMessage' | 'removeTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript' | 'commitPartialTranscript'
+  | 'addTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript' | 'commitPartialTranscript'
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
   | 'setShapeKind' | 'setEraserMode'
   | 'setStrokeColor' | 'setStrokeWidth' | 'addItem' | 'removeItem' | 'undo' | 'redo'
   | 'clearCanvas' | 'applyCanvasDraw' | 'clearTutorMarks'
-  | 'setInputMode' | 'setTextInput' | 'setPanelSide' | 'setPanelWidth' | 'resetPanelWidth' | 'togglePanelSide' | 'togglePanelCollapsed'
+  | 'setInputMode' | 'setTextInput' | 'setPanelSide' | 'togglePanelSide' | 'togglePanelCollapsed'
   | 'toggleTranscript' | 'setToolbarPos' | 'toggleToolbarCollapsed' | 'setToolbarOrientation' | 'setMicButtonPos' | 'setCanvasGrid' | 'setTtsVoice' | 'setActiveScaffold'
   | 'setCanvasExporter' | 'startGroupSession' | 'endGroupSession'
   | 'upsertParticipant' | 'removeParticipant' | 'setParticipantCursor'
@@ -600,7 +531,6 @@ const initial: Omit<
   lastTutorTurnId: null,
   expectsStudentResponse: true,
   allowVoiceInput: true,
-  tutorTurnFailed: false,
   activeScaffold: null as ActiveScaffold | null,
   visualCueVisible: false,
   visualCueType: null,
@@ -628,7 +558,6 @@ const initial: Omit<
   textInput: '',
   panelSide: 'left',
   panelCollapsed: false,
-  panelWidth: PANEL_WIDTH_DEFAULT,
   transcriptVisible: true,
   toolbarPos: null,
   toolbarCollapsed: false,
@@ -788,11 +717,7 @@ export const useNumeraStore = create<NumeraState>()(
       lastTutorTurnId: tutorTurnId,
       expectsStudentResponse: expects,
       allowVoiceInput: allow,
-      // A turn landed, so whatever failed before it is over.
-      tutorTurnFailed: false,
     }),
-
-  markTutorTurnFailed: () => set({ tutorTurnFailed: true }),
 
   setVisualCueVisible: (visualCueVisible) => set({ visualCueVisible }),
   setActiveScaffold: (activeScaffold) => set({ activeScaffold }),
@@ -807,8 +732,7 @@ export const useNumeraStore = create<NumeraState>()(
     set({ activeSlide: Math.max(0, index), totalSlides: Math.max(0, total) }),
   toggleVisualCue: () => set((s) => ({ visualCueVisible: !s.visualCueVisible })),
 
-  addTranscriptMessage: (msg) => {
-    const id = uid();
+  addTranscriptMessage: (msg) =>
     set((s) => ({
       // Anything the tutor says ends the student's turn, so the next thing they
       // say starts a new bubble instead of joining the last one. This is the
@@ -818,14 +742,9 @@ export const useNumeraStore = create<NumeraState>()(
         ...(msg.role === 'ai'
           ? s.transcript.map((m) => (m.open ? { ...m, open: false } : m))
           : s.transcript),
-        { ...msg, id, timestamp: Date.now() },
+        { ...msg, id: uid(), timestamp: Date.now() },
       ],
-    }));
-    return id;
-  },
-
-  removeTranscriptMessage: (id) =>
-    set((s) => ({ transcript: s.transcript.filter((m) => m.id !== id) })),
+    })),
 
   setTranscript: (msgs) =>
     set({
@@ -972,8 +891,6 @@ export const useNumeraStore = create<NumeraState>()(
   setInputMode: (inputMode) => set({ inputMode }),
   setTextInput: (textInput) => set({ textInput }),
 
-  setPanelWidth: (px) => set({ panelWidth: clampPanelWidth(px) }),
-  resetPanelWidth: () => set({ panelWidth: PANEL_WIDTH_DEFAULT }),
   setPanelSide: (panelSide) => set({ panelSide }),
   togglePanelSide: () => set((s) => ({ panelSide: s.panelSide === 'left' ? 'right' : 'left' })),
   togglePanelCollapsed: () => set((s) => ({ panelCollapsed: !s.panelCollapsed })),
@@ -1091,7 +1008,6 @@ export const useNumeraStore = create<NumeraState>()(
         sessionId: s.sessionId,
         panelSide: s.panelSide,
         panelCollapsed: s.panelCollapsed,
-        panelWidth: s.panelWidth,
         transcriptVisible: s.transcriptVisible,
         toolbarPos: s.toolbarPos,
         toolbarCollapsed: s.toolbarCollapsed,

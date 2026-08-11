@@ -95,43 +95,19 @@ export function useVoiceStream({ onAudio }: UseVoiceStreamOptions) {
   const transmitting = useRef(true);
 
   /**
-   * Muted by the student. Distinct from `transmitting` (turn-taking): mute is
-   * the student's own switch, turn-taking is the tutor's.
-   *
-   * Muting no longer releases the hardware. It did until 10 Aug, which meant
-   * every mute/unmute cycle paid getUserMedia + AudioContext setup again —
-   * 100-400ms of dead air in which the first syllable of the answer was never
-   * captured ("It is" graded instead of "It is 5"). A muted-then-unmuted mic
-   * now resumes on the SAME stream, instantly, the way a call app's mute does.
-   *
-   * What makes that safe to do: mute sets `track.enabled = false` at the
-   * SOURCE. The track then produces silence by spec — this is not a JS flag a
-   * refactor can forget to check, and the 2026-07-28 class of bug ("Muted" on
-   * screen while the tutor kept hearing the student) cannot come back through a
-   * desynced flag, because even a wrongly-set `transmitting` would be
-   * transmitting silence. The onaudioprocess guard below is belt and braces.
-   *
-   * The browser's mic-in-use indicator stays lit while muted. Deliberate: the
-   * indicator tells the truth (the device is held, reading silence), and a
-   * lesson is a call — releasing the device on every mute is why the first
-   * word kept going missing.
-   */
-  const muted = useRef(false);
-
-  /**
    * Bumped by every stop(). A start() that was awaiting getUserMedia compares
    * the generation it began in against this: if they differ it was cancelled
    * while waiting, and must throw away the stream it just acquired.
    *
-   * Without it the mic could go live AFTER being released — start()'s only
-   * guard was `ctxRef.current`, which isn't set until after the await, so a
-   * stop() during permission/acquisition cleared nothing and the pending
-   * start() then installed a live capture.
+   * Without it the mic could go live AFTER being muted — start()'s only guard
+   * was `ctxRef.current`, which isn't set until after the await, so a stop()
+   * during permission/acquisition cleared nothing and the pending start() then
+   * installed a live capture. The student saw "Muted" while the tutor kept
+   * hearing them and answering (reported 2026-07-28).
    */
   const generation = useRef(0);
   const starting = useRef(false);
 
-  /** Full release. Unmount and sign-out only — NOT the mute button. */
   const stop = useCallback(() => {
     generation.current += 1;
     starting.current = false;
@@ -147,17 +123,6 @@ export function useVoiceStream({ onAudio }: UseVoiceStreamOptions) {
     useMicLevel.getState().setActive(false);
   }, []);
 
-  /**
-   * The student's mute switch. Applies immediately even if start() is still
-   * awaiting the permission prompt — start() re-applies `muted.current` after
-   * acquisition, so a mute that lands mid-acquire wins.
-   */
-  const setMuted = useCallback((on: boolean) => {
-    muted.current = on;
-    streamRef.current?.getAudioTracks().forEach((t) => { t.enabled = !on; });
-    if (on) useMicLevel.getState().setLevels(new Array(MIC_BARS).fill(0));
-  }, []);
-
   /** Gate transmission without releasing the hardware (turn-taking). */
   const setTransmitting = useCallback((on: boolean) => {
     transmitting.current = on;
@@ -165,17 +130,10 @@ export function useVoiceStream({ onAudio }: UseVoiceStreamOptions) {
   }, []);
 
   const start = useCallback(async () => {
-    // Already capturing: an unmute, not an acquisition. Resume on the stream
-    // we already hold — this is the instant path that kills the dead air.
-    if (ctxRef.current) {
-      setMuted(false);
-      return;
-    }
     // `starting` is checked synchronously so two calls in the same tick can't
     // both get past the guard and open two microphones.
-    if (!supported || starting.current) return;
+    if (!supported || ctxRef.current || starting.current) return;
     starting.current = true;
-    muted.current = false;
     const myGeneration = generation.current;
 
     let stream: MediaStream;
@@ -259,15 +217,10 @@ export function useVoiceStream({ onAudio }: UseVoiceStreamOptions) {
       inRate === TARGET_RATE ? '(native, no resampling)' : '(falling back to box-average downsample)',
     );
 
-    // A mute that arrived while getUserMedia was up takes effect before the
-    // first frame can be read (see setMuted).
-    stream.getAudioTracks().forEach((t) => { t.enabled = !muted.current; });
-
     proc.onaudioprocess = (e: AudioProcessingEvent) => {
-      // Hardware stays open; mute and turn-taking only gate what is SENT.
-      // Muted frames are silence anyway (track.enabled=false at the source),
-      // but there is no reason to ship silence either.
-      if (!transmitting.current || muted.current) return;
+      // Hardware stays open; only transmission is gated (half-duplex). Frames
+      // captured while the tutor speaks are dropped here, never sent.
+      if (!transmitting.current) return;
       const input = e.inputBuffer.getChannelData(0);
       const down = downsample(input, inRate);
       onAudioRef.current(bytesToBase64(floatToPcm16(down)));
@@ -296,5 +249,5 @@ export function useVoiceStream({ onAudio }: UseVoiceStreamOptions) {
   // Clean up on unmount.
   useEffect(() => stop, [stop]);
 
-  return { active, supported, start, stop, setMuted, setTransmitting };
+  return { active, supported, start, stop, setTransmitting };
 }

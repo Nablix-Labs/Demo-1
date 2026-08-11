@@ -88,11 +88,6 @@ guided_learning:
     not treat tutor wording as student evidence. Return DEMONSTRATED only when
     the student's own response communicates the target meaning, CONTRADICTED
     only for an explicit incompatible claim, and NOT_DEMONSTRATED otherwise.
-    Respect the role assigned to every value or symbol. Mentioning an expected
-    symbol or number in the wrong role is CONTRADICTED, not DEMONSTRATED. Saying
-    a variable is fixed contradicts a component requiring that variable to
-    change; saying a constant changes contradicts a component requiring that
-    constant to remain fixed.
     Copy component_id exactly. Evidence must identify the relevant student
     wording and must never invent an answer. Return only the requested JSON.
   explain_again_system_prompt: |
@@ -194,17 +189,10 @@ intent_phrases:
   EXPRESSING_CONFUSION:
     - i don't know
     - i do not know
-    - idk
-    - i have no idea
-    - no idea
     - i do not understand
     - i don't understand
-    - what do you mean
-    - what do u mean
     - confused
     - stuck
-    - are you stupid
-    - are u stupid
   OFF_TOPIC:
     - pizza
     - play a game

@@ -90,18 +90,6 @@ class MathpixVisionOCRAdapter:
         except (ValueError, ValidationError) as error:
             raise AdapterError("mathpix_vision", f"unparseable response: {error}; body={response.text}") from error
 
-        if _error_id(payload) == "image_no_content":
-            return VisionOCRResult(
-                raw_ocr_text="",
-                detected_equation="",
-                detected_steps=[],
-                final_answer=None,
-                confidence=0.0,
-                needs_clarification=True,
-                confidence_source="ocr_native",
-                provider="mathpix",
-            )
-
         if payload.error is not None or payload.error_info is not None:
             raise AdapterError(
                 "mathpix_vision",
@@ -229,14 +217,6 @@ def _confidence_for(payload: _MathpixOCRPayload) -> float:
     if payload.confidence_rate is not None:
         return payload.confidence_rate
     return 0.0
-
-
-def _error_id(payload: _MathpixOCRPayload) -> str | None:
-    if isinstance(payload.error_info, dict):
-        identifier = payload.error_info.get("id")
-        if isinstance(identifier, str):
-            return identifier
-    return payload.error
 
 
 def _unit(value: float) -> float:

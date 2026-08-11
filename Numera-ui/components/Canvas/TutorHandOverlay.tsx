@@ -25,12 +25,11 @@
 import { useEffect, useRef } from 'react';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useTutorReveal } from '@/store/useTutorReveal';
-import { basePath } from '@/lib/runtimeConfig';
 import { tipFor } from '@/lib/tutorTip';
 
 /** Measured from the asset itself — the nib, as a fraction of the image box. */
 const HAND = {
-  src: `${basePath}/tutor/hand-write.webp`,
+  src: '/tutor/hand-write.webp',
   tip: [0.1389, 0.0944] as const,
   /** Of the live canvas height. Large enough that the forearm reaches the edge. */
   heightRatio: 0.85,

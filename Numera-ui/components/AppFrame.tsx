@@ -80,8 +80,6 @@ function ConfigError() {
 export default function AppFrame({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const panelSide = useNumeraStore((s) => s.panelSide);
-  const panelWidth = useNumeraStore((s) => s.panelWidth);
-  const panelCollapsed = useNumeraStore((s) => s.panelCollapsed);
 
   // Follow the backend's phase across the flow (no-op until a phase advances).
   usePhaseRouting();
@@ -168,12 +166,10 @@ export default function AppFrame({ children }: { children: ReactNode }) {
           whichever edge the panel is docked to. */}
       {tutoring && (
         <div
-          className="fixed bottom-5 z-50 flex items-center gap-1"
-          // Follows the panel now that its width is draggable. This was
-          // `left-[250px]`, hardcoded off the old fixed 234 — widening the
-          // panel used to slide it back underneath the composer, which is the
-          // overlap the comment above was written about in the first place.
-          style={{ left: panelSide === 'left' ? (panelCollapsed ? 28 : panelWidth) + 16 : 20 }}
+          className={cn(
+            'fixed bottom-5 z-50 flex items-center gap-1',
+            panelSide === 'left' ? 'left-[250px]' : 'left-5',
+          )}
         >
           {!isLesson && <VoicePicker />}
           <LogOutButton />
