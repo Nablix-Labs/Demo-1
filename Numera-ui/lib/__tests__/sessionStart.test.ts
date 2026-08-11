@@ -13,6 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { SessionRecord } from '@/lib/api';
 
 const startSession = vi.fn();
 const getSession = vi.fn();
@@ -24,12 +25,13 @@ vi.mock('@/lib/api', async (importOriginal) => ({
 }));
 vi.mock('@/lib/tts', () => ({ speakTutor: vi.fn() }));
 
+// Only the fields these tests read; the rest of SessionRecord is irrelevant here.
 const RECORD = {
   session_id: 'SESSION001',
   current_phase: 'DIAGNOSTIC',
   current_question: 'What does 4y mean?',
   question_id: 'Q-T02-D01',
-};
+} as unknown as SessionRecord;
 
 /** Fresh module state per test — the guard is module-level by design. */
 async function loadTutor() {
