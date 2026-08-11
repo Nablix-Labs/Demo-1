@@ -549,8 +549,13 @@ export function useDemoTutor() {
     if (canvasSubmissionInFlight.current) return null;
     canvasSubmissionInFlight.current = true;
     try {
-      const res = await submitCanvas(sessionId, canvasSnapshot.snapshotDataUrl, 'STANDALONE_ATTEMPT');
       const phase3Submission = isPhase3(useNumeraStore.getState().currentPhase);
+      const res = await submitCanvas(
+        sessionId,
+        canvasSnapshot.snapshotDataUrl,
+        'STANDALONE_ATTEMPT',
+        phase3Submission
+      );
       // Canvas responses now carry the same phase state as /interaction, so a
       // backend phase change here also drives usePhaseRouting.
       const entering = phaseAnnouncement(res, useNumeraStore.getState().currentPhase);

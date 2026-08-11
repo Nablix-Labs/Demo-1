@@ -29,6 +29,7 @@ from app.services.interaction_service import (
     _phase_2_prompt_context,
     _schema_question,
     _guided_rescue,
+    require_phase3_submission,
     _scaffold_evaluation_context,
     process_answer_with_session_event,
     _response_from,
@@ -117,6 +118,16 @@ async def submit_canvas(
     )
     schema_question = _schema_question(session)
     turn_session = session
+    if (
+        session.current_phase == "INDEPENDENT_PRACTICE"
+        and request.submission_role == "STANDALONE_ATTEMPT"
+    ):
+        require_phase3_submission(
+            session,
+            request.phase3_submission_confirmed,
+            request.phase3_submission_kind,
+            None,
+        )
 
     submission_id = request.turn_id or uuid4().hex
     snapshot_reference = build_reference(submission_id)
@@ -280,7 +291,7 @@ async def submit_canvas(
     response.snapshot_reference = snapshot_reference
     response.tutor = tutor
     response.canvas_draw = canvas_draw
-    response.ocr = ocr
+    response.ocr = None if phase3_silent else ocr
     response.latency = latency
     response.guided_rescue = _guided_rescue(schema_content_response)
     if phase3_silent:
