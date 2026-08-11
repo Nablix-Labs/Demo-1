@@ -38,11 +38,14 @@ function Options({
   selectedId,
   onSelect,
   requiresExplanation,
+  readOnly = false,
 }: {
   options: SchemaQuestionOption[];
   selectedId: string | null;
   onSelect: (option: SchemaQuestionOption) => void;
   requiresExplanation: boolean;
+  /** Shown but not changeable — a Phase 3 answer that has been accepted. */
+  readOnly?: boolean;
 }) {
   return (
     <div className="flex flex-col gap-1.5" role="radiogroup" aria-label="Answer options">
@@ -54,12 +57,17 @@ function Options({
             type="button"
             role="radio"
             aria-checked={selected}
+            disabled={readOnly}
             onClick={() => onSelect(option)}
             className={cn(
               'group flex items-center gap-2.5 rounded-lg border px-3 py-2 text-left text-[14px] transition-colors',
               selected
                 ? 'border-focus-navy bg-focus-navy/5 text-ink font-medium'
-                : 'border-muted-gray bg-white text-ink hover:bg-reading-surface',
+                : 'border-muted-gray bg-white text-ink',
+              // A locked choice still SHOWS what was picked — hiding it would
+              // erase the student's own answer from the screen — but it must
+              // not look pressable.
+              readOnly ? 'cursor-default opacity-90' : !selected && 'hover:bg-reading-surface',
             )}
           >
             <span
@@ -95,6 +103,7 @@ export default function QuestionDisplay({
   options = [],
   selectedOptionId = null,
   onSelectOption,
+  optionsReadOnly = false,
 }: {
   question: string;
   /** `lesson` is the full canvas header; `compact` is the practice header. */
@@ -104,6 +113,8 @@ export default function QuestionDisplay({
   options?: SchemaQuestionOption[];
   selectedOptionId?: string | null;
   onSelectOption?: (option: SchemaQuestionOption) => void;
+  /** Render the choices as a record of what was picked, not a chooser. */
+  optionsReadOnly?: boolean;
 }) {
   const layout = questionLayout(question);
   const equationSize = size === 'lesson' ? 'text-[22px]' : 'text-[16px]';
@@ -123,6 +134,7 @@ export default function QuestionDisplay({
       selectedId={selectedOptionId}
       onSelect={onSelectOption!}
       requiresExplanation={requiresExplanation}
+      readOnly={optionsReadOnly}
     />
   ) : null;
 
