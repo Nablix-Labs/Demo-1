@@ -697,7 +697,12 @@ export const useNumeraStore = create<NumeraState>()(
   // monotonic WITHIN a session, so a fresh session starts counting again — and
   // carrying the previous session's high-water mark forward would make every
   // reply in the new one look stale and be dropped, freezing the lesson.
-  setSessionId: (id) => set({ sessionId: id, appliedResponse: EMPTY_APPLIED }),
+  // A Phase 3 lock belongs to the session that took the attempt. Persisting it
+  // (so a refresh cannot reopen closed evidence) means it can otherwise outlive
+  // its session and freeze the FIRST question of the next one, because a lock
+  // held with no active question yet reads as locked by design.
+  setSessionId: (id) =>
+    set({ sessionId: id, appliedResponse: EMPTY_APPLIED, phase3LockedQuestionId: null }),
   setSessionState: (sessionState) => set({ sessionState }),
   setActiveSlide: (activeSlide) => set({ activeSlide }),
   setTotalSlides: (totalSlides) => set({ totalSlides }),
@@ -767,6 +772,17 @@ export const useNumeraStore = create<NumeraState>()(
               // would show the next question opening with an answer already
               // chosen.
               selectedOptionId: null,
+              // So does the working. Nothing cleared the student's ink on a
+              // question change, so the next question opened underneath the
+              // last one's solution — and since the canvas is what gets
+              // submitted, the OCR then read both (row 32, 11 Aug).
+              items: [],
+              undone: [],
+              // The tutor's marks belong to the question they annotated.
+              tutorElements: [],
+              // Ink and marks are gone, so a Phase 3 lock on the question just
+              // left has nothing to hold; keeping it would freeze the new one.
+              phase3LockedQuestionId: null,
             }
           : {}),
       };
@@ -793,6 +809,7 @@ export const useNumeraStore = create<NumeraState>()(
     sessionId: null,
     backendSession: null,
     appliedResponse: EMPTY_APPLIED,
+    phase3LockedQuestionId: null,
   }),
 
   // Mute is orthogonal to the turn phase (voice contract §12): the LISTENING/

@@ -47,9 +47,12 @@ export function applyInteractionSupport(response: SupportPresentation): string {
 
   const cue = response.visual_cue;
   const showCue = cue?.show ?? response.show_visual_cue;
-  if (typeof showCue === 'boolean') {
+  // False means no new cue was served on this turn. Keep the cue already
+  // authorised for the active question while its scaffold is open;
+  // applyBackendPhase clears it when the question or phase changes.
+  if (showCue === true) {
     useNumeraStore.getState().setVisualCue({
-      show: showCue,
+      show: true,
       cueType: cue?.cue_type ?? null,
       description: cue?.description ?? null,
     });

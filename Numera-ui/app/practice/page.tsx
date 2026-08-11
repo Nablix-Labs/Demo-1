@@ -46,6 +46,10 @@ export default function PracticePage() {
   const currentPhase = useNumeraStore((s) => s.currentPhase);
   const activeQuestionId = useNumeraStore((s) => s.activeQuestionId);
   const phase3LockedQuestionId = useNumeraStore((s) => s.phase3LockedQuestionId);
+  const questionType = useNumeraStore((s) => s.questionType);
+  const questionOptions = useNumeraStore((s) => s.questionOptions);
+  const selectedOptionId = useNumeraStore((s) => s.selectedOptionId);
+  const setSelectedOption = useNumeraStore((s) => s.setSelectedOption);
   const lockPhase3Attempt = useNumeraStore((s) => s.lockPhase3Attempt);
   const { goStage } = useFlowNav();
   const tutor = useDemoTutor();
@@ -96,13 +100,19 @@ export default function PracticePage() {
   const { submitVoiceTurn } = tutor;
   const onTurnEnd = useCallback(
     (transcript: string, confidence?: number) => {
+      // §3.2: "Voice remains available only for accessibility or clarification;
+      // it must not create an independent-answer submission." A spoken answer
+      // here would be evidence the student never confirmed, evaluated against a
+      // transcript they could not see — so in Phase 3 the turn is simply not
+      // sent. The canvas (or an approved choice) is the only answer channel.
+      if (silent) return;
       void submitVoiceTurn(
         transcript,
         { concept_id: DEMO_CONCEPT_ID, current_phase: PHASE, hint_count: 0 },
         confidence
       );
     },
-    [submitVoiceTurn, PHASE]
+    [submitVoiceTurn, PHASE, silent]
   );
   const voice = useVoiceTurn({ onTurnEnd });
 
@@ -251,7 +261,21 @@ export default function PracticePage() {
           ) : !QUESTION ? (
             <div className="text-[16px] font-semibold text-ink">Loading question…</div>
           ) : (
-            <QuestionDisplay question={QUESTION} size="compact" />
+            /* Row 24: a choice question arrived in Phase 3 with nowhere to
+               choose — the options were in the store and simply never
+               rendered here, so the student could only write on the canvas.
+               §3.2 allows exactly two answer channels: canvas work and an
+               approved choice. Picks stop being accepted once the attempt is
+               locked (§3.3, "lock student ink and choice controls"). */
+            <QuestionDisplay
+              question={QUESTION}
+              size="compact"
+              questionType={questionType}
+              options={questionOptions}
+              selectedOptionId={selectedOptionId}
+              onSelectOption={(o) => { if (!locked) setSelectedOption(o.option_id); }}
+              optionsReadOnly={locked}
+            />
           )}
         </div>
         <div className="ml-auto flex items-center gap-2">

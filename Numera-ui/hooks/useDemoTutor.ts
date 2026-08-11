@@ -38,7 +38,6 @@ import { applyInteractionSupport, acceptResponse } from '@/lib/interactionPresen
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { tutorSay, setStudentWriting } from '@/lib/tutorSpeech';
 import { phaseAnnouncement, withTransitionVoice } from '@/lib/phaseTransition';
-import { isPhase3 } from '@/lib/phase3';
 import { speakBrowser } from '@/lib/tts';
 import type { SupportRung } from '@/lib/supportLadder';
 import type { NudgeClaimResult } from '@/hooks/useInactivityNudge';
@@ -485,12 +484,11 @@ export function useDemoTutor() {
       const turnId = useNumeraStore.getState().beginSubmissionTurn();
       try {
         const state = useNumeraStore.getState();
-        const phase3Choice = isPhase3(state.currentPhase) && state.selectedOptionId !== null;
         const res = await sendSynchronizedInteraction({
           session_id: sessionId,
           student_id: studentId(),
           interaction_type: 'ANSWER_SUBMISSION',
-          input_source: phase3Choice ? 'CHOICE' : 'TEXT',
+          input_source: 'TEXT',
           text_input: text,
           selected_option_id: phase3Choice ? state.selectedOptionId ?? undefined : undefined,
           current_phase: state.currentPhase,
@@ -548,7 +546,6 @@ export function useDemoTutor() {
     canvasSubmissionInFlight.current = true;
     try {
       const res = await submitCanvas(sessionId, canvasSnapshot.snapshotDataUrl, 'STANDALONE_ATTEMPT');
-      const phase3Submission = isPhase3(useNumeraStore.getState().currentPhase);
       // Canvas responses now carry the same phase state as /interaction, so a
       // backend phase change here also drives usePhaseRouting.
       const entering = phaseAnnouncement(res, useNumeraStore.getState().currentPhase);
@@ -558,12 +555,6 @@ export function useDemoTutor() {
           current_question: res.current_question ?? null,
           question_id: res.question_id ?? null,
         });
-      }
-      if (phase3Submission) {
-        if (res.phase3_locked_question_id) {
-          useNumeraStore.getState().lockPhase3Attempt(res.phase3_locked_question_id);
-        }
-        return res;
       }
       addTrailEntry({
         kind: 'canvas',
@@ -576,7 +567,6 @@ export function useDemoTutor() {
         addTranscriptMessage({ role: 'ai', text: entering.text });
         addTrailEntry({ kind: 'tutor', text: entering.text, meta: 'phase change' });
       }
-      if (res.tutor === null) return res;
       addTranscriptMessage({ role: 'ai', text: res.tutor.tutor_message });
       addTrailEntry({
         kind: 'tutor',
@@ -893,11 +883,7 @@ export function useDemoTutor() {
         const interactionReq = {
           session_id: sessionId,
           student_id: studentId(),
-          interaction_type: (
-            isPhase3(state.currentPhase)
-              ? 'CLARIFICATION_REQUEST'
-              : 'ANSWER_SUBMISSION'
-          ) as const,
+          interaction_type: 'ANSWER_SUBMISSION' as const,
           input_source: 'VOICE' as const,
           voice_transcript: transcript,
           transcript_confidence: confidence,
