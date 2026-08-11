@@ -7,6 +7,13 @@ from app.services.snapshot_store import get_snapshot, store_snapshot
 
 
 _pool: asyncpg.Pool | None = None
+_PSYCOPG_SCHEME = "postgresql+psycopg://"
+
+
+def _normalize_database_url(database_url: str) -> str:
+    if database_url.startswith(_PSYCOPG_SCHEME):
+        return "postgresql://" + database_url[len(_PSYCOPG_SCHEME) :]
+    return database_url
 
 
 def _decode_state(value: object) -> dict[str, object]:
@@ -35,7 +42,9 @@ async def open_session_store(database_url: str) -> dict[str, SessionRecord]:
         raise RuntimeError("NABLIX_DATABASE_URL is required for session persistence.")
 
     global _pool
-    _pool = await asyncpg.create_pool(database_url, min_size=1, max_size=5)
+    _pool = await asyncpg.create_pool(
+        _normalize_database_url(database_url), min_size=1, max_size=5
+    )
     rows = await _pool.fetch("SELECT session_id, state FROM sessions")
     return {row["session_id"]: _restore_session(row) for row in rows}
 
