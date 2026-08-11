@@ -438,32 +438,8 @@ def test_mathpix_adapter_raises_adapter_error_on_http_error(monkeypatch) -> None
         asyncio.run(_mathpix_adapter().recognize(DATA_URL))
 
 
-def test_mathpix_adapter_maps_empty_content_to_clarification(monkeypatch) -> None:
-    _patch_mathpix_post(
-        monkeypatch,
-        _FakeResponse(
-            200,
-            {
-                "error": "Content not found",
-                "error_info": {
-                    "id": "image_no_content",
-                    "message": "Content not found",
-                },
-            },
-        ),
-    )
-
-    result = asyncio.run(_mathpix_adapter().recognize(DATA_URL))
-
-    assert result.raw_ocr_text == ""
-    assert result.detected_steps == []
-    assert result.confidence == 0.0
-    assert result.needs_clarification is True
-    assert result.provider == "mathpix"
-
-
-def test_mathpix_adapter_preserves_other_mathpix_errors(monkeypatch) -> None:
-    _patch_mathpix_post(monkeypatch, _FakeResponse(200, {"error": "conversion_error"}))
+def test_mathpix_adapter_raises_adapter_error_on_mathpix_error(monkeypatch) -> None:
+    _patch_mathpix_post(monkeypatch, _FakeResponse(200, {"error": "image_no_content"}))
 
     with pytest.raises(AdapterError):
         asyncio.run(_mathpix_adapter().recognize(DATA_URL))

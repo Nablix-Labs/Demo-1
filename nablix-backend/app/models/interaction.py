@@ -73,6 +73,9 @@ class InteractionRequest(BaseModel):
     transcript_final: bool | None = None
     canvas_snapshot_id: str | None = None
     canvas_state: InteractionCanvasState | None = None
+    selected_option_id: str | None = None
+    phase3_submission_confirmed: bool | None = None
+    phase3_submission_kind: Literal["CANVAS", "CHOICE"] | None = None
     current_phase: Phase
     concept_id: ConceptId
     question_id: QuestionId
@@ -101,6 +104,10 @@ class InteractionRequest(BaseModel):
             raise ValueError(
                 "previous_tutor_turn_id is required for inactivity interactions."
             )
+        if self.interaction_type == "CLARIFICATION_REQUEST" and self.input_source != "VOICE":
+            raise ValueError("CLARIFICATION_REQUEST is only valid for VOICE input.")
+        if self.input_source == "CHOICE" and self.selected_option_id is None:
+            raise ValueError("selected_option_id is required for CHOICE input.")
         return self
 
 
@@ -187,6 +194,13 @@ class InteractionResponse(BaseModel):
     is_canvas_solution_correct: bool | None = None
     advance_to_next_question: bool = False
     feedback_type: Literal["PRAISE", "HINT", "CORRECTION", "CLARIFICATION"] | None = None
+    phase3_submission_confirmed: bool | None = None
+    phase3_submission_kind: Literal["CANVAS", "CHOICE"] | None = None
+    independent_outcome: Literal["CORRECT", "INCORRECT"] | None = None
+    independent_success: bool | None = None
+    independent_attempt_terminal: bool | None = None
+    phase3_locked_question_id: str | None = None
+    first_error_step: str | None = None
 
 
 class StaleTurnResponse(BaseModel):

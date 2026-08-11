@@ -251,6 +251,8 @@ def test_canvas_initializes_recommended_phase_before_answer(
         json={
             "session_id": session_id,
             "student_id": "ST013",
+            "phase3_submission_confirmed": True,
+            "phase3_submission_kind": "CANVAS",
             "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
         },
     )
@@ -367,6 +369,8 @@ def test_canvas_repairs_in_progress_question_before_building_answer_context(
         json={
             "session_id": session_id,
             "student_id": student_id,
+            "phase3_submission_confirmed": True,
+            "phase3_submission_kind": "CANVAS",
             "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
         },
     )
@@ -908,6 +912,8 @@ def test_canvas_final_independent_attempt_is_recorded_before_review(
         json={
             "session_id": session_id,
             "student_id": "ST024",
+            "phase3_submission_confirmed": True,
+            "phase3_submission_kind": "CANVAS",
             "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
         },
     )

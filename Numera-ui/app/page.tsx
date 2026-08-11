@@ -235,20 +235,12 @@ export default function LessonPage() {
   // SENT (setTransmitting below), so echo suppression is unchanged but the
   // first word is no longer eaten.
   const { supported: captureSupported, start: startCapture, stop: stopCapture } = capture;
-  const muteCapture = voiceStream.setMuted;
   const captureOn = VOICE_TRANSPORT === 'server' ? !micMuted : listening;
   useEffect(() => {
     if (!apiEnabled || !sessionId || !captureSupported) return;
     if (captureOn) void startCapture();
-    // The two transports mute differently on purpose. Web Speech (REST) has to
-    // stop its recogniser — that is the API. The server path used to release
-    // the hardware here too, so every unmute paid getUserMedia + AudioContext
-    // again: 100-400ms of dead air, the missing first syllable of each answer
-    // (audit F-10). It now mutes at the track (silence by spec, device held)
-    // and the next unmute resumes on the same stream instantly.
-    else if (VOICE_TRANSPORT === 'server') muteCapture(true);
     else stopCapture();
-  }, [apiEnabled, sessionId, captureOn, captureSupported, startCapture, stopCapture, muteCapture]);
+  }, [apiEnabled, sessionId, captureOn, captureSupported, startCapture, stopCapture]);
 
   const { setTransmitting } = voiceStream;
   useEffect(() => {

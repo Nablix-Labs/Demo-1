@@ -41,8 +41,9 @@ class Settings(BaseSettings):
     use_mock_student_model: bool = False
     use_mock_voice: bool = True
     use_mock_vision: bool = True
-    # The Student Model supports dedicated Wrong-4 and repeated-STUCK events.
-    student_model_atomic_guided_events_enabled: bool = True
+    # Keep disabled until the deployed Student Model supports the dedicated
+    # Wrong-4 and repeated-STUCK events. The legacy event path remains active.
+    student_model_atomic_guided_events_enabled: bool = False
 
     #Vision OCR (used when use_mock_vision is False)
     ocr_provider: Literal["openai", "mathpix"] = "openai"

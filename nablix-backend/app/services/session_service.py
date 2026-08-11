@@ -1495,7 +1495,7 @@ async def record_canvas_submission(
                     else None
                 ),
                 input_source="CANVAS",
-                hint_level_used=record.tutor.hint_level or 0,
+                hint_level_used=record.tutor.hint_level,
                 attempted_at=record.submitted_at,
             ),
         ]

@@ -85,7 +85,8 @@ InteractionType = Literal[
     "HELP_REQUEST",
     "SUPPORT_REPLAY",
     "CLARIFICATION",
+    "CLARIFICATION_REQUEST",
     "SESSION_START",
     "SESSION_END",
 ]
-InputSource = Literal["TEXT", "VOICE", "CANVAS", "SYSTEM"]
+InputSource = Literal["TEXT", "VOICE", "CANVAS", "CHOICE", "SYSTEM"]
