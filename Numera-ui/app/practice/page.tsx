@@ -95,19 +95,13 @@ export default function PracticePage() {
   const { submitVoiceTurn } = tutor;
   const onTurnEnd = useCallback(
     (transcript: string, confidence?: number) => {
-      // §3.2: "Voice remains available only for accessibility or clarification;
-      // it must not create an independent-answer submission." A spoken answer
-      // here would be evidence the student never confirmed, evaluated against a
-      // transcript they could not see — so in Phase 3 the turn is simply not
-      // sent. The canvas (or an approved choice) is the only answer channel.
-      if (silent) return;
       void submitVoiceTurn(
         transcript,
         { concept_id: DEMO_CONCEPT_ID, current_phase: PHASE, hint_count: 0 },
         confidence
       );
     },
-    [submitVoiceTurn, PHASE, silent]
+    [submitVoiceTurn, PHASE]
   );
   const voice = useVoiceTurn({ onTurnEnd });
 

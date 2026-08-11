@@ -209,7 +209,8 @@ async def submit_canvas(
             update={"next_phase_recommendation": student_result.recommended_entry_phase}
         )
     tutor_latency_ms = (perf_counter() - tutor_started) * 1000
-    canvas_draw = plan_canvas_draw(tutor, canvas_regions)
+    phase3_silent = turn_session.current_phase == "INDEPENDENT_PRACTICE"
+    canvas_draw = [] if phase3_silent else plan_canvas_draw(tutor, canvas_regions)
 
     latency = CanvasLatency(
         ocr_latency_ms=ocr_latency_ms,
@@ -281,4 +282,8 @@ async def submit_canvas(
     response.canvas_draw = canvas_draw
     response.ocr = ocr
     response.latency = latency
+    response.guided_rescue = _guided_rescue(schema_content_response)
+    if phase3_silent:
+        response.phase3_submission_kind = "CANVAS"
+        response.tutor = None
     return response

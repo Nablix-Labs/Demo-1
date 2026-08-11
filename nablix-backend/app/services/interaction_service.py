@@ -1758,6 +1758,21 @@ def _response_from(
         if interaction_type in {"INACTIVITY_NUDGE", "NUDGE_PRESENTED"}
         else None
     )
+    phase3_attempt = None
+    if stored_event is not None:
+        phase3 = stored_event.journey_state.phase_3_independent_practice
+        phase3_attempt = getattr(phase3, "last_terminal_attempt", None)
+    phase3_silent = session.current_phase == "INDEPENDENT_PRACTICE"
+    if phase3_silent and phase3_attempt is not None:
+        outcome = phase3_attempt.get("outcome")
+        message = (
+            "Answer recorded."
+            if outcome == "CORRECT"
+            else "We'll review this one before a fresh independent check."
+        )
+        message_voice = ""
+        visual_cue = None
+        scaffold_steps = []
     return InteractionResponse(
         session_id=session_id,
         student_id=student_id,
@@ -1786,10 +1801,10 @@ def _response_from(
         message=message,
         message_voice=message_voice,
         show_canvas=session.show_canvas,
-        show_hint_button=session.show_hint_button,
-        show_visual_cue=session.show_visual_cue,
+        show_hint_button=False if phase3_silent else session.show_hint_button,
+        show_visual_cue=False if phase3_silent else session.show_visual_cue,
         visual_cue=visual_cue,
-        show_scaffold_panel=session.show_scaffold_panel,
+        show_scaffold_panel=False if phase3_silent else session.show_scaffold_panel,
         scaffold_id=session.scaffold_id,
         current_scaffold_step_id=session.current_scaffold_step_id,
         scaffold_step_number=session.scaffold_step_number,
@@ -1807,24 +1822,39 @@ def _response_from(
         session_summary=session_summary,
         student_model_event=session.student_model_event,
         student_model_state=session.student_model_state,
-        active_teaching_objective=active_objective,
+        active_teaching_objective=None if phase3_silent else active_objective,
         first_unresolved_concept_id=(
             active_objective.missing_concept_ids[0]
             if active_objective is not None
             and active_objective.missing_concept_ids
             else None
         ),
-        active_support_level=active_support_level,
-        highest_support_used=highest_support_used,
+        active_support_level="NONE" if phase3_silent else active_support_level,
+        highest_support_used="NONE" if phase3_silent else highest_support_used,
         consecutive_stuck_count=session.stuck_count,
         wrong_attempt_count=session.wrong_attempt_count,
         intervention_triggered=session.wrong_attempt_count >= 4,
         routing_reason_code=(
             stored_event.routing.reason_code if stored_event is not None else None
         ),
-        active_scaffold=_active_scaffold(session),
+        active_scaffold=None if phase3_silent else _active_scaffold(session),
         inactivity_policy=inactivity_policy(),
         nudge_delivery=nudge_delivery,
+        phase3_submission_confirmed=phase3_attempt is not None if phase3_silent else None,
+        independent_outcome=(phase3_attempt.get("outcome") if phase3_attempt else None),
+        independent_success=(
+            phase3_attempt.get("outcome") == "CORRECT" if phase3_attempt else None
+        ),
+        independent_attempt_terminal=phase3_attempt is not None if phase3_silent else None,
+        phase3_locked_question_id=(
+            phase3_attempt.get("question_id") if phase3_attempt else None
+        ),
+        selected_error_code=(
+            None if phase3_silent else session.selected_error_code
+        ),
+        first_error_step=(
+            phase3_attempt.get("first_error_step") if phase3_attempt else None
+        ),
     )
 
 
@@ -2606,6 +2636,41 @@ async def _process_interaction(
         return duplicate_response
     if _turn_is_stale(request, session):
         return _stale_turn_response(session)
+
+    if session.current_phase == "INDEPENDENT_PRACTICE":
+        if request.interaction_type == "CLARIFICATION_REQUEST":
+            response = _response_from(
+                session_id=request.session_id,
+                student_id=request.student_id,
+                turn_id=request.turn_id or "TURN-0000",
+                interaction_type=request.interaction_type,
+                nudge_id=None,
+                session=session,
+                message="Please use the canvas or an approved choice to record your answer.",
+                message_voice="",
+                visual_cue=None,
+                scaffold_steps=[],
+                session_summary=None,
+                conversation_action="REQUEST_CLARIFICATION",
+                attempt_increment=0,
+                status="CLARIFICATION_REQUIRED",
+                retry_safe=True,
+            )
+            return _cache_response(request, response)
+        if request.interaction_type in {"HELP_REQUEST", "SUPPORT_REPLAY", "EXPLAIN_AGAIN"}:
+            raise HTTPException(status_code=409, detail="Teaching support is unavailable during Independent Practice.")
+        if request.interaction_type == "ANSWER_SUBMISSION":
+            if request.phase3_submission_confirmed is not True:
+                raise HTTPException(status_code=409, detail="Independent Practice answers require explicit submission confirmation.")
+            if request.input_source == "VOICE":
+                raise HTTPException(status_code=409, detail="Voice cannot submit an Independent Practice answer.")
+            if request.input_source != "CHOICE":
+                raise HTTPException(
+                    status_code=409,
+                    detail="Independent Practice answers must use Canvas or Choice.",
+                )
+            if request.input_source == "CHOICE" and request.phase3_submission_kind != "CHOICE":
+                raise HTTPException(status_code=409, detail="Choice submissions must declare the CHOICE kind.")
 
     if request.interaction_type == "HELP_REQUEST" or _is_explicit_help_request(request):
         return await _guided_help_response(request, session, access_token)

@@ -247,9 +247,10 @@ export type InteractionMode = 'VOICE' | 'TEXT';
  * originated, which today means inactivity nudges. Keeping it distinct is what
  * stops a nudge being counted as a learner interaction anywhere downstream.
  */
-export type InputSource = 'TEXT' | 'VOICE' | 'CANVAS' | 'SYSTEM';
+export type InputSource = 'TEXT' | 'VOICE' | 'CANVAS' | 'CHOICE' | 'SYSTEM';
 export type InteractionType =
   | 'ANSWER_SUBMISSION'
+  | 'CLARIFICATION_REQUEST'
   // Replay the current explanation. Neither an answer nor a help escalation:
   // the backend returns attempt_increment 0 and emits no Student Model event
   // (Phase 2 handoff, Chirudeva — Explain Again).
@@ -805,6 +806,9 @@ export interface InteractionPayload {
   canvas_snapshot_id?: string;
   /** Frozen at voice-turn end so speech and board work are evaluated together. */
   canvas_state?: InteractionCanvasState;
+  selected_option_id?: string;
+  phase3_submission_confirmed?: boolean;
+  phase3_submission_kind?: 'CANVAS' | 'CHOICE';
   idle_duration_ms?: number;
   nudge_id?: string;
   current_phase: string;
@@ -1128,7 +1132,7 @@ export interface CanvasSubmissionResult extends Phase3ResponseFields {
   submission_id: string;
   snapshot_reference: string;
   ocr: OcrResult;
-  tutor: TutorResult;
+  tutor: TutorResult | null;
   latency: CanvasLatency;
   /** Tutor drawing actions (e.g. mark up the student's working). The backend
    *  sends a LIST of draw actions here, unlike the WS path (one per message). */
