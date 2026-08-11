@@ -45,6 +45,7 @@ from app.models.guided_learning import (
     GeneratedConcept,
     GeneratedQuestionRubric,
     GuidedEvaluation,
+    GuidedTeachingState,
     ScaffoldEvaluationContext,
     ScaffoldStepEvaluation,
 )
@@ -303,6 +304,7 @@ def test_wrong_choice_comparison_does_not_treat_yes_as_progress() -> None:
         ],
         "yes",
         objective,
+        None,
     )
 
     assert follow_up is not None
@@ -329,11 +331,137 @@ def test_wrong_choice_comparison_accepts_a_negative_correction_without_completio
         ],
         "it's false",
         objective,
+        None,
     )
 
     assert follow_up is not None
     assert follow_up.student_state == "PARTIAL"
     assert "cannot describe every case" in follow_up.tutor_message
+
+
+def test_copied_numeric_example_is_repaired_before_the_general_rule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _NoEvaluationClient:
+        def evaluate_guided_turn(self, **kwargs: object) -> GuidedEvaluation:
+            raise AssertionError("copied source data must be repaired before LLM evaluation")
+
+    rubric = GeneratedQuestionRubric(
+        question_id="CT-T01-P3",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="GENERAL_RULE",
+                description="States the general rule.",
+                required=True,
+            )
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="copied-example",
+        prompt_version="1.0.0",
+    )
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _NoEvaluationClient(),
+    )
+
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="CT-T01-P3",
+            question_type="SHORT_RESPONSE",
+            question="3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number.",
+            correct_answer="n + 5",
+            answer_spec=AnswerSpec(
+                answer_spec_id="ANS-CT-T01-P3",
+                canonical_answer="n + 5",
+                accepted_answers=[],
+                verification_method="STRUCTURED_TEXT_MATCH",
+                explanation_required=False,
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            generated_question_rubric=rubric,
+            active_teaching_objective=classifier.initial_guided_objective(rubric),
+            student_input="3 + 5, 9 + 5, 14 + 4, so the added number changes",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.guided_student_state == "WRONG"
+    assert "14 + 5, not 14 + 4" in response.tutor_message
+    assert response.guided_teaching_state is not None
+    assert response.guided_teaching_state.last_tutor_question_type == "SOURCE_CORRECTION"
+
+
+def test_source_correction_keeps_the_same_active_component(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _NoEvaluationClient:
+        def evaluate_guided_turn(self, **kwargs: object) -> GuidedEvaluation:
+            raise AssertionError("the explicit source correction has a deterministic response")
+
+    rubric = GeneratedQuestionRubric(
+        question_id="CT-T01-P3",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="GENERAL_RULE",
+                description="States the general rule.",
+                required=True,
+            )
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="source-follow-up",
+        prompt_version="1.0.0",
+    )
+    objective = classifier.initial_guided_objective(rubric)
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _NoEvaluationClient(),
+    )
+
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="CT-T01-P3",
+            question_type="SHORT_RESPONSE",
+            question="3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number.",
+            correct_answer="n + 5",
+            answer_spec=AnswerSpec(
+                answer_spec_id="ANS-CT-T01-P3",
+                canonical_answer="n + 5",
+                accepted_answers=[],
+                verification_method="STRUCTURED_TEXT_MATCH",
+                explanation_required=False,
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            generated_question_rubric=rubric,
+            active_teaching_objective=objective,
+            guided_teaching_state=GuidedTeachingState(
+                question_id="CT-T01-P3",
+                objective_component_ids=["GENERAL_RULE"],
+                confirmed_component_ids=[],
+                missing_component_ids=["GENERAL_RULE"],
+                active_component_id="GENERAL_RULE",
+                last_tutor_question_type="SOURCE_CORRECTION",
+                selected_option_id=None,
+                awaiting_response=True,
+            ),
+            student_input="5",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.guided_student_state == "PARTIAL"
+    assert "What general rule represents this situation?" in response.tutor_message
+    assert response.guided_teaching_state is not None
+    assert response.guided_teaching_state.active_component_id == "GENERAL_RULE"
 
 
 def test_reversed_fixed_component_is_not_praised_as_correct() -> None:
@@ -3144,7 +3272,7 @@ def test_guided_partial_without_confirmed_concepts_becomes_safe_unclear(
     assert response.question_completed is False
     assert response.tutor_message == (
         "I couldn’t connect that response to the question. "
-        "What else does the question ask you to state?"
+        "State the remaining idea in your own words."
     )
 
 
@@ -4109,7 +4237,7 @@ def test_guided_exact_notation_stuck_uses_question_aware_llm_message(
     assert response.guided_student_state == "STUCK"
     assert response.tutor_message == (
         "That’s okay—we’ll take it one part at a time. "
-        "What else does the question ask you to state?"
+        "State the remaining idea in your own words."
     )
     assert "x" not in response.tutor_message
     assert response.attempt_increment == 0

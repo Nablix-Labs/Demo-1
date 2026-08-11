@@ -2398,6 +2398,17 @@ def _option_selected_interaction_response(
                 message,
                 rules.conversation_rules.max_recent_messages,
             ),
+            "guided_teaching_state": (
+                session.guided_teaching_state.model_copy(
+                    update={
+                        "selected_option_id": request.selected_option_id,
+                        "last_tutor_question_type": "OPTION_COMPARISON",
+                        "awaiting_response": True,
+                    }
+                )
+                if session.guided_teaching_state is not None
+                else None
+            ),
             **_turn_updates(request, "REQUESTED_EXPLANATION", "EXPLANATION"),
         },
     )
@@ -2532,15 +2543,6 @@ def _acknowledge_inactivity_nudge(
             status_code=409,
             detail="UNKNOWN_NUDGE: nudge_id does not name the pending generated nudge.",
         )
-    rules = load_classifier_rules()
-    history = [
-        *session.conversation_history,
-        ConversationMessage(role="assistant", content=session.pending_nudge_message),
-    ]
-    if rules.conversation_rules.max_recent_messages == 0:
-        history = []
-    else:
-        history = history[-rules.conversation_rules.max_recent_messages :]
     return _nudge_response(
         request,
         session,
@@ -2550,7 +2552,6 @@ def _acknowledge_inactivity_nudge(
             "nudge_presented_count": session.nudge_presented_count + 1,
             "pending_nudge_id": None,
             "pending_nudge_message": None,
-            "conversation_history": history,
         },
     )
 
@@ -3095,6 +3096,7 @@ async def _process_interaction(
         conversation_state=_conversation_state_from_session(session),
         generated_question_rubric=session.generated_question_rubric,
         active_teaching_objective=session.active_teaching_objective,
+        guided_teaching_state=session.guided_teaching_state,
         scaffold_evaluation_context=(
             _scaffold_evaluation_context(session)
             if scaffold_turn
@@ -3386,6 +3388,11 @@ async def _process_interaction(
             if tutor.guided_student_state is not None
             else session.active_teaching_objective
         ),
+        "guided_teaching_state": (
+            tutor.guided_teaching_state
+            if tutor.guided_student_state is not None
+            else session.guided_teaching_state
+        ),
         "recommended_entry_phase": recommended,
         "stuck_count": (
             session.stuck_count + 1
@@ -3426,6 +3433,7 @@ async def _process_interaction(
         state_updates["selected_error_code"] = None
         state_updates["generated_question_rubric"] = None
         state_updates["active_teaching_objective"] = None
+        state_updates["guided_teaching_state"] = None
         state_updates["explanation_request_count"] = 0
 
     # Never turn repeated unresolved reasoning into a correct completion during

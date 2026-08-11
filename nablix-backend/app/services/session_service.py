@@ -783,6 +783,7 @@ def _apply_schema_event(
                 "question_completed": next_question_id is None,
                 "generated_question_rubric": None,
                 "active_teaching_objective": None,
+                "guided_teaching_state": None,
                 "guided_student_state": None,
                 "selected_error_code": None,
                 "wrong_attempt_count": 0,
