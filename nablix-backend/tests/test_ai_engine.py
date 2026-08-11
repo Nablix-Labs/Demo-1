@@ -4144,6 +4144,17 @@ def test_guided_rubric_uses_only_the_compact_specialized_prompt(
     assert "You are Numera" not in str(messages)
 
 
+def test_focused_component_schema_requires_the_requested_component_id() -> None:
+    schema = openai_client.focused_component_evidence_schema(
+        "CONCEPT-NUMERIC_CASE"
+    )
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    component_id = properties["component_id"]
+    assert isinstance(component_id, dict)
+    assert component_id["enum"] == ["CONCEPT-NUMERIC_CASE"]
+
+
 def test_guided_learning_supports_every_authored_answer_verification_method() -> None:
     rules = classifier.load_classifier_rules()
 

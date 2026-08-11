@@ -47,6 +47,23 @@ from app.models.student_model_session import AnswerSpec, QuestionType
 _OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 
 
+def focused_component_evidence_schema(
+    component_id: str,
+) -> dict[str, object]:
+    """Constrain structured output to the component being adjudicated."""
+    schema: dict[str, object] = FocusedComponentEvidence.model_json_schema()
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        raise ValueError("Focused component evidence schema has no properties.")
+    component_property = properties.get("component_id")
+    if not isinstance(component_property, dict):
+        raise ValueError(
+            "Focused component evidence schema has no component_id property."
+        )
+    component_property["enum"] = [component_id]
+    return schema
+
+
 def build_explain_again_initial_payload(
     request: ExplainAgainRequest,
     prompt_version: str,
@@ -343,7 +360,9 @@ class OpenAIAIEngineClient:
     ) -> FocusedComponentEvidence:
         content = self._request_guided_json(
             name="guided_component_adjudication",
-            schema=FocusedComponentEvidence.model_json_schema(),
+            schema=focused_component_evidence_schema(
+                target_component.concept_id
+            ),
             system_prompt=system_prompt,
             user_payload={
                 "question_type": question_type,
