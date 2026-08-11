@@ -28,9 +28,8 @@ from app.services.interaction_service import (
     _initialize_restored_schema_phase,
     _phase_2_prompt_context,
     _schema_question,
-    _schema_support_steps,
-    _schema_visual_cue,
     _guided_rescue,
+    require_phase3_submission,
     _scaffold_evaluation_context,
     process_answer_with_session_event,
     _response_from,
@@ -118,7 +117,17 @@ async def submit_canvas(
         access_token,
     )
     schema_question = _schema_question(session)
-    previous_session = session
+    turn_session = session
+    if (
+        session.current_phase == "INDEPENDENT_PRACTICE"
+        and request.submission_role == "STANDALONE_ATTEMPT"
+    ):
+        require_phase3_submission(
+            session,
+            request.phase3_submission_confirmed,
+            request.phase3_submission_kind,
+            None,
+        )
 
     submission_id = request.turn_id or uuid4().hex
     snapshot_reference = build_reference(submission_id)
@@ -211,7 +220,8 @@ async def submit_canvas(
             update={"next_phase_recommendation": student_result.recommended_entry_phase}
         )
     tutor_latency_ms = (perf_counter() - tutor_started) * 1000
-    canvas_draw = plan_canvas_draw(tutor, canvas_regions)
+    phase3_silent = turn_session.current_phase == "INDEPENDENT_PRACTICE"
+    canvas_draw = [] if phase3_silent else plan_canvas_draw(tutor, canvas_regions)
 
     latency = CanvasLatency(
         ocr_latency_ms=ocr_latency_ms,
@@ -246,11 +256,12 @@ async def submit_canvas(
             request.session_id,
             request.student_id,
             updated_session,
+            turn_session,
             record,
             updated_history,
             student_result,
         )
-    phase_changed = updated_session.current_phase != previous_session.current_phase
+    phase_changed = updated_session.current_phase != turn_session.current_phase
     status_to_return = (
         "processed"
         if request.submission_role == "VOICE_ATTACHMENT"
@@ -258,8 +269,6 @@ async def submit_canvas(
         if tutor.evaluation == "UNCLEAR"
         else "processed"
     )
-    schema_visual_cue = _schema_visual_cue(schema_content_response)
-    schema_scaffold_steps = _schema_support_steps(schema_content_response)
     response = _response_from(
         session_id=request.session_id,
         student_id=request.student_id,
@@ -269,27 +278,23 @@ async def submit_canvas(
         session=updated_session,
         message=tutor.tutor_message,
         message_voice=tutor.tutor_message_voice,
-        visual_cue=(
-            schema_visual_cue
-            or (tutor.visual_cue if tutor.visual_cue.show else None)
-        ),
-        scaffold_steps=(schema_scaffold_steps or tutor.scaffold_steps_delivered),
+        visual_cue=tutor.visual_cue if tutor.visual_cue.show else None,
+        scaffold_steps=tutor.scaffold_steps_delivered,
         session_summary=None,
         conversation_action=tutor.recommended_conversation_action,
         attempt_increment=tutor.attempt_increment,
         status=status_to_return,
         retry_safe=None,
-        previous_phase=previous_session.current_phase if phase_changed else None,
+        previous_phase=turn_session.current_phase if phase_changed else None,
     )
     response.submission_id = submission_id
     response.snapshot_reference = snapshot_reference
     response.tutor = tutor
     response.canvas_draw = canvas_draw
-    response.ocr = ocr
+    response.ocr = None if phase3_silent else ocr
     response.latency = latency
-    rescue = _guided_rescue(schema_content_response)
-    if rescue is not None:
-        response.guided_rescue = rescue
-        response.support_served_this_turn = rescue.rescue_type
-        response.active_support_level = rescue.rescue_type
+    response.guided_rescue = _guided_rescue(schema_content_response)
+    if phase3_silent:
+        response.phase3_submission_kind = "CANVAS"
+        response.tutor = None
     return response

@@ -9,7 +9,6 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Users, Copy, Check, LogOut, Sparkles, X, LayoutGrid, User } from 'lucide-react';
-import { useShallow } from 'zustand/react/shallow';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useChallenge } from '@/hooks/useChallenge';
 import PrivateCanvas from '@/components/Challenge/PrivateCanvas';
@@ -28,14 +27,7 @@ export default function ChallengePage() {
   const {
     challengeActive, challengeProblem, participants,
     privateFeedback, startChallenge, endChallenge, setPrivateFeedback,
-  } = useNumeraStore(
-    useShallow((s) => ({
-      challengeActive: s.challengeActive, challengeProblem: s.challengeProblem,
-      participants: s.participants, privateFeedback: s.privateFeedback,
-      startChallenge: s.startChallenge, endChallenge: s.endChallenge,
-      setPrivateFeedback: s.setPrivateFeedback,
-    })),
-  );
+  } = useNumeraStore();
 
   const [copied, setCopied] = useState(false);
   const [teacherView, setTeacherView] = useState(false);

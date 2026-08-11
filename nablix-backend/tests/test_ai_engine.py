@@ -2642,8 +2642,7 @@ def test_guided_evaluator_retries_answer_revealing_wording(monkeypatch) -> None:
 
     assert response.guided_student_state == "PARTIAL"
     assert response.tutor_message == (
-        "Good—let’s focus on the remaining part. "
-        "What do the letters represent when the expression is expanded?"
+        "You identified multiplication. What do the two letters represent?"
     )
     assert feedback[0] is None
     assert feedback[1] is not None
@@ -2734,7 +2733,6 @@ def test_guided_answer_reveal_fallback_names_the_missing_explanation(
     assert evaluation_calls > 1
     assert response.guided_student_state == "PARTIAL"
     assert response.tutor_message == (
-        "Good—let’s focus on the remaining part. "
         "You have given the answer. Now explain why it is true in this situation."
     )
     assert response.active_teaching_objective is not None
@@ -3023,8 +3021,8 @@ def test_guided_partial_without_confirmed_concepts_becomes_safe_unclear(
     assert response.attempt_increment == 0
     assert response.question_completed is False
     assert response.tutor_message == (
-        "I couldn’t connect that response to the question. "
-        "What else does the question ask you to state?"
+        "I want to make sure I understood that. "
+        "Please explain the part that is still unresolved."
     )
 
 
@@ -3988,8 +3986,7 @@ def test_guided_exact_notation_stuck_uses_question_aware_llm_message(
 
     assert response.guided_student_state == "STUCK"
     assert response.tutor_message == (
-        "That’s okay—we’ll take it one part at a time. "
-        "What else does the question ask you to state?"
+        "Let’s make it smaller. Which letter is repeated?"
     )
     assert "x" not in response.tutor_message
     assert response.attempt_increment == 0

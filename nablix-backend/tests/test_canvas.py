@@ -251,6 +251,8 @@ def test_canvas_initializes_recommended_phase_before_answer(
         json={
             "session_id": session_id,
             "student_id": "ST013",
+            "phase3_submission_confirmed": True,
+            "phase3_submission_kind": "CANVAS",
             "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
         },
     )
@@ -367,6 +369,8 @@ def test_canvas_repairs_in_progress_question_before_building_answer_context(
         json={
             "session_id": session_id,
             "student_id": student_id,
+            "phase3_submission_confirmed": True,
+            "phase3_submission_kind": "CANVAS",
             "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
         },
     )
@@ -844,6 +848,92 @@ def test_canvas_correct_same_phase_routes_next_question(
     assert stored.attempt_count == 0
     assert stored.question_completed is False
     assert stored.question_number == 1
+
+
+def test_canvas_final_independent_attempt_is_recorded_before_review(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def send_session_event(
+        adapter: StudentModelServiceAdapter,
+        event: StudentModelSessionEvent,
+        access_token: str,
+    ) -> StudentModelSessionEventResponse:
+        del adapter, access_token
+        body = (
+            _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+            if event.event_type == "SESSION_OPENED"
+            else _session_opened_response("REVIEW")
+        )
+        body["request_id"] = event.request_id
+        return StudentModelSessionEventResponse.model_validate(body)
+
+    async def correct_pipeline(
+        context: AdapterContext,
+    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
+        del context
+        student = StudentModelResult(
+            mastery_status="MASTERED",
+            continuity_status="on_track",
+            recommended_entry_phase="REVIEW",
+            hint_dependency_score=0.0,
+            intervention_required=False,
+        )
+        tutor = TutorResult(
+            evaluation="CORRECT",
+            error_type="NONE",
+            intent="SUBMITTING_ANSWER",
+            response_strategy="CONFIRM_CORRECT",
+            tutor_message="Correct.",
+            tutor_message_voice="Correct.",
+            voice_optimised=True,
+            hint_level=0,
+            answer_reveal_allowed=False,
+            confidence=0.95,
+            input_source="CANVAS",
+            attempt_increment=1,
+            recommended_conversation_action="ADVANCE_TO_NEXT_QUESTION",
+            question_completed=True,
+            answer_value_confirmed=True,
+            reasoning_complete=True,
+        )
+        return RAGResult(documents=[], retrieval_confidence=0.0), student, tutor
+
+    monkeypatch.setattr(
+        StudentModelServiceAdapter,
+        "send_session_event",
+        send_session_event,
+    )
+    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", correct_pipeline)
+    session_id = _start_session("ST024")
+    before = session_service._get_owned_session(session_id, "ST024")
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST024",
+            "phase3_submission_confirmed": True,
+            "phase3_submission_kind": "CANVAS",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["current_phase"] == "REVIEW"
+    assert body["question_id"] is None
+    assert body["current_question"] is None
+    assert body["phase_changed"] is True
+
+    stored = session_service._get_owned_session(session_id, "ST024")
+    assert len(stored.canvas_submissions) == 1
+    assert len(stored.per_question_history) == 1
+    attempt = stored.per_question_history[0]
+    assert attempt.question_id == before.question_id
+    assert attempt.question_text == before.current_question
+    assert attempt.phase == "INDEPENDENT_PRACTICE"
+    assert attempt.evaluation == "CORRECT"
+    assert attempt.input_source == "CANVAS"
 
 
 def test_unified_voice_canvas_validation_advances_for_complete_correct_work() -> None:

@@ -104,6 +104,8 @@ class CanvasSubmitRequest(BaseModel):
     session_id: SessionId
     student_id: StudentId
     turn_id: TurnId | None = None
+    phase3_submission_confirmed: bool | None = None
+    phase3_submission_kind: Literal["CANVAS", "CHOICE"] | None = None
     snapshot_data_url: SnapshotDataUrl
     strokes: list[CanvasStroke] = Field(default_factory=list)
     # Optional spoken transcript to grade alongside the canvas (VAD turn). Omitted by

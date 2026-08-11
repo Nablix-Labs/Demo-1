@@ -10,6 +10,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import type { LearningPhase } from '@/lib/phases';
 import type { FlowStage } from '@/lib/flow';
 import { TOPICS } from '@/lib/topics';
+import { isPhase3 } from '@/lib/phase3';
 import {
   DEMO_CONCEPT_ID,
   studentViewFor,
@@ -328,6 +329,24 @@ export interface NumeraState {
   // has been removed from the backend. Both reset when the question changes.
   supportShown: SupportRung | null;
   lastHintText: string | null;
+  /**
+   * The question whose Phase 3 attempt has been accepted and locked.
+   *
+   * Keyed by question id, not a flag: the lock must survive a reconnect and a
+   * duplicate reply (replaying it changes nothing) and must lift for a rescue
+   * question by virtue of its different id — Phase 3 spec §3.3/§3.4.
+   */
+  phase3LockedQuestionId: string | null;
+  /**
+   * A tutor line that has been shown but not yet spoken.
+   *
+   * Set when one screen hands the student to another: the phase-entry line
+   * belongs to the screen being ENTERED, so the departing screen cannot speak
+   * it — starting speech on a route that is unmounting is how this codebase
+   * previously ended up with two tutor voices at once. The arriving screen
+   * claims it, speaks it, and clears it.
+   */
+  pendingTutorSpeech: string | null;
 
   // Ordering guard for interaction responses (Phase 2 handoff item 2). Holds the
   // highest interaction_state_version applied and the accepted_turn_ids already
@@ -473,6 +492,11 @@ export interface NumeraState {
   setAppliedResponse: (a: AppliedState) => void;
   setInactivityPolicy: (p: InactivityPolicy | null) => void;
   setLastHintText: (text: string | null) => void;
+  lockPhase3Attempt: (questionId: string | null) => void;
+  /** Queue a line for the next screen to speak. */
+  setPendingTutorSpeech: (text: string | null) => void;
+  /** Take the queued line, clearing it — so two mounts cannot speak it twice. */
+  claimPendingTutorSpeech: () => string | null;
   /** Position within this phase's question set, for the progress rail. */
   setQuestionProgress: (index: number, total: number) => void;
   toggleVisualCue: () => void;
@@ -545,7 +569,8 @@ const initial: Omit<
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
   | 'setQuestionText' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'markTutorTurnFailed'
   | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue'
-  | 'setSupportShown' | 'setLastHintText' | 'setQuestionProgress' | 'setAppliedResponse' | 'setInactivityPolicy'
+  | 'setSupportShown' | 'setLastHintText' | 'lockPhase3Attempt'
+  | 'setPendingTutorSpeech' | 'claimPendingTutorSpeech' | 'setQuestionProgress' | 'setAppliedResponse' | 'setInactivityPolicy'
   | 'addTranscriptMessage' | 'removeTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript' | 'commitPartialTranscript'
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
   | 'setShapeKind' | 'setEraserMode'
@@ -607,6 +632,8 @@ const initial: Omit<
   visualCueDescription: null,
   supportShown: null as SupportRung | null,
   lastHintText: null as string | null,
+  phase3LockedQuestionId: null as string | null,
+  pendingTutorSpeech: null as string | null,
   appliedResponse: EMPTY_APPLIED,
   inactivityPolicy: null as InactivityPolicy | null,
   // Empty. This used to seed a three-message demo conversation about
@@ -663,7 +690,7 @@ const initial: Omit<
 
 export const useNumeraStore = create<NumeraState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
   ...initial,
 
   // Opening a session resets the ordering guard. interaction_state_version is
@@ -807,6 +834,20 @@ export const useNumeraStore = create<NumeraState>()(
   setAppliedResponse: (appliedResponse) => set({ appliedResponse }),
   setInactivityPolicy: (inactivityPolicy) => set({ inactivityPolicy }),
   setLastHintText: (lastHintText) => set({ lastHintText }),
+
+  // Idempotent by construction: locking the same question twice is the same
+  // state, which is what makes a duplicate reply harmless.
+  lockPhase3Attempt: (phase3LockedQuestionId) => set({ phase3LockedQuestionId }),
+
+  setPendingTutorSpeech: (pendingTutorSpeech) => set({ pendingTutorSpeech }),
+
+  // Claim-and-clear in one call: React mounts effects twice in development, and
+  // a read-then-clear pair would speak the line twice before the clear landed.
+  claimPendingTutorSpeech: () => {
+    const { pendingTutorSpeech } = get();
+    if (pendingTutorSpeech !== null) set({ pendingTutorSpeech: null });
+    return pendingTutorSpeech;
+  },
   setQuestionProgress: (index, total) =>
     set({ activeSlide: Math.max(0, index), totalSlides: Math.max(0, total) }),
   toggleVisualCue: () => set((s) => ({ visualCueVisible: !s.visualCueVisible })),
@@ -944,6 +985,12 @@ export const useNumeraStore = create<NumeraState>()(
 
   applyCanvasDraw: (payload) =>
     set((s) => {
+      // Phase 3 spec §3.2/§1.5: no tutor ink or correction overlays during an
+      // independent attempt, and no canvas_draw built from Phase 3 metadata.
+      // Refused HERE rather than hidden at the render, so a drawing the backend
+      // still sends never enters the tutor layer at all — hiding it would leave
+      // it waiting to appear the moment the phase changed.
+      if (isPhase3(s.currentPhase)) return {};
       // The WS path delivers one action per message; REST responses deliver a
       // list of actions. Accept both here so no caller has to care.
       const actions = Array.isArray(payload) ? payload : [payload];
@@ -1093,6 +1140,11 @@ export const useNumeraStore = create<NumeraState>()(
       // from that, rather than leaving the lesson wedged.
       partialize: (s) => ({
         sessionId: s.sessionId,
+        // Phase 3 spec §3.3: "Keep the locked state through reconnect." The
+        // canvas and transcript are deliberately per-session below, but an
+        // accepted independent attempt must NOT come back editable after a
+        // refresh — that would let a student reopen closed evidence.
+        phase3LockedQuestionId: s.phase3LockedQuestionId,
         panelSide: s.panelSide,
         panelCollapsed: s.panelCollapsed,
         panelWidth: s.panelWidth,

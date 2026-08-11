@@ -17,7 +17,6 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import { Stage, Layer, Line, Rect, Ellipse, Group, Text } from 'react-konva';
 import type Konva from 'konva';
-import { useShallow } from 'zustand/react/shallow';
 import { useNumeraStore, type CanvasExporter, type CanvasStrokeSnapshot, type DrawnItem } from '@/store/useNumeraStore';
 import { uid } from '@/lib/uid';
 import { setStudentWriting } from '@/lib/tutorSpeech';
@@ -42,27 +41,27 @@ interface DrawingCanvasProps {
    * middle of the tutor's demonstration.
    */
   tutorOnly?: boolean;
+  /**
+   * The student's work is frozen: they cannot draw, but everything they wrote
+   * stays on screen. Distinct from `tutorOnly`, which also HIDES student ink —
+   * here the ink is the point. Phase 3 locks an accepted independent answer
+   * this way, so the student sees what was submitted and cannot revise it
+   * after the fact.
+   */
+  readOnly?: boolean;
 }
 
-export default function DrawingCanvas({ onExportReady, tutorOnly = false }: DrawingCanvasProps) {
+export default function DrawingCanvas({ onExportReady, tutorOnly = false, readOnly = false }: DrawingCanvasProps) {
+  // Both mean "this student cannot draw"; they differ only in whose ink shows.
+  const inputBlocked = tutorOnly || readOnly;
   const stageRef = useRef<Konva.Stage>(null);
   const isDrawing = useRef(false);
   const startPos = useRef<{ x: number; y: number } | null>(null);
 
-  // Shallow-selected — a bare useNumeraStore() re-rendered every Konva layer
-  // on every partial transcript while the student spoke (audit F-14), which is
-  // the worst possible place to spend main-thread time mid-stroke.
   const {
     activeTool, shapeKind, eraserMode, strokeColor, strokeWidth,
     items, remoteItems, addItem, removeItem, undo, redo,
-  } = useNumeraStore(
-    useShallow((s) => ({
-      activeTool: s.activeTool, shapeKind: s.shapeKind, eraserMode: s.eraserMode,
-      strokeColor: s.strokeColor, strokeWidth: s.strokeWidth,
-      items: s.items, remoteItems: s.remoteItems, addItem: s.addItem,
-      removeItem: s.removeItem, undo: s.undo, redo: s.redo,
-    })),
-  );
+  } = useNumeraStore();
 
   const [draft, setDraft] = useState<DrawnItem | null>(null);
   const draftRef = useRef<DrawnItem | null>(null);
@@ -77,7 +76,7 @@ export default function DrawingCanvas({ onExportReady, tutorOnly = false }: Draw
     setDraft(item);
   }, []);
 
-  const objectErase = !tutorOnly && activeTool === 'eraser' && eraserMode === 'object';
+  const objectErase = !inputBlocked && activeTool === 'eraser' && eraserMode === 'object';
 
   // ── Resize observer ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -126,7 +125,7 @@ export default function DrawingCanvas({ onExportReady, tutorOnly = false }: Draw
   // ── Pointer handlers ─────────────────────────────────────────────────────────
   const handleDown = useCallback(
     (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
-      if (tutorOnly) return; // tutor-only canvas — the student can't draw
+      if (inputBlocked) return; // tutor-only canvas, or a locked Phase 3 answer
       // Object-eraser deletes via clicking a shape, not by drawing.
       if (activeTool === 'eraser' && eraserMode === 'object') return;
       const pos = e.target.getStage()?.getPointerPosition();
@@ -167,7 +166,7 @@ export default function DrawingCanvas({ onExportReady, tutorOnly = false }: Draw
         }
       }
     },
-    [tutorOnly, activeTool, eraserMode, shapeKind, strokeColor, strokeWidth, setDraftItem]
+    [inputBlocked, activeTool, eraserMode, shapeKind, strokeColor, strokeWidth, setDraftItem]
   );
 
   const handleMove = useCallback(
@@ -302,7 +301,7 @@ export default function DrawingCanvas({ onExportReady, tutorOnly = false }: Draw
   };
 
   const cursor =
-    tutorOnly ? 'default'
+    inputBlocked ? 'default'
     : activeTool === 'eraser' ? (eraserMode === 'object' ? 'pointer' : 'cell')
     : (activeTool === 'pen' || activeTool === 'pencil' || activeTool === 'highlighter') ? 'crosshair'
     : 'copy';

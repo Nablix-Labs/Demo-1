@@ -68,31 +68,3 @@ describe('partial transcript handling', () => {
     expect(transcript().filter((m) => m.role === 'student')).toHaveLength(3);
   });
 });
-
-describe('retracting a message', () => {
-  beforeEach(() => useNumeraStore.setState({ transcript: [] }));
-
-  it('addTranscriptMessage hands back the id of the bubble it created', () => {
-    const s = useNumeraStore.getState();
-    const id = s.addTranscriptMessage({ role: 'ai', text: 'Something went wrong.' });
-    expect(transcript()[0].id).toBe(id);
-  });
-
-  it('removes exactly the retracted bubble — the rescue-then-late-reply case', () => {
-    // 10 Aug: the tutor replied ~53s after the student stopped, AFTER the
-    // rescue had already apologised. The apology must come out; nothing else.
-    const s = useNumeraStore.getState();
-    s.addTranscriptMessage({ role: 'student', text: 'n plus four' });
-    const apology = s.addTranscriptMessage({ role: 'ai', text: 'Something went wrong on my side.' });
-    s.removeTranscriptMessage(apology);
-    s.addTranscriptMessage({ role: 'ai', text: 'Nice work!' });
-    expect(transcript().map((m) => m.text)).toEqual(['n plus four', 'Nice work!']);
-  });
-
-  it('removing an id that is not there leaves the transcript alone', () => {
-    const s = useNumeraStore.getState();
-    s.addTranscriptMessage({ role: 'ai', text: 'Go on.' });
-    s.removeTranscriptMessage('no-such-id');
-    expect(transcript()).toHaveLength(1);
-  });
-});

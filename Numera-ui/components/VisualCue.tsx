@@ -16,6 +16,7 @@
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { useNumeraStore } from '@/store/useNumeraStore';
+import { isPhase3 } from '@/lib/phase3';
 import { resolveCueCard } from '@/lib/visualCueCards';
 import { cn } from '@/lib/cn';
 import StickyNote from '@/components/StickyNote';
@@ -26,6 +27,7 @@ export default function VisualCue() {
   const cueType = useNumeraStore((s) => s.visualCueType);
   const description = useNumeraStore((s) => s.visualCueDescription);
   const panelSide = useNumeraStore((s) => s.panelSide);
+  const currentPhase = useNumeraStore((s) => s.currentPhase);
   const card = resolveCueCard(cueType);
   // A note with no authored card is the tutor's own guidance text — the hint
   // rung of the support ladder, not a cue card. Titling it "Visual cue" told
@@ -46,6 +48,10 @@ export default function VisualCue() {
   // Nothing authored and nothing to say — show nothing, rather than a card
   // about an equation the student isn't working on.
   if (!visible || (!card && !description)) return null;
+  // Phase 3 is answered alone: no visual cues during an independent attempt
+  // (Phase 3 spec §3.2). Suppressed at the render rather than at the source so
+  // a cue the backend still sends cannot leak onto the screen.
+  if (isPhase3(currentPhase)) return null;
 
   return (
     <aside

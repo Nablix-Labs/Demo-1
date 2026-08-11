@@ -56,8 +56,6 @@ export interface ActivityGate {
   disconnected: boolean;
   /** The backend is actually waiting on the student. */
   awaitingStudent: boolean;
-  /** The tutor's last turn errored and nothing has replaced it. */
-  tutorTurnFailed: boolean;
 }
 
 export interface NudgeRecord {
@@ -80,17 +78,9 @@ const IDLE_GATE_KEYS = [
  * Note `awaitingStudent`: a nudge is only meaningful when the backend is
  * actually waiting for the student. Nudging while the tutor still owes a reply
  * would blame the student for the tutor being slow.
- *
- * `tutorTurnFailed` is the same principle applied to the case that actually
- * reached a student (10 Aug): they answered, the tutor 500'd, they answered
- * again, it 500'd again, they stopped — and because a failed turn leaves
- * `awaitingStudent` true and `lastTutorTurnId` on the last turn that worked,
- * the silence looked ordinary and they were asked "what is the first thing you
- * would try?". Silence after a broken turn is not the silence a nudge is for.
  */
 export function clockMayRun(gate: ActivityGate): boolean {
   if (!gate.awaitingStudent) return false;
-  if (gate.tutorTurnFailed) return false;
   return IDLE_GATE_KEYS.every((k) => !gate[k]);
 }
 

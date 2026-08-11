@@ -31,11 +31,18 @@ export function applyPhaseHandoff(rec: SessionRecord): void {
     questionText: rec.current_question ?? null,
   });
 
-  // Seeded into the transcript rather than spoken here: the next screen owns
-  // the voice, and speaking from a screen that is being navigated away from is
-  // how this codebase previously ended up with two tutor voices at once.
+  // Shown here, spoken by the screen being entered.
+  //
+  // Not spoken from this screen because it is unmounting — starting speech on a
+  // route that is going away is how this codebase previously ended up with two
+  // tutor voices at once. But showing it and never voicing it left the student
+  // reading a line the tutor never said, on a voice-first product (row 4,
+  // "displayed but not spoken", Sanya 11 Aug). So it is queued, and the
+  // arriving screen claims it.
   const message = rec.message?.trim();
   if (message) {
-    useNumeraStore.getState().addTranscriptMessage({ role: 'ai', text: message });
+    const store = useNumeraStore.getState();
+    store.addTranscriptMessage({ role: 'ai', text: message });
+    store.setPendingTutorSpeech(message);
   }
 }

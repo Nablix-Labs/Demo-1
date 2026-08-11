@@ -32,6 +32,7 @@ import {
   orientationFor,
   orientationCheckFor,
   orientationVideoForTopicCode,
+  orientationYouTubeIdForTopicCode,
   type OrientationMedia,
 } from '@/lib/demoContent';
 import { useNumeraStore, type TutorElement } from '@/store/useNumeraStore';
@@ -57,6 +58,8 @@ import ConceptArt from '@/components/ConceptArt';
 
 // react-konva is client-only (no SSR), same as everywhere else the canvas mounts.
 const DrawingCanvas = dynamic(() => import('@/components/Canvas/DrawingCanvas'), { ssr: false });
+// Client-only: it injects the YouTube IFrame API and touches window.
+const YouTubeVideo = dynamic(() => import('@/components/YouTubeVideo'), { ssr: false });
 
 type Status = 'loading' | 'ready' | 'empty' | 'error';
 /** Phase 1 runs content → concept check (tutor writes) → on to Teacher Mode. */
@@ -772,32 +775,39 @@ function OrientationItem({
   const [replayKey, setReplayKey] = useState(0);
 
   if (item.content_type === 'ORIENTATION_VIDEO' && item.video) {
-    // Back on Azure blob (2026-08-10): everything orientation serves now comes
-    // from the one storage account, so a backend asset_url and our own fallback
-    // point at the same place and there is no hosting preference left to encode.
+    // The backend now sends asset_url — but pointed at the ~163 MB Azure blob,
+    // which is exactly what made the whole app sluggish while a video was on
+    // screen. So YouTube wins over an asset_url that IS one of those blobs
+    // (same video, adaptive CDN stream) and over the blob fallback.
     //
-    // The blob MP4s are ~163 MB each and stream unadaptively, which is what made
-    // the app sluggish while one was on screen in July. Re-encoding them (see
-    // the Addendum 1 note: H.264 CRF 23 with `-movflags +faststart`) is what
-    // fixes that now, not a second host.
-    const src = item.video.asset_url ?? orientationVideoForTopicCode(topicCode);
+    // Any other asset_url is used as given, so the moment the Student Model
+    // serves a CDN or YouTube link itself this override stops applying and the
+    // whole branch can be deleted.
+    const assetUrl = item.video.asset_url;
+    const isHeavyBlob = Boolean(assetUrl?.includes('nablixmathvideos.blob.core.windows.net'));
+    const youTubeId = !assetUrl || isHeavyBlob ? orientationYouTubeIdForTopicCode(topicCode) : null;
+    const src = assetUrl ?? orientationVideoForTopicCode(topicCode);
     return (
       <section>
         <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-2 inline-flex items-center gap-1.5">
           <Film size={12} strokeWidth={1.8} /> Concept video
         </div>
         <h2 className="text-[17px] font-semibold text-ink mb-3">{item.video.title}</h2>
-        {src ? (
+        {youTubeId ? (
           <>
-            <VideoFile
+            {messages?.before_video_message && (
+              <p className="text-[13.5px] text-ink leading-relaxed mb-3">{messages.before_video_message}</p>
+            )}
+            <YouTubeVideo
               key={replayKey}
-              media={{ kind: 'video', title: item.video.title, duration: '', summary: '', src }}
-              spoken={messages?.before_video_message ?? null}
+              videoId={youTubeId}
+              title={item.video.title}
               onEnded={() => onFinished({ videoId: item.video!.video_id })}
             />
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              {/* Remounting is the replay: VideoFile starts playback on mount,
-                  so a fresh instance restarts it without reaching into its ref. */}
+              {/* Remounting the player is the replay: the IFrame API owns
+                  playback state, so a fresh instance is cleaner than reaching
+                  into it. */}
               <button
                 onClick={() => setReplayKey((k) => k + 1)}
                 className="inline-flex items-center gap-1.5 rounded-md border border-muted-gray px-3 py-2 text-[12.5px] font-semibold text-ink transition-colors hover:border-focus-navy"
@@ -813,6 +823,22 @@ function OrientationItem({
                 </button>
               )}
             </div>
+          </>
+        ) : src ? (
+          <>
+            <VideoFile
+              media={{ kind: 'video', title: item.video.title, duration: '', summary: '', src }}
+              spoken={messages?.before_video_message ?? null}
+              onEnded={() => onFinished({ videoId: item.video!.video_id })}
+            />
+            {!isLast && (
+              <button
+                onClick={() => onFinished({ videoId: item.video!.video_id })}
+                className="mt-3 text-[12px] font-semibold text-slate-blue hover:text-ink transition-colors"
+              >
+                Skip the video
+              </button>
+            )}
           </>
         ) : (
           <div className="flex flex-col items-center justify-center text-center rounded-xl border border-dashed border-muted-gray bg-reading-surface aspect-video w-full">

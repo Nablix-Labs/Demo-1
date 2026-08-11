@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useShallow } from 'zustand/react/shallow';
 import { useNumeraStore, type CanvasExporter } from '@/store/useNumeraStore';
+import { isPhase3 } from '@/lib/phase3';
 import { useAuthStore, isConsentActive } from '@/store/useAuthStore';
 import type { SchemaQuestionOption } from '@/lib/api';
 import { useDemoTutor } from '@/hooks/useDemoTutor';
@@ -48,6 +49,10 @@ export default function CanvasStage() {
     })),
   );
   const activeScaffold = useNumeraStore((s) => s.activeScaffold);
+  // Phase 3 spec §3.2: no scaffold panels during an independent attempt. Read
+  // from the phase rather than the route — the phase is what decides whether
+  // the tutor is allowed to be helping right now.
+  const silentPhase3 = isPhase3(useNumeraStore((s) => s.currentPhase));
   const visualCueType = useNumeraStore((s) => s.visualCueType);
   const visualCueDescription = useNumeraStore((s) => s.visualCueDescription);
   const setVisualCueVisible = useNumeraStore((s) => s.setVisualCueVisible);
@@ -174,7 +179,9 @@ export default function CanvasStage() {
             counting as an attempt." The backend generates the re-expression;
             while that request is in flight the disabled busy state prevents a
             second click from creating a duplicate turn. */}
-        {canReplayCue && (
+        {/* §3.2: Explain Again is unavailable in Phase 3 — it is help, and the
+            attempt is meant to be unaided. */}
+        {!silentPhase3 && canReplayCue && (
           <button
             onClick={replayCue}
             disabled={explainAgainPending}
@@ -197,7 +204,7 @@ export default function CanvasStage() {
           one line of it. A question that wrapped to two lines, or carried
           multiple-choice options, was covered by the card that was supposed to
           be helping with it (Manjusha, 10 Aug). */}
-      {activeScaffold && (
+      {!silentPhase3 && activeScaffold && (
         <div className="mt-3 w-[min(560px,100%)]">
           <ScaffoldPanel scaffold={activeScaffold} />
         </div>

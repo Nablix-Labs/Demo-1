@@ -15,6 +15,7 @@ import axios from 'axios';
 import type { CanvasDrawPayload } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { allowAnonTutorCalls } from '@/lib/runtimeConfig';
+import type { Phase3ResponseFields } from '@/lib/phase3';
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
 
@@ -246,11 +247,12 @@ export type InteractionMode = 'VOICE' | 'TEXT';
  * originated, which today means inactivity nudges. Keeping it distinct is what
  * stops a nudge being counted as a learner interaction anywhere downstream.
  */
-export type InputSource = 'TEXT' | 'VOICE' | 'CANVAS' | 'SYSTEM';
+export type InputSource = 'TEXT' | 'VOICE' | 'CANVAS' | 'CHOICE' | 'SYSTEM';
 export type InteractionType =
   | 'ANSWER_SUBMISSION'
   | 'OPTION_SELECTED'
   | 'TEACH_BACK_SUBMISSION'
+  | 'CLARIFICATION_REQUEST'
   // Replay the current explanation. Neither an answer nor a help escalation:
   // the backend returns attempt_increment 0 and emits no Student Model event
   // (Phase 2 handoff, Chirudeva — Explain Again).
@@ -262,8 +264,7 @@ export type InteractionType =
   //   NUDGE_PRESENTED   — acknowledgement that one was actually shown or spoken
   | 'INACTIVITY_NUDGE'
   | 'NUDGE_PRESENTED'
-  | 'HELP_REQUEST'
-  | 'SUPPORT_REPLAY'
+  | 'HINT_REQUEST'
   | 'CANVAS_SUBMISSION'
   | 'SESSION_START'
   | 'SESSION_END';
@@ -809,6 +810,9 @@ export interface InteractionPayload {
   canvas_snapshot_id?: string;
   /** Frozen at voice-turn end so speech and board work are evaluated together. */
   canvas_state?: InteractionCanvasState;
+  selected_option_id?: string;
+  phase3_submission_confirmed?: boolean;
+  phase3_submission_kind?: 'CANVAS' | 'CHOICE';
   idle_duration_ms?: number;
   nudge_id?: string;
   current_phase: string;
@@ -830,7 +834,6 @@ export interface InteractionPayload {
  *  which visual to render. Matches the backend VisualCue model. */
 export interface VisualCue {
   show: boolean;
-  cue_id?: string | null;
   cue_type: string | null;
   description: string | null;
   /** Structured cue actions (backend adapters.py:175). Not rendered yet — Phase 2 §6. */
@@ -918,7 +921,7 @@ export type SupportLevel =
   | 'PARALLEL_EXAMPLE'
   | 'TUTOR_SOLVED';
 
-export interface InteractionResponse extends GuidedStateFields {
+export interface InteractionResponse extends GuidedStateFields, Phase3ResponseFields {
   session_id: string;
   student_id: string;
   current_phase: string;
@@ -1126,14 +1129,14 @@ export interface CanvasLatency {
   total_latency_ms: number;
 }
 
-export interface CanvasSubmissionResult {
+export interface CanvasSubmissionResult extends Phase3ResponseFields {
   session_id: string;
   student_id: string;
   status: string;
   submission_id: string;
   snapshot_reference: string;
   ocr: OcrResult;
-  tutor: TutorResult;
+  tutor: TutorResult | null;
   latency: CanvasLatency;
   /** Tutor drawing actions (e.g. mark up the student's working). The backend
    *  sends a LIST of draw actions here, unlike the WS path (one per message). */
@@ -1143,8 +1146,8 @@ export interface CanvasSubmissionResult {
   phase_changed?: boolean;
   previous_phase?: string | null;
   current_phase?: string;
-  current_question?: string;
-  question_id?: string;
+  current_question?: string | null;
+  question_id?: string | null;
   ui_state?: string;
   recommended_entry_phase?: string | null;
   phase_transition_message?: string | null;
@@ -1183,6 +1186,10 @@ export async function submitCanvas(
     student_id: student,
     snapshot_data_url: snapshotDataUrl,
     submission_role: submissionRole,
+    phase3_submission_confirmed:
+      submissionRole === 'STANDALONE_ATTEMPT' ? true : undefined,
+    phase3_submission_kind:
+      submissionRole === 'STANDALONE_ATTEMPT' ? 'CANVAS' : undefined,
   });
   return res.data;
 }

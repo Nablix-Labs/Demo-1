@@ -168,6 +168,28 @@ export default function LessonPage() {
     });
   }, [hydrated, apiEnabled, sessionId, activeConceptId, startSession, setMicMuted, setQuestionText, setQuestionNumber, setTranscript, clearTutorMarks, beginListeningTurn]);
 
+  // Speak the line the previous screen queued for us.
+  //
+  // The phase-entry message belongs to the screen being ENTERED: orientation
+  // cannot speak it, because by then it is unmounting and speech started on a
+  // dying route is how two tutor voices once ended up talking at once. It
+  // showed the line and queued the voice; this claims it. Claim-and-clear is
+  // atomic in the store so React's double-mount in development cannot say it
+  // twice (row 4, "displayed but not spoken", 11 Aug).
+  //
+  // Watches the queue rather than firing once on mount: a resume sets it AFTER
+  // this screen has mounted (the fetch has to come back first), so a mount-only
+  // effect would miss every resumed session.
+  const pendingSpeech = useNumeraStore((s) => s.pendingTutorSpeech);
+  useEffect(() => {
+    if (!hydrated || !pendingSpeech) return;
+    const queued = useNumeraStore.getState().claimPendingTutorSpeech();
+    if (!queued) return;
+    setStudentWriting(false);
+    useNumeraStore.getState().setVoiceStatus('speaking');
+    tutorSay(queued, { onEnd: () => useNumeraStore.getState().beginListeningTurn() });
+  }, [hydrated, pendingSpeech]);
+
   // Mic capture is half-duplex (voice contract §12): it runs ONLY during the
   // student's LISTENING turn and while unmuted. During PROCESSING (request in
   // flight) and SPEAKING (tutor audio playing) the mic is closed, so the tutor's
@@ -213,20 +235,12 @@ export default function LessonPage() {
   // SENT (setTransmitting below), so echo suppression is unchanged but the
   // first word is no longer eaten.
   const { supported: captureSupported, start: startCapture, stop: stopCapture } = capture;
-  const muteCapture = voiceStream.setMuted;
   const captureOn = VOICE_TRANSPORT === 'server' ? !micMuted : listening;
   useEffect(() => {
     if (!apiEnabled || !sessionId || !captureSupported) return;
     if (captureOn) void startCapture();
-    // The two transports mute differently on purpose. Web Speech (REST) has to
-    // stop its recogniser — that is the API. The server path used to release
-    // the hardware here too, so every unmute paid getUserMedia + AudioContext
-    // again: 100-400ms of dead air, the missing first syllable of each answer
-    // (audit F-10). It now mutes at the track (silence by spec, device held)
-    // and the next unmute resumes on the same stream instantly.
-    else if (VOICE_TRANSPORT === 'server') muteCapture(true);
     else stopCapture();
-  }, [apiEnabled, sessionId, captureOn, captureSupported, startCapture, stopCapture, muteCapture]);
+  }, [apiEnabled, sessionId, captureOn, captureSupported, startCapture, stopCapture]);
 
   const { setTransmitting } = voiceStream;
   useEffect(() => {

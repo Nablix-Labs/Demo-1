@@ -115,7 +115,6 @@ export function useInactivityNudge(options: InactivityNudgeOptions = {}): void {
         disconnected: Boolean(optsRef.current.disconnected),
         // Only meaningful when the backend is actually waiting on the student.
         awaitingStudent: s.expectsStudentResponse,
-        tutorTurnFailed: s.tutorTurnFailed,
       };
     };
 
@@ -134,12 +133,8 @@ export function useInactivityNudge(options: InactivityNudgeOptions = {}): void {
         suppressPending();
         return;
       }
-      // Nothing to nudge about: either the tutor still owes a reply, or its last
-      // one failed. Reset rather than pause, so recovery starts a fresh silence
-      // window instead of firing on time the student spent staring at an error.
-      if (!gate.awaitingStudent || gate.tutorTurnFailed) {
+      if (!gate.awaitingStudent) {
         idleSinceRef.current = null;
-        suppressPending();
         return;
       }
 
@@ -197,7 +192,7 @@ export function useInactivityNudge(options: InactivityNudgeOptions = {}): void {
         // The student may have started working while the claim was in flight.
         // Re-read rather than trusting the gate from before the await.
         const after = gateNow();
-        if (after.studentActive || !after.awaitingStudent || after.tutorTurnFailed) {
+        if (after.studentActive || !after.awaitingStudent) {
           suppressPending();
           return;
         }
