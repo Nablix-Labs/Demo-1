@@ -293,11 +293,7 @@ def _is_wrong_evaluation(tutor: TutorResult) -> bool:
 
 def _is_support_failure(tutor: TutorResult) -> bool:
     """Return whether an unresolved answer should advance guided support."""
-    return _is_wrong_evaluation(tutor) or (
-        tutor.guided_student_state == "PARTIAL"
-        and not tutor.answer_value_confirmed
-        and tutor.intent != "EXPRESSING_CONFUSION"
-    )
+    return _is_wrong_evaluation(tutor)
 
 
 def _guided_attempt_event_type(

@@ -21,7 +21,7 @@ SessionEventPost = Callable[
 ]
 
 
-def test_guided_support_failure_distinguishes_wrong_partial_from_defence() -> None:
+def test_guided_partial_answers_do_not_advance_wrong_support() -> None:
     wrong_partial = TutorResult.model_construct(
         guided_student_state="PARTIAL",
         evaluation="PARTIALLY_CORRECT",
@@ -35,12 +35,12 @@ def test_guided_support_failure_distinguishes_wrong_partial_from_defence() -> No
         update={"intent": "EXPRESSING_CONFUSION"}
     )
 
-    assert interaction_service._is_support_failure(wrong_partial)
+    assert not interaction_service._is_support_failure(wrong_partial)
     assert not interaction_service._is_support_failure(defence_partial)
     assert not interaction_service._is_support_failure(stuck)
 
 
-def test_unresolved_partial_advances_the_authoritative_support_ladder() -> None:
+def test_unresolved_partial_does_not_emit_an_incorrect_attempt() -> None:
     rules = load_classifier_rules()
     unresolved = TutorResult.model_construct(
         guided_student_state="PARTIAL",
@@ -50,9 +50,7 @@ def test_unresolved_partial_advances_the_authoritative_support_ladder() -> None:
     )
     defence = unresolved.model_copy(update={"answer_value_confirmed": True})
 
-    assert interaction_service._guided_attempt_event_type(unresolved, rules) == (
-        "INCORRECT_ATTEMPT"
-    )
+    assert interaction_service._guided_attempt_event_type(unresolved, rules) is None
     assert interaction_service._guided_attempt_event_type(defence, rules) is None
 
 

@@ -1180,7 +1180,9 @@ def component_adjudication_targets(
 ) -> list[GeneratedConcept]:
     """Verify claimed evidence before it can enter persistent guided state."""
 
-    claimed_ids = set(evaluation.newly_confirmed_concept_ids)
+    claimed_ids = set(evaluation.newly_confirmed_concept_ids) - set(
+        objective.confirmed_concept_ids
+    )
     claimed = [
         component
         for component in rubric.required_concepts
