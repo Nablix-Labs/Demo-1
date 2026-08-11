@@ -538,10 +538,10 @@ export function useDemoTutor() {
       // Canvas responses now carry the same phase state as /interaction, so a
       // backend phase change here also drives usePhaseRouting.
       const entering = phaseAnnouncement(res, useNumeraStore.getState().currentPhase);
-      if (res.current_phase && res.current_question) {
+      if (res.current_phase) {
         syncBackendSession({
           current_phase: res.current_phase,
-          current_question: res.current_question,
+          current_question: res.current_question ?? null,
           question_id: res.question_id ?? null,
         });
       }

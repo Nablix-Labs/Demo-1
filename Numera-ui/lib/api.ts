@@ -1140,8 +1140,8 @@ export interface CanvasSubmissionResult extends Phase3ResponseFields {
   phase_changed?: boolean;
   previous_phase?: string | null;
   current_phase?: string;
-  current_question?: string;
-  question_id?: string;
+  current_question?: string | null;
+  question_id?: string | null;
   ui_state?: string;
   recommended_entry_phase?: string | null;
   phase_transition_message?: string | null;
