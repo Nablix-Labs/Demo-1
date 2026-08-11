@@ -3531,6 +3531,62 @@ def test_explanation_question_uses_a_stable_two_component_rubric(
     ] == ["ANSWER_SELECTION", "ANSWER_EXPLANATION"]
 
 
+def test_component_adjudication_ignores_an_already_confirmed_claim() -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-EXPLANATION",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="ANSWER_SELECTION",
+                description="Selects the correct answer.",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="ANSWER_EXPLANATION",
+                description="Explains why the selected answer is true.",
+                required=True,
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="explanation-rubric",
+        prompt_version="1.1.0",
+    )
+    objective = ActiveTeachingObjective(
+        objective_type="EXPLAIN_REASONING",
+        target_concept_ids=["ANSWER_EXPLANATION"],
+        confirmed_concept_ids=["ANSWER_SELECTION"],
+        missing_concept_ids=["ANSWER_EXPLANATION"],
+    )
+    evaluation = GuidedEvaluation(
+        student_state="PARTIAL",
+        newly_confirmed_concept_ids=["ANSWER_SELECTION"],
+        preserved_concept_ids=["ANSWER_SELECTION"],
+        contradicted_concept_ids=[],
+        missing_concept_ids=["ANSWER_EXPLANATION"],
+        selected_error_code=None,
+        confidence=0.95,
+        next_objective=objective,
+        tutor_message="Explain why.",
+        tutor_message_voice="Explain why.",
+    )
+
+    targets = classifier.component_adjudication_targets(
+        evaluation=evaluation,
+        objective=objective,
+        rubric=rubric,
+        student_response="because n is a variable",
+        question="Which is the general rule: 12 + 4 or n + 4? Explain why.",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-EXPLANATION",
+            canonical_answer="n + 4",
+            accepted_answers=["n + 4 because n can vary"],
+            verification_method="CHOICE_AND_CONCEPT_MATCH",
+            explanation_required=True,
+        ),
+    )
+
+    assert [target.concept_id for target in targets] == ["ANSWER_EXPLANATION"]
+
+
 def test_guided_llm_repeated_stuck_requests_one_scaffold_escalation(
     monkeypatch,
 ) -> None:
