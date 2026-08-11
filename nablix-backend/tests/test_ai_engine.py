@@ -138,6 +138,73 @@ def test_guided_confusion_bypasses_semantic_answer_evaluation(
     assert "make sure I understood" not in response.tutor_message
 
 
+def test_guided_component_question_stays_specific_after_confusion_and_wrong_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _NoEvaluationClient:
+        def evaluate_guided_turn(self, **kwargs: object) -> GuidedEvaluation:
+            raise AssertionError("controller-owned component turns must not call the LLM")
+
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-COMPONENTS",
+        required_concepts=[
+            GeneratedConcept(concept_id="CHANGING_VALUE", description="m changes", required=True),
+            GeneratedConcept(concept_id="FIXED_VALUE", description="7 stays fixed", required=True),
+            GeneratedConcept(concept_id="OPERATION", description="addition", required=True),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="component-rubric",
+        prompt_version="1.0.0",
+    )
+    objective = classifier.initial_guided_objective(rubric)
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _NoEvaluationClient(),
+    )
+    request = ClassificationRequest(
+        question_id="Q-T01-COMPONENTS",
+        question_type="MULTI_PART_SHORT_RESPONSE",
+        question="In m + 7, identify the changing quantity, the fixed value and the operation.",
+        correct_answer="m; 7; addition",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-COMPONENTS",
+            canonical_answer="m; 7; addition",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=True,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        generated_question_rubric=rubric,
+        active_teaching_objective=objective,
+        student_input="I do not understand",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+    )
+    confused = classify_student_response(request)
+
+    assert confused.guided_student_state == "STUCK"
+    assert confused.tutor_message.endswith("Which part can take different possible values?")
+    assert confused.guided_teaching_state is not None
+
+    wrong = classify_student_response(
+        request.model_copy(
+            update={
+                "student_input": "the changing quantity is 7",
+                "guided_teaching_state": confused.guided_teaching_state,
+                "active_teaching_objective": confused.active_teaching_objective,
+            }
+        )
+    )
+
+    assert wrong.guided_student_state == "WRONG"
+    assert "the changing quantity is the letter" in wrong.tutor_message
+    assert wrong.tutor_message.endswith("Which part can take different possible values?")
+
+
 def test_final_partial_wording_asks_only_the_reconciled_missing_component() -> None:
     rules = classifier.load_classifier_rules()
     rubric = _guided_rubric()

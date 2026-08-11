@@ -877,6 +877,17 @@ def deterministic_teaching_step_evaluation(
     variable, operator, number = expression
     normalized = re.sub(r"\s+", " ", request.student_input.casefold()).strip()
     compact = re.sub(r"\s+", "", normalized)
+    if normalized in {
+        "idk",
+        "i have no idea",
+        "i do not understand",
+        "i didn't understand",
+        "i dont understand",
+        "not sure",
+        "what do i state",
+        "are u stupid",
+    }:
+        return None
     steps = teaching_steps_for(request)
     step_index = next(index for index, item in enumerate(steps) if item.step_id == step.step_id)
     next_step = steps[step_index + 1] if step_index + 1 < len(steps) else None
@@ -895,7 +906,15 @@ def deterministic_teaching_step_evaluation(
         return None
 
     if step.step_id == "CHANGING_VALUE":
-        exact_aliases = {variable, "the starting number", "starting number", "the first number", "first number"}
+        exact_aliases = {
+            variable,
+            "the starting number",
+            "starting number",
+            "the starting value",
+            "starting value",
+            "the first number",
+            "first number",
+        }
         valid_variable_statement = variable in normalized and any(
             marker in normalized for marker in ("change", "vary", "different")
         )
@@ -920,7 +939,14 @@ def deterministic_teaching_step_evaluation(
             else:
                 message = f"Yes. {next_step.prompt}"
             return _controller_evaluation("PARTIAL", objective, message, step.step_id, rubric)
-        return None
+        if number in compact:
+            message = (
+                "Not quite: the changing quantity is the letter, not the fixed number. "
+                f"{step.prompt}"
+            )
+            return _controller_evaluation("WRONG", objective, message, None, rubric)
+        message = f"Focus on the changing part only. {step.prompt}"
+        return _controller_evaluation("UNCLEAR", objective, message, None, rubric)
 
     if step.step_id == "FIXED_VALUE":
         expected = f"{operator}{number}"
@@ -931,7 +957,15 @@ def deterministic_teaching_step_evaluation(
         if f"-{number}" in compact and operator == "+":
             message = f"Check the sign: this rule adds {number}, so the fixed amount is +{number}. {step.prompt}"
             return _controller_evaluation("WRONG", objective, message, None, rubric)
-        return None
+        if variable in normalized:
+            message = (
+                f"{variable} can change; we are looking for the number that stays the same. "
+                f"{step.prompt}"
+            )
+            return _controller_evaluation("WRONG", objective, message, None, rubric)
+        return _controller_evaluation(
+            "UNCLEAR", objective, f"Focus on the fixed value only. {step.prompt}", None, rubric
+        )
 
     if step.step_id == "OPERATION":
         accepted = ("add", "addition", "plus") if operator == "+" else ("subtract", "subtraction", "minus")
@@ -943,6 +977,9 @@ def deterministic_teaching_step_evaluation(
         if any(word in normalized for word in incorrect):
             message = f"Not this time: the + sign means addition, not {next(word for word in incorrect if word in normalized)}. {step.prompt}"
             return _controller_evaluation("WRONG", objective, message, None, rubric)
+        return _controller_evaluation(
+            "UNCLEAR", objective, f"Focus on the operation only. {step.prompt}", None, rubric
+        )
     return None
 
 
@@ -1231,10 +1268,15 @@ def classify_guided_learning_response(
             next_objective,
         )
     if detect_student_intent(request.student_input, rules) == "EXPRESSING_CONFUSION":
-        focused_prompt = focused_unresolved_prompt(
-            rubric,
-            objective,
-            "Which part should we look at first?",
+        active_step = active_teaching_step(request)
+        focused_prompt = (
+            active_step.prompt
+            if active_step is not None
+            else focused_unresolved_prompt(
+                rubric,
+                objective,
+                "Which part should we look at first?",
+            )
         )
         message = f"That’s okay—we’ll take it one part at a time. {focused_prompt}"
         evaluation = GuidedEvaluation(
