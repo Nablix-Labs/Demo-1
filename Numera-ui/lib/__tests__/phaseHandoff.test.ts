@@ -38,6 +38,7 @@ describe('applyPhaseHandoff', () => {
       ],
       selectedOptionId: 'B',
       transcript: [],
+      pendingTutorSpeech: null,
       backendSession: null,
     }),
   );
@@ -60,6 +61,26 @@ describe('applyPhaseHandoff', () => {
 
     const spoken = state().transcript.filter((m) => m.role === 'ai').map((m) => m.text);
     expect(spoken).toEqual(["Nice work. Here's the next question — take your time."]);
+  });
+
+  it('queues the line for the arriving screen to speak', () => {
+    // Row 4: the line was shown and never voiced, on a voice-first product.
+    // It cannot be spoken here — this screen is unmounting — so it is queued.
+    applyPhaseHandoff(enteringGuidedPractice());
+    expect(state().pendingTutorSpeech).toBe("Nice work. Here's the next question — take your time.");
+  });
+
+  it('hands the queued line over exactly once', () => {
+    // React mounts effects twice in development; a read-then-clear pair would
+    // let both mounts speak before the clear landed.
+    applyPhaseHandoff(enteringGuidedPractice());
+    expect(state().claimPendingTutorSpeech()).toBe("Nice work. Here's the next question — take your time.");
+    expect(state().claimPendingTutorSpeech()).toBeNull();
+  });
+
+  it('queues nothing to speak when there is nothing to say', () => {
+    applyPhaseHandoff(enteringGuidedPractice({ message: '   ' }));
+    expect(state().pendingTutorSpeech).toBeNull();
   });
 
   it('adds no empty bubble when the record carries no message', () => {

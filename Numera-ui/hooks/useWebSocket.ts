@@ -22,6 +22,7 @@
 'use client';
 
 import { useEffect, useRef, useCallback } from 'react';
+import { phaseAnnouncement, withTransitionVoice } from '@/lib/phaseTransition';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { tutorAudioStream, effectiveVoice } from '@/lib/tts';
@@ -311,6 +312,20 @@ export function useWebSocket(sessionId: string | null) {
               }
               rescueMsgIdRef.current = null;
             }
+            // A phase change announces itself on this transport too.
+            //
+            // This branch had no phase handling at all, while the REST path has
+            // had it since Phase 2 — so whether a student saw "you're moving on
+            // to…" depended on whether that turn happened to go over the socket
+            // or over REST. That is the "appears sometimes, doesn't sometimes"
+            // in row 4 (Manjusha, 11 Aug).
+            const enteringPhase = phaseAnnouncement(
+              msg as Parameters<typeof phaseAnnouncement>[0],
+              useNumeraStore.getState().currentPhase,
+            );
+            if (enteringPhase) {
+              addTranscriptMessage({ role: 'ai', text: enteringPhase.text });
+            }
             addTranscriptMessage({ role: 'ai', text: msg.text as string });
             // applyInteractionSupport returns the line the tutor should SAY —
             // the scaffold step's voice line when a panel is open, else the
@@ -398,8 +413,17 @@ export function useWebSocket(sessionId: string | null) {
               // speaks again.
               sendTurnContext();
             });
+            // The transition rides on the FALLBACK text, not on a second
+            // utterance: the server streams this reply's audio, and speaking
+            // over it would put two tutor voices in the room — the failure this
+            // codebase already fixed once. So when we do the speaking (no
+            // streamed audio arrived), the student hears the transition; when
+            // the server speaks, the server owns whether it voices it.
             tutorAudioStream.begin(
-              (typeof msg.voice_text === 'string' && msg.voice_text) || spokenLine,
+              withTransitionVoice(
+                enteringPhase,
+                (typeof msg.voice_text === 'string' && msg.voice_text) || spokenLine,
+              ),
             );
             break;
 

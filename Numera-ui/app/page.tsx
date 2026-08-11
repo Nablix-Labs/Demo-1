@@ -168,6 +168,23 @@ export default function LessonPage() {
     });
   }, [hydrated, apiEnabled, sessionId, activeConceptId, startSession, setMicMuted, setQuestionText, setQuestionNumber, setTranscript, clearTutorMarks, beginListeningTurn]);
 
+  // Speak the line the previous screen queued for us.
+  //
+  // The phase-entry message belongs to the screen being ENTERED: orientation
+  // cannot speak it, because by then it is unmounting and speech started on a
+  // dying route is how two tutor voices once ended up talking at once. It
+  // showed the line and queued the voice; this claims it. Claim-and-clear is
+  // atomic in the store so React's double-mount in development cannot say it
+  // twice (row 4, "displayed but not spoken", 11 Aug).
+  useEffect(() => {
+    if (!hydrated) return;
+    const queued = useNumeraStore.getState().claimPendingTutorSpeech();
+    if (!queued) return;
+    setStudentWriting(false);
+    useNumeraStore.getState().setVoiceStatus('speaking');
+    tutorSay(queued, { onEnd: () => useNumeraStore.getState().beginListeningTurn() });
+  }, [hydrated]);
+
   // Mic capture is half-duplex (voice contract §12): it runs ONLY during the
   // student's LISTENING turn and while unmuted. During PROCESSING (request in
   // flight) and SPEAKING (tutor audio playing) the mic is closed, so the tutor's

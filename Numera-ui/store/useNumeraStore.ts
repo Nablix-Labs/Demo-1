@@ -337,6 +337,16 @@ export interface NumeraState {
    * question by virtue of its different id — Phase 3 spec §3.3/§3.4.
    */
   phase3LockedQuestionId: string | null;
+  /**
+   * A tutor line that has been shown but not yet spoken.
+   *
+   * Set when one screen hands the student to another: the phase-entry line
+   * belongs to the screen being ENTERED, so the departing screen cannot speak
+   * it — starting speech on a route that is unmounting is how this codebase
+   * previously ended up with two tutor voices at once. The arriving screen
+   * claims it, speaks it, and clears it.
+   */
+  pendingTutorSpeech: string | null;
 
   // Ordering guard for interaction responses (Phase 2 handoff item 2). Holds the
   // highest interaction_state_version applied and the accepted_turn_ids already
@@ -483,6 +493,10 @@ export interface NumeraState {
   setInactivityPolicy: (p: InactivityPolicy | null) => void;
   setLastHintText: (text: string | null) => void;
   lockPhase3Attempt: (questionId: string | null) => void;
+  /** Queue a line for the next screen to speak. */
+  setPendingTutorSpeech: (text: string | null) => void;
+  /** Take the queued line, clearing it — so two mounts cannot speak it twice. */
+  claimPendingTutorSpeech: () => string | null;
   /** Position within this phase's question set, for the progress rail. */
   setQuestionProgress: (index: number, total: number) => void;
   toggleVisualCue: () => void;
@@ -555,7 +569,8 @@ const initial: Omit<
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
   | 'setQuestionText' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'markTutorTurnFailed'
   | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue'
-  | 'setSupportShown' | 'setLastHintText' | 'lockPhase3Attempt' | 'setQuestionProgress' | 'setAppliedResponse' | 'setInactivityPolicy'
+  | 'setSupportShown' | 'setLastHintText' | 'lockPhase3Attempt'
+  | 'setPendingTutorSpeech' | 'claimPendingTutorSpeech' | 'setQuestionProgress' | 'setAppliedResponse' | 'setInactivityPolicy'
   | 'addTranscriptMessage' | 'removeTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript' | 'commitPartialTranscript'
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
   | 'setShapeKind' | 'setEraserMode'
@@ -618,6 +633,7 @@ const initial: Omit<
   supportShown: null as SupportRung | null,
   lastHintText: null as string | null,
   phase3LockedQuestionId: null as string | null,
+  pendingTutorSpeech: null as string | null,
   appliedResponse: EMPTY_APPLIED,
   inactivityPolicy: null as InactivityPolicy | null,
   // Empty. This used to seed a three-message demo conversation about
@@ -674,7 +690,7 @@ const initial: Omit<
 
 export const useNumeraStore = create<NumeraState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
   ...initial,
 
   // Opening a session resets the ordering guard. interaction_state_version is
@@ -822,6 +838,16 @@ export const useNumeraStore = create<NumeraState>()(
   // Idempotent by construction: locking the same question twice is the same
   // state, which is what makes a duplicate reply harmless.
   lockPhase3Attempt: (phase3LockedQuestionId) => set({ phase3LockedQuestionId }),
+
+  setPendingTutorSpeech: (pendingTutorSpeech) => set({ pendingTutorSpeech }),
+
+  // Claim-and-clear in one call: React mounts effects twice in development, and
+  // a read-then-clear pair would speak the line twice before the clear landed.
+  claimPendingTutorSpeech: () => {
+    const { pendingTutorSpeech } = get();
+    if (pendingTutorSpeech !== null) set({ pendingTutorSpeech: null });
+    return pendingTutorSpeech;
+  },
   setQuestionProgress: (index, total) =>
     set({ activeSlide: Math.max(0, index), totalSlides: Math.max(0, total) }),
   toggleVisualCue: () => set((s) => ({ visualCueVisible: !s.visualCueVisible })),
