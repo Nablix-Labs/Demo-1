@@ -49,7 +49,14 @@ describe('synthesizeSpeech payload', () => {
     vi.resetModules();
     const post = vi.fn().mockResolvedValue({ data: { audio_base64: null } });
     vi.doMock('axios', () => ({
-      default: { create: () => ({ post, interceptors: { request: { use: vi.fn() } } }) },
+      default: {
+        create: () => ({
+          post,
+          // Both interceptors, because lib/api.ts registers a response one too
+          // (it signs the student out when the server rejects a real login).
+          interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } },
+        }),
+      },
     }));
     const { synthesizeSpeech } = await import('@/lib/api');
     await synthesizeSpeech('hello', opts);

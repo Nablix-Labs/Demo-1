@@ -23,7 +23,7 @@ import { getTopic } from '@/lib/curriculum';
 import { useFlowNav } from '@/lib/useFlowNav';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
-import { useDemoTutor, resetSessionStart, sessionStartError } from '@/hooks/useDemoTutor';
+import { resumeSession, useDemoTutor, resetSessionStart, sessionStartError } from '@/hooks/useDemoTutor';
 import {
   completeDiagnostic,
   diagnosticQuestions,
@@ -168,7 +168,11 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
 
   useEffect(() => {
     if (questions.length > 0) { setStatus('ready'); return; }
-    if (!authReady || sessionId || started.current) return;
+    if (!authReady || started.current) return;
+    if (sessionId) {
+      void resumeSession();
+      return;
+    }
     void openSession();
     // openSession is intentionally omitted — see the note on `started`.
     // eslint-disable-next-line react-hooks/exhaustive-deps

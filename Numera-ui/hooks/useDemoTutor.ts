@@ -417,7 +417,7 @@ export async function resumeSession(): Promise<void> {
   if (resumeInFlight) return resumeInFlight;
   resumeInFlight = (async () => {
     try {
-      const rec = await getSession(store.sessionId!);
+      const rec = await getSession(store.sessionId!, studentId());
       const s = useNumeraStore.getState();
       s.setBackendSession(rec);
       syncBackendSession(rec);

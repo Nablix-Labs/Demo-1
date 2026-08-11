@@ -88,14 +88,14 @@ def test_review_session_with_no_attempts_can_end() -> None:
 
 
 def test_get_session_rejects_malformed_session_id() -> None:
-    response = client.get("/session/bad")
+    response = client.get("/session/bad", params={"student_id": "ST001"})
 
     assert response.status_code == 422
     assert response.json()["field"] == "session_id"
 
 
 def test_get_session_returns_404_for_unknown_valid_session_id() -> None:
-    response = client.get("/session/SESSION777")
+    response = client.get("/session/SESSION777", params={"student_id": "ST001"})
 
     assert response.status_code == 404
     body = response.json()

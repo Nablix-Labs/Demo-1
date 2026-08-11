@@ -1080,7 +1080,10 @@ def test_repeated_session_start_restores_authoritative_progress(
         "SESSION_OPENED",
         "SESSION_OPENED",
     ]
-    restored = client.get(f"/session/{second_body['session_id']}")
+    restored = client.get(
+        f"/session/{second_body['session_id']}",
+        params={"student_id": second_body["student_id"]},
+    )
     assert restored.status_code == 200
     assert restored.json() == second_body
 
@@ -1506,7 +1509,7 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
             assert stuck.json()["current_scaffold_step_id"] == "SCF-T02-M1-S1"
             assert stuck.json()["message"] == "Which operation should you undo first?"
         assert "scaffold_expected_response" not in stuck.json()
-        assert client.get(f"/session/{session_id}").json()["stuck_count"] == (
+        assert client.get(f"/session/{session_id}", params={"student_id": "ST001"}).json()["stuck_count"] == (
             expected_stuck_count
         )
 
@@ -1655,7 +1658,7 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert events[-1]["micro_skill_ids"] == ["T02.M1"]
     assert events[-1]["student_response"] == "x = 4"
     assert events[-1]["error_code"] == "ERR-T02-SUBTRACTION-MISAPPLIED"
-    assert client.get(f"/session/{session_id}").json()["stuck_count"] == 0
+    assert client.get(f"/session/{session_id}", params={"student_id": "ST001"}).json()["stuck_count"] == 0
     assert guided_incorrect.json()["student_model_state"][
         "highest_support_used_by_skill"
     ] == {"T02.M1": "HINT"}

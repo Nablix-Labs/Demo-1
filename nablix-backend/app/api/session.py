@@ -7,7 +7,7 @@ from app.ai_engine.session_review import (
     generate_session_review,
 )
 from app.api.auth import AccessToken
-from app.models.fields import SessionId
+from app.models.fields import SessionId, StudentId
 from app.models.session import (
     DiagnosticCompleteRequest,
     OrientationCompletionRequest,
@@ -66,8 +66,12 @@ async def complete_orientation_endpoint(
 
 
 @router.get("/{session_id}", response_model=SessionResponse)
-async def get_session_endpoint(session_id: SessionId) -> SessionRecord:
-    return await get_session(session_id)
+async def get_session_endpoint(
+    session_id: SessionId,
+    student_id: StudentId,
+    access_token: AccessToken,
+) -> SessionRecord:
+    return await get_session(session_id, student_id)
 
 
 @router.post("/end", response_model=SessionResponse)

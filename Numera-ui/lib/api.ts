@@ -69,6 +69,39 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+/**
+ * A rejected LOGIN ends the session — the student is sent back to sign in.
+ *
+ * Expiry can be noticed two ways: the client sees the token's `exp` pass (the
+ * gate's own timer), or the server rejects it first — a token revoked, a key
+ * rotated, or a clock that disagrees. Only the first was handled, so a student
+ * whose login the server had already stopped accepting kept working against a
+ * wall of 401s, each one surfacing as "we couldn't reach the tutor". That reads
+ * as an outage rather than a finished session (Manjusha, 11 Aug: "if any issues
+ * redirect the user to log in again").
+ *
+ * Clearing the token rather than navigating here: AuthGate already decides
+ * where an unauthenticated student belongs, and it re-runs on any auth change.
+ * A redirect from inside a network layer would race it and has no idea which
+ * screens are reachable signed-out.
+ *
+ * Deliberately NOT fired for the anonymous placeholder. That bearer is 401'd by
+ * student_model BY DESIGN when no one has logged in; treating it as an expiry
+ * would bounce every anonymous tester to a login screen they were never on.
+ */
+api.interceptors.response.use(
+  (response) => response,
+  (error: unknown) => {
+    const status = (error as { response?: { status?: number } })?.response?.status;
+    const realLogin = useAuthStore.getState().accessToken !== null;
+    if (status === 401 && realLogin) {
+      console.warn('[auth] the server rejected our login — signing out');
+      useAuthStore.getState().logout();
+    }
+    return Promise.reject(error);
+  },
+);
+
 // ── Error shape ───────────────────────────────────────────────────────────────
 // Every backend error returns this shape (never a raw stack trace).
 export interface ApiError {
@@ -668,9 +701,11 @@ export function requiredOrientationContent(record: SessionRecord | null | undefi
 }
 
 // ── GET /session/{session_id} ─────────────────────────────────────────────────
-/** GET /session/{session_id} — metadata + canvas submissions only (no transcript). */
-export async function getSession(sessionId: string) {
-  const res = await api.get<SessionRecord>(`/session/${sessionId}`);
+/** GET /session/{session_id} — restore one student-owned session. */
+export async function getSession(sessionId: string, student: string = studentId()) {
+  const res = await api.get<SessionRecord>(`/session/${sessionId}`, {
+    params: { student_id: student },
+  });
   return res.data;
 }
 

@@ -60,6 +60,7 @@ from app.services.student_model_session import (
     schema_support_steps,
     schema_visual_cue,
 )
+from app.services.session_store import save_session
 
 
 _sessions: dict[str, SessionRecord] = {}
@@ -224,7 +225,7 @@ _SIDE_CHANNEL_UPDATE_FIELDS = {
 }
 
 
-def update_side_channel_state(
+async def update_side_channel_state(
     session: SessionRecord,
     updates: dict[str, object],
 ) -> SessionRecord:
@@ -235,6 +236,7 @@ def update_side_channel_state(
         )
     updated = session.model_copy(update=updates)
     _sessions[session.session_id] = updated
+    await save_session(updated)
     return updated
 
 
@@ -409,6 +411,7 @@ async def start_session(
         student_model_state=project_student_model_state(event),
     )
     _sessions[session_id] = session
+    await save_session(session)
     return session
 
 
@@ -648,7 +651,7 @@ def _require_schema_phase(
         )
 
 
-def _apply_schema_event(
+async def _apply_schema_event(
     session: SessionRecord,
     event: StudentModelSessionEventResponse,
 ) -> SessionRecord:
@@ -845,6 +848,7 @@ def _apply_schema_event(
         )
     updated = session.model_copy(update=updates)
     _sessions[session.session_id] = updated
+    await save_session(updated)
     return updated
 
 
@@ -973,7 +977,7 @@ async def complete_diagnostic(
             status_code=503,
             detail="Student Model returned no independent-practice questions.",
         )
-    return _apply_schema_event(session, event)
+    return await _apply_schema_event(session, event)
 
 
 def _orientation_targets(session: SessionRecord) -> list[str]:
@@ -1113,7 +1117,7 @@ async def start_orientation(
             status_code=503,
             detail="Student Model returned no orientation bundle.",
         )
-    return _apply_schema_event(session, response)
+    return await _apply_schema_event(session, response)
 
 
 async def complete_orientation(
@@ -1163,14 +1167,14 @@ async def complete_orientation(
             status_code=503,
             detail="Student Model returned no guided-practice questions.",
         )
-    return _apply_schema_event(session, response)
+    return await _apply_schema_event(session, response)
 
 
-async def get_session(session_id: str) -> SessionRecord:
-    """Return a stored mock session or raise a standard 404."""
+async def get_session(session_id: str, student_id: str) -> SessionRecord:
+    """Return a session only when it belongs to the requesting student."""
 
     session: SessionRecord | None = _sessions.get(session_id)
-    if session is None:
+    if session is None or session.student_id != student_id:
         raise _session_not_found(session_id)
     return session
 
@@ -1426,11 +1430,12 @@ async def end_session(request: SessionEndRequest) -> SessionRecord:
         }
     )
     _sessions[request.session_id] = ended_session
+    await save_session(ended_session)
     clear_nudge_deliveries_for_session(request.session_id)
     return ended_session
 
 
-def start_voice_stream(session_id: str, student_id: str) -> SessionRecord:
+async def start_voice_stream(session_id: str, student_id: str) -> SessionRecord:
     """Mark the voice stream active for an existing session."""
 
     session: SessionRecord = _get_owned_session(session_id, student_id)
@@ -1449,6 +1454,7 @@ def start_voice_stream(session_id: str, student_id: str) -> SessionRecord:
     )
     updated_session: SessionRecord = session.model_copy(update={"voice_state": voice_state})
     _sessions[session_id] = updated_session
+    await save_session(updated_session)
     return updated_session
 
 
@@ -1516,6 +1522,7 @@ async def record_canvas_submission(
     )
     # This read-modify-write is safe only while the mock backend uses one worker.
     _sessions[session_id] = updated_session
+    await save_session(updated_session)
     return updated_session
 
 
@@ -1536,6 +1543,7 @@ async def record_canvas_attachment(
         update={"canvas_submissions": [*session.canvas_submissions, record]}
     )
     _sessions[session_id] = updated_session
+    await save_session(updated_session)
     return updated_session
 
 
@@ -1557,7 +1565,7 @@ def get_canvas_submission(
     )
 
 
-def update_interaction_state(
+async def update_interaction_state(
     session_id: str,
     student_id: str,
     session: SessionRecord,
@@ -1607,4 +1615,5 @@ def update_interaction_state(
         }
     )
     _sessions[session_id] = updated_session
+    await save_session(updated_session)
     return updated_session

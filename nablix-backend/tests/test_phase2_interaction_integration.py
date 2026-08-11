@@ -220,7 +220,10 @@ def test_text_duplicate_and_stale_turns_do_not_mutate_state() -> None:
     assert stale.status_code == 409
     assert stale.json()["status"] == "STALE_TURN"
 
-    stored = client.get(f"/session/{session['session_id']}")
+    stored = client.get(
+        f"/session/{session['session_id']}",
+        params={"student_id": session["student_id"]},
+    )
     assert stored.status_code == 200
     assert stored.json()["attempt_count"] == first_body["attempt_count"]
 
@@ -344,7 +347,10 @@ def test_help_request_without_active_support_is_explicit() -> None:
     assert response.status_code == 409
     assert response.json()["message"].startswith("NO_ACTIVE_SUPPORT:")
 
-    stored = client.get(f"/session/{session['session_id']}")
+    stored = client.get(
+        f"/session/{session['session_id']}",
+        params={"student_id": session["student_id"]},
+    )
     assert stored.status_code == 200
     assert stored.json()["attempt_count"] == session["attempt_count"]
 

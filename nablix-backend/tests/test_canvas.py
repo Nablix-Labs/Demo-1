@@ -560,7 +560,7 @@ def test_canvas_submit_sends_full_ocr_context_and_forwards_events(
         f"{session_id}:{context.source_turn_id}:INCORRECT_ATTEMPT"
     )
     assert attempt_event.expected_journey_version > 0
-    stored = client.get(f"/session/{session_id}").json()
+    stored = client.get(f"/session/{session_id}", params={"student_id": "ST011"}).json()
     assert stored["attempt_count"] == 0
     assert len(stored["per_question_history"]) == 1
     persisted_session = session_service._get_owned_session(session_id, "ST011")
@@ -597,7 +597,7 @@ def test_voice_canvas_attachment_does_not_record_a_second_attempt(
 
     assert response.status_code == 200
     assert response.json()["status"] == "processed"
-    stored_session = client.get(f"/session/{session_id}").json()
+    stored_session = client.get(f"/session/{session_id}", params={"student_id": "ST013"}).json()
     assert stored_session["attempt_count"] == 0
     assert stored_session["per_question_history"] == []
     assert len(stored_session["canvas_submissions"]) == 1
@@ -642,7 +642,7 @@ def test_canvas_submit_stops_before_tutor_when_ocr_needs_clarification(
     body = response.json()
     assert body["status"] == "CLARIFICATION_REQUIRED"
     assert body["canvas_draw"] == []
-    stored_session = client.get(f"/session/{session_id}").json()
+    stored_session = client.get(f"/session/{session_id}", params={"student_id": "ST012"}).json()
     assert stored_session["attempt_count"] == 0
     assert stored_session["canvas_submissions"][0]["tutor"]["evaluation"] == "UNCLEAR"
 
@@ -678,7 +678,7 @@ def test_canvas_submit_stores_ocr_without_serializing_snapshot() -> None:
     )
     assert submit_response.status_code == 200
 
-    session_response = client.get(f"/session/{session_id}")
+    session_response = client.get(f"/session/{session_id}", params={"student_id": "ST002"})
 
     assert session_response.status_code == 200
     body = session_response.json()

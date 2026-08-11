@@ -196,7 +196,7 @@ def test_voice_session_start_sets_stream_active_state() -> None:
     assert body["voice_session_token"] == f"mock_voice_token_{session_id}"
     assert body["fallback_active"] is False
 
-    session_response = client.get(f"/session/{session_id}")
+    session_response = client.get(f"/session/{session_id}", params={"student_id": "ST010"})
     assert session_response.status_code == 200
     assert session_response.json()["voice_state"]["stream_active"] is True
 
