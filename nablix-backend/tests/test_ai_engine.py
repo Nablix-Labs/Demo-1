@@ -93,7 +93,7 @@ def _guided_rubric() -> GeneratedQuestionRubric:
     )
 
 
-@pytest.mark.parametrize("student_input", ["idk", "I have no idea", "are u stupid"])
+@pytest.mark.parametrize("student_input", ["what", "idk", "I have no idea", "are u stupid"])
 def test_guided_confusion_bypasses_semantic_answer_evaluation(
     monkeypatch,
     student_input: str,
@@ -622,6 +622,35 @@ def test_contradicted_role_cannot_enter_persistent_component_evidence() -> None:
 
     assert verified.newly_confirmed_concept_ids == []
     assert verified.contradicted_concept_ids == ["FIXED_VALUE"]
+
+
+def test_component_claim_requires_positive_adjudication() -> None:
+    evaluation = GuidedEvaluation(
+        student_state="PARTIAL",
+        newly_confirmed_concept_ids=["FIXED_VALUE"],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=["CHANGING_VALUE", "OPERATION"],
+        selected_error_code=None,
+        confidence=0.96,
+        next_objective=None,
+        tutor_message="Good.",
+        tutor_message_voice="Good.",
+    )
+
+    verified = classifier.apply_focused_component_evidence(
+        evaluation,
+        FocusedComponentEvidence(
+            component_id="FIXED_VALUE",
+            status="NOT_DEMONSTRATED",
+            evidence="The learner did not state the fixed value.",
+            confidence=0.5,
+        ),
+        0.85,
+    )
+
+    assert verified.newly_confirmed_concept_ids == []
+    assert verified.contradicted_concept_ids == []
 
 
 def _multipart_guided_rubric() -> GeneratedQuestionRubric:
@@ -3840,7 +3869,7 @@ def test_guided_multipart_expression_starts_the_next_specific_teaching_step(
         (
             "CHOICE_WITH_EXPLANATION",
             "Which statement is correct? Select one and explain why.",
-            "B",
+            "option b",
             "EXACT_CHOICE_MATCH",
             "B",
         ),

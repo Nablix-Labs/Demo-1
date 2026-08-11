@@ -884,6 +884,8 @@ def deterministic_teaching_step_evaluation(
         "i didn't understand",
         "i dont understand",
         "not sure",
+        "what",
+        "what?",
         "what do i state",
         "are u stupid",
     }:
@@ -1928,16 +1930,23 @@ def apply_focused_component_evidence(
 ) -> GuidedEvaluation:
     """Apply independently verified evidence to one authored component."""
 
-    if evidence.confidence < confidence_threshold:
-        return evaluation
     confirmed_ids = set(evaluation.newly_confirmed_concept_ids)
     contradicted_ids = set(evaluation.contradicted_concept_ids)
-    if evidence.status == "DEMONSTRATED":
+    if (
+        evidence.status == "DEMONSTRATED"
+        and evidence.confidence >= confidence_threshold
+    ):
         confirmed_ids.add(evidence.component_id)
         contradicted_ids.discard(evidence.component_id)
     else:
+        # A model claim is never persistent evidence on its own. If the
+        # independent adjudicator cannot positively demonstrate the component,
+        # remove the new claim and retain the unresolved teaching step.
         confirmed_ids.discard(evidence.component_id)
-        if evidence.status == "CONTRADICTED":
+        if (
+            evidence.status == "CONTRADICTED"
+            and evidence.confidence >= confidence_threshold
+        ):
             contradicted_ids.add(evidence.component_id)
     return evaluation.model_copy(
         update={
@@ -2890,7 +2899,7 @@ def evaluate_answer_contract(
         *answer_spec.accepted_answers,
     ]
     if method == "EXACT_CHOICE_MATCH":
-        student_choice = request.student_input.strip().upper()
+        student_choice = normalized_choice_response(request.student_input)
         accepted_choices = {answer.strip().upper() for answer in accepted_answers}
         return "CORRECT" if student_choice in accepted_choices else "INCORRECT"
     if method == "EXACT_NOTATION_MATCH":
@@ -2937,6 +2946,17 @@ def evaluate_answer_contract(
     ):
         return "CORRECT"
     return None
+
+
+def normalized_choice_response(student_input: str) -> str:
+    """Return the selected option ID from a short typed choice response."""
+
+    normalized = student_input.strip().upper()
+    match = re.fullmatch(
+        r"(?:I\s+(?:CHOOSE|CHOSE)\s+(?:OPTION\s+)?|(?:THE\s+)?(?:OPTION|CHOICE)\s+)?([A-Z])\.?",
+        normalized,
+    )
+    return match.group(1) if match is not None else normalized
 
 
 def normalize_exact_notation(value: str) -> str:

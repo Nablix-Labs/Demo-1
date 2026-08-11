@@ -207,6 +207,7 @@ intent_phrases:
     - hint
     - help me
   EXPRESSING_CONFUSION:
+    - what
     - i don't know
     - i do not know
     - idk
