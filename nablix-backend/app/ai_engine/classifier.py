@@ -1134,7 +1134,26 @@ def option_comparison_follow_up(
         return None
 
     normalized_response = re.sub(r"[^a-z]", "", student_input.casefold())
-    if normalized_response in {"yes", "yeah", "yep", "correct", "true"}:
+    selected_option = (
+        teaching_state.selected_option_id.casefold()
+        if teaching_state is not None and teaching_state.selected_option_id is not None
+        else None
+    )
+    selected_reference = re.fullmatch(
+        r"(?:ichoose(?:option)?|ichose(?:option)?|option|choose)?([a-z])",
+        normalized_response,
+    )
+    if (
+        selected_reference is not None
+        and selected_option is not None
+        and selected_reference.group(1) == selected_option
+    ):
+        message = (
+            "You have already chosen that option. Now test it: can one fixed "
+            "starting number describe every possible case?"
+        )
+        state: GuidedStudentState = "PARTIAL"
+    elif normalized_response in {"yes", "yeah", "yep", "correct", "true"}:
         message = (
             "Not quite. A fixed starting number only describes one case. "
             "Try another starting number: would the option you chose still work?"
@@ -1268,16 +1287,27 @@ def classify_guided_learning_response(
             next_objective,
         )
     if detect_student_intent(request.student_input, rules) == "EXPRESSING_CONFUSION":
-        active_step = active_teaching_step(request)
-        focused_prompt = (
-            active_step.prompt
-            if active_step is not None
-            else focused_unresolved_prompt(
-                rubric,
-                objective,
-                "Which part should we look at first?",
-            )
+        option_comparison = (
+            request.guided_teaching_state is not None
+            and request.guided_teaching_state.last_tutor_question_type
+            == "OPTION_COMPARISON"
         )
+        if option_comparison:
+            focused_prompt = (
+                "Let’s check it together: can one fixed starting number describe "
+                "every possible case?"
+            )
+        else:
+            active_step = active_teaching_step(request)
+            focused_prompt = (
+                active_step.prompt
+                if active_step is not None
+                else focused_unresolved_prompt(
+                    rubric,
+                    objective,
+                    "Which part should we look at first?",
+                )
+            )
         message = f"That’s okay—we’ll take it one part at a time. {focused_prompt}"
         evaluation = GuidedEvaluation(
             student_state="STUCK",

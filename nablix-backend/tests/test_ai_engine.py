@@ -406,6 +406,32 @@ def test_wrong_choice_comparison_accepts_a_negative_correction_without_completio
     assert "cannot describe every case" in follow_up.tutor_message
 
 
+def test_choice_reaffirmation_keeps_the_existing_comparison_question() -> None:
+    objective = ActiveTeachingObjective(
+        objective_type="ANSWER_QUESTION",
+        target_concept_ids=["GENERAL_RULE_SELECTION"],
+        confirmed_concept_ids=[],
+        missing_concept_ids=["GENERAL_RULE_SELECTION"],
+    )
+    state = GuidedTeachingState(
+        question_id="Q-T01-004",
+        objective_component_ids=["GENERAL_RULE_SELECTION"],
+        confirmed_component_ids=[],
+        missing_component_ids=["GENERAL_RULE_SELECTION"],
+        active_component_id="GENERAL_RULE_SELECTION",
+        last_tutor_question_type="OPTION_COMPARISON",
+        selected_option_id="A",
+        awaiting_response=True,
+    )
+
+    follow_up = classifier.option_comparison_follow_up([], "I choose option A", objective, state)
+
+    assert follow_up is not None
+    assert follow_up.student_state == "PARTIAL"
+    assert "already chosen" in follow_up.tutor_message
+    assert "can one fixed starting number" in follow_up.tutor_message
+
+
 def test_copied_numeric_example_is_repaired_before_the_general_rule(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
