@@ -763,7 +763,7 @@ async def process_answer_with_session_event(
         tutor,
         content_response,
         response,
-        _apply_schema_event(session, response),
+        await _apply_schema_event(session, response),
     )
 
 
@@ -1042,7 +1042,7 @@ async def _initialize_restored_schema_phase(
         and payload.question_set is not None
         and payload.question_set.questions
     ):
-        session = _apply_schema_event(session, event)
+        session = await _apply_schema_event(session, event)
 
     if session.current_phase == "GUIDED_PRACTICE":
         phase_state = event.journey_state.phase_2_guided_learning
@@ -1150,7 +1150,7 @@ async def _initialize_restored_schema_phase(
             status_code=503,
             detail="Student Model did not initialize the restored phase with questions.",
         )
-    return _apply_schema_event(session, response)
+    return await _apply_schema_event(session, response)
 def _schema_visual_cue(
     event: StudentModelSessionEventResponse | None,
 ) -> VisualCue | None:
@@ -2100,7 +2100,7 @@ async def _guided_help_response(
             session.correct_answer,
             rules,
         )
-    event_session = _apply_schema_event(session, event)
+    event_session = await _apply_schema_event(session, event)
     history = _updated_conversation_history(
         session.conversation_history,
         request.text_input or request.voice_transcript or "Help requested.",
@@ -2112,7 +2112,7 @@ async def _guided_help_response(
         False,
         None,
     )
-    updated_session = update_interaction_state(
+    updated_session = await update_interaction_state(
         request.session_id,
         request.student_id,
         event_session,
@@ -2288,7 +2288,7 @@ def _nudge_side_channel_updates(
     return updates
 
 
-def _side_channel_response(
+async def _side_channel_response(
     request: InteractionRequest,
     session: SessionRecord,
     message: str,
@@ -2296,7 +2296,7 @@ def _side_channel_response(
     conversation_action: ConversationAction,
     state_updates: dict[str, object],
 ) -> InteractionResponse:
-    updated_session = update_side_channel_state(session, state_updates)
+    updated_session = await update_side_channel_state(session, state_updates)
     response = _response_from(
         session_id=request.session_id,
         student_id=request.student_id,
@@ -2368,7 +2368,7 @@ def _selected_option_message(session: SessionRecord, option_id: str) -> tuple[st
     )
 
 
-def _option_selected_interaction_response(
+async def _option_selected_interaction_response(
     request: InteractionRequest,
     session: SessionRecord,
 ) -> InteractionResponse:
@@ -2378,7 +2378,7 @@ def _option_selected_interaction_response(
         raise HTTPException(status_code=422, detail="selected_option_id is required.")
     selection, message = _selected_option_message(session, request.selected_option_id)
     rules = load_classifier_rules()
-    updated_session = update_interaction_state(
+    updated_session = await update_interaction_state(
         request.session_id,
         request.student_id,
         session,
@@ -2440,14 +2440,14 @@ def _nudge_eligible(session: SessionRecord, now: datetime) -> bool:
     return cooldown_ms >= policy.cooldown_ms
 
 
-def _nudge_response(
+async def _nudge_response(
     request: InteractionRequest,
     session: SessionRecord,
     message: str,
     status: Literal["GENERATED", "PRESENTED"] | None,
     state_updates: dict[str, object],
 ) -> InteractionResponse:
-    updated_session = update_side_channel_state(session, state_updates)
+    updated_session = await update_side_channel_state(session, state_updates)
     response = _response_from(
         session_id=request.session_id,
         student_id=request.student_id,
@@ -2489,14 +2489,14 @@ def _nudge_response(
     )
 
 
-def _claim_inactivity_nudge(
+async def _claim_inactivity_nudge(
     request: InteractionRequest,
     session: SessionRecord,
 ) -> InteractionResponse:
     now = datetime.now(timezone.utc)
     base_updates: dict[str, object] = {}
     if not _nudge_eligible(session, now):
-        return _nudge_response(
+        return await _nudge_response(
             request,
             session,
             "",
@@ -2505,7 +2505,7 @@ def _claim_inactivity_nudge(
             base_updates,
         )
     message = _contextual_nudge_message(session)
-    return _nudge_response(
+    return await _nudge_response(
         request,
         session,
         message,
@@ -2520,7 +2520,7 @@ def _claim_inactivity_nudge(
     )
 
 
-def _acknowledge_inactivity_nudge(
+async def _acknowledge_inactivity_nudge(
     request: InteractionRequest,
     session: SessionRecord,
 ) -> InteractionResponse:
@@ -2541,7 +2541,7 @@ def _acknowledge_inactivity_nudge(
         history = []
     else:
         history = history[-rules.conversation_rules.max_recent_messages :]
-    return _nudge_response(
+    return await _nudge_response(
         request,
         session,
         session.pending_nudge_message,
@@ -2627,7 +2627,7 @@ def _visible_visual_cue_for_explain_again(
     )
 
 
-def _explain_again_interaction_response(
+async def _explain_again_interaction_response(
     request: InteractionRequest,
     session: SessionRecord,
 ) -> InteractionResponse:
@@ -2712,7 +2712,7 @@ def _explain_again_interaction_response(
         history = []
     else:
         history = history[-max_messages:]
-    updated_session = update_interaction_state(
+    updated_session = await update_interaction_state(
         request.session_id,
         request.student_id,
         session,
@@ -2834,7 +2834,7 @@ async def _process_interaction(
                 status_code=409,
                 detail="NO_ACTIVE_SUPPORT: this session has no support to replay.",
             )
-        return _side_channel_response(
+        return await _side_channel_response(
             request,
             session,
             support_message,
@@ -2843,15 +2843,15 @@ async def _process_interaction(
             _tutor_side_channel_updates(request, session, support_message),
         )
     if request.interaction_type == "EXPLAIN_AGAIN":
-        return _explain_again_interaction_response(request, session)
+        return await _explain_again_interaction_response(request, session)
     if request.interaction_type == "OPTION_SELECTED":
-        return _option_selected_interaction_response(request, session)
+        return await _option_selected_interaction_response(request, session)
     if request.interaction_type == "INACTIVITY_NUDGE":
-        nudge_res = _claim_inactivity_nudge(request, session)
+        nudge_res = await _claim_inactivity_nudge(request, session)
         return nudge_res
 
     if request.interaction_type == "NUDGE_PRESENTED":
-        return _acknowledge_inactivity_nudge(request, session)
+        return await _acknowledge_inactivity_nudge(request, session)
 
     # Teach-back is a real learner explanation. It follows the normal answer
     # pipeline so it can confirm evidence or receive support; the distinct
@@ -2880,7 +2880,7 @@ async def _process_interaction(
             _LOW_CONFIDENCE_MESSAGE,
             rules.conversation_rules.max_recent_messages,
         )
-        updated_session = update_interaction_state(
+        updated_session = await update_interaction_state(
             request.session_id,
             request.student_id,
             session,
@@ -2985,7 +2985,7 @@ async def _process_interaction(
             "Your board shows a correct final answer, but I heard a different answer. "
             "Which answer would you like me to check?"
         )
-        updated_session = update_interaction_state(
+        updated_session = await update_interaction_state(
             request.session_id,
             request.student_id,
             session,
@@ -3111,7 +3111,7 @@ async def _process_interaction(
     )
     if ocr is not None and ocr.needs_clarification:
         message = "I’m having trouble reading your working on the board. Please rewrite it clearly and try again."
-        updated_session = update_interaction_state(
+        updated_session = await update_interaction_state(
             request.session_id,
             request.student_id,
             session,
@@ -3169,7 +3169,7 @@ async def _process_interaction(
     safety_check = await adapters.safety.check(context)
     if not safety_check.passed:
         fallback = safety_check.safe_fallback_message or "Let's pause for a moment."
-        updated_session = update_interaction_state(
+        updated_session = await update_interaction_state(
             request.session_id,
             request.student_id,
             session,
@@ -3533,7 +3533,7 @@ async def _process_interaction(
     )
 
     next_phase = session.current_phase
-    updated_session = update_interaction_state(
+    updated_session = await update_interaction_state(
         request.session_id,
         request.student_id,
         session,

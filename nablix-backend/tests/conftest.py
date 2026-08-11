@@ -15,6 +15,7 @@ import pytest
 
 from app.adapters import provider
 from app.core.config import Settings, get_settings
+from app.models.session import SessionRecord
 from app.services import session_service
 
 
@@ -34,6 +35,10 @@ _TEST_QUESTIONS: dict[str, tuple[str, str, str]] = {
     )
     for phase, question_id in _PHASE_QUESTION_IDS.items()
 }
+
+
+async def _skip_session_persistence(_: SessionRecord) -> None:
+    """Keep unit tests independent from the production PostgreSQL service."""
 
 
 @pytest.fixture(autouse=True)
@@ -58,5 +63,6 @@ def force_mock_adapters(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         "get_settings",
         lambda: test_settings,
     )
+    monkeypatch.setattr(session_service, "save_session", _skip_session_persistence)
     yield
     get_settings.cache_clear()

@@ -41,7 +41,7 @@ async def start_voice_session(
 ) -> VoiceSessionStartResponse:
     """Open a mock voice stream for an existing tutoring session."""
 
-    session: SessionRecord = start_voice_stream(request.session_id, request.student_id)
+    session: SessionRecord = await start_voice_stream(request.session_id, request.student_id)
     return VoiceSessionStartResponse(
         session_id=session.session_id,
         student_id=session.student_id,
