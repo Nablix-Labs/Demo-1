@@ -490,7 +490,6 @@ export function useDemoTutor() {
           interaction_type: 'ANSWER_SUBMISSION',
           input_source: 'TEXT',
           text_input: text,
-          selected_option_id: phase3Choice ? state.selectedOptionId ?? undefined : undefined,
           current_phase: state.currentPhase,
           concept_id: ctx.concept_id,
           question_id: questionId,
@@ -1007,14 +1006,14 @@ export function useDemoTutor() {
     if (!apiEnabled() || !sessionId || !state.activeQuestionId) return;
     const turnId = state.beginSubmissionTurn();
     const selection = `Selected ${optionId}: ${optionText}`;
-    addTranscriptMessage({ role: 'user', text: selection });
-    addTrailEntry({ kind: 'student', text: selection });
+    addTranscriptMessage({ role: 'student', text: selection });
+    addTrailEntry({ kind: 'answer', text: selection, meta: 'option selected' });
     try {
       const res = await sendSynchronizedInteraction({
         session_id: sessionId,
         student_id: studentId(),
         interaction_type: 'OPTION_SELECTED',
-        input_source: 'TEXT',
+        input_source: 'CHOICE',
         selected_option_id: optionId,
         current_phase: state.currentPhase,
         concept_id: state.activeConceptId,
@@ -1037,8 +1036,8 @@ export function useDemoTutor() {
     const state = useNumeraStore.getState();
     if (!apiEnabled() || !sessionId || !state.activeQuestionId || !text.trim()) return false;
     const turnId = state.beginSubmissionTurn();
-    addTranscriptMessage({ role: 'user', text });
-    addTrailEntry({ kind: 'student', text, meta: 'teach back' });
+    addTranscriptMessage({ role: 'student', text });
+    addTrailEntry({ kind: 'answer', text, meta: 'teach back' });
     try {
       const res = await sendSynchronizedInteraction({
         session_id: sessionId,

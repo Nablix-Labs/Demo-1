@@ -74,7 +74,6 @@ class InteractionRequest(BaseModel):
     transcript_final: bool | None = None
     canvas_snapshot_id: str | None = None
     canvas_state: InteractionCanvasState | None = None
-    selected_option_id: str | None = None
     current_phase: Phase
     concept_id: ConceptId
     question_id: QuestionId
