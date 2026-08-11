@@ -890,26 +890,12 @@ def _schema_question(session: SessionRecord) -> StudentModelQuestion:
     return question
 
 
-def require_phase3_submission(
+def require_phase3_choice_option(
     session: SessionRecord,
-    submission_confirmed: bool | None,
-    submission_kind: Literal["CANVAS", "CHOICE"] | None,
     selected_option_id: str | None,
 ) -> None:
-    """Validate an explicit Phase 3 submission against its active question."""
+    """Validate a Phase 3 choice against the active question options."""
 
-    if submission_confirmed is not True:
-        raise HTTPException(
-            status_code=409,
-            detail="Independent Practice answers require explicit submission confirmation.",
-        )
-    if submission_kind == "CANVAS":
-        return
-    if submission_kind != "CHOICE":
-        raise HTTPException(
-            status_code=409,
-            detail="Independent Practice answers must use Canvas or Choice.",
-        )
     option_ids = {
         option.option_id
         for option in _schema_question(session).student_view.options
@@ -2834,10 +2820,8 @@ async def _process_interaction(
                     status_code=409,
                     detail="Independent Practice answers must use Canvas or Choice.",
                 )
-            require_phase3_submission(
+            require_phase3_choice_option(
                 session,
-                request.phase3_submission_confirmed,
-                request.phase3_submission_kind,
                 request.selected_option_id,
             )
 

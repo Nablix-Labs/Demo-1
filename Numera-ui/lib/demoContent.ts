@@ -341,26 +341,6 @@ export const demoFor = (topicId: string): TopicDemo =>
  */
 const ORIENTATION_VIDEO_BASE = 'https://nablixmathvideos.blob.core.windows.net/numeradev';
 
-/**
- * YouTube ids for the same orientation videos, uploaded unlisted by Manjusha
- * (2026-07-28) because the blob MP4s are ~163 MB each and made the whole app
- * feel slow while one was on screen. Preferred over the blob file: YouTube
- * serves an adaptive stream from a CDN.
- *
- * Only 1-3 have been uploaded so far; 4-6 still fall back to the blob.
- */
-const ORIENTATION_YOUTUBE_IDS: Record<number, string> = {
-  1: '-hKO8z_hHfM',
-  2: 'Yl-uS9s4xM0',
-  3: 'awY94qzVObA',
-};
-
-/** YouTube id for a backend topic code, or null when there isn't one. */
-export function orientationYouTubeIdForTopicCode(topicCode: string | null | undefined): string | null {
-  const match = /(\d+)\s*$/.exec(topicCode ?? '');
-  return match ? ORIENTATION_YOUTUBE_IDS[Number(match[1])] ?? null : null;
-}
-
 export const ORIENTATION_VIDEOS: { sequence: number; title: string; src: string }[] = [
   'What Is Algebra?',
   'Algebraic Notation',

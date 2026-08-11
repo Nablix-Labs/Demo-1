@@ -75,8 +75,6 @@ class InteractionRequest(BaseModel):
     canvas_snapshot_id: str | None = None
     canvas_state: InteractionCanvasState | None = None
     selected_option_id: str | None = None
-    phase3_submission_confirmed: bool | None = None
-    phase3_submission_kind: Literal["CANVAS", "CHOICE"] | None = None
     current_phase: Phase
     concept_id: ConceptId
     question_id: QuestionId
