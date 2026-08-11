@@ -490,6 +490,7 @@ export function useDemoTutor() {
           interaction_type: 'ANSWER_SUBMISSION',
           input_source: 'TEXT',
           text_input: text,
+          selected_option_id: phase3Choice ? state.selectedOptionId ?? undefined : undefined,
           current_phase: state.currentPhase,
           concept_id: ctx.concept_id,
           question_id: questionId,

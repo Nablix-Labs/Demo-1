@@ -806,6 +806,7 @@ export interface InteractionPayload {
   canvas_snapshot_id?: string;
   /** Frozen at voice-turn end so speech and board work are evaluated together. */
   canvas_state?: InteractionCanvasState;
+  selected_option_id?: string;
   idle_duration_ms?: number;
   nudge_id?: string;
   current_phase: string;
