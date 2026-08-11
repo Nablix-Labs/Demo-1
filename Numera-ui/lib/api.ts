@@ -1169,7 +1169,6 @@ export async function submitCanvas(
   sessionId: string,
   snapshotDataUrl: string,
   submissionRole: 'STANDALONE_ATTEMPT' | 'VOICE_ATTACHMENT',
-  phase3Submission: boolean,
   student: string = studentId()
 ) {
   if (!snapshotDataUrl.startsWith(PNG_DATA_URL_PREFIX)) {
@@ -1183,8 +1182,10 @@ export async function submitCanvas(
     student_id: student,
     snapshot_data_url: snapshotDataUrl,
     submission_role: submissionRole,
-    phase3_submission_confirmed: phase3Submission || undefined,
-    phase3_submission_kind: phase3Submission ? 'CANVAS' : undefined,
+    phase3_submission_confirmed:
+      submissionRole === 'STANDALONE_ATTEMPT' ? true : undefined,
+    phase3_submission_kind:
+      submissionRole === 'STANDALONE_ATTEMPT' ? 'CANVAS' : undefined,
   });
   return res.data;
 }
