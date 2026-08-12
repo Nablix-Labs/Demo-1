@@ -16,7 +16,6 @@ import type { CanvasDrawPayload } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { allowAnonTutorCalls } from '@/lib/runtimeConfig';
 import type { Phase3ResponseFields } from '@/lib/phase3';
-import { recordDebugCall } from '@/lib/debugJson';
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
 
@@ -91,30 +90,9 @@ api.interceptors.request.use((config) => {
  * would bounce every anonymous tester to a login screen they were never on.
  */
 api.interceptors.response.use(
-  (response) => {
-    // Dev-only JSON capture (lib/debugJson.ts). One line here covers every
-    // phase's calls; it is a no-op unless NEXT_PUBLIC_DEBUG_JSON is set.
-    recordDebugCall(
-      `${response.config.method?.toUpperCase() ?? 'POST'} ${response.config.url ?? ''}`,
-      safeRequestBody(response.config.data),
-      response.data,
-    );
-    return response;
-  },
+  (response) => response,
   (error: unknown) => {
     const status = (error as { response?: { status?: number } })?.response?.status;
-    // A FAILED call is the one a tester most needs to see, so capture it too.
-    const failed = error as {
-      config?: { method?: string; url?: string; data?: unknown };
-      response?: { data?: unknown };
-    };
-    if (failed?.config) {
-      recordDebugCall(
-        `${failed.config.method?.toUpperCase() ?? 'POST'} ${failed.config.url ?? ''} (failed)`,
-        safeRequestBody(failed.config.data),
-        failed.response?.data ?? String(error),
-      );
-    }
     const realLogin = useAuthStore.getState().accessToken !== null;
     if (status === 401 && realLogin) {
       console.warn('[auth] the server rejected our login — signing out');
@@ -124,18 +102,6 @@ api.interceptors.response.use(
   },
 );
 
-/**
- * Axios hands back the request body already serialised. Parse it so the panel
- * can pretty-print it, and never let a malformed body break the capture.
- */
-function safeRequestBody(data: unknown): unknown {
-  if (typeof data !== 'string') return data;
-  try {
-    return JSON.parse(data);
-  } catch {
-    return data;
-  }
-}
 
 // ── Error shape ───────────────────────────────────────────────────────────────
 // Every backend error returns this shape (never a raw stack trace).
@@ -917,6 +883,14 @@ export interface VisualCue {
   cue_id?: string | null;
   cue_type: string | null;
   description: string | null;
+  /**
+   * Illustration for the cue. Optional because the backend does not forward it
+   * yet — Sanya, 12 Aug 2026: "a later enhancement is to preserve and forward
+   * asset_url in the backend visual-cue response". The client reads it now so
+   * the image appears the moment it starts arriving, and renders text-only
+   * until then. Values are sanitised by lib/cueAsset.
+   */
+  asset_url?: string | null;
   /** Structured cue actions (backend adapters.py:175). Not rendered yet — Phase 2 §6. */
   actions?: Array<Record<string, unknown>>;
 }

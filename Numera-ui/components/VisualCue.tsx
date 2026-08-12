@@ -26,6 +26,7 @@ export default function VisualCue() {
   const setVisible = useNumeraStore((s) => s.setVisualCueVisible);
   const cueType = useNumeraStore((s) => s.visualCueType);
   const description = useNumeraStore((s) => s.visualCueDescription);
+  const assetUrl = useNumeraStore((s) => s.visualCueAssetUrl);
   const panelSide = useNumeraStore((s) => s.panelSide);
   const currentPhase = useNumeraStore((s) => s.currentPhase);
   const card = resolveCueCard(cueType);
@@ -37,6 +38,9 @@ export default function VisualCue() {
 
   // Small entrance (fade + rise) without depending on a motion library.
   const [shown, setShown] = useState(false);
+  // Reset per cue: a failure on one image must not suppress the next one.
+  const [imageFailed, setImageFailed] = useState(false);
+  useEffect(() => setImageFailed(false), [assetUrl]);
   useEffect(() => {
     if (visible) {
       const id = requestAnimationFrame(() => setShown(true));
@@ -82,6 +86,19 @@ export default function VisualCue() {
         <StickyNote tone="amber" label={label} lines={card ? [card.example] : undefined}>
           {card?.caption}
           {description ? <span className="mt-2 block">{description}</span> : null}
+          {/* The picture is ADDITIVE — the text card above is the cue itself.
+              A missing, malformed or unreachable image must never cost the
+              student the cue, so a load failure just hides the <img> (Sanya,
+              12 Aug 2026: "do not break the existing text-card cue if the
+              image is unavailable"). */}
+          {assetUrl && !imageFailed ? (
+            <img
+              src={assetUrl}
+              alt={description ?? 'Visual cue'}
+              onError={() => setImageFailed(true)}
+              className="mt-3 block w-full rounded-md border border-muted-gray bg-white object-contain"
+            />
+          ) : null}
         </StickyNote>
       </div>
     </aside>

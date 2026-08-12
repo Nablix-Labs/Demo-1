@@ -4,7 +4,6 @@ import './globals.css';
 import AppFrame from '@/components/AppFrame';
 import SupportChrome from '@/components/support/SupportChrome';
 import { caveat } from '@/lib/tutorFont';
-import DebugJsonPanel from '@/components/DebugJsonPanel';
 
 export const metadata: Metadata = {
   title: 'Numera — AI Math Tutor',
@@ -35,18 +34,6 @@ export default function RootLayout({
             over the login page is in-app chrome shown to someone who is not in
             the app yet. */}
         <SupportChrome />
-        {/* Dev-only JSON viewer (temporary — Manjusha, 12 Aug 2026). Mounted at
-            the root so every phase is covered by one line, and renders null
-            unless NEXT_PUBLIC_DEBUG_JSON=true and a call has been captured.
-            To remove: delete this line, components/DebugJsonPanel.tsx,
-            lib/debugJson.ts and the recordDebugCall calls in lib/api.ts. */}
-        {/* Compared inline so the flag is a literal at build time. Note the
-            panel's CODE still ships — webpack keeps the client-component chunk
-            either way — but it is unreachable, and nothing is captured either,
-            because recordDebugCall returns early on the same flag. So no
-            student payload is ever held or shown in a normal build; deleting
-            the four places listed above is what removes it outright. */}
-        {process.env.NEXT_PUBLIC_DEBUG_JSON === 'true' && <DebugJsonPanel />}
       </body>
     </html>
   );

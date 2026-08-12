@@ -1,4 +1,5 @@
 import { activeScaffold, type InteractionResponse } from '@/lib/api';
+import { cueAssetUrl } from '@/lib/cueAsset';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import {
   shouldApply,
@@ -37,6 +38,27 @@ export function acceptResponse(response: VersionedResponse): boolean {
   return true;
 }
 
+/**
+ * A hint the backend has already authorised on this turn.
+ *
+ * Sanya, 12 Aug 2026: on WRONG_1 and WRONG_2 the Student Model returns real
+ * hints with `conversation_action: GIVE_HINT` and the text in
+ * `support_message`. The client stored them for the "Need help?" replay and
+ * showed nothing — so a student who had already earned a hint had to know to
+ * ask for it. "The student should not have to press Need help? to receive a
+ * hint that the backend has already authorised."
+ *
+ * Null when there is nothing extra to present: no hint was served, or the
+ * support text IS the tutor's line, in which case showing both would say the
+ * same thing twice.
+ */
+export function authorisedHint(response: SupportPresentation): string | null {
+  if (response.conversation_action !== 'GIVE_HINT') return null;
+  const hint = response.support_message?.trim();
+  if (!hint) return null;
+  return hint === response.message?.trim() ? null : hint;
+}
+
 export function applyInteractionSupport(response: SupportPresentation): string {
   // Support is separate from the tutor's actual response. Keeping it apart
   // prevents a generic content hint from replacing a question-aware correction
@@ -56,6 +78,9 @@ export function applyInteractionSupport(response: SupportPresentation): string {
       show: true,
       cueType: cue?.cue_type ?? null,
       description: cue?.description ?? null,
+      // Additive: null whenever the backend sent no usable URL, and the card
+      // renders text-only exactly as before (see lib/cueAsset).
+      assetUrl: cueAssetUrl(cue?.asset_url),
     });
   }
 
