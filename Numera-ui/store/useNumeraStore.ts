@@ -14,6 +14,7 @@ import { isPhase3 } from '@/lib/phase3';
 import {
   DEMO_CONCEPT_ID,
   studentViewFor,
+  hasSelectableOptions,
   type ActiveScaffold,
   type QuestionType,
   type SchemaQuestionOption,
@@ -805,7 +806,35 @@ export const useNumeraStore = create<NumeraState>()(
     }),
 
   setCurrentPhase: (currentPhase) => set({ currentPhase }),
-  setBackendSession: (backendSession) => set({ backendSession }),
+  /**
+   * Store the session record — and backfill the options that depend on it.
+   *
+   * Options do not travel on an interaction reply; they are looked up out of
+   * this record by question id. So any turn applied BEFORE the record has
+   * loaded finds nothing and sets `questionOptions: []` — and nothing ever put
+   * them back, because every later reply is for the same question and so leaves
+   * the (empty) list alone. The student was left with a choice question and no
+   * choices: "Which is the general rule:" and nothing under it.
+   *
+   * That is the intermittent refresh case (Manjusha, 13 Aug 2026): reload
+   * clears the record, and whether the options survive depends on whether the
+   * record or the first reply lands first — a race the student should not be
+   * exposed to. Re-deriving here removes the ordering dependency entirely.
+   */
+  setBackendSession: (backendSession) =>
+    set((s) => {
+      const view = studentViewFor(backendSession, s.activeQuestionId);
+      if (!hasSelectableOptions(view) || s.questionOptions.length > 0) {
+        return { backendSession };
+      }
+      return {
+        backendSession,
+        questionOptions: view!.options,
+        // The record is also the authority on the type when the reply omitted
+        // it, which is what decides that a chooser is rendered at all.
+        questionType: s.questionType ?? view!.question_type,
+      };
+    }),
   setSessionSummary: (sessionSummary) => set({ sessionSummary }),
   setSessionReview: (sessionReview) => set({ sessionReview }),
   clearSessionId: () => set({
