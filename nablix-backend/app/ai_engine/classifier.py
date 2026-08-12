@@ -1791,7 +1791,13 @@ def align_guided_follow_up(
     if evaluation.student_state == "CORRECT" or objective is None:
         return evaluation
     prompt = controller_prompt_for_objective(request, rubric, objective)
-    if guided_tutor_message_is_safe_and_relevant(evaluation, request, prompt):
+    if guided_tutor_message_is_safe_and_relevant(
+        evaluation,
+        request,
+        rubric,
+        objective,
+        prompt,
+    ):
         return evaluation
     prefix = {
         "PARTIAL": "Good.",
@@ -1799,7 +1805,13 @@ def align_guided_follow_up(
         "STUCK": "That's okay.",
         "UNCLEAR": "Let's focus on this part.",
     }[evaluation.student_state]
-    message = f"{prefix} {prompt}"
+    acknowledgement = safe_guided_acknowledgement_prefix(
+        evaluation,
+        request,
+        rubric,
+        objective,
+    )
+    message = f"{acknowledgement or prefix} {prompt}"
     logger.warning(
         "guided_tutor_message_replaced",
         extra={
@@ -1819,6 +1831,8 @@ def align_guided_follow_up(
 def guided_tutor_message_is_safe_and_relevant(
     evaluation: GuidedEvaluation,
     request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
     controller_prompt: str,
 ) -> bool:
     """Return whether the LLM reply is safe and tied to the current tutor turn."""
@@ -1838,6 +1852,14 @@ def guided_tutor_message_is_safe_and_relevant(
     ):
         return False
 
+    if guided_message_reveals_unresolved_teaching_step(
+        message,
+        request,
+        rubric,
+        objective,
+    ):
+        return False
+
     normalized_message = normalize_semantic_answer(message)
     if normalize_semantic_answer(controller_prompt) in normalized_message:
         return True
@@ -1854,6 +1876,170 @@ def guided_tutor_message_is_safe_and_relevant(
         | significant_component_tokens(request.question)
     )
     return bool(message_tokens.intersection(turn_context_tokens))
+
+
+def guided_message_reveals_unresolved_teaching_step(
+    message: str,
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+) -> bool:
+    """Reject prose that gives a pending guided-step answer before asking it."""
+
+    answer_spec = request.answer_spec
+    if answer_spec is None:
+        return False
+    expression = _expression_parts(answer_spec.canonical_answer)
+    active_step = active_teaching_step(request)
+    if expression is None or active_step is None:
+        return False
+
+    variable, operator, fixed_value = expression
+    teaching_steps = teaching_steps_for(request)
+    active_index = next(
+        (
+            index
+            for index, teaching_step in enumerate(teaching_steps)
+            if teaching_step.step_id == active_step.step_id
+        ),
+        None,
+    )
+    if active_index is None:
+        return False
+    missing_step_ids = {
+        teaching_step.step_id
+        for teaching_step in teaching_steps[active_index:]
+        if _component_for_step(rubric, teaching_step.step_id)
+        in set(objective.missing_concept_ids)
+    }
+    if not missing_step_ids:
+        return False
+
+    normalized = normalize_semantic_answer(message)
+    normalized_student_input = normalize_semantic_answer(request.student_input)
+    if (
+        "CHANGING_VALUE" in missing_step_ids
+        and not teaches_changing_value(
+            normalized_student_input,
+            variable,
+        )
+        and teaches_changing_value(
+            normalized,
+            variable,
+        )
+    ):
+        return True
+    if (
+        "FIXED_VALUE" in missing_step_ids
+        and not teaches_fixed_value(
+            normalized_student_input,
+            fixed_value,
+        )
+        and teaches_fixed_value(
+            normalized,
+            fixed_value,
+        )
+    ):
+        return True
+    operation_terms = operation_answer_terms(operator)
+    return (
+        "OPERATION" in missing_step_ids
+        and not teaches_operation(normalized_student_input, operation_terms)
+        and teaches_operation(normalized, operation_terms)
+    )
+
+
+def teaches_changing_value(message: str, variable: str) -> bool:
+    """Return whether prose directly supplies the changing-value answer."""
+
+    escaped_variable = re.escape(variable)
+    return bool(
+        re.search(
+            rf"\b(?:changing (?:quantity|value)|variable|letter|symbol)\b"
+            rf"[^.?!]{{0,32}}\b{escaped_variable}\b",
+            message,
+        )
+        or re.search(
+            rf"\b{escaped_variable}\b\s+(?:is|represents|can change|varies)",
+            message,
+        )
+    )
+
+
+def teaches_fixed_value(message: str, fixed_value: str) -> bool:
+    """Return whether prose directly supplies the fixed-value answer."""
+
+    escaped_value = re.escape(fixed_value)
+    return bool(
+        re.search(
+            rf"\b(?:fixed value|fixed number|constant|increment)\b"
+            rf"[^.?!]{{0,32}}\b{escaped_value}\b",
+            message,
+        )
+        or re.search(
+            rf"\b{escaped_value}\b\s+(?:is|stays|remains)\s+(?:fixed|constant)",
+            message,
+        )
+    )
+
+
+def teaches_operation(message: str, operation_terms: set[str]) -> bool:
+    """Return whether prose directly supplies the pending operation answer."""
+
+    alternatives = "|".join(sorted(map(re.escape, operation_terms)))
+    return bool(
+        re.search(
+            rf"\b(?:operation|plus sign|minus sign|sign)\b"
+            rf"[^.?!]{{0,32}}\b(?:{alternatives})\b",
+            message,
+        )
+    )
+
+
+def operation_answer_terms(operator: str) -> set[str]:
+    """Return verbal answer terms that disclose an operation step."""
+
+    terms_by_operator = {
+        "+": {"add", "added", "adding", "addition", "plus"},
+        "-": {"subtract", "subtracted", "subtracting", "subtraction", "minus"},
+        "×": {"multiply", "multiplied", "multiplying", "multiplication", "times"},
+        "x": {"multiply", "multiplied", "multiplying", "multiplication", "times"},
+        "*": {"multiply", "multiplied", "multiplying", "multiplication", "times"},
+    }
+    return terms_by_operator[operator]
+
+
+def safe_guided_acknowledgement_prefix(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+) -> str | None:
+    """Keep a safe brief acknowledgement while replacing an unsafe explanation."""
+
+    first_sentence = re.split(r"(?<=[.!?])\s+", evaluation.tutor_message.strip())[0]
+    acknowledgement_starts = (
+        "good",
+        "great",
+        "nice",
+        "yes",
+        "you are right",
+        "you're right",
+        "youre right",
+        "you are on the right track",
+        "you're on the right track",
+        "youre on the right track",
+    )
+    if not first_sentence.casefold().startswith(acknowledgement_starts):
+        return None
+    if guided_message_reveals_unresolved_teaching_step(
+        first_sentence,
+        request,
+        rubric,
+        objective,
+    ):
+        return None
+    return first_sentence
 
 
 def guided_message_repairs_selected_misconception(normalized_message: str) -> bool:
