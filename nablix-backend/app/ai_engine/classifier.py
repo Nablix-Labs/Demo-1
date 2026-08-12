@@ -1772,12 +1772,12 @@ def align_guided_follow_up(
     rubric: GeneratedQuestionRubric,
     objective: ActiveTeachingObjective | None,
 ) -> GuidedEvaluation:
-    """Keep the backend-owned question when LLM wording loses lesson context."""
+    """Replace empty, unsafe, generic, or off-topic LLM wording with the active question."""
 
     if evaluation.student_state == "CORRECT" or objective is None:
         return evaluation
     prompt = controller_prompt_for_objective(request, rubric, objective)
-    if prompt.casefold() in evaluation.tutor_message.casefold():
+    if guided_tutor_message_is_safe_and_relevant(evaluation, request, prompt):
         return evaluation
     prefix = {
         "PARTIAL": "Good.",
@@ -1800,6 +1800,39 @@ def align_guided_follow_up(
             "tutor_message_voice": message,
         }
     )
+
+
+def guided_tutor_message_is_safe_and_relevant(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+    controller_prompt: str,
+) -> bool:
+    """Return whether the LLM reply is safe and tied to the current tutor turn."""
+
+    message = evaluation.tutor_message.strip()
+    voice_message = evaluation.tutor_message_voice.strip()
+    if message == "" or voice_message == "":
+        return False
+
+    rules = load_classifier_rules()
+    if message_reveals_answer(
+        message,
+        voice_message,
+        request.correct_answer,
+        rules,
+    ):
+        return False
+
+    normalized_message = normalize_semantic_answer(message)
+    if normalize_semantic_answer(controller_prompt) in normalized_message:
+        return True
+
+    message_tokens = significant_component_tokens(message)
+    turn_context_tokens = (
+        significant_component_tokens(request.student_input)
+        | significant_component_tokens(request.question)
+    )
+    return bool(message_tokens.intersection(turn_context_tokens))
 
 
 def authoritative_guided_completion(
@@ -3814,6 +3847,8 @@ def apply_retrieved_hint(
 def contains_answer_reveal(message: str, correct_answer: str, rules: ClassifierRulesConfig) -> bool:
     normalized_message: str = normalize_text(message)
     normalized_correct_answer: str = normalize_text(correct_answer)
+    semantic_message = normalize_semantic_answer(message)
+    semantic_correct_answer = normalize_semantic_answer(correct_answer)
 
     exact_answer_present = False
     if len(normalized_correct_answer) == 1 and normalized_correct_answer.isalnum():
@@ -3826,12 +3861,25 @@ def contains_answer_reveal(message: str, correct_answer: str, rules: ClassifierR
         )
     elif normalized_correct_answer != "":
         exact_answer_present = normalized_correct_answer in normalized_message
+    if (
+        len(semantic_correct_answer.split()) > 1
+        and semantic_correct_answer in semantic_message
+    ):
+        exact_answer_present = True
     if exact_answer_present:
         return True
     if contains_any(normalized_message, rules.answer_reveal_guardrail.reveal_phrases):
         return True
     correct_numbers: list[str] = re.findall(r"-?\d+(?:\.\d+)?", correct_answer)
-    if len(correct_numbers) != 1:
+    is_single_numeric_answer = (
+        len(correct_numbers) == 1
+        and (
+            re.search(r"[a-z]", semantic_correct_answer) is None
+            or re.fullmatch(r"[a-z]\s*=\s*-?\d+(?:\.\d+)?", correct_answer.casefold().strip())
+            is not None
+        )
+    )
+    if not is_single_numeric_answer:
         return False
 
     correct_value: float = float(correct_numbers[0])
