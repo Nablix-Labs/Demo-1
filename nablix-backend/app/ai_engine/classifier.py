@@ -3210,6 +3210,7 @@ def build_tutor_message_with_openai(
                 phase=request.current_phase,
                 conversation_history=request.conversation_history,
                 canvas_context=canvas_context,
+                support_context=None,
                 rejected_tutor_message=rejected_message,
                 validation_feedback=validation_feedback,
             )
@@ -3235,6 +3236,64 @@ def build_tutor_message_with_openai(
                 "attempt": attempt + 1,
                 "input_source": request.input_source,
             },
+        )
+    return None
+
+
+def build_support_aware_tutor_message(
+    question_id: str | None,
+    question: str,
+    correct_answer: str,
+    student_input: str,
+    evaluation: EvaluationCategory | None,
+    error_type: ErrorType | None,
+    response_strategy: ResponseStrategy,
+    hint_level: HintLevel | None,
+    conversation_history: list[ConversationMessage],
+    support_context: dict[str, object],
+    openai_client: OpenAIAIEngineClient | None,
+) -> OpenAITutorMessage | None:
+    """Write a response that explicitly connects an authored support item to a turn."""
+
+    if openai_client is None:
+        return None
+    rules = load_classifier_rules()
+    rejected_message: str | None = None
+    validation_feedback: str | None = None
+    for attempt in range(rules.guided_learning.maximum_retries + 1):
+        try:
+            message = openai_client.build_tutor_message(
+                question=question,
+                student_input=student_input,
+                evaluation=evaluation,
+                error_type=error_type,
+                response_strategy=response_strategy,
+                hint_level=hint_level,
+                phase="GUIDED_PRACTICE",
+                conversation_history=conversation_history,
+                canvas_context=None,
+                support_context=support_context,
+                rejected_tutor_message=rejected_message,
+                validation_feedback=validation_feedback,
+            )
+        except AdapterError as error:
+            logger.warning(
+                "support_aware_tutor_message_fallback",
+                extra={"question_id": question_id, "detail": error.message},
+            )
+            return None
+        if not message_reveals_answer(
+            message.tutor_message,
+            message.tutor_message_voice_optimised,
+            correct_answer,
+            rules,
+        ):
+            return message
+        rejected_message = message.tutor_message
+        validation_feedback = rules.answer_reveal_guardrail.rewrite_feedback
+        logger.warning(
+            "support_aware_tutor_message_answer_reveal_retry",
+            extra={"question_id": question_id, "attempt": attempt + 1},
         )
     return None
 

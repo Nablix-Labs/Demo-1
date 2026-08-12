@@ -3569,6 +3569,60 @@ def test_canvas_wording_retries_an_answer_revealing_draft() -> None:
     assert captured_feedback[1] is not None
 
 
+def test_support_aware_wording_receives_visible_visual_cue() -> None:
+    captured_support_context: list[dict[str, object] | None] = []
+
+    class _SupportAwareClient:
+        def build_tutor_message(
+            self,
+            **kwargs: object,
+        ) -> openai_client.OpenAITutorMessage:
+            captured_support_context.append(
+                cast(dict[str, object] | None, kwargs["support_context"])
+            )
+            return openai_client.OpenAITutorMessage(
+                tutor_message=(
+                    "Look at the visual cue on your screen. It shows that the "
+                    "starting value can change. Which part can vary?"
+                ),
+                tutor_message_voice_optimised=(
+                    "Look at the visual cue on your screen. It shows that the "
+                    "starting value can change. Which part can vary?"
+                ),
+                confidence=0.95,
+            )
+
+    support_context = {
+        "support_type": "VISUAL_CUE",
+        "visual_cue": {
+            "show": True,
+            "cue_id": "VC-T01-CHANGE",
+            "cue_type": None,
+            "description": "The starting value changes while the operation stays fixed.",
+            "actions": [],
+        },
+        "instruction": "Explain the visible cue and ask one focused next question.",
+    }
+
+    message = classifier.build_support_aware_tutor_message(
+        question_id="Q-T01-006",
+        question="A counter starts at any value c and increases by 4.",
+        correct_answer="c + 4",
+        student_input="c - 4",
+        evaluation="INCORRECT",
+        error_type="SIGN_ERROR",
+        response_strategy="PROVIDE_VISUAL_CUE",
+        hint_level=None,
+        conversation_history=[],
+        support_context=support_context,
+        openai_client=_SupportAwareClient(),
+    )
+
+    assert message is not None
+    assert message.tutor_message.startswith("Look at the visual cue")
+    assert captured_support_context == [support_context]
+
+
 def test_guided_evaluator_retries_answer_revealing_wording(monkeypatch) -> None:
     feedback: list[str | None] = []
 
