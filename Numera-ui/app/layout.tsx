@@ -4,6 +4,7 @@ import './globals.css';
 import AppFrame from '@/components/AppFrame';
 import SupportChrome from '@/components/support/SupportChrome';
 import { caveat } from '@/lib/tutorFont';
+import DebugJsonPanel from '@/components/DebugJsonPanel';
 
 export const metadata: Metadata = {
   title: 'Numera — AI Math Tutor',
@@ -34,6 +35,11 @@ export default function RootLayout({
             over the login page is in-app chrome shown to someone who is not in
             the app yet. */}
         <SupportChrome />
+        {/* Dev-only JSON viewer (temporary — Manjusha). Renders null unless
+            NEXT_PUBLIC_DEBUG_JSON=true and a tutoring call has been captured.
+            To remove: delete this line, components/DebugJsonPanel.tsx,
+            lib/debugJson.ts and the recordDebugCall calls in lib/api.ts. */}
+        {process.env.NEXT_PUBLIC_DEBUG_JSON === 'true' && <DebugJsonPanel />}
       </body>
     </html>
   );
