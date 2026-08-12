@@ -12,7 +12,7 @@ import dynamic from 'next/dynamic';
 import { Eye, EyeOff, Lightbulb, Check, ArrowRight } from 'lucide-react';
 import { useNumeraStore, type CanvasExporter } from '@/store/useNumeraStore';
 import { useFlowNav } from '@/lib/useFlowNav';
-import { useDemoTutor, resetSessionStart, sessionStartError } from '@/hooks/useDemoTutor';
+import { useDemoTutor, resetSessionStart, resumeSession, sessionStartError } from '@/hooks/useDemoTutor';
 import { useVoiceTurn } from '@/hooks/useVoiceTurn';
 import { DEMO_CONCEPT_ID, DEMO_PHASE } from '@/lib/api';
 import { demoFor } from '@/lib/demoContent';
@@ -156,6 +156,23 @@ export default function PracticePage() {
   // forever with no error and no way to retry — which is what a failed session
   // start actually looked like to a tester (2026-07-28).
   const [startError, setStartError] = useState<string | null>(null);
+
+  // A surviving sessionId with no session record is the state a refresh leaves
+  // behind — and, far more often, what a BACKEND RESTART leaves behind, since
+  // its sessions live in memory and die with the process while ours is
+  // persisted. The start effect below short-circuits on that id, so this screen
+  // called nothing at all, never learned the session was a 404, and sat on
+  // "Loading question…" forever with nothing fetching (reproduced live on
+  // 12 Aug 2026 against a session the backend answered 404 for).
+  //
+  // Refetching is what triggers recovery: the 404 inside resumeSession drops
+  // the dead session, sessionId goes null, and the start effect opens a fresh
+  // one. The lesson screen has had this since 28 Jul; this one never got it.
+  const backendSession = useNumeraStore((s) => s.backendSession);
+  useEffect(() => {
+    if (tutor.apiEnabled && tutor.sessionId && !backendSession) void resumeSession();
+  }, [tutor.apiEnabled, tutor.sessionId, backendSession]);
+
   useEffect(() => {
     if (!tutor.apiEnabled || tutor.sessionId) return;
     void tutor.start(DEMO_CONCEPT_ID, 'TEXT').then((rec) => {
