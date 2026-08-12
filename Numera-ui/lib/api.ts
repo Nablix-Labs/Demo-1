@@ -1183,8 +1183,17 @@ export interface CanvasSubmissionResult extends Phase3ResponseFields {
   status: string;
   submission_id: string;
   snapshot_reference: string;
-  ocr: OcrResult;
-  tutor: TutorResult;
+  /**
+   * Both are NULL on a live Phase 3 submission (Sanya, 12 Aug 2026).
+   *
+   * That is by design, not a fault: Independent Practice is silent, so there is
+   * no tutor message to send, and a submission the backend accepted without
+   * reading the ink back has no OCR block either. Typing them as always-present
+   * meant the client dereferenced both, threw, and reported an ACCEPTED
+   * submission to the student as a failure.
+   */
+  ocr: OcrResult | null;
+  tutor: TutorResult | null;
   latency: CanvasLatency;
   /** Tutor drawing actions (e.g. mark up the student's working). The backend
    *  sends a LIST of draw actions here, unlike the WS path (one per message). */

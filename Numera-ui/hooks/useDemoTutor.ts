@@ -42,6 +42,7 @@ import { speakBrowser } from '@/lib/tts';
 import type { SupportRung } from '@/lib/supportLadder';
 import type { NudgeClaimResult } from '@/hooks/useInactivityNudge';
 import { reportFailure } from '@/lib/failureReport';
+import { canvasSubmissionView } from '@/lib/canvasSubmission';
 
 const apiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
@@ -556,30 +557,29 @@ export function useDemoTutor() {
           question_id: res.question_id ?? null,
         });
       }
-      addTrailEntry({
-        kind: 'canvas',
-        text: res.ocr.raw_ocr_text || res.ocr.detected_equation || 'Canvas submitted.',
-        meta: `OCR ${(res.ocr.confidence * 100).toFixed(0)}%${
-          res.ocr.needs_clarification ? ' · needs clarification' : ''
-        }`,
-      });
+      // Every part of the reply is optional — see lib/canvasSubmission.ts for
+      // why assuming otherwise reported accepted work as a failure.
+      const view = canvasSubmissionView(res);
+      if (view.ocr) addTrailEntry({ kind: 'canvas', ...view.ocr });
       if (entering) {
         addTranscriptMessage({ role: 'ai', text: entering.text });
         addTrailEntry({ kind: 'tutor', text: entering.text, meta: 'phase change' });
       }
-      addTranscriptMessage({ role: 'ai', text: res.tutor.tutor_message });
-      addTrailEntry({
-        kind: 'tutor',
-        text: res.tutor.tutor_message,
-        meta: res.tutor.evaluation,
-      });
+      const tutorMessage = view.tutorText;
+      if (tutorMessage) {
+        addTranscriptMessage({ role: 'ai', text: tutorMessage });
+        addTrailEntry({ kind: 'tutor', text: tutorMessage, meta: view.tutorEvaluation });
+      }
       const drew = Boolean(res.canvas_draw?.length);
       if (drew) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw!);
       // The work has been read, so the student no longer holds the floor —
       // otherwise the tutor's response to a submission would be silently dropped
       // by the very rule that kept it quiet while they were writing.
       setStudentWriting(false);
-      tutorSay(withTransitionVoice(entering, res.tutor.tutor_message), { afterMarks: drew });
+      // With no tutor message there may still be a phase-change line to speak,
+      // and in Phase 3 there is deliberately nothing to say at all.
+      const spoken = withTransitionVoice(entering, tutorMessage ?? '');
+      if (spoken.trim()) tutorSay(spoken, { afterMarks: drew });
       return res;
     } catch (err) {
       // A forgotten session recovers by opening a new one; see

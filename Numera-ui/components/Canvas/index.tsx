@@ -137,7 +137,9 @@ export default function CanvasStage() {
     if (tutor.apiEnabled && tutor.sessionId) {
       showToast('Reading your working…');
       void tutor.submitCanvasWork().then((res) => {
-        showToast(res ? res.tutor.tutor_message : 'Submitted — see your session trail.');
+        // An accepted Phase 3 submission carries no tutor block at all — the
+        // phase is silent by design — so there is nothing to quote back here.
+        showToast(res?.tutor?.tutor_message?.trim() || 'Submitted — see your session trail.');
       });
     } else {
       showToast('Nice work — your working has been submitted.');
