@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from app.adapters.provider import get_adapters
 from app.ai_engine.classifier_config import ClassifierRulesConfig, load_classifier_rules
 from app.core.config import get_settings
+from app.core.exceptions import JourneyVersionConflict
 from app.models.adapters import (
     AdapterContext,
     ConversationMessage,
@@ -41,6 +42,7 @@ from app.services.session_service import (
     interaction_payload_fingerprint_for,
     last_interaction_response_for,
     record_canvas_attachment,
+    reconcile_journey_conflict,
     record_canvas_submission,
 )
 from app.services.snapshot_store import build_reference, store_snapshot
@@ -257,13 +259,19 @@ async def submit_canvas(
         schema_content_response = None
         updated_session = session
     else:
-        student_result, tutor, schema_content_response, _schema_response, updated_session = (
-            await process_answer_with_session_event(
-                context,
-                session,
-                access_token,
+        try:
+            student_result, tutor, schema_content_response, _schema_response, updated_session = (
+                await process_answer_with_session_event(
+                    context,
+                    session,
+                    access_token,
+                )
             )
-        )
+        except JourneyVersionConflict as conflict:
+            await reconcile_journey_conflict(
+                request.session_id, request.student_id, conflict
+            )
+            raise
         tutor = tutor.model_copy(
             update={"next_phase_recommendation": student_result.recommended_entry_phase}
         )
