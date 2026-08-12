@@ -76,6 +76,22 @@ def _request_id(request: Request) -> str:
     return f"REQ{uuid4().hex[:8].upper()}"
 
 
+def _http_exception_metadata(
+    request: Request,
+    exc: StarletteHTTPException,
+) -> dict[str, object]:
+    """Return the structured context needed to diagnose a rejected request."""
+
+    return {
+        "method": request.method,
+        "path": request.url.path,
+        "status_code": exc.status_code,
+        "error_code": getattr(exc, "error_code", "HTTP_ERROR"),
+        "detail": str(exc.detail),
+        "request_id": _request_id(request),
+    }
+
+
 def _validation_field(error: dict[str, object]) -> str | None:
     location = error.get("loc")
     if not isinstance(location, list) and not isinstance(location, tuple):
@@ -180,6 +196,11 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
     # Typed application exceptions carry their own error_code.
+    metadata = _http_exception_metadata(request, exc)
+    if exc.status_code >= 500:
+        logger.error("http_request_rejected", extra=metadata)
+    else:
+        logger.warning("http_request_rejected", extra=metadata)
     return _error_response(
         request, exc.status_code, getattr(exc, "error_code", "HTTP_ERROR"), str(exc.detail)
     )
