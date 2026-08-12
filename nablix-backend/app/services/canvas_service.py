@@ -44,6 +44,8 @@ from app.services.session_service import (
     record_canvas_submission,
 )
 from app.services.snapshot_store import build_reference, store_snapshot
+from app.services.student_model_debug import begin as begin_student_model_debug
+from app.services.student_model_debug import payload as student_model_debug_payload
 
 
 _CANVAS_RELATION_PATTERN = re.compile(
@@ -116,6 +118,9 @@ async def submit_canvas(
     """Recognize a canvas snapshot, run it through the tutor, and store the result."""
 
     settings = get_settings()
+    # /canvas/submit calls process_answer_with_session_event directly, so it never
+    # passes through process_interaction's boundary.
+    begin_student_model_debug(settings.debug_json_view)
     if len(request.snapshot_data_url) > settings.max_snapshot_bytes:
         raise HTTPException(
             status_code=413,
@@ -368,4 +373,9 @@ async def submit_canvas(
         response,
         _canvas_request_fingerprint(request),
     )
+    # After caching, via model_copy: the cache holds the response by reference, so
+    # a duplicate replay must not inherit this turn's exchange.
+    debug = student_model_debug_payload()
+    if debug is not None:
+        response = response.model_copy(update={"debug": debug})
     return response

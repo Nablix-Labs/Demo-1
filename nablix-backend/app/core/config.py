@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     use_mock_student_model: bool = False
     use_mock_voice: bool = True
     use_mock_vision: bool = True
+    # Dev-only: attach raw Student Model exchanges to interaction responses.
+    # ISOLATED TESTER DEPLOYMENTS ONLY. Raw responses carry
+    # phase_payload.question_set.questions[].tutor_view.answer_spec.canonical_answer,
+    # so enabling this where real students can reach the API hands them the answers.
+    debug_json_view: bool = False
     # Keep disabled until the deployed Student Model supports the dedicated
     # Wrong-4 and repeated-STUCK events. The legacy event path remains active.
     student_model_atomic_guided_events_enabled: bool = False

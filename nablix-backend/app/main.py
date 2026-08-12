@@ -15,6 +15,7 @@ from app.core.logger import logger
 from app.middleware.request_logging import log_requests
 from app.services import session_service
 from app.services.session_store import close_session_store, open_session_store
+from app.services.student_model_debug import payload as student_model_debug_payload
 
 
 prompt_registry = load_prompt_registry()
@@ -150,16 +151,20 @@ def _error_response(
     message: str,
     field: str | None = None,
 ) -> JSONResponse:
-    return JSONResponse(
-        status_code=status_code,
-        content={
-            "error_code": error_code,
-            "message": message,
-            "field": field,
-            "timestamp": _utc_timestamp(),
-            "request_id": _request_id(request),
-        },
-    )
+    content: dict[str, object] = {
+        "error_code": error_code,
+        "message": message,
+        "field": field,
+        "timestamp": _utc_timestamp(),
+        "request_id": _request_id(request),
+    }
+    # A failed Student Model call is the one a tester most needs to read, and it
+    # never reaches InteractionResponse — it surfaces here. Absent unless the dev
+    # flag ran begin() for this request.
+    debug = student_model_debug_payload()
+    if debug is not None:
+        content["debug"] = debug
+    return JSONResponse(status_code=status_code, content=content)
 
 
 @app.exception_handler(RequestValidationError)
