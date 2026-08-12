@@ -4,10 +4,12 @@ from typing import TypedDict
 from uuid import uuid4
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 from typing_extensions import NotRequired
 
 from app.adapters.provider import get_adapters
 from app.core.config import get_settings
+from app.core.exceptions import JourneyVersionConflict
 from app.core.logger import logger
 from app.models.adapters import ConversationMessage, StudentModelResult, VisionOCRResult
 from app.models.canvas import CanvasSubmissionRecord
@@ -43,6 +45,7 @@ from app.models.student_model_session import (
     ReviewCompletedEvent,
     SessionOpenedEvent,
     SessionResumedEvent,
+    StudentModelJourneyState,
     StudentModelPhasePayload,
     StudentModelPhase,
     StudentModelQuestion,
@@ -303,6 +306,109 @@ def _get_owned_session_for_turn(
             detail="Schema 3.0 session state is required.",
         )
     return session
+
+
+def _skip_journey_reconcile(session_id: str, student_id: str, reason: str) -> None:
+    """Log why a 409 could not self-heal the session's cached journey state.
+
+    These conflicts otherwise leave no trace, which is the gap that made the
+    original loop so hard to diagnose. An identity mismatch is not routine: it
+    means the Student Model's conflict body named a different student or topic
+    than the session it was raised for.
+    """
+
+    logger.warning(
+        "journey_conflict_reconcile_skipped",
+        extra={"session_id": session_id, "student_id": student_id, "reason": reason},
+    )
+
+
+async def reconcile_journey_conflict(
+    session_id: str,
+    student_id: str,
+    conflict: JourneyVersionConflict,
+) -> None:
+    """Sync a session's cached journey state after the Student Model rejects it.
+
+    The Student Model's 409 carries the journey it actually holds. Without this,
+    a session that fell behind (e.g. another session for the same student/topic
+    advanced it) resends the same stale expected_journey_version forever, since
+    nothing refreshes the cache that value is read from. Best-effort: anything
+    that stops it just leaves the existing 409 to reach the client unchanged.
+    """
+
+    session = _sessions.get(session_id)
+    if session is None or session.student_id != student_id:
+        _skip_journey_reconcile(session_id, student_id, "session_not_found_or_not_owned")
+        return
+    event = session.student_model_event
+    if event is None:
+        _skip_journey_reconcile(session_id, student_id, "schema_3_state_missing")
+        return
+
+    detail = conflict.conflict_detail
+    if not isinstance(detail, dict):
+        _skip_journey_reconcile(session_id, student_id, "conflict_detail_not_a_dict")
+        return
+    # Two raise sites, two shapes: the true 409 nests the journey under
+    # current_journey_state, while a 200 carrying a conflict status passes the
+    # whole response, where it sits under journey_state.
+    raw_journey = detail.get("current_journey_state", detail.get("journey_state"))
+    if not isinstance(raw_journey, dict):
+        _skip_journey_reconcile(session_id, student_id, "no_journey_state_in_conflict")
+        return
+
+    try:
+        fresh_journey = StudentModelJourneyState.model_validate(raw_journey)
+    except ValidationError:
+        _skip_journey_reconcile(session_id, student_id, "journey_state_failed_validation")
+        return
+    if (
+        fresh_journey.student_id != student_id
+        or fresh_journey.topic_id != event.journey_state.topic_id
+    ):
+        _skip_journey_reconcile(session_id, student_id, "journey_state_identity_mismatch")
+        return
+    if fresh_journey.version <= event.journey_state.version:
+        _skip_journey_reconcile(session_id, student_id, "journey_state_not_newer")
+        return
+
+    # Take the fresh version AND drop everything derived from the stale one. The
+    # 409 body carries journey_state only - no phase_payload - so the question,
+    # answer spec and served ids cannot be refreshed from it. Keeping them would
+    # splice the new journey onto the old question: a state the Student Model
+    # never held, and one that would submit already-used evidence against a
+    # version that now accepts it. Clearing them re-arms
+    # _initialize_restored_schema_phase, which every answer path runs first and
+    # which re-derives the whole envelope at the corrected version.
+    #
+    # phase_payload must go too: that restore path re-applies the stored event
+    # when its payload still carries questions, handing the stale question
+    # straight back. Dropping it forces a real question-set request.
+    updated = session.model_copy(
+        update={
+            "student_model_event": event.model_copy(
+                update={"journey_state": fresh_journey, "phase_payload": None}
+            ),
+            "current_phase": PHASE_FROM_STUDENT_MODEL[fresh_journey.current_phase],
+            "current_question": None,
+            "question_id": None,
+            "question_type": None,
+            "correct_answer": None,
+            "active_student_model_question": None,
+        }
+    )
+    _sessions[session_id] = updated
+    await save_session(updated)
+    logger.info(
+        "journey_conflict_reconciled",
+        extra={
+            "session_id": session_id,
+            "student_id": student_id,
+            "stale_version": event.journey_state.version,
+            "authoritative_version": fresh_journey.version,
+        },
+    )
 
 
 async def start_session(

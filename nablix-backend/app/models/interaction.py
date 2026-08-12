@@ -46,7 +46,6 @@ from app.models.student_model_session import (
     QuestionType,
     StudentModelCoreState,
     SupportUsed,
-    RoutingReasonCode,
 )
 
 
@@ -177,8 +176,16 @@ class InteractionResponse(BaseModel):
     first_unresolved_concept_id: str | None = None
     selected_error_code: str | None = None
     evaluation_reason_code: EvaluationReasonCode | None = None
-    routing_reason_code: RoutingReasonCode | None = None
-    support_reason_code: WrongEscalationCode | RoutingReasonCode | None = None
+    # Deliberately `str`, not RoutingReasonCode: the Student Model owns this
+    # vocabulary and adds to it independently (GUIDED_STARTED arrived that way
+    # and 500'd completed turns). StudentModelRouting.reason_code is already
+    # `str` on the way in, so a closed enum here made the boundary asymmetric.
+    # Nothing in the backend or the frontend branches on either field - they are
+    # carried through for display and telemetry - so rejecting an unknown code
+    # costs a whole tutoring turn and buys nothing. RoutingReasonCode remains
+    # the documented set of known values.
+    routing_reason_code: str | None = None
+    support_reason_code: str | None = None
     support_served_this_turn: SupportUsed | None = None
     active_support_level: SupportUsed = "NONE"
     highest_support_used: SupportUsed = "NONE"

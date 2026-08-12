@@ -98,6 +98,7 @@ from app.services.phase_transition import (
     TRANSITION_MESSAGES,
 )
 from app.services.session_service import (
+    reconcile_journey_conflict,
     _apply_schema_event,
     _get_owned_session_for_turn,
     cache_interaction_response,
@@ -117,6 +118,7 @@ from app.services.session_service import (
 from app.services.student_model_session import (
     PHASE_FROM_STUDENT_MODEL,
 )
+from app.core.exceptions import JourneyVersionConflict
 from app.services.student_model_debug import begin as begin_student_model_debug
 from app.services.student_model_debug import payload as student_model_debug_payload
 from app.services.snapshot_store import build_reference, store_snapshot
@@ -2041,7 +2043,13 @@ async def process_interaction(
 ) -> InteractionResponse | StaleTurnResponse:
     begin_student_model_debug(get_settings().debug_json_view)
     async with interaction_lock_for(request.session_id):
-        response = await _process_interaction(request, access_token)
+        try:
+            response = await _process_interaction(request, access_token)
+        except JourneyVersionConflict as conflict:
+            await reconcile_journey_conflict(
+                request.session_id, request.student_id, conflict
+            )
+            raise
     if isinstance(response, InteractionResponse):
         debug = student_model_debug_payload()
         if debug is not None:
