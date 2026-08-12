@@ -194,8 +194,14 @@ export default function PracticePage() {
         setStartError('Your practice question is missing. Try again, or tell us if it keeps happening.');
       }
     });
+    // Depends on sessionId, NOT mount-once. Recovering a dead session clears
+    // the id AFTER this has already run and short-circuited on it, so a
+    // mount-once effect left the screen with no session and nothing starting
+    // one — the second half of the "Loading question…" dead end. Re-running is
+    // safe: useDemoTutor's module-level `inFlight` latch collapses concurrent
+    // starts and `failedConcept` stops it retrying a failure on its own.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [tutor.apiEnabled, tutor.sessionId]);
 
   // After a pause in activity, the observer offers a hint (unless gone quiet)
   useEffect(() => {
