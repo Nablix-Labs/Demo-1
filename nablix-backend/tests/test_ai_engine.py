@@ -374,7 +374,113 @@ def test_guided_follow_up_replaces_an_unrelated_llm_question() -> None:
     assert aligned.tutor_message_voice == aligned.tutor_message
 
 
-def test_final_partial_wording_is_replaced_with_the_active_question() -> None:
+def test_guided_follow_up_preserves_a_relevant_non_revealing_llm_correction() -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-006",
+        required_concepts=[
+            GeneratedConcept(concept_id="GENERAL_RULE", description="general rule", required=True)
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="counter-rule",
+        prompt_version="1.0.0",
+    )
+    objective = classifier.initial_guided_objective(rubric)
+    request = ClassificationRequest(
+        question_id="Q-T01-006",
+        question_type="MULTI_PART_SHORT_RESPONSE",
+        question="A counter starts at any value c and increases by 4. Write the general rule.",
+        correct_answer="c + 4",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-006",
+            canonical_answer="c + 4",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=False,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        student_input="c - 4",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+    )
+    evaluation = GuidedEvaluation(
+        student_state="WRONG",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=["GENERAL_RULE"],
+        selected_error_code="ERR-DIRECTION-REVERSED",
+        confidence=0.9,
+        next_objective=objective,
+        tutor_message=(
+            "It looks like the rule shows a decrease, but this counter increases. "
+            "How could you express that increase?"
+        ),
+        tutor_message_voice=(
+            "It looks like the rule shows a decrease, but this counter increases. "
+            "How could you express that increase?"
+        ),
+    )
+
+    aligned = classifier.align_guided_follow_up(evaluation, request, rubric, objective)
+
+    assert aligned.tutor_message == evaluation.tutor_message
+    assert aligned.tutor_message_voice == evaluation.tutor_message_voice
+
+
+def test_guided_follow_up_replaces_an_answer_revealing_llm_reply() -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-006",
+        required_concepts=[
+            GeneratedConcept(concept_id="GENERAL_RULE", description="general rule", required=True)
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="counter-rule",
+        prompt_version="1.0.0",
+    )
+    objective = classifier.initial_guided_objective(rubric)
+    request = ClassificationRequest(
+        question_id="Q-T01-006",
+        question_type="MULTI_PART_SHORT_RESPONSE",
+        question="A counter starts at any value c and increases by 4. Write the general rule.",
+        correct_answer="c + 4",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-006",
+            canonical_answer="c + 4",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=False,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        student_input="c - 4",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+    )
+    evaluation = GuidedEvaluation(
+        student_state="WRONG",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=["GENERAL_RULE"],
+        selected_error_code="ERR-DIRECTION-REVERSED",
+        confidence=0.9,
+        next_objective=objective,
+        tutor_message="The correct rule is c plus 4.",
+        tutor_message_voice="The correct rule is c plus 4.",
+    )
+
+    aligned = classifier.align_guided_follow_up(evaluation, request, rubric, objective)
+
+    assert aligned.tutor_message == "Let's check that carefully. What general rule represents this situation?"
+    assert aligned.tutor_message_voice == aligned.tutor_message
+
+
+def test_final_partial_wording_is_replaced_when_it_is_generic() -> None:
     rubric = _guided_rubric()
     objective = ActiveTeachingObjective(
         objective_type="ANSWER_QUESTION",
@@ -412,6 +518,7 @@ def test_final_partial_wording_is_replaced_with_the_active_question() -> None:
     aligned = classifier.align_guided_follow_up(evaluation, request, rubric, objective)
 
     assert aligned.tutor_message == "Good. What do the letters represent when the expression is expanded?"
+    assert aligned.tutor_message_voice == aligned.tutor_message
 
 
 @pytest.mark.parametrize("student_input", ["NPlus5", "n plus 5", "The general rule is NPlus5"])
@@ -3303,7 +3410,7 @@ def test_guided_evaluator_retries_answer_revealing_wording(monkeypatch) -> None:
 
     assert response.guided_student_state == "PARTIAL"
     assert response.tutor_message == (
-        "Good. What do the letters represent when the expression is expanded?"
+        "You identified multiplication. What do the two letters represent?"
     )
     assert feedback[0] is None
     assert feedback[1] is not None
