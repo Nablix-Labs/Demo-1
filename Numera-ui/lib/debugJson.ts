@@ -139,12 +139,46 @@ let capture: DebugCapture | null = null;
 const listeners = new Set<() => void>();
 
 /** Record one completed call. No-op unless the debug view is switched on. */
+/**
+ * Calls worth capturing — the ones that carry a Student Model exchange.
+ *
+ * Manjusha, 12 Aug 2026: "it comes and disappears as tts endpoint is called
+ * after that — always I see tts json only". Capturing every call meant the
+ * tutor turn she needed was overwritten a moment later by `/voice/tts`, which
+ * fires on every spoken reply and has no Student Model exchange behind it.
+ *
+ * An allow-list rather than a block-list: a new noisy endpoint should be
+ * ignored by default, not silently start clobbering the turn under inspection.
+ */
+const CAPTURED_ENDPOINTS = [
+  '/interaction',
+  '/canvas/submit',
+  '/session/start',
+  '/session/end',
+  '/diagnostic/complete',
+  '/orientation/start',
+  '/orientation/complete',
+  '/review/complete',
+];
+
+/** Is this a call a tester wants to inspect, or transport noise? */
+export function isCapturedEndpoint(endpoint: string): boolean {
+  // The label is "<METHOD> <path>", optionally with a " (failed)" suffix.
+  const path = endpoint.replace(/^\S+\s+/, '').replace(/\s*\(failed\)\s*$/, '');
+  // Voice transport is never interesting here, and must be rejected FIRST:
+  // "/voice/session/start" ends with "/session/start" and would otherwise be
+  // captured by the allow-list below.
+  if (path.startsWith('/voice/')) return false;
+  return CAPTURED_ENDPOINTS.some((allowed) => path === allowed || path.endsWith(allowed));
+}
+
 export function recordDebugCall(
   endpoint: string,
   request: unknown,
   response: unknown,
 ): void {
   if (!debugJsonEnabled()) return;
+  if (!isCapturedEndpoint(endpoint)) return;
   capture = toDebugCapture(endpoint, request, response, new Date().toLocaleTimeString());
   for (const listener of listeners) listener();
 }

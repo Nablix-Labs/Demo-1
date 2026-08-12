@@ -18,6 +18,7 @@ import {
   getDebugCapture,
   clearDebugCapture,
   subscribeDebugCapture,
+  isCapturedEndpoint,
 } from '@/lib/debugJson';
 
 const setFlag = (value: string | undefined) => {
@@ -150,5 +151,60 @@ describe('rendering never throws', () => {
 
   it('says so plainly when there is nothing to show', () => {
     expect(formatJson(undefined)).toBe('Not provided by the backend.');
+  });
+});
+
+/**
+ * Transport noise must not overwrite the turn under inspection.
+ *
+ * Manjusha, 12 Aug 2026: "it comes and disappears as tts endpoint is called
+ * after that — always I see tts json only". `/voice/tts` fires on every spoken
+ * reply, immediately after the tutor turn, and carries no Student Model
+ * exchange — so the capture she needed was replaced a moment later by one that
+ * could never contain what she was looking for.
+ */
+describe('which calls the panel captures', () => {
+  beforeEach(() => { clearDebugCapture(); setFlag('true'); });
+  afterEach(() => { clearDebugCapture(); setFlag(undefined); });
+
+  it('captures the calls that carry a Student Model exchange', () => {
+    for (const endpoint of [
+      'POST /interaction',
+      'POST /canvas/submit',
+      'POST /session/start',
+      'POST /session/end',
+      'POST /session/SESSION1/diagnostic/complete',
+      'POST /session/SESSION1/orientation/start',
+    ]) {
+      expect(isCapturedEndpoint(endpoint)).toBe(true);
+    }
+  });
+
+  it('ignores the transport calls that were clobbering them', () => {
+    for (const endpoint of [
+      'POST /voice/tts',
+      'POST /voice/transcript',
+      'POST /voice/session/start',
+      'GET /health',
+    ]) {
+      expect(isCapturedEndpoint(endpoint)).toBe(false);
+    }
+  });
+
+  it('keeps the tutor turn when tts fires straight after it — the reported bug', () => {
+    recordDebugCall('POST /interaction', { turn_id: 'TURN-1' }, { message: 'Nice work.' });
+    recordDebugCall('POST /voice/tts', { text: 'Nice work.' }, { audio_base64: '...' });
+    expect(getDebugCapture()?.endpoint).toBe('POST /interaction');
+  });
+
+  it('still replaces one tutoring turn with the next', () => {
+    recordDebugCall('POST /interaction', { turn_id: 'TURN-1' }, {});
+    recordDebugCall('POST /canvas/submit', { turn_id: 'TURN-2' }, {});
+    expect(getDebugCapture()?.endpoint).toBe('POST /canvas/submit');
+  });
+
+  it('captures a FAILED tutoring call, which is the one most worth seeing', () => {
+    recordDebugCall('POST /interaction (failed)', { turn_id: 'TURN-9' }, { error_code: 'HTTP_ERROR' });
+    expect(getDebugCapture()?.endpoint).toBe('POST /interaction (failed)');
   });
 });
