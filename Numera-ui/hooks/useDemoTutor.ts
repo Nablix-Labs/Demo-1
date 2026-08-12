@@ -546,7 +546,16 @@ export function useDemoTutor() {
     if (canvasSubmissionInFlight.current) return null;
     canvasSubmissionInFlight.current = true;
     try {
-      const res = await submitCanvas(sessionId, canvasSnapshot.snapshotDataUrl, 'STANDALONE_ATTEMPT');
+      // One turn id per submission. Independent Practice rejects a canvas
+      // submission without it (422), and it is what lets the backend recognise
+      // a resend as the same attempt rather than a second one.
+      const turnId = useNumeraStore.getState().beginSubmissionTurn();
+      const res = await submitCanvas(
+        sessionId,
+        canvasSnapshot.snapshotDataUrl,
+        'STANDALONE_ATTEMPT',
+        turnId,
+      );
       // Canvas responses now carry the same phase state as /interaction, so a
       // backend phase change here also drives usePhaseRouting.
       const entering = phaseAnnouncement(res, useNumeraStore.getState().currentPhase);
