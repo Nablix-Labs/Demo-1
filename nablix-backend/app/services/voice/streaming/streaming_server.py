@@ -107,7 +107,8 @@ def _build_deepgram_params(language: str = "en") -> str:
         f"&smart_format=true"
         f"&punctuate=true"
         f"&interim_results=true"
-        f"&utterance_end_ms=2500"
+        f"&endpointing=3500"
+        f"&utterance_end_ms=5000"
         f"&encoding=linear16"
         f"&sample_rate=16000"
         f"&channels=1"
@@ -331,6 +332,9 @@ async def voice_stream(
     audio_started_at = 0.0
     turn_already_processed = False  # True when UtteranceEnd auto-triggered a response
     last_transcript_at = time.time()  # when Deepgram last sent a transcript
+    is_processing = False  # True while process_and_respond is running (Tier 2)
+    pending_transcript = ""  # Speech that arrived during processing (Tier 2)
+    pending_confidence = 0.0
     access_token: str | None = None
     turn_id: str | None = None
     previous_tutor_turn_id: str | None = None
@@ -365,36 +369,29 @@ async def voice_stream(
     # of blocking the Deepgram receiver loop).
     _background_tasks: set[asyncio.Task] = set()
 
-    async def _silence_fallback_handler():
-        """Server-side fallback when Deepgram fails to send UtteranceEnd.
+    async def _process_buffer():
+        """Process whatever is in the final_transcript buffer.
 
-        Uses adaptive timeout based on word count:
-          1-3 words  -> 3.0s  (short utterance, likely complete)
-          4-6 words  -> 5.0s  (medium, could go either way)
-          7+ words   -> 7.5s  (long, student probably thinking mid-sentence)
+        Called by:
+          - speech_final (primary: Deepgram VAD detected end of speech)
+          - UtteranceEnd (backup: transcript word-timing gap detected)
+          - silence fallback timer (last resort: no messages for N seconds)
 
-        Each incoming transcript resets the timer.  When it fires, the
-        server auto-processes whatever is in the final_transcript buffer.
+        Tier 2 (cancel-and-reprocess): If new speech arrives WHILE this
+        function is running (is_processing=True), the receiver stores it
+        in pending_transcript.  When this function finishes, it checks
+        for pending speech and processes it automatically.
         """
         nonlocal final_transcript, final_confidence, final_segment_count
         nonlocal audio_started_at, turn_already_processed
         nonlocal turn_id, previous_tutor_turn_id, transcript_final
-        nonlocal silence_timer_task, last_transcript_at
+        nonlocal silence_timer_task, is_processing
+        nonlocal pending_transcript, pending_confidence
 
-        timeout = _get_adaptive_timeout(final_transcript)
-        await asyncio.sleep(timeout)
-
-        # UtteranceEnd may have already processed and cleared the buffer
         if not final_transcript:
             return
 
-        actual_gap = round(time.time() - last_transcript_at, 1)
-        logger.info(
-            f"[{session_id}] Silence fallback (adaptive {timeout}s, "
-            f"{len(final_transcript.split())} words) - "
-            f"actual gap {actual_gap}s - "
-            f"auto-processing: '{final_transcript}'"
-        )
+        is_processing = True
         transcript_to_process = final_transcript
         confidence_to_process = final_confidence
         duration = max(time.time() - audio_started_at, 0.001)
@@ -419,17 +416,67 @@ async def voice_stream(
             )
         except Exception as e:
             turn_already_processed = False
-            logger.error(f"[{session_id}] Silence fallback failed: {e}")
+            logger.error(f"[{session_id}] _process_buffer failed: {e}")
         finally:
+            is_processing = False
             turn_id = None
             previous_tutor_turn_id = None
             transcript_final = None
             silence_timer_task = None
 
+            # Tier 2: Check if speech arrived while we were processing.
+            # If so, move it into the main buffer and process again.
+            if pending_transcript:
+                logger.info(
+                    f"[{session_id}] Pending speech from during processing: "
+                    f"'{pending_transcript}' - moving to buffer"
+                )
+                final_transcript = pending_transcript
+                final_confidence = pending_confidence
+                final_segment_count = 1
+                pending_transcript = ""
+                pending_confidence = 0.0
+                # Start a new silence timer for the pending speech.
+                # Don't process immediately -- give the student time
+                # to continue speaking.
+                silence_timer_task = asyncio.create_task(
+                    _silence_fallback_handler()
+                )
+
+    async def _silence_fallback_handler():
+        """Last-resort fallback when neither speech_final nor UtteranceEnd fire.
+
+        Uses adaptive timeout based on word count:
+          1-3 words  -> 3.0s  (short utterance, likely complete)
+          4-6 words  -> 5.0s  (medium, could go either way)
+          7+ words   -> 7.5s  (long, student probably thinking mid-sentence)
+
+        This should rarely fire now that we use speech_final (endpointing=3500)
+        as the primary signal.  It exists as a safety net for cases where
+        Deepgram's VAD doesn't trigger (e.g., persistent background noise).
+        """
+        nonlocal silence_timer_task
+
+        timeout = _get_adaptive_timeout(final_transcript)
+        await asyncio.sleep(timeout)
+
+        if not final_transcript:
+            return
+
+        actual_gap = round(time.time() - last_transcript_at, 1)
+        logger.info(
+            f"[{session_id}] Silence fallback (adaptive {timeout}s, "
+            f"{len(final_transcript.split())} words) - "
+            f"actual gap {actual_gap}s - "
+            f"auto-processing: '{final_transcript}'"
+        )
+        await _process_buffer()
+
     async def forward_deepgram_results(dg_ws):
         nonlocal final_transcript, final_confidence, final_segment_count, audio_started_at, turn_already_processed
         nonlocal turn_id, previous_tutor_turn_id, transcript_final
         nonlocal silence_timer_task, last_transcript_at
+        nonlocal pending_transcript, pending_confidence
 
         try:
             async for msg in dg_ws:
@@ -454,22 +501,42 @@ async def voice_stream(
                     transcript = best.get("transcript", "").strip()
                     confidence = best.get("confidence", 0.0)
                     is_final = data.get("is_final", False)
+                    # speech_final is Deepgram's VAD-based endpointing signal.
+                    # It fires after `endpointing` ms of actual audio silence
+                    # (detected by Voice Activity Detection on the raw audio,
+                    # NOT transcript timing).  This is our PRIMARY signal that
+                    # the student has stopped speaking.
+                    speech_final = data.get("speech_final", False)
 
                     if not transcript:
                         continue
 
                     if is_final:
-                        if final_transcript:
-                            final_transcript += " " + transcript
+                        # Tier 2: If we're currently processing a previous
+                        # turn, store new speech in the pending buffer.
+                        # It will be picked up after processing finishes.
+                        if is_processing:
+                            if pending_transcript:
+                                pending_transcript += " " + transcript
+                            else:
+                                pending_transcript = transcript
+                            pending_confidence = confidence
+                            logger.info(
+                                f"[{session_id}] Speech during processing, "
+                                f"queued: '{pending_transcript}'"
+                            )
                         else:
-                            final_transcript = transcript
-                        # Track a running average confidence across all
-                        # final segments instead of just keeping the last
-                        final_segment_count += 1
-                        final_confidence = (
-                            (final_confidence * (final_segment_count - 1) + confidence)
-                            / final_segment_count
-                        )
+                            if final_transcript:
+                                final_transcript += " " + transcript
+                            else:
+                                final_transcript = transcript
+                            # Track a running average confidence across all
+                            # final segments instead of just keeping the last
+                            final_segment_count += 1
+                            final_confidence = (
+                                (final_confidence * (final_segment_count - 1) + confidence)
+                                / final_segment_count
+                            )
 
                     await ws.send_json({
                         "type": "transcript_partial" if not is_final else "transcript_final",
@@ -482,33 +549,62 @@ async def voice_stream(
                     last_transcript_at = time.time()
 
                     logger.info(
-                        f"[{session_id}] {'FINAL' if is_final else 'partial'}: "
+                        f"[{session_id}] {'FINAL' if is_final else 'partial'}"
+                        f"{'(speech_final)' if speech_final else ''}: "
                         f"'{transcript}' (conf={confidence:.4f})"
                     )
 
-                    # Reset the silence fallback timer on every transcript
-                    # message (partial or final).  The timer only fires if
-                    # Deepgram goes quiet for the adaptive timeout duration.
-                    if silence_timer_task and not silence_timer_task.done():
-                        silence_timer_task.cancel()
-                    if final_transcript:
+                    # --- Turn processing logic ---
+                    #
+                    # PRIMARY signal: speech_final=true from Deepgram's VAD.
+                    #   Deepgram's endpointing (3500ms) detected real audio
+                    #   silence.  Process the buffer immediately.
+                    #
+                    # FALLBACK signal: silence timer (adaptive timeout).
+                    #   If speech_final never fires (noisy environment, or
+                    #   Deepgram VAD fails), our timer processes the buffer
+                    #   after N seconds of no transcript messages.
+                    #
+                    if speech_final and final_transcript:
+                        # Deepgram's VAD confirms the student stopped speaking.
+                        # Cancel any pending silence timer and process now.
+                        if silence_timer_task and not silence_timer_task.done():
+                            silence_timer_task.cancel()
+                            silence_timer_task = None
+                        logger.info(
+                            f"[{session_id}] speech_final triggered - "
+                            f"processing: '{final_transcript}'"
+                        )
+                        await _process_buffer()
+                    elif is_final and final_transcript:
+                        # is_final but NOT speech_final: Deepgram finalized a
+                        # segment (happens every ~3-5s) but the student may
+                        # still be talking.  Start/reset the fallback timer.
+                        if silence_timer_task and not silence_timer_task.done():
+                            silence_timer_task.cancel()
                         silence_timer_task = asyncio.create_task(
                             _silence_fallback_handler()
                         )
 
                 elif data.get("type") == "UtteranceEnd":
-                    # Deepgram detected 2.5s silence after speech.
-                    # We intentionally do NOT process here. 2.5s is too
-                    # short for math tutoring -- students often pause to
-                    # think mid-sentence.  Instead, we let the silence
-                    # fallback timer (SILENCE_FALLBACK_SECONDS) handle
-                    # processing.  UtteranceEnd is logged for debugging
-                    # but does not trigger any action.
-                    logger.info(
-                        f"[{session_id}] UtteranceEnd received "
-                        f"(ignored, waiting for silence fallback). "
-                        f"Buffer: '{final_transcript}'"
-                    )
+                    # UtteranceEnd fires after utterance_end_ms (5000ms) of
+                    # no new words in transcripts.  It's a BACKUP for noisy
+                    # environments where speech_final might not fire.
+                    # If there's still content in the buffer, process it.
+                    if final_transcript:
+                        if silence_timer_task and not silence_timer_task.done():
+                            silence_timer_task.cancel()
+                            silence_timer_task = None
+                        logger.info(
+                            f"[{session_id}] UtteranceEnd triggered (backup) - "
+                            f"processing: '{final_transcript}'"
+                        )
+                        await _process_buffer()
+                    else:
+                        logger.info(
+                            f"[{session_id}] UtteranceEnd received "
+                            f"(buffer empty, nothing to process)"
+                        )
 
         except websockets.exceptions.ConnectionClosed:
             logger.info(f"[{session_id}] Deepgram connection closed")
