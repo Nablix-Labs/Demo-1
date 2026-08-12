@@ -47,6 +47,31 @@ DEEPGRAM_WS_URL = "wss://api.deepgram.com/v1/listen"
 DEEPGRAM_API_KEY = voice_config.DEEPGRAM_API_KEY
 MAIN_BACKEND_URL = os.getenv("NABLIX_MAIN_BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
 
+# Adaptive silence timeout (seconds).
+# Instead of a single fixed timeout, we use different timeouts based on
+# how many words the student has spoken so far.  Short utterances like
+# "yes" or "hello" use a short timeout for quick responses.  Longer
+# utterances (student mid-explanation) use a longer timeout so thinking
+# pauses don't fragment the sentence.
+SILENCE_SHORT_SECONDS = float(os.getenv("VOICE_SILENCE_SHORT_SECONDS", "3.0"))    # 1-3 words
+SILENCE_MEDIUM_SECONDS = float(os.getenv("VOICE_SILENCE_MEDIUM_SECONDS", "5.0"))  # 4-6 words
+SILENCE_LONG_SECONDS = float(os.getenv("VOICE_SILENCE_LONG_SECONDS", "7.5"))      # 7+ words
+
+def _get_adaptive_timeout(transcript: str) -> float:
+    """Return silence timeout based on word count of current buffer.
+
+    Short utterances (1-3 words) -> 3.0s  (likely complete: "yes", "I don't know")
+    Medium utterances (4-6 words) -> 5.0s (could be complete or mid-sentence)
+    Long utterances (7+ words) -> 7.5s    (likely mid-explanation, give thinking room)
+    """
+    word_count = len(transcript.split())
+    if word_count <= 3:
+        return SILENCE_SHORT_SECONDS
+    elif word_count <= 6:
+        return SILENCE_MEDIUM_SECONDS
+    else:
+        return SILENCE_LONG_SECONDS
+
 # Math-domain keyterms for Deepgram Nova-3 keyterm prompting.
 # These help the STT model recognize math vocabulary that it
 # often mis-transcribes (e.g. "coefficient" -> "co efficient",
@@ -82,7 +107,7 @@ def _build_deepgram_params(language: str = "en") -> str:
         f"&smart_format=true"
         f"&punctuate=true"
         f"&interim_results=true"
-        f"&utterance_end_ms=1500"
+        f"&utterance_end_ms=2500"
         f"&encoding=linear16"
         f"&sample_rate=16000"
         f"&channels=1"
@@ -305,6 +330,7 @@ async def voice_stream(
     receiving_audio = False
     audio_started_at = 0.0
     turn_already_processed = False  # True when UtteranceEnd auto-triggered a response
+    last_transcript_at = time.time()  # when Deepgram last sent a transcript
     access_token: str | None = None
     turn_id: str | None = None
     previous_tutor_turn_id: str | None = None
@@ -332,16 +358,92 @@ async def voice_stream(
     keepalive_task = asyncio.create_task(deepgram_keepalive())
 
     deepgram_receiver_task = None
+    silence_timer_task = None
+
+    # Background tasks set — prevents garbage collection of fire-and-forget
+    # tasks (V-1 fix: process_and_respond runs as a background task instead
+    # of blocking the Deepgram receiver loop).
+    _background_tasks: set[asyncio.Task] = set()
+
+    async def _silence_fallback_handler():
+        """Server-side fallback when Deepgram fails to send UtteranceEnd.
+
+        Uses adaptive timeout based on word count:
+          1-3 words  -> 3.0s  (short utterance, likely complete)
+          4-6 words  -> 5.0s  (medium, could go either way)
+          7+ words   -> 7.5s  (long, student probably thinking mid-sentence)
+
+        Each incoming transcript resets the timer.  When it fires, the
+        server auto-processes whatever is in the final_transcript buffer.
+        """
+        nonlocal final_transcript, final_confidence, final_segment_count
+        nonlocal audio_started_at, turn_already_processed
+        nonlocal turn_id, previous_tutor_turn_id, transcript_final
+        nonlocal silence_timer_task, last_transcript_at
+
+        timeout = _get_adaptive_timeout(final_transcript)
+        await asyncio.sleep(timeout)
+
+        # UtteranceEnd may have already processed and cleared the buffer
+        if not final_transcript:
+            return
+
+        actual_gap = round(time.time() - last_transcript_at, 1)
+        logger.info(
+            f"[{session_id}] Silence fallback (adaptive {timeout}s, "
+            f"{len(final_transcript.split())} words) - "
+            f"actual gap {actual_gap}s - "
+            f"auto-processing: '{final_transcript}'"
+        )
+        transcript_to_process = final_transcript
+        confidence_to_process = final_confidence
+        duration = max(time.time() - audio_started_at, 0.001)
+
+        # Reset buffer for potential next utterance
+        final_transcript = ""
+        final_confidence = 0.0
+        final_segment_count = 0
+        audio_started_at = time.time()
+        turn_already_processed = True
+
+        try:
+            if access_token is None:
+                await ws.close(code=4401, reason="Authentication required")
+                return
+            await process_and_respond(
+                ws, session_id, student_id,
+                transcript_to_process, confidence_to_process,
+                duration, access_token, None,
+                tts_provider, tts_voice,
+                turn_id, previous_tutor_turn_id, transcript_final,
+            )
+        except Exception as e:
+            turn_already_processed = False
+            logger.error(f"[{session_id}] Silence fallback failed: {e}")
+        finally:
+            turn_id = None
+            previous_tutor_turn_id = None
+            transcript_final = None
+            silence_timer_task = None
 
     async def forward_deepgram_results(dg_ws):
         nonlocal final_transcript, final_confidence, final_segment_count, audio_started_at, turn_already_processed
         nonlocal turn_id, previous_tutor_turn_id, transcript_final
+        nonlocal silence_timer_task, last_transcript_at
 
         try:
             async for msg in dg_ws:
                 data = json.loads(msg)
+                msg_type = data.get("type", "unknown")
 
-                if data.get("type") == "Results":
+                # Debug: log every Deepgram message type so we can
+                # check whether UtteranceEnd is actually being sent.
+                if msg_type != "Results":
+                    logger.info(
+                        f"[{session_id}] Deepgram event: {msg_type}"
+                    )
+
+                if msg_type == "Results":
                     channel = data.get("channel", {})
                     alternatives = channel.get("alternatives", [])
 
@@ -377,48 +479,36 @@ async def voice_stream(
                         "role": "student",
                     })
 
+                    last_transcript_at = time.time()
+
                     logger.info(
                         f"[{session_id}] {'FINAL' if is_final else 'partial'}: "
                         f"'{transcript}' (conf={confidence:.4f})"
                     )
 
-                elif data.get("type") == "UtteranceEnd":
-                    # Deepgram detected 1.5s silence after speech.
-                    # Auto-trigger tutor response without requiring mic mute.
+                    # Reset the silence fallback timer on every transcript
+                    # message (partial or final).  The timer only fires if
+                    # Deepgram goes quiet for the adaptive timeout duration.
+                    if silence_timer_task and not silence_timer_task.done():
+                        silence_timer_task.cancel()
                     if final_transcript:
-                        logger.info(
-                            f"[{session_id}] UtteranceEnd - auto-processing: "
-                            f"'{final_transcript}'"
+                        silence_timer_task = asyncio.create_task(
+                            _silence_fallback_handler()
                         )
-                        transcript_to_process = final_transcript
-                        confidence_to_process = final_confidence
-                        duration = max(time.time() - audio_started_at, 0.001)
 
-                        # Reset for potential next utterance in same session
-                        final_transcript = ""
-                        final_confidence = 0.0
-                        final_segment_count = 0
-                        audio_started_at = time.time()
-                        turn_already_processed = True
-
-                        try:
-                            if access_token is None:
-                                await ws.close(code=4401, reason="Authentication required")
-                                return
-                            await process_and_respond(
-                                ws, session_id, student_id,
-                                transcript_to_process, confidence_to_process,
-                                duration, access_token, None,
-                                tts_provider, tts_voice,
-                                turn_id, previous_tutor_turn_id, transcript_final,
-                            )
-                        except Exception as e:
-                            turn_already_processed = False
-                            logger.error(f"[{session_id}] Auto-process failed: {e}")
-                        finally:
-                            turn_id = None
-                            previous_tutor_turn_id = None
-                            transcript_final = None
+                elif data.get("type") == "UtteranceEnd":
+                    # Deepgram detected 2.5s silence after speech.
+                    # We intentionally do NOT process here. 2.5s is too
+                    # short for math tutoring -- students often pause to
+                    # think mid-sentence.  Instead, we let the silence
+                    # fallback timer (SILENCE_FALLBACK_SECONDS) handle
+                    # processing.  UtteranceEnd is logged for debugging
+                    # but does not trigger any action.
+                    logger.info(
+                        f"[{session_id}] UtteranceEnd received "
+                        f"(ignored, waiting for silence fallback). "
+                        f"Buffer: '{final_transcript}'"
+                    )
 
         except websockets.exceptions.ConnectionClosed:
             logger.info(f"[{session_id}] Deepgram connection closed")
@@ -508,6 +598,10 @@ async def voice_stream(
 
                 elif msg_type == "stop":
                     receiving_audio = False
+                    # Cancel silence fallback -- explicit stop takes over
+                    if silence_timer_task and not silence_timer_task.done():
+                        silence_timer_task.cancel()
+                        silence_timer_task = None
                     canvas_snapshot = data.get("canvas_snapshot")
                     logger.info(f"[{session_id}] Stop received. Finalizing...")
 
@@ -547,6 +641,8 @@ async def voice_stream(
                                 tts_provider, tts_voice,
                                 turn_id, previous_tutor_turn_id, transcript_final,
                             )
+                        except Exception as e:
+                            logger.error(f"[{session_id}] Stop-path process failed: {e}")
                         finally:
                             turn_id = None
                             previous_tutor_turn_id = None
@@ -625,6 +721,11 @@ async def voice_stream(
         keepalive_task.cancel()
         if deepgram_receiver_task and not deepgram_receiver_task.done():
             deepgram_receiver_task.cancel()
+        # Cancel any background process_and_respond tasks still running
+        for bg_task in _background_tasks:
+            if not bg_task.done():
+                bg_task.cancel()
+        _background_tasks.clear()
         if deepgram_ws:
             try:
                 await deepgram_ws.close()
