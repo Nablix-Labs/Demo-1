@@ -31,6 +31,7 @@ import {
   type StaleTurnResponse,
   type NudgeDelivery,
   type QuestionType,
+  type StudentModelEvent,
   isStaleTurnResponse,
   isStaleSessionError,
 } from '@/lib/api';
@@ -279,6 +280,11 @@ export function syncBackendSession(response: {
    * sitting unused on the record.
    */
   question_type?: QuestionType | null;
+  /**
+   * The Student Model event behind this turn. Carries the question set, which
+   * is where a question's options live.
+   */
+  student_model_event?: StudentModelEvent | null;
   inactivity_policy?: {
     initial_idle_threshold_ms: number;
     cooldown_ms: number;
@@ -293,6 +299,16 @@ export function syncBackendSession(response: {
   // Whether a null question clears the current one depends on the phase; see
   // applyBackendPhase, which both transports share.
   const store = useNumeraStore.getState();
+  // Refresh the cached record FIRST when this reply carries a newer question
+  // set. Options are looked up out of that record by question id, and it was
+  // only ever written at session start and resume — so once the backend issued
+  // a new set (which is what a phase change does) the lookup was searching the
+  // PREVIOUS phase's questions and finding nothing. Doing it before
+  // applyBackendPhase means the new question can find its own options.
+  const event = response.student_model_event;
+  if (event?.phase_payload?.question_set && store.backendSession) {
+    store.setBackendSession({ ...store.backendSession, student_model_event: event });
+  }
   store.applyBackendPhase({
     phase: response.current_phase,
     questionId: response.question_id,
