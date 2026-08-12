@@ -280,7 +280,101 @@ def test_guided_evaluator_context_preserves_active_step_and_support_state() -> N
     assert context.consecutive_stuck_count == 2
 
 
-def test_final_partial_wording_is_preserved_after_state_reconciliation() -> None:
+def test_new_score_rule_uses_the_same_guided_rule_controller() -> None:
+    request = ClassificationRequest(
+        question_id="Q-T01-SCORE",
+        question_type="SHORT_RESPONSE",
+        question="A player starts with score s and gains 6 bonus points. Write the new-score rule.",
+        correct_answer="s + 6",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-SCORE",
+            canonical_answer="s + 6",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=False,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        student_input="s minus six",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+    )
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-SCORE",
+        required_concepts=[
+            GeneratedConcept(concept_id="GENERAL_RULE", description="new score rule", required=True)
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="score-rule",
+        prompt_version="1.0.0",
+    )
+    objective = classifier.initial_guided_objective(rubric)
+
+    evaluation = classifier.deterministic_teaching_step_evaluation(
+        request,
+        rubric,
+        objective,
+    )
+
+    assert evaluation is not None
+    assert evaluation.student_state == "WRONG"
+    assert "add, not subtract" in evaluation.tutor_message
+    assert "falls" not in evaluation.tutor_message
+
+
+def test_guided_follow_up_replaces_an_unrelated_llm_question() -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-SCORE",
+        required_concepts=[
+            GeneratedConcept(concept_id="GENERAL_RULE", description="new score rule", required=True)
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="score-rule",
+        prompt_version="1.0.0",
+    )
+    objective = classifier.initial_guided_objective(rubric)
+    request = ClassificationRequest(
+        question_id="Q-T01-SCORE",
+        question_type="SHORT_RESPONSE",
+        question="A player starts with score s and gains 6 bonus points. Write the new-score rule.",
+        correct_answer="s + 6",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-SCORE",
+            canonical_answer="s + 6",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=False,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        student_input="I do not know",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+    )
+    hallucinated = GuidedEvaluation(
+        student_state="STUCK",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=["GENERAL_RULE"],
+        selected_error_code=None,
+        confidence=0.9,
+        next_objective=objective,
+        tutor_message="What does the word 'falls' tell you about the operation?",
+        tutor_message_voice="What does the word 'falls' tell you about the operation?",
+    )
+
+    aligned = classifier.align_guided_follow_up(hallucinated, request, rubric, objective)
+
+    assert aligned.tutor_message == "That's okay. What general rule represents this situation?"
+    assert aligned.tutor_message_voice == aligned.tutor_message
+
+
+def test_final_partial_wording_is_replaced_with_the_active_question() -> None:
     rubric = _guided_rubric()
     objective = ActiveTeachingObjective(
         objective_type="ANSWER_QUESTION",
@@ -301,13 +395,23 @@ def test_final_partial_wording_is_preserved_after_state_reconciliation() -> None
         tutor_message_voice="You identified the wrong component.",
     )
 
-    aligned = classifier.align_guided_follow_up(
-        evaluation,
-        rubric,
-        objective,
+    request = ClassificationRequest(
+        question_id="Q-T02-002",
+        question_type="SHORT_RESPONSE",
+        question="What does cd mean?",
+        correct_answer="c multiplied by d",
+        answer_spec=_answer_spec("c multiplied by d", ["c times d"], "CONCEPT_TEXT_MATCH"),
+        phase_2_prompt_context=_guided_context(0),
+        student_input="multiplication",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
     )
+    aligned = classifier.align_guided_follow_up(evaluation, request, rubric, objective)
 
-    assert aligned.tutor_message == "You identified the wrong component."
+    assert aligned.tutor_message == "Good. What do the letters represent when the expression is expanded?"
 
 
 @pytest.mark.parametrize("student_input", ["NPlus5", "n plus 5", "The general rule is NPlus5"])
@@ -3199,7 +3303,7 @@ def test_guided_evaluator_retries_answer_revealing_wording(monkeypatch) -> None:
 
     assert response.guided_student_state == "PARTIAL"
     assert response.tutor_message == (
-        "You identified multiplication. What do the two letters represent?"
+        "Good. What do the letters represent when the expression is expanded?"
     )
     assert feedback[0] is None
     assert feedback[1] is not None

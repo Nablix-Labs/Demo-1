@@ -853,7 +853,10 @@ def teaching_steps_for(request: ClassificationRequest) -> list[TeachingStep]:
             TeachingStep("CHANGING_VALUE", changing_prompt),
             TeachingStep("FIXED_VALUE", "What operation or amount stays fixed?"),
         ]
-    if "general rule" in question:
+    if any(
+        phrase in question
+        for phrase in ("general rule", "new-score rule", "new score rule", "write the rule")
+    ):
         return [TeachingStep("GENERAL_RULE", rule_prompt)]
     return []
 
@@ -1020,6 +1023,23 @@ def deterministic_teaching_step_evaluation(
     steps = teaching_steps_for(request)
     step_index = next(index for index, item in enumerate(steps) if item.step_id == step.step_id)
     next_step = steps[step_index + 1] if step_index + 1 < len(steps) else None
+
+    if operator == "+" and any(
+        word in normalized for word in ("minus", "subtract", "subtraction")
+    ):
+        message = (
+            "The word in the question means add, not subtract. "
+            "What operation does the sign tell us to use?"
+        )
+        return _controller_evaluation("WRONG", objective, message, None, rubric)
+    if operator == "-" and any(
+        word in normalized for word in ("plus", "add", "addition")
+    ):
+        message = (
+            "The word in the question means subtract, not add. "
+            "What operation does the sign tell us to use?"
+        )
+        return _controller_evaluation("WRONG", objective, message, None, rubric)
 
     if step.step_id == "GENERAL_RULE":
         if re.fullmatch(rf"{re.escape(variable)}\s*{re.escape(operator)}\s*{number}", compact):
@@ -1696,6 +1716,7 @@ def classify_guided_learning_response(
     next_objective = normalized_guided_objective(evaluation, objective)
     evaluation = align_guided_follow_up(
         evaluation,
+        request,
         rubric,
         next_objective,
     )
@@ -1726,15 +1747,59 @@ def classify_guided_learning_response(
     )
 
 
+def controller_prompt_for_objective(
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+) -> str:
+    """Return the one controller-owned question for the remaining objective."""
+
+    missing_ids = set(objective.missing_concept_ids)
+    for teaching_step in teaching_steps_for(request):
+        component_id = _component_for_step(rubric, teaching_step.step_id)
+        if component_id in missing_ids:
+            return teaching_step.prompt
+    return focused_unresolved_prompt(
+        rubric,
+        objective,
+        "Which part should we look at first?",
+    )
+
+
 def align_guided_follow_up(
     evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
     rubric: GeneratedQuestionRubric,
     objective: ActiveTeachingObjective | None,
 ) -> GuidedEvaluation:
-    """Keep LLM wording after the backend has reconciled the teaching state."""
+    """Keep the backend-owned question when LLM wording loses lesson context."""
 
-    del rubric, objective
-    return evaluation
+    if evaluation.student_state == "CORRECT" or objective is None:
+        return evaluation
+    prompt = controller_prompt_for_objective(request, rubric, objective)
+    if prompt.casefold() in evaluation.tutor_message.casefold():
+        return evaluation
+    prefix = {
+        "PARTIAL": "Good.",
+        "WRONG": "Let's check that carefully.",
+        "STUCK": "That's okay.",
+        "UNCLEAR": "Let's focus on this part.",
+    }[evaluation.student_state]
+    message = f"{prefix} {prompt}"
+    logger.warning(
+        "guided_tutor_message_replaced",
+        extra={
+            "question_id": request.question_id,
+            "student_state": evaluation.student_state,
+            "active_prompt": prompt,
+        },
+    )
+    return evaluation.model_copy(
+        update={
+            "tutor_message": message,
+            "tutor_message_voice": message,
+        }
+    )
 
 
 def authoritative_guided_completion(
