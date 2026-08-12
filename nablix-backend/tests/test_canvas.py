@@ -251,6 +251,7 @@ def test_canvas_initializes_recommended_phase_before_answer(
         json={
             "session_id": session_id,
             "student_id": "ST013",
+            "turn_id": "TURN-ST013-CANVAS-1",
             "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
         },
     )
@@ -365,9 +366,10 @@ def test_canvas_repairs_in_progress_question_before_building_answer_context(
     response = client.post(
         "/canvas/submit",
         json={
-            "session_id": session_id,
-            "student_id": student_id,
-            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+                "session_id": session_id,
+                "student_id": student_id,
+                "turn_id": f"TURN-{student_id}-CANVAS-1",
+                "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
         },
     )
 
@@ -490,7 +492,9 @@ def test_canvas_preserves_question_metadata_for_guided_rescue(
     assert after.current_question == before.current_question
     assert after.student_model_event is not None
     assert after.student_model_event.phase_payload is not None
-    assert after.student_model_event.phase_payload.question_set is not None
+    assert after.student_model_event.phase_payload.question_set is None
+    assert after.active_student_model_question is not None
+    assert after.active_student_model_question.question_id == before.question_id
 
 
 def test_canvas_submit_sends_full_ocr_context_and_forwards_events(
@@ -849,12 +853,15 @@ def test_canvas_correct_same_phase_routes_next_question(
 def test_canvas_final_independent_attempt_is_recorded_before_review(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    terminal_events: list[str] = []
+
     async def send_session_event(
         adapter: StudentModelServiceAdapter,
         event: StudentModelSessionEvent,
         access_token: str,
     ) -> StudentModelSessionEventResponse:
         del adapter, access_token
+        terminal_events.append(event.event_type)
         body = (
             _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
             if event.event_type == "SESSION_OPENED"
@@ -903,16 +910,23 @@ def test_canvas_final_independent_attempt_is_recorded_before_review(
     session_id = _start_session("ST024")
     before = session_service._get_owned_session(session_id, "ST024")
 
-    response = client.post(
+    payload = {
+        "session_id": session_id,
+        "student_id": "ST024",
+        "turn_id": "TURN-ST024-CANVAS-1",
+        "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+    }
+    response = client.post("/canvas/submit", json=payload)
+    duplicate = client.post("/canvas/submit", json=payload)
+    changed = client.post(
         "/canvas/submit",
-        json={
-            "session_id": session_id,
-            "student_id": "ST024",
-            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
-        },
+        json={**payload, "snapshot_data_url": "data:image/png;base64,d29ybGQ="},
     )
 
     assert response.status_code == 200, response.text
+    assert duplicate.status_code == 200, duplicate.text
+    assert duplicate.json()["status"] == "DUPLICATE_TURN"
+    assert changed.status_code == 409
     body = response.json()
     assert body["current_phase"] == "REVIEW"
     assert body["question_id"] is None
@@ -928,6 +942,208 @@ def test_canvas_final_independent_attempt_is_recorded_before_review(
     assert attempt.phase == "INDEPENDENT_PRACTICE"
     assert attempt.evaluation == "CORRECT"
     assert attempt.input_source == "CANVAS"
+    assert len(stored.canvas_submissions) == 1
+    assert terminal_events.count("CORRECT_ATTEMPT") == 1
+
+
+def _incorrect_independent_tutor() -> TutorResult:
+    return TutorResult(
+        evaluation="INCORRECT",
+        error_type="CONCEPTUAL_ERROR",
+        intent="SUBMITTING_ANSWER",
+        response_strategy="CORRECT_MISCONCEPTION",
+        tutor_message="Diagnostic detail that must not be exposed.",
+        tutor_message_voice="Diagnostic detail that must not be exposed.",
+        voice_optimised=True,
+        hint_level=0,
+        answer_reveal_allowed=False,
+        confidence=0.95,
+        input_source="CANVAS",
+        attempt_increment=1,
+        recommended_conversation_action="WAIT_FOR_STUDENT",
+        question_completed=True,
+        answer_value_confirmed=False,
+        reasoning_complete=True,
+        selected_error_code="ERR-T02-SUBTRACTION-MISAPPLIED",
+        independent_outcome="RESCUE_REQUIRED",
+        independent_success=False,
+        independent_attempt_terminal=True,
+    )
+
+
+def test_tc21_canvas_failure_requests_fresh_content_and_keeps_gap_neutral(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[StudentModelSessionEvent] = []
+
+    async def send_session_event(
+        adapter: StudentModelServiceAdapter,
+        event: StudentModelSessionEvent,
+        access_token: str,
+    ) -> StudentModelSessionEventResponse:
+        del adapter, access_token
+        events.append(event)
+        body = _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+        body["request_id"] = event.request_id
+        if event.event_type == "INCORRECT_ATTEMPT":
+            body["phase_payload"] = None
+            body["journey_state"]["phase_3_independent_practice"].update(
+                {
+                    "retry_required_micro_skill_ids": ["T02.M1"],
+                    "used_question_ids": ["Q-T02-004"],
+                    "current_question_id": None,
+                }
+            )
+        if event.event_type == "FRESH_INDEPENDENT_QUESTION_REQUESTED":
+            body["phase_payload"] = None
+            body["routing"].update(
+                {
+                    "reason_code": "FRESH_CONTENT_UNAVAILABLE",
+                    "reason": "No fresh content is available.",
+                    "next_action": "WAIT_FOR_CONTENT",
+                    "content_gap_detected": True,
+                    "missing_micro_skill_ids": ["T02.M1"],
+                }
+            )
+            body["status"].update(
+                {
+                    "status_code": "CONTENT_GAP",
+                    "intervention_required": True,
+                    "intervention_reason": "Missing content for T02.M1.",
+                }
+            )
+        return StudentModelSessionEventResponse.model_validate(body)
+
+    async def incorrect_pipeline(
+        context: AdapterContext,
+    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
+        del context
+        return (
+            RAGResult(documents=[], retrieval_confidence=0.0),
+            StudentModelResult(
+                mastery_status="DEVELOPING",
+                continuity_status="on_track",
+                recommended_entry_phase="INDEPENDENT_PRACTICE",
+                hint_dependency_score=0.0,
+                intervention_required=False,
+            ),
+            _incorrect_independent_tutor(),
+        )
+
+    monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", send_session_event)
+    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", incorrect_pipeline)
+    session_id = _start_session("ST025")
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST025",
+            "turn_id": "TURN-TC21",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert [event.event_type for event in events[-2:]] == [
+        "INCORRECT_ATTEMPT",
+        "FRESH_INDEPENDENT_QUESTION_REQUESTED",
+    ]
+    fresh = events[-1]
+    assert fresh.target_micro_skill_ids == ["T02.M1"]
+    assert fresh.used_question_ids == ["Q-T02-004"]
+    body = response.json()
+    assert body["current_phase"] == "INDEPENDENT_PRACTICE"
+    assert body["question_id"] is None
+    assert body["message"] == "We'll review this one before a fresh independent check."
+    assert body["tutor"] is None
+    assert body["selected_error_code"] is None
+    assert body["first_error_step"] is None
+    assert body["phase3_review_evidence"] is None
+    stored = session_service._sessions[session_id]
+    assert stored.student_model_event is not None
+    assert stored.student_model_event.status.status_code == "CONTENT_GAP"
+    assert stored.student_model_event.routing.missing_micro_skill_ids == ["T02.M1"]
+
+
+def test_tc20_failed_retry_uses_returned_prerequisites_and_retains_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[StudentModelSessionEvent] = []
+
+    async def send_session_event(
+        adapter: StudentModelServiceAdapter,
+        event: StudentModelSessionEvent,
+        access_token: str,
+    ) -> StudentModelSessionEventResponse:
+        del adapter, access_token
+        events.append(event)
+        if event.event_type == "SESSION_OPENED":
+            body = _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+            body["journey_state"]["phase_3_independent_practice"]["retry_required_micro_skill_ids"] = ["T02.M1"]
+        elif event.event_type == "INDEPENDENT_RETRY_COMPLETED":
+            body = _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+            body["phase_payload"] = None
+            body["journey_state"]["recommended_entry_phase"] = "PHASE_2_GUIDED_LEARNING"
+            body["journey_state"]["phase_3_independent_practice"].update(
+                {"retry_required_micro_skill_ids": [], "unresolved_micro_skill_ids": ["T02.M1"]}
+            )
+            body["routing"].update(
+                {
+                    "reason_code": "FRESH_RETRY_FAILED",
+                    "next_action": "CHECK_PREREQUISITES_AND_RETURN_TO_GUIDED",
+                    "prerequisite_check_required": True,
+                    "prerequisite_micro_skill_ids": ["T02.M2"],
+                }
+            )
+        else:
+            body = _session_opened_response("PHASE_2_GUIDED_LEARNING")
+        body["request_id"] = event.request_id
+        return StudentModelSessionEventResponse.model_validate(body)
+
+    async def incorrect_pipeline(
+        context: AdapterContext,
+    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
+        del context
+        return (
+            RAGResult(documents=[], retrieval_confidence=0.0),
+            StudentModelResult(
+                mastery_status="LEARNING_GAP",
+                continuity_status="on_track",
+                recommended_entry_phase="GUIDED_PRACTICE",
+                hint_dependency_score=0.0,
+                intervention_required=True,
+            ),
+            _incorrect_independent_tutor(),
+        )
+
+    monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", send_session_event)
+    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", incorrect_pipeline)
+    session_id = _start_session("ST026")
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST026",
+            "turn_id": "TURN-TC20",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert [event.event_type for event in events[-2:]] == [
+        "INDEPENDENT_RETRY_COMPLETED",
+        "GUIDED_QUESTION_SET_REQUESTED",
+    ]
+    guided_request = events[-1]
+    assert guided_request.target_micro_skill_ids == ["T02.M2"]
+    body = response.json()
+    assert body["prerequisite_repair"] == {
+        "prerequisite_micro_skill_ids": ["T02.M2"],
+        "reason_code": "FRESH_RETRY_FAILED",
+    }
+    stored = session_service._sessions[session_id]
+    assert stored.prerequisite_repair_event is not None
+    assert stored.prerequisite_repair_event.routing.prerequisite_micro_skill_ids == ["T02.M2"]
 
 
 def test_unified_voice_canvas_validation_advances_for_complete_correct_work() -> None:

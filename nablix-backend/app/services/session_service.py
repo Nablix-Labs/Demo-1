@@ -23,10 +23,12 @@ from app.models.session import (
     OrientationPhaseRequest,
     PhaseTransitionRecord,
     QuestionAttemptRecord,
+    ReviewCompleteRequest,
     SessionEndRequest,
     SessionPerformance,
     SessionRecord,
     SessionStartRequest,
+    SessionResumeRequest,
     SessionSummary,
     VoiceState,
 )
@@ -38,7 +40,9 @@ from app.models.student_model_session import (
     MicroSkillResult,
     OrientationCompletedEvent,
     QuestionType,
+    ReviewCompletedEvent,
     SessionOpenedEvent,
+    SessionResumedEvent,
     StudentModelPhasePayload,
     StudentModelPhase,
     StudentModelQuestion,
@@ -240,6 +244,16 @@ async def update_side_channel_state(
     return updated
 
 
+async def store_prerequisite_repair_event(
+    session: SessionRecord,
+    event: StudentModelSessionEventResponse,
+) -> SessionRecord:
+    updated = session.model_copy(update={"prerequisite_repair_event": event})
+    _sessions[session.session_id] = updated
+    await save_session(updated)
+    return updated
+
+
 # Retained only for legacy session-review fixtures; active sessions use the
 # question and answer specification returned by Student Model Schema 3.0.
 _DEMO_QUESTIONS: dict[str, tuple[str, str, int]] = {
@@ -409,27 +423,15 @@ async def start_session(
         ),
         student_model_event=event,
         student_model_state=project_student_model_state(event),
+        active_student_model_question=(
+            payload.question_set.questions[0]
+            if payload.question_set is not None and payload.question_set.questions
+            else None
+        ),
     )
     _sessions[session_id] = session
     await save_session(session)
     return session
-
-
-def _build_content_exhausted_review_summary(
-    event: StudentModelSessionEventResponse,
-) -> dict[str, object]:
-    """Synthesise a minimal review summary when Phase 3 content ran out."""
-    js = event.journey_state
-    return {
-        "summary_id": "SUMMARY-CONTENT-EXHAUSTED",
-        "topic_id": js.topic_id,
-        "mastery_status": js.mastery_status,
-        "phase_3_summary": {
-            "verified": js.phase_3_independent_practice.verified_micro_skill_ids,
-            "remaining": js.phase_3_independent_practice.remaining_micro_skill_ids,
-            "content_exhausted": True,
-        },
-    }
 
 
 def _validate_session_opened_payload(
@@ -490,15 +492,7 @@ def _validate_session_opened_payload(
         payload.question_set is None or not payload.question_set.questions
     ):
         if payload.phase == "PHASE_3_INDEPENDENT_PRACTICE":
-            logger.warning(
-                "Phase 3 content exhausted — no questions in payload. "
-                "Auto-transitioning session to REVIEW phase."
-            )
-            return StudentModelPhasePayload(
-                phase="REVIEW",
-                payload_type="REVIEW_SUMMARY",
-                review_summary=_build_content_exhausted_review_summary(event),
-            )
+            return payload
         raise HTTPException(
             status_code=503,
             detail=f"Student Model returned no questions for {payload.phase}.",
@@ -656,32 +650,18 @@ async def _apply_schema_event(
     event: StudentModelSessionEventResponse,
 ) -> SessionRecord:
     payload = event.phase_payload
-    if payload is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Student Model returned no phase payload for the active phase.",
-        )
     has_questions = (
-        payload.question_set is not None and bool(payload.question_set.questions)
+        payload is not None
+        and payload.question_set is not None
+        and bool(payload.question_set.questions)
     )
-    if payload.payload_type in {
+    if payload is not None and payload.payload_type in {
         "QUESTION_SET",
         "SUPPORT_AND_RETRY",
         "SCAFFOLD",
         "RESCUE_AND_FRESH_QUESTION",
     } and not has_questions:
-        if payload.phase == "PHASE_3_INDEPENDENT_PRACTICE":
-            logger.warning(
-                "Phase 3 content exhausted — no questions in payload. "
-                "Auto-transitioning session to REVIEW phase."
-            )
-            payload = StudentModelPhasePayload(
-                phase="REVIEW",
-                payload_type="REVIEW_SUMMARY",
-                review_summary=_build_content_exhausted_review_summary(event),
-            )
-            event = event.model_copy(update={"phase_payload": payload})
-        else:
+        if payload.phase != "PHASE_3_INDEPENDENT_PRACTICE":
             raise HTTPException(
                 status_code=503,
                 detail=(
@@ -690,7 +670,9 @@ async def _apply_schema_event(
                 ),
             )
 
-    next_phase = PHASE_FROM_STUDENT_MODEL[payload.phase]
+    next_phase = PHASE_FROM_STUDENT_MODEL[
+        payload.phase if payload is not None else event.journey_state.current_phase
+    ]
     transition = resolve_transition(session.current_phase, next_phase)
     if next_phase != session.current_phase and transition is None:
         raise HTTPException(
@@ -704,41 +686,26 @@ async def _apply_schema_event(
     preserve_active_question = (
         next_phase == session.current_phase
         and next_phase in {"GUIDED_PRACTICE", "INDEPENDENT_PRACTICE"}
+        and payload is not None
         and payload.payload_type == "RESCUE"
         and not has_questions
     )
-    stored_event = event
-    if preserve_active_question:
-        previous_payload = (
-            session.student_model_event.phase_payload
-            if session.student_model_event is not None
-            else None
-        )
-        previous_question_set = (
-            previous_payload.question_set if previous_payload is not None else None
-        )
-        if (
-            previous_question_set is None
-            or session.question_id is None
-            or not any(
-                question.question_id == session.question_id
-                for question in previous_question_set.questions
-            )
-        ):
+    previous_used_ids = (
+        session.student_model_event.journey_state.phase_3_independent_practice.used_question_ids
+        if session.student_model_event is not None
+        else []
+    )
+    if payload is not None and payload.phase == "PHASE_3_INDEPENDENT_PRACTICE" and payload.question_set is not None:
+        reused_ids = [
+            question.question_id
+            for question in payload.question_set.questions
+            if question.question_id in previous_used_ids
+        ]
+        if reused_ids:
             raise HTTPException(
                 status_code=503,
-                detail=(
-                    "Student Model returned rescue without recoverable active "
-                    "question metadata."
-                ),
+                detail=f"Student Model returned previously used fresh questions: {reused_ids}.",
             )
-        stored_event = event.model_copy(
-            update={
-                "phase_payload": payload.model_copy(
-                    update={"question_set": previous_question_set}
-                )
-            }
-        )
 
     flags = UI_STATE_FLAGS[next_phase]
     phase1_messages = load_phase1_tutor_messages()
@@ -754,7 +721,7 @@ async def _apply_schema_event(
             if event.journey_state.recommended_entry_phase is not None
             else None
         ),
-        "student_model_event": stored_event,
+        "student_model_event": event,
         "student_model_state": project_student_model_state(event),
         "show_canvas": flags["show_canvas"],
         "show_hint_button": flags["show_hint_button"],
@@ -765,6 +732,13 @@ async def _apply_schema_event(
     }
     if question_updates is not None:
         updates.update(question_updates)
+        if payload is not None and payload.question_set is not None and payload.question_set.questions:
+            current_question_id = question_updates["question_id"]
+            updates["active_student_model_question"] = next(
+                question
+                for question in payload.question_set.questions
+                if question.question_id == current_question_id
+            )
     if next_phase == "CONCEPT_ORIENTATION":
         updates["orientation_messages"] = phase1_messages
         if next_phase == session.current_phase:
@@ -1177,6 +1151,63 @@ async def get_session(session_id: str, student_id: str) -> SessionRecord:
     if session is None or session.student_id != student_id:
         raise _session_not_found(session_id)
     return session
+
+
+async def resume_session(
+    session_id: str,
+    request: SessionResumeRequest,
+    access_token: str,
+) -> SessionRecord:
+    session = _schema_session(session_id, request.student_id)
+    stored_event = session.student_model_event
+    if stored_event is None:
+        raise RuntimeError("Schema session is missing its Student Model event.")
+    request_id = _schema_request_id(session, request.turn_id, "SESSION_RESUMED")
+    if stored_event.request_id == request_id:
+        return session
+    event = SessionResumedEvent(
+        request_id=request_id,
+        event_type="SESSION_RESUMED",
+        source_turn_id=request.turn_id,
+        expected_journey_version=stored_event.journey_state.version,
+        topic_id=stored_event.journey_state.topic_id,
+        student_id=session.student_id,
+        timestamp=_schema_timestamp(),
+        last_activity_at=request.last_activity_at.isoformat().replace("+00:00", "Z"),
+        continuity_threshold_days=request.continuity_threshold_days,
+        saved_journey=request.saved_journey,
+    )
+    response = await get_adapters().student_model.send_session_event(event, access_token)
+    return await _apply_schema_event(session, response)
+
+
+async def complete_review(
+    session_id: str,
+    request: ReviewCompleteRequest,
+    access_token: str,
+) -> SessionRecord:
+    session = _schema_session(session_id, request.student_id)
+    if session.current_phase != "REVIEW":
+        raise HTTPException(status_code=409, detail="The session is not in Review.")
+    stored_event = session.student_model_event
+    if stored_event is None:
+        raise RuntimeError("Schema session is missing its Student Model event.")
+    request_id = _schema_request_id(session, request.turn_id, "REVIEW_COMPLETED")
+    if stored_event.request_id == request_id:
+        return session
+    response = await get_adapters().student_model.send_session_event(
+        ReviewCompletedEvent(
+            request_id=request_id,
+            event_type="REVIEW_COMPLETED",
+            source_turn_id=request.turn_id,
+            expected_journey_version=stored_event.journey_state.version,
+            topic_id=stored_event.journey_state.topic_id,
+            student_id=session.student_id,
+            timestamp=_schema_timestamp(),
+        ),
+        access_token,
+    )
+    return await _apply_schema_event(session, response)
 
 
 def assemble_session_summary(session: SessionRecord, ended_at: datetime) -> SessionSummary:
@@ -1617,3 +1648,5 @@ async def update_interaction_state(
     _sessions[session_id] = updated_session
     await save_session(updated_session)
     return updated_session
+    ReviewCompletedEvent,
+    SessionResumedEvent,

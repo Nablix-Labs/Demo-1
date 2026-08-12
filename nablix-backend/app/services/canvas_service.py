@@ -1,3 +1,5 @@
+import hashlib
+import json
 import re
 from datetime import datetime, timezone
 from time import perf_counter
@@ -35,6 +37,9 @@ from app.services.interaction_service import (
 )
 from app.services.session_service import (
     _get_owned_session,
+    cache_interaction_response,
+    interaction_payload_fingerprint_for,
+    last_interaction_response_for,
     record_canvas_attachment,
     record_canvas_submission,
 )
@@ -44,6 +49,15 @@ from app.services.snapshot_store import build_reference, store_snapshot
 _CANVAS_RELATION_PATTERN = re.compile(
     r"(?:\\+(?:rightarrow|to)|[→⟶⟹⇒])"
 )
+
+
+def _canvas_request_fingerprint(request: CanvasSubmitRequest) -> str:
+    encoded = json.dumps(
+        request.model_dump(mode="json", exclude_none=True),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _semantic_canvas_text(ocr: VisionOCRResult) -> str:
@@ -110,6 +124,34 @@ async def submit_canvas(
 
     # Load the session up front so a stale/unknown session 404s before we pay for OCR.
     session = _get_owned_session(request.session_id, request.student_id)
+    if (
+        session.current_phase == "INDEPENDENT_PRACTICE"
+        and request.submission_role == "STANDALONE_ATTEMPT"
+        and request.turn_id is None
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="turn_id is required for Independent Practice Canvas submissions.",
+        )
+    if request.turn_id is not None:
+        previous = last_interaction_response_for(request.session_id, request.turn_id)
+        if previous is not None:
+            fingerprint = interaction_payload_fingerprint_for(
+                request.session_id,
+                request.turn_id,
+            )
+            if fingerprint != _canvas_request_fingerprint(request):
+                raise HTTPException(
+                    status_code=409,
+                    detail="turn_id was already accepted with different Canvas evidence.",
+                )
+            return previous.model_copy(
+                update={
+                    "status": "DUPLICATE_TURN",
+                    "attempt_increment": 0,
+                    "retry_safe": True,
+                }
+            )
     session = await _initialize_restored_schema_phase(
         session,
         get_adapters().student_model,
@@ -305,21 +347,25 @@ async def submit_canvas(
             response.independent_outcome = "INPUT_UNCLEAR"
             response.independent_success = None
             response.independent_attempt_terminal = False
-            response.phase3_review_evidence = {
-                "question_id": turn_session.question_id,
-                "submission_kind": "CANVAS",
-                "submitted_work_present": bool(message.strip()),
-                "ocr_clear": False,
-                "evaluation": "UNCLEAR",
-                "selected_error_code": None,
-                "first_error_step": None,
-                "confidence": ocr.confidence,
-            }
+            response.first_error_step = None
+            response.phase3_review_evidence = None
         else:
+            response.message = (
+                "Answer recorded."
+                if tutor.independent_outcome == "INDEPENDENTLY_VERIFIED"
+                else "We'll review this one before a fresh independent check."
+            )
+            response.message_voice = ""
             response.phase3_submission_confirmed = tutor.independent_outcome is not None
             response.independent_outcome = tutor.independent_outcome
             response.independent_success = tutor.independent_success
             response.independent_attempt_terminal = tutor.independent_attempt_terminal
-            response.first_error_step = tutor.first_error_step
-            response.phase3_review_evidence = tutor.phase3_review_evidence
+            response.first_error_step = None
+            response.phase3_review_evidence = None
+    cache_interaction_response(
+        request.session_id,
+        submission_id,
+        response,
+        _canvas_request_fingerprint(request),
+    )
     return response

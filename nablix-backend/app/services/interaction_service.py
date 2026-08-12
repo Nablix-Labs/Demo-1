@@ -55,6 +55,7 @@ from app.models.guided_learning import (
     EvaluationReasonCode,
     GuidedRescue,
     NudgeDelivery,
+    PrerequisiteRepair,
     ScaffoldEvaluationContext,
     WrongEscalationCode,
 )
@@ -73,12 +74,12 @@ from app.models.session import (
 from app.models.student_model_session import (
     AnswerSpec,
     GuidedAttemptEvent,
-    GuidedPhaseCompletedEvent,
+    FreshIndependentQuestionRequestedEvent,
     GuidedQuestionSetRequestedEvent,
     GuidedSupportEvent,
     IndependentQuestionSetRequestedEvent,
-    IndependentRetryCompletedEvent,
     Phase2RepairResult,
+    IndependentRetryCompletedEvent,
     QuestionType,
     StudentModelSessionEventResponse,
     StudentModelQuestion,
@@ -107,6 +108,7 @@ from app.services.session_service import (
     nudge_deliveries_for_tutor_turn,
     nudge_delivery_for,
     store_nudge_delivery,
+    store_prerequisite_repair_event,
     update_nudge_delivery_status,
     update_side_channel_state,
     update_interaction_state,
@@ -715,20 +717,72 @@ async def process_answer_with_session_event(
             or (event_type == "CORRECT_ATTEMPT" and not guided.remaining_micro_skill_ids)
         )
     ):
+        missing_support = [
+            skill
+            for skill in guided.target_micro_skill_ids
+            if skill not in guided.highest_support_used_by_skill
+        ]
+        if missing_support:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Student Model omitted highest support for Phase 2 skills: {missing_support}.",
+            )
         response = await adapters.student_model.send_session_event(
-            GuidedPhaseCompletedEvent(
+            IndependentQuestionSetRequestedEvent(
                 request_id=_schema_interaction_request_id(
                     session,
                     context.source_turn_id,
-                    "GUIDED_PHASE_COMPLETED",
+                    "INDEPENDENT_QUESTION_SET_REQUESTED",
                 ),
-                event_type="GUIDED_PHASE_COMPLETED",
+                event_type="INDEPENDENT_QUESTION_SET_REQUESTED",
                 source_turn_id=context.source_turn_id,
                 expected_journey_version=response.journey_state.version,
                 topic_id=response.journey_state.topic_id,
                 student_id=session.student_id,
                 timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                completed_micro_skill_ids=guided.completed_micro_skill_ids,
+                phase2_repair_results=[
+                    Phase2RepairResult(
+                        micro_skill_id=skill,
+                        highest_support_used=guided.highest_support_used_by_skill[skill],
+                    )
+                    for skill in guided.target_micro_skill_ids
+                ],
+                used_question_ids=guided.used_question_ids,
+            ),
+            access_token,
+        )
+    prerequisite_repair_event: StudentModelSessionEventResponse | None = None
+    if (
+        session.current_phase == "INDEPENDENT_PRACTICE"
+        and not retry_required
+        and event_type == "INCORRECT_ATTEMPT"
+        and (
+            response.phase_payload is None
+            or response.phase_payload.question_set is None
+            or not response.phase_payload.question_set.questions
+        )
+    ):
+        phase3 = response.journey_state.phase_3_independent_practice
+        target_skills = (
+            phase3.retry_required_micro_skill_ids
+            or phase3.unresolved_micro_skill_ids
+            or micro_skill_ids
+        )
+        response = await adapters.student_model.send_session_event(
+            FreshIndependentQuestionRequestedEvent(
+                request_id=_schema_interaction_request_id(
+                    session,
+                    context.source_turn_id,
+                    "FRESH_INDEPENDENT_QUESTION_REQUESTED",
+                ),
+                event_type="FRESH_INDEPENDENT_QUESTION_REQUESTED",
+                source_turn_id=context.source_turn_id,
+                expected_journey_version=response.journey_state.version,
+                topic_id=response.journey_state.topic_id,
+                student_id=session.student_id,
+                timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                target_micro_skill_ids=target_skills,
+                used_question_ids=phase3.used_question_ids,
             ),
             access_token,
         )
@@ -739,6 +793,7 @@ async def process_answer_with_session_event(
         and response.journey_state.recommended_entry_phase
         == "PHASE_2_GUIDED_LEARNING"
     ):
+        prerequisite_repair_event = response
         response = await adapters.student_model.send_session_event(
             GuidedQuestionSetRequestedEvent(
                 request_id=_schema_interaction_request_id(
@@ -752,19 +807,22 @@ async def process_answer_with_session_event(
                 topic_id=response.journey_state.topic_id,
                 student_id=session.student_id,
                 timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                target_micro_skill_ids=(
-                    response.journey_state.phase_3_independent_practice
-                    .unresolved_micro_skill_ids
-                ),
+                target_micro_skill_ids=response.routing.prerequisite_micro_skill_ids,
             ),
             access_token,
+        )
+    updated_session = await _apply_schema_event(session, response)
+    if prerequisite_repair_event is not None:
+        updated_session = await store_prerequisite_repair_event(
+            updated_session,
+            prerequisite_repair_event,
         )
     return (
         student,
         tutor,
         content_response,
         response,
-        await _apply_schema_event(session, response),
+        updated_session,
     )
 
 
@@ -865,11 +923,15 @@ def _schema_question(session: SessionRecord) -> StudentModelQuestion:
             status_code=409,
             detail="Schema 3.0 session state is missing.",
         )
-    if event.phase_payload is None or event.phase_payload.question_set is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Student Model returned no active question set.",
-        )
+    question_set = (
+        event.phase_payload.question_set
+        if event.phase_payload is not None
+        else None
+    )
+    if question_set is None and session.active_student_model_question is not None:
+        return session.active_student_model_question
+    if question_set is None:
+        raise HTTPException(status_code=503, detail="Student Model returned no active question set.")
     if session.question_id is None:
         raise HTTPException(
             status_code=409,
@@ -878,7 +940,7 @@ def _schema_question(session: SessionRecord) -> StudentModelQuestion:
     question: StudentModelQuestion | None = next(
         (
             item
-            for item in event.phase_payload.question_set.questions
+            for item in question_set.questions
             if item.question_id == session.question_id
         ),
         None,
@@ -1859,6 +1921,16 @@ def _response_from(
             stored_event.routing.reason_code if stored_event is not None else None
         ),
         active_scaffold=None if phase3_silent else _active_scaffold(session),
+        prerequisite_repair=(
+            PrerequisiteRepair(
+                prerequisite_micro_skill_ids=(
+                    session.prerequisite_repair_event.routing.prerequisite_micro_skill_ids
+                ),
+                reason_code=session.prerequisite_repair_event.routing.reason_code,
+            )
+            if session.prerequisite_repair_event is not None
+            else None
+        ),
         inactivity_policy=inactivity_policy(),
         nudge_delivery=nudge_delivery,
         phase3_submission_confirmed=phase3_attempt is not None if phase3_silent else None,
@@ -3601,6 +3673,13 @@ async def _process_interaction(
     if turn_session.current_phase == "INDEPENDENT_PRACTICE":
         response = response.model_copy(
             update={
+                "message": (
+                    "Answer recorded."
+                    if tutor.independent_outcome == "INDEPENDENTLY_VERIFIED"
+                    else "We'll review this one before a fresh independent check."
+                    if tutor.independent_outcome == "RESCUE_REQUIRED"
+                    else response.message
+                ),
                 "message_voice": "",
                 "selected_error_code": None,
                 "evaluation_reason_code": None,
@@ -3615,6 +3694,8 @@ async def _process_interaction(
                 "canvas_draw": [],
                 "is_canvas_solution_correct": None,
                 "feedback_type": None,
+                "first_error_step": None,
+                "phase3_review_evidence": None,
                 "phase3_submission_confirmed": tutor.independent_outcome is not None,
                 "phase3_submission_kind": "CHOICE" if request.input_source == "CHOICE" else None,
             }

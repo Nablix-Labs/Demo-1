@@ -1,7 +1,9 @@
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
+import asyncio
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.adapters import provider, student_model
@@ -575,7 +577,10 @@ def _event_response(
                 "next_action": "DELIVER_SUPPORT_AND_RETRY",
             }
         )
-    elif event_type == "GUIDED_PHASE_COMPLETED":
+    elif event_type in {
+        "GUIDED_PHASE_COMPLETED",
+        "INDEPENDENT_QUESTION_SET_REQUESTED",
+    }:
         response = _event_response("ORIENTATION_COMPLETED", request_id)
         journey = response["journey_state"]
         payload = response["phase_payload"]
@@ -711,6 +716,7 @@ def _event_response(
                 "completed_micro_skill_ids": ["T02.M1"],
                 "remaining_micro_skill_ids": [],
                 "highest_support_used_by_skill": {"T02.M1": "TUTOR_SOLVED"},
+                "used_question_ids": ["Q-T02-004"],
             }
         )
         payload.update(
@@ -1766,18 +1772,19 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
             "hint_count": 0,
         },
     )
-    assert tutor_solved.status_code == 200
+    assert tutor_solved.status_code == 200, tutor_solved.text
     assert events[-2]["event_type"] == "MAXIMUM_GUIDED_SUPPORT_REQUIRED"
     assert events[-2]["error_code"] == "ERR-T02-SUBTRACTION-MISAPPLIED"
-    assert events[-1]["event_type"] == "GUIDED_PHASE_COMPLETED"
-    assert events[-1]["completed_micro_skill_ids"] == ["T02.M1"]
+    assert events[-1]["event_type"] == "INDEPENDENT_QUESTION_SET_REQUESTED"
+    assert events[-1]["phase2_repair_results"] == [
+        {"micro_skill_id": "T02.M1", "highest_support_used": "TUTOR_SOLVED"}
+    ]
+    assert events[-1]["used_question_ids"] == ["Q-T02-004"]
     assert tutor_solved.json()["guided_rescue"]["rescue_type"] == "TUTOR_SOLVED"
     assert tutor_solved.json()["support_served_this_turn"] == "TUTOR_SOLVED"
     assert "correct answer is x = 5" in tutor_solved.json()["message"]
     assert tutor_solved.json()["current_phase"] == "INDEPENDENT_PRACTICE"
-    state = tutor_solved.json()["student_model_state"]
-    assert state["target_micro_skill_ids"] == ["T02.M1"]
-    assert state["completed_micro_skill_ids"] == []
+    assert tutor_solved.json()["student_model_state"] is None
 
 
 def test_diagnostic_no_gaps_honors_direct_independent_transition(monkeypatch) -> None:
@@ -2243,7 +2250,7 @@ def test_legacy_initial_phase_session_is_rejected(monkeypatch) -> None:
     assert captured == {}
 
 
-def test_phase3_content_exhaustion_auto_transitions_to_review() -> None:
+def test_phase3_content_gap_is_persisted_without_synthetic_review() -> None:
     event_dict = {
         "schema_version": "3.0",
         "request_id": "SESSION001:SESSION_OPENED",
@@ -2307,7 +2314,254 @@ def test_phase3_content_exhaustion_auto_transitions_to_review() -> None:
     }
     parsed = session_service.StudentModelSessionEventResponse.model_validate(event_dict)
     validated = session_service._validate_session_opened_payload(parsed)
-    assert validated.phase == "REVIEW"
-    assert validated.payload_type == "REVIEW_SUMMARY"
-    assert validated.review_summary is not None
-    assert validated.review_summary["summary_id"] == "SUMMARY-CONTENT-EXHAUSTED"
+    assert validated == parsed.phase_payload
+
+
+def test_tc21_phase3_null_payload_is_stored_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_post_json(
+        adapter_name: str,
+        url: str,
+        payload: dict[str, object],
+        headers: dict[str, str],
+        timeout_seconds: int,
+        retry_count: int,
+    ) -> dict[str, object]:
+        del adapter_name, url, headers, timeout_seconds, retry_count
+        response = _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+        response["request_id"] = payload["request_id"]
+        return response
+
+    _use_live_student_model(monkeypatch, fake_post_json)
+    started = client.post(
+        "/session/start",
+        json={"student_id": "ST001", "concept_id": "ALG_LINEAR_ONE_STEP", "interaction_mode": "TEXT"},
+    )
+    session = session_service._sessions[started.json()["session_id"]]
+    stored_event = session.student_model_event
+    assert stored_event is not None
+    stored_phase3 = stored_event.journey_state.phase_3_independent_practice.model_copy(
+        update={"used_question_ids": ["Q-T02-004"]}
+    )
+    stored_journey = stored_event.journey_state.model_copy(
+        update={"phase_3_independent_practice": stored_phase3}
+    )
+    session = session.model_copy(
+        update={"student_model_event": stored_event.model_copy(update={"journey_state": stored_journey})}
+    )
+    body = _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+    body["phase_payload"] = None
+    body["routing"].update(
+        {
+            "reason_code": "FRESH_CONTENT_UNAVAILABLE",
+            "reason": "No fresh question is available.",
+            "next_action": "WAIT_FOR_CONTENT",
+            "content_gap_detected": True,
+            "missing_micro_skill_ids": ["T02.M1"],
+        }
+    )
+    body["status"].update(
+        {
+            "status_code": "CONTENT_GAP",
+            "intervention_required": True,
+            "intervention_reason": "Missing fresh independent question.",
+        }
+    )
+    event = session_service.StudentModelSessionEventResponse.model_validate(body)
+
+    updated = asyncio.run(session_service._apply_schema_event(session, event))
+
+    assert updated.current_phase == "INDEPENDENT_PRACTICE"
+    assert updated.question_id is None
+    assert updated.student_model_event == event
+    assert updated.student_model_event.routing.missing_micro_skill_ids == ["T02.M1"]
+
+
+def test_tc21_rejects_reused_fresh_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_post_json(
+        adapter_name: str,
+        url: str,
+        payload: dict[str, object],
+        headers: dict[str, str],
+        timeout_seconds: int,
+        retry_count: int,
+    ) -> dict[str, object]:
+        del adapter_name, url, headers, timeout_seconds, retry_count
+        response = _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+        response["request_id"] = payload["request_id"]
+        return response
+
+    _use_live_student_model(monkeypatch, fake_post_json)
+    started = client.post(
+        "/session/start",
+        json={"student_id": "ST001", "concept_id": "ALG_LINEAR_ONE_STEP", "interaction_mode": "TEXT"},
+    )
+    session = session_service._sessions[started.json()["session_id"]]
+    body = _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+    stored_event = session.student_model_event
+    assert stored_event is not None
+    stored_phase3 = stored_event.journey_state.phase_3_independent_practice.model_copy(
+        update={"used_question_ids": ["Q-T02-004"]}
+    )
+    session = session.model_copy(
+        update={
+            "student_model_event": stored_event.model_copy(
+                update={
+                    "journey_state": stored_event.journey_state.model_copy(
+                        update={"phase_3_independent_practice": stored_phase3}
+                    )
+                }
+            )
+        }
+    )
+    journey = body["journey_state"]["phase_3_independent_practice"]
+    journey["used_question_ids"] = ["Q-T02-004"]
+    event = session_service.StudentModelSessionEventResponse.model_validate(body)
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(session_service._apply_schema_event(session, event))
+    assert error.value.status_code == 503
+    assert "previously used" in str(error.value.detail)
+
+
+@pytest.mark.parametrize(
+    ("phase", "reason_code", "continuity_status"),
+    [
+        ("PHASE_2_GUIDED_LEARNING", "SESSION_RESUMED", "RESUMED"),
+        ("PHASE_3_INDEPENDENT_PRACTICE", "SESSION_RESUMED", "RESUMED"),
+        ("PHASE_2_GUIDED_LEARNING", "SESSION_RESUMED_WITHIN_THRESHOLD", "ON_TRACK"),
+    ],
+)
+def test_tc22_tc24_resume_forwards_saved_journey_and_persists_returned_state(
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+    reason_code: str,
+    continuity_status: str,
+) -> None:
+    events: list[object] = []
+
+    async def send_session_event(adapter: object, event: object, access_token: str):
+        del adapter, access_token
+        events.append(event)
+        event_type = getattr(event, "event_type")
+        body = _session_opened_response(
+            "PHASE_2_GUIDED_LEARNING" if event_type == "SESSION_OPENED" else phase
+        )
+        body["request_id"] = getattr(event, "request_id")
+        if event_type == "SESSION_RESUMED":
+            body["journey_state"]["continuity_status"] = continuity_status
+            body["routing"]["reason_code"] = reason_code
+            body["routing"]["next_action"] = (
+                "RESUME_INDEPENDENT_PRACTICE"
+                if phase == "PHASE_3_INDEPENDENT_PRACTICE"
+                else "RESUME_GUIDED_LEARNING"
+            )
+        return session_service.StudentModelSessionEventResponse.model_validate(body)
+
+    monkeypatch.setattr(
+        student_model.StudentModelServiceAdapter,
+        "send_session_event",
+        send_session_event,
+    )
+    settings = Settings(
+        student_model_url="https://student-model.example",
+        student_model_topic_codes={"ALG_LINEAR_ONE_STEP": "ALG-ORI-02"},
+        use_mock_student_model=False,
+    )
+    monkeypatch.setattr(provider, "get_settings", lambda: settings)
+    monkeypatch.setattr(session_service, "get_settings", lambda: settings)
+    started = client.post(
+        "/session/start",
+        json={"student_id": "ST001", "concept_id": "ALG_LINEAR_ONE_STEP", "interaction_mode": "TEXT"},
+    )
+    session_id = started.json()["session_id"]
+    saved_journey = {
+        "phase_2_guided_learning": {
+            "target_micro_skill_ids": ["T02.M1"],
+            "remaining_micro_skill_ids": ["T02.M1"],
+            "used_question_ids": ["Q-T02-OLD"],
+        }
+    }
+
+    resumed = client.post(
+        f"/session/{session_id}/resume",
+        json={
+            "student_id": "ST001",
+            "turn_id": f"TURN-{reason_code}-{phase}",
+            "last_activity_at": "2026-07-22T10:00:00Z",
+            "continuity_threshold_days": 3,
+            "saved_journey": saved_journey,
+        },
+    )
+
+    assert resumed.status_code == 200, resumed.text
+    resume_event = events[-1]
+    assert getattr(resume_event, "event_type") == "SESSION_RESUMED"
+    assert getattr(resume_event, "saved_journey") == saved_journey
+    assert getattr(resume_event, "expected_journey_version") == 1
+    stored = session_service._sessions[session_id]
+    assert stored.student_model_event is not None
+    assert stored.student_model_event.routing.reason_code == reason_code
+    assert stored.student_model_event.journey_state.continuity_status == continuity_status
+
+
+def test_tc25_review_complete_forwards_correlated_event_and_persists_next_topic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[object] = []
+
+    async def send_session_event(adapter: object, event: object, access_token: str):
+        del adapter, access_token
+        events.append(event)
+        body = _session_opened_response("REVIEW")
+        body["request_id"] = getattr(event, "request_id")
+        if getattr(event, "event_type") == "REVIEW_COMPLETED":
+            body["phase_payload"] = None
+            body["journey_state"]["topic_status"] = "COMPLETED"
+            body["journey_state"]["mastery_status"] = "MASTERED"
+            body["journey_state"]["recommended_entry_phase"] = None
+            body["journey_state"]["review"]["status"] = "COMPLETED"
+            body["routing"].update(
+                {
+                    "reason_code": "REVIEW_COMPLETED",
+                    "next_action": "START_NEXT_TOPIC",
+                    "next_topic_id": "ALG-ORI-02",
+                    "next_topic_entry_phase": "PHASE_0_DIAGNOSTIC",
+                }
+            )
+        return session_service.StudentModelSessionEventResponse.model_validate(body)
+
+    monkeypatch.setattr(
+        student_model.StudentModelServiceAdapter,
+        "send_session_event",
+        send_session_event,
+    )
+    settings = Settings(
+        student_model_url="https://student-model.example",
+        student_model_topic_codes={"ALG_LINEAR_ONE_STEP": "ALG-ORI-02"},
+        use_mock_student_model=False,
+    )
+    monkeypatch.setattr(provider, "get_settings", lambda: settings)
+    monkeypatch.setattr(session_service, "get_settings", lambda: settings)
+    started = client.post(
+        "/session/start",
+        json={"student_id": "ST001", "concept_id": "ALG_LINEAR_ONE_STEP", "interaction_mode": "TEXT"},
+    )
+    session_id = started.json()["session_id"]
+
+    completed = client.post(
+        f"/session/{session_id}/review/complete",
+        json={"student_id": "ST001", "turn_id": "TURN-TC25"},
+    )
+
+    assert completed.status_code == 200, completed.text
+    review_event = events[-1]
+    assert getattr(review_event, "event_type") == "REVIEW_COMPLETED"
+    assert getattr(review_event, "source_turn_id") == "TURN-TC25"
+    assert getattr(review_event, "expected_journey_version") == 1
+    stored = session_service._sessions[session_id]
+    assert stored.student_model_event is not None
+    assert stored.student_model_event.routing.next_topic_id == "ALG-ORI-02"

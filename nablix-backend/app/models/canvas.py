@@ -116,6 +116,7 @@ class CanvasSubmitRequest(BaseModel):
 
 
 
+
 class CanvasLatency(BaseModel):
     """Per-stage timing for one canvas submission, in milliseconds."""
 

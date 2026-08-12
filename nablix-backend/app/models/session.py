@@ -36,6 +36,7 @@ from app.models.student_model_session import (
     QuestionType,
     StudentModelCoreState,
     StudentModelSessionEventResponse,
+    StudentModelQuestion,
 )
 from app.services.phase1_tutor import Phase1TutorMessages
 
@@ -101,6 +102,23 @@ class SessionEndRequest(BaseModel):
 
     session_id: SessionId
     student_id: StudentId
+
+
+class SessionResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    student_id: StudentId
+    turn_id: TurnId
+    last_activity_at: datetime
+    continuity_threshold_days: int = Field(ge=1)
+    saved_journey: dict[str, object]
+
+
+class ReviewCompleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    student_id: StudentId
+    turn_id: TurnId
 
 
 class DiagnosticAnswer(BaseModel):
@@ -262,7 +280,9 @@ class SessionRecord(BaseModel):
     # end-of-session review reflects his data rather than a reconstruction.
     last_student_model: StudentModelResult | None = None
     student_model_event: StudentModelSessionEventResponse | None = None
+    prerequisite_repair_event: StudentModelSessionEventResponse | None = None
     student_model_state: StudentModelCoreState | None = None
+    active_student_model_question: StudentModelQuestion | None = None
     session_summary: SessionSummary | None = None
     session_review: SessionReviewResponse | None = None
 
@@ -274,6 +294,14 @@ class SessionResponse(SessionRecord):
     scaffold_steps: list[str] = Field(default_factory=list, exclude=True)
     scaffold_expected_response: str | None = Field(default=None, exclude=True)
     student_model_event: PublicStudentModelEvent | None = None
+    prerequisite_repair_event: StudentModelSessionEventResponse | None = Field(
+        default=None,
+        exclude=True,
+    )
+    active_student_model_question: StudentModelQuestion | None = Field(
+        default=None,
+        exclude=True,
+    )
     generated_question_rubric: GeneratedQuestionRubric | None = Field(
         default=None,
         exclude=True,

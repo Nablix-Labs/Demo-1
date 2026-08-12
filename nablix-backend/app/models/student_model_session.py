@@ -377,6 +377,23 @@ class IndependentQuestionSetRequestedEvent(MutatingSessionEventBase):
     used_question_ids: list[str]
 
 
+class FreshIndependentQuestionRequestedEvent(MutatingSessionEventBase):
+    event_type: Literal["FRESH_INDEPENDENT_QUESTION_REQUESTED"]
+    target_micro_skill_ids: list[str]
+    used_question_ids: list[str]
+
+
+class SessionResumedEvent(MutatingSessionEventBase):
+    event_type: Literal["SESSION_RESUMED"]
+    last_activity_at: str
+    continuity_threshold_days: int
+    saved_journey: dict[str, object]
+
+
+class ReviewCompletedEvent(MutatingSessionEventBase):
+    event_type: Literal["REVIEW_COMPLETED"]
+
+
 StudentModelSessionEvent: TypeAlias = (
     SessionOpenedEvent
     | DiagnosticQuestionSetRequestedEvent
@@ -389,6 +406,9 @@ StudentModelSessionEvent: TypeAlias = (
     | IndependentRetryCompletedEvent
     | GuidedQuestionSetRequestedEvent
     | IndependentQuestionSetRequestedEvent
+    | FreshIndependentQuestionRequestedEvent
+    | SessionResumedEvent
+    | ReviewCompletedEvent
 )
 
 
