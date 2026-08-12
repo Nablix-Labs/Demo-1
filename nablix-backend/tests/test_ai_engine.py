@@ -480,6 +480,230 @@ def test_guided_follow_up_replaces_an_answer_revealing_llm_reply() -> None:
     assert aligned.tutor_message_voice == aligned.tutor_message
 
 
+def test_guided_follow_up_keeps_the_learner_selected_choice_explanation() -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-004",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="ANSWER_SELECTION",
+                description="Selects the correct option.",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="ANSWER_EXPLANATION",
+                description="Explains why the selected option works.",
+                required=True,
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="choice-explanation",
+        prompt_version="1.0.0",
+    )
+    objective = ActiveTeachingObjective(
+        objective_type="EXPLAIN_REASONING",
+        target_concept_ids=["ANSWER_EXPLANATION"],
+        confirmed_concept_ids=["ANSWER_SELECTION"],
+        missing_concept_ids=["ANSWER_EXPLANATION"],
+    )
+    request = ClassificationRequest(
+        question_id="Q-T01-004",
+        question_type="CHOICE_WITH_EXPLANATION",
+        question="Which is the general rule? A: 12 + 4. B: n + 4. Explain briefly.",
+        correct_answer="B",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-004",
+            canonical_answer="B",
+            accepted_answers=["B"],
+            verification_method="EXACT_CHOICE_MATCH",
+            explanation_required=True,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        guided_teaching_state=GuidedTeachingState(
+            question_id="Q-T01-004",
+            objective_component_ids=["ANSWER_SELECTION", "ANSWER_EXPLANATION"],
+            confirmed_component_ids=["ANSWER_SELECTION"],
+            missing_component_ids=["ANSWER_EXPLANATION"],
+            active_component_id="ANSWER_EXPLANATION",
+            last_tutor_question_type="COMPONENT",
+            selected_option_id="B",
+            awaiting_response=True,
+        ),
+        student_input="option b",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+    )
+    evaluation = GuidedEvaluation(
+        student_state="PARTIAL",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=["ANSWER_SELECTION"],
+        contradicted_concept_ids=[],
+        missing_concept_ids=["ANSWER_EXPLANATION"],
+        selected_error_code=None,
+        confidence=0.9,
+        next_objective=objective,
+        tutor_message=(
+            "You chose option B, which is a good start. Now explain why option B "
+            "works as a general rule."
+        ),
+        tutor_message_voice=(
+            "You chose option B, which is a good start. Now explain why option B "
+            "works as a general rule."
+        ),
+    )
+
+    aligned = classifier.align_guided_follow_up(evaluation, request, rubric, objective)
+
+    assert aligned.tutor_message == evaluation.tutor_message
+    assert aligned.tutor_message_voice == evaluation.tutor_message_voice
+
+
+def test_guided_follow_up_blocks_an_unselected_choice_reveal() -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-004",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="ANSWER_SELECTION",
+                description="Selects the correct option.",
+                required=True,
+            )
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="choice-reveal",
+        prompt_version="1.0.0",
+    )
+    objective = classifier.initial_guided_objective(rubric)
+    request = ClassificationRequest(
+        question_id="Q-T01-004",
+        question_type="CHOICE_WITH_EXPLANATION",
+        question="Which is the general rule? A: 12 + 4. B: n + 4. Explain briefly.",
+        correct_answer="B",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-004",
+            canonical_answer="B",
+            accepted_answers=["B"],
+            verification_method="EXACT_CHOICE_MATCH",
+            explanation_required=True,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        guided_teaching_state=GuidedTeachingState(
+            question_id="Q-T01-004",
+            objective_component_ids=["ANSWER_SELECTION"],
+            confirmed_component_ids=[],
+            missing_component_ids=["ANSWER_SELECTION"],
+            active_component_id="ANSWER_SELECTION",
+            last_tutor_question_type="COMPONENT",
+            selected_option_id="A",
+            awaiting_response=True,
+        ),
+        student_input="option a",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+    )
+    evaluation = GuidedEvaluation(
+        student_state="WRONG",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=["ANSWER_SELECTION"],
+        selected_error_code=None,
+        confidence=0.9,
+        next_objective=objective,
+        tutor_message="The correct choice is option B.",
+        tutor_message_voice="The correct choice is option B.",
+    )
+
+    aligned = classifier.align_guided_follow_up(evaluation, request, rubric, objective)
+
+    assert aligned.tutor_message == "Let's check that carefully. Which option do you choose?"
+
+
+def test_guided_choice_repetition_keeps_the_llm_explanation_and_updates_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    class _GuidedClient:
+        def evaluate_guided_turn(self, **kwargs: object) -> GuidedEvaluation:
+            nonlocal calls
+            calls += 1
+            return GuidedEvaluation(
+                student_state="PARTIAL",
+                newly_confirmed_concept_ids=["ANSWER_SELECTION"],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=["ANSWER_EXPLANATION"],
+                selected_error_code=None,
+                confidence=0.9,
+                next_objective=ActiveTeachingObjective(
+                    objective_type="EXPLAIN_REASONING",
+                    target_concept_ids=["ANSWER_EXPLANATION"],
+                    confirmed_concept_ids=["ANSWER_SELECTION"],
+                    missing_concept_ids=["ANSWER_EXPLANATION"],
+                ),
+                tutor_message=(
+                    "You chose option B, which is a good start. Now explain why "
+                    "option B works as a general rule."
+                ),
+                tutor_message_voice=(
+                    "You chose option B, which is a good start. Now explain why "
+                    "option B works as a general rule."
+                ),
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _GuidedClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T01-004",
+            question_type="CHOICE_WITH_EXPLANATION",
+            question=(
+                "Which is the general rule: A) 12 + 4 or B) n + 4? "
+                "Explain briefly."
+            ),
+            correct_answer="B",
+            answer_spec=AnswerSpec(
+                answer_spec_id="ANS-T01-004",
+                canonical_answer="B",
+                accepted_answers=["B", "n+4", "second option"],
+                verification_method="CHOICE_AND_CONCEPT_MATCH",
+                explanation_required=True,
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            guided_teaching_state=GuidedTeachingState(
+                question_id="Q-T01-004",
+                objective_component_ids=["ANSWER_SELECTION", "ANSWER_EXPLANATION"],
+                confirmed_component_ids=[],
+                missing_component_ids=["ANSWER_SELECTION", "ANSWER_EXPLANATION"],
+                active_component_id="ANSWER_SELECTION",
+                last_tutor_question_type="OPTION_COMPARISON",
+                selected_option_id="A",
+                awaiting_response=True,
+            ),
+            student_input="option b",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert calls == 1
+    assert response.tutor_message.startswith("You chose option B")
+    assert response.answer_reveal_allowed is True
+    assert response.guided_teaching_state is not None
+    assert response.guided_teaching_state.selected_option_id == "B"
+
+
 def test_final_partial_wording_is_replaced_when_it_is_generic() -> None:
     rubric = _guided_rubric()
     objective = ActiveTeachingObjective(

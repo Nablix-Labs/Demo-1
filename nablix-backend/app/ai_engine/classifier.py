@@ -1170,14 +1170,27 @@ def teaching_state_for(
         active_component_id=active_component_id(rubric, objective),
         last_tutor_question_type=prompt_type_for_message(tutor_message),
         selected_option_id=(
-            previous.selected_option_id
-            if previous is not None and previous.question_id == (request.question_id or rubric.question_id)
-            else None
+            typed_choice_selection(request)
+            or (
+                previous.selected_option_id
+                if previous is not None
+                and previous.question_id == (request.question_id or rubric.question_id)
+                else None
+            )
         ),
         awaiting_response=objective is not None,
         active_step_id=active_step_id,
         teaching_step_ids=[step.step_id for step in teaching_steps],
     )
+
+
+def typed_choice_selection(request: ClassificationRequest) -> str | None:
+    """Return a typed choice ID for an explanation-choice question."""
+
+    if request.question_type != "CHOICE_WITH_EXPLANATION":
+        return None
+    choice = normalized_choice_response(request.student_input)
+    return choice if len(choice) == 1 and choice.isalpha() else None
 
 
 def guided_tutor_context_for(
@@ -1591,10 +1604,11 @@ def classify_guided_learning_response(
             )
             if (
                 evaluation.student_state != "CORRECT"
-                and message_reveals_answer(
+                and guided_message_reveals_undemonstrated_answer(
                     evaluation.tutor_message,
                     evaluation.tutor_message_voice,
-                    request.correct_answer,
+                    request,
+                    evaluation,
                     rules,
                 )
             ):
@@ -1815,10 +1829,11 @@ def guided_tutor_message_is_safe_and_relevant(
         return False
 
     rules = load_classifier_rules()
-    if message_reveals_answer(
+    if guided_message_reveals_undemonstrated_answer(
         message,
         voice_message,
-        request.correct_answer,
+        request,
+        evaluation,
         rules,
     ):
         return False
@@ -1877,6 +1892,102 @@ def guided_message_repairs_selected_misconception(normalized_message: str) -> bo
         len(significant_component_tokens(normalized_message)) >= 3
         and bool(set(normalized_message.split()).intersection(correction_terms))
     )
+
+
+def guided_message_reveals_undemonstrated_answer(
+    message: str,
+    voice_message: str,
+    request: ClassificationRequest,
+    evaluation: GuidedEvaluation,
+    rules: ClassifierRulesConfig,
+) -> bool:
+    """Block a final answer only when the learner has not already supplied it."""
+
+    if not message_reveals_answer(
+        message,
+        voice_message,
+        request.correct_answer,
+        rules,
+    ):
+        return False
+    return not guided_turn_has_answer_evidence(request, evaluation)
+
+
+def guided_turn_has_answer_evidence(
+    request: ClassificationRequest,
+    evaluation: GuidedEvaluation,
+) -> bool:
+    """Return whether this turn or its durable state already proves the answer."""
+
+    if learner_input_matches_canonical_answer(request):
+        return True
+    return guided_choice_selection_is_confirmed(request, evaluation)
+
+
+def learner_input_matches_canonical_answer(request: ClassificationRequest) -> bool:
+    """Recognise a full canonical answer already present in the learner input."""
+
+    if request.answer_spec is None:
+        return False
+    if request.question_type in {
+        "CHOICE_WITH_EXPLANATION",
+        "TRUE_FALSE_WITH_EXPLANATION",
+    } or request.answer_spec.verification_method == "EXACT_CHOICE_MATCH":
+        return normalized_choice_response(request.student_input) in {
+            normalized_choice_response(answer)
+            for answer in [
+                request.answer_spec.canonical_answer,
+                *request.answer_spec.accepted_answers,
+            ]
+        }
+    canonical_answer = normalize_semantic_answer(
+        request.answer_spec.canonical_answer
+    )
+    learner_answer = normalize_semantic_answer(request.student_input)
+    if canonical_answer == "" or learner_answer == "":
+        return False
+    if len(canonical_answer) == 1 and canonical_answer.isalnum():
+        return re.search(
+            rf"(?<!\w){re.escape(canonical_answer)}(?!\w)",
+            learner_answer,
+        ) is not None
+    return canonical_answer in learner_answer
+
+
+def guided_choice_selection_is_confirmed(
+    request: ClassificationRequest,
+    evaluation: GuidedEvaluation,
+) -> bool:
+    """Allow explanation of the correct choice once the learner selected it."""
+
+    if request.answer_spec is None:
+        return False
+    if request.question_type not in {
+        "CHOICE_WITH_EXPLANATION",
+        "TRUE_FALSE_WITH_EXPLANATION",
+    }:
+        return False
+    teaching_state = request.guided_teaching_state
+    if teaching_state is None or teaching_state.selected_option_id is None:
+        return False
+    accepted_choices = {
+        normalized_choice_response(answer)
+        for answer in [
+            request.answer_spec.canonical_answer,
+            *request.answer_spec.accepted_answers,
+        ]
+    }
+    selected_choice = normalized_choice_response(teaching_state.selected_option_id)
+    if selected_choice not in accepted_choices:
+        return False
+    learner_choice = normalized_choice_response(request.student_input)
+    if len(learner_choice) == 1 and learner_choice.isalpha() and learner_choice != selected_choice:
+        return False
+    confirmed_ids = {
+        *evaluation.newly_confirmed_concept_ids,
+        *evaluation.preserved_concept_ids,
+    }
+    return "ANSWER_SELECTION" in confirmed_ids
 
 
 def authoritative_guided_completion(
@@ -2608,10 +2719,11 @@ def build_guided_tutor_response(
         mistake_classification=None,
         annotation_intents=[],
         next_phase_recommendation=request.current_phase,
-        # Re-stating a numerical example printed in the question repairs a
-        # copied-data mistake; it is not disclosure of the requested rule.
+        # A tutor may safely discuss an answer the learner has already supplied
+        # or selected; it must not introduce a new final answer.
         answer_reveal_allowed=(
             prompt_type_for_message(evaluation.tutor_message) == "SOURCE_CORRECTION"
+            or guided_turn_has_answer_evidence(request, evaluation)
         ),
         confidence=evaluation.confidence,
         input_source=request.input_source,
