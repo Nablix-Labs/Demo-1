@@ -1267,6 +1267,20 @@ export async function submitCanvas(
   sessionId: string,
   snapshotDataUrl: string,
   submissionRole: 'STANDALONE_ATTEMPT' | 'VOICE_ATTACHMENT',
+  /**
+   * The turn this submission belongs to — REQUIRED in Independent Practice.
+   *
+   * `canvas_service.py:130` answers 422 "turn_id is required for Independent
+   * Practice Canvas submissions" without it, so every Phase 3 canvas submission
+   * was being rejected (Chiru, 12 Aug 2026). It is also what makes a retry safe:
+   * the backend keys the submission on this id, so re-sending the same turn is
+   * deduplicated instead of counting as a second attempt.
+   *
+   * Mint it with the store's `beginSubmissionTurn()` and reuse it verbatim on a
+   * retry — a fresh id on a retry is a NEW submission, which is the bug this
+   * field exists to prevent.
+   */
+  turnId: string,
   student: string = studentId()
 ) {
   if (!snapshotDataUrl.startsWith(PNG_DATA_URL_PREFIX)) {
@@ -1278,6 +1292,7 @@ export async function submitCanvas(
   const res = await api.post<CanvasSubmissionResult>('/canvas/submit', {
     session_id: sessionId,
     student_id: student,
+    turn_id: turnId,
     snapshot_data_url: snapshotDataUrl,
     submission_role: submissionRole,
   });

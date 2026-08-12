@@ -101,4 +101,64 @@ describe('Canvas phase synchronization', () => {
     expect(state.activeQuestionId).toBeNull();
     expect(state.questionText).toBe('');
   });
+
+  /**
+   * Independent Practice REJECTS a canvas submission with no turn_id.
+   *
+   * canvas_service.py:130 answers 422 "turn_id is required for Independent
+   * Practice Canvas submissions" (Chiru, 12 Aug 2026), so every Phase 3 canvas
+   * submission was failing before it reached OCR. The id is also the backend's
+   * dedupe key, which is why it must look like a real minted turn rather than
+   * any placeholder string.
+   */
+  it('sends a minted turn id with every canvas submission', async () => {
+    submitCanvas.mockResolvedValue({
+      session_id: 'SESSION001', student_id: 'ST001', status: 'processed',
+      submission_id: 'SUBMISSION002', snapshot_reference: 'snapshot://SUBMISSION002',
+      ocr: null, tutor: null,
+      latency: { ocr_latency_ms: 1, tutor_latency_ms: 1, total_latency_ms: 2 },
+    });
+
+    await act(async () => { await tutor?.submitCanvasWork(); });
+
+    expect(submitCanvas).toHaveBeenCalledTimes(1);
+    const [, , submissionRole, turnId] = submitCanvas.mock.calls[0];
+    expect(submissionRole).toBe('STANDALONE_ATTEMPT');
+    expect(turnId).toMatch(/^TURN-/);
+  });
+
+  it('gives each submission its own turn id', async () => {
+    // Two submissions are two attempts. Reusing one id would make the backend
+    // treat the second as a duplicate of the first and discard the new work.
+    submitCanvas.mockResolvedValue({
+      session_id: 'SESSION001', student_id: 'ST001', status: 'processed',
+      submission_id: 'S', snapshot_reference: 'snapshot://S',
+      ocr: null, tutor: null,
+      latency: { ocr_latency_ms: 1, tutor_latency_ms: 1, total_latency_ms: 2 },
+    });
+
+    await act(async () => { await tutor?.submitCanvasWork(); });
+    await act(async () => { await tutor?.submitCanvasWork(); });
+
+    const [first, second] = submitCanvas.mock.calls.map((call) => call[3]);
+    expect(first).toMatch(/^TURN-/);
+    expect(second).toMatch(/^TURN-/);
+    expect(first).not.toBe(second);
+  });
+
+  it('does not throw when Phase 3 returns no OCR and no tutor block', async () => {
+    // The live Phase 3 shape: accepted, graded, and silent. Reading through
+    // either field threw and reported accepted work as a failure.
+    submitCanvas.mockResolvedValue({
+      session_id: 'SESSION001', student_id: 'ST001', status: 'processed',
+      submission_id: 'S3', snapshot_reference: 'snapshot://S3',
+      ocr: null, tutor: null,
+      independent_outcome: 'RESCUE_REQUIRED', independent_attempt_terminal: true,
+      latency: { ocr_latency_ms: 1, tutor_latency_ms: 1, total_latency_ms: 2 },
+    });
+
+    let result: unknown = 'not set';
+    await act(async () => { result = await tutor?.submitCanvasWork(); });
+    expect(result).not.toBeNull();
+  });
 });
