@@ -159,7 +159,23 @@ export default function PracticePage() {
   useEffect(() => {
     if (!tutor.apiEnabled || tutor.sessionId) return;
     void tutor.start(DEMO_CONCEPT_ID, 'TEXT').then((rec) => {
-      if (!rec) setStartError(sessionStartError() ?? "We couldn't load your practice question.");
+      if (!rec) {
+        setStartError(sessionStartError() ?? "We couldn't load your practice question.");
+        return;
+      }
+      // A start can SUCCEED and still carry no question — Sanya's 12 Aug
+      // session opened straight into INDEPENDENT_PRACTICE with
+      // `current_question` null. That fell through to "Loading question…" with
+      // no error and no retry, so the screen sat there claiming to be loading
+      // something nobody was fetching. A session with no question is as broken
+      // as a session that failed to start, and has to offer the same way out.
+      if (!rec.current_question?.trim()) {
+        console.warn('[practice] session started with no question', {
+          phase: rec.current_phase,
+          question_id: rec.question_id,
+        });
+        setStartError('Your practice question is missing. Try again, or tell us if it keeps happening.');
+      }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
