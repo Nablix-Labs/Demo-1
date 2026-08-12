@@ -561,6 +561,78 @@ def test_guided_follow_up_blocks_unresolved_component_reveal() -> None:
     assert aligned.tutor_message_voice == aligned.tutor_message
 
 
+def test_guided_follow_up_removes_unsupported_specific_praise() -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-006",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="GENERAL_RULE",
+                description="States the general rule.",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="CHANGING_VALUE",
+                description="Identifies what changes.",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="FIXED_INCREMENT",
+                description="Identifies what stays fixed.",
+                required=True,
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="counter-components",
+        prompt_version="1.0.0",
+    )
+    objective = classifier.initial_guided_objective(rubric)
+    request = ClassificationRequest(
+        question_id="Q-T01-006",
+        question_type="MULTI_PART_SHORT_RESPONSE",
+        question="A counter starts at any value c and increases by 4. Write the general rule and state what changes and what stays fixed.",
+        correct_answer="c + 4",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-006",
+            canonical_answer="c + 4",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=False,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        student_input="c stays fixed",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+    )
+    evaluation = GuidedEvaluation(
+        student_state="WRONG",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=["GENERAL_RULE", "CHANGING_VALUE", "FIXED_INCREMENT"],
+        selected_error_code=None,
+        confidence=0.9,
+        next_objective=objective,
+        tutor_message=(
+            "You mentioned that c stays fixed, which is correct! Now think about "
+            "what happens when the counter increases by 4."
+        ),
+        tutor_message_voice=(
+            "You mentioned that c stays fixed, which is correct! Now think about "
+            "what happens when the counter increases by 4."
+        ),
+    )
+
+    aligned = classifier.align_guided_follow_up(evaluation, request, rubric, objective)
+
+    assert aligned.tutor_message == (
+        "Now think about what happens when the counter increases by 4."
+    )
+    assert aligned.tutor_message_voice == aligned.tutor_message
+
+
 def test_guided_follow_up_keeps_the_learner_selected_choice_explanation() -> None:
     rubric = GeneratedQuestionRubric(
         question_id="Q-T01-004",

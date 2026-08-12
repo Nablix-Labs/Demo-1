@@ -1790,6 +1790,10 @@ def align_guided_follow_up(
 
     if evaluation.student_state == "CORRECT" or objective is None:
         return evaluation
+    evaluation = remove_unsupported_guided_praise(
+        evaluation,
+        request,
+    )
     prompt = controller_prompt_for_objective(request, rubric, objective)
     if guided_tutor_message_is_safe_and_relevant(
         evaluation,
@@ -1826,6 +1830,122 @@ def align_guided_follow_up(
             "tutor_message_voice": message,
         }
     )
+
+
+def remove_unsupported_guided_praise(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+) -> GuidedEvaluation:
+    """Remove only praise that is not supported by this turn's component evidence."""
+
+    confirmed_component_ids = {
+        *evaluation.newly_confirmed_concept_ids,
+        *evaluation.preserved_concept_ids,
+    } - set(evaluation.contradicted_concept_ids)
+    tutor_message = remove_unsupported_praise_sentences(
+        evaluation.tutor_message,
+        request,
+        confirmed_component_ids,
+    )
+    tutor_message_voice = remove_unsupported_praise_sentences(
+        evaluation.tutor_message_voice,
+        request,
+        confirmed_component_ids,
+    )
+    if (
+        tutor_message == evaluation.tutor_message
+        and tutor_message_voice == evaluation.tutor_message_voice
+    ):
+        return evaluation
+    logger.warning(
+        "guided_unsupported_praise_removed",
+        extra={
+            "question_id": request.question_id,
+            "student_state": evaluation.student_state,
+            "confirmed_component_ids": sorted(confirmed_component_ids),
+        },
+    )
+    return evaluation.model_copy(
+        update={
+            "tutor_message": tutor_message,
+            "tutor_message_voice": tutor_message_voice,
+        }
+    )
+
+
+def remove_unsupported_praise_sentences(
+    message: str,
+    request: ClassificationRequest,
+    confirmed_component_ids: set[str],
+) -> str:
+    """Keep useful correction prose while removing only unsupported praise clauses."""
+
+    sentences = re.split(r"(?<=[.!?])\s+", message.strip())
+    retained_sentences = []
+    for sentence in sentences:
+        if not unsupported_guided_praise_sentence(
+            sentence,
+            request,
+            confirmed_component_ids,
+        ):
+            retained_sentences.append(sentence)
+            continue
+        correction = correction_after_unsupported_praise(sentence)
+        if correction is not None:
+            retained_sentences.append(correction)
+    return " ".join(retained_sentences)
+
+
+def unsupported_guided_praise_sentence(
+    sentence: str,
+    request: ClassificationRequest,
+    confirmed_component_ids: set[str],
+) -> bool:
+    """Return whether praise claims evidence that the evaluation does not support."""
+
+    normalized = normalize_semantic_answer(sentence)
+    praise_terms = (
+        "correct",
+        "good",
+        "great",
+        "nice",
+        "right",
+        "well done",
+        "on the right track",
+    )
+    if not any(term in normalized for term in praise_terms):
+        return False
+    if not confirmed_component_ids:
+        return True
+
+    expression = _expression_parts(
+        request.answer_spec.canonical_answer if request.answer_spec else ""
+    )
+    if expression is None:
+        return False
+    variable, _, fixed_value = expression
+    if re.search(
+        rf"\b{re.escape(variable)}\b\s+(?:is|stays|remains)\s+(?:fixed|constant)",
+        normalized,
+    ):
+        return True
+    if re.search(
+        rf"\b{re.escape(fixed_value)}\b\s+(?:is|can|does)\s+(?:change|vary|changes|varies)",
+        normalized,
+    ):
+        return True
+
+    return False
+
+
+def correction_after_unsupported_praise(sentence: str) -> str | None:
+    """Keep the corrective clause when it follows unsupported praise with 'but'."""
+
+    match = re.search(r"\bbut\s+(.+)", sentence, flags=re.IGNORECASE)
+    if match is None:
+        return None
+    correction = match.group(1).strip()
+    return correction if correction else None
 
 
 def guided_tutor_message_is_safe_and_relevant(
