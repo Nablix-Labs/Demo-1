@@ -14,6 +14,7 @@ from app.adapters.base import StudentModelAdapter
 from app.adapters.provider import get_adapters
 from app.ai_engine.classifier import (
     build_openai_ai_engine_client,
+    build_support_aware_tutor_message,
     contains_answer_reveal,
     detect_student_intent,
     generate_explain_again_response,
@@ -207,6 +208,39 @@ _WRONG_ESCALATION_BY_COUNT: dict[int, WrongEscalationCode] = {
     3: WrongEscalationCode.WRONG_3_VISUAL_CUE,
     4: WrongEscalationCode.WRONG_4_INTERVENTION,
 }
+
+
+def _support_narration_context(
+    support_type: object,
+    support_message: str | None,
+    visual_cue: VisualCue | None,
+    scaffold_steps: list[str],
+    tutor_message: str,
+) -> dict[str, object] | None:
+    if not isinstance(support_type, str):
+        return None
+    if support_type == "HINT" and support_message is not None:
+        return {
+            "support_type": "HINT",
+            "support_text": support_message,
+            "prior_tutor_message": tutor_message,
+            "instruction": "Briefly explain the hint and ask one focused next question.",
+        }
+    if support_type in {"VISUAL_CUE", "HINT_AND_VISUAL_CUE"} and visual_cue is not None:
+        return {
+            "support_type": "VISUAL_CUE",
+            "visual_cue": visual_cue.model_dump(),
+            "prior_tutor_message": tutor_message,
+            "instruction": "Tell the student to look at the visible cue, explain what it shows, and ask one focused next question.",
+        }
+    if support_type == "SCAFFOLD" and scaffold_steps:
+        return {
+            "support_type": "SCAFFOLD",
+            "scaffold_step": scaffold_steps[0],
+            "prior_tutor_message": tutor_message,
+            "instruction": "Introduce the visible scaffold step, explain its purpose, and ask the one focused question in that step.",
+        }
+    return None
 
 
 @dataclass(frozen=True)
@@ -3173,6 +3207,7 @@ async def _process_interaction(
 
     schema_support_action: ConversationAction | None = None
     schema_support_level: SupportUsed | None = None
+    schema_support_message: str | None = None
     support_payload = (
         schema_content_response.phase_payload.support_to_serve
         if schema_content_response is not None
@@ -3184,7 +3219,7 @@ async def _process_interaction(
         and support_payload.get("support_type") != "RETRY_WITHOUT_SUPPORT"
     ):
         (
-            _schema_support_message,
+            schema_support_message,
             schema_support_visual_cue,
             schema_support_steps,
             schema_support_action,
@@ -3207,9 +3242,30 @@ async def _process_interaction(
     # question display a temperature-specific "falls by 3" prompt.
     tutor_message = tutor.tutor_message
     tutor_message_voice = tutor.tutor_message_voice
-    if schema_steps:
-        tutor_message = schema_steps[0]
-        tutor_message_voice = schema_steps[0]
+    support_context = _support_narration_context(
+        support_payload.get("support_type") if support_payload is not None else None,
+        schema_support_message,
+        schema_support_visual_cue,
+        schema_support_steps,
+        tutor_message,
+    )
+    if support_context is not None:
+        support_message = build_support_aware_tutor_message(
+            question_id=session.question_id,
+            question=session.current_question,
+            correct_answer=session.correct_answer or "",
+            student_input=student_message,
+            evaluation=tutor.evaluation,
+            error_type=tutor.error_type,
+            response_strategy=tutor.response_strategy,
+            hint_level=tutor.hint_level,
+            conversation_history=turn_session.conversation_history,
+            support_context=support_context,
+            openai_client=build_openai_ai_engine_client(get_settings()),
+        )
+        if support_message is not None:
+            tutor_message = support_message.tutor_message
+            tutor_message_voice = support_message.tutor_message_voice_optimised
     scaffold_turn_updates: dict[str, object] = {}
     if scaffold_turn and tutor.scaffold_original_answer_correct:
         scaffold_steps = []

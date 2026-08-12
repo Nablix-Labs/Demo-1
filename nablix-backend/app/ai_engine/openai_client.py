@@ -556,6 +556,7 @@ class OpenAIAIEngineClient:
         phase: LearningPhase,
         conversation_history: list[ConversationMessage],
         canvas_context: dict[str, object] | None,
+        support_context: dict[str, object] | None,
         rejected_tutor_message: str | None,
         validation_feedback: str | None,
     ) -> OpenAITutorMessage:
@@ -574,6 +575,7 @@ class OpenAIAIEngineClient:
                 "response_strategy": response_strategy,
                 "hint_level": hint_level,
                 "canvas_context": canvas_context,
+                "support_context": support_context,
                 "rejected_tutor_message": rejected_tutor_message,
                 "validation_feedback": validation_feedback,
                 "answer_reveal_allowed": False,

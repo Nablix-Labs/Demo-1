@@ -79,6 +79,34 @@ def test_empty_support_keeps_the_tutor_response_available(
     assert support_used is None
 
 
+def test_visual_cue_requires_an_authored_visual_cue_item() -> None:
+    response = _event_response("INCORRECT_ATTEMPT", "REQ-MISSING-VISUAL")
+    phase_payload = response["phase_payload"]
+    assert isinstance(phase_payload, dict)
+    phase_payload["support_to_serve"] = {
+        "support_type": "VISUAL_CUE",
+        "items": [
+            {
+                "content_type": "HINT",
+                "content_id": "HINT-T01-L2",
+                "content": "Compare the changing and fixed parts.",
+            }
+        ],
+        "retry_same_question": True,
+    }
+    event = session_service.StudentModelSessionEventResponse.model_validate(response)
+
+    message, visual_cue, steps, action, support_used = (
+        interaction_service._support_presentation(event)
+    )
+
+    assert message == "Compare the changing and fixed parts."
+    assert visual_cue is None
+    assert steps == []
+    assert action == "GIVE_HINT"
+    assert support_used == "HINT"
+
+
 @pytest.mark.parametrize("rescue_type", ["PARALLEL_EXAMPLE", "TUTOR_SOLVED"])
 def test_empty_rescue_keeps_the_tutor_response_available(
     rescue_type: str,
