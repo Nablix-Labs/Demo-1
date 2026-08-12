@@ -16,7 +16,7 @@ import { useDemoTutor, resetSessionStart, sessionStartError } from '@/hooks/useD
 import { useVoiceTurn } from '@/hooks/useVoiceTurn';
 import { DEMO_CONCEPT_ID, DEMO_PHASE } from '@/lib/api';
 import { demoFor } from '@/lib/demoContent';
-import { LADDER_EXHAUSTED } from '@/lib/supportLadder';
+import { LADDER_EXHAUSTED, hintFailureMessage, type SupportRung } from '@/lib/supportLadder';
 import {
   isPhase3, phase3AttemptClosed, phase3Locked, phase3Notice, OCR_UNCLEAR, ANSWER_RECORDED,
 } from '@/lib/phase3';
@@ -189,7 +189,17 @@ export default function PracticePage() {
     // It used to POST /hint/request, which the backend deleted on 3 Aug 2026 —
     // so every press 404'd and this card showed a fetch error regardless of
     // what support the tutor had actually granted.
-    const rung = await tutor.hint();
+    // The request can also REJECT, and used to be left to: HELP_REQUEST now
+    // answers 409 NO_ACTIVE_SUPPORT whenever the backend has no authorised
+    // support to replay, which threw straight past this line and left the card
+    // blank forever — indistinguishable from a hung app.
+    let rung: SupportRung | null = null;
+    try {
+      rung = await tutor.hint();
+    } catch (error) {
+      setHintText(hintFailureMessage(error));
+      return;
+    }
     setHintText(rung ? useNumeraStore.getState().lastHintText ?? null : LADDER_EXHAUSTED);
     if (rung) setHintIndex((i) => i + 1);
   };

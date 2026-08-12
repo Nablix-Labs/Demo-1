@@ -88,7 +88,13 @@ export function phase3AttemptClosed(res: Phase3ResponseFields | null | undefined
  */
 export function phase3Notice(res: Phase3ResponseFields | null | undefined): string {
   if (res?.status === 'CLARIFICATION_REQUIRED') return OCR_UNCLEAR;
-  const failed = res?.independent_success === false || res?.independent_outcome === 'INCORRECT';
+  // The backend renamed these on 11 Aug 2026: CORRECT/INCORRECT became
+  // INDEPENDENTLY_VERIFIED/RESCUE_REQUIRED. Both spellings are accepted so a
+  // rescue is still recognised whichever build is deployed, and so this does not
+  // rest solely on the boolean beside them.
+  const outcome = res?.independent_outcome;
+  const failed =
+    res?.independent_success === false || outcome === 'INCORRECT' || outcome === 'RESCUE_REQUIRED';
   return failed ? RESCUE_PENDING : ANSWER_RECORDED;
 }
 

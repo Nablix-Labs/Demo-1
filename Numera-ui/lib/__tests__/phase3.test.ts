@@ -68,6 +68,23 @@ describe('phase3Notice', () => {
     expect(phase3Notice({ independent_outcome: 'INCORRECT' })).toBe(RESCUE_PENDING);
   });
 
+  it('reads the renamed outcomes the backend switched to on 11 Aug 2026', () => {
+    // CORRECT/INCORRECT became INDEPENDENTLY_VERIFIED/RESCUE_REQUIRED. Both
+    // spellings have to work: which one arrives depends on which build is up,
+    // and reading the new one as "not a rescue" would drop the rescue notice.
+    expect(phase3Notice({ independent_outcome: 'INDEPENDENTLY_VERIFIED' })).toBe(ANSWER_RECORDED);
+    expect(phase3Notice({ independent_outcome: 'RESCUE_REQUIRED' })).toBe(RESCUE_PENDING);
+  });
+
+  it('stays quiet while a submission is still awaited', () => {
+    // AWAITING_SUBMISSION is not a verdict — the attempt is still open.
+    expect(phase3AttemptClosed({
+      independent_outcome: 'AWAITING_SUBMISSION',
+      independent_attempt_terminal: false,
+      phase3_submission_confirmed: false,
+    })).toBe(false);
+  });
+
   it('asks for a rewrite when the OCR was unreadable', () => {
     expect(phase3Notice({ status: 'CLARIFICATION_REQUIRED' })).toBe(OCR_UNCLEAR);
   });
