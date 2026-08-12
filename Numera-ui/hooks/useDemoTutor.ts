@@ -509,6 +509,11 @@ export function useDemoTutor() {
         // Read the phase we were in BEFORE advancing it, or the transition can
         // never be detected.
         const entering = phaseAnnouncement(res, useNumeraStore.getState().currentPhase);
+        // Support BEFORE the words that refer to it (Sanya, 12 Aug 2026). The
+        // tutor now says things like "look at the visual cue on your screen",
+        // so the cue and scaffold have to be on screen before that line is
+        // shown or spoken — otherwise it points at nothing.
+        const spoken = withTransitionVoice(entering, applyInteractionSupport(res));
         if (entering) {
           addTranscriptMessage({ role: 'ai', text: entering.text });
           addTrailEntry({ kind: 'tutor', text: entering.text, meta: 'phase change' });
@@ -518,7 +523,6 @@ export function useDemoTutor() {
         if (res.current_phase) useNumeraStore.getState().setCurrentPhase(res.current_phase); // advance phase
         const drew = Boolean(res.canvas_draw?.length);
         if (drew) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw!);
-        const spoken = withTransitionVoice(entering, applyInteractionSupport(res));
         // §1: highlight first, pause, then speak. When the turn also drew, the
         // mark lands before it is described; when it didn't, this speaks at once.
         tutorSay(spoken, { afterMarks: drew });
@@ -667,8 +671,8 @@ export function useDemoTutor() {
       syncBackendSession(res);
       // Present the returned wording once; preserve cue and scaffold as sent.
       await acknowledgementWindow;
-      addTranscriptMessage({ role: 'ai', text: res.message });
       const spoken = applyInteractionSupport(res);
+      addTranscriptMessage({ role: 'ai', text: res.message });
       tutorSay(spoken, { afterMarks: Boolean(res.canvas_draw?.length) });
       if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
       return res;
@@ -833,9 +837,9 @@ export function useDemoTutor() {
     });
     if (!acceptResponse(res)) return null;
     syncBackendSession(res);
+    const spoken = applyInteractionSupport(res);
     addTranscriptMessage({ role: 'ai', text: res.message });
     addTrailEntry({ kind: 'hint', text: res.message, meta: res.support_served_this_turn ?? 'support' });
-    const spoken = applyInteractionSupport(res);
     tutorSay(spoken, { afterMarks: Boolean(res.canvas_draw?.length) });
     const served = res.support_served_this_turn;
     const rung: SupportRung | null = served && served !== 'NONE' ? served : null;
@@ -954,6 +958,8 @@ export function useDemoTutor() {
         syncBackendSession(res);
         console.groupEnd();
         const entering = phaseAnnouncement(res, useNumeraStore.getState().currentPhase);
+        // Support first — see the answer path above.
+        const spoken = withTransitionVoice(entering, applyInteractionSupport(res));
         if (entering) {
           addTranscriptMessage({ role: 'ai', text: entering.text });
           addTrailEntry({ kind: 'tutor', text: entering.text, meta: 'phase change' });
@@ -969,7 +975,6 @@ export function useDemoTutor() {
         }
         if (res.current_phase) useNumeraStore.getState().setCurrentPhase(res.current_phase); // advance phase
         if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
-        const spoken = withTransitionVoice(entering, applyInteractionSupport(res));
         // Record the tutor turn + backend gating for the next turn (contract §11).
         // Fallbacks keep the loop working before the backend sends these fields.
         useNumeraStore.getState().setTutorTurn(res.tutor_turn_id ?? null, {
@@ -1034,9 +1039,14 @@ export function useDemoTutor() {
       });
       if (!acceptResponse(res)) return;
       syncBackendSession(res);
+      // This path never applied support at all, so a cue or scaffold served in
+      // reply to a choice was silently dropped — and with the backend now
+      // referring to it out loud, the tutor would point at something that was
+      // never rendered.
+      const spoken = applyInteractionSupport(res);
       addTranscriptMessage({ role: 'ai', text: res.message });
       addTrailEntry({ kind: 'tutor', text: res.message, meta: 'option selected' });
-      tutorSay(res.message);
+      tutorSay(spoken);
     } catch (err) {
       reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage, '/interaction (option selected)');
     }
@@ -1064,9 +1074,10 @@ export function useDemoTutor() {
       });
       if (!acceptResponse(res)) return false;
       syncBackendSession(res);
+      const spoken = applyInteractionSupport(res);
       addTranscriptMessage({ role: 'ai', text: res.message });
       addTrailEntry({ kind: 'tutor', text: res.message, meta: 'teach back feedback' });
-      tutorSay(applyInteractionSupport(res));
+      tutorSay(spoken);
       return true;
     } catch (err) {
       reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage, '/interaction (teach back)');

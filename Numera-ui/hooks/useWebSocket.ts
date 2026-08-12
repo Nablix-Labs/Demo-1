@@ -353,7 +353,10 @@ export function useWebSocket(sessionId: string | null) {
               });
               break;
             }
-            addTranscriptMessage({ role: 'ai', text: msg.text as string });
+            // Support is applied BEFORE the message is shown or spoken (Sanya,
+            // 12 Aug 2026): the tutor's wording now refers to the cue and the
+            // scaffold, so both have to be on screen first.
+            //
             // applyInteractionSupport returns the line the tutor should SAY —
             // the scaffold step's voice line when a panel is open, else the
             // message. Kept as the stream's fallback text below.
@@ -373,6 +376,7 @@ export function useWebSocket(sessionId: string | null) {
               total_scaffold_steps:
                 msg.total_scaffold_steps as number | null | undefined,
             });
+            addTranscriptMessage({ role: 'ai', text: msg.text as string });
             if (Array.isArray(msg.canvas_draw) && msg.canvas_draw.length > 0)
               applyCanvasDraw(msg.canvas_draw as Parameters<typeof applyCanvasDraw>[0]);
             // The voice server forwards the backend's phase state; keep the
