@@ -16,6 +16,7 @@ import type { CanvasDrawPayload } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { allowAnonTutorCalls } from '@/lib/runtimeConfig';
 import type { Phase3ResponseFields } from '@/lib/phase3';
+import { recordDebugCall } from '@/lib/debugJson';
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
 
@@ -90,9 +91,30 @@ api.interceptors.request.use((config) => {
  * would bounce every anonymous tester to a login screen they were never on.
  */
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // Dev-only JSON capture (lib/debugJson.ts). One line here covers every
+    // phase's calls; it is a no-op unless NEXT_PUBLIC_DEBUG_JSON is set.
+    recordDebugCall(
+      `${response.config.method?.toUpperCase() ?? 'POST'} ${response.config.url ?? ''}`,
+      safeRequestBody(response.config.data),
+      response.data,
+    );
+    return response;
+  },
   (error: unknown) => {
     const status = (error as { response?: { status?: number } })?.response?.status;
+    // A FAILED call is the one a tester most needs to see, so capture it too.
+    const failed = error as {
+      config?: { method?: string; url?: string; data?: unknown };
+      response?: { data?: unknown };
+    };
+    if (failed?.config) {
+      recordDebugCall(
+        `${failed.config.method?.toUpperCase() ?? 'POST'} ${failed.config.url ?? ''} (failed)`,
+        safeRequestBody(failed.config.data),
+        failed.response?.data ?? String(error),
+      );
+    }
     const realLogin = useAuthStore.getState().accessToken !== null;
     if (status === 401 && realLogin) {
       console.warn('[auth] the server rejected our login — signing out');
@@ -101,6 +123,19 @@ api.interceptors.response.use(
     return Promise.reject(error);
   },
 );
+
+/**
+ * Axios hands back the request body already serialised. Parse it so the panel
+ * can pretty-print it, and never let a malformed body break the capture.
+ */
+function safeRequestBody(data: unknown): unknown {
+  if (typeof data !== 'string') return data;
+  try {
+    return JSON.parse(data);
+  } catch {
+    return data;
+  }
+}
 
 // ── Error shape ───────────────────────────────────────────────────────────────
 // Every backend error returns this shape (never a raw stack trace).
@@ -1183,8 +1218,17 @@ export interface CanvasSubmissionResult extends Phase3ResponseFields {
   status: string;
   submission_id: string;
   snapshot_reference: string;
-  ocr: OcrResult;
-  tutor: TutorResult;
+  /**
+   * Both are NULL on a live Phase 3 submission (Sanya, 12 Aug 2026).
+   *
+   * That is by design, not a fault: Independent Practice is silent, so there is
+   * no tutor message to send, and a submission the backend accepted without
+   * reading the ink back has no OCR block either. Typing them as always-present
+   * meant the client dereferenced both, threw, and reported an ACCEPTED
+   * submission to the student as a failure.
+   */
+  ocr: OcrResult | null;
+  tutor: TutorResult | null;
   latency: CanvasLatency;
   /** Tutor drawing actions (e.g. mark up the student's working). The backend
    *  sends a LIST of draw actions here, unlike the WS path (one per message). */

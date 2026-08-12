@@ -44,9 +44,39 @@ export function isPhase3(phase: string | null | undefined): boolean {
  * and everything here degrades to the safest reading when they are absent —
  * which for a phase built on "say nothing" means saying nothing.
  */
+/**
+ * The backend's verdict on an independent attempt (PR #105, 11 Aug 2026).
+ *
+ * Only two of the four are terminal. AWAITING_SUBMISSION means nothing has been
+ * handed in yet, and INPUT_UNCLEAR means it was handed in but could not be read
+ * — neither closes the attempt, so neither may lock the student's work.
+ *
+ * The legacy CORRECT/INCORRECT spellings are kept alongside because which one
+ * arrives depends on which backend build is deployed, and a tester on the older
+ * one must not silently lose the rescue notice.
+ */
+export type IndependentOutcome =
+  | 'AWAITING_SUBMISSION'
+  | 'INPUT_UNCLEAR'
+  | 'INDEPENDENTLY_VERIFIED'
+  | 'RESCUE_REQUIRED'
+  | 'CORRECT'
+  | 'INCORRECT';
+
+/** The outcomes that mean the attempt is over and may not be answered again. */
+const TERMINAL_OUTCOMES = new Set<string>([
+  'INDEPENDENTLY_VERIFIED',
+  'RESCUE_REQUIRED',
+  'CORRECT',
+  'INCORRECT',
+]);
+
+/** The outcomes that mean a rescue is coming rather than the answer standing. */
+const RESCUE_OUTCOMES = new Set<string>(['RESCUE_REQUIRED', 'INCORRECT']);
+
 export interface Phase3ResponseFields {
   /** Terminal verdict for the attempt. Never rendered — see phase3Notice. */
-  independent_outcome?: string | null;
+  independent_outcome?: IndependentOutcome | string | null;
   independent_success?: boolean | null;
   /** True once the attempt is closed and cannot be answered again. */
   independent_attempt_terminal?: boolean | null;
@@ -73,6 +103,12 @@ export const OCR_UNCLEAR =
 export function phase3AttemptClosed(res: Phase3ResponseFields | null | undefined): boolean {
   if (!res) return false;
   if (res.status === 'CLARIFICATION_REQUIRED') return false;
+  // The outcome enum says this outright, and it outranks the flags beside it:
+  // an unreadable or not-yet-made submission leaves the attempt open however
+  // `independent_attempt_terminal` and `phase3_submission_confirmed` were set.
+  const outcome = res.independent_outcome;
+  if (outcome === 'INPUT_UNCLEAR' || outcome === 'AWAITING_SUBMISSION') return false;
+  if (typeof outcome === 'string' && TERMINAL_OUTCOMES.has(outcome)) return true;
   if (res.independent_attempt_terminal === true) return true;
   // Before the backend sends the terminal flag, a confirmed submission is the
   // only other thing that means "this attempt is over".
@@ -87,8 +123,14 @@ export function phase3AttemptClosed(res: Phase3ResponseFields | null | undefined
  * has said nothing about the outcome, this is the quieter of the two.
  */
 export function phase3Notice(res: Phase3ResponseFields | null | undefined): string {
-  if (res?.status === 'CLARIFICATION_REQUIRED') return OCR_UNCLEAR;
-  const failed = res?.independent_success === false || res?.independent_outcome === 'INCORRECT';
+  const outcome = res?.independent_outcome;
+  if (res?.status === 'CLARIFICATION_REQUIRED' || outcome === 'INPUT_UNCLEAR') return OCR_UNCLEAR;
+  // All four outcomes are handled explicitly rather than leaning on
+  // `independent_success`, so that a build which sends the enum and omits the
+  // boolean still gets the rescue line right.
+  const failed =
+    (typeof outcome === 'string' && RESCUE_OUTCOMES.has(outcome))
+    || (outcome == null && res?.independent_success === false);
   return failed ? RESCUE_PENDING : ANSWER_RECORDED;
 }
 

@@ -12,11 +12,11 @@ import dynamic from 'next/dynamic';
 import { Eye, EyeOff, Lightbulb, Check, ArrowRight } from 'lucide-react';
 import { useNumeraStore, type CanvasExporter } from '@/store/useNumeraStore';
 import { useFlowNav } from '@/lib/useFlowNav';
-import { useDemoTutor, resetSessionStart, sessionStartError } from '@/hooks/useDemoTutor';
+import { useDemoTutor, resetSessionStart, resumeSession, sessionStartError } from '@/hooks/useDemoTutor';
 import { useVoiceTurn } from '@/hooks/useVoiceTurn';
 import { DEMO_CONCEPT_ID, DEMO_PHASE } from '@/lib/api';
 import { demoFor } from '@/lib/demoContent';
-import { LADDER_EXHAUSTED } from '@/lib/supportLadder';
+import { LADDER_EXHAUSTED, hintFailureMessage, type SupportRung } from '@/lib/supportLadder';
 import {
   isPhase3, phase3AttemptClosed, phase3Locked, phase3Notice, OCR_UNCLEAR, ANSWER_RECORDED,
 } from '@/lib/phase3';
@@ -156,13 +156,52 @@ export default function PracticePage() {
   // forever with no error and no way to retry — which is what a failed session
   // start actually looked like to a tester (2026-07-28).
   const [startError, setStartError] = useState<string | null>(null);
+
+  // A surviving sessionId with no session record is the state a refresh leaves
+  // behind — and, far more often, what a BACKEND RESTART leaves behind, since
+  // its sessions live in memory and die with the process while ours is
+  // persisted. The start effect below short-circuits on that id, so this screen
+  // called nothing at all, never learned the session was a 404, and sat on
+  // "Loading question…" forever with nothing fetching (reproduced live on
+  // 12 Aug 2026 against a session the backend answered 404 for).
+  //
+  // Refetching is what triggers recovery: the 404 inside resumeSession drops
+  // the dead session, sessionId goes null, and the start effect opens a fresh
+  // one. The lesson screen has had this since 28 Jul; this one never got it.
+  const backendSession = useNumeraStore((s) => s.backendSession);
+  useEffect(() => {
+    if (tutor.apiEnabled && tutor.sessionId && !backendSession) void resumeSession();
+  }, [tutor.apiEnabled, tutor.sessionId, backendSession]);
+
   useEffect(() => {
     if (!tutor.apiEnabled || tutor.sessionId) return;
     void tutor.start(DEMO_CONCEPT_ID, 'TEXT').then((rec) => {
-      if (!rec) setStartError(sessionStartError() ?? "We couldn't load your practice question.");
+      if (!rec) {
+        setStartError(sessionStartError() ?? "We couldn't load your practice question.");
+        return;
+      }
+      // A start can SUCCEED and still carry no question — Sanya's 12 Aug
+      // session opened straight into INDEPENDENT_PRACTICE with
+      // `current_question` null. That fell through to "Loading question…" with
+      // no error and no retry, so the screen sat there claiming to be loading
+      // something nobody was fetching. A session with no question is as broken
+      // as a session that failed to start, and has to offer the same way out.
+      if (!rec.current_question?.trim()) {
+        console.warn('[practice] session started with no question', {
+          phase: rec.current_phase,
+          question_id: rec.question_id,
+        });
+        setStartError('Your practice question is missing. Try again, or tell us if it keeps happening.');
+      }
     });
+    // Depends on sessionId, NOT mount-once. Recovering a dead session clears
+    // the id AFTER this has already run and short-circuited on it, so a
+    // mount-once effect left the screen with no session and nothing starting
+    // one — the second half of the "Loading question…" dead end. Re-running is
+    // safe: useDemoTutor's module-level `inFlight` latch collapses concurrent
+    // starts and `failedConcept` stops it retrying a failure on its own.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [tutor.apiEnabled, tutor.sessionId]);
 
   // After a pause in activity, the observer offers a hint (unless gone quiet)
   useEffect(() => {
@@ -189,7 +228,17 @@ export default function PracticePage() {
     // It used to POST /hint/request, which the backend deleted on 3 Aug 2026 —
     // so every press 404'd and this card showed a fetch error regardless of
     // what support the tutor had actually granted.
-    const rung = await tutor.hint();
+    // The request can also REJECT, and used to be left to: HELP_REQUEST now
+    // answers 409 NO_ACTIVE_SUPPORT whenever the backend has no authorised
+    // support to replay, which threw straight past this line and left the card
+    // blank forever — indistinguishable from a hung app.
+    let rung: SupportRung | null = null;
+    try {
+      rung = await tutor.hint();
+    } catch (error) {
+      setHintText(hintFailureMessage(error));
+      return;
+    }
     setHintText(rung ? useNumeraStore.getState().lastHintText ?? null : LADDER_EXHAUSTED);
     if (rung) setHintIndex((i) => i + 1);
   };
