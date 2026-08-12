@@ -480,6 +480,87 @@ def test_guided_follow_up_replaces_an_answer_revealing_llm_reply() -> None:
     assert aligned.tutor_message_voice == aligned.tutor_message
 
 
+def test_guided_follow_up_blocks_unresolved_component_reveal() -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-002",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="CHANGING_VALUE",
+                description="Identifies the changing quantity.",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="FIXED_VALUE",
+                description="Identifies the fixed value.",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="OPERATION",
+                description="Identifies the operation.",
+                required=True,
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="components",
+        prompt_version="1.0.0",
+    )
+    objective = classifier.initial_guided_objective(rubric)
+    request = ClassificationRequest(
+        question_id="Q-T01-002",
+        question_type="MULTI_PART_SHORT_RESPONSE",
+        question="In m + 7, identify the changing quantity, the fixed value and the operation.",
+        correct_answer="m + 7",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-002",
+            canonical_answer="m + 7",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=False,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        guided_teaching_state=GuidedTeachingState(
+            question_id="Q-T01-002",
+            objective_component_ids=["CHANGING_VALUE", "FIXED_VALUE", "OPERATION"],
+            confirmed_component_ids=[],
+            missing_component_ids=["CHANGING_VALUE", "FIXED_VALUE", "OPERATION"],
+            active_component_id="CHANGING_VALUE",
+            last_tutor_question_type="COMPONENT",
+            selected_option_id=None,
+            awaiting_response=True,
+            active_step_id="CHANGING_VALUE",
+        ),
+        student_input="+7 is fixed",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+    )
+    evaluation = GuidedEvaluation(
+        student_state="PARTIAL",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=["CHANGING_VALUE", "FIXED_VALUE", "OPERATION"],
+        selected_error_code=None,
+        confidence=0.9,
+        next_objective=objective,
+        tutor_message=(
+            "You're on the right track. The fixed value is 7, while the changing "
+            "quantity is m and the operation is addition. Does that help?"
+        ),
+        tutor_message_voice=(
+            "You're on the right track. The fixed value is 7, while the changing "
+            "quantity is m and the operation is addition. Does that help?"
+        ),
+    )
+
+    aligned = classifier.align_guided_follow_up(evaluation, request, rubric, objective)
+
+    assert aligned.tutor_message == "You're on the right track. Which part can take different possible values?"
+    assert aligned.tutor_message_voice == aligned.tutor_message
+
+
 def test_guided_follow_up_keeps_the_learner_selected_choice_explanation() -> None:
     rubric = GeneratedQuestionRubric(
         question_id="Q-T01-004",
