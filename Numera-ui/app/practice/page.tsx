@@ -18,7 +18,7 @@ import { DEMO_CONCEPT_ID, DEMO_PHASE } from '@/lib/api';
 import { demoFor } from '@/lib/demoContent';
 import { LADDER_EXHAUSTED, hintFailureMessage, type SupportRung } from '@/lib/supportLadder';
 import {
-  isPhase3, phase3AttemptClosed, phase3Locked, phase3Notice, OCR_UNCLEAR, ANSWER_RECORDED,
+  isPhase3, phase3AttemptClosed, phase3Locked, phase3LockTarget, phase3Notice, OCR_UNCLEAR, ANSWER_RECORDED,
 } from '@/lib/phase3';
 import QuestionDisplay from '@/components/QuestionDisplay';
 import StickyNote from '@/components/StickyNote';
@@ -271,7 +271,11 @@ export default function PracticePage() {
         const closed = phase3AttemptClosed(res) && !res.ocr?.needs_clarification;
         setNotice(closed ? phase3Notice(res) : OCR_UNCLEAR);
         if (closed) {
-          lockPhase3Attempt(useNumeraStore.getState().activeQuestionId);
+          // Lock the question the BACKEND graded, not the one we think is
+          // active — those have been observed to differ (see phase3LockTarget).
+          lockPhase3Attempt(
+            phase3LockTarget(res, useNumeraStore.getState().activeQuestionId),
+          );
           setPracticeDone();
           completePhase('practice');
         }

@@ -85,6 +85,31 @@ export interface Phase3ResponseFields {
   /** Turn-level status; CLARIFICATION_REQUIRED means the OCR was unreadable. */
   status?: string;
   question_id?: string | null;
+  /**
+   * The question the backend actually graded and locked.
+   *
+   * Read this rather than the client's own idea of the active question. On
+   * 12 Aug 2026 a live payload carried `question_id: "Q-T01-005"` alongside
+   * `phase3_locked_question_id: "Q-T01-007"` — the attempt was graded against a
+   * different question than the one on screen. Locking the active id there
+   * freezes the wrong question and leaves the graded one open.
+   */
+  phase3_locked_question_id?: string | null;
+}
+
+/**
+ * Which question this reply's lock belongs to.
+ *
+ * The backend is authoritative when it names one; the active question is only a
+ * fallback for builds that don't send the field yet.
+ */
+export function phase3LockTarget(
+  res: Phase3ResponseFields | null | undefined,
+  activeQuestionId: string | null,
+): string | null {
+  const named = res?.phase3_locked_question_id?.trim();
+  if (named) return named;
+  return activeQuestionId;
 }
 
 /** The only three things Phase 3 may say to a student before REVIEW. */
