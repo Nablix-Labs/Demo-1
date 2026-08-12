@@ -359,6 +359,7 @@ export function useWebSocket(sessionId: string | null) {
             // message. Kept as the stream's fallback text below.
             const spokenLine = applyInteractionSupport({
               message: msg.text as string,
+              support_message: msg.support_message as string | null | undefined,
               show_visual_cue: msg.show_visual_cue as boolean | undefined,
               visual_cue: msg.visual_cue as SupportPresentation['visual_cue'],
               show_scaffold_panel: msg.show_scaffold_panel as boolean | undefined,

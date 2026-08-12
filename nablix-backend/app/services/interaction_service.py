@@ -1200,19 +1200,6 @@ def _schema_hint(event: StudentModelSessionEventResponse | None) -> str | None:
     return None
 
 
-def _contextual_schema_hint(
-    schema_hint: str | None,
-    tutor_message: str,
-) -> str:
-    if schema_hint is None:
-        return tutor_message
-    if normalize_exact_notation(schema_hint).casefold() in (
-        normalize_exact_notation(tutor_message).casefold()
-    ):
-        return tutor_message
-    return f"{tutor_message.rstrip()} {schema_hint}"
-
-
 def _schema_support_steps(
     event: StudentModelSessionEventResponse | None,
 ) -> list[str]:
@@ -1827,6 +1814,7 @@ def _response_from(
         ui_state=session.ui_state,
         message=message,
         message_voice=message_voice,
+        support_message=None if phase3_silent else _active_support_message(session),
         show_canvas=session.show_canvas,
         show_hint_button=False if phase3_silent else session.show_hint_button,
         show_visual_cue=False if phase3_silent else session.show_visual_cue,
@@ -3196,32 +3184,29 @@ async def _process_interaction(
         and support_payload.get("support_type") != "RETRY_WITHOUT_SUPPORT"
     ):
         (
-            schema_support_message,
+            _schema_support_message,
             schema_support_visual_cue,
             schema_support_steps,
             schema_support_action,
             schema_support_level,
         ) = _support_presentation(schema_content_response)
     else:
-        schema_support_message = None
         schema_support_visual_cue = None
         schema_support_steps = []
     visual_cue = schema_support_visual_cue or _schema_visual_cue(schema_content_response) or (
         tutor.visual_cue if tutor.visual_cue.show else None
     )
-    schema_hint = _schema_hint(schema_content_response)
     schema_steps = schema_support_steps or _schema_support_steps(schema_content_response)
     for scaffold_prompt in schema_steps:
         _validate_scaffold_prompt(scaffold_prompt, session.correct_answer, rules)
     scaffold_steps = schema_steps or tutor.scaffold_steps_delivered
-    tutor_message = schema_support_message or _contextual_schema_hint(
-        schema_hint,
-        tutor.tutor_message,
-    )
-    tutor_message_voice = schema_support_message or _contextual_schema_hint(
-        schema_hint,
-        tutor.tutor_message_voice,
-    )
+    # Support content is an additional resource, not a replacement for the
+    # evaluated tutor turn. A broadly authored hint can legitimately apply to
+    # several errors, while the tutor response is grounded in this student's
+    # actual words and the active question. Replacing the latter made a counter
+    # question display a temperature-specific "falls by 3" prompt.
+    tutor_message = tutor.tutor_message
+    tutor_message_voice = tutor.tutor_message_voice
     if schema_steps:
         tutor_message = schema_steps[0]
         tutor_message_voice = schema_steps[0]

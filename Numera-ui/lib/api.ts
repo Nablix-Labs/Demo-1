@@ -978,6 +978,8 @@ export interface InteractionResponse extends GuidedStateFields, Phase3ResponseFi
   interaction_mode: InteractionMode;
   message: string;
   message_voice: string;
+  /** Authored support held separately from the tutor's conversational reply. */
+  support_message?: string | null;
   hint_count: number;
   phase_indicator: string;
   /** Optional tutor drawing to render on the canvas alongside this reply. */

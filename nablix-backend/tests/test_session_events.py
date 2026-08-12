@@ -1676,7 +1676,9 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
                 }
             ],
         }
-    assert guided_incorrect.json()["message"] == "Undo the addition first."
+    assert guided_incorrect.json()["message"] != "Undo the addition first."
+    assert guided_incorrect.json()["message"]
+    assert guided_incorrect.json()["support_message"] == "Undo the addition first."
 
     for wrong_number in range(2, 5):
         guided_incorrect = client.post(
