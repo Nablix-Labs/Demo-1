@@ -9,7 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  isPhase3, phase3AttemptClosed, phase3Locked, phase3Notice,
+  isPhase3, phase3AttemptClosed, phase3Locked, phase3LockTarget, phase3Notice,
   ANSWER_RECORDED, RESCUE_PENDING, OCR_UNCLEAR,
 } from '@/lib/phase3';
 
@@ -199,5 +199,38 @@ describe('the independent outcome enum', () => {
         expect(line).not.toContain(banned);
       }
     }
+  });
+});
+
+/**
+ * The lock belongs to the question the BACKEND graded.
+ *
+ * Sanya's 12 Aug 2026 payload carried `question_id: "Q-T01-005"` next to
+ * `phase3_locked_question_id: "Q-T01-007"` — the attempt was evaluated against
+ * a different question than the one on screen. Locking the client's active id
+ * there freezes a question the backend never graded and leaves the graded one
+ * open to a second submission.
+ */
+describe('which question a Phase 3 lock belongs to', () => {
+  it('takes the backend id over the active question when they disagree', () => {
+    expect(phase3LockTarget({ phase3_locked_question_id: 'Q-T01-007' }, 'Q-T01-005'))
+      .toBe('Q-T01-007');
+  });
+
+  it('falls back to the active question when the backend names none', () => {
+    // Older builds do not send the field; the client's view is all there is.
+    expect(phase3LockTarget({}, 'Q-T01-005')).toBe('Q-T01-005');
+    expect(phase3LockTarget({ phase3_locked_question_id: null }, 'Q-T01-005')).toBe('Q-T01-005');
+    expect(phase3LockTarget({ phase3_locked_question_id: '  ' }, 'Q-T01-005')).toBe('Q-T01-005');
+    expect(phase3LockTarget(null, 'Q-T01-005')).toBe('Q-T01-005');
+  });
+
+  it('locks nothing when neither side names a question', () => {
+    expect(phase3LockTarget({}, null)).toBeNull();
+  });
+
+  it('agrees with the active question in the ordinary case', () => {
+    expect(phase3LockTarget({ phase3_locked_question_id: 'Q-T01-005' }, 'Q-T01-005'))
+      .toBe('Q-T01-005');
   });
 });
