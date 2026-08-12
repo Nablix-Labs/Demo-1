@@ -169,6 +169,7 @@ class InteractionResponse(BaseModel):
     phase_indicator: Phase
     recommended_entry_phase: str | None
     session_summary: SessionSummary | None
+    debug: dict[str, object] | None = None
     student_model_event: PublicStudentModelEvent | None = None
     student_model_state: StudentModelCoreState | None = None
     guided_student_state: GuidedStudentState | None = None
