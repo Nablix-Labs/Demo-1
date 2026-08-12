@@ -148,6 +148,7 @@ class InteractionResponse(BaseModel):
     ui_state: str
     message: str
     message_voice: str
+    support_message: str | None = None
     show_canvas: bool
     show_hint_button: bool
     show_visual_cue: bool
