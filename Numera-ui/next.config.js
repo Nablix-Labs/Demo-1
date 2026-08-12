@@ -47,15 +47,7 @@ const nextConfig = {
         trailingSlash: true,
       }
     : {}),
-  env: {
-    NEXT_PUBLIC_BASE_PATH: effectiveBasePath,
-    // Dev-only JSON viewer (temporary — Manjusha, 12 Aug 2026). Declared here
-    // because in this static export a bare NEXT_PUBLIC_ read did not reach the
-    // client bundle, so the panel stayed dark even with the flag set; this is
-    // the same mechanism NEXT_PUBLIC_BASE_PATH already relies on. Defaults to
-    // '' so an ordinary build has the feature off.
-    NEXT_PUBLIC_DEBUG_JSON: process.env.NEXT_PUBLIC_DEBUG_JSON || '',
-  },
+  env: { NEXT_PUBLIC_BASE_PATH: effectiveBasePath },
   images: { unoptimized: true },
   // Allow KaTeX CSS to be imported from node_modules
   transpilePackages: ['react-katex'],

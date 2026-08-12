@@ -34,8 +34,8 @@ import {
   isStaleTurnResponse,
   isStaleSessionError,
 } from '@/lib/api';
-import { applyInteractionSupport, acceptResponse } from '@/lib/interactionPresentation';
-import { useNumeraStore } from '@/store/useNumeraStore';
+import { applyInteractionSupport, acceptResponse, authorisedHint } from '@/lib/interactionPresentation';
+import { useNumeraStore, type TrailKind } from '@/store/useNumeraStore';
 import { tutorSay, setStudentWriting } from '@/lib/tutorSpeech';
 import { phaseAnnouncement, withTransitionVoice } from '@/lib/phaseTransition';
 import { speakBrowser } from '@/lib/tts';
@@ -150,6 +150,38 @@ function errorMessage(err: unknown, fallback: string): string {
   }
   // No response object: the request genuinely never completed.
   return err instanceof Error ? `No response — ${err.message}` : fallback;
+}
+
+/**
+ * Put an authorised hint on screen, before the tutor's own line.
+ *
+ * Returns the hint so the caller can speak it ahead of the reply — see
+ * withHint. Returns null when the turn served no separate hint, in which case
+ * the caller's behaviour is unchanged.
+ */
+function presentAuthorisedHint(
+  res: Parameters<typeof authorisedHint>[0],
+  addTranscriptMessage: (m: { role: 'ai' | 'student'; text: string }) => unknown,
+  addTrailEntry: (e: { kind: TrailKind; text: string; meta?: string }) => unknown,
+): string | null {
+  const hint = authorisedHint(res);
+  if (!hint) return null;
+  addTranscriptMessage({ role: 'ai', text: hint });
+  addTrailEntry({ kind: 'hint', text: hint, meta: 'auto' });
+  return hint;
+}
+
+/**
+ * The hint spoken first, then the tutor's reply — as one utterance.
+ *
+ * Deliberately one call rather than two chained ones: two overlapping tutorSay
+ * calls race, and the second can be cut off by the first's end handler. The
+ * order the student hears is what matters, and this preserves it.
+ */
+function withHint(hint: string | null, spoken: string): string {
+  if (!hint) return spoken;
+  const reply = spoken.trim();
+  return reply && reply !== hint ? `${hint} ${reply}` : hint;
 }
 
 // Shown in the chat when a tutor call fails (e.g. backend 5xx), so a failure is
@@ -518,6 +550,9 @@ export function useDemoTutor() {
           addTranscriptMessage({ role: 'ai', text: entering.text });
           addTrailEntry({ kind: 'tutor', text: entering.text, meta: 'phase change' });
         }
+        // A hint the backend authorised is shown and spoken WITHOUT the student
+        // having to ask for it, before the tutor's own correction.
+        const hint = presentAuthorisedHint(res, addTranscriptMessage, addTrailEntry);
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message });
         if (res.current_phase) useNumeraStore.getState().setCurrentPhase(res.current_phase); // advance phase
@@ -525,7 +560,7 @@ export function useDemoTutor() {
         if (drew) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw!);
         // §1: highlight first, pause, then speak. When the turn also drew, the
         // mark lands before it is described; when it didn't, this speaks at once.
-        tutorSay(spoken, { afterMarks: drew });
+        tutorSay(withHint(hint, spoken), { afterMarks: drew });
         return res;
       } catch (err) {
         if (recoverIfStaleSession(err)) return null;
@@ -964,6 +999,7 @@ export function useDemoTutor() {
           addTranscriptMessage({ role: 'ai', text: entering.text });
           addTrailEntry({ kind: 'tutor', text: entering.text, meta: 'phase change' });
         }
+        const voiceHint = presentAuthorisedHint(res, addTranscriptMessage, addTrailEntry);
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message });
         if (res.ocr) {
@@ -988,7 +1024,7 @@ export function useDemoTutor() {
         const expectsMore = res.expects_student_response ?? true;
         // A scaffold response voices its one authorised step. Ordinary turns
         // voice the exact message shown in the transcript.
-        tutorSay(spoken, {
+        tutorSay(withHint(voiceHint, spoken), {
           onEnd: () => {
             const store = useNumeraStore.getState();
             if (store.voiceStatus !== 'speaking') return; // superseded meanwhile
@@ -1044,9 +1080,10 @@ export function useDemoTutor() {
       // referring to it out loud, the tutor would point at something that was
       // never rendered.
       const spoken = applyInteractionSupport(res);
+      const hint = presentAuthorisedHint(res, addTranscriptMessage, addTrailEntry);
       addTranscriptMessage({ role: 'ai', text: res.message });
       addTrailEntry({ kind: 'tutor', text: res.message, meta: 'option selected' });
-      tutorSay(spoken);
+      tutorSay(withHint(hint, spoken));
     } catch (err) {
       reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage, '/interaction (option selected)');
     }
@@ -1075,9 +1112,10 @@ export function useDemoTutor() {
       if (!acceptResponse(res)) return false;
       syncBackendSession(res);
       const spoken = applyInteractionSupport(res);
+      const hint = presentAuthorisedHint(res, addTranscriptMessage, addTrailEntry);
       addTranscriptMessage({ role: 'ai', text: res.message });
       addTrailEntry({ kind: 'tutor', text: res.message, meta: 'teach back feedback' });
-      tutorSay(spoken);
+      tutorSay(withHint(hint, spoken));
       return true;
     } catch (err) {
       reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage, '/interaction (teach back)');

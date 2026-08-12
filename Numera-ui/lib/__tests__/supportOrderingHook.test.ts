@@ -120,4 +120,34 @@ describe('every reply path shows support before the message', () => {
     await act(async () => { await tutor?.answer('n plus four', CTX); });
     expect(useNumeraStore.getState().visualCueVisible).toBe(false);
   });
+
+  it('shows an authorised hint without the student pressing Need help?', async () => {
+    // WRONG_1: the backend serves a real hint alongside its own correction.
+    sendInteraction.mockResolvedValue(replyWithCue({
+      interaction_state_version: 6,
+      visual_cue: undefined,
+      message: 'Not quite — think about what changes each time.',
+      support_message: 'Look at the operation in every example. Is it addition or multiplication?',
+      conversation_action: 'GIVE_HINT',
+    }));
+    await act(async () => { await tutor?.answer('12 + 5', CTX); });
+
+    const said = useNumeraStore.getState().transcript.filter((m) => m.role === 'ai').map((m) => m.text);
+    expect(said[0]).toContain('Is it addition or multiplication?');
+    expect(said[1]).toBe('Not quite — think about what changes each time.');
+    // Still available for the Need help? replay.
+    expect(useNumeraStore.getState().lastHintText).toContain('addition or multiplication');
+  });
+
+  it('does not invent a hint when the backend served none', async () => {
+    sendInteraction.mockResolvedValue(replyWithCue({
+      interaction_state_version: 7,
+      visual_cue: undefined,
+      message: 'Keep going.',
+      conversation_action: 'ASK_QUESTION',
+    }));
+    await act(async () => { await tutor?.answer('12 + 5', CTX); });
+    const said = useNumeraStore.getState().transcript.filter((m) => m.role === 'ai').map((m) => m.text);
+    expect(said).toEqual(['Keep going.']);
+  });
 });

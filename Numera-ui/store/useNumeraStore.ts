@@ -321,6 +321,8 @@ export interface NumeraState {
   visualCueVisible: boolean;
   visualCueType: string | null;
   visualCueDescription: string | null;
+  /** Illustration for the cue, when the backend sent a usable asset_url. */
+  visualCueAssetUrl: string | null;
 
   // Support ladder (§6 of the Phase 2 spec). `supportShown` is the highest rung
   // revealed for the CURRENT question, so "Need help?" climbs rather than
@@ -487,7 +489,7 @@ export interface NumeraState {
   setVisualCueVisible: (v: boolean) => void;
   setActiveScaffold: (s: ActiveScaffold | null) => void;
 
-  setVisualCue: (cue: { show: boolean; cueType?: string | null; description?: string | null }) => void;
+  setVisualCue: (cue: { show: boolean; cueType?: string | null; description?: string | null; assetUrl?: string | null }) => void;
   setSupportShown: (rung: SupportRung | null) => void;
   setAppliedResponse: (a: AppliedState) => void;
   setInactivityPolicy: (p: InactivityPolicy | null) => void;
@@ -630,6 +632,7 @@ const initial: Omit<
   visualCueVisible: false,
   visualCueType: null,
   visualCueDescription: null,
+  visualCueAssetUrl: null as string | null,
   supportShown: null as SupportRung | null,
   lastHintText: null as string | null,
   phase3LockedQuestionId: null as string | null,
@@ -845,8 +848,13 @@ export const useNumeraStore = create<NumeraState>()(
   setVisualCueVisible: (visualCueVisible) => set({ visualCueVisible }),
   setActiveScaffold: (activeScaffold) => set({ activeScaffold }),
 
-  setVisualCue: ({ show, cueType = null, description = null }) =>
-    set({ visualCueVisible: show, visualCueType: cueType, visualCueDescription: description }),
+  setVisualCue: ({ show, cueType = null, description = null, assetUrl = null }) =>
+    set({
+      visualCueVisible: show,
+      visualCueType: cueType,
+      visualCueDescription: description,
+      visualCueAssetUrl: assetUrl,
+    }),
   setSupportShown: (supportShown) => set({ supportShown }),
   setAppliedResponse: (appliedResponse) => set({ appliedResponse }),
   setInactivityPolicy: (inactivityPolicy) => set({ inactivityPolicy }),
