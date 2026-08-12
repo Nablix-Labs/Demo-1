@@ -415,12 +415,12 @@ def test_guided_follow_up_preserves_a_relevant_non_revealing_llm_correction() ->
         confidence=0.9,
         next_objective=objective,
         tutor_message=(
-            "It looks like the rule shows a decrease, but this counter increases. "
-            "How could you express that increase?"
+            "It looks like you subtracted when you should have added. "
+            "Which quantity can change in this situation?"
         ),
         tutor_message_voice=(
-            "It looks like the rule shows a decrease, but this counter increases. "
-            "How could you express that increase?"
+            "It looks like you subtracted when you should have added. "
+            "Which quantity can change in this situation?"
         ),
     )
 

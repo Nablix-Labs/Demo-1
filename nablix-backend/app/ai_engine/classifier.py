@@ -1827,12 +1827,56 @@ def guided_tutor_message_is_safe_and_relevant(
     if normalize_semantic_answer(controller_prompt) in normalized_message:
         return True
 
+    if (
+        evaluation.selected_error_code is not None
+        and guided_message_repairs_selected_misconception(normalized_message)
+    ):
+        return True
+
     message_tokens = significant_component_tokens(message)
     turn_context_tokens = (
         significant_component_tokens(request.student_input)
         | significant_component_tokens(request.question)
     )
     return bool(message_tokens.intersection(turn_context_tokens))
+
+
+def guided_message_repairs_selected_misconception(normalized_message: str) -> bool:
+    """Recognise specific corrective wording when surface tokens differ."""
+
+    correction_terms = {
+        "add",
+        "added",
+        "adding",
+        "addition",
+        "decrease",
+        "decreased",
+        "decreasing",
+        "divide",
+        "divided",
+        "dividing",
+        "division",
+        "increase",
+        "increased",
+        "increasing",
+        "minus",
+        "multiply",
+        "multiplied",
+        "multiplying",
+        "multiplication",
+        "plus",
+        "subtract",
+        "subtracted",
+        "subtracting",
+        "subtraction",
+        "variable",
+        "fixed",
+        "constant",
+    }
+    return (
+        len(significant_component_tokens(normalized_message)) >= 3
+        and bool(set(normalized_message.split()).intersection(correction_terms))
+    )
 
 
 def authoritative_guided_completion(
