@@ -55,14 +55,14 @@ MAIN_BACKEND_URL = os.getenv("NABLIX_MAIN_BACKEND_URL", "http://127.0.0.1:8000")
 # pauses don't fragment the sentence.
 SILENCE_SHORT_SECONDS = float(os.getenv("VOICE_SILENCE_SHORT_SECONDS", "3.0"))    # 1-3 words
 SILENCE_MEDIUM_SECONDS = float(os.getenv("VOICE_SILENCE_MEDIUM_SECONDS", "5.0"))  # 4-6 words
-SILENCE_LONG_SECONDS = float(os.getenv("VOICE_SILENCE_LONG_SECONDS", "7.5"))      # 7+ words
+SILENCE_LONG_SECONDS = float(os.getenv("VOICE_SILENCE_LONG_SECONDS", "12.5"))     # 7+ words
 
 def _get_adaptive_timeout(transcript: str) -> float:
     """Return silence timeout based on word count of current buffer.
 
     Short utterances (1-3 words) -> 3.0s  (likely complete: "yes", "I don't know")
     Medium utterances (4-6 words) -> 5.0s (could be complete or mid-sentence)
-    Long utterances (7+ words) -> 7.5s    (likely mid-explanation, give thinking room)
+    Long utterances (7+ words) -> 12.5s   (likely mid-explanation, give thinking room)
     """
     word_count = len(transcript.split())
     if word_count <= 3:
@@ -419,9 +419,12 @@ async def voice_stream(
             logger.error(f"[{session_id}] _process_buffer failed: {e}")
         finally:
             is_processing = False
-            turn_id = None
-            previous_tutor_turn_id = None
-            transcript_final = None
+            # NOTE: Do NOT clear turn_id, previous_tutor_turn_id,
+            # or transcript_final here.  The frontend sends these
+            # once per turn via turn_context messages.  If we clear
+            # them after the first fragment, any pending speech that
+            # gets processed next will fail with "turn_id is required"
+            # because the frontend won't re-send them.
             silence_timer_task = None
 
             # Tier 2: Check if speech arrived while we were processing.
@@ -449,21 +452,44 @@ async def voice_stream(
         Uses adaptive timeout based on word count:
           1-3 words  -> 3.0s  (short utterance, likely complete)
           4-6 words  -> 5.0s  (medium, could go either way)
-          7+ words   -> 7.5s  (long, student probably thinking mid-sentence)
+          7+ words   -> 12.5s (long, student probably thinking mid-sentence)
 
-        This should rarely fire now that we use speech_final (endpointing=3500)
-        as the primary signal.  It exists as a safety net for cases where
-        Deepgram's VAD doesn't trigger (e.g., persistent background noise).
+        DEBOUNCE LOOP: instead of a flat asyncio.sleep(timeout), this
+        loops and re-checks how much time has passed since the last
+        Deepgram message (partial OR final).  If new messages arrived
+        (meaning the student is still speaking), last_transcript_at
+        will have been updated, and the timer keeps waiting.  Only
+        when truly no Deepgram messages arrive for the full timeout
+        period does it process the buffer.
+
+        This prevents the bug where FINAL "So see." starts a 3s timer,
+        but partials "I believe on the left..." arrive during the sleep
+        and the timer fires anyway (actual gap 0.7s).
         """
         nonlocal silence_timer_task
 
-        timeout = _get_adaptive_timeout(final_transcript)
-        await asyncio.sleep(timeout)
+        while True:
+            # Recalculate timeout from current buffer (may have
+            # grown since the timer started if new FINALs arrived).
+            timeout = (
+                _get_adaptive_timeout(final_transcript)
+                if final_transcript
+                else SILENCE_LONG_SECONDS
+            )
+            elapsed = time.time() - last_transcript_at
+            remaining = timeout - elapsed
+
+            if remaining <= 0:
+                # Full timeout elapsed with no new messages.
+                break
+
+            await asyncio.sleep(remaining)
 
         if not final_transcript:
             return
 
         actual_gap = round(time.time() - last_transcript_at, 1)
+        timeout = _get_adaptive_timeout(final_transcript)
         logger.info(
             f"[{session_id}] Silence fallback (adaptive {timeout}s, "
             f"{len(final_transcript.split())} words) - "
