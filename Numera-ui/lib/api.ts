@@ -1053,6 +1053,17 @@ export interface InteractionResponse extends GuidedStateFields, Phase3ResponseFi
    *  InteractionResponse", but these two were only ever declared there. */
   phase_transition_message?: string | null;
   phase_transition_voice?: string | null;
+  /**
+   * The Student Model event behind this turn, including the question set.
+   *
+   * The backend has always sent this (interaction.py:172) and the client never
+   * declared it, so the cached session record was only ever refreshed at
+   * session start and resume. Everything looked up out of that record —
+   * question options above all — therefore went stale the moment the backend
+   * issued a NEW question set, which is exactly what a phase change does.
+   */
+  student_model_event?: StudentModelEvent | null;
+  student_model_state?: StudentModelState | null;
   /** Backend's next conversational move (ASK_QUESTION, ADVANCE_TO_NEXT_QUESTION, …). */
   conversation_action?: string;
   /** Whether another student response is expected after this reply. */

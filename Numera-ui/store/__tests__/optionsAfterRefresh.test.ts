@@ -15,6 +15,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useNumeraStore } from '@/store/useNumeraStore';
+import { syncBackendSession } from '@/hooks/useDemoTutor';
 import type { SessionRecord } from '@/lib/api';
 
 const OPTIONS = [
@@ -104,5 +105,68 @@ describe('options survive the record arriving late', () => {
     useNumeraStore.setState({ activeQuestionId: 'Q-T01-004' });
     useNumeraStore.getState().setBackendSession(empty as unknown as SessionRecord);
     expect(useNumeraStore.getState().questionOptions).toEqual([]);
+  });
+});
+
+/**
+ * A NEW question set must bring its own options with it.
+ *
+ * The cached record was only written at session start and resume, so once the
+ * backend issued a new question set — which is exactly what a phase change does
+ * — option lookups were still searching the PREVIOUS phase's questions. The
+ * next choice question rendered as a bare stem with nothing to pick.
+ *
+ * The reply has always carried the new event (interaction.py:172); the client
+ * simply never read it.
+ */
+describe('a reply carrying a newer question set', () => {
+  const NEXT_OPTIONS = [
+    { option_id: 'A', text: 't - 3' },
+    { option_id: 'B', text: '3 - t' },
+  ];
+
+  const replyEvent = {
+    phase_payload: {
+      question_set: {
+        questions: [
+          {
+            question_id: 'Q-T01-009',
+            student_view: { question_type: 'SINGLE_CHOICE', options: NEXT_OPTIONS },
+          },
+        ],
+      },
+    },
+    journey_state: { topic_id: 'ALG-KS3-01' },
+  };
+
+  beforeEach(() => {
+    useNumeraStore.setState({
+      backendSession: record(),
+      currentPhase: 'GUIDED_PRACTICE',
+      activeQuestionId: 'Q-T01-004',
+      questionOptions: OPTIONS,
+      questionType: 'CHOICE_WITH_EXPLANATION',
+    });
+  });
+
+  // Driven through syncBackendSession — the function the reply handlers
+  // actually call — so the wiring is pinned, not just the store behaviour.
+  it("finds the new question's options after a phase change", () => {
+    syncBackendSession({
+      current_phase: 'INDEPENDENT_PRACTICE',
+      current_question: 'Which is the general rule:',
+      question_id: 'Q-T01-009',
+      student_model_event: replyEvent as never,
+    });
+    expect(useNumeraStore.getState().questionOptions).toEqual(NEXT_OPTIONS);
+  });
+
+  it('leaves the current question untouched when the reply carries no new set', () => {
+    syncBackendSession({
+      current_phase: 'GUIDED_PRACTICE',
+      current_question: 'Which is the general rule:',
+      question_id: 'Q-T01-004',
+    });
+    expect(useNumeraStore.getState().questionOptions).toEqual(OPTIONS);
   });
 });
