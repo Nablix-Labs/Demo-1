@@ -139,3 +139,65 @@ describe('phase3Locked', () => {
     expect(phase3Locked('Q-1', null)).toBe(true);
   });
 });
+
+/**
+ * All four backend outcomes, handled explicitly.
+ *
+ * PR #105 (11 Aug 2026) replaced CORRECT/INCORRECT with a four-value enum, and
+ * Sanya asked for every value to be handled rather than inferred from the
+ * boolean beside it — a build that sends the enum and omits `independent_success`
+ * would otherwise read every rescue as a clean pass.
+ */
+describe('the independent outcome enum', () => {
+  const CLOSES = ['INDEPENDENTLY_VERIFIED', 'RESCUE_REQUIRED', 'CORRECT', 'INCORRECT'];
+  const LEAVES_OPEN = ['AWAITING_SUBMISSION', 'INPUT_UNCLEAR'];
+
+  it('closes the attempt only on a terminal verdict', () => {
+    for (const independent_outcome of CLOSES) {
+      expect(phase3AttemptClosed({ independent_outcome })).toBe(true);
+    }
+    for (const independent_outcome of LEAVES_OPEN) {
+      expect(phase3AttemptClosed({ independent_outcome })).toBe(false);
+    }
+  });
+
+  it('keeps an unreadable attempt open even when the flags say otherwise', () => {
+    // The student's handwriting must not cost them the attempt: the enum wins
+    // over a terminal flag the backend set beside it.
+    expect(phase3AttemptClosed({
+      independent_outcome: 'INPUT_UNCLEAR',
+      independent_attempt_terminal: true,
+      phase3_submission_confirmed: true,
+    })).toBe(false);
+  });
+
+  it('picks the right line for each outcome without the boolean', () => {
+    expect(phase3Notice({ independent_outcome: 'INDEPENDENTLY_VERIFIED' })).toBe(ANSWER_RECORDED);
+    expect(phase3Notice({ independent_outcome: 'RESCUE_REQUIRED' })).toBe(RESCUE_PENDING);
+    expect(phase3Notice({ independent_outcome: 'INPUT_UNCLEAR' })).toBe(OCR_UNCLEAR);
+    expect(phase3Notice({ independent_outcome: 'AWAITING_SUBMISSION' })).toBe(ANSWER_RECORDED);
+  });
+
+  it('trusts the enum over a contradicting boolean', () => {
+    // Sanya's 12 Aug payload carried both; if they ever disagree the named
+    // outcome is the one the backend actually decided on.
+    expect(phase3Notice({ independent_outcome: 'RESCUE_REQUIRED', independent_success: true }))
+      .toBe(RESCUE_PENDING);
+    expect(phase3Notice({ independent_outcome: 'INDEPENDENTLY_VERIFIED', independent_success: false }))
+      .toBe(ANSWER_RECORDED);
+  });
+
+  it('still reads an older build that sends only the boolean', () => {
+    expect(phase3Notice({ independent_success: false })).toBe(RESCUE_PENDING);
+    expect(phase3Notice({ independent_success: true })).toBe(ANSWER_RECORDED);
+  });
+
+  it('never leaks a verdict for any outcome', () => {
+    for (const independent_outcome of [...CLOSES, ...LEAVES_OPEN]) {
+      const line = phase3Notice({ independent_outcome }).toLowerCase();
+      for (const banned of ['correct', 'incorrect', 'wrong', 'right', 'verified', 'failed']) {
+        expect(line).not.toContain(banned);
+      }
+    }
+  });
+});
