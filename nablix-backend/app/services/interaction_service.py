@@ -645,6 +645,7 @@ async def process_answer_with_session_event(
                     context.message
                     if escalation_type == "GUIDED_SUPPORT_ESCALATION_REQUIRED"
                     and wrong_four_escalation
+                    and escalation_error_code is not None
                     else None
                 ),
                 error_code=escalation_error_code,
@@ -3684,6 +3685,12 @@ async def _process_interaction(
                 ]
                 if _is_support_failure(tutor)
                 and updated_session.wrong_attempt_count > 0
+                and not (
+                    updated_session.wrong_attempt_count >= 4
+                    and schema_content_response is not None
+                    and schema_content_response.routing.reason_code
+                    == "GUIDED_SCAFFOLD_REQUIRED"
+                )
                 else schema_content_response.routing.reason_code
                 if support_served is not None
                 else None
@@ -3693,6 +3700,9 @@ async def _process_interaction(
             "intervention_triggered": (
                 _is_support_failure(tutor)
                 and updated_session.wrong_attempt_count >= 4
+                and schema_content_response is not None
+                and schema_content_response.routing.reason_code
+                != "GUIDED_SCAFFOLD_REQUIRED"
             ),
             "ocr": ocr,
             "snapshot_reference": (
