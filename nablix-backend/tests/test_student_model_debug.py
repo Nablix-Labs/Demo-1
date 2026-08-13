@@ -15,7 +15,13 @@ from app.models.student_model_session import (
     StudentModelSessionEvent,
     StudentModelSessionEventResponse,
 )
-from app.services import canvas_service, interaction_service, student_model_debug
+from app.adapters import provider
+from app.services import (
+    canvas_service,
+    interaction_service,
+    session_service,
+    student_model_debug,
+)
 from tests.test_canvas import VALID_SNAPSHOT_DATA_URL, _start_session, client
 from tests.test_session_events import _session_opened_response
 
@@ -272,6 +278,16 @@ def test_canvas_submit_returns_the_debug_object(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(
         canvas_service, "get_settings", lambda: Settings(debug_json_view=True)
     )
+    # /session/start refuses a concept with no Student Model topic code, and the
+    # test_canvas autouse fixture does not follow the imported _start_session.
+    session_settings = Settings(
+        student_model_url="https://student-model.test",
+        student_model_topic_codes={"ALG_LINEAR_ONE_STEP": "ALG-ORI-02"},
+        use_mock_student_model=False,
+        use_openai_ai_engine=False,
+    )
+    monkeypatch.setattr(provider, "get_settings", lambda: session_settings)
+    monkeypatch.setattr(session_service, "get_settings", lambda: session_settings)
 
     session_id = _start_session("ST001")
     response = client.post(
