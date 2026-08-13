@@ -6,6 +6,7 @@ from app.models.adapters import (
     TutorResult,
 )
 from app.models.canvas import CanvasDrawPayload, TutorElement
+from app.services.canvas_spatial import canonical_math_token_text
 
 
 Box = tuple[float, float, float, float]
@@ -88,7 +89,7 @@ def _region_for(step_id: str | None, regions: list[OCRTextRegion]) -> OCRTextReg
 
 
 def _normalised_text(value: str) -> str:
-    return "".join(value.replace("−", "-").split())
+    return canonical_math_token_text(value)
 
 
 def _normalised_token_text(tokens: list[SpatialMathToken]) -> str:

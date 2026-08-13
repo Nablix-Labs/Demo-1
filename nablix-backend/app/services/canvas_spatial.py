@@ -7,9 +7,33 @@ SpatialMathTokens with normalized bounding boxes.
 
 import xml.etree.ElementTree as ET
 from typing import Literal
+from unicodedata import normalize
 
 from app.models.adapters import OCRTextRegion, SpatialMathToken
 from app.models.canvas import CanvasPoint, CanvasStroke
+
+
+_MATH_OPERATOR_EQUIVALENTS = str.maketrans(
+    {
+        "−": "-",
+        "–": "-",
+        "—": "-",
+        "﹣": "-",
+        "×": "*",
+        "·": "*",
+        "∙": "*",
+        "⋅": "*",
+        "÷": "/",
+        "∕": "/",
+        "⁄": "/",
+    }
+)
+
+
+def canonical_math_token_text(value: str) -> str:
+    """Normalize OCR and MathML text for supported tutor-error comparisons."""
+
+    return "".join(normalize("NFKC", value).translate(_MATH_OPERATOR_EQUIVALENTS).split())
 
 
 class StrokeBox:
