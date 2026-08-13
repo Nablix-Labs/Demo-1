@@ -46,6 +46,7 @@ from app.models.adapters import (
     ConversationMessage,
     ConversationState,
     Phase2PromptContext,
+    SpatialMathToken,
 )
 from app.models.guided_learning import (
     ActiveTeachingObjective,
@@ -93,6 +94,7 @@ class ClassificationRequest(StrictSchema):
     exclude_content_ids: list[str] = Field(default_factory=list)
     canvas_regions: list[CanvasTextRegion] = Field(default_factory=list)
     canvas_mathml_blocks: list[str] = Field(default_factory=list)
+    spatial_tokens: list[SpatialMathToken] = Field(default_factory=list)
     has_canvas_evidence: bool = False
     canvas_solution_complete_candidate: bool = False
     conversation_history: list[ConversationMessage] = Field(default_factory=list)
@@ -4161,6 +4163,7 @@ def build_tutor_decision(
             correct_answer=request.correct_answer,
             current_phase=request.current_phase,
             canvas_regions=request.canvas_regions,
+            spatial_tokens=request.spatial_tokens,
             config=rules.canvas_review,
             confidence=confidence,
         )

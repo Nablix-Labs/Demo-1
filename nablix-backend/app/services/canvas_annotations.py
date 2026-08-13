@@ -40,31 +40,29 @@ def plan_canvas_draw(
     if target_region is None:
         return []
 
-    # Priority 1: Resolution via specific spatial token bounding box union
-    target_box: Box | None = None
-    if classification.target_token_ids:
-        matching_tokens = [
-            tok
-            for tok in spatial_tokens or []
-            if tok.token_id in classification.target_token_ids
-        ]
-        if (
-            len(matching_tokens) == len(classification.target_token_ids)
-            and all(token.alignment_confidence >= 0.9 for token in matching_tokens)
-        ):
-            boxes = [tok.bounding_box for tok in matching_tokens if tok.bounding_box]
-            if boxes:
-                min_x = min(b.get("x", target_region.x) for b in boxes)
-                min_y = min(b.get("y", target_region.y) for b in boxes)
-                max_x = max(b.get("x", target_region.x) + b.get("width", target_region.w) for b in boxes)
-                max_y = max(b.get("y", target_region.y) + b.get("height", target_region.h) for b in boxes)
-                target_box = (min_x, min_y, max(0.01, max_x - min_x), max(0.01, max_y - min_y))
+    if len(classification.target_token_ids) == 0 or classification.error_token is None:
+        return []
 
-        if target_box is None:
-            return []
+    matching_tokens = [
+        tok
+        for tok in spatial_tokens or []
+        if tok.token_id in classification.target_token_ids
+    ]
+    if (
+        len(matching_tokens) != len(classification.target_token_ids)
+        or any(token.alignment_confidence < 0.9 for token in matching_tokens)
+        or _normalised_token_text(matching_tokens) != _normalised_text(classification.error_token)
+    ):
+        return []
 
-    if target_box is None:
-        target_box = _line_box(target_region)
+    boxes = [token.bounding_box for token in matching_tokens if token.bounding_box]
+    if len(boxes) != len(matching_tokens):
+        return []
+    min_x = min(box.get("x", target_region.x) for box in boxes)
+    min_y = min(box.get("y", target_region.y) for box in boxes)
+    max_x = max(box.get("x", target_region.x) + box.get("width", target_region.w) for box in boxes)
+    max_y = max(box.get("y", target_region.y) + box.get("height", target_region.h) for box in boxes)
+    target_box: Box = (min_x, min_y, max(0.01, max_x - min_x), max(0.01, max_y - min_y))
 
     elements = _elements_for(classification, tutor.annotation_intents, target_box)
     if not elements:
@@ -89,8 +87,12 @@ def _region_for(step_id: str | None, regions: list[OCRTextRegion]) -> OCRTextReg
     return None
 
 
-def _line_box(region: OCRTextRegion) -> Box:
-    return (region.x, region.y, region.w, region.h)
+def _normalised_text(value: str) -> str:
+    return "".join(value.replace("−", "-").split())
+
+
+def _normalised_token_text(tokens: list[SpatialMathToken]) -> str:
+    return "".join(_normalised_text(token.text) for token in tokens)
 
 
 def _elements_for(

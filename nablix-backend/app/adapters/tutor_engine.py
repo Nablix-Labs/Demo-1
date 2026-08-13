@@ -116,6 +116,7 @@ class TutorEngineServiceAdapter:
                     exclude_content_ids=[],
                     canvas_regions=_coerce_canvas_regions(context.canvas_regions),
                     canvas_mathml_blocks=context.canvas_mathml_blocks,
+                    spatial_tokens=context.spatial_tokens,
                     has_canvas_evidence=context.has_canvas_evidence,
                     canvas_solution_complete_candidate=(
                         context.canvas_solution_complete_candidate
@@ -219,6 +220,9 @@ def _tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:
             TutorMistakeClassification(
                 status=response.mistake_classification.status,
                 mistake_step_id=response.mistake_classification.mistake_step_id,
+                target_token_ids=response.mistake_classification.target_token_ids,
+                error_token=response.mistake_classification.error_token,
+                expected_token=response.mistake_classification.expected_token,
                 target_text=response.mistake_classification.target_text,
                 target_span=(
                     (

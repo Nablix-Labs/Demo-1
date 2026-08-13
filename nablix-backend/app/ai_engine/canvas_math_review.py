@@ -22,6 +22,7 @@ from app.ai_engine.schemas import (
     HighlightInstruction,
     LearningPhase,
 )
+from app.models.adapters import SpatialMathToken
 
 
 _EQUATION_GRAMMAR = r"""
@@ -97,6 +98,7 @@ def review_canvas_math(
     correct_answer: str,
     current_phase: LearningPhase,
     canvas_regions: list[CanvasTextRegion],
+    spatial_tokens: list[SpatialMathToken],
     config: CanvasReviewConfig,
     confidence: float,
 ) -> CanvasMathReview:
@@ -151,6 +153,7 @@ def review_canvas_math(
                 correct_answer=correct_answer,
                 current_phase=current_phase,
                 canvas_regions=canvas_regions,
+                spatial_tokens=spatial_tokens,
                 config=config,
                 confidence=confidence,
             )
@@ -293,6 +296,7 @@ def _mistake_review(
     correct_answer: str,
     current_phase: LearningPhase,
     canvas_regions: list[CanvasTextRegion],
+    spatial_tokens: list[SpatialMathToken],
     config: CanvasReviewConfig,
     confidence: float,
 ) -> CanvasMathReview:
@@ -319,10 +323,21 @@ def _mistake_review(
             replacement_text = None
 
     step_id: str = region.step_id or f"step-{index + 1}"
+    error_token: str | None = (
+        region.text[target_span[0] : target_span[1]] if target_span is not None else None
+    )
+    target_token_ids: list[str] = _target_token_ids(
+        step_id=step_id,
+        error_token=error_token,
+        spatial_tokens=spatial_tokens,
+    )
     classification: CanvasMistakeClassification = CanvasMistakeClassification(
         status="mistake_found",
         mistake_step_id=step_id,
-        target_text=(region.text[target_span[0] : target_span[1]] if target_span is not None else region.text),
+        target_token_ids=target_token_ids,
+        error_token=error_token if len(target_token_ids) > 0 else None,
+        expected_token=replacement_text if len(target_token_ids) > 0 else None,
+        target_text=error_token or region.text,
         target_span=list(target_span) if target_span is not None else None,
         replacement_text=replacement_text,
         confidence=confidence,
@@ -344,6 +359,42 @@ def _mistake_review(
             else []
         ),
     )
+
+
+def _target_token_ids(
+    step_id: str,
+    error_token: str | None,
+    spatial_tokens: list[SpatialMathToken],
+) -> list[str]:
+    """Return consecutive, high-confidence OCR tokens matching the corrected text."""
+
+    if error_token is None:
+        return []
+
+    expected_text: str = _normalise_token_text(error_token)
+    if expected_text == "":
+        return []
+
+    step_tokens: list[SpatialMathToken] = [
+        token
+        for token in spatial_tokens
+        if token.step_id == step_id and token.alignment_confidence >= 0.9
+    ]
+    for start_index, _token in enumerate(step_tokens):
+        assembled_text: str = ""
+        matching_ids: list[str] = []
+        for token in step_tokens[start_index:]:
+            assembled_text += _normalise_token_text(token.text)
+            matching_ids.append(token.token_id)
+            if assembled_text == expected_text:
+                return matching_ids
+            if expected_text.startswith(assembled_text) is False:
+                break
+    return []
+
+
+def _normalise_token_text(value: str) -> str:
+    return "".join(normalize_canvas_math_text(value).split())
 
 
 def _classify_transition(
