@@ -1,21 +1,27 @@
 import asyncio
+from copy import deepcopy
 from dataclasses import replace
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api import canvas as canvas_api
-from app.adapters import provider
+from app.adapters import provider, tutor_engine as tutor_engine_module
 from app.adapters.student_model import StudentModelServiceAdapter
 from app.adapters.tutor_engine import TutorEngineServiceAdapter
 from app.adapters.vision_ocr import MockVisionOCRAdapter
+from app.ai_engine.classifier import ClassificationRequest
+from app.ai_engine.schemas import TutorResponse
 from app.core.config import Settings, get_settings
 from app.main import app
 from app.models.adapters import (
     AdapterContext,
+    AnnotationIntent,
+    OCRTextRegion,
     RAGResult,
     StudentModelResult,
     TutorResult,
+    TutorMistakeClassification,
     VisionOCRResult,
 )
 from app.models.canvas import CanvasSubmitRequest
@@ -70,6 +76,46 @@ def _unified_voice_payload(
             "captured_at": "2026-08-10T10:00:00Z",
         },
     }
+
+
+def _canvas_event(question_id: str | None, order_index: int) -> dict[str, object]:
+    return {
+        "order_index": order_index,
+        "turn_id": "FRONTEND-LISTENING-TURN",
+        "question_id": question_id,
+        "actor": "STUDENT",
+        "action_type": "WRITE",
+        "content": "Student wrote a line.",
+        "math_text": None,
+        "target_object_id": "stroke-1",
+        "bbox": {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.1},
+        "semantic_tag": None,
+        "source_id": None,
+        "active_state": "ACTIVE",
+    }
+
+
+async def _incorrect_ocr(
+    adapter: MockVisionOCRAdapter,
+    snapshot_data_url: str,
+) -> VisionOCRResult:
+    del adapter, snapshot_data_url
+    return VisionOCRResult(
+        raw_ocr_text="x = 4",
+        detected_equation="x = 4",
+        detected_steps=["x = 4"],
+        final_answer="x = 4",
+        confidence=0.95,
+        provider="mock",
+    )
+
+
+async def _unexpected_ocr(
+    adapter: MockVisionOCRAdapter,
+    snapshot_data_url: str,
+) -> VisionOCRResult:
+    del adapter, snapshot_data_url
+    raise AssertionError("rejected Canvas evidence reached OCR")
 
 
 def test_canvas_semantic_text_normalizes_detected_relationships() -> None:
@@ -381,16 +427,22 @@ def test_canvas_repairs_in_progress_question_before_building_answer_context(
             "without a question or remaining target skills."
         )
     else:
+        expected_attempt = (
+            "CORRECT_ATTEMPT"
+            if phase == "PHASE_2_GUIDED_LEARNING"
+            else "INCORRECT_ATTEMPT"
+        )
         assert event_types[:3] == [
             "SESSION_OPENED",
             expected_initializer,
-            "INCORRECT_ATTEMPT",
+            expected_attempt,
         ]
 
 
 def test_canvas_rejects_empty_question_response_without_erasing_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(MockVisionOCRAdapter, "recognize", _incorrect_ocr)
     session_id = _start_session("ST015")
     before = session_service._get_owned_session(session_id, "ST015")
 
@@ -440,6 +492,7 @@ def test_canvas_rejects_empty_question_response_without_erasing_session(
 def test_canvas_preserves_question_metadata_for_guided_rescue(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(MockVisionOCRAdapter, "recognize", _incorrect_ocr)
     session_id = _start_session("ST016")
     before = session_service._get_owned_session(session_id, "ST016")
 
@@ -503,8 +556,14 @@ def test_canvas_submit_sends_full_ocr_context_and_forwards_events(
     captured_contexts: list[AdapterContext] = []
     captured_events: list[StudentModelSessionEvent] = []
     captured_responses: list[StudentModelSessionEventResponse] = []
+    classifier_requests: list[ClassificationRequest] = []
     original_evaluate = TutorEngineServiceAdapter.evaluate
     original_send = StudentModelServiceAdapter.send_session_event
+    original_classify = tutor_engine_module.classify_student_response
+
+    def capture_classification(request: ClassificationRequest) -> TutorResponse:
+        classifier_requests.append(request)
+        return original_classify(request)
 
     async def capture_evaluate(
         adapter: TutorEngineServiceAdapter,
@@ -527,7 +586,13 @@ def test_canvas_submit_sends_full_ocr_context_and_forwards_events(
 
     monkeypatch.setattr(TutorEngineServiceAdapter, "evaluate", capture_evaluate)
     monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", capture_event)
+    monkeypatch.setattr(
+        tutor_engine_module,
+        "classify_student_response",
+        capture_classification,
+    )
     session_id = _start_session("ST011")
+    question_id = session_service._sessions[session_id].question_id
 
     response = client.post(
         "/canvas/submit",
@@ -535,6 +600,7 @@ def test_canvas_submit_sends_full_ocr_context_and_forwards_events(
             "session_id": session_id,
             "student_id": "ST011",
             "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+            "canvas_events": [_canvas_event(question_id, 0)],
         },
     )
 
@@ -553,15 +619,20 @@ def test_canvas_submit_sends_full_ocr_context_and_forwards_events(
         "step-2",
         "step-3",
     ]
+    assert context.has_canvas_evidence is True
+    assert [event.order_index for event in context.canvas_events] == [0]
+    assert len(classifier_requests) == 1
+    assert classifier_requests[0].canvas_events == context.canvas_events
     assert [event.event_type for event in captured_events] == [
         "SESSION_OPENED",
-        "INCORRECT_ATTEMPT",
+        "CORRECT_ATTEMPT",
+        "INDEPENDENT_QUESTION_SET_REQUESTED",
     ]
     attempt_event = captured_events[1]
     assert isinstance(attempt_event, GuidedAttemptEvent)
     assert attempt_event.source_turn_id == context.source_turn_id
     assert attempt_event.request_id == (
-        f"{session_id}:{context.source_turn_id}:INCORRECT_ATTEMPT"
+        f"{session_id}:{context.source_turn_id}:CORRECT_ATTEMPT"
     )
     assert attempt_event.expected_journey_version > 0
     stored = client.get(f"/session/{session_id}", params={"student_id": "ST011"}).json()
@@ -850,6 +921,86 @@ def test_canvas_correct_same_phase_routes_next_question(
     assert stored.question_number == 1
 
 
+def test_canvas_guided_validation_question_remains_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def send_validation_question(
+        adapter: StudentModelServiceAdapter,
+        event: StudentModelSessionEvent,
+        access_token: str,
+    ) -> StudentModelSessionEventResponse:
+        del adapter, access_token
+        if event.event_type == "SESSION_OPENED":
+            body = _session_opened_response("PHASE_2_GUIDED_LEARNING")
+        else:
+            assert event.event_type == "CORRECT_ATTEMPT"
+            body = _event_response("CORRECT_ATTEMPT", event.request_id)
+            source = _event_response("ORIENTATION_COMPLETED", event.request_id)
+            source_payload = source["phase_payload"]
+            assert isinstance(source_payload, dict)
+            source_question_set = source_payload["question_set"]
+            assert isinstance(source_question_set, dict)
+            source_questions = source_question_set["questions"]
+            assert isinstance(source_questions, list)
+            validation_question = deepcopy(source_questions[0])
+            assert isinstance(validation_question, dict)
+            validation_question["question_id"] = "Q-T02-VAL-01"
+            validation_question["question_usage_id"] = "QU-T02-VAL-01"
+            student_view = validation_question["student_view"]
+            assert isinstance(student_view, dict)
+            student_view["question_text"] = "Validation: solve x + 2 = 7."
+            journey = body["journey_state"]
+            payload = body["phase_payload"]
+            assert isinstance(journey, dict)
+            assert isinstance(payload, dict)
+            phase_state = journey["phase_2_guided_learning"]
+            assert isinstance(phase_state, dict)
+            phase_state.update(
+                {
+                    "completed_micro_skill_ids": [],
+                    "remaining_micro_skill_ids": ["T02.M1"],
+                    "current_question_id": "Q-T02-VAL-01",
+                    "current_question_target_micro_skill_ids": ["T02.M1"],
+                }
+            )
+            payload["question_set"] = {"questions": [validation_question]}
+        body["request_id"] = event.request_id
+        return StudentModelSessionEventResponse.model_validate(body)
+
+    monkeypatch.setattr(
+        StudentModelServiceAdapter,
+        "send_session_event",
+        send_validation_question,
+    )
+    session_id = _start_session("ST039")
+    before = session_service._sessions[session_id]
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST039",
+            "turn_id": "TURN-ST039-CANVAS-1",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+            "canvas_events": [_canvas_event(before.question_id, 0)],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["current_phase"] == "GUIDED_PRACTICE"
+    assert body["question_id"] == "Q-T02-VAL-01"
+    assert body["current_question"] == "Validation: solve x + 2 = 7."
+    assert "Validation: solve x + 2 = 7." in body["message"]
+    assert "Validation: solve x + 2 = 7." in body["tutor"]["tutor_message"]
+    stored = session_service._sessions[session_id]
+    assert stored.canvas_state.snapshot_id is None
+    assert stored.canvas_state.ocr_result is None
+    assert before.question_id is not None
+    assert stored.canvas_memory_by_question[before.question_id].updated_turn_id == (
+        "TURN-ST039-CANVAS-1"
+    )
+
+
 def test_canvas_final_independent_attempt_is_recorded_before_review(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -915,18 +1066,43 @@ def test_canvas_final_independent_attempt_is_recorded_before_review(
         "student_id": "ST024",
         "turn_id": "TURN-ST024-CANVAS-1",
         "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+        "canvas_events": [_canvas_event(before.question_id, 0)],
     }
     response = client.post("/canvas/submit", json=payload)
-    duplicate = client.post("/canvas/submit", json=payload)
+    duplicate = client.post(
+        "/canvas/submit",
+        json={
+            **payload,
+            "canvas_events": [
+                _canvas_event(before.question_id, 0),
+                _canvas_event(before.question_id, 1),
+            ],
+        },
+    )
     changed = client.post(
         "/canvas/submit",
         json={**payload, "snapshot_data_url": "data:image/png;base64,d29ybGQ="},
+    )
+    changed_strokes = client.post(
+        "/canvas/submit",
+        json={
+            **payload,
+            "strokes": [
+                {
+                    "stroke_id": "changed-stroke",
+                    "tool": "pen",
+                    "points": [{"x": 0.4, "y": 0.4}],
+                    "width": 0.01,
+                }
+            ],
+        },
     )
 
     assert response.status_code == 200, response.text
     assert duplicate.status_code == 200, duplicate.text
     assert duplicate.json()["status"] == "DUPLICATE_TURN"
     assert changed.status_code == 409
+    assert changed_strokes.status_code == 409
     body = response.json()
     assert body["current_phase"] == "REVIEW"
     assert body["question_id"] is None
@@ -935,6 +1111,15 @@ def test_canvas_final_independent_attempt_is_recorded_before_review(
 
     stored = session_service._get_owned_session(session_id, "ST024")
     assert len(stored.canvas_submissions) == 1
+    assert stored.canvas_state.snapshot_id is None
+    assert stored.canvas_state.ocr_result is None
+    assert list(stored.canvas_memory_by_question) == [before.question_id]
+    assert stored.canvas_memory_by_question[before.question_id].updated_turn_id == (
+        "TURN-ST024-CANVAS-1"
+    )
+    assert len(
+        stored.canvas_memory_by_question[before.question_id].canvas_events
+    ) == 1
     assert len(stored.per_question_history) == 1
     attempt = stored.per_question_history[0]
     assert attempt.question_id == before.question_id
@@ -1296,7 +1481,12 @@ def test_unified_voice_canvas_unclear_ocr_does_not_grade(
     assert body["advance_to_next_question"] is False
     assert body["attempt_increment"] == 0
     assert body["feedback_type"] == "CLARIFICATION"
-    assert session_service._sessions[session_id].attempt_count == 0
+    stored = session_service._sessions[session_id]
+    assert stored.attempt_count == 0
+    assert stored.question_id is not None
+    memory = stored.canvas_memory_by_question[stored.question_id]
+    assert memory.updated_turn_id == "TURN-UNIFIED-UNCLEAR"
+    assert [stroke.stroke_id for stroke in memory.strokes] == ["stroke-1"]
 
 
 def test_unified_voice_canvas_keeps_mathml_in_tutor_context(
@@ -1366,17 +1556,392 @@ def test_unified_voice_canvas_keeps_mathml_in_tutor_context(
     )
     monkeypatch.setattr(interaction_service, "run_tutor_pipeline", capture_pipeline)
     session_id = _start_session("ST024")
-
+    request = _unified_voice_payload(
+        session_id,
+        "ST024",
+        "TURN-UNIFIED-MATHML",
+        "Is this right?",
+    )
+    canvas_state = request["canvas_state"]
+    assert isinstance(canvas_state, dict)
+    canvas_state["canvas_events"] = [
+        _canvas_event(session_service._sessions[session_id].question_id, 0)
+    ]
     response = client.post(
         "/interaction",
-        json=_unified_voice_payload(
-            session_id,
-            "ST024",
-            "TURN-UNIFIED-MATHML",
-            "Is this right?",
-        ),
+        json=request,
     )
 
     assert response.status_code == 200, response.text
     assert captured_context[0].canvas_mathml_blocks == mathml_blocks
     assert [region.mathml for region in captured_context[0].canvas_regions] == mathml_blocks
+    assert [event.order_index for event in captured_context[0].canvas_events] == [0]
+
+
+def test_canvas_event_order_must_be_contiguous_from_zero() -> None:
+    session_id = _start_session("ST030")
+    question_id = session_service._sessions[session_id].question_id
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST030",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+            "canvas_events": [_canvas_event(question_id, 1)],
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_canvas_stale_question_is_rejected_before_ocr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(MockVisionOCRAdapter, "recognize", _unexpected_ocr)
+    session_id = _start_session("ST031")
+    before = session_service._sessions[session_id]
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST031",
+            "turn_id": "TURN-ST031-CANVAS-1",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+            "canvas_events": [_canvas_event("STALE-QUESTION", 0)],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["status"] == "STALE_TURN"
+    after = session_service._sessions[session_id]
+    assert after.attempt_count == before.attempt_count
+    assert after.canvas_submissions == before.canvas_submissions
+    assert after.canvas_memory_by_question == before.canvas_memory_by_question
+
+
+@pytest.mark.parametrize("oversized_field", ["strokes", "canvas_events"])
+def test_canvas_payload_caps_apply_before_ocr(
+    monkeypatch: pytest.MonkeyPatch,
+    oversized_field: str,
+) -> None:
+    monkeypatch.setattr(MockVisionOCRAdapter, "recognize", _unexpected_ocr)
+    student_id = "ST032" if oversized_field == "strokes" else "ST033"
+    session_id = _start_session(student_id)
+    question_id = session_service._sessions[session_id].question_id
+    payload: dict[str, object] = {
+        "session_id": session_id,
+        "student_id": student_id,
+        "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+    }
+    if oversized_field == "strokes":
+        payload["strokes"] = [
+            {
+                "stroke_id": "oversized",
+                "tool": "pen",
+                "points": [{"x": 0.1, "y": 0.1}] * 10_001,
+                "width": 0.01,
+            }
+        ]
+    else:
+        payload["canvas_events"] = [
+            _canvas_event(question_id, index) for index in range(501)
+        ]
+
+    response = client.post("/canvas/submit", json=payload)
+
+    assert response.status_code == 413
+
+
+@pytest.mark.parametrize(
+    ("canvas_events", "expected_status"),
+    [
+        ([_canvas_event("STALE-QUESTION", 0)], 409),
+        (
+            [_canvas_event(None, index) for index in range(501)],
+            413,
+        ),
+    ],
+)
+def test_interaction_rejects_stale_or_oversized_canvas_before_ocr(
+    monkeypatch: pytest.MonkeyPatch,
+    canvas_events: list[dict[str, object]],
+    expected_status: int,
+) -> None:
+    monkeypatch.setattr(MockVisionOCRAdapter, "recognize", _unexpected_ocr)
+    student_id = "ST037" if expected_status == 409 else "ST038"
+    session_id = _start_session(student_id)
+    request = _unified_voice_payload(
+        session_id,
+        student_id,
+        f"TURN-INTERACTION-REJECT-{expected_status}",
+        "Please check this.",
+    )
+    canvas_state = request["canvas_state"]
+    assert isinstance(canvas_state, dict)
+    canvas_state["canvas_events"] = canvas_events
+
+    response = client.post("/interaction", json=request)
+
+    assert response.status_code == expected_status
+    if expected_status == 409:
+        assert response.json()["status"] == "STALE_TURN"
+
+
+def test_unclear_canvas_replaces_memory_for_the_same_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_contexts: list[AdapterContext] = []
+    original_evaluate = TutorEngineServiceAdapter.evaluate
+
+    async def capture_evaluate(
+        adapter: TutorEngineServiceAdapter,
+        context: AdapterContext,
+        rag: RAGResult,
+        student: StudentModelResult,
+    ) -> TutorResult:
+        captured_contexts.append(context)
+        return await original_evaluate(adapter, context, rag, student)
+
+    async def unclear_ocr(
+        adapter: MockVisionOCRAdapter,
+        snapshot_data_url: str,
+    ) -> VisionOCRResult:
+        del adapter, snapshot_data_url
+        return VisionOCRResult(
+            raw_ocr_text="x = ?",
+            detected_equation="x = ?",
+            detected_steps=["x = ?"],
+            confidence=0.4,
+            needs_clarification=True,
+            provider="mock",
+        )
+
+    monkeypatch.setattr(MockVisionOCRAdapter, "recognize", unclear_ocr)
+    monkeypatch.setattr(TutorEngineServiceAdapter, "evaluate", capture_evaluate)
+    session_id = _start_session("ST034")
+    question_id = session_service._sessions[session_id].question_id
+    assert question_id is not None
+    base_payload: dict[str, object] = {
+        "session_id": session_id,
+        "student_id": "ST034",
+        "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+    }
+    first = client.post(
+        "/canvas/submit",
+        json={
+            **base_payload,
+            "turn_id": "TURN-ST034-CANVAS-1",
+            "canvas_events": [_canvas_event(question_id, 0)],
+        },
+    )
+    second = client.post(
+        "/canvas/submit",
+        json={
+            **base_payload,
+            "turn_id": "TURN-ST034-CANVAS-2",
+            "strokes": [
+                {
+                    "stroke_id": "latest-stroke",
+                    "tool": "pen",
+                    "points": [{"x": 0.2, "y": 0.2}],
+                    "width": 0.01,
+                }
+            ],
+            "canvas_events": [
+                _canvas_event(question_id, 0),
+                _canvas_event(question_id, 1),
+            ],
+        },
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    stored = session_service._sessions[session_id]
+    assert stored.attempt_count == 0
+    assert len(stored.canvas_memory_by_question) == 1
+    memory = stored.canvas_memory_by_question[question_id]
+    assert memory.updated_turn_id == "TURN-ST034-CANVAS-2"
+    assert [stroke.stroke_id for stroke in memory.strokes] == ["latest-stroke"]
+    assert [event.order_index for event in memory.canvas_events] == [0, 1]
+    assert stored.canvas_state.snapshot_id == "TURN-ST034-CANVAS-2"
+    assert stored.canvas_state.ocr_result is not None
+    retrieved = client.get(
+        f"/session/{session_id}", params={"student_id": "ST034"}
+    ).json()
+    assert retrieved["canvas_memory_by_question"][question_id]["updated_turn_id"] == (
+        "TURN-ST034-CANVAS-2"
+    )
+    follow_up = client.post(
+        "/interaction",
+        json={
+            "session_id": session_id,
+            "student_id": "ST034",
+            "interaction_type": "ANSWER_SUBMISSION",
+            "input_source": "TEXT",
+            "turn_id": "TURN-ST034-TEXT-3",
+            "text_input": "I am still working on it.",
+            "current_phase": stored.current_phase,
+            "concept_id": stored.concept_id,
+            "question_id": question_id,
+            "hint_count": stored.hint_count,
+        },
+    )
+    assert follow_up.status_code == 200, follow_up.text
+    assert [event.order_index for event in captured_contexts[-1].canvas_events] == [
+        0,
+        1,
+    ]
+
+
+def test_interaction_duplicate_ignores_growing_canvas_events_after_advance() -> None:
+    session_id = _start_session("ST035")
+    question_id = session_service._sessions[session_id].question_id
+    request = _unified_voice_payload(
+        session_id,
+        "ST035",
+        "TURN-ST035-VOICE-1",
+        "My answer is x equals five.",
+    )
+    canvas_state = request["canvas_state"]
+    assert isinstance(canvas_state, dict)
+    canvas_state["canvas_events"] = [_canvas_event(question_id, 0)]
+
+    first = client.post("/interaction", json=request)
+    retry_canvas_state = {
+        **canvas_state,
+        "canvas_events": [
+            _canvas_event(question_id, 0),
+            _canvas_event(question_id, 1),
+        ],
+    }
+    duplicate = client.post(
+        "/interaction",
+        json={**request, "canvas_state": retry_canvas_state},
+    )
+
+    assert first.status_code == 200, first.text
+    assert duplicate.status_code == 200, duplicate.text
+    assert duplicate.json()["status"] == "DUPLICATE_TURN"
+    assert duplicate.json()["attempt_increment"] == 0
+    stored = session_service._sessions[session_id]
+    assert question_id is not None
+    assert stored.canvas_memory_by_question[question_id].updated_turn_id == (
+        "TURN-ST035-VOICE-1"
+    )
+
+
+def test_canvas_submit_uses_shared_spatial_tokens_for_grounded_draw(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_contexts: list[AdapterContext] = []
+
+    class MathMLVision:
+        async def recognize(self, snapshot_data_url: str) -> VisionOCRResult:
+            del snapshot_data_url
+            return VisionOCRResult(
+                raw_ocr_text="4-y",
+                detected_equation="4-y",
+                detected_steps=["4-y"],
+                detected_regions=[
+                    OCRTextRegion(
+                        text="4-y",
+                        x=0.05,
+                        y=0.05,
+                        w=0.35,
+                        h=0.15,
+                        confidence=0.95,
+                    )
+                ],
+                final_answer="x = 4",
+                confidence=0.95,
+                mathml_blocks=[
+                    "<math><mrow><mn>4</mn><mo>-</mo><mi>y</mi></mrow></math>"
+                ],
+                provider="mathpix",
+            )
+
+    async def incorrect_evaluation(
+        adapter: TutorEngineServiceAdapter,
+        context: AdapterContext,
+        rag: RAGResult,
+        student: StudentModelResult,
+    ) -> TutorResult:
+        del adapter, rag, student
+        captured_contexts.append(context)
+        return TutorResult(
+            evaluation="INCORRECT",
+            error_type="OPPOSITE_OPERATION",
+            intent="CANVAS_EVAL",
+            response_strategy="CORRECT_MISTAKE",
+            tutor_message="Check the sign.",
+            tutor_message_voice="Check the sign.",
+            voice_optimised=True,
+            hint_level=1,
+            answer_reveal_allowed=False,
+            confidence=0.95,
+            input_source="CANVAS",
+            recommended_conversation_action="GIVE_HINT",
+            question_completed=False,
+            attempt_increment=1,
+            mistake_classification=TutorMistakeClassification(
+                status="mistake_found",
+                mistake_step_id="step-1",
+                target_token_ids=["step-1:token-2"],
+                error_token="-",
+                expected_token="+",
+                confidence=0.95,
+            ),
+            annotation_intents=[
+                AnnotationIntent(kind="circle_target", target_step_id="step-1")
+            ],
+        )
+
+    adapters = provider.get_adapters()
+    monkeypatch.setattr(
+        canvas_service,
+        "get_adapters",
+        lambda: replace(adapters, vision=MathMLVision()),
+    )
+    monkeypatch.setattr(TutorEngineServiceAdapter, "evaluate", incorrect_evaluation)
+    session_id = _start_session("ST036")
+    question_id = session_service._sessions[session_id].question_id
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST036",
+            "turn_id": "TURN-ST036-CANVAS-1",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+            "strokes": [
+                {
+                    "stroke_id": "s1",
+                    "tool": "pen",
+                    "points": [{"x": 0.1, "y": 0.1}, {"x": 0.12, "y": 0.12}],
+                    "width": 0.01,
+                },
+                {
+                    "stroke_id": "s2",
+                    "tool": "pen",
+                    "points": [{"x": 0.2, "y": 0.1}, {"x": 0.25, "y": 0.1}],
+                    "width": 0.01,
+                },
+                {
+                    "stroke_id": "s3",
+                    "tool": "pen",
+                    "points": [{"x": 0.3, "y": 0.1}, {"x": 0.32, "y": 0.15}],
+                    "width": 0.01,
+                },
+            ],
+            "canvas_events": [_canvas_event(question_id, 0)],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(captured_contexts) == 1
+    context = captured_contexts[0]
+    assert context.has_canvas_evidence is True
+    assert context.canvas_mathml_blocks
+    assert len(context.spatial_tokens) == 3
+    assert context.canvas_events[0].question_id == question_id
+    assert response.json()["canvas_draw"]

@@ -23,14 +23,22 @@ from app.models.canvas import (
     CanvasSubmissionRecord,
     CanvasSubmitRequest,
 )
-from app.models.interaction import InteractionResponse
-from app.services.canvas_annotations import assign_step_ids, plan_canvas_draw
+from app.models.interaction import InteractionResponse, StaleTurnResponse
+from app.services.canvas_annotations import plan_canvas_draw
+from app.services.canvas_evidence import (
+    canvas_events_are_stale,
+    collect_canvas_evidence,
+    validate_canvas_payload,
+)
+from app.services.guided_question_opening import guided_question_opening
 from app.services.interaction_service import (
     _current_hint_level_from,
     _independent_correct_in_session,
+    _is_complete_correct_canvas,
     _initialize_restored_schema_phase,
     _phase_2_prompt_context,
     _schema_question,
+    _stale_turn_response,
     _guided_rescue,
     _scaffold_evaluation_context,
     process_answer_with_session_event,
@@ -45,7 +53,6 @@ from app.services.session_service import (
     reconcile_journey_conflict,
     record_canvas_submission,
 )
-from app.services.snapshot_store import build_reference, store_snapshot
 from app.services.student_model_debug import begin as begin_student_model_debug
 from app.services.student_model_debug import payload as student_model_debug_payload
 
@@ -56,8 +63,10 @@ _CANVAS_RELATION_PATTERN = re.compile(
 
 
 def _canvas_request_fingerprint(request: CanvasSubmitRequest) -> str:
+    payload = request.model_dump(mode="json", exclude_none=True)
+    payload.pop("canvas_events", None)
     encoded = json.dumps(
-        request.model_dump(mode="json", exclude_none=True),
+        payload,
         sort_keys=True,
         separators=(",", ":"),
     ).encode()
@@ -116,19 +125,13 @@ def _attachment_result(ocr: VisionOCRResult) -> TutorResult:
 async def submit_canvas(
     request: CanvasSubmitRequest,
     access_token: str,
-) -> InteractionResponse:
+) -> InteractionResponse | StaleTurnResponse:
     """Recognize a canvas snapshot, run it through the tutor, and store the result."""
 
     settings = get_settings()
     # /canvas/submit calls process_answer_with_session_event directly, so it never
     # passes through process_interaction's boundary.
     begin_student_model_debug(settings.debug_json_view)
-    if len(request.snapshot_data_url) > settings.max_snapshot_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Canvas snapshot exceeds the {settings.max_snapshot_bytes} byte limit.",
-        )
-
     # Load the session up front so a stale/unknown session 404s before we pay for OCR.
     session = _get_owned_session(request.session_id, request.student_id)
     if (
@@ -159,22 +162,27 @@ async def submit_canvas(
                     "retry_safe": True,
                 }
             )
+    validate_canvas_payload(request.strokes, request.canvas_events)
     session = await _initialize_restored_schema_phase(
         session,
         get_adapters().student_model,
         access_token,
     )
+    if canvas_events_are_stale(request.canvas_events, session.question_id):
+        return _stale_turn_response(session)
     schema_question = _schema_question(session)
     turn_session = session
     submission_id = request.turn_id or uuid4().hex
-    snapshot_reference = build_reference(submission_id)
-    store_snapshot(snapshot_reference, request.snapshot_data_url)
-
-    ocr_started = perf_counter()
-    ocr: VisionOCRResult = await get_adapters().vision.recognize(request.snapshot_data_url)
-    canvas_regions = assign_step_ids(ocr.detected_regions)
-    ocr = ocr.model_copy(update={"detected_regions": canvas_regions})
-    ocr_latency_ms = (perf_counter() - ocr_started) * 1000
+    canvas_evidence = await collect_canvas_evidence(
+        request.snapshot_data_url,
+        request.strokes,
+        submission_id,
+        get_adapters().vision,
+    )
+    snapshot_reference = canvas_evidence.snapshot_reference
+    ocr = canvas_evidence.ocr
+    canvas_regions = ocr.detected_regions
+    ocr_latency_ms = canvas_evidence.ocr_latency_ms
 
     written_work = _semantic_canvas_text(ocr)
     message = "\n".join(part for part in [written_work, request.transcript] if part)
@@ -226,6 +234,9 @@ async def submit_canvas(
         detected_steps=ocr.detected_steps,
         ocr_confidence=ocr.confidence,
         canvas_regions=canvas_regions,
+        canvas_mathml_blocks=ocr.mathml_blocks,
+        spatial_tokens=canvas_evidence.spatial_tokens,
+        canvas_events=request.canvas_events,
         conversation_history=recent_history,
         generated_question_rubric=session.generated_question_rubric,
         active_teaching_objective=session.active_teaching_objective,
@@ -233,7 +244,11 @@ async def submit_canvas(
         scaffold_evaluation_context=(
             _scaffold_evaluation_context(session) if scaffold_turn else None
         ),
-        has_canvas_evidence=session.current_phase == "INDEPENDENT_PRACTICE",
+        has_canvas_evidence=True,
+        canvas_solution_complete_candidate=_is_complete_correct_canvas(
+            ocr,
+            session.correct_answer,
+        ),
         phase3_submission_confirmed=(
             session.current_phase == "INDEPENDENT_PRACTICE"
             and request.submission_role != "VOICE_ATTACHMENT"
@@ -277,7 +292,11 @@ async def submit_canvas(
         )
     tutor_latency_ms = (perf_counter() - tutor_started) * 1000
     phase3_silent = turn_session.current_phase == "INDEPENDENT_PRACTICE"
-    canvas_draw = [] if phase3_silent else plan_canvas_draw(tutor, canvas_regions)
+    canvas_draw = (
+        []
+        if phase3_silent
+        else plan_canvas_draw(tutor, canvas_regions, canvas_evidence.spatial_tokens)
+    )
 
     latency = CanvasLatency(
         ocr_latency_ms=ocr_latency_ms,
@@ -292,10 +311,26 @@ async def submit_canvas(
         latency=latency,
         submitted_at=datetime.now(timezone.utc),
     )
+    question_advanced = (
+        updated_session.question_id is not None
+        and updated_session.question_id != turn_session.question_id
+        and updated_session.current_question is not None
+    )
+    response_message = tutor.tutor_message
+    response_message_voice = tutor.tutor_message_voice
+    response_action = tutor.recommended_conversation_action
+    if question_advanced and updated_session.current_phase == "GUIDED_PRACTICE":
+        response_message = guided_question_opening(
+            updated_session.current_question,
+            updated_session.question_type,
+            "Nice work. Here is the next question.",
+        )
+        response_message_voice = response_message
+        response_action = "ADVANCE_TO_NEXT_QUESTION"
     updated_history: list[ConversationMessage] = [
         *session.conversation_history,
         ConversationMessage(role="user", content=message),
-        ConversationMessage(role="assistant", content=tutor.tutor_message),
+        ConversationMessage(role="assistant", content=response_message),
     ]
     if rules.conversation_rules.max_recent_messages == 0:
         updated_history = []
@@ -306,6 +341,8 @@ async def submit_canvas(
             request.session_id,
             request.student_id,
             record,
+            request.strokes,
+            request.canvas_events,
         )
     else:
         updated_session = await record_canvas_submission(
@@ -316,6 +353,8 @@ async def submit_canvas(
             record,
             updated_history,
             student_result,
+            request.strokes,
+            request.canvas_events,
         )
     phase_changed = updated_session.current_phase != turn_session.current_phase
     status_to_return = (
@@ -332,12 +371,12 @@ async def submit_canvas(
         interaction_type="ANSWER_SUBMISSION",
         nudge_id=None,
         session=updated_session,
-        message=tutor.tutor_message,
-        message_voice=tutor.tutor_message_voice,
+        message=response_message,
+        message_voice=response_message_voice,
         visual_cue=tutor.visual_cue if tutor.visual_cue.show else None,
         scaffold_steps=tutor.scaffold_steps_delivered,
         session_summary=None,
-        conversation_action=tutor.recommended_conversation_action,
+        conversation_action=response_action,
         attempt_increment=tutor.attempt_increment,
         status=status_to_return,
         retry_safe=None,
@@ -345,11 +384,17 @@ async def submit_canvas(
     )
     response.submission_id = submission_id
     response.snapshot_reference = snapshot_reference
-    response.tutor = tutor
+    response.tutor = tutor.model_copy(
+        update={
+            "tutor_message": response_message,
+            "tutor_message_voice": response_message_voice,
+        }
+    )
     response.canvas_draw = canvas_draw
     response.ocr = None if phase3_silent else ocr
     response.latency = latency
     response.guided_rescue = _guided_rescue(schema_content_response)
+    response.advance_to_next_question = question_advanced
     if phase3_silent:
         response.phase3_submission_kind = "CANVAS"
         response.tutor = None

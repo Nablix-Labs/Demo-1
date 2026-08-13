@@ -117,6 +117,7 @@ class TutorEngineServiceAdapter:
                     canvas_regions=_coerce_canvas_regions(context.canvas_regions),
                     canvas_mathml_blocks=context.canvas_mathml_blocks,
                     spatial_tokens=context.spatial_tokens,
+                    canvas_events=context.canvas_events,
                     has_canvas_evidence=context.has_canvas_evidence,
                     canvas_solution_complete_candidate=(
                         context.canvas_solution_complete_candidate

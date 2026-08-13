@@ -3,7 +3,6 @@ import json
 import re
 from datetime import datetime, timezone
 from dataclasses import dataclass
-from time import perf_counter
 from typing import Final, Literal, cast
 from uuid import uuid4
 
@@ -43,13 +42,12 @@ from app.models.adapters import (
     Phase2PromptContext,
     RAGResult,
     StudentModelResult,
-    OCRTextRegion,
-    SpatialMathToken,
     TutorAction,
     TutorResult,
     VisualCue,
     VisionOCRResult,
 )
+from app.models.canvas_memory import CanvasEvent
 from app.models.fields import Phase
 from app.models.guided_learning import (
     ActiveScaffold,
@@ -87,11 +85,12 @@ from app.models.student_model_session import (
     SupportUsed,
 )
 from app.services.guided_question_opening import guided_question_opening
-from app.services.canvas_annotations import assign_step_ids, plan_canvas_draw
-from app.services.canvas_spatial import (
-    align_step_tokens,
-    associate_strokes_with_steps,
-    parse_mathml_tokens,
+from app.services.canvas_annotations import plan_canvas_draw
+from app.services.canvas_evidence import (
+    CanvasEvidence,
+    canvas_events_are_stale,
+    collect_canvas_evidence,
+    validate_canvas_payload,
 )
 from app.services.phase_transition import (
     DEFAULT_TRANSITION_MESSAGE,
@@ -102,6 +101,7 @@ from app.services.session_service import (
     _apply_schema_event,
     _get_owned_session_for_turn,
     cache_interaction_response,
+    build_canvas_memory_update,
     get_canvas_submission,
     interaction_lock_for,
     inactivity_policy,
@@ -121,7 +121,6 @@ from app.services.student_model_session import (
 from app.core.exceptions import JourneyVersionConflict
 from app.services.student_model_debug import begin as begin_student_model_debug
 from app.services.student_model_debug import payload as student_model_debug_payload
-from app.services.snapshot_store import build_reference, store_snapshot
 
 
 _NUMBER_WORD_VALUES: Final[dict[str, str]] = {
@@ -249,32 +248,6 @@ def _support_narration_context(
     return None
 
 
-@dataclass(frozen=True)
-class _CanvasEvidence:
-    submission_id: str
-    snapshot_reference: str
-    ocr: VisionOCRResult
-    spatial_tokens: list[SpatialMathToken]
-    ocr_latency_ms: float
-
-
-def _normalised_mathml_tokens(mathml: str) -> str:
-    return "".join(token.text for token in parse_mathml_tokens(mathml)).replace(" ", "")
-
-
-def _with_confirmed_mathml_regions(ocr: VisionOCRResult) -> VisionOCRResult:
-    """Attach MathML only when Mathpix returned one unambiguous block per line."""
-
-    if len(ocr.mathml_blocks) != len(ocr.detected_regions):
-        return ocr
-    regions: list[OCRTextRegion] = []
-    for region, mathml in zip(ocr.detected_regions, ocr.mathml_blocks):
-        if _normalised_mathml_tokens(mathml) != region.text.replace(" ", ""):
-            return ocr
-        regions.append(region.model_copy(update={"mathml": mathml}))
-    return ocr.model_copy(update={"detected_regions": regions})
-
-
 def _is_complete_correct_canvas(
     ocr: VisionOCRResult | None,
     correct_answer: str | None,
@@ -288,45 +261,18 @@ def _is_complete_correct_canvas(
     )
 
 
-async def _canvas_evidence_for(request: InteractionRequest) -> _CanvasEvidence | None:
+async def _canvas_evidence_for(request: InteractionRequest) -> CanvasEvidence | None:
     canvas_state = request.canvas_state
     if canvas_state is None:
         return None
-    settings = get_settings()
-    if len(canvas_state.snapshot_data_url) > settings.max_snapshot_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Canvas snapshot exceeds the {settings.max_snapshot_bytes} byte limit.",
-        )
     if request.turn_id is None:
         raise RuntimeError("validated interaction is missing turn_id")
-
-    snapshot_reference = build_reference(request.turn_id)
-    store_snapshot(snapshot_reference, canvas_state.snapshot_data_url)
-    started = perf_counter()
-    ocr = await get_adapters().vision.recognize(canvas_state.snapshot_data_url)
-    ocr = ocr.model_copy(update={"detected_regions": assign_step_ids(ocr.detected_regions)})
-    ocr = _with_confirmed_mathml_regions(ocr)
-    strokes_by_step = associate_strokes_with_steps(canvas_state.strokes, ocr.detected_regions)
-    spatial_tokens: list[SpatialMathToken] = []
-    for region in ocr.detected_regions:
-        if region.step_id is None or region.mathml is None:
-            continue
-        spatial_tokens.extend(
-            align_step_tokens(
-                region.step_id,
-                region.mathml,
-                region.text,
-                strokes_by_step.get(region.step_id, []),
-                region,
-            )
-        )
-    return _CanvasEvidence(
-        submission_id=request.turn_id,
-        snapshot_reference=snapshot_reference,
-        ocr=ocr,
-        spatial_tokens=spatial_tokens,
-        ocr_latency_ms=(perf_counter() - started) * 1000,
+    validate_canvas_payload(canvas_state.strokes, canvas_state.canvas_events)
+    return await collect_canvas_evidence(
+        canvas_state.snapshot_data_url,
+        canvas_state.strokes,
+        request.turn_id,
+        get_adapters().vision,
     )
 
 
@@ -1781,7 +1727,41 @@ def _turn_is_stale(request: InteractionRequest, session: SessionRecord) -> bool:
             session.question_id is not None
             and request.question_id != session.question_id
         )
+        or (
+            request.canvas_state is not None
+            and canvas_events_are_stale(
+                request.canvas_state.canvas_events,
+                session.question_id,
+            )
+        )
     )
+
+
+def _canvas_memory_update_from_request(
+    request: InteractionRequest,
+    session: SessionRecord,
+) -> dict[str, object]:
+    if request.canvas_state is None:
+        return {}
+    return build_canvas_memory_update(
+        session,
+        session.question_id,
+        request.turn_id,
+        request.canvas_state.strokes,
+        request.canvas_state.canvas_events,
+    )
+
+
+def _canvas_events_for_context(
+    request: InteractionRequest,
+    session: SessionRecord,
+) -> list[CanvasEvent]:
+    if request.canvas_state is not None:
+        return request.canvas_state.canvas_events
+    if session.question_id is None:
+        return []
+    memory = session.canvas_memory_by_question.get(session.question_id)
+    return memory.canvas_events if memory is not None else []
 
 
 def _guided_support_levels(session: SessionRecord) -> tuple[SupportUsed, SupportUsed]:
@@ -2039,6 +2019,9 @@ def _cache_response(
 
 def _request_fingerprint(request: InteractionRequest) -> str:
     payload = request.model_dump(mode="json", exclude_none=True)
+    canvas_state = payload.get("canvas_state")
+    if isinstance(canvas_state, dict):
+        canvas_state.pop("canvas_events", None)
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
 
@@ -2943,6 +2926,7 @@ async def _process_interaction(
                 "attempt_count": session.attempt_count,
                 "question_completed": session.question_completed,
                 "conversation_history": clarification_history,
+                **_canvas_memory_update_from_request(request, session),
                 **_turn_updates(
                     request,
                     "REQUESTED_CLARIFICATION",
@@ -3053,6 +3037,7 @@ async def _process_interaction(
                     message,
                     rules.conversation_rules.max_recent_messages,
                 ),
+                **_canvas_memory_update_from_request(request, session),
                 **_turn_updates(request, "REQUESTED_CLARIFICATION", "CLARIFICATION"),
             },
         )
@@ -3153,6 +3138,7 @@ async def _process_interaction(
         canvas_regions=ocr.detected_regions if ocr is not None else [],
         canvas_mathml_blocks=ocr.mathml_blocks if ocr is not None else [],
         spatial_tokens=(canvas_evidence.spatial_tokens if canvas_evidence is not None else []),
+        canvas_events=_canvas_events_for_context(request, session),
         has_canvas_evidence=canvas_evidence is not None,
         canvas_solution_complete_candidate=canvas_solution_complete_candidate,
         phase3_submission_confirmed=(
@@ -3193,6 +3179,7 @@ async def _process_interaction(
                     message,
                     rules.conversation_rules.max_recent_messages,
                 ),
+                **_canvas_memory_update_from_request(request, session),
                 **_turn_updates(request, "REQUESTED_CLARIFICATION", "CLARIFICATION"),
             },
         )
@@ -3237,8 +3224,8 @@ async def _process_interaction(
             session.hint_count,
             session.current_phase,
             request.transcript_confidence,
-            request.canvas_snapshot_id,
-            None,
+            canvas_evidence.submission_id if canvas_evidence is not None else request.canvas_snapshot_id,
+            canvas_evidence.ocr if canvas_evidence is not None else None,
             False,
             False,
             [],
@@ -3251,6 +3238,7 @@ async def _process_interaction(
                     fallback,
                     rules.conversation_rules.max_recent_messages,
                 ),
+                **_canvas_memory_update_from_request(request, session),
                 **_turn_updates(
                     request,
                     session.last_tutor_action,
@@ -3520,6 +3508,7 @@ async def _process_interaction(
         "selected_error_code": tutor.selected_error_code,
         **_schema_scaffold_state(schema_content_response),
         **scaffold_turn_updates,
+        **_canvas_memory_update_from_request(request, turn_session),
     }
     if scaffold_turn and not tutor.scaffold_original_answer_correct:
         conversation_action = "ASK_QUESTION"
@@ -3645,6 +3634,7 @@ async def _process_interaction(
         state_updates["active_visual_cue"] = visual_cue
 
     next_phase = session.current_phase
+    canvas_is_for_active_question = session.question_id == turn_session.question_id
     updated_session = await update_interaction_state(
         request.session_id,
         request.student_id,
@@ -3653,8 +3643,14 @@ async def _process_interaction(
         next_hint_count,
         next_phase,
         request.transcript_confidence,
-        canvas_evidence.submission_id if canvas_evidence is not None else request.canvas_snapshot_id,
-        ocr,
+        (
+            canvas_evidence.submission_id
+            if canvas_evidence is not None and canvas_is_for_active_question
+            else request.canvas_snapshot_id
+            if canvas_is_for_active_question
+            else None
+        ),
+        ocr if canvas_is_for_active_question else None,
         visual_cue is not None,
         len(scaffold_steps) > 0,
         scaffold_steps,
