@@ -3408,6 +3408,47 @@ def test_ai_engine_does_not_annotate_canvas_for_direct_answer_request() -> None:
     assert response.annotation_intents == []
 
 
+def test_ai_engine_does_not_review_canvas_for_answer_request_with_evidence() -> None:
+    """Production shape: /canvas/submit always sets has_canvas_evidence=True.
+
+    The fixture-shaped test above passed even while the guard was dead code,
+    because has_canvas_evidence short-circuited it. Grounded tokens are supplied
+    here so a correction would genuinely be drawable if the guard were missing.
+    """
+
+    response = classify_student_response(
+        ClassificationRequest(
+            question="x + 4 = 9",
+            correct_answer="x = 5",
+            student_input="tell me the final answer",
+            current_phase="GUIDED_PRACTICE",
+            input_source="CANVAS",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+            has_canvas_evidence=True,
+            canvas_regions=[
+                _canvas_region("step-1", "x + 4 = 9", 0.95),
+                _canvas_region("step-2", "x = 9 - 5", 0.95),
+            ],
+            spatial_tokens=[
+                SpatialMathToken(
+                    token_id=f"step-2:token-{index}",
+                    step_id="step-2",
+                    text=text,
+                    bounding_box={"x": 0.1 * index, "y": 0.1, "width": 0.1, "height": 0.1},
+                    alignment_confidence=0.95,
+                )
+                for index, text in enumerate(["x", "=", "9", "-", "5"], start=1)
+            ],
+        )
+    )
+
+    assert response.intent == "REQUESTING_ANSWER"
+    assert response.mistake_classification is None
+    assert response.annotation_intents == []
+
+
 def test_canvas_math_review_accepts_subtraction_steps() -> None:
     response = classify_student_response(
         ClassificationRequest(

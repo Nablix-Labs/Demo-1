@@ -4245,6 +4245,12 @@ def _canvas_review_for(
 
     if not request.has_canvas_evidence and request.input_source != "CANVAS":
         return None
+    # Asking for the answer is not offering work to be marked. Denylist rather than
+    # allowlist: "Is this right?" reads as ASKING_QUESTION yet is a real submission.
+    # Checked independently of has_canvas_evidence, which is always true on
+    # /canvas/submit and so short-circuited this guard into dead code before.
+    if detect_student_intent(request.student_input, rules) == "REQUESTING_ANSWER":
+        return None
     return review_canvas_math(
         question=request.question,
         correct_answer=request.correct_answer,
