@@ -1566,7 +1566,10 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
                 "Which operation should you undo first?"
             )
             assert stuck.json()["current_scaffold_step_id"] == "SCF-T02-M1-S1"
-            assert stuck.json()["message"] == "Which operation should you undo first?"
+            # The scaffold prompt is surfaced beside the tutor reply, not as it
+            # (see "feat: narrate guided support in tutor responses").
+            assert stuck.json()["message"]
+            assert stuck.json()["message"] != "Which operation should you undo first?"
         assert "scaffold_expected_response" not in stuck.json()
         assert client.get(f"/session/{session_id}", params={"student_id": "ST001"}).json()["stuck_count"] == (
             expected_stuck_count
@@ -1727,6 +1730,7 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
             "cue_id": "VC-T02-COEFFICIENT-COUNT",
             "cue_type": None,
             "description": "Count the equal letter terms.",
+            "asset_url": None,
             "actions": [
                 {
                     "action": "HIGHLIGHT_TOKEN",
@@ -1762,7 +1766,11 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert events[-1]["micro_skill_id"] == "T02.M1"
     assert events[-1]["triggering_response"] == "x = 4"
     assert events[-1]["error_code"] == "ERR-T02-SUBTRACTION-MISAPPLIED"
-    assert guided_incorrect.json()["support_reason_code"] == "WRONG_4_INTERVENTION"
+    # Wrong-4 defers to the Student Model's scaffold routing reason when a
+    # scaffold is actually served (see "fix(interaction): require evidence for
+    # Wrong-4 escalation").
+    assert guided_incorrect.json()["support_reason_code"] == "GUIDED_SCAFFOLD_REQUIRED"
+    assert guided_incorrect.json()["intervention_triggered"] is False
     assert guided_incorrect.json()["show_scaffold_panel"] is True
     assert guided_incorrect.json()["current_scaffold_step_id"] == "SCF-T02-M1-S1"
 

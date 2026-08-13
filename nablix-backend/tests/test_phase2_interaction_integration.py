@@ -11,6 +11,7 @@ from app.ai_engine.schemas import (
     ExplainAgainResponse,
     OpenAIExplainAgainMessage,
 )
+from app.ai_engine.openai_client import OpenAITutorMessage
 from app.core.config import Settings
 from app.main import app
 from app.models.adapters import VisualCue as AdapterVisualCue
@@ -112,6 +113,18 @@ def schema_student_model(monkeypatch: pytest.MonkeyPatch) -> None:
                 answer_reveal_allowed=False,
                 progression_change_requested=False,
                 attempt_increment=0,
+            )
+
+        def build_tutor_message(self, **kwargs: object) -> OpenAITutorMessage:
+            # Guided support is narrated through the AI engine since
+            # "feat: narrate guided support in tutor responses".
+            del kwargs
+            return OpenAITutorMessage(
+                tutor_message="Look at the support shown and try the next step.",
+                tutor_message_voice_optimised=(
+                    "Look at the support shown and try the next step."
+                ),
+                confidence=0.9,
             )
 
     monkeypatch.setattr(
@@ -285,18 +298,20 @@ def test_explain_again_is_cached_and_does_not_grade(
     student_id = "ST152"
     session = _start(student_id)
     stored_session = session_service._sessions[str(session["session_id"])]
+    # Explain Again reads the persisted authored cue since
+    # "fix: preserve authored visual cue payload".
     session_service._sessions[str(session["session_id"])] = stored_session.model_copy(
-        update={"show_visual_cue": True}
-    )
-    monkeypatch.setattr(
-        interaction_service,
-        "_schema_visual_cue",
-        lambda event: AdapterVisualCue(
-            show=True,
-            cue_type="VC-T01-ADD-NOT-MULTIPLY",
-            description="The starting value changes while the operation stays fixed.",
-            actions=[],
-        ),
+        update={
+            "show_visual_cue": True,
+            "active_visual_cue": AdapterVisualCue(
+                show=True,
+                cue_type="VC-T01-ADD-NOT-MULTIPLY",
+                description=(
+                    "The starting value changes while the operation stays fixed."
+                ),
+                actions=[],
+            ),
+        }
     )
     request = _interaction(
         session,
