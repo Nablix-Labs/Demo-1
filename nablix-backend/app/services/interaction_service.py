@@ -1270,6 +1270,7 @@ def _schema_visual_cue(
         content_id = item.get("content_id")
         cue_type = item.get("cue_type", item.get("visual_cue_type"))
         description = item.get("description")
+        asset_url = item.get("asset_url")
         actions = item.get("actions", [])
         if not isinstance(content_id, str) or not isinstance(description, str):
             raise RuntimeError("Student Model returned a malformed visual cue.")
@@ -1277,11 +1278,14 @@ def _schema_visual_cue(
             isinstance(action, dict) for action in actions
         ):
             raise RuntimeError("Student Model returned malformed visual cue actions.")
+        if asset_url is not None and not isinstance(asset_url, str):
+            raise RuntimeError("Student Model returned a malformed visual cue asset URL.")
         return VisualCue(
             show=True,
             cue_id=content_id,
             cue_type=cue_type if isinstance(cue_type, str) else None,
             description=description,
+            asset_url=asset_url,
             actions=actions,
         )
     return None
@@ -1888,6 +1892,7 @@ def _response_from(
         message_voice = ""
         visual_cue = None
         scaffold_steps = []
+    visible_visual_cue = visual_cue or session.active_visual_cue
     return InteractionResponse(
         session_id=session_id,
         student_id=student_id,
@@ -1918,8 +1923,8 @@ def _response_from(
         support_message=None if phase3_silent else _active_support_message(session),
         show_canvas=session.show_canvas,
         show_hint_button=False if phase3_silent else session.show_hint_button,
-        show_visual_cue=False if phase3_silent else session.show_visual_cue,
-        visual_cue=visual_cue,
+        show_visual_cue=False if phase3_silent else visible_visual_cue is not None,
+        visual_cue=None if phase3_silent else visible_visual_cue,
         show_scaffold_panel=False if phase3_silent else session.show_scaffold_panel,
         scaffold_id=session.scaffold_id,
         current_scaffold_step_id=session.current_scaffold_step_id,
@@ -2703,11 +2708,7 @@ async def _explain_again_interaction_response(
             status_code=409,
             detail="EXPLAIN_AGAIN has no unresolved Guided Practice component.",
         )
-    visual_cue = (
-        _schema_visual_cue(session.student_model_event)
-        if session.show_visual_cue
-        else None
-    )
+    visual_cue = session.active_visual_cue
     active_support_level, highest_support_used = _guided_support_levels(session)
     recorded_misconception = _recorded_misconception(
         session,
@@ -3615,6 +3616,8 @@ async def _process_interaction(
             expected_student_response,
         )
     )
+    if visual_cue is not None:
+        state_updates["active_visual_cue"] = visual_cue
 
     next_phase = session.current_phase
     updated_session = await update_interaction_state(
