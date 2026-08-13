@@ -385,7 +385,7 @@ def classify_scaffold_response(
         error_type=None if satisfied else "INSUFFICIENT_INFORMATION",
         response_strategy="CONFIRM_CORRECT" if satisfied else "CLARIFY",
         hint_level=None,
-        canvas_review=None,
+        canvas_review=_canvas_review_for(request, rules, result.confidence),
         reasoning_complete=satisfied,
     )
     response = build_tutor_response(
@@ -3110,6 +3110,11 @@ def build_guided_tutor_response(
     objective: ActiveTeachingObjective | None,
 ) -> TutorResponse:
     state = evaluation.student_state
+    canvas_review: CanvasMathReview | None = _canvas_review_for(
+        request,
+        rules,
+        evaluation.confidence,
+    )
     response_strategy: ResponseStrategy = (
         "CONFIRM_CORRECT"
         if state == "CORRECT"
@@ -3130,7 +3135,13 @@ def build_guided_tutor_response(
     )
     response = TutorResponse(
         evaluation=mapped_evaluation,
-        error_type="UNKNOWN_ERROR" if state == "WRONG" else None,
+        error_type=(
+            canvas_review.error_type
+            if canvas_review is not None and canvas_review.error_type is not None
+            else "UNKNOWN_ERROR"
+            if state == "WRONG"
+            else None
+        ),
         intent="EXPRESSING_CONFUSION" if state == "STUCK" else "SUBMITTING_ANSWER",
         response_strategy=response_strategy,
         tutor_message=evaluation.tutor_message,
@@ -3139,13 +3150,25 @@ def build_guided_tutor_response(
         hint_level=None,
         scaffold_steps_delivered=[],
         visual_cue=VisualCue(show=False, cue_type=None, description=None),
-        canvas_feedback=CanvasFeedback(
-            has_feedback=False,
-            step_feedback=[],
-            highlight_instruction=None,
+        canvas_feedback=(
+            canvas_review.canvas_feedback
+            if canvas_review is not None
+            else CanvasFeedback(
+                has_feedback=False,
+                step_feedback=[],
+                highlight_instruction=None,
+            )
         ),
-        mistake_classification=None,
-        annotation_intents=[],
+        mistake_classification=(
+            canvas_review.mistake_classification
+            if canvas_review is not None
+            else None
+        ),
+        annotation_intents=(
+            canvas_review.annotation_intents
+            if canvas_review is not None
+            else []
+        ),
         next_phase_recommendation=request.current_phase,
         # A tutor may safely discuss an answer the learner has already supplied
         # or selected; it must not introduce a new final answer.
@@ -4156,19 +4179,11 @@ def build_tutor_decision(
     hint_level: HintLevel | None,
     confidence: float,
 ) -> TutorDecision:
-    canvas_review: CanvasMathReview | None = None
-    if request.has_canvas_evidence or (
-        request.input_source == "CANVAS" and intent == "SUBMITTING_ANSWER"
-    ):
-        canvas_review = review_canvas_math(
-            question=request.question,
-            correct_answer=request.correct_answer,
-            current_phase=request.current_phase,
-            canvas_regions=request.canvas_regions,
-            spatial_tokens=request.spatial_tokens,
-            config=rules.canvas_review,
-            confidence=confidence,
-        )
+    canvas_review: CanvasMathReview | None = _canvas_review_for(
+        request,
+        rules,
+        confidence,
+    )
 
     effective_error_type: ErrorType | None = (
         canvas_review.error_type
@@ -4218,6 +4233,26 @@ def build_tutor_decision(
         hint_level=effective_hint_level,
         canvas_review=canvas_review,
         reasoning_complete=has_reasoning_evidence(request, rules),
+    )
+
+
+def _canvas_review_for(
+    request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
+    confidence: float,
+) -> CanvasMathReview | None:
+    """Review Canvas evidence for every tutor path that may annotate submitted work."""
+
+    if not request.has_canvas_evidence and request.input_source != "CANVAS":
+        return None
+    return review_canvas_math(
+        question=request.question,
+        correct_answer=request.correct_answer,
+        current_phase=request.current_phase,
+        canvas_regions=request.canvas_regions,
+        spatial_tokens=request.spatial_tokens,
+        config=rules.canvas_review,
+        confidence=confidence,
     )
 
 

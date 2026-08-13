@@ -3529,14 +3529,61 @@ def test_canvas_math_review_emits_grounded_tokens_for_correctable_error() -> Non
     assert response.mistake_classification.expected_token == "4"
 
 
-def test_canvas_math_review_writes_grounded_direct_expression_correction() -> None:
+def test_canvas_math_review_writes_grounded_direct_expression_correction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class GuidedClient:
+        def evaluate_guided_turn(self, **kwargs: object) -> GuidedEvaluation:
+            objective = cast(ActiveTeachingObjective, kwargs["active_objective"])
+            return GuidedEvaluation(
+                student_state="WRONG",
+                newly_confirmed_concept_ids=[],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=objective.missing_concept_ids,
+                selected_error_code=None,
+                confidence=0.95,
+                next_objective=objective,
+                tutor_message="Check the fixed amount in your rule.",
+                tutor_message_voice="Check the fixed amount in your rule.",
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: GuidedClient(),
+    )
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-001",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="CONCEPT_GENERAL_RULE",
+                description="The general rule is n + 5.",
+                required=True,
+            )
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="direct-expression",
+        prompt_version="1.0.0",
+    )
     response = classify_student_response(
         ClassificationRequest(
+            question_id="Q-T01-001",
+            question_type="SHORT_RESPONSE",
             question=(
                 "3 + 5, 9 + 5, 14 + 5. Use n for the changing starting "
                 "number. Write the general rule."
             ),
             correct_answer="n+5",
+            answer_spec=AnswerSpec(
+                answer_spec_id="ANS-T01-001",
+                canonical_answer="n+5",
+                accepted_answers=[],
+                verification_method="STRUCTURED_TEXT_MATCH",
+                explanation_required=False,
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            generated_question_rubric=rubric,
             student_input="n+b",
             current_phase="GUIDED_PRACTICE",
             input_source="CANVAS",
