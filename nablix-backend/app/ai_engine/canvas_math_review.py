@@ -201,7 +201,7 @@ def _review_direct_expression(
     tokens: list[SpatialMathToken] = [
         token
         for token in spatial_tokens
-        if token.step_id == step_id and token.alignment_confidence >= 0.9
+        if token.step_id == step_id
     ]
     actual: str = "".join(_normalise_token_text(token.text) for token in tokens)
     expected: str = _normalise_token_text(correct_answer)
@@ -217,7 +217,11 @@ def _review_direct_expression(
         if expected.startswith(prefix) and expected.endswith(suffix):
             replacement_end: int = len(expected) - len(suffix) if suffix else len(expected)
             replacement: str = expected[len(prefix) : replacement_end]
-            if replacement != "" and replacement != token_text:
+            if (
+                replacement != ""
+                and replacement != token_text
+                and token.alignment_confidence >= 0.9
+            ):
                 candidates.append((token, replacement))
         offset += len(token_text)
     if len(candidates) != 1:
