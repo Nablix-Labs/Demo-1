@@ -650,6 +650,23 @@ export function sessionTopicCode(record: SessionRecord | null | undefined): stri
   return record?.student_model_event?.journey_state?.topic_id ?? null;
 }
 
+/**
+ * What to CALL this session's topic on screen, or null when we don't know.
+ *
+ * The only human-readable name the backend sends is the orientation video's
+ * title — `journey_state.topic_id` is a code ('ALG-ORI-02'), which is not
+ * something to show a student. Null is a real answer here and callers must
+ * handle it: the alternative is what row 42 reported, a Review header
+ * confidently labelled "Linear equations" on a session about something else,
+ * because the screen fell back to mock content instead of admitting it had
+ * nothing.
+ */
+export function sessionTopicTitle(record: SessionRecord | null | undefined): string | null {
+  const video = orientationBundle(record)?.delivery_sequence
+    .find((item) => item.video?.title)?.video;
+  return video?.title?.trim() || null;
+}
+
 // ── Phase 0 → 1 lifecycle ────────────────────────────────────────────────────
 // The backend derives micro-skills from the answers themselves, so the client
 // never sends micro_skill_ids (Chirudeva, 2026-07-27).

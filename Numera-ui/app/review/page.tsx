@@ -23,7 +23,7 @@ import { useDemoTutor, resetSessionStart } from '@/hooks/useDemoTutor';
 import { useFlowNav } from '@/lib/useFlowNav';
 import { demoFor, type DemoWorksheet } from '@/lib/demoContent';
 import { cn } from '@/lib/cn';
-import type { FiveCategorySummary, QuestionOutcome } from '@/lib/api';
+import { sessionTopicTitle, type FiveCategorySummary, type QuestionOutcome } from '@/lib/api';
 import { speakTutor, stopTutorSpeech } from '@/lib/tts';
 
 /** Real session outcomes rendered through the same worksheet layout. */
@@ -68,6 +68,7 @@ export default function ReviewPage() {
   const completePhase = useNumeraStore((s) => s.completePhase);
   const currentTopicId = useNumeraStore((s) => s.currentTopicId);
   const sessionSummary = useNumeraStore((s) => s.sessionSummary);
+  const backendSession = useNumeraStore((s) => s.backendSession);
   const sessionReview = useNumeraStore((s) => s.sessionReview);
   const { decideReview, goStage } = useFlowNav();
   const tutor = useDemoTutor();
@@ -106,6 +107,14 @@ export default function ReviewPage() {
   const live = outcomes.length > 0;
   const WORKSHEETS = live ? outcomeWorksheets(outcomes) : demo.worksheets;
 
+  // Row 42: the header read "Linear equations · today" for every student,
+  // because it used the mock worksheet's label even on a real session — so a
+  // student who had spent the lesson on "What Is Algebra?" was told otherwise.
+  // The demo label is correct for demo worksheets and wrong for anything else;
+  // when the session is real and unnamed, say only when it happened.
+  const topicLabel = live ? sessionTopicTitle(backendSession) : demo.label;
+  const subtitle = [topicLabel, 'today'].filter(Boolean).join(' · ');
+
   const total = WORKSHEETS.length;
   const done = i >= total;                 // past the last sheet → final summary
   const ws = WORKSHEETS[Math.min(i, total - 1)];
@@ -142,7 +151,7 @@ export default function ReviewPage() {
   if (apiEnabled && endFailed && !sessionSummary) {
     return (
       <PhaseGate phase="review">
-        <PageShell title="Review & feedback" subtitle={`${demo.label} · today`}>
+        <PageShell title="Review & feedback" subtitle={subtitle}>
           <div className="rounded-lg border border-muted-gray bg-white px-6 py-8 flex flex-col items-start gap-3">
             <div className="text-[11px] font-semibold tracking-widest uppercase text-slate-blue">
               {endFailed === 'empty' ? 'Nothing to review yet' : 'Review unavailable'}
@@ -168,7 +177,7 @@ export default function ReviewPage() {
     <PhaseGate phase="review">
     <PageShell
       title="Review & feedback"
-      subtitle={`${demo.label} · today`}
+      subtitle={subtitle}
       action={<Chip tone="solid">{score} / {total}</Chip>}
     >
       <div className="flex flex-col gap-6">
