@@ -592,7 +592,10 @@ def test_guided_follow_up_blocks_unresolved_component_reveal() -> None:
 
     aligned = classifier.align_guided_follow_up(evaluation, request, rubric, objective)
 
-    assert aligned.tutor_message == "You're on the right track. Which part can take different possible values?"
+    # Nothing was confirmed this turn, so the LLM's praise is unsupported and is
+    # stripped before the canned PARTIAL prefix is applied
+    # (see "fix: remove unsupported guided praise").
+    assert aligned.tutor_message == "Good. Which part can take different possible values?"
     assert aligned.tutor_message_voice == aligned.tutor_message
 
 
@@ -3404,7 +3407,9 @@ def test_ai_engine_does_not_annotate_canvas_for_direct_answer_request() -> None:
 
     assert response.intent == "REQUESTING_ANSWER"
     assert response.answer_reveal_allowed is False
-    assert response.mistake_classification is None
+    # Canvas review runs on every tutor path since "fix: run Canvas review in
+    # guided tutor paths"; a direct answer request must still draw nothing.
+    assert response.mistake_classification.status == "no_mistake"
     assert response.annotation_intents == []
 
 
@@ -5381,9 +5386,10 @@ def test_guided_exact_notation_stuck_uses_question_aware_llm_message(
     )
 
     assert response.guided_student_state == "STUCK"
+    # The bespoke stuck wording was folded into the shared prefix map by
+    # "fix: retry invalid guided tutor wording once".
     assert response.tutor_message == (
-        "That’s okay—we’ll take it one part at a time. "
-        "State the remaining idea in your own words."
+        "That's okay. State the remaining idea in your own words."
     )
     assert "x" not in response.tutor_message
     assert response.attempt_increment == 0
