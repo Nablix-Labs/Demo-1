@@ -12,6 +12,7 @@ from app.services.canvas_annotations import assign_step_ids
 from app.services.canvas_spatial import (
     align_step_tokens,
     associate_strokes_with_steps,
+    canonical_math_token_text,
     parse_mathml_tokens,
 )
 from app.services.snapshot_store import build_reference, store_snapshot
@@ -64,8 +65,8 @@ def canvas_events_are_stale(
 
 
 def _normalised_mathml_tokens(mathml: str) -> str:
-    return "".join(token.text for token in parse_mathml_tokens(mathml)).replace(
-        " ", ""
+    return canonical_math_token_text(
+        "".join(token.text for token in parse_mathml_tokens(mathml))
     )
 
 
@@ -76,7 +77,7 @@ def _with_confirmed_mathml_regions(ocr: VisionOCRResult) -> VisionOCRResult:
         return ocr
     regions: list[OCRTextRegion] = []
     for region, mathml in zip(ocr.detected_regions, ocr.mathml_blocks):
-        if _normalised_mathml_tokens(mathml) != region.text.replace(" ", ""):
+        if _normalised_mathml_tokens(mathml) != canonical_math_token_text(region.text):
             return ocr
         regions.append(region.model_copy(update={"mathml": mathml}))
     return ocr.model_copy(update={"detected_regions": regions})

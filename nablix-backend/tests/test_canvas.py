@@ -25,7 +25,7 @@ from app.models.adapters import (
     VisionOCRResult,
 )
 from app.models.canvas import CanvasSubmitRequest
-from app.services import canvas_service, interaction_service, session_service
+from app.services import canvas_evidence, canvas_service, interaction_service, session_service
 from app.services.snapshot_store import get_snapshot
 from app.models.student_model_session import (
     GuidedAttemptEvent,
@@ -41,6 +41,49 @@ from tests.test_session_events import (
 client = TestClient(app, headers={"Authorization": "Bearer test-token"})
 
 VALID_SNAPSHOT_DATA_URL = "data:image/png;base64,aGVsbG8="
+
+
+@pytest.mark.parametrize(
+    ("ocr_text", "mathml_operator"),
+    [
+        ("n-5", "−"),
+        ("n+5", "＋"),
+        ("n*5", "×"),
+        ("n/5", "÷"),
+        ("n=5", "＝"),
+    ],
+)
+def test_mathml_confirmation_accepts_equivalent_operator_glyphs(
+    ocr_text: str,
+    mathml_operator: str,
+) -> None:
+    left, right = ocr_text[0], ocr_text[-1]
+    ocr = VisionOCRResult(
+        raw_ocr_text=ocr_text,
+        detected_equation=ocr_text,
+        detected_steps=[ocr_text],
+        detected_regions=[
+            OCRTextRegion(
+                step_id="step-1",
+                text=ocr_text,
+                x=0.1,
+                y=0.1,
+                w=0.3,
+                h=0.1,
+                confidence=1.0,
+            )
+        ],
+        final_answer=ocr_text,
+        confidence=1.0,
+        mathml_blocks=[
+            f"<math><mi>{left}</mi><mo>{mathml_operator}</mo><mn>{right}</mn></math>"
+        ],
+        provider="mathpix",
+    )
+
+    confirmed = canvas_evidence._with_confirmed_mathml_regions(ocr)
+
+    assert confirmed.detected_regions[0].mathml == ocr.mathml_blocks[0]
 
 
 def _unified_voice_payload(
