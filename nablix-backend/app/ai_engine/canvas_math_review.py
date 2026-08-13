@@ -134,7 +134,15 @@ def review_canvas_math(
             config.max_expression_characters,
         )
     except CanvasMathParseError:
-        return uncertain
+        direct_review: CanvasMathReview | None = _review_direct_expression(
+            correct_answer,
+            current_phase,
+            canvas_regions,
+            spatial_tokens,
+            config,
+            confidence,
+        )
+        return direct_review if direct_review is not None else uncertain
 
     previous_equation: Equality = original_equation
     previous_solutions: Set = expected_solutions
@@ -173,6 +181,91 @@ def review_canvas_math(
             confidence=confidence,
         ),
         annotation_intents=[],
+    )
+
+
+def _review_direct_expression(
+    correct_answer: str,
+    current_phase: LearningPhase,
+    canvas_regions: list[CanvasTextRegion],
+    spatial_tokens: list[SpatialMathToken],
+    config: CanvasReviewConfig,
+    confidence: float,
+) -> CanvasMathReview | None:
+    """Correct one grounded token when it alone differs from the expected expression."""
+
+    if len(canvas_regions) != 1 or current_phase not in config.annotation_enabled_phases:
+        return None
+    region: CanvasTextRegion = canvas_regions[0]
+    step_id: str = region.step_id or "step-1"
+    tokens: list[SpatialMathToken] = [
+        token
+        for token in spatial_tokens
+        if token.step_id == step_id and token.alignment_confidence >= 0.9
+    ]
+    actual: str = "".join(_normalise_token_text(token.text) for token in tokens)
+    expected: str = _normalise_token_text(correct_answer)
+    if actual == "" or expected == "" or actual != _normalise_token_text(region.text):
+        return None
+
+    candidates: list[tuple[SpatialMathToken, str]] = []
+    offset: int = 0
+    for token in tokens:
+        token_text: str = _normalise_token_text(token.text)
+        prefix: str = actual[:offset]
+        suffix: str = actual[offset + len(token_text) :]
+        if expected.startswith(prefix) and expected.endswith(suffix):
+            replacement_end: int = len(expected) - len(suffix) if suffix else len(expected)
+            replacement: str = expected[len(prefix) : replacement_end]
+            if replacement != "" and replacement != token_text:
+                candidates.append((token, replacement))
+        offset += len(token_text)
+    if len(candidates) != 1:
+        return None
+
+    target, replacement = candidates[0]
+    classification = CanvasMistakeClassification(
+        status="mistake_found",
+        mistake_step_id=step_id,
+        target_token_ids=[target.token_id],
+        error_token=target.text,
+        expected_token=replacement,
+        target_text=target.text,
+        target_span=None,
+        replacement_text=replacement,
+        confidence=confidence,
+    )
+    intents: list[CanvasAnnotationIntent] = [
+        CanvasAnnotationIntent(
+            kind="circle_target",
+            target_step_id=step_id,
+            text=None,
+            placement=None,
+        ),
+        CanvasAnnotationIntent(
+            kind="write_correction",
+            target_step_id=step_id,
+            text=replacement,
+            placement="right",
+        ),
+        CanvasAnnotationIntent(
+            kind="draw_arrow",
+            target_step_id=step_id,
+            text=None,
+            placement=None,
+        ),
+    ]
+    message: str = config.messages.CONCEPTUAL_MISUNDERSTANDING
+    return CanvasMathReview(
+        error_type="CONCEPTUAL_MISUNDERSTANDING",
+        tutor_feedback=(message if current_phase in config.feedback_enabled_phases else None),
+        canvas_feedback=(
+            _mistake_step_feedback(0, canvas_regions, "CONCEPTUAL_MISUNDERSTANDING", message, config)
+            if current_phase in config.feedback_enabled_phases
+            else CanvasFeedback(has_feedback=False, step_feedback=[], highlight_instruction=None)
+        ),
+        mistake_classification=classification,
+        annotation_intents=intents,
     )
 
 
