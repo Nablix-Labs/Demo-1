@@ -48,6 +48,7 @@ from app.models.adapters import (
     Phase2PromptContext,
     SpatialMathToken,
 )
+from app.models.canvas_memory import CanvasEvent
 from app.models.guided_learning import (
     ActiveTeachingObjective,
     FocusedComponentEvidence,
@@ -95,6 +96,7 @@ class ClassificationRequest(StrictSchema):
     canvas_regions: list[CanvasTextRegion] = Field(default_factory=list)
     canvas_mathml_blocks: list[str] = Field(default_factory=list)
     spatial_tokens: list[SpatialMathToken] = Field(default_factory=list)
+    canvas_events: list[CanvasEvent] = Field(default_factory=list)
     has_canvas_evidence: bool = False
     canvas_solution_complete_candidate: bool = False
     conversation_history: list[ConversationMessage] = Field(default_factory=list)

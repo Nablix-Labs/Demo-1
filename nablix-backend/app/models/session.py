@@ -12,7 +12,7 @@ from app.models.adapters import (
     VisualCue,
     VisionOCRResult,
 )
-from app.models.canvas import CanvasSubmissionRecord
+from app.models.canvas import CanvasQuestionMemory, CanvasSubmissionRecord
 from app.models.fields import (
     ConceptId,
     InteractionMode,
@@ -274,6 +274,9 @@ class SessionRecord(BaseModel):
     status: Literal["started", "ended"]
     mode: Literal["inprocess"] = "inprocess"
     canvas_submissions: list[CanvasSubmissionRecord] = Field(default_factory=list)
+    canvas_memory_by_question: dict[str, CanvasQuestionMemory] = Field(
+        default_factory=dict
+    )
     per_question_history: list[QuestionAttemptRecord] = Field(default_factory=list)
     hint_levels_used: list[int] = Field(default_factory=list)
     phase_transitions: list[PhaseTransitionRecord] = Field(default_factory=list)

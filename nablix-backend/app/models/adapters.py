@@ -10,6 +10,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.canvas_memory import CanvasEvent
 from app.models.student_model_session import AnswerSpec, QuestionType
 from app.models.guided_learning import (
     ActiveTeachingObjective,
@@ -114,6 +115,7 @@ class AdapterContext(BaseModel):
     canvas_regions: list["OCRTextRegion"] = Field(default_factory=list)
     canvas_mathml_blocks: list[str] = Field(default_factory=list)
     spatial_tokens: list["SpatialMathToken"] = Field(default_factory=list)
+    canvas_events: list[CanvasEvent] = Field(default_factory=list)
     has_canvas_evidence: bool = False
     canvas_solution_complete_candidate: bool = False
     conversation_history: list["ConversationMessage"] = Field(default_factory=list)

@@ -12,6 +12,7 @@ from app.models.adapters import (
     VisionOCRResult,
 )
 from app.models.canvas import CanvasDrawPayload, CanvasLatency, CanvasStroke
+from app.models.canvas_memory import CanvasEvent, validate_canvas_event_order
 from app.models.fields import (
     BoundedText,
     ConceptId,
@@ -54,7 +55,13 @@ class InteractionCanvasState(BaseModel):
 
     snapshot_data_url: SnapshotDataUrl
     strokes: list[CanvasStroke] = Field(default_factory=list)
+    canvas_events: list[CanvasEvent] = Field(default_factory=list)
     captured_at: datetime
+
+    @model_validator(mode="after")
+    def validate_canvas_events(self) -> "InteractionCanvasState":
+        validate_canvas_event_order(self.canvas_events)
+        return self
 
 
 class InteractionRequest(BaseModel):
@@ -198,6 +205,7 @@ class InteractionResponse(BaseModel):
     inactivity_policy: InactivityPolicy | None = None
     nudge_delivery: NudgeDeliveryRecord | None = None
     canvas_draw: list[CanvasDrawPayload] = Field(default_factory=list)
+    localization_status: Literal["grounded", "uncertain"] | None = None
     ocr: VisionOCRResult | None = None
     latency: CanvasLatency | None = None
     snapshot_reference: str | None = None

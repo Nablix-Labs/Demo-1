@@ -12,7 +12,8 @@ from app.core.config import get_settings
 from app.core.exceptions import JourneyVersionConflict
 from app.core.logger import logger
 from app.models.adapters import ConversationMessage, StudentModelResult, VisualCue, VisionOCRResult
-from app.models.canvas import CanvasSubmissionRecord
+from app.models.canvas import CanvasQuestionMemory, CanvasStroke, CanvasSubmissionRecord
+from app.models.canvas_memory import CanvasEvent
 from app.models.fields import Phase
 from app.models.interaction import InteractionResponse
 from app.models.session import (
@@ -871,6 +872,9 @@ async def _apply_schema_event(
                 "guided_student_state": None,
                 "selected_error_code": None,
                 "wrong_attempt_count": 0,
+                "canvas_state": session.canvas_state.model_copy(
+                    update={"snapshot_id": None, "ocr_result": None}
+                ),
             }
         )
     if transition is not None:
@@ -1604,6 +1608,8 @@ async def record_canvas_submission(
     record: CanvasSubmissionRecord,
     conversation_history: list[ConversationMessage],
     last_student_model: StudentModelResult | None,
+    strokes: list[CanvasStroke],
+    canvas_events: list[CanvasEvent],
 ) -> SessionRecord:
     """Append a reviewed canvas submission without replacing Schema 3.0 state."""
 
@@ -1656,6 +1662,27 @@ async def record_canvas_submission(
             "per_question_history": per_question_history,
             "recommended_entry_phase": session.recommended_entry_phase,
             "last_student_model": last_student_model or session.last_student_model,
+            **build_canvas_memory_update(
+                session,
+                turn_session.question_id,
+                record.submission_id,
+                strokes,
+                canvas_events,
+            ),
+            "canvas_state": session.canvas_state.model_copy(
+                update={
+                    "snapshot_id": (
+                        record.submission_id
+                        if session.question_id == turn_session.question_id
+                        else None
+                    ),
+                    "ocr_result": (
+                        record.ocr
+                        if session.question_id == turn_session.question_id
+                        else None
+                    ),
+                }
+            ),
         }
     )
     # This read-modify-write is safe only while the mock backend uses one worker.
@@ -1668,6 +1695,8 @@ async def record_canvas_attachment(
     session_id: str,
     student_id: str,
     record: CanvasSubmissionRecord,
+    strokes: list[CanvasStroke],
+    canvas_events: list[CanvasEvent],
 ) -> SessionRecord:
     """Store voice-attached OCR without counting a second student attempt."""
 
@@ -1678,11 +1707,47 @@ async def record_canvas_attachment(
             detail=f"Session with ID {session_id} has ended.",
         )
     updated_session: SessionRecord = session.model_copy(
-        update={"canvas_submissions": [*session.canvas_submissions, record]}
+        update={
+            "canvas_submissions": [*session.canvas_submissions, record],
+            **build_canvas_memory_update(
+                session,
+                session.question_id,
+                record.submission_id,
+                strokes,
+                canvas_events,
+            ),
+            "canvas_state": session.canvas_state.model_copy(
+                update={
+                    "snapshot_id": record.submission_id,
+                    "ocr_result": record.ocr,
+                }
+            ),
+        }
     )
     _sessions[session_id] = updated_session
     await save_session(updated_session)
     return updated_session
+
+
+def build_canvas_memory_update(
+    session: SessionRecord,
+    question_id: str | None,
+    turn_id: str,
+    strokes: list[CanvasStroke],
+    canvas_events: list[CanvasEvent],
+) -> dict[str, object]:
+    if question_id is None:
+        return {}
+    return {
+        "canvas_memory_by_question": {
+            **session.canvas_memory_by_question,
+            question_id: CanvasQuestionMemory(
+                updated_turn_id=turn_id,
+                strokes=strokes,
+                canvas_events=canvas_events,
+            ),
+        }
+    }
 
 
 def get_canvas_submission(
@@ -1730,10 +1795,12 @@ async def update_interaction_state(
     voice_state: VoiceState = session.voice_state.model_copy(
         update={"last_transcript_confidence": transcript_confidence}
     )
+    next_question_id = transition_updates.get("question_id", session.question_id)
+    question_changed = next_question_id != session.question_id
     canvas_state: CanvasState = session.canvas_state.model_copy(
         update={
-            "snapshot_id": canvas_snapshot_id,
-            "ocr_result": ocr_result,
+            "snapshot_id": None if question_changed else canvas_snapshot_id,
+            "ocr_result": None if question_changed else ocr_result,
         }
     )
     requested_active_visual_cue = transition_updates.get(
@@ -1745,8 +1812,6 @@ async def update_interaction_state(
         VisualCue,
     ):
         raise ValueError("active_visual_cue must be a VisualCue or None.")
-    next_question_id = transition_updates.get("question_id", session.question_id)
-    question_changed = next_question_id != session.question_id
     active_visual_cue = (
         None
         if current_phase != "GUIDED_PRACTICE" or question_changed

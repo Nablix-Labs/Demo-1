@@ -4,6 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.adapters import TutorResult, VisionOCRResult
+from app.models.canvas_memory import CanvasEvent, validate_canvas_event_order
 from app.models.fields import Phase, SessionId, SnapshotDataUrl, StudentId, TurnId
 from app.models.guided_learning import GuidedRescue
 
@@ -106,6 +107,7 @@ class CanvasSubmitRequest(BaseModel):
     turn_id: TurnId | None = None
     snapshot_data_url: SnapshotDataUrl
     strokes: list[CanvasStroke] = Field(default_factory=list)
+    canvas_events: list[CanvasEvent] = Field(default_factory=list)
     # Optional spoken transcript to grade alongside the canvas (VAD turn). Omitted by
     # the Check button, which stays canvas-only.
     transcript: str | None = None
@@ -114,7 +116,10 @@ class CanvasSubmitRequest(BaseModel):
         "STANDALONE_ATTEMPT"
     )
 
-
+    @model_validator(mode="after")
+    def validate_canvas_events(self) -> "CanvasSubmitRequest":
+        validate_canvas_event_order(self.canvas_events)
+        return self
 
 
 class CanvasLatency(BaseModel):
@@ -132,6 +137,12 @@ class CanvasSubmissionRecord(BaseModel):
     tutor: TutorResult
     latency: CanvasLatency
     submitted_at: datetime
+
+
+class CanvasQuestionMemory(BaseModel):
+    updated_turn_id: str
+    strokes: list[CanvasStroke] = Field(default_factory=list)
+    canvas_events: list[CanvasEvent] = Field(default_factory=list)
 
 
 class CanvasSubmitResponse(BaseModel):
