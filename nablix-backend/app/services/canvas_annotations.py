@@ -42,7 +42,7 @@ def plan_canvas_draw(
         return []
 
     if len(classification.target_token_ids) == 0 or classification.error_token is None:
-        return []
+        return _whole_region_draw(tutor, classification, target_region)
 
     matching_tokens = [
         tok
@@ -74,6 +74,36 @@ def plan_canvas_draw(
             action_id=f"canvas-correction-{target_region.step_id}",
             mode="append",
             elements=elements,
+        )
+    ]
+
+
+def _whole_region_draw(
+    tutor: TutorResult,
+    classification: TutorMistakeClassification,
+    region: OCRTextRegion,
+) -> list[CanvasDrawPayload]:
+    intents = [
+        intent
+        for intent in tutor.annotation_intents
+        if intent.target_step_id == classification.mistake_step_id
+    ]
+    if (
+        classification.target_span is not None
+        or classification.replacement_text is not None
+        or _normalised_text(classification.target_text or "")
+        != _normalised_text(region.text)
+        or len(intents) != 1
+        or intents[0].kind != "circle_target"
+    ):
+        return []
+    return [
+        CanvasDrawPayload(
+            action_id=f"canvas-line-review-{region.step_id}",
+            mode="append",
+            elements=[
+                _ellipse_element((region.x, region.y, region.w, region.h), 1)
+            ],
         )
     ]
 

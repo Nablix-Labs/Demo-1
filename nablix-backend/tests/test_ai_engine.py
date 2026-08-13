@@ -7,6 +7,7 @@ import pytest
 
 from app.adapters.tutor_engine import TutorEngineServiceAdapter, apply_retrieved_content
 from app.ai_engine import classifier, openai_client
+from app.ai_engine.canvas_math_review import review_canvas_math
 from app.ai_engine.classifier import ClassificationRequest, classify_student_response
 from app.ai_engine.prompt_registry import (
     Trigger,
@@ -3634,6 +3635,59 @@ def test_canvas_math_review_writes_grounded_direct_expression_correction(
         "draw_arrow",
     ]
     assert response.annotation_intents[1].text == "+"
+
+
+def test_canvas_math_review_circles_direct_expression_with_multiple_errors() -> None:
+    review = review_canvas_math(
+        question=(
+            "3 + 5, 9 + 5, 14 + 5. Use n for the changing starting "
+            "number. Write the general rule."
+        ),
+        correct_answer="n+5",
+        current_phase="GUIDED_PRACTICE",
+        canvas_regions=[_canvas_region("step-1", "n-7", 1.0)],
+        spatial_tokens=[
+            SpatialMathToken(
+                token_id=f"step-1:token-{index}",
+                step_id="step-1",
+                text=text,
+                bounding_box={"x": index / 10, "y": 0.1, "width": 0.05, "height": 0.1},
+                alignment_confidence=0.95,
+            )
+            for index, text in enumerate(["n", "-", "7"], start=1)
+        ],
+        config=classifier.load_classifier_rules().canvas_review,
+        confidence=0.95,
+    )
+
+    assert review.mistake_classification.status == "mistake_found"
+    assert review.mistake_classification.target_text == "n-7"
+    assert review.mistake_classification.target_token_ids == []
+    assert [intent.kind for intent in review.annotation_intents] == ["circle_target"]
+
+
+def test_canvas_math_review_does_not_circle_correct_direct_expression() -> None:
+    review = review_canvas_math(
+        question="Write the general rule.",
+        correct_answer="n+5",
+        current_phase="GUIDED_PRACTICE",
+        canvas_regions=[_canvas_region("step-1", "n+5", 1.0)],
+        spatial_tokens=[
+            SpatialMathToken(
+                token_id=f"step-1:token-{index}",
+                step_id="step-1",
+                text=text,
+                bounding_box={"x": index / 10, "y": 0.1, "width": 0.05, "height": 0.1},
+                alignment_confidence=0.95,
+            )
+            for index, text in enumerate(["n", "+", "5"], start=1)
+        ],
+        config=classifier.load_classifier_rules().canvas_review,
+        confidence=0.95,
+    )
+
+    assert review.mistake_classification.status == "no_mistake"
+    assert review.annotation_intents == []
 
 
 def test_canvas_math_review_accepts_division_steps() -> None:

@@ -207,6 +207,25 @@ def _review_direct_expression(
     expected: str = _normalise_token_text(correct_answer)
     if actual == "" or expected == "" or actual != _normalise_token_text(region.text):
         return None
+    if actual == expected:
+        return CanvasMathReview(
+            error_type=None,
+            tutor_feedback=None,
+            canvas_feedback=CanvasFeedback(
+                has_feedback=False,
+                step_feedback=[],
+                highlight_instruction=None,
+            ),
+            mistake_classification=CanvasMistakeClassification(
+                status="no_mistake",
+                mistake_step_id=None,
+                target_text=None,
+                target_span=None,
+                replacement_text=None,
+                confidence=confidence,
+            ),
+            annotation_intents=[],
+        )
 
     candidates: list[tuple[SpatialMathToken, str]] = []
     offset: int = 0
@@ -225,7 +244,34 @@ def _review_direct_expression(
                 candidates.append((token, replacement))
         offset += len(token_text)
     if len(candidates) != 1:
-        return None
+        classification = CanvasMistakeClassification(
+            status="mistake_found",
+            mistake_step_id=step_id,
+            target_token_ids=[],
+            error_token=None,
+            expected_token=None,
+            target_text=region.text,
+            target_span=None,
+            replacement_text=None,
+            confidence=confidence,
+        )
+        intent = CanvasAnnotationIntent(
+            kind="circle_target",
+            target_step_id=step_id,
+            text=None,
+            placement=None,
+        )
+        return CanvasMathReview(
+            error_type="CONCEPTUAL_MISUNDERSTANDING",
+            tutor_feedback=None,
+            canvas_feedback=CanvasFeedback(
+                has_feedback=False,
+                step_feedback=[],
+                highlight_instruction=None,
+            ),
+            mistake_classification=classification,
+            annotation_intents=[intent],
+        )
 
     target, replacement = candidates[0]
     classification = CanvasMistakeClassification(

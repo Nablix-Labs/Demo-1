@@ -95,3 +95,24 @@ def test_canvas_planner_does_not_mark_without_grounded_tokens_when_no_correction
     )
 
     assert plan_canvas_draw(tutor, regions) == []
+
+
+def test_canvas_planner_circles_explicit_whole_line_mistake() -> None:
+    regions = assign_step_ids([_region()])
+    tutor = _tutor_result(
+        TutorMistakeClassification(
+            status="mistake_found",
+            mistake_step_id="step-1",
+            target_text="x = 9 - 5",
+            target_span=None,
+            replacement_text=None,
+            confidence=0.95,
+        ),
+        [AnnotationIntent(kind="circle_target", target_step_id="step-1")],
+    )
+
+    draw = plan_canvas_draw(tutor, regions)
+
+    assert len(draw) == 1
+    assert draw[0].action_id == "canvas-line-review-step-1"
+    assert [element.kind for element in draw[0].elements] == ["ellipse"]
