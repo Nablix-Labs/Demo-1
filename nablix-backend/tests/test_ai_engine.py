@@ -94,18 +94,35 @@ def _guided_rubric() -> GeneratedQuestionRubric:
 
 
 @pytest.mark.parametrize("student_input", ["what", "idk", "I have no idea", "are u stupid"])
-def test_guided_confusion_bypasses_semantic_answer_evaluation(
+def test_guided_confusion_uses_semantic_tutor_evaluation(
     monkeypatch,
     student_input: str,
 ) -> None:
-    class _NoEvaluationClient:
-        def evaluate_guided_turn(self, **kwargs):
-            raise AssertionError("confusion must not be evaluated as an answer")
+    class _EvaluationClient:
+        def evaluate_guided_turn(self, **kwargs: object) -> GuidedEvaluation:
+            return GuidedEvaluation(
+                student_state="STUCK",
+                newly_confirmed_concept_ids=[],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=["OPERATION", "EXPANDED_MEANING"],
+                selected_error_code=None,
+                confidence=0.9,
+                next_objective=None,
+                tutor_message=(
+                    "That makes sense. Let’s use the expression in front of us: "
+                    "what does the plus sign tell us to do?"
+                ),
+                tutor_message_voice=(
+                    "That makes sense. Let’s use the expression in front of us: "
+                    "what does the plus sign tell us to do?"
+                ),
+            )
 
     monkeypatch.setattr(
         classifier,
         "build_openai_ai_engine_client",
-        lambda settings: _NoEvaluationClient(),
+        lambda settings: _EvaluationClient(),
     )
     response = classify_student_response(
         ClassificationRequest(
@@ -134,16 +151,33 @@ def test_guided_confusion_bypasses_semantic_answer_evaluation(
     assert response.guided_student_state == "STUCK"
     assert response.intent == "EXPRESSING_CONFUSION"
     assert response.attempt_increment == 0
-    assert "one part at a time" in response.tutor_message
-    assert "make sure I understood" not in response.tutor_message
+    assert "what does the plus sign" in response.tutor_message
+    assert "one part at a time" not in response.tutor_message
 
 
 def test_guided_component_question_stays_specific_after_confusion_and_wrong_value(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class _NoEvaluationClient:
+    class _EvaluationClient:
         def evaluate_guided_turn(self, **kwargs: object) -> GuidedEvaluation:
-            raise AssertionError("controller-owned component turns must not call the LLM")
+            return GuidedEvaluation(
+                student_state="STUCK",
+                newly_confirmed_concept_ids=[],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=["CHANGING_VALUE", "FIXED_VALUE", "OPERATION"],
+                selected_error_code=None,
+                confidence=0.9,
+                next_objective=None,
+                tutor_message=(
+                    "That is understandable. Which part can take different "
+                    "possible values?"
+                ),
+                tutor_message_voice=(
+                    "That is understandable. Which part can take different "
+                    "possible values?"
+                ),
+            )
 
     rubric = GeneratedQuestionRubric(
         question_id="Q-T01-COMPONENTS",
@@ -160,7 +194,7 @@ def test_guided_component_question_stays_specific_after_confusion_and_wrong_valu
     monkeypatch.setattr(
         classifier,
         "build_openai_ai_engine_client",
-        lambda settings: _NoEvaluationClient(),
+        lambda settings: _EvaluationClient(),
     )
     request = ClassificationRequest(
         question_id="Q-T01-COMPONENTS",
