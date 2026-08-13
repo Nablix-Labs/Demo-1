@@ -391,6 +391,9 @@ async def submit_canvas(
         }
     )
     response.canvas_draw = canvas_draw
+    response.localization_status = (
+        "grounded" if canvas_evidence.spatial_tokens else "uncertain"
+    )
     response.ocr = None if phase3_silent else ocr
     response.latency = latency
     response.guided_rescue = _guided_rescue(schema_content_response)

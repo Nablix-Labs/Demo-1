@@ -205,6 +205,7 @@ class InteractionResponse(BaseModel):
     inactivity_policy: InactivityPolicy | None = None
     nudge_delivery: NudgeDeliveryRecord | None = None
     canvas_draw: list[CanvasDrawPayload] = Field(default_factory=list)
+    localization_status: Literal["grounded", "uncertain"] | None = None
     ocr: VisionOCRResult | None = None
     latency: CanvasLatency | None = None
     snapshot_reference: str | None = None

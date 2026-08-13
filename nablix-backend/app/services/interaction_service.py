@@ -3743,6 +3743,13 @@ async def _process_interaction(
                 if ocr is not None
                 else []
             ),
+            "localization_status": (
+                "grounded"
+                if canvas_evidence is not None and canvas_evidence.spatial_tokens
+                else "uncertain"
+                if canvas_evidence is not None
+                else None
+            ),
             "is_canvas_solution_correct": (
                 True
                 if canvas_evidence is not None

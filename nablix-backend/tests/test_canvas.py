@@ -717,6 +717,7 @@ def test_canvas_submit_stops_before_tutor_when_ocr_needs_clarification(
     body = response.json()
     assert body["status"] == "CLARIFICATION_REQUIRED"
     assert body["canvas_draw"] == []
+    assert body["localization_status"] == "uncertain"
     stored_session = client.get(f"/session/{session_id}", params={"student_id": "ST012"}).json()
     assert stored_session["attempt_count"] == 0
     assert stored_session["canvas_submissions"][0]["tutor"]["evaluation"] == "UNCLEAR"
@@ -1938,6 +1939,7 @@ def test_canvas_submit_uses_shared_spatial_tokens_for_grounded_draw(
     )
 
     assert response.status_code == 200, response.text
+    assert response.json()["localization_status"] == "grounded"
     assert len(captured_contexts) == 1
     context = captured_contexts[0]
     assert context.has_canvas_evidence is True
