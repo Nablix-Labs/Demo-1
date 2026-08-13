@@ -610,6 +610,9 @@ export function useDemoTutor() {
         canvasSnapshot.snapshotDataUrl,
         'STANDALONE_ATTEMPT',
         turnId,
+        // The strokes are what let the tutor mark the exact symbol rather than
+        // the whole line. They were already captured here and simply not sent.
+        canvasSnapshot.strokes,
       );
       // Canvas responses now carry the same phase state as /interaction, so a
       // backend phase change here also drives usePhaseRouting.

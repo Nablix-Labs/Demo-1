@@ -12,7 +12,7 @@
  *    `session_id` from /session/start and reuse it for the whole run.
  */
 import axios from 'axios';
-import type { CanvasDrawPayload } from '@/store/useNumeraStore';
+import type { CanvasDrawPayload, CanvasStrokeSnapshot } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { allowAnonTutorCalls } from '@/lib/runtimeConfig';
 import type { Phase3ResponseFields } from '@/lib/phase3';
@@ -1318,6 +1318,21 @@ export async function submitCanvas(
    * field exists to prevent.
    */
   turnId: string,
+  /**
+   * The pen strokes behind the snapshot — REQUIRED, not optional.
+   *
+   * The image alone tells the backend WHAT was written; the strokes are what
+   * let it say WHERE. `canvas_service` turns them into spatial tokens, and
+   * without tokens the tutor can read a wrong answer but cannot circle the
+   * symbol that is wrong — it can only mark the whole line (Sanya, 13 Aug 2026).
+   *
+   * Required for the same reason `turnId` is: this call sent no strokes for
+   * weeks while the field existed on both sides and every submission validated
+   * cleanly, because the omission is invisible to a type that allows it. The
+   * voice path has always sent them via `canvas_state.strokes`; the Check
+   * button had not.
+   */
+  strokes: CanvasStrokeSnapshot[],
   student: string = studentId()
 ) {
   if (!snapshotDataUrl.startsWith(PNG_DATA_URL_PREFIX)) {
@@ -1331,6 +1346,9 @@ export async function submitCanvas(
     student_id: student,
     turn_id: turnId,
     snapshot_data_url: snapshotDataUrl,
+    // Field name and shape match `CanvasSubmitRequest.strokes` (canvas.py:108)
+    // and are the same objects the voice turn already sends.
+    strokes,
     submission_role: submissionRole,
   });
   return res.data;
