@@ -15,6 +15,16 @@ Point = tuple[float, float]
 _TARGET_COLOR = "#E05A47"
 _CORRECTION_COLOR = "#175CD3"
 
+# ponytail: V1 annotates tutor-authored anchors only, never student handwriting.
+# The grounding below is kept rather than deleted — review_canvas_math stays
+# authoritative for verbal diagnosis, and this path returns when anchors land.
+# Ceiling before flipping this on: align_step_tokens pairs stroke clusters to
+# MathML tokens by ordinal position and stamps 0.95 either way, so one unmerged
+# stroke shifts every later token. An "=" drawn as two bars 0.06 apart circles
+# the minus sign while the token-text check still passes, because the text comes
+# from MathML and the box comes from the clustering.
+_ANNOTATE_STUDENT_INK = False
+
 
 def assign_step_ids(regions: list[OCRTextRegion]) -> list[OCRTextRegion]:
     """Return OCR regions with stable step IDs without mutating OCR output."""
@@ -32,6 +42,9 @@ def plan_canvas_draw(
     spatial_tokens: list[SpatialMathToken] | None = None,
 ) -> list[CanvasDrawPayload]:
     """Convert grounded tutor annotation intents into frontend draw commands."""
+
+    if not _ANNOTATE_STUDENT_INK:
+        return []
 
     classification = tutor.mistake_classification
     if classification is None or classification.status != "mistake_found":

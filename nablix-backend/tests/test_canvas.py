@@ -1875,7 +1875,7 @@ def test_interaction_duplicate_ignores_growing_canvas_events_after_advance() -> 
     )
 
 
-def test_canvas_submit_uses_shared_spatial_tokens_for_grounded_draw(
+def test_canvas_submit_shares_spatial_tokens_without_drawing_on_student_ink(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured_contexts: list[AdapterContext] = []
@@ -1989,4 +1989,6 @@ def test_canvas_submit_uses_shared_spatial_tokens_for_grounded_draw(
     assert context.canvas_mathml_blocks
     assert len(context.spatial_tokens) == 3
     assert context.canvas_events[0].question_id == question_id
-    assert response.json()["canvas_draw"]
+    # Evidence still reaches the tutor; V1 simply never turns it into ink-targeted
+    # draw commands. Anchors replace this in PR 2.
+    assert response.json()["canvas_draw"] == []

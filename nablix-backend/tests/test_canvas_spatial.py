@@ -1,5 +1,7 @@
 """Unit tests for the Spatial Overlay Engine and character-level token bounding box planning."""
 
+import pytest
+
 from app.models.adapters import (
     AnnotationIntent,
     OCRTextRegion,
@@ -7,6 +9,7 @@ from app.models.adapters import (
     TutorResult,
 )
 from app.models.canvas import CanvasPoint, CanvasStroke
+from app.services import canvas_annotations
 from app.services.canvas_annotations import plan_canvas_draw
 from app.services.canvas_spatial import (
     align_step_tokens,
@@ -81,7 +84,7 @@ def test_group_strokes_into_candidates() -> None:
     assert len(candidates[0]) == 2
 
 
-def test_align_step_tokens_and_plan_canvas_draw() -> None:
+def test_align_step_tokens_and_plan_canvas_draw(monkeypatch: pytest.MonkeyPatch) -> None:
     mathml = "<math><mrow><mn>4</mn><mo>-</mo><mi>y</mi></mrow></math>"
     s1 = CanvasStroke(stroke_id="s1", tool="pen", points=[CanvasPoint(x=0.1, y=0.1), CanvasPoint(x=0.12, y=0.12)])  # 4
     s2 = CanvasStroke(stroke_id="s2", tool="pen", points=[CanvasPoint(x=0.2, y=0.1), CanvasPoint(x=0.25, y=0.1)])   # -
@@ -124,6 +127,10 @@ def test_align_step_tokens_and_plan_canvas_draw() -> None:
     )
 
     regions = [OCRTextRegion(step_id="step-1", text="4-y", x=0.0, y=0.0, w=0.5, h=0.2, confidence=0.9)]
+    # V1 never draws on student ink, so exercise the retained grounding explicitly
+    # rather than letting it rot unexercised while dormant.
+    assert plan_canvas_draw(tutor_res, regions, spatial_tokens) == []
+    monkeypatch.setattr(canvas_annotations, "_ANNOTATE_STUDENT_INK", True)
     payloads = plan_canvas_draw(tutor_res, regions, spatial_tokens)
     assert len(payloads) == 1
     assert len(payloads[0].elements) == 1
