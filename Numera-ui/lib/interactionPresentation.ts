@@ -76,11 +76,16 @@ export function applyInteractionSupport(response: SupportPresentation): string {
   if (showCue === true) {
     useNumeraStore.getState().setVisualCue({
       show: true,
+      // Stored whole, as sent. `cue_id` is the cue's identity AND the evidence
+      // that this is an authored cue at all — `cue_type` is null on the real
+      // Topic 1 cues, so it can serve as neither (Sanya, 13 Aug 2026).
+      cueId: cue?.cue_id?.trim() || null,
       cueType: cue?.cue_type ?? null,
       description: cue?.description ?? null,
       // Additive: null whenever the backend sent no usable URL, and the card
       // renders text-only exactly as before (see lib/cueAsset).
       assetUrl: cueAssetUrl(cue?.asset_url),
+      actions: cue?.actions ?? null,
     });
   }
 
