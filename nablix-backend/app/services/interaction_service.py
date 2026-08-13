@@ -3338,7 +3338,7 @@ async def _process_interaction(
         schema_support_steps,
         tutor_message,
     )
-    if support_context is not None:
+    if support_context is not None and not scaffold_turn:
         support_message = build_support_aware_tutor_message(
             question_id=session.question_id,
             question=session.current_question,
@@ -3392,6 +3392,31 @@ async def _process_interaction(
                 step=scaffold_steps[0]
             )
             tutor_message_voice = tutor_message
+    if scaffold_turn and scaffold_steps:
+        scaffold_support_context = _support_narration_context(
+            "SCAFFOLD",
+            None,
+            None,
+            scaffold_steps,
+            tutor_message,
+        )
+        if scaffold_support_context is not None:
+            scaffold_message = build_support_aware_tutor_message(
+                question_id=session.question_id,
+                question=session.current_question,
+                correct_answer=session.correct_answer or "",
+                student_input=student_message,
+                evaluation=tutor.evaluation,
+                error_type=tutor.error_type,
+                response_strategy=tutor.response_strategy,
+                hint_level=tutor.hint_level,
+                conversation_history=turn_session.conversation_history,
+                support_context=scaffold_support_context,
+                openai_client=build_openai_ai_engine_client(get_settings()),
+            )
+            if scaffold_message is not None:
+                tutor_message = scaffold_message.tutor_message
+                tutor_message_voice = scaffold_message.tutor_message_voice_optimised
     conversation_history: list[ConversationMessage] = _updated_conversation_history(
         turn_session.conversation_history,
         student_message,
