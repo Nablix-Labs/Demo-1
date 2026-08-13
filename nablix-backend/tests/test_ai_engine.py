@@ -592,7 +592,7 @@ def test_guided_follow_up_blocks_unresolved_component_reveal() -> None:
 
     aligned = classifier.align_guided_follow_up(evaluation, request, rubric, objective)
 
-    assert aligned.tutor_message == "You're on the right track. Which part can take different possible values?"
+    assert aligned.tutor_message == "Good. Which part can take different possible values?"
     assert aligned.tutor_message_voice == aligned.tutor_message
 
 
@@ -5382,8 +5382,7 @@ def test_guided_exact_notation_stuck_uses_question_aware_llm_message(
 
     assert response.guided_student_state == "STUCK"
     assert response.tutor_message == (
-        "That’s okay—we’ll take it one part at a time. "
-        "State the remaining idea in your own words."
+        "That's okay. State the remaining idea in your own words."
     )
     assert "x" not in response.tutor_message
     assert response.attempt_increment == 0
