@@ -29,11 +29,20 @@ _MATH_OPERATOR_EQUIVALENTS = str.maketrans(
     }
 )
 
+_LATEX_OPERATOR_EQUIVALENTS: tuple[tuple[str, str], ...] = (
+    (r"\times", "*"),
+    (r"\cdot", "*"),
+    (r"\div", "/"),
+)
+
 
 def canonical_math_token_text(value: str) -> str:
     """Normalize OCR and MathML text for supported tutor-error comparisons."""
 
-    return "".join(normalize("NFKC", value).translate(_MATH_OPERATOR_EQUIVALENTS).split())
+    normalized = value
+    for source, replacement in _LATEX_OPERATOR_EQUIVALENTS:
+        normalized = normalized.replace(source, replacement)
+    return "".join(normalize("NFKC", normalized).translate(_MATH_OPERATOR_EQUIVALENTS).split())
 
 
 class StrokeBox:

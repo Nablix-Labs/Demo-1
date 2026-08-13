@@ -47,6 +47,7 @@ VALID_SNAPSHOT_DATA_URL = "data:image/png;base64,aGVsbG8="
     ("ocr_text", "mathml_operator"),
     [
         ("n-5", "−"),
+        (r"n\times5", "×"),
         ("n+5", "＋"),
         ("n*5", "×"),
         ("n/5", "÷"),
@@ -84,6 +85,43 @@ def test_mathml_confirmation_accepts_equivalent_operator_glyphs(
     confirmed = canvas_evidence._with_confirmed_mathml_regions(ocr)
 
     assert confirmed.detected_regions[0].mathml == ocr.mathml_blocks[0]
+
+
+def test_mathml_confirmation_keeps_matching_regions_when_another_region_misses() -> None:
+    ocr = VisionOCRResult(
+        raw_ocr_text="n-5\nx+4",
+        detected_equation="n-5\nx+4",
+        detected_steps=["n-5", "x+4"],
+        detected_regions=[
+            OCRTextRegion(
+                step_id="step-1",
+                text="n-5",
+                x=0.1,
+                y=0.1,
+                w=0.3,
+                h=0.1,
+                confidence=1.0,
+            ),
+            OCRTextRegion(
+                step_id="step-2",
+                text="x+4",
+                x=0.1,
+                y=0.3,
+                w=0.3,
+                h=0.1,
+                confidence=1.0,
+            ),
+        ],
+        final_answer="x+4",
+        confidence=1.0,
+        mathml_blocks=["<math><mi>n</mi><mo>−</mo><mn>5</mn></math>"],
+        provider="mathpix",
+    )
+
+    confirmed = canvas_evidence._with_confirmed_mathml_regions(ocr)
+
+    assert confirmed.detected_regions[0].mathml == ocr.mathml_blocks[0]
+    assert confirmed.detected_regions[1].mathml is None
 
 
 def _unified_voice_payload(

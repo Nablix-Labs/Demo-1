@@ -71,15 +71,25 @@ def _normalised_mathml_tokens(mathml: str) -> str:
 
 
 def _with_confirmed_mathml_regions(ocr: VisionOCRResult) -> VisionOCRResult:
-    """Attach MathML only when Mathpix returned one unambiguous block per line."""
+    """Attach each MathML block only to its unique matching OCR region."""
 
-    if len(ocr.mathml_blocks) != len(ocr.detected_regions):
-        return ocr
+    available_blocks: set[int] = set(range(len(ocr.mathml_blocks)))
     regions: list[OCRTextRegion] = []
-    for region, mathml in zip(ocr.detected_regions, ocr.mathml_blocks):
-        if _normalised_mathml_tokens(mathml) != canonical_math_token_text(region.text):
-            return ocr
-        regions.append(region.model_copy(update={"mathml": mathml}))
+    for region in ocr.detected_regions:
+        region_text = canonical_math_token_text(region.text)
+        matching_blocks = [
+            index
+            for index in available_blocks
+            if _normalised_mathml_tokens(ocr.mathml_blocks[index]) == region_text
+        ]
+        if len(matching_blocks) == 1:
+            block_index = matching_blocks[0]
+            available_blocks.remove(block_index)
+            regions.append(
+                region.model_copy(update={"mathml": ocr.mathml_blocks[block_index]})
+            )
+        else:
+            regions.append(region)
     return ocr.model_copy(update={"detected_regions": regions})
 
 
