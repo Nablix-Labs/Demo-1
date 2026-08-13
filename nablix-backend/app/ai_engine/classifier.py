@@ -1518,49 +1518,6 @@ def classify_guided_learning_response(
             controller_evaluation,
             next_objective,
         )
-    if detect_student_intent(request.student_input, rules) == "EXPRESSING_CONFUSION":
-        option_comparison = (
-            request.guided_teaching_state is not None
-            and request.guided_teaching_state.last_tutor_question_type
-            == "OPTION_COMPARISON"
-        )
-        if option_comparison:
-            focused_prompt = (
-                "Let’s check it together: can one fixed starting number describe "
-                "every possible case?"
-            )
-        else:
-            active_step = active_teaching_step(request)
-            focused_prompt = (
-                active_step.prompt
-                if active_step is not None
-                else focused_unresolved_prompt(
-                    rubric,
-                    objective,
-                    "Which part should we look at first?",
-                )
-            )
-        message = f"That’s okay—we’ll take it one part at a time. {focused_prompt}"
-        evaluation = GuidedEvaluation(
-            student_state="STUCK",
-            newly_confirmed_concept_ids=[],
-            preserved_concept_ids=objective.confirmed_concept_ids,
-            contradicted_concept_ids=[],
-            missing_concept_ids=objective.missing_concept_ids,
-            selected_error_code=None,
-            confidence=rules.confidence.standard_response,
-            next_objective=objective,
-            tutor_message=message,
-            tutor_message_voice=message,
-        )
-        return build_guided_tutor_response(
-            request,
-            rules,
-            safety_check,
-            rubric,
-            evaluation,
-            objective,
-        )
     evaluation: GuidedEvaluation | None = None
     raw_student_state: GuidedStudentState | None = None
     raw_confidence: float | None = None
@@ -1728,6 +1685,16 @@ def classify_guided_learning_response(
     if is_authoritative_guided_completion(request):
         evaluation = authoritative_guided_completion(evaluation, rules)
     next_objective = normalized_guided_objective(evaluation, objective)
+    evaluation = rewrite_invalid_guided_message_once(
+        evaluation,
+        request,
+        rubric,
+        next_objective,
+        openai_client,
+        allowed_errors,
+        guided_tutor_context,
+        rules,
+    )
     evaluation = align_guided_follow_up(
         evaluation,
         request,
@@ -1780,6 +1747,132 @@ def controller_prompt_for_objective(
     )
 
 
+def rewrite_invalid_guided_message_once(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective | None,
+    openai_client: OpenAIAIEngineClient,
+    allowed_errors: list[dict[str, object]],
+    guided_tutor_context: GuidedTutorContext,
+    rules: ClassifierRulesConfig,
+) -> GuidedEvaluation:
+    """Ask the LLM once to repair invalid prose without changing teaching state."""
+
+    if evaluation.student_state == "CORRECT" or objective is None:
+        return evaluation
+
+    evaluation = remove_unsupported_guided_praise(evaluation, request)
+    controller_prompt = controller_prompt_for_objective(request, rubric, objective)
+    rejection_reason = guided_tutor_message_validation_reason(
+        evaluation,
+        request,
+        rubric,
+        objective,
+        controller_prompt,
+    )
+    if rejection_reason is None:
+        return evaluation
+
+    logger.warning(
+        "guided_tutor_message_rewrite_requested",
+        extra={
+            "question_id": request.question_id,
+            "student_state": evaluation.student_state,
+            "rejection_reason": rejection_reason,
+            "active_prompt": controller_prompt,
+        },
+    )
+    try:
+        rewritten = openai_client.evaluate_guided_turn(
+            question_type=request.question_type,
+            question=request.question,
+            answer_spec=request.answer_spec,
+            deterministic_evaluation=evaluate_answer_contract(request),
+            generated_rubric=rubric,
+            active_objective=objective,
+            guided_tutor_context=guided_tutor_context,
+            student_response=request.student_input,
+            input_source=request.input_source,
+            allowed_error_codes=allowed_errors,
+            recent_conversation=request.conversation_history[
+                -rules.guided_learning.maximum_recent_history_turns:
+            ],
+            validation_feedback=guided_message_rewrite_feedback(
+                rejection_reason,
+                controller_prompt,
+            ),
+            evaluator_prompt_version=rules.guided_learning.evaluator_prompt_version,
+            system_prompt=rules.guided_learning.evaluator_system_prompt,
+        )
+    except AdapterError as error:
+        logger.warning(
+            "guided_tutor_message_rewrite_failed",
+            extra={
+                "question_id": request.question_id,
+                "student_state": evaluation.student_state,
+                "rejection_reason": rejection_reason,
+                "detail": error.detail,
+            },
+        )
+        return evaluation
+
+    rewritten_evaluation = evaluation.model_copy(
+        update={
+            "tutor_message": rewritten.tutor_message,
+            "tutor_message_voice": rewritten.tutor_message_voice,
+        }
+    )
+    rewritten_evaluation = remove_unsupported_guided_praise(
+        rewritten_evaluation,
+        request,
+    )
+    rewritten_reason = guided_tutor_message_validation_reason(
+        rewritten_evaluation,
+        request,
+        rubric,
+        objective,
+        controller_prompt,
+    )
+    if rewritten_reason is None:
+        logger.info(
+            "guided_tutor_message_rewrite_accepted",
+            extra={
+                "question_id": request.question_id,
+                "student_state": evaluation.student_state,
+                "initial_rejection_reason": rejection_reason,
+            },
+        )
+        return rewritten_evaluation
+
+    logger.warning(
+        "guided_tutor_message_rewrite_rejected",
+        extra={
+            "question_id": request.question_id,
+            "student_state": evaluation.student_state,
+            "initial_rejection_reason": rejection_reason,
+            "rewritten_rejection_reason": rewritten_reason,
+        },
+    )
+    return evaluation
+
+
+def guided_message_rewrite_feedback(
+    rejection_reason: str,
+    controller_prompt: str,
+) -> str:
+    """Tell the LLM how to repair only its wording for one guided turn."""
+
+    return (
+        "Your previous tutor wording was rejected for "
+        f"{rejection_reason}. Keep the same student-state classification and "
+        "component evidence. Rewrite only tutor_message and tutor_message_voice. "
+        "Respond naturally to the student's exact words or misconception, do not "
+        "reveal any unresolved answer, and end with one focused question about "
+        f"the active step: {controller_prompt}"
+    )
+
+
 def align_guided_follow_up(
     evaluation: GuidedEvaluation,
     request: ClassificationRequest,
@@ -1795,13 +1888,14 @@ def align_guided_follow_up(
         request,
     )
     prompt = controller_prompt_for_objective(request, rubric, objective)
-    if guided_tutor_message_is_safe_and_relevant(
+    rejection_reason = guided_tutor_message_validation_reason(
         evaluation,
         request,
         rubric,
         objective,
         prompt,
-    ):
+    )
+    if rejection_reason is None:
         return evaluation
     prefix = {
         "PARTIAL": "Good.",
@@ -1822,6 +1916,7 @@ def align_guided_follow_up(
             "question_id": request.question_id,
             "student_state": evaluation.student_state,
             "active_prompt": prompt,
+            "rejection_reason": rejection_reason,
         },
     )
     return evaluation.model_copy(
@@ -1957,10 +2052,31 @@ def guided_tutor_message_is_safe_and_relevant(
 ) -> bool:
     """Return whether the LLM reply is safe and tied to the current tutor turn."""
 
+    return (
+        guided_tutor_message_validation_reason(
+            evaluation,
+            request,
+            rubric,
+            objective,
+            controller_prompt,
+        )
+        is None
+    )
+
+
+def guided_tutor_message_validation_reason(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+    controller_prompt: str,
+) -> str | None:
+    """Return the precise reason a guided message cannot be shown unchanged."""
+
     message = evaluation.tutor_message.strip()
     voice_message = evaluation.tutor_message_voice.strip()
     if message == "" or voice_message == "":
-        return False
+        return "EMPTY"
 
     rules = load_classifier_rules()
     if guided_message_reveals_undemonstrated_answer(
@@ -1970,7 +2086,7 @@ def guided_tutor_message_is_safe_and_relevant(
         evaluation,
         rules,
     ):
-        return False
+        return "ANSWER_REVEAL"
 
     if guided_message_reveals_unresolved_teaching_step(
         message,
@@ -1978,24 +2094,26 @@ def guided_tutor_message_is_safe_and_relevant(
         rubric,
         objective,
     ):
-        return False
+        return "OFF_ACTIVE_STEP"
 
     normalized_message = normalize_semantic_answer(message)
     if normalize_semantic_answer(controller_prompt) in normalized_message:
-        return True
+        return None
 
     if (
         evaluation.selected_error_code is not None
         and guided_message_repairs_selected_misconception(normalized_message)
     ):
-        return True
+        return None
 
     message_tokens = significant_component_tokens(message)
     turn_context_tokens = (
         significant_component_tokens(request.student_input)
         | significant_component_tokens(request.question)
     )
-    return bool(message_tokens.intersection(turn_context_tokens))
+    if message_tokens.intersection(turn_context_tokens):
+        return None
+    return "UNRELATED"
 
 
 def guided_message_reveals_unresolved_teaching_step(
