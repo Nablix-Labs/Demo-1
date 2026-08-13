@@ -189,6 +189,7 @@ def _tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:
         scaffold_steps_delivered=response.scaffold_steps_delivered,
         visual_cue=VisualCue(
             show=response.visual_cue.show,
+            cue_id=response.visual_cue.cue_id,
             cue_type=response.visual_cue.cue_type,
             description=response.visual_cue.description,
             actions=response.visual_cue.actions,

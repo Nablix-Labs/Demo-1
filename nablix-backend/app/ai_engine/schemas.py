@@ -121,6 +121,7 @@ class StrictSchema(BaseModel):
 
 class VisualCue(StrictSchema):
     show: StrictBool
+    cue_id: str | None = None
     cue_type: VisualCueType | None
     description: str | None
     actions: list[dict[str, object]] = Field(default_factory=list)
@@ -353,4 +354,3 @@ class OpenAIExplainAgainMessage(StrictSchema):
 class RecordedMisconception(StrictSchema):
     error_code: str
     description: str
-

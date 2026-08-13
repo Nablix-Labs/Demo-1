@@ -11,7 +11,7 @@ from app.adapters.provider import get_adapters
 from app.core.config import get_settings
 from app.core.exceptions import JourneyVersionConflict
 from app.core.logger import logger
-from app.models.adapters import ConversationMessage, StudentModelResult, VisionOCRResult
+from app.models.adapters import ConversationMessage, StudentModelResult, VisualCue, VisionOCRResult
 from app.models.canvas import CanvasSubmissionRecord
 from app.models.fields import Phase
 from app.models.interaction import InteractionResponse
@@ -502,6 +502,7 @@ async def start_session(
         show_canvas=flags["show_canvas"],
         show_hint_button=flags["show_hint_button"],
         show_visual_cue=flags["show_visual_cue"] or visual_cue is not None,
+        active_visual_cue=visual_cue,
         show_scaffold_panel=flags["show_scaffold_panel"] or bool(support_steps),
         scaffold_steps=support_steps,
         allow_text_input=flags["allow_text_input"],
@@ -1735,6 +1736,22 @@ async def update_interaction_state(
             "ocr_result": ocr_result,
         }
     )
+    requested_active_visual_cue = transition_updates.get(
+        "active_visual_cue",
+        session.active_visual_cue,
+    )
+    if requested_active_visual_cue is not None and not isinstance(
+        requested_active_visual_cue,
+        VisualCue,
+    ):
+        raise ValueError("active_visual_cue must be a VisualCue or None.")
+    next_question_id = transition_updates.get("question_id", session.question_id)
+    question_changed = next_question_id != session.question_id
+    active_visual_cue = (
+        None
+        if current_phase != "GUIDED_PRACTICE" or question_changed
+        else requested_active_visual_cue
+    )
     updated_session: SessionRecord = session.model_copy(
         update={
             "current_phase": current_phase,
@@ -1745,7 +1762,8 @@ async def update_interaction_state(
             # Phase-driven flags first; the tutor's per-turn cue/scaffold
             # outputs then override their always-False map entries.
             **UI_STATE_FLAGS[current_phase],
-            "show_visual_cue": show_visual_cue,
+            "show_visual_cue": active_visual_cue is not None,
+            "active_visual_cue": active_visual_cue,
             "show_scaffold_panel": show_scaffold_panel,
             "scaffold_steps": scaffold_steps,
             **transition_updates,

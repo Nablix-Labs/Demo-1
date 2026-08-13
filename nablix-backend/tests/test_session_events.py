@@ -109,6 +109,31 @@ def test_visual_cue_requires_an_authored_visual_cue_item() -> None:
     assert support_used == "HINT"
 
 
+def test_schema_visual_cue_preserves_the_authored_identity_and_asset() -> None:
+    event = session_service.StudentModelSessionEventResponse.model_validate(
+        _event_response("INCORRECT_ATTEMPT", "REQ-VISUAL-CUE-ASSET")
+    )
+    assert event.phase_payload is not None
+    event.phase_payload.support_to_serve = {
+        "support_type": "VISUAL_CUE",
+        "items": [
+            {
+                "content_type": "VISUAL_CUE",
+                "content_id": "VC-T01-GENERAL-VS-PARTICULAR",
+                "description": "Compare a particular case with the general rule.",
+                "asset_url": "https://example.test/cues/general-rule.png",
+                "actions": [],
+            }
+        ],
+    }
+
+    visual_cue = interaction_service._schema_visual_cue(event)
+
+    assert visual_cue is not None
+    assert visual_cue.cue_id == "VC-T01-GENERAL-VS-PARTICULAR"
+    assert visual_cue.asset_url == "https://example.test/cues/general-rule.png"
+
+
 @pytest.mark.parametrize("rescue_type", ["PARALLEL_EXAMPLE", "TUTOR_SOLVED"])
 def test_empty_rescue_keeps_the_tutor_response_available(
     rescue_type: str,

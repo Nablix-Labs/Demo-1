@@ -9,6 +9,7 @@ from app.models.adapters import (
     ExpectedStudentResponse,
     StudentModelResult,
     TutorAction,
+    VisualCue,
     VisionOCRResult,
 )
 from app.models.canvas import CanvasSubmissionRecord
@@ -224,6 +225,7 @@ class SessionRecord(BaseModel):
     show_canvas: bool = True
     show_hint_button: bool = False
     show_visual_cue: bool = False
+    active_visual_cue: VisualCue | None = None
     show_scaffold_panel: bool = False
     scaffold_steps: list[str] = Field(default_factory=list)
     allow_text_input: bool = True
