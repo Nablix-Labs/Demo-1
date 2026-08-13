@@ -35,6 +35,7 @@ from app.models.adapters import (
     Phase2PromptContext,
     RAGResult,
     RetrievedDocument,
+    SpatialMathToken,
     StudentModelResult,
     TutorEngineRequest,
 )
@@ -3465,6 +3466,67 @@ def test_canvas_math_review_finds_first_multiplication_error() -> None:
         "INCORRECT",
         "INCORRECT",
     ]
+
+
+def test_canvas_math_review_emits_grounded_tokens_for_correctable_error() -> None:
+    response = classify_student_response(
+        ClassificationRequest(
+            question="x + 4 = 9",
+            correct_answer="x = 5",
+            student_input="x + 4 = 9\nx = 9 - 5",
+            current_phase="GUIDED_PRACTICE",
+            input_source="CANVAS",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+            canvas_regions=[
+                _canvas_region("step-1", "x + 4 = 9", 0.95),
+                _canvas_region("step-2", "x = 9 - 5", 0.95),
+            ],
+            spatial_tokens=[
+                SpatialMathToken(
+                    token_id="step-2:token-1",
+                    step_id="step-2",
+                    text="x",
+                    bounding_box={"x": 0.1, "y": 0.1, "width": 0.1, "height": 0.1},
+                    alignment_confidence=0.95,
+                ),
+                SpatialMathToken(
+                    token_id="step-2:token-2",
+                    step_id="step-2",
+                    text="=",
+                    bounding_box={"x": 0.2, "y": 0.1, "width": 0.1, "height": 0.1},
+                    alignment_confidence=0.95,
+                ),
+                SpatialMathToken(
+                    token_id="step-2:token-3",
+                    step_id="step-2",
+                    text="9",
+                    bounding_box={"x": 0.3, "y": 0.1, "width": 0.1, "height": 0.1},
+                    alignment_confidence=0.95,
+                ),
+                SpatialMathToken(
+                    token_id="step-2:token-4",
+                    step_id="step-2",
+                    text="-",
+                    bounding_box={"x": 0.4, "y": 0.1, "width": 0.1, "height": 0.1},
+                    alignment_confidence=0.95,
+                ),
+                SpatialMathToken(
+                    token_id="step-2:token-5",
+                    step_id="step-2",
+                    text="5",
+                    bounding_box={"x": 0.5, "y": 0.1, "width": 0.1, "height": 0.1},
+                    alignment_confidence=0.95,
+                ),
+            ],
+        )
+    )
+
+    assert response.mistake_classification is not None
+    assert response.mistake_classification.target_token_ids == ["step-2:token-5"]
+    assert response.mistake_classification.error_token == "5"
+    assert response.mistake_classification.expected_token == "4"
 
 
 def test_canvas_math_review_accepts_division_steps() -> None:

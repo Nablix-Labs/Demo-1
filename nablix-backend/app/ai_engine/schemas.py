@@ -230,6 +230,9 @@ class CanvasTextRegion(StrictSchema):
 class CanvasMistakeClassification(StrictSchema):
     status: MistakeStatus
     mistake_step_id: str | None
+    target_token_ids: list[str] = Field(default_factory=list)
+    error_token: str | None = None
+    expected_token: str | None = None
     target_text: str | None
     target_span: list[int] | None
     replacement_text: str | None
