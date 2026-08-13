@@ -12,7 +12,7 @@ import { useCallback, useEffect, useState } from 'react';
 import CanvasStage from '@/components/Canvas';
 import ContinuityCheck from '@/components/ContinuityCheck';
 import FloatingMicButton from '@/components/FloatingMicButton';
-import VisualCue from '@/components/VisualCue';
+import SupportLane from '@/components/SupportLane';
 import { useFlowNav } from '@/lib/useFlowNav';
 import { useRouter } from 'next/navigation';
 import { useNumeraStore } from '@/store/useNumeraStore';
@@ -300,7 +300,7 @@ export default function LessonPage() {
       <CanvasStage />
       <ContinuityCheck />
       <FloatingMicButton />
-      <VisualCue />
+      <SupportLane />
     </>
   );
 }

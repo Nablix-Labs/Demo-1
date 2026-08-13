@@ -345,6 +345,23 @@ export interface NumeraState {
    * step restored on reload would contradict the Student Model.
    */
   activeScaffold: ActiveScaffold | null;
+  /**
+   * The authorised hint currently ON SCREEN, or null.
+   *
+   * Distinct from `lastHintText`, which is the record kept for the "Need help?"
+   * replay and for `hint_count` — that one has to survive being dismissed. This
+   * is only what the student can see right now, so dismissing it clears this
+   * and leaves the record alone.
+   *
+   * It exists because a hint had no UI of its own in Guided Practice: it was
+   * appended to the transcript as an ordinary tutor bubble, so it looked exactly
+   * like the tutor talking and vanished entirely when the panel was collapsed
+   * (Sanya, 13 Aug 2026: "hints are gone noww").
+   *
+   * Never persisted — support state belongs to the live turn, and a hint
+   * restored on reload would contradict the Student Model.
+   */
+  visibleHint: string | null;
   visualCueVisible: boolean;
   /**
    * The backend's `cue_id` (e.g. 'VC-T01-ADD-NOT-MULTIPLY'), when it sent one.
@@ -547,6 +564,7 @@ export interface NumeraState {
   setTutorTurn: (tutorTurnId: string | null, gating: { expects: boolean; allow: boolean }) => void;
   /** The tutor turn failed; the student is owed a reply, not a nudge. */
   markTutorTurnFailed: () => void;
+  setVisibleHint: (hint: string | null) => void;
   setVisualCueVisible: (v: boolean) => void;
   setActiveScaffold: (s: ActiveScaffold | null) => void;
 
@@ -641,7 +659,7 @@ const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
   | 'setQuestionText' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'markTutorTurnFailed'
-  | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue'
+  | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue' | 'setVisibleHint'
   | 'setSupportShown' | 'setLastHintText' | 'lockPhase3Attempt'
   | 'setPendingTutorSpeech' | 'claimPendingTutorSpeech' | 'setQuestionProgress' | 'setAppliedResponse' | 'setInactivityPolicy'
   | 'addTranscriptMessage' | 'removeTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript' | 'commitPartialTranscript'
@@ -700,6 +718,7 @@ const initial: Omit<
   allowVoiceInput: true,
   tutorTurnFailed: false,
   activeScaffold: null as ActiveScaffold | null,
+  visibleHint: null as string | null,
   visualCueVisible: false,
   visualCueId: null as string | null,
   visualCueType: null,
@@ -849,6 +868,9 @@ export const useNumeraStore = create<NumeraState>()(
               visualCueActions: null,
               supportShown: null,
               lastHintText: null,
+              // A hint is about the question it was given on. Left up, it would
+              // sit beside the next question nudging the wrong step.
+              visibleHint: null,
               // A pick belongs to the question it was made on. Carrying it over
               // would show the next question opening with an answer already
               // chosen.
@@ -956,6 +978,8 @@ export const useNumeraStore = create<NumeraState>()(
     }),
 
   markTutorTurnFailed: () => set({ tutorTurnFailed: true }),
+
+  setVisibleHint: (visibleHint) => set({ visibleHint }),
 
   setVisualCueVisible: (visualCueVisible) => set({ visualCueVisible }),
 

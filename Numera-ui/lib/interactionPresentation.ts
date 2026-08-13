@@ -68,6 +68,20 @@ export function applyInteractionSupport(response: SupportPresentation): string {
     useNumeraStore.getState().setLastHintText(supportMessage);
   }
 
+  // Put the hint on screen as its own card, not only in the transcript.
+  //
+  // It was reaching the student as a plain tutor bubble — indistinguishable
+  // from the tutor talking, and invisible altogether once the transcript panel
+  // was collapsed, which is a persisted preference. So a hint the backend had
+  // authorised could be delivered, logged, counted in `hint_count`, and still
+  // never seen (Sanya, 13 Aug 2026).
+  //
+  // `authorisedHint` rather than `supportMessage`: it drops a support message
+  // that only repeats the tutor's own line, which would otherwise put the same
+  // sentence on the screen twice.
+  const hint = authorisedHint(response);
+  if (hint) useNumeraStore.getState().setVisibleHint(hint);
+
   const cue = response.visual_cue;
   const showCue = cue?.show ?? response.show_visual_cue;
   // False means no new cue was served on this turn. Keep the cue already

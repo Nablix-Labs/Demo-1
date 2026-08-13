@@ -20,7 +20,6 @@ import { useNumeraStore } from '@/store/useNumeraStore';
 import { isPhase3 } from '@/lib/phase3';
 import { resolveCueCard } from '@/lib/visualCueCards';
 import { cueLabel } from '@/lib/cueLabel';
-import { cn } from '@/lib/cn';
 import StickyNote from '@/components/StickyNote';
 
 export default function VisualCue() {
@@ -30,7 +29,6 @@ export default function VisualCue() {
   const cueType = useNumeraStore((s) => s.visualCueType);
   const description = useNumeraStore((s) => s.visualCueDescription);
   const assetUrl = useNumeraStore((s) => s.visualCueAssetUrl);
-  const panelSide = useNumeraStore((s) => s.panelSide);
   const currentPhase = useNumeraStore((s) => s.currentPhase);
   const card = resolveCueCard(cueType);
   // Labelled by what the BACKEND served, not by what the client happens to hold
@@ -67,12 +65,10 @@ export default function VisualCue() {
 
   return (
     <aside
-      // Right side (matches the design mockup: canvas left, cue right). Sits
-      // below the "Explain it back" chrome so it stacks under it, not over it.
-      className={cn(
-        'fixed top-[84px] z-30 transition-all duration-300',
-        panelSide === 'right' ? 'left-4' : 'right-4',
-      )}
+      // Position belongs to SupportLane, which stacks this under the hint —
+      // owning a `fixed` of its own is what would put the two cards on top of
+      // each other.
+      className="relative transition-all duration-300"
       style={{
         opacity: shown ? 1 : 0,
         transform: shown ? 'translateY(0)' : 'translateY(-6px)',
