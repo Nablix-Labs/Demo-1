@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { cueAssetUrl } from '@/lib/cueAsset';
+import { cueAssetUrl, showCueDescription } from '@/lib/cueAsset';
 
 const GOOD = 'https://nablixmathvideos.blob.core.windows.net/numeradev/cues/VC-T01-ADD-NOT-MULTIPLY.png';
 
@@ -41,5 +41,28 @@ describe('cueAssetUrl', () => {
     // This string comes from authored content and ends up in an <img src>.
     expect(cueAssetUrl('http://nablixmathvideos.blob.core.windows.net/c/x.png')).toBeNull();
     expect(cueAssetUrl('https://example.com/cues/x.png')).toBeNull();
+  });
+});
+
+describe('showCueDescription', () => {
+  const IMG = 'https://nablixmathvideos.blob.core.windows.net/cues/direction-words.png';
+
+  it('hides the tutor script when the picture is carrying the cue', () => {
+    // Manjusha, 13 Aug 2026: "can we remove the text above the pic ... that
+    // text is for the tutor to explain".
+    expect(showCueDescription(IMG, false)).toBe(false);
+  });
+
+  it('shows the text when there is no picture', () => {
+    // Most Topic 1 cues have no asset_url today, so this is the common path —
+    // the description IS the cue and hiding it leaves an empty card.
+    expect(showCueDescription(null, false)).toBe(true);
+  });
+
+  it('brings the text back when the picture fails to load', () => {
+    // The degradation guarantee: a broken asset must never cost the student
+    // the cue. Hiding the text unconditionally would turn one bad URL into a
+    // blank card.
+    expect(showCueDescription(IMG, true)).toBe(true);
   });
 });

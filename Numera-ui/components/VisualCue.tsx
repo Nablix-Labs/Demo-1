@@ -20,6 +20,7 @@ import { useNumeraStore } from '@/store/useNumeraStore';
 import { isPhase3 } from '@/lib/phase3';
 import { resolveCueCard } from '@/lib/visualCueCards';
 import { cueLabel } from '@/lib/cueLabel';
+import { showCueDescription } from '@/lib/cueAsset';
 import StickyNote from '@/components/StickyNote';
 
 export default function VisualCue() {
@@ -47,6 +48,9 @@ export default function VisualCue() {
   // Reset per cue: a failure on one image must not suppress the next one.
   const [imageFailed, setImageFailed] = useState(false);
   useEffect(() => setImageFailed(false), [cueKey]);
+  // The picture carries the cue whenever there is one to show; the text steps
+  // back in only when there is not.
+  const showDescription = showCueDescription(assetUrl, imageFailed);
   useEffect(() => {
     if (visible) {
       const id = requestAnimationFrame(() => setShown(true));
@@ -89,12 +93,19 @@ export default function VisualCue() {
             as the annotation rather than beside it. */}
         <StickyNote tone="amber" label={label} lines={card ? [card.example] : undefined}>
           {card?.caption}
-          {description ? <span className="mt-2 block">{description}</span> : null}
-          {/* The picture is ADDITIVE — the text card above is the cue itself.
-              A missing, malformed or unreachable image must never cost the
-              student the cue, so a load failure just hides the <img> (Sanya,
-              12 Aug 2026: "do not break the existing text-card cue if the
-              image is unavailable"). */}
+          {/* The description is the TUTOR'S script, not the student's caption —
+              "that text is for the tutor to explain" (Manjusha, 13 Aug 2026).
+              With a picture on the card, printing it too makes the student read
+              the explanation they are about to be given.
+
+              It still renders when there is no usable image, because then the
+              text IS the cue — that is the whole degradation guarantee below,
+              and dropping it would leave an empty card. */}
+          {description && showDescription ? <span className="mt-2 block">{description}</span> : null}
+          {/* A missing, malformed or unreachable image must never cost the
+              student the cue, so a load failure hides the <img> and the text
+              above comes back (Sanya, 12 Aug 2026: "do not break the existing
+              text-card cue if the image is unavailable"). */}
           {assetUrl && !imageFailed ? (
             <img
               src={assetUrl}

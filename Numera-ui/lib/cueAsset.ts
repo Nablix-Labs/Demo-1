@@ -37,3 +37,23 @@ export function cueAssetUrl(raw: string | null | undefined): string | null {
   if (!ALLOWED_HOSTS.includes(url.hostname)) return null;
   return url.toString();
 }
+
+/**
+ * Should the cue's `description` be printed on the card?
+ *
+ * Only when there is no picture to carry the cue. The description is the
+ * TUTOR'S script — "that text is for the tutor to explain" (Manjusha, 13 Aug
+ * 2026) — so showing it beside the image makes the student read the explanation
+ * they are about to be told.
+ *
+ * It comes back when the image is absent or failed to load, because then the
+ * text IS the cue. That is the same degradation guarantee the <img> has: a
+ * broken asset must never cost the student the cue, and hiding the text
+ * unconditionally would leave them an empty card.
+ */
+export function showCueDescription(
+  assetUrl: string | null | undefined,
+  imageFailed: boolean,
+): boolean {
+  return !assetUrl || imageFailed;
+}

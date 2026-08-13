@@ -1011,6 +1011,15 @@ export const useNumeraStore = create<NumeraState>()(
       visualCueDescription: description,
       visualCueAssetUrl: assetUrl,
       visualCueActions: actions,
+      // The cue REPLACES the hint (Sanya, 13 Aug 2026: "i think it should be
+      // replaced after cue appears"). The ladder escalates hint → hint → cue,
+      // so a cue means the hints did not land — leaving them stacked above it
+      // gives the student three cards to read at the moment they are already
+      // stuck, and the newest support is the one meant to be acted on.
+      //
+      // Only on the way UP: hiding a cue must not also clear a hint that is
+      // still the active support.
+      ...(show ? { visibleHint: null } : {}),
       canvasEvents: appendCanvasEvent(s.canvasEvents, {
         actor: 'SYSTEM_SUPPORT',
         action_type: show ? 'SHOW_CUE' : 'HIDE_CUE',

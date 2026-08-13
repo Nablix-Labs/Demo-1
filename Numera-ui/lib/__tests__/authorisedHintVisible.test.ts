@@ -78,6 +78,31 @@ describe('an authorised hint', () => {
   });
 });
 
+describe('the ladder', () => {
+  it('replaces the hint when the cue arrives', () => {
+    // Sanya, 13 Aug 2026: "i think it should be replaced after cue appears".
+    // A cue means the hints did not land, so stacking all three leaves the
+    // student reading the most at the moment they are most stuck.
+    applyInteractionSupport(turn());
+    applyInteractionSupport(turn({
+      conversation_action: 'SHOW_VISUAL_CUE',
+      support_message: null,
+      show_visual_cue: true,
+      visual_cue: { show: true, cue_id: 'VC-T01-ADD-NOT-MULTIPLY', description: 'Look at the +5' },
+    }));
+    expect(state().visibleHint).toBeNull();
+    expect(state().visualCueVisible).toBe(true);
+  });
+
+  it('does not clear the hint when a cue is dismissed', () => {
+    // Going back DOWN the ladder is not an escalation — a hint that is still
+    // the active support has to survive the cue being closed.
+    applyInteractionSupport(turn());
+    state().setVisualCue({ show: false });
+    expect(state().visibleHint).toBe('What happens to the +5 each time?');
+  });
+});
+
 describe('scope', () => {
   it('comes down when the question changes', () => {
     applyInteractionSupport(turn());
