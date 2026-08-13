@@ -13,6 +13,7 @@
  */
 import axios from 'axios';
 import type { CanvasDrawPayload, CanvasStrokeSnapshot } from '@/store/useNumeraStore';
+import type { CanvasEvent } from '@/lib/canvasMemory';
 import { useAuthStore } from '@/store/useAuthStore';
 import { allowAnonTutorCalls } from '@/lib/runtimeConfig';
 import type { Phase3ResponseFields } from '@/lib/phase3';
@@ -893,6 +894,17 @@ export interface InteractionCanvasState {
     width: number;
   }>;
   captured_at: string;
+  /**
+   * Ordered canvas memory for the current question (§8 of the V1-Hybrid spec).
+   *
+   * Sent alongside the snapshot, not instead of it: the snapshot is what OCR
+   * reads, the log is what tells the tutor the order things appeared in — and
+   * §7 asks that Sanya be called "with compact current canvas memory, not just
+   * a flat screenshot".
+   *
+   * Optional so the request stays valid before the backend adds the field.
+   */
+  canvas_events?: CanvasEvent[];
 }
 
 export interface InteractionPayload {
@@ -1333,6 +1345,18 @@ export async function submitCanvas(
    * button had not.
    */
   strokes: CanvasStrokeSnapshot[],
+  /**
+   * Ordered canvas memory for the current question — REQUIRED (§8, §9).
+   *
+   * Strokes say where the ink is; this says what happened and in what order,
+   * including the work the student rubbed out. §13 asks that the tutor "does
+   * not repeat already-completed reasoning steps", and nothing in a snapshot or
+   * a stroke list can tell it which steps those were.
+   *
+   * Required for the same reason `strokes` is — the field the caller may omit
+   * is the field that silently stops being sent.
+   */
+  canvasEvents: CanvasEvent[],
   student: string = studentId()
 ) {
   if (!snapshotDataUrl.startsWith(PNG_DATA_URL_PREFIX)) {
@@ -1349,6 +1373,11 @@ export async function submitCanvas(
     // Field name and shape match `CanvasSubmitRequest.strokes` (canvas.py:108)
     // and are the same objects the voice turn already sends.
     strokes,
+    // Not yet on `CanvasSubmitRequest`, and safe to send: the model does not
+    // forbid extra fields, so it is ignored until Chirudeva adds it (§12
+    // stage 2). Sending it now means the day the field lands, the data is
+    // already arriving — no second frontend release in the middle of his work.
+    canvas_events: canvasEvents,
     submission_role: submissionRole,
   });
   return res.data;

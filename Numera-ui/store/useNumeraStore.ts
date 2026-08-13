@@ -26,6 +26,19 @@ import { uid } from '@/lib/uid';
 import type { SupportRung } from '@/lib/supportLadder';
 import { EMPTY_APPLIED, type AppliedState } from '@/lib/responseGate';
 import type { InactivityPolicy } from '@/lib/inactivity';
+import {
+  appendCanvasEvent,
+  clearCanvasEvents,
+  itemBBox,
+  supersedeCanvasEvents,
+  tutorActionType,
+  tutorElementBBox,
+  tutorElementText,
+  type CanvasEvent,
+  type CanvasEventContext,
+  type CanvasEventDraft,
+  type CanvasSize,
+} from '@/lib/canvasMemory';
 
 // A turn id is an idempotency key, so it must remain unique across reloads and
 // reconnects. A module-local counter restarted at TURN-0001 after refresh and
@@ -150,6 +163,19 @@ export interface CanvasDrawPayload {
 // WebSocket reconnect). We drop any actionId we've already applied. Module-level
 // (not React state) since it's plumbing, not UI.
 const seenDrawActionIds = new Set<string>();
+
+/**
+ * Which turn and question a canvas event belongs to (§8: "links canvas activity
+ * to the conversation turn and active problem").
+ *
+ * Read off live state at emit time rather than passed in by callers — a
+ * component that drew before the ids updated would otherwise file the event
+ * against the previous question, which is precisely the mix-up ordered memory
+ * exists to prevent.
+ */
+function eventContext(s: { currentTurnId: string | null; activeQuestionId: string | null }): CanvasEventContext {
+  return { turnId: s.currentTurnId, questionId: s.activeQuestionId };
+}
 
 export interface TranscriptMessage {
   id: string;
@@ -390,6 +416,30 @@ export interface NumeraState {
   undone: DrawnItem[];         // student redo stack
   tutorElements: TutorElement[]; // AI-tutor marks (separate, non-erasable layer)
 
+  /**
+   * Ordered canvas memory — §8 of the Phase 2 V1-Hybrid spec.
+   *
+   * Append-only for the life of a question, so it records the ORDER in which
+   * the maths appeared and not just what survived. `items` answers "what is on
+   * the board"; this answers "what happened, and in what order" — which is the
+   * question the tutor needs answered to resume at the first unresolved step
+   * rather than starting the question again. See lib/canvasMemory.ts.
+   *
+   * Not persisted: it describes one live question, and a log restored from
+   * storage would tell the tutor about reasoning the student cannot see.
+   */
+  canvasEvents: CanvasEvent[];
+
+  /**
+   * Live pixel size of the drawing surface, reported by DrawingCanvas.
+   *
+   * The store holds raw Konva pixels in `items` but §8's bbox has to be
+   * normalised, like all tutor geometry — so the size has to be readable
+   * outside the component that measures it. Zero until first measured, which
+   * `itemBBox` treats as "no box yet" rather than inventing one.
+   */
+  canvasSize: CanvasSize;
+
   // Input mode (voice | text | canvas)
   inputMode: InputMode;
   textInput: string;
@@ -540,6 +590,9 @@ export interface NumeraState {
   clearCanvas: () => void;
   applyCanvasDraw: (payload: CanvasDrawPayload | CanvasDrawPayload[]) => void;
   clearTutorMarks: () => void;
+  setCanvasSize: (size: CanvasSize) => void;
+  /** Record a support action (cue shown, scaffold step opened) in canvas memory. */
+  recordSupportEvent: (draft: CanvasEventDraft) => void;
   setInputMode: (m: InputMode) => void;
   setTextInput: (v: string) => void;
   setPanelSide: (s: 'left' | 'right') => void;
@@ -595,7 +648,7 @@ const initial: Omit<
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
   | 'setShapeKind' | 'setEraserMode'
   | 'setStrokeColor' | 'setStrokeWidth' | 'addItem' | 'removeItem' | 'undo' | 'redo'
-  | 'clearCanvas' | 'applyCanvasDraw' | 'clearTutorMarks'
+  | 'clearCanvas' | 'applyCanvasDraw' | 'clearTutorMarks' | 'setCanvasSize' | 'recordSupportEvent'
   | 'setInputMode' | 'setTextInput' | 'setPanelSide' | 'setPanelWidth' | 'resetPanelWidth' | 'togglePanelSide' | 'togglePanelCollapsed'
   | 'toggleTranscript' | 'setToolbarPos' | 'toggleToolbarCollapsed' | 'setToolbarOrientation' | 'setMicButtonPos' | 'setCanvasGrid' | 'setTtsVoice' | 'setActiveScaffold'
   | 'setCanvasExporter' | 'startGroupSession' | 'endGroupSession'
@@ -674,6 +727,8 @@ const initial: Omit<
   items: [],
   undone: [],
   tutorElements: [],
+  canvasEvents: [] as CanvasEvent[],
+  canvasSize: { width: 0, height: 0 } as CanvasSize,
   inputMode: 'voice',
   textInput: '',
   panelSide: 'left',
@@ -806,6 +861,12 @@ export const useNumeraStore = create<NumeraState>()(
               undone: [],
               // The tutor's marks belong to the question they annotated.
               tutorElements: [],
+              // Ordered memory is scoped to one question (§8: it exists so the
+              // tutor can resume at the first unresolved step of the CURRENT
+              // problem). Carrying it over would offer the tutor a completed
+              // question's reasoning as if it were unfinished. Cross-question
+              // history is session state, which the backend persists (§7).
+              canvasEvents: [],
               // Ink and marks are gone, so a Phase 3 lock on the question just
               // left has nothing to hold; keeping it would freeze the new one.
               phase3LockedQuestionId: null,
@@ -897,19 +958,45 @@ export const useNumeraStore = create<NumeraState>()(
   markTutorTurnFailed: () => set({ tutorTurnFailed: true }),
 
   setVisualCueVisible: (visualCueVisible) => set({ visualCueVisible }),
-  setActiveScaffold: (activeScaffold) => set({ activeScaffold }),
+
+  // §8 logs SCAFFOLD_STEP as a SYSTEM_SUPPORT action, with `source_id` so every
+  // support action stays traceable to the DB content it came from (§13). Only a
+  // step the student can actually see is recorded: closing the panel is not a
+  // teaching move, it is the absence of one.
+  setActiveScaffold: (activeScaffold) =>
+    set((s) => ({
+      activeScaffold,
+      canvasEvents: activeScaffold
+        ? appendCanvasEvent(s.canvasEvents, {
+            actor: 'SYSTEM_SUPPORT',
+            action_type: 'SCAFFOLD_STEP',
+            content: activeScaffold.stepText,
+            source_id: activeScaffold.currentStepId,
+            target_object_id: activeScaffold.scaffoldId,
+          }, eventContext(s))
+        : s.canvasEvents,
+    })),
 
   setVisualCue: ({
     show, cueId = null, cueType = null, description = null, assetUrl = null, actions = null,
   }) =>
-    set({
+    set((s) => ({
       visualCueVisible: show,
       visualCueId: cueId,
       visualCueType: cueType,
       visualCueDescription: description,
       visualCueAssetUrl: assetUrl,
       visualCueActions: actions,
-    }),
+      canvasEvents: appendCanvasEvent(s.canvasEvents, {
+        actor: 'SYSTEM_SUPPORT',
+        action_type: show ? 'SHOW_CUE' : 'HIDE_CUE',
+        content: description,
+        // The cue's own id is its identity AND its DB provenance, so it is both
+        // what was acted on and where the support came from (Sanya, 13 Aug).
+        target_object_id: cueId,
+        source_id: cueId,
+      }, eventContext(s)),
+    })),
   setSupportShown: (supportShown) => set({ supportShown }),
   setAppliedResponse: (appliedResponse) => set({ appliedResponse }),
   setInactivityPolicy: (inactivityPolicy) => set({ inactivityPolicy }),
@@ -1041,27 +1128,93 @@ export const useNumeraStore = create<NumeraState>()(
   setStrokeColor: (strokeColor) => set({ strokeColor }),
   setStrokeWidth: (strokeWidth) => set({ strokeWidth }),
 
+  // ── Canvas mutations, each also written to ordered memory (§8) ─────────────
+  //
+  // The events are emitted HERE rather than in DrawingCanvas because the store
+  // is the one place every path goes through — pointer strokes, the object
+  // eraser, undo/redo and the toolbar's clear. An emitter in the component
+  // would have to be repeated at each, and the one that got missed would be
+  // invisible: the board would still look right, and only the tutor would be
+  // working from an incomplete history.
+
   addItem: (item) =>
-    set((s) => ({ items: [...s.items, item], undone: [] })),
+    set((s) => ({
+      items: [...s.items, item],
+      undone: [],
+      canvasEvents: appendCanvasEvent(s.canvasEvents, {
+        actor: 'STUDENT',
+        action_type: 'WRITE',
+        target_object_id: item.id,
+        bbox: itemBBox(item, s.canvasSize),
+        content: item.kind === 'stroke' ? item.tool : item.kind,
+      }, eventContext(s)),
+    })),
 
   removeItem: (id) =>
-    set((s) => ({ items: s.items.filter((it) => it.id !== id) })),
+    set((s) => {
+      const removed = s.items.find((it) => it.id === id);
+      if (!removed) return s;
+      return {
+        items: s.items.filter((it) => it.id !== id),
+        canvasEvents: appendCanvasEvent(
+          supersedeCanvasEvents(s.canvasEvents, [id]),
+          { actor: 'STUDENT', action_type: 'ERASE', target_object_id: id },
+          eventContext(s),
+        ),
+      };
+    }),
 
+  // Undo is an ERASE in the log, not a rewind of it. The student did write the
+  // thing and then take it back, and that sequence is evidence — §8 keeps the
+  // trail of thinking, so removing the WRITE would make the log claim they
+  // never tried it.
   undo: () =>
     set((s) => {
       if (s.items.length === 0) return s;
       const last = s.items[s.items.length - 1];
-      return { items: s.items.slice(0, -1), undone: [...s.undone, last] };
+      return {
+        items: s.items.slice(0, -1),
+        undone: [...s.undone, last],
+        canvasEvents: appendCanvasEvent(
+          supersedeCanvasEvents(s.canvasEvents, [last.id]),
+          { actor: 'STUDENT', action_type: 'ERASE', target_object_id: last.id },
+          eventContext(s),
+        ),
+      };
     }),
 
   redo: () =>
     set((s) => {
       if (s.undone.length === 0) return s;
       const last = s.undone[s.undone.length - 1];
-      return { items: [...s.items, last], undone: s.undone.slice(0, -1) };
+      return {
+        items: [...s.items, last],
+        undone: s.undone.slice(0, -1),
+        canvasEvents: appendCanvasEvent(s.canvasEvents, {
+          actor: 'STUDENT',
+          action_type: 'WRITE',
+          target_object_id: last.id,
+          bbox: itemBBox(last, s.canvasSize),
+          content: last.kind === 'stroke' ? last.tool : last.kind,
+        }, eventContext(s)),
+      };
     }),
 
-  clearCanvas: () => set({ items: [], undone: [] }),
+  clearCanvas: () =>
+    set((s) => ({
+      items: [],
+      undone: [],
+      canvasEvents: appendCanvasEvent(
+        clearCanvasEvents(s.canvasEvents),
+        { actor: 'STUDENT', action_type: 'CLEAR' },
+        eventContext(s),
+      ),
+    })),
+
+  setCanvasSize: (canvasSize) => set({ canvasSize }),
+
+  recordSupportEvent: (draft) =>
+    set((s) => ({ canvasEvents: appendCanvasEvent(s.canvasEvents, draft, eventContext(s)) })),
 
   applyCanvasDraw: (payload) =>
     set((s) => {
@@ -1075,13 +1228,21 @@ export const useNumeraStore = create<NumeraState>()(
       // list of actions. Accept both here so no caller has to care.
       const actions = Array.isArray(payload) ? payload : [payload];
       let tutorElements = s.tutorElements;
+      let canvasEvents = s.canvasEvents;
+      const context = eventContext(s);
       for (const action of actions) {
         // A new "replace" resets the layer and the idempotency window.
         if (action.mode === 'replace') {
           seenDrawActionIds.clear();
+          // The marks leave the screen; their events stay in the log as
+          // SUPERSEDED. The tutor drew them, so they are part of how the
+          // reasoning unfolded even once they are gone (§11).
+          canvasEvents = supersedeCanvasEvents(canvasEvents, tutorElements.map((el) => el.id));
           tutorElements = [];
         }
-        // Drop a duplicate command (re-delivered on reconnect).
+        // Drop a duplicate command (re-delivered on reconnect). It must not
+        // reach the log either — a reconnect would otherwise show the tutor
+        // annotating twice and read as a repeated teaching move.
         if (action.actionId) {
           if (seenDrawActionIds.has(action.actionId)) continue;
           seenDrawActionIds.add(action.actionId);
@@ -1090,9 +1251,20 @@ export const useNumeraStore = create<NumeraState>()(
           ...el,
           id: el.id ?? uid(),
         }));
+        for (const element of incoming) {
+          canvasEvents = appendCanvasEvent(canvasEvents, {
+            actor: 'TUTOR',
+            action_type: tutorActionType(element.kind),
+            target_object_id: element.id,
+            bbox: tutorElementBBox(element),
+            content: tutorElementText(element),
+            math_text: element.tex?.trim() || null,
+            source_id: action.actionId ?? null,
+          }, context);
+        }
         tutorElements = [...tutorElements, ...incoming];
       }
-      return { tutorElements };
+      return { tutorElements, canvasEvents };
     }),
 
   clearTutorMarks: () => {

@@ -613,6 +613,10 @@ export function useDemoTutor() {
         // The strokes are what let the tutor mark the exact symbol rather than
         // the whole line. They were already captured here and simply not sent.
         canvasSnapshot.strokes,
+        // Ordered memory for this question (§8). Read at submit time, not
+        // captured with the snapshot, so a mark made between the export and the
+        // POST is still in the history the tutor reasons over.
+        useNumeraStore.getState().canvasEvents,
       );
       // Canvas responses now carry the same phase state as /interaction, so a
       // backend phase change here also drives usePhaseRouting.
@@ -958,6 +962,11 @@ export function useDemoTutor() {
             snapshot_data_url: canvasSnapshot.snapshotDataUrl,
             strokes: canvasSnapshot.strokes,
             captured_at: canvasSnapshot.capturedAt,
+            // §7: call the tutor engine "with compact current canvas memory,
+            // not just a flat screenshot". A voice turn needs it most — the
+            // student explained aloud, so the board alone under-reports what
+            // they did.
+            canvas_events: state.canvasEvents,
           },
           current_phase: state.currentPhase,
           concept_id: ctx.concept_id,

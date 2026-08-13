@@ -64,13 +64,14 @@ export default function DrawingCanvas({ onExportReady, tutorOnly = false, readOn
   // the worst possible place to spend main-thread time mid-stroke.
   const {
     activeTool, shapeKind, eraserMode, strokeColor, strokeWidth,
-    items, remoteItems, addItem, removeItem, undo, redo,
+    items, remoteItems, addItem, removeItem, undo, redo, setCanvasSize,
   } = useNumeraStore(
     useShallow((s) => ({
       activeTool: s.activeTool, shapeKind: s.shapeKind, eraserMode: s.eraserMode,
       strokeColor: s.strokeColor, strokeWidth: s.strokeWidth,
       items: s.items, remoteItems: s.remoteItems, addItem: s.addItem,
       removeItem: s.removeItem, undo: s.undo, redo: s.redo,
+      setCanvasSize: s.setCanvasSize,
     })),
   );
 
@@ -95,12 +96,17 @@ export default function DrawingCanvas({ onExportReady, tutorOnly = false, readOn
     if (!el) return;
     const ro = new ResizeObserver((entries) => {
       for (const e of entries) {
-        setContainerSize({ width: e.contentRect.width, height: e.contentRect.height });
+        const size = { width: e.contentRect.width, height: e.contentRect.height };
+        setContainerSize(size);
+        // Published to the store so ordered canvas memory can normalise a
+        // stroke's bbox (§8) — the store holds raw Konva pixels and this is the
+        // only place the surface is measured.
+        setCanvasSize(size);
       }
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [setCanvasSize]);
 
   // ── Expose the frozen PNG and committed freehand strokes to parent ────────────
   useEffect(() => {
