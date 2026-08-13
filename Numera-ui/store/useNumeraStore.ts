@@ -320,10 +320,20 @@ export interface NumeraState {
    */
   activeScaffold: ActiveScaffold | null;
   visualCueVisible: boolean;
+  /**
+   * The backend's `cue_id` (e.g. 'VC-T01-ADD-NOT-MULTIPLY'), when it sent one.
+   *
+   * This is the cue's IDENTITY, and the only reliable evidence that what we are
+   * holding is an authored visual cue at all. `cue_type` is null on the real
+   * Topic 1 cues (Sanya, 13 Aug), so it can answer neither question.
+   */
+  visualCueId: string | null;
   visualCueType: string | null;
   visualCueDescription: string | null;
   /** Illustration for the cue, when the backend sent a usable asset_url. */
   visualCueAssetUrl: string | null;
+  /** Structured cue actions as sent. Stored whole; not rendered yet (Phase 2 §6). */
+  visualCueActions: Array<Record<string, unknown>> | null;
 
   // Support ladder (§6 of the Phase 2 spec). `supportShown` is the highest rung
   // revealed for the CURRENT question, so "Need help?" climbs rather than
@@ -490,7 +500,14 @@ export interface NumeraState {
   setVisualCueVisible: (v: boolean) => void;
   setActiveScaffold: (s: ActiveScaffold | null) => void;
 
-  setVisualCue: (cue: { show: boolean; cueType?: string | null; description?: string | null; assetUrl?: string | null }) => void;
+  setVisualCue: (cue: {
+    show: boolean;
+    cueId?: string | null;
+    cueType?: string | null;
+    description?: string | null;
+    assetUrl?: string | null;
+    actions?: Array<Record<string, unknown>> | null;
+  }) => void;
   setSupportShown: (rung: SupportRung | null) => void;
   setAppliedResponse: (a: AppliedState) => void;
   setInactivityPolicy: (p: InactivityPolicy | null) => void;
@@ -631,9 +648,11 @@ const initial: Omit<
   tutorTurnFailed: false,
   activeScaffold: null as ActiveScaffold | null,
   visualCueVisible: false,
+  visualCueId: null as string | null,
   visualCueType: null,
   visualCueDescription: null,
   visualCueAssetUrl: null as string | null,
+  visualCueActions: null as Array<Record<string, unknown>> | null,
   supportShown: null as SupportRung | null,
   lastHintText: null as string | null,
   phase3LockedQuestionId: null as string | null,
@@ -768,8 +787,11 @@ export const useNumeraStore = create<NumeraState>()(
         ...(questionChanged
           ? {
               visualCueVisible: false,
+              visualCueId: null,
               visualCueType: null,
               visualCueDescription: null,
+              visualCueAssetUrl: null,
+              visualCueActions: null,
               supportShown: null,
               lastHintText: null,
               // A pick belongs to the question it was made on. Carrying it over
@@ -877,12 +899,16 @@ export const useNumeraStore = create<NumeraState>()(
   setVisualCueVisible: (visualCueVisible) => set({ visualCueVisible }),
   setActiveScaffold: (activeScaffold) => set({ activeScaffold }),
 
-  setVisualCue: ({ show, cueType = null, description = null, assetUrl = null }) =>
+  setVisualCue: ({
+    show, cueId = null, cueType = null, description = null, assetUrl = null, actions = null,
+  }) =>
     set({
       visualCueVisible: show,
+      visualCueId: cueId,
       visualCueType: cueType,
       visualCueDescription: description,
       visualCueAssetUrl: assetUrl,
+      visualCueActions: actions,
     }),
   setSupportShown: (supportShown) => set({ supportShown }),
   setAppliedResponse: (appliedResponse) => set({ appliedResponse }),

@@ -4,13 +4,14 @@
  * VisualCue — the instructional cue card shown when the AI Engine flags a
  * student mistake.
  *
- * The backend sends a `visual_cue` object (show + cue_type + description); the
- * store holds `visualCueVisible` / `visualCueType` / `visualCueDescription`.
- * This picks the matching card from the static library (lib/visualCueCards) and
- * renders title, worked example, steps and caption, with the backend
- * `description` layered on as an extra guidance note. The card never reveals the
- * final answer — it nudges the next step. Kept in the top-left corner so it
- * supports the student's working without covering it or the practice button.
+ * The backend sends a `visual_cue` object — `cue_id`, `cue_type`, `description`,
+ * `asset_url`, `actions` — and the store holds all of it. This picks the
+ * matching card from the static library (lib/visualCueCards) when `cue_type`
+ * names one, and layers the backend `description` on as the guidance note; the
+ * authored cues carry no `cue_type`, so most of the time the description IS the
+ * cue. The card never reveals the final answer — it nudges the next step. Kept
+ * in the corner so it supports the student's working without covering it or the
+ * practice button.
  */
 
 import { useEffect, useState } from 'react';
@@ -18,29 +19,36 @@ import { X } from 'lucide-react';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { isPhase3 } from '@/lib/phase3';
 import { resolveCueCard } from '@/lib/visualCueCards';
+import { cueLabel } from '@/lib/cueLabel';
 import { cn } from '@/lib/cn';
 import StickyNote from '@/components/StickyNote';
 
 export default function VisualCue() {
   const visible = useNumeraStore((s) => s.visualCueVisible);
   const setVisible = useNumeraStore((s) => s.setVisualCueVisible);
+  const cueId = useNumeraStore((s) => s.visualCueId);
   const cueType = useNumeraStore((s) => s.visualCueType);
   const description = useNumeraStore((s) => s.visualCueDescription);
   const assetUrl = useNumeraStore((s) => s.visualCueAssetUrl);
   const panelSide = useNumeraStore((s) => s.panelSide);
   const currentPhase = useNumeraStore((s) => s.currentPhase);
   const card = resolveCueCard(cueType);
-  // A note with no authored card is the tutor's own guidance text — the hint
-  // rung of the support ladder, not a cue card. Titling it "Visual cue" told
-  // the student a hint was something else (Manjusha, 10 Aug). The card's own
-  // title stands when there is one.
-  const label = card?.title ?? 'Hint';
+  // Labelled by what the BACKEND served, not by what the client happens to hold
+  // a card for — see lib/cueLabel for why both Manjusha's and Sanya's reports
+  // are satisfied by that rule.
+  const label = cueLabel({ cardTitle: card?.title, cueId });
+  /**
+   * Identity of the cue on screen, for state that must reset when it changes.
+   * `cue_id` first: it is the only stable identifier the backend sends, since
+   * `cue_type` is null and `asset_url` is absent on most cues today.
+   */
+  const cueKey = cueId ?? cueType ?? assetUrl;
 
   // Small entrance (fade + rise) without depending on a motion library.
   const [shown, setShown] = useState(false);
   // Reset per cue: a failure on one image must not suppress the next one.
   const [imageFailed, setImageFailed] = useState(false);
-  useEffect(() => setImageFailed(false), [assetUrl]);
+  useEffect(() => setImageFailed(false), [cueKey]);
   useEffect(() => {
     if (visible) {
       const id = requestAnimationFrame(() => setShown(true));
