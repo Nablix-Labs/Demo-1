@@ -33,6 +33,12 @@ from app.models.guided_learning import (
     ActiveTeachingObjective,
     GeneratedQuestionRubric,
     GuidedEvaluation,
+    HybridSemanticEvaluation,
+    HybridTutorRequest,
+    HybridTutorWording,
+    HybridTutorWordingRequest,
+    HybridTutorTurn,
+    HybridTutorTurnContext,
     ScaffoldEvaluationContext,
     ScaffoldStepEvaluation,
 )
@@ -40,6 +46,18 @@ from app.models.student_model_session import AnswerSpec, QuestionType
 
 
 _OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
+
+
+def _hybrid_current_step_payload(request: HybridTutorRequest) -> dict[str, object] | None:
+    current_index = request.pedagogical_state.current_answer_step_index
+    if current_index is None:
+        return None
+    return {
+        "step_id": f"{request.answer_spec.answer_spec_id}:STEP:{current_index + 1}",
+        "step_index": current_index,
+        "text": request.answer_spec.answer_steps[current_index],
+        "component_id": f"{request.answer_spec.answer_spec_id}:COMPONENT:{current_index + 1}",
+    }
 
 
 class OpenAITutorTurn(StrictSchema):
@@ -275,6 +293,105 @@ class OpenAIAIEngineClient:
                 "openai_ai_engine",
                 f"invalid scaffold evaluation: {error}",
             ) from error
+
+    def evaluate_hybrid_semantics(
+        self,
+        request: HybridTutorRequest,
+        system_prompt: str,
+    ) -> HybridSemanticEvaluation:
+        current_step = _hybrid_current_step_payload(request)
+        content = self._request_guided_json(
+            name="hybrid_semantic_evaluation",
+            schema=HybridSemanticEvaluation.model_json_schema(),
+            system_prompt=system_prompt,
+            user_payload={
+                "question_id": request.question_id,
+                "question": request.question,
+                "current_authored_step": current_step,
+                "completed_component_ids": request.pedagogical_state.completed_component_ids,
+                "student_evidence": request.student_evidence.model_dump(),
+                "ordered_canvas_memory": [
+                    item.model_dump() for item in request.ordered_canvas_memory
+                ],
+                "support_state": request.support_state.model_dump(),
+            },
+        )
+        try:
+            return HybridSemanticEvaluation.model_validate(content)
+        except ValidationError as error:
+            raise AdapterError(
+                "openai_ai_engine",
+                f"invalid hybrid semantic evaluation: {error}",
+            ) from error
+
+    def generate_hybrid_tutor_wording(
+        self,
+        request: HybridTutorWordingRequest,
+        system_prompt: str,
+    ) -> HybridTutorWording:
+        content = self._request_guided_json(
+            name="hybrid_tutor_wording",
+            schema=HybridTutorWording.model_json_schema(),
+            system_prompt=system_prompt,
+            user_payload=request.model_dump(),
+        )
+        try:
+            return HybridTutorWording.model_validate(content)
+        except ValidationError as error:
+            raise AdapterError(
+                "openai_ai_engine",
+                f"invalid hybrid tutor wording: {error}",
+            ) from error
+
+    def generate_hybrid_tutor_turn(
+        self,
+        context: HybridTutorTurnContext,
+        system_prompt: str,
+    ) -> HybridTutorTurn:
+        request = context.request
+        authored_steps = [
+            {
+                "step_id": f"{request.answer_spec.answer_spec_id}:STEP:{index + 1}",
+                "component_id": f"{request.answer_spec.answer_spec_id}:COMPONENT:{index + 1}",
+                "text": text,
+            }
+            for index, text in enumerate(request.answer_spec.answer_steps)
+        ]
+        completed = request.pedagogical_state.completed_component_ids
+        content = self._request_guided_json(
+            name="hybrid_tutor_turn",
+            schema=HybridTutorTurn.model_json_schema(),
+            system_prompt=system_prompt,
+            user_payload={
+                "question_id": request.question_id,
+                "question_type": request.question_type,
+                "question": request.question,
+                "answer_spec": request.answer_spec.model_dump(),
+                "authored_steps": authored_steps,
+                "completed_step_ids": [step["step_id"] for step in authored_steps[:len(completed)]],
+                "unresolved_step_ids": [step["step_id"] for step in authored_steps[len(completed):]],
+                "selected_option": {
+                    "option_id": request.student_evidence.selected_option_id,
+                    "option_text": request.student_evidence.selected_option_text,
+                },
+                "resolved_student_meaning": context.resolved_student_meaning,
+                "student_evidence": request.student_evidence.model_dump(),
+                "relevant_history": [item.model_dump() for item in request.session_history],
+                "support_state": request.support_state.model_dump(),
+                "active_support_content": (
+                    context.active_support_content.model_dump()
+                    if context.active_support_content is not None else None
+                ),
+                "ordered_canvas_memory": [item.model_dump() for item in request.ordered_canvas_memory],
+                "decision": context.decision.model_dump(),
+                "canvas_actions": [item.model_dump() for item in context.canvas_actions],
+                "approved_answer_reveal": context.approved_answer_reveal,
+            },
+        )
+        try:
+            return HybridTutorTurn.model_validate(content)
+        except ValidationError as error:
+            raise AdapterError("openai_ai_engine", f"invalid hybrid tutor turn: {error}") from error
 
     def _request_guided_json(
         self,
