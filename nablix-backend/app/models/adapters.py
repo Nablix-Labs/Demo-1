@@ -14,6 +14,7 @@ from app.models.canvas_memory import CanvasEvent
 from app.models.student_model_session import AnswerSpec, QuestionType
 from app.models.guided_learning import (
     ActiveTeachingObjective,
+    ConversationMessage,
     GuidedTeachingState,
     GeneratedQuestionRubric,
     GuidedStudentState,
@@ -127,11 +128,6 @@ class AdapterContext(BaseModel):
     phase3_submission_confirmed: bool | None = None
     phase3_submission_kind: Literal["CANVAS", "CHOICE"] | None = None
     phase3_allowed_error_definitions: list[dict[str, object]] = Field(default_factory=list)
-
-
-class ConversationMessage(BaseModel):
-    role: Literal["user", "assistant"]
-    content: str
 
 
 class RetrievedDocument(BaseModel):

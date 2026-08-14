@@ -22,6 +22,7 @@ from app.ai_engine.schemas import (
     ExplainAgainRequest,
     OpenAIExplainAgainMessage,
     RecordedMisconception,
+    TutorResponse,
     VisibleVisualCue,
 )
 from app.core.config import Settings, get_settings
@@ -43,13 +44,25 @@ from app.models.adapters import (
 from app.models.student_model_session import AnswerSpec
 from app.models.guided_learning import (
     ActiveTeachingObjective,
-    FocusedComponentEvidence,
+    CanvasPedagogyAction,
+    HybridAuthoredSupportContent,
+    HybridCanvasPlannerRequest,
+    HybridPedagogyDecision,
     GeneratedConcept,
     GeneratedQuestionRubric,
     GuidedEvaluation,
+    HybridPedagogicalState,
+    HybridStudentEvidence,
+    HybridSupportState,
+    HybridTutorRequest,
+    HybridTutorResponse,
+    HybridTutorTurnContext,
+    OrderedCanvasMemoryItem,
+    FocusedComponentEvidence,
     GuidedTeachingState,
     ScaffoldEvaluationContext,
     ScaffoldStepEvaluation,
+    authored_hybrid_answer_steps,
 )
 
 
@@ -1850,6 +1863,824 @@ def _answer_spec(
         accepted_answers=accepted_answers,
         verification_method=verification_method,
     )
+
+
+def test_answer_spec_types_existing_student_model_answer_steps() -> None:
+    steps = [
+        "Identify the changing value.",
+        "Write the general rule.",
+    ]
+
+    answer_spec = AnswerSpec(
+        answer_spec_id="ANS-T01-001",
+        canonical_answer="n + 5",
+        accepted_answers=["n+5"],
+        verification_method="EXACT_NOTATION_MATCH",
+        answer_steps=steps,
+    )
+
+    assert answer_spec.answer_steps == steps
+    assert answer_spec.model_dump()["answer_steps"] == steps
+
+
+def test_answer_spec_defaults_missing_answer_steps_for_legacy_payloads() -> None:
+    answer_spec = _answer_spec("n + 5", ["n+5"], "EXACT_NOTATION_MATCH")
+
+    assert answer_spec.answer_steps == []
+
+
+def test_answer_spec_rejects_non_string_answer_steps() -> None:
+    with pytest.raises(ValueError):
+        AnswerSpec.model_validate(
+            {
+                "answer_spec_id": "ANS-T01-001",
+                "canonical_answer": "n + 5",
+                "accepted_answers": ["n+5"],
+                "verification_method": "EXACT_NOTATION_MATCH",
+                "answer_steps": [1],
+            }
+        )
+
+
+def _hybrid_action_payload() -> dict[str, object]:
+    return {
+        "action_id": "TURN-1:A1",
+        "type": "HIGHLIGHT",
+        "layer": "TUTOR",
+        "target_object_id": "canvas-object-1",
+        "semantic_tag": "changing_value",
+        "text": None,
+        "source_id": None,
+        "answer_reveal_allowed": False,
+    }
+
+
+def _hybrid_request_payload() -> dict[str, object]:
+    return {
+        "schema_version": "1.0",
+        "question_id": "Q-T01-001",
+        "question_type": "SHORT_RESPONSE",
+        "question": "Write the general rule.",
+        "answer_spec": {
+            "answer_spec_id": "ANS-T01-001",
+            "canonical_answer": "n + 5",
+            "accepted_answers": ["n+5"],
+            "verification_method": "EXACT_NOTATION_MATCH",
+            "answer_steps": [
+                "Identify the changing value.",
+                "Write the general rule.",
+            ],
+        },
+        "support_state": {
+            "current_support": "NONE",
+            "highest_support_used": "NONE",
+            "active_support_id": None,
+            "support_history_ids": [],
+            "consecutive_stuck_count": 0,
+        },
+        "session_history": [],
+        "ordered_canvas_memory": [
+            {
+                "object_id": "canvas-object-1",
+                "order_index": 0,
+                "turn_id": "TURN-1",
+                "question_id": "Q-T01-001",
+                "actor": "STUDENT",
+                "action_type": "WRITE",
+                "content": "The starting number changes.",
+                "math_text": None,
+                "target_object_id": None,
+                "semantic_tag": "changing_value",
+                "source_id": None,
+                "active_state": "ACTIVE",
+                "reliability": "RELIABLE",
+            }
+        ],
+        "student_evidence": {
+            "input_source": "VOICE",
+            "raw_voice_transcript": "the starting number changes",
+            "transcript_confidence": 0.98,
+            "transcript_alternatives": [],
+            "typed_answer": None,
+            "structured_answer": {},
+            "selected_option_id": None,
+            "selected_option_text": None,
+            "raw_ocr_text": None,
+            "processed_math_text": None,
+            "ocr_confidence": None,
+            "canvas_object_ids": ["canvas-object-1"],
+        },
+        "pedagogical_state": {
+            "student_state": "PARTIAL",
+            "completed_component_ids": [],
+            "current_answer_step_index": 0,
+            "consecutive_stuck_count": 0,
+        },
+    }
+
+
+def _hybrid_response_payload() -> dict[str, object]:
+    return {
+        "schema_version": "1.0",
+        "pedagogical_state": "PARTIAL",
+        "resolved_student_meaning": "The starting number changes.",
+        "input_reliability": "RELIABLE",
+        "tutor_voice_text": "Look at the part I highlighted. What stays fixed?",
+        "canvas_actions": [_hybrid_action_payload()],
+        "support_action": "NONE",
+        "next_expected_input": "VOICE_OR_WRITE",
+        "completed_components": ["CHANGING_VALUE"],
+        "current_answer_step_index": 1,
+        "current_answer_step_id": "ANS-T01-001:STEP:2",
+    }
+
+
+def test_hybrid_contracts_validate_strict_versioned_payloads() -> None:
+    request = HybridTutorRequest.model_validate(_hybrid_request_payload())
+    response = HybridTutorResponse.model_validate(_hybrid_response_payload())
+
+    assert request.answer_spec.answer_steps == [
+        "Identify the changing value.",
+        "Write the general rule.",
+    ]
+    assert response.canvas_actions[0].target_object_id == "canvas-object-1"
+
+
+def test_hybrid_request_derives_progress_ids_without_outer_progress_fields() -> None:
+    request_payload = _hybrid_request_payload()
+    request = HybridTutorRequest.model_validate(request_payload)
+
+    assert request.pedagogical_state.current_answer_step_index == 0
+    assert [step.component_id for step in authored_hybrid_answer_steps(request.answer_spec)] == [
+        "ANS-T01-001:COMPONENT:1",
+        "ANS-T01-001:COMPONENT:2",
+    ]
+    request_payload["current_answer_step_index"] = 0
+    with pytest.raises(ValueError):
+        HybridTutorRequest.model_validate(request_payload)
+
+
+def test_hybrid_evidence_accepts_selected_option_fields() -> None:
+    request_payload = _hybrid_request_payload()
+    evidence = request_payload["student_evidence"]
+    assert isinstance(evidence, dict)
+    evidence["selected_option_id"] = "A"
+    evidence["selected_option_text"] = "12 + 4 is the general form"
+
+    request = HybridTutorRequest.model_validate(request_payload)
+
+    assert request.student_evidence.selected_option_id == "A"
+    assert request.student_evidence.selected_option_text == "12 + 4 is the general form"
+
+
+def test_hybrid_authored_steps_have_stable_ids_and_component_order() -> None:
+    request = HybridTutorRequest.model_validate(_hybrid_request_payload())
+
+    steps = authored_hybrid_answer_steps(request.answer_spec)
+
+    assert [step.step_id for step in steps] == [
+        "ANS-T01-001:STEP:1",
+        "ANS-T01-001:STEP:2",
+    ]
+    assert [step.component_id for step in steps] == [
+        "ANS-T01-001:COMPONENT:1",
+        "ANS-T01-001:COMPONENT:2",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("question_id", "answer_spec_id"),
+    [
+        ("Q-T01-002", "ANS-T01-002"),
+        ("Q-T01-006", "ANS-T01-006"),
+    ],
+)
+def test_hybrid_progression_retains_confirmed_components(
+    question_id: str,
+    answer_spec_id: str,
+) -> None:
+    request_payload = _hybrid_request_payload()
+    answer_spec = request_payload["answer_spec"]
+    pedagogical_state = request_payload["pedagogical_state"]
+    assert isinstance(answer_spec, dict)
+    assert isinstance(pedagogical_state, dict)
+    request_payload["question_id"] = question_id
+    answer_spec["answer_spec_id"] = answer_spec_id
+    component_ids = [f"{answer_spec_id}:COMPONENT:1", f"{answer_spec_id}:COMPONENT:2"]
+    pedagogical_state["completed_component_ids"] = [component_ids[0]]
+    pedagogical_state["current_answer_step_index"] = 1
+    request = HybridTutorRequest.model_validate(request_payload)
+    response_payload = _hybrid_response_payload()
+    response_payload["completed_components"] = component_ids
+    response_payload["current_answer_step_index"] = None
+    response_payload["current_answer_step_id"] = None
+    response = HybridTutorResponse.model_validate(response_payload)
+
+    validated = classifier.validate_hybrid_tutor_progression(request, response)
+
+    assert validated.completed_components == component_ids
+    assert validated.current_answer_step_id is None
+
+
+def test_hybrid_progression_rejects_skipped_or_reordered_components() -> None:
+    request = HybridTutorRequest.model_validate(_hybrid_request_payload())
+    response_payload = _hybrid_response_payload()
+    response_payload["completed_components"] = ["ANS-T01-001:COMPONENT:2"]
+    response_payload["current_answer_step_index"] = 1
+    response_payload["current_answer_step_id"] = "ANS-T01-001:STEP:2"
+    response = HybridTutorResponse.model_validate(response_payload)
+
+    with pytest.raises(ValueError, match="ordered prefix"):
+        classifier.validate_hybrid_tutor_progression(request, response)
+
+
+def _enabled_hybrid_rules() -> classifier.ClassifierRulesConfig:
+    rules = classifier.load_classifier_rules()
+    guided_learning = rules.guided_learning.model_copy(
+        update={
+            "v1_hybrid_enabled": True,
+            "canvas_pedagogy_action_planner_enabled": True,
+        }
+    )
+    return rules.model_copy(update={"guided_learning": guided_learning})
+
+
+def _hybrid_canvas_planner_request(
+    state: str,
+    support_count: int,
+    support_action: str = "NONE",
+    support_id: str | None = None,
+) -> HybridCanvasPlannerRequest:
+    request = HybridTutorRequest.model_validate(_hybrid_request_payload())
+    decision = HybridPedagogyDecision(
+        strategy={
+            "CORRECT": "ADVANCE_AND_FADE",
+            "PARTIAL": "AFFIRM_AND_ISOLATE",
+            "WRONG": "SOCRATIC_MISCONCEPTION_TEST",
+            "STUCK": "SUPPORT_ESCALATION" if support_action != "NONE" else "LOAD_REDUCTION",
+        }[state],
+        support_action=support_action,
+        support_id=support_id,
+        next_expected_input="VOICE_OR_WRITE",
+    )
+    return HybridCanvasPlannerRequest(
+        turn_id="TURN-42",
+        question_id="Q-T01-001",
+        answer_spec=request.answer_spec,
+        current_answer_step_index=request.pedagogical_state.current_answer_step_index,
+        current_answer_step_id="ANS-T01-001:STEP:1",
+        completed_component_ids=request.pedagogical_state.completed_component_ids,
+        input_reliability="RELIABLE",
+        decision=decision,
+        ordered_canvas_memory=request.ordered_canvas_memory,
+        authored_support_content=[
+            HybridAuthoredSupportContent(
+                source_id="SUPPORT-HINT-1",
+                support_action="HINT",
+                text="Look for the quantity that changes.",
+            )
+        ],
+        confirmed_tutor_anchors=[],
+        approved_answer_reveal=False,
+        active_action_ids=[],
+    )
+
+
+@pytest.mark.parametrize(
+    ("state", "expected_strategy"),
+    [
+        ("CORRECT", "ADVANCE_AND_FADE"),
+        ("PARTIAL", "AFFIRM_AND_ISOLATE"),
+        ("WRONG", "SOCRATIC_MISCONCEPTION_TEST"),
+    ],
+)
+def test_hybrid_pedagogy_routes_correct_partial_and_wrong_deterministically(
+    state: str,
+    expected_strategy: str,
+) -> None:
+    request = HybridTutorRequest.model_validate(_hybrid_request_payload())
+    pedagogical_state = request.pedagogical_state.model_copy(
+        update={"student_state": state}
+    )
+
+    decision = classifier.decide_hybrid_pedagogy(
+        pedagogical_state,
+        request.support_state,
+        [],
+        classifier.load_classifier_rules(),
+    )
+
+    assert decision.strategy == expected_strategy
+    assert decision.support_action == "NONE"
+
+
+def test_hybrid_repeated_stuck_escalates_once_to_authored_support() -> None:
+    request = HybridTutorRequest.model_validate(_hybrid_request_payload())
+    pedagogical_state = request.pedagogical_state.model_copy(
+        update={"student_state": "STUCK"}
+    )
+    authored_support = [
+        HybridAuthoredSupportContent(
+            source_id="SUPPORT-HINT-1",
+            support_action="HINT",
+            text="Look for the quantity that changes.",
+        )
+    ]
+    first = classifier.decide_hybrid_pedagogy(
+        pedagogical_state,
+        request.support_state,
+        authored_support,
+        classifier.load_classifier_rules(),
+    )
+    repeated_support_state = request.support_state.model_copy(
+        update={"consecutive_stuck_count": 1}
+    )
+    second = classifier.decide_hybrid_pedagogy(
+        pedagogical_state,
+        repeated_support_state,
+        authored_support,
+        classifier.load_classifier_rules(),
+    )
+
+    assert first.strategy == "LOAD_REDUCTION"
+    assert second.strategy == "SUPPORT_ESCALATION"
+    assert second.support_action == "HINT"
+    assert second.support_id == "SUPPORT-HINT-1"
+
+
+@pytest.mark.parametrize(
+    ("question_id", "student_meaning"),
+    [
+        ("Q-T01-001", "5n"),
+        ("Q-T01-004", "choice A"),
+    ],
+)
+def test_hybrid_known_misconceptions_use_a_socratic_test(
+    question_id: str,
+    student_meaning: str,
+) -> None:
+    request_payload = _hybrid_request_payload()
+    request_payload["question_id"] = question_id
+    request = HybridTutorRequest.model_validate(request_payload)
+    pedagogical_state = request.pedagogical_state.model_copy(
+        update={"student_state": "WRONG"}
+    )
+
+    decision = classifier.decide_hybrid_pedagogy(
+        pedagogical_state,
+        request.support_state,
+        [],
+        classifier.load_classifier_rules(),
+    )
+
+    assert student_meaning in {"5n", "choice A"}
+    assert decision.strategy == "SOCRATIC_MISCONCEPTION_TEST"
+
+
+def test_hybrid_canvas_planner_emits_targetable_answer_safe_action() -> None:
+    planner_request = _hybrid_canvas_planner_request("WRONG", 0)
+
+    actions = classifier.plan_hybrid_canvas_pedagogy(
+        planner_request,
+        _enabled_hybrid_rules(),
+    )
+
+    assert len(actions) == 1
+    assert actions[0].action_id == "TURN-42:canvas:1"
+    assert actions[0].type == "CIRCLE"
+    assert actions[0].target_object_id == "canvas-object-1"
+    assert actions[0].answer_reveal_allowed is False
+
+
+def test_hybrid_canvas_planner_suppresses_duplicate_active_action() -> None:
+    planner_request = _hybrid_canvas_planner_request("PARTIAL", 0).model_copy(
+        update={"active_action_ids": ["TURN-42:canvas:1"]}
+    )
+
+    actions = classifier.plan_hybrid_canvas_pedagogy(
+        planner_request,
+        _enabled_hybrid_rules(),
+    )
+
+    assert actions == []
+
+
+def test_hybrid_canvas_planner_rejects_unreliable_or_inactive_targets() -> None:
+    planner_request = _hybrid_canvas_planner_request("PARTIAL", 0)
+    unreliable_memory = planner_request.ordered_canvas_memory[0].model_copy(
+        update={"reliability": "NEEDS_WRITING"}
+    )
+    planner_request = planner_request.model_copy(
+        update={"ordered_canvas_memory": [unreliable_memory]}
+    )
+
+    actions = classifier.plan_hybrid_canvas_pedagogy(
+        planner_request,
+        _enabled_hybrid_rules(),
+    )
+
+    assert actions == []
+
+
+def test_hybrid_canvas_planner_requires_authored_source_for_support_action() -> None:
+    planner_request = _hybrid_canvas_planner_request(
+        "STUCK",
+        1,
+        support_action="HINT",
+        support_id="MISSING-SUPPORT",
+    )
+
+    actions = classifier.plan_hybrid_canvas_pedagogy(
+        planner_request,
+        _enabled_hybrid_rules(),
+    )
+
+    assert actions == []
+
+
+def test_hybrid_canvas_wording_must_reference_the_selected_action() -> None:
+    planner_request = _hybrid_canvas_planner_request("PARTIAL", 0)
+    actions = classifier.plan_hybrid_canvas_pedagogy(
+        planner_request,
+        _enabled_hybrid_rules(),
+    )
+
+    safe_wording = classifier.validate_hybrid_tutor_wording(
+        "Look at the part I highlighted. What changes?",
+        actions,
+        planner_request.answer_spec.canonical_answer,
+        _enabled_hybrid_rules(),
+    )
+    replaced_wording = classifier.validate_hybrid_tutor_wording(
+        "What changes?",
+        actions,
+        planner_request.answer_spec.canonical_answer,
+        _enabled_hybrid_rules(),
+    )
+
+    assert safe_wording == "Look at the part I highlighted. What changes?"
+    assert replaced_wording == "What is the next part you can work out?"
+
+
+def test_hybrid_canvas_planner_is_disabled_by_default() -> None:
+    planner_request = _hybrid_canvas_planner_request("PARTIAL", 0)
+
+    actions = classifier.plan_hybrid_canvas_pedagogy(
+        planner_request,
+        classifier.load_classifier_rules(),
+    )
+
+    assert actions == []
+
+
+def test_hybrid_needs_writing_emits_only_a_write_focus_action() -> None:
+    planner_request = _hybrid_canvas_planner_request("PARTIAL", 0).model_copy(
+        update={"input_reliability": "NEEDS_WRITING"}
+    )
+
+    actions = classifier.plan_hybrid_canvas_pedagogy(
+        planner_request,
+        _enabled_hybrid_rules(),
+    )
+
+    assert len(actions) == 1
+    assert actions[0].type == "FOCUS"
+    assert actions[0].semantic_tag == "student_attempt"
+    assert actions[0].layer == "SUPPORT"
+    assert actions[0].text is None
+    assert actions[0].source_id is None
+
+
+def test_hybrid_phase2_prompts_use_the_shared_guided_practice_block() -> None:
+    rules = classifier.load_classifier_rules()
+
+    semantic_prompt = classifier.hybrid_phase2_system_prompt("SEMANTIC", rules)
+    wording_prompt = classifier.hybrid_phase2_system_prompt("WORDING", rules)
+
+    assert "PHASE 2 — GUIDED DIALECTIC PRACTICE" in semantic_prompt
+    assert rules.guided_learning.hybrid_prompts.semantic_prompt in semantic_prompt
+    assert "PHASE 2 — GUIDED DIALECTIC PRACTICE" in wording_prompt
+    assert rules.guided_learning.hybrid_prompts.wording_prompt in wording_prompt
+
+
+def test_hybrid_single_call_receives_the_complete_turn_context(monkeypatch) -> None:
+    request = HybridTutorRequest.model_validate(_hybrid_request_payload())
+    captured: dict[str, object] = {}
+    ai_client = openai_client.OpenAIAIEngineClient(
+        api_key="test-key",
+        model="test-model",
+        timeout_seconds=10,
+        prompt_cache_key_enabled=False,
+        store_responses=False,
+        retry_count=0,
+    )
+
+    def request_json(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {
+            "pedagogical_state": "PARTIAL",
+            "completed_components": [],
+            "current_answer_step_index": 0,
+            "current_answer_step_id": "ANS-T01-001:STEP:1",
+            "tutor_voice_text": "Which part can take different possible values?",
+            "requires_written_math_evidence": False,
+            "next_expected_input": "VOICE_OR_WRITE",
+        }
+
+    monkeypatch.setattr(ai_client, "_request_guided_json", request_json)
+    turn = ai_client.generate_hybrid_tutor_turn(
+        HybridTutorTurnContext(
+            request=request,
+            resolved_student_meaning="The starting number changes.",
+            input_reliability="RELIABLE",
+            decision=HybridPedagogyDecision(
+                strategy="AFFIRM_AND_ISOLATE",
+                support_action="NONE",
+                support_id=None,
+                next_expected_input="VOICE_OR_WRITE",
+            ),
+            canvas_actions=[],
+            active_support_content=None,
+            approved_answer_reveal=False,
+        ),
+        "Hybrid system prompt",
+    )
+    payload = captured["user_payload"]
+    assert isinstance(payload, dict)
+
+    assert payload["authored_steps"] == [
+        {
+            "step_id": "ANS-T01-001:STEP:1",
+            "component_id": "ANS-T01-001:COMPONENT:1",
+            "text": "Identify the changing value.",
+        },
+        {
+            "step_id": "ANS-T01-001:STEP:2",
+            "component_id": "ANS-T01-001:COMPONENT:2",
+            "text": "Write the general rule.",
+        },
+    ]
+    assert payload["selected_option"] == {"option_id": None, "option_text": None}
+    assert payload["resolved_student_meaning"] == "The starting number changes."
+    assert payload["decision"] == {
+        "strategy": "AFFIRM_AND_ISOLATE",
+        "support_action": "NONE",
+        "support_id": None,
+        "next_expected_input": "VOICE_OR_WRITE",
+    }
+    assert turn.tutor_voice_text == "Which part can take different possible values?"
+    assert turn.current_answer_step_id == "ANS-T01-001:STEP:1"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("type", "ERASE"),
+        ("layer", "STUDENT"),
+        ("semantic_tag", "final_answer"),
+    ],
+)
+def test_canvas_pedagogy_action_rejects_invalid_contract_values(
+    field: str,
+    value: object,
+) -> None:
+    payload = _hybrid_action_payload()
+    payload[field] = value
+
+    with pytest.raises(ValueError):
+        CanvasPedagogyAction.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("action_type", "support_action", "approved"),
+    [
+        ("HIGHLIGHT", "TUTOR_SOLVED", True),
+        ("TUTOR_SOLVED_STEP", "HINT", True),
+        ("TUTOR_SOLVED_STEP", "TUTOR_SOLVED", False),
+    ],
+)
+def test_canvas_answer_reveal_requires_approved_tutor_solved_final_rung(
+    action_type: str,
+    support_action: str,
+    approved: bool,
+) -> None:
+    payload = _hybrid_action_payload()
+    payload["type"] = action_type
+    payload["answer_reveal_allowed"] = True
+    action = CanvasPedagogyAction.model_validate(payload)
+
+    with pytest.raises(ValueError, match="not approved"):
+        classifier.validate_hybrid_canvas_action_reveal_policy(
+            action,
+            support_action,
+            approved,
+        )
+
+
+def test_canvas_answer_reveal_accepts_only_approved_tutor_solved_final_rung() -> None:
+    payload = _hybrid_action_payload()
+    payload["type"] = "TUTOR_SOLVED_STEP"
+    payload["answer_reveal_allowed"] = True
+    action = CanvasPedagogyAction.model_validate(payload)
+
+    assert classifier.validate_hybrid_canvas_action_reveal_policy(
+        action,
+        "TUTOR_SOLVED",
+        True,
+    ) == action
+
+
+def test_hybrid_contracts_reject_unknown_fields_and_states() -> None:
+    request_payload = _hybrid_request_payload()
+    request_payload["unexpected"] = True
+    response_payload = _hybrid_response_payload()
+    response_payload["pedagogical_state"] = "UNCLEAR"
+
+    with pytest.raises(ValueError):
+        HybridTutorRequest.model_validate(request_payload)
+    with pytest.raises(ValueError):
+        HybridTutorResponse.model_validate(response_payload)
+
+
+@pytest.mark.parametrize(
+    ("payload_name", "field", "value"),
+    [
+        ("request", "input_source", "VIDEO"),
+        ("response", "input_reliability", "UNCLEAR"),
+        ("response", "next_expected_input", "CANVAS_ONLY"),
+        ("response", "support_action", "EXPLANATION"),
+    ],
+)
+def test_hybrid_contracts_reject_invalid_input_and_support_values(
+    payload_name: str,
+    field: str,
+    value: object,
+) -> None:
+    if payload_name == "request":
+        request_payload = _hybrid_request_payload()
+        evidence = request_payload["student_evidence"]
+        assert isinstance(evidence, dict)
+        evidence[field] = value
+        with pytest.raises(ValueError):
+            HybridTutorRequest.model_validate(request_payload)
+        return
+
+    response_payload = _hybrid_response_payload()
+    response_payload[field] = value
+    with pytest.raises(ValueError):
+        HybridTutorResponse.model_validate(response_payload)
+
+
+def test_hybrid_support_evidence_memory_and_state_models_are_standalone() -> None:
+    request = HybridTutorRequest.model_validate(_hybrid_request_payload())
+
+    assert isinstance(request.support_state, HybridSupportState)
+    assert isinstance(request.student_evidence, HybridStudentEvidence)
+    assert isinstance(request.ordered_canvas_memory[0], OrderedCanvasMemoryItem)
+    assert isinstance(request.pedagogical_state, HybridPedagogicalState)
+
+
+def test_hybrid_voice_resolves_sex_plus_six_only_with_unique_question_context() -> None:
+    request = HybridTutorRequest.model_validate(_hybrid_request_payload())
+    evidence = request.student_evidence.model_copy(
+        update={
+            "raw_voice_transcript": "sex plus six",
+            "transcript_confidence": 0.98,
+        }
+    )
+
+    resolution = classifier.resolve_hybrid_student_evidence(
+        evidence,
+        "A player starts with score s and gains 6 bonus points. Write the new-score rule.",
+        classifier.load_classifier_rules().guided_learning.minimum_voice_transcript_confidence,
+        classifier.load_classifier_rules().guided_learning.minimum_ocr_confidence,
+    )
+
+    assert resolution.input_reliability == "RELIABLE"
+    assert resolution.resolved_student_meaning == "s + 6"
+    assert resolution.resolution_source == "VOICE_CONTEXT"
+    assert resolution.can_update_learning_state is True
+    assert evidence.raw_voice_transcript == "sex plus six"
+
+
+@pytest.mark.parametrize(
+    ("question", "transcript", "confidence"),
+    [
+        (
+            "A player starts with score s and gains 6 bonus points. Write the new-score rule.",
+            "sex plus four",
+            0.98,
+        ),
+        (
+            "Write a general rule for the situation.",
+            "sex plus six",
+            0.98,
+        ),
+        (
+            "A player starts with score s and gains 6 bonus points. Write the new-score rule.",
+            "sex plus six",
+            0.69,
+        ),
+    ],
+)
+def test_hybrid_ambiguous_voice_math_returns_needs_writing_without_state_mutation(
+    question: str,
+    transcript: str,
+    confidence: float,
+) -> None:
+    request = HybridTutorRequest.model_validate(_hybrid_request_payload())
+    evidence = request.student_evidence.model_copy(
+        update={
+            "raw_voice_transcript": transcript,
+            "transcript_confidence": confidence,
+        }
+    )
+    original_evidence = evidence.model_dump()
+    original_support_state = request.support_state.model_dump()
+    original_pedagogical_state = request.pedagogical_state.model_dump()
+
+    resolution = classifier.resolve_hybrid_student_evidence(
+        evidence,
+        question,
+        classifier.load_classifier_rules().guided_learning.minimum_voice_transcript_confidence,
+        classifier.load_classifier_rules().guided_learning.minimum_ocr_confidence,
+    )
+
+    assert resolution.input_reliability == "NEEDS_WRITING"
+    assert resolution.resolved_student_meaning is None
+    assert resolution.resolution_source == "NEEDS_WRITING"
+    assert resolution.can_update_learning_state is False
+    assert evidence.model_dump() == original_evidence
+    assert request.support_state.model_dump() == original_support_state
+    assert request.pedagogical_state.model_dump() == original_pedagogical_state
+
+
+def test_hybrid_evidence_prefers_typed_math_over_voice_repair() -> None:
+    request = HybridTutorRequest.model_validate(_hybrid_request_payload())
+    evidence = request.student_evidence.model_copy(
+        update={
+            "raw_voice_transcript": "sex plus six",
+            "transcript_confidence": 0.98,
+            "typed_answer": "s + 6",
+        }
+    )
+
+    resolution = classifier.resolve_hybrid_student_evidence(
+        evidence,
+        "A player starts with score s and gains 6 bonus points. Write the new-score rule.",
+        classifier.load_classifier_rules().guided_learning.minimum_voice_transcript_confidence,
+        classifier.load_classifier_rules().guided_learning.minimum_ocr_confidence,
+    )
+
+    assert resolution.resolution_source == "TYPED"
+    assert resolution.resolved_student_meaning == "s + 6"
+
+
+def test_hybrid_evidence_uses_confident_processed_canvas_math() -> None:
+    request = HybridTutorRequest.model_validate(_hybrid_request_payload())
+    evidence = request.student_evidence.model_copy(
+        update={
+            "input_source": "CANVAS",
+            "raw_voice_transcript": None,
+            "transcript_confidence": None,
+            "processed_math_text": "c + 4",
+            "ocr_confidence": 0.95,
+        }
+    )
+
+    resolution = classifier.resolve_hybrid_student_evidence(
+        evidence,
+        "A counter starts at any value c and increases by 4.",
+        classifier.load_classifier_rules().guided_learning.minimum_voice_transcript_confidence,
+        classifier.load_classifier_rules().guided_learning.minimum_ocr_confidence,
+    )
+
+    assert resolution.resolution_source == "OCR"
+    assert resolution.resolved_student_meaning == "c + 4"
+
+
+def test_v1_hybrid_flag_is_loaded_disabled() -> None:
+    assert classifier.load_classifier_rules().guided_learning.v1_hybrid_enabled is False
+
+
+def test_legacy_tutor_response_schema_has_no_hybrid_field() -> None:
+    assert "hybrid_turn" not in TutorResponse.model_json_schema()["properties"]
+
+    response = classify_student_response(
+        ClassificationRequest(
+            question="Write the general rule.",
+            correct_answer="n + 5",
+            answer_spec=_answer_spec("n + 5", ["n+5"], "EXACT_NOTATION_MATCH"),
+            student_input="n + 5",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert "hybrid_turn" not in response.model_dump()
 
 
 @pytest.fixture(autouse=True)
@@ -4366,6 +5197,7 @@ def test_guided_llm_partial_persists_only_the_missing_objective(monkeypatch) -> 
             return _guided_rubric()
 
         def evaluate_guided_turn(self, **kwargs):
+            captured["evaluation"] = kwargs
             return GuidedEvaluation(
                 student_state="PARTIAL",
                 newly_confirmed_concept_ids=["OPERATION"],
@@ -4389,16 +5221,24 @@ def test_guided_llm_partial_persists_only_the_missing_objective(monkeypatch) -> 
         "build_openai_ai_engine_client",
         lambda settings: _GuidedClient(),
     )
+    answer_spec = _answer_spec(
+        "c multiplied by d",
+        ["c times d"],
+        "CONCEPT_TEXT_MATCH",
+    ).model_copy(
+        update={
+            "answer_steps": [
+                "Identify the operation represented by adjacent letters.",
+                "Describe c multiplied by d.",
+            ]
+        }
+    )
     response = classify_student_response(
         ClassificationRequest(
             question_id="Q-T02-002",
             question="What does cd mean?",
             correct_answer="c multiplied by d",
-            answer_spec=_answer_spec(
-                "c multiplied by d",
-                ["c times d"],
-                "CONCEPT_TEXT_MATCH",
-            ),
+            answer_spec=answer_spec,
             phase_2_prompt_context=_guided_context(0),
             student_input="multiplication",
             current_phase="GUIDED_PRACTICE",
@@ -4417,6 +5257,9 @@ def test_guided_llm_partial_persists_only_the_missing_objective(monkeypatch) -> 
     assert response.active_teaching_objective.missing_concept_ids == ["EXPANDED_MEANING"]
     rubric_payload = captured["rubric"]
     assert isinstance(rubric_payload, dict)
+    rubric_answer_spec = rubric_payload["answer_spec"]
+    assert isinstance(rubric_answer_spec, AnswerSpec)
+    assert rubric_answer_spec.answer_steps == answer_spec.answer_steps
     assert rubric_payload["potential_errors"] == [
         {
             "error_code": "ERR-T02-ADDITION",
@@ -4424,6 +5267,11 @@ def test_guided_llm_partial_persists_only_the_missing_objective(monkeypatch) -> 
             "response_patterns": ["c + d"],
         }
     ]
+    evaluation_payload = captured["evaluation"]
+    assert isinstance(evaluation_payload, dict)
+    evaluation_answer_spec = evaluation_payload["answer_spec"]
+    assert isinstance(evaluation_answer_spec, AnswerSpec)
+    assert evaluation_answer_spec.answer_steps == answer_spec.answer_steps
 
 
 def test_guided_partial_without_confirmed_concepts_becomes_safe_unclear(

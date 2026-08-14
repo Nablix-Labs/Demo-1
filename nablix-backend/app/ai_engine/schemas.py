@@ -8,8 +8,19 @@ from app.models.adapters import ConversationAction
 from app.models.guided_learning import (
     ActiveScaffold,
     ActiveTeachingObjective,
+    AuthoredAnswerStep,
+    CanvasPedagogyAction,
     GeneratedQuestionRubric,
     GuidedStudentState,
+    HybridEvidenceResolution,
+    HybridCanvasPlannerRequest,
+    HybridPedagogyDecision,
+    HybridSemanticEvaluation,
+    HybridTutorWording,
+    HybridTutorWordingRequest,
+    HybridTutorRequest,
+    HybridTutorResponse,
+    validate_hybrid_tutor_progression,
     GuidedTeachingState,
 )
 

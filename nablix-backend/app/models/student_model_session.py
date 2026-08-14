@@ -78,7 +78,6 @@ class AnswerSpec(BaseModel):
     answer_steps: list[str] = Field(default_factory=list)
 
 
-
 class TutorQuestionView(BaseModel):
     model_config = ConfigDict(extra="allow")
 

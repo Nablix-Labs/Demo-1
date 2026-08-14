@@ -5,11 +5,11 @@ from pathlib import Path
 from typing import Annotated
 
 import yaml
-from pydantic import Field, model_validator
+from pydantic import Field, StrictBool, model_validator
 
 from app.ai_engine.schemas import ErrorType, IntentType, LearningPhase, ResponseStrategy, StrictSchema, VisualCueType
 from app.models.guided_learning import GuidedStudentState
-from app.models.student_model_session import QuestionType
+from app.models.student_model_session import QuestionType, SupportUsed
 
 
 CONFIG_PATH: Path = Path("configs/classifier_rules.yaml")
@@ -172,7 +172,24 @@ class GuidedStateMappingConfig(StrictSchema):
     strategy: str | None
 
 
+class CanvasPedagogyPlannerConfig(StrictSchema):
+    action_reference_phrases: dict[str, list[str]]
+    safe_action_free_question: str
+
+
+class HybridPromptConfig(StrictSchema):
+    semantic_prompt: str
+    wording_prompt: str
+
+
 class GuidedLearningConfig(StrictSchema):
+    v1_hybrid_enabled: StrictBool
+    minimum_voice_transcript_confidence: float = Field(ge=0.0, le=1.0)
+    minimum_ocr_confidence: float = Field(ge=0.0, le=1.0)
+    canvas_pedagogy_action_planner_enabled: StrictBool
+    hybrid_support_ladder: list[SupportUsed]
+    canvas_pedagogy_planner: CanvasPedagogyPlannerConfig
+    hybrid_prompts: HybridPromptConfig
     evaluation_mode: str
     confidence_threshold: float = Field(ge=0.0, le=1.0)
     state_confidence_thresholds: dict[
