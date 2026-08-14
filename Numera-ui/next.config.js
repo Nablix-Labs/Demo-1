@@ -47,7 +47,13 @@ const nextConfig = {
         trailingSlash: true,
       }
     : {}),
-  env: { NEXT_PUBLIC_BASE_PATH: effectiveBasePath },
+  env: {
+    NEXT_PUBLIC_BASE_PATH: effectiveBasePath,
+    // A bare NEXT_PUBLIC_ read did not reach the client in this static export,
+    // so the flag is declared here like NEXT_PUBLIC_BASE_PATH. Defaults to ''
+    // so an ordinary build has the panel off.
+    NEXT_PUBLIC_DEBUG_JSON: process.env.NEXT_PUBLIC_DEBUG_JSON || '',
+  },
   images: { unoptimized: true },
   // Allow KaTeX CSS to be imported from node_modules
   transpilePackages: ['react-katex'],

@@ -13,14 +13,9 @@ from collections.abc import Iterator
 
 import pytest
 
-from app.adapters import provider, rag_service
+from app.adapters import provider
 from app.core.config import Settings, get_settings
-from app.models.rag import (
-    RAGQueryMetadata,
-    RAGRetrieveRequest,
-    RAGRetrieveResponse,
-    RAGRetrievedContent,
-)
+from app.models.session import SessionRecord
 from app.services import session_service
 
 
@@ -42,6 +37,10 @@ _TEST_QUESTIONS: dict[str, tuple[str, str, str]] = {
 }
 
 
+async def _skip_session_persistence(_: SessionRecord) -> None:
+    """Keep unit tests independent from the production PostgreSQL service."""
+
+
 @pytest.fixture(autouse=True)
 def force_mock_adapters(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("NABLIX_USE_OPENAI_AI_ENGINE", "false")
@@ -59,53 +58,11 @@ def force_mock_adapters(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         qdrant_api_key="test-key",
     )
 
-    async def fake_fetch_question(
-        concept_id: str,
-        phase: str,
-        exclude_question_ids: list[str] | None,
-        difficulty: str,
-    ) -> tuple[str, str, str] | None:
-        del concept_id, difficulty
-        question = _TEST_QUESTIONS[phase]
-        if question[2] in set(exclude_question_ids or []):
-            return None
-        return question
-
-    def fake_retrieve_content(
-        request: RAGRetrieveRequest,
-        settings: Settings,
-    ) -> RAGRetrieveResponse:
-        del settings
-        result = RAGRetrievedContent(
-            content_id="TEST_HINT_001",
-            content_type="HINT",
-            hint_level=request.hint_level,
-            text="Check the inverse operation before simplifying.",
-            voice_text=None,
-            relevance_score=0.91,
-            concept_id="mock_curriculum",
-            error_type=request.error_type,
-            difficulty=request.difficulty,
-            version="test",
-            approval_status="APPROVED",
-        )
-        return RAGRetrieveResponse(
-            query_id=request.query_id,
-            results=[result],
-            result_count=1,
-            fallback_used=False,
-            query_metadata=RAGQueryMetadata(
-                retrieval_time_ms=1,
-                filters_applied=[],
-            ),
-        )
-
     monkeypatch.setattr(
         provider,
         "get_settings",
         lambda: test_settings,
     )
-    monkeypatch.setattr(session_service, "fetch_question", fake_fetch_question)
-    monkeypatch.setattr(rag_service, "retrieve_content", fake_retrieve_content)
+    monkeypatch.setattr(session_service, "save_session", _skip_session_persistence)
     yield
     get_settings.cache_clear()

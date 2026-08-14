@@ -1,15 +1,22 @@
 """Student Model adapter backed by Saravanan's HTTP contract."""
 
+import json
+
 from pydantic import ValidationError
 
-from app.adapters.http_utils import JsonObject, post_json
+from app.adapters.http_utils import post_json
 from app.core.config import Settings
-from app.core.exceptions import AdapterError
-from app.models.adapters import AdapterContext, StudentModelEvent, StudentModelResult
+from app.core.exceptions import (
+    AdapterError,
+    AdapterRequestRejected,
+    JourneyVersionConflict,
+)
+from app.models.adapters import AdapterContext, StudentModelResult
 from app.models.student_model_session import (
     StudentModelSessionEvent,
     StudentModelSessionEventResponse,
 )
+from app.services.student_model_debug import record_request, record_response
 
 
 class StudentModelServiceAdapter:
@@ -37,74 +44,12 @@ class StudentModelServiceAdapter:
                 f"invalid response body={response}: {error}",
             ) from error
 
-    async def update_from_event(
-        self,
-        event: StudentModelEvent,
-        context: AdapterContext,
-        access_token: str,
-    ) -> StudentModelResult:
-        """Persist one evaluated event and return the authoritative learner state."""
-
-        if self._settings.use_mock_student_model:
-            return self._local_response(context)
-        if self._settings.student_model_url == "":
-            raise AdapterError(
-                "student_model",
-                "NABLIX_STUDENT_MODEL_URL is required when NABLIX_USE_MOCK_STUDENT_MODEL=false",
-            )
-
-        concept_id = context.concept_id
-        if concept_id is None:
-            raise AdapterError(
-                "student_model",
-                "concept_id is required for Student Model updates",
-            )
-        source_turn_id: str | None = context.source_turn_id
-        if source_turn_id is None:
-            raise AdapterError(
-                "student_model",
-                "source_turn_id is required for Student Model updates",
-            )
-        topic_id = self._settings.student_model_topic_ids.get(concept_id)
-        if topic_id is None:
-            raise AdapterError(
-                "student_model",
-                f"no topic_id mapping configured for concept_id={concept_id}",
-            )
-
-        # independent_success is Sanya's "correct without help" flag in ANY
-        # phase; gating it to Independent Practice starves Saravanan's guided
-        # advancement rule.
-        payload: JsonObject = {
-            "event_id": f"{context.session_id}:{source_turn_id}:{event.event_type}",
-            "source_turn_id": source_turn_id,
-            "topic_id": topic_id,
-            "event_type": event.event_type,
-            "evaluation": event.evaluation,
-            "error_type": event.error_type,
-            "hint_level_used": event.hint_level_used,
-            "independent_success": event.independent_success,
-            "current_phase": context.current_phase,
-            "independent_correct_in_session": (
-                context.independent_correct_in_session + int(event.independent_success)
-            ),
-        }
-        response = await post_json(
-            "student_model",
-            f"{self._settings.student_model_url.rstrip('/')}/interaction",
-            payload,
-            {"Authorization": f"Bearer {access_token}"},
-            self._settings.adapter_request_timeout_seconds,
-            self._settings.adapter_request_retry_count,
-        )
-        return self.parse_response(response)
-
     async def send_session_event(
         self,
         event: StudentModelSessionEvent,
         access_token: str,
     ) -> StudentModelSessionEventResponse:
-        """Persist one Schema 3.0 journey event and return its full state."""
+        """Serialize one Schema 3.0 event, persist it, and validate its full state."""
 
         if self._settings.use_mock_student_model:
             raise AdapterError(
@@ -116,14 +61,39 @@ class StudentModelServiceAdapter:
                 "student_model",
                 "NABLIX_STUDENT_MODEL_URL is required for Schema 3.0 session events",
             )
-        response = await post_json(
-            "student_model",
-            f"{self._settings.student_model_url.rstrip('/')}/session/event",
-            event.model_dump(exclude_none=True),
-            {"Authorization": f"Bearer {access_token}"},
-            self._settings.adapter_request_timeout_seconds,
-            self._settings.adapter_request_retry_count,
-        )
+        request_body = event.model_dump(mode="json", exclude_none=True)
+        record_request(request_body)
+        try:
+            response = await post_json(
+                "student_model",
+                f"{self._settings.student_model_url.rstrip('/')}/session/event",
+                request_body,
+                {"Authorization": f"Bearer {access_token}"},
+                self._settings.adapter_request_timeout_seconds,
+                self._settings.adapter_request_retry_count,
+            )
+        except AdapterRequestRejected as error:
+            record_response(
+                {
+                    "status_code": error.status_code,
+                    "response_body": error.response_body,
+                }
+            )
+            if error.status_code != 409:
+                raise
+            try:
+                conflict_body: object = json.loads(error.response_body)
+            except json.JSONDecodeError:
+                raise error
+            if not isinstance(conflict_body, dict) or conflict_body.get(
+                "error_code"
+            ) != "JOURNEY_VERSION_CONFLICT":
+                raise
+            raise JourneyVersionConflict(conflict_body) from error
+        except AdapterError as error:
+            record_response({"error": str(error)})
+            raise
+        record_response(response)
         try:
             parsed = StudentModelSessionEventResponse.model_validate(response)
         except ValidationError as error:
@@ -145,6 +115,8 @@ class StudentModelServiceAdapter:
                     f"topic_id={parsed.journey_state.topic_id} body={response}"
                 ),
             )
+        if parsed.status.status_code == "JOURNEY_VERSION_CONFLICT":
+            raise JourneyVersionConflict(response)
         if not parsed.status.success:
             raise AdapterError(
                 "student_model",

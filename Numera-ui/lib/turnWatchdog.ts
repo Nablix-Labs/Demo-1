@@ -27,24 +27,46 @@
  * The window must therefore outlast the slowest reply the server can produce:
  *
  *     1.5s   UtteranceEnd silence threshold
- *  + 15.0s   the tutor HTTP call's timeout (streaming_server.py:107)
- *  = 16.5s   after which the server has sent either `tutor_response` or `error`
+ *  + 40.0s   the tutor HTTP call's timeout (streaming_server.py, raised from
+ *            15s to match /canvas/submit on 31 Jul — commit 514f628)
+ *  = 41.5s   after which the server has sent either `tutor_response` or `error`
  *
- * Both of those disarm us. 20s leaves 3.5s of margin, so by the time we fire,
+ * Both of those disarm us. 45s leaves 3.5s of margin, so by the time we fire,
  * nothing can still be in flight and the cancel is harmless.
+ *
+ * If the backend timeout changes again, this window moves with it — the
+ * "outlasts the slowest reply" test below the fold is what enforces that.
  *
  * This is a rescue, not a turn-taking mechanism. In the normal case UtteranceEnd
  * fires, the tutor replies, and this never runs.
  */
 
-/** See the derivation above before changing this. */
-export const TURN_RESCUE_MS = 20_000;
+/**
+ * UPDATED 11 Aug 2026 — the server's trigger changed.
+ *
+ * Processing no longer starts at Deepgram's UtteranceEnd (now log-only). A
+ * silence-fallback timer is the sole trigger, and it waits 4.5s after the last
+ * transcript rather than 1.5s. The budget below it is unchanged:
+ *
+ *     4.5s   silence fallback (SILENCE_FALLBACK_SECONDS)
+ *  + 40.0s   the tutor HTTP call's timeout
+ *  = 44.5s   before the server has said anything either way
+ *
+ * 45s left half a second of margin, which is not margin — a reply that used
+ * its full budget would race the rescue that is meant to cover its absence,
+ * and the rescue cancels work in flight. 60s restores a real gap.
+ *
+ * The cost of the extra 15s is only paid on turns the server never answers,
+ * which is the case this exists for and is now rare (V-1 fixed 11 Aug).
+ */
+export const TURN_RESCUE_MS = 60_000;
 
 export class TurnWatchdog {
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private armedTurnId: string | null = null;
 
   constructor(
-    private readonly onStuck: () => void,
+    private readonly onStuck: (armedTurnId: string | null) => void,
     private readonly windowMs: number = TURN_RESCUE_MS,
   ) {}
 
@@ -56,12 +78,18 @@ export class TurnWatchdog {
   /**
    * The student's speech was transcribed. Arms the rescue, restarting the clock
    * — each new segment means they are still talking, so the wait starts over.
+   *
+   * `turnId` is the turn this rescue belongs to, handed back to onStuck so the
+   * callback can refuse to fire into a turn that has since moved on — a stray
+   * echo-final used to arm a timer with no identity, and 45s later its `stop`
+   * landed in the middle of whatever turn was then live.
    */
-  noteStudentSpeech(): void {
+  noteStudentSpeech(turnId: string | null = null): void {
     this.disarm();
+    this.armedTurnId = turnId;
     this.timer = setTimeout(() => {
       this.timer = null;
-      this.onStuck();
+      this.onStuck(this.armedTurnId);
     }, this.windowMs);
   }
 

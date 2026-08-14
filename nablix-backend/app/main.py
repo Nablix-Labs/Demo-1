@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -7,11 +8,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.api import ai_engine, canvas, health, hint, interaction, session, voice
+from app.api import ai_engine, canvas, health, interaction, session, voice
 from app.ai_engine.prompt_registry import load_prompt_registry
 from app.core.config import get_settings
 from app.core.logger import logger
 from app.middleware.request_logging import log_requests
+from app.services import session_service
+from app.services.session_store import close_session_store, open_session_store
+from app.services.student_model_debug import payload as student_model_debug_payload
 
 
 prompt_registry = load_prompt_registry()
@@ -23,11 +27,25 @@ logger.info(
         "validation_status": "passed",
     },
 )
+settings = get_settings()
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    restored_sessions = await open_session_store(settings.database_url)
+    session_service._sessions.clear()
+    session_service._sessions.update(restored_sessions)
+    try:
+        yield
+    finally:
+        await close_session_store()
+
+
 app: FastAPI = FastAPI(
     title="Nablix AI Math Tutor API",
     version="1.0.0",
+    lifespan=lifespan,
 )
-settings = get_settings()
 
 # Registering middleware for logging requests and responses
 app.middleware("http")(log_requests)
@@ -44,7 +62,6 @@ app.include_router(health.router, tags=["Health"])
 app.include_router(ai_engine.router, prefix="/ai-engine", tags=["AI Engine"])
 app.include_router(session.router, prefix="/session", tags=["Session"])
 app.include_router(interaction.router, tags=["Interaction"])
-app.include_router(hint.router, prefix="/hint", tags=["Hints"])
 app.include_router(canvas.router, prefix="/canvas", tags=["Canvas"])
 app.include_router(voice.router, prefix="/voice", tags=["Voice"])
 
@@ -113,8 +130,9 @@ def _validation_response_message(
         return f"{field_name} must be 500 characters or fewer."
     if field == "interaction_type":
         return (
-            "interaction_type must be one of ANSWER_SUBMISSION, HINT_REQUEST, "
-            "CANVAS_SUBMISSION, SESSION_START, SESSION_END."
+            "interaction_type must be one of ANSWER_SUBMISSION, CANVAS_SUBMISSION, "
+            "EXPLAIN_AGAIN, INACTIVITY_NUDGE, NUDGE_PRESENTED, HELP_REQUEST, "
+            "SUPPORT_REPLAY, CLARIFICATION, SESSION_START, SESSION_END."
         )
     if field == "current_phase":
         return (
@@ -133,16 +151,20 @@ def _error_response(
     message: str,
     field: str | None = None,
 ) -> JSONResponse:
-    return JSONResponse(
-        status_code=status_code,
-        content={
-            "error_code": error_code,
-            "message": message,
-            "field": field,
-            "timestamp": _utc_timestamp(),
-            "request_id": _request_id(request),
-        },
-    )
+    content: dict[str, object] = {
+        "error_code": error_code,
+        "message": message,
+        "field": field,
+        "timestamp": _utc_timestamp(),
+        "request_id": _request_id(request),
+    }
+    # A failed Student Model call is the one a tester most needs to read, and it
+    # never reaches InteractionResponse — it surfaces here. Absent unless the dev
+    # flag ran begin() for this request.
+    debug = student_model_debug_payload()
+    if debug is not None:
+        content["debug"] = debug
+    return JSONResponse(status_code=status_code, content=content)
 
 
 @app.exception_handler(RequestValidationError)
@@ -162,7 +184,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
-    # Typed exceptions (e.g. QuestionFetchError) carry their own error_code.
+    # Typed application exceptions carry their own error_code.
     return _error_response(
         request, exc.status_code, getattr(exc, "error_code", "HTTP_ERROR"), str(exc.detail)
     )

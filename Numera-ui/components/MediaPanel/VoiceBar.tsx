@@ -6,10 +6,15 @@ import { useAuthStore, isConsentActive } from '@/store/useAuthStore';
 import { cn } from '@/lib/cn';
 
 export default function VoiceBar() {
-  const { micMuted, voiceStatus } = useNumeraStore();
+  // Selector subscriptions — the whole-store form re-rendered this bar (and
+  // re-ran its parents' effects) on every store write, several times a second
+  // while the student speaks.
+  const micMuted = useNumeraStore((s) => s.micMuted);
+  const voiceStatus = useNumeraStore((s) => s.voiceStatus);
   const levels = useMicLevel((s) => s.levels);
   const active = useMicLevel((s) => s.active);
   const caption = useMicLevel((s) => s.caption);
+  const micError = useMicLevel((s) => s.micError);
   const consents = useAuthStore((s) => s.consents);
 
   // Voice is a consented feature (§10): only available with voice_processing consent.
@@ -24,9 +29,24 @@ export default function VoiceBar() {
       <p className="text-[11.5px] text-slate-blue text-center">
         Status:{' '}
         <strong className="text-ink">
-          {!voiceAllowed ? 'Unavailable' : micMuted ? 'Muted' : voiceStatus === 'listening' ? 'Listening…' : voiceStatus === 'speaking' ? 'Speaking…' : voiceStatus === 'processing' ? 'Processing…' : 'Idle'}
+          {!voiceAllowed ? 'Unavailable' : micError ? 'Microphone unavailable' : micMuted ? 'Muted' : voiceStatus === 'listening' ? 'Listening…' : voiceStatus === 'speaking' ? 'Speaking…' : voiceStatus === 'processing' ? 'Processing…' : 'Idle'}
         </strong>
       </p>
+
+      {/* Capture failed: saying "Listening…" here while sending nothing is
+          exactly what got reported as "the tutor is ignoring me". */}
+      {voiceAllowed && micError && (
+        <div className="rounded-md bg-reading-surface border border-muted-gray px-3 py-2.5 text-center">
+          <p className="text-[11.5px] text-ink font-medium">
+            {micError === 'denied' ? 'Microphone is blocked' : 'Microphone isn’t working'}
+          </p>
+          <p className="text-[11px] text-slate-blue mt-0.5 leading-snug">
+            {micError === 'denied'
+              ? 'Allow the microphone in your browser’s address bar, then tap the mic button.'
+              : 'Check that a microphone is connected, then tap the mic button to retry.'}
+          </p>
+        </div>
+      )}
 
       {!voiceAllowed ? (
         /* §14: voice consent missing */

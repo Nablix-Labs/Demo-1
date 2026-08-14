@@ -117,6 +117,13 @@ class ReasoningCompletionConfig(StrictSchema):
     explanation_accepted_message: str
 
 
+class IndependentPracticeConfig(StrictSchema):
+    answer_recorded_message: str
+    rescue_required_message: str
+    awaiting_submission_message: str
+    input_unclear_message: str
+
+
 class CanvasReviewMessagesConfig(StrictSchema):
     ARITHMETIC_ERROR: str
     SIGN_ERROR: str
@@ -194,8 +201,13 @@ class GuidedLearningConfig(StrictSchema):
     maximum_recent_history_turns: int = Field(ge=0)
     rubric_prompt_version: str
     evaluator_prompt_version: str
+    component_adjudicator_prompt_version: str
+    explain_again_prompt_version: str
     rubric_system_prompt: str
     evaluator_system_prompt: str
+    component_adjudicator_system_prompt: str
+    component_adjudicator_confidence_threshold: float = Field(ge=0.0, le=1.0)
+    explain_again_system_prompt: str
     scaffold_evaluator_system_prompt: str
     answer_reveal_retry_feedback: str
     reconciliation_message: str
@@ -235,6 +247,7 @@ class ClassifierRulesConfig(StrictSchema):
     progressive_hint_messages: dict[ErrorType, list[str]]
     messages: MessageConfig
     guided_learning: GuidedLearningConfig
+    independent_practice: IndependentPracticeConfig
 
 
 @lru_cache(maxsize=1)

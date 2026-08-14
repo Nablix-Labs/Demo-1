@@ -10,10 +10,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.canvas_memory import CanvasEvent
 from app.models.student_model_session import AnswerSpec, QuestionType
 from app.models.guided_learning import (
     ActiveTeachingObjective,
     ConversationMessage,
+    GuidedTeachingState,
     GeneratedQuestionRubric,
     GuidedStudentState,
     ScaffoldEvaluationContext,
@@ -112,11 +114,20 @@ class AdapterContext(BaseModel):
     detected_steps: list[str] = Field(default_factory=list)
     ocr_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     canvas_regions: list["OCRTextRegion"] = Field(default_factory=list)
+    canvas_mathml_blocks: list[str] = Field(default_factory=list)
+    spatial_tokens: list["SpatialMathToken"] = Field(default_factory=list)
+    canvas_events: list[CanvasEvent] = Field(default_factory=list)
+    has_canvas_evidence: bool = False
+    canvas_solution_complete_candidate: bool = False
     conversation_history: list["ConversationMessage"] = Field(default_factory=list)
     conversation_state: ConversationState | None = None
     generated_question_rubric: GeneratedQuestionRubric | None = None
     active_teaching_objective: ActiveTeachingObjective | None = None
+    guided_teaching_state: GuidedTeachingState | None = None
     scaffold_evaluation_context: ScaffoldEvaluationContext | None = None
+    phase3_submission_confirmed: bool | None = None
+    phase3_submission_kind: Literal["CANVAS", "CHOICE"] | None = None
+    phase3_allowed_error_definitions: list[dict[str, object]] = Field(default_factory=list)
 
 
 class RetrievedDocument(BaseModel):
@@ -166,8 +177,10 @@ class StudentModelEvent(BaseModel):
 
 class VisualCue(BaseModel):
     show: bool = False
+    cue_id: str | None = None
     cue_type: str | None = None
     description: str | None = None
+    asset_url: str | None = None
     actions: list[dict[str, object]] = Field(default_factory=list)
 
 
@@ -190,9 +203,32 @@ class CanvasFeedback(BaseModel):
     highlight_instruction: HighlightInstruction | None = None
 
 
+class SpatialMathToken(BaseModel):
+    token_id: str
+    step_id: str
+    text: str
+    latex: str | None = None
+    role: Literal[
+        "number",
+        "identifier",
+        "operator",
+        "fraction_bar",
+        "radical",
+        "fence",
+        "unknown",
+    ] = "unknown"
+    semantic_path: str = ""
+    stroke_ids: list[str] = Field(default_factory=list)
+    bounding_box: dict[str, float] = Field(default_factory=dict)  # x, y, width, height in 0..1
+    alignment_confidence: float = 1.0
+
+
 class TutorMistakeClassification(BaseModel):
     status: Literal["mistake_found", "no_mistake", "uncertain"]
     mistake_step_id: str | None = None
+    target_token_ids: list[str] = Field(default_factory=list)
+    error_token: str | None = None
+    expected_token: str | None = None
     target_text: str | None = None
     target_span: tuple[int, int] | None = None
     replacement_text: str | None = None
@@ -204,6 +240,7 @@ class AnnotationIntent(BaseModel):
     target_step_id: str
     text: str | None = None
     placement: Literal["right", "below"] | None = None
+
 
 
 class TutorResult(BaseModel):
@@ -236,7 +273,18 @@ class TutorResult(BaseModel):
     selected_error_code: str | None = None
     generated_question_rubric: GeneratedQuestionRubric | None = None
     active_teaching_objective: ActiveTeachingObjective | None = None
+    guided_teaching_state: GuidedTeachingState | None = None
     scaffold_original_answer_correct: bool = False
+    independent_outcome: Literal[
+        "AWAITING_SUBMISSION",
+        "INPUT_UNCLEAR",
+        "INDEPENDENTLY_VERIFIED",
+        "RESCUE_REQUIRED",
+    ] | None = None
+    independent_success: bool | None = None
+    independent_attempt_terminal: bool = False
+    first_error_step: str | None = None
+    phase3_review_evidence: dict[str, object] | None = None
 
 
 class VoiceResult(BaseModel):
@@ -270,6 +318,7 @@ class OCRTextRegion(BaseModel):
     w: float = Field(ge=0.0, le=1.0)
     h: float = Field(ge=0.0, le=1.0)
     confidence: float
+    mathml: str | None = None
 
 
 class VisionOCRResult(BaseModel):
@@ -299,6 +348,7 @@ class VisionOCRResult(BaseModel):
 
     # Additional canvas-understanding fields beyond the task-plan schema
     latex: str | None = None
+    mathml_blocks: list[str] = Field(default_factory=list)
     detected_shapes: list[DetectedShape] = []
     confidence_source: Literal["mock", "model_estimated", "ocr_native"] = "mock"
     provider: str = "mock"

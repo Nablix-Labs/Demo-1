@@ -9,13 +9,12 @@ class Settings(BaseSettings):
     app_version: str = "1.0.0"
 
     # External service URLs
-    tutor_engine_url: str = "http://localhost:8001"
     voice_service_url: str = "http://localhost:8004" #chiru+aditya
     safety_service_url: str = "http://localhost:8004" #manjusha
     student_model_url: str = ""
+    database_url: str = Field(default="", validation_alias="DATABASE_URL")
     student_model_topic_ids: dict[str, int] = Field(default_factory=dict)
     student_model_topic_codes: dict[str, str] = Field(default_factory=dict)
-    student_model_session_opened_enabled: bool = False
     cors_allowed_origins: list[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
@@ -43,6 +42,14 @@ class Settings(BaseSettings):
     use_mock_student_model: bool = False
     use_mock_voice: bool = True
     use_mock_vision: bool = True
+    # Dev-only: attach raw Student Model exchanges to interaction responses.
+    # ISOLATED TESTER DEPLOYMENTS ONLY. Raw responses carry
+    # phase_payload.question_set.questions[].tutor_view.answer_spec.canonical_answer,
+    # so enabling this where real students can reach the API hands them the answers.
+    debug_json_view: bool = False
+    # Keep disabled until the deployed Student Model supports the dedicated
+    # Wrong-4 and repeated-STUCK events. The legacy event path remains active.
+    student_model_atomic_guided_events_enabled: bool = False
 
     #Vision OCR (used when use_mock_vision is False)
     ocr_provider: Literal["openai", "mathpix"] = "openai"
@@ -56,6 +63,12 @@ class Settings(BaseSettings):
     openai_store_responses: bool = False
     adapter_request_timeout_seconds: int = 20
     adapter_request_retry_count: int = 2
+
+    # Server-authoritative inactivity policy. Client idle duration is telemetry only.
+    inactivity_initial_idle_threshold_ms: int = Field(default=20_000, ge=1)
+    inactivity_cooldown_ms: int = Field(default=30_000, ge=1)
+    inactivity_max_nudges_per_tutor_turn: int = Field(default=2, ge=1)
+    inactivity_generated_nudge_rate_limit: int = Field(default=4, ge=1)
 
     #Validation
     max_text_input_length: int = 500

@@ -4,31 +4,53 @@
  * VisualCue — the instructional cue card shown when the AI Engine flags a
  * student mistake.
  *
- * The backend sends a `visual_cue` object (show + cue_type + description); the
- * store holds `visualCueVisible` / `visualCueType` / `visualCueDescription`.
- * This picks the matching card from the static library (lib/visualCueCards) and
- * renders title, worked example, steps and caption, with the backend
- * `description` layered on as an extra guidance note. The card never reveals the
- * final answer — it nudges the next step. Kept in the top-left corner so it
- * supports the student's working without covering it or the practice button.
+ * The backend sends a `visual_cue` object — `cue_id`, `cue_type`, `description`,
+ * `asset_url`, `actions` — and the store holds all of it. This picks the
+ * matching card from the static library (lib/visualCueCards) when `cue_type`
+ * names one, and layers the backend `description` on as the guidance note; the
+ * authored cues carry no `cue_type`, so most of the time the description IS the
+ * cue. The card never reveals the final answer — it nudges the next step. Kept
+ * in the corner so it supports the student's working without covering it or the
+ * practice button.
  */
 
 import { useEffect, useState } from 'react';
-import { Lightbulb, Info, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import { useNumeraStore } from '@/store/useNumeraStore';
+import { isPhase3 } from '@/lib/phase3';
 import { resolveCueCard } from '@/lib/visualCueCards';
-import { cn } from '@/lib/cn';
+import { cueLabel } from '@/lib/cueLabel';
+import { showCueDescription } from '@/lib/cueAsset';
+import StickyNote from '@/components/StickyNote';
 
 export default function VisualCue() {
   const visible = useNumeraStore((s) => s.visualCueVisible);
   const setVisible = useNumeraStore((s) => s.setVisualCueVisible);
+  const cueId = useNumeraStore((s) => s.visualCueId);
   const cueType = useNumeraStore((s) => s.visualCueType);
   const description = useNumeraStore((s) => s.visualCueDescription);
-  const panelSide = useNumeraStore((s) => s.panelSide);
+  const assetUrl = useNumeraStore((s) => s.visualCueAssetUrl);
+  const currentPhase = useNumeraStore((s) => s.currentPhase);
   const card = resolveCueCard(cueType);
+  // Labelled by what the BACKEND served, not by what the client happens to hold
+  // a card for — see lib/cueLabel for why both Manjusha's and Sanya's reports
+  // are satisfied by that rule.
+  const label = cueLabel({ cardTitle: card?.title, cueId });
+  /**
+   * Identity of the cue on screen, for state that must reset when it changes.
+   * `cue_id` first: it is the only stable identifier the backend sends, since
+   * `cue_type` is null and `asset_url` is absent on most cues today.
+   */
+  const cueKey = cueId ?? cueType ?? assetUrl;
 
   // Small entrance (fade + rise) without depending on a motion library.
   const [shown, setShown] = useState(false);
+  // Reset per cue: a failure on one image must not suppress the next one.
+  const [imageFailed, setImageFailed] = useState(false);
+  useEffect(() => setImageFailed(false), [cueKey]);
+  // The picture carries the cue whenever there is one to show; the text steps
+  // back in only when there is not.
+  const showDescription = showCueDescription(assetUrl, imageFailed);
   useEffect(() => {
     if (visible) {
       const id = requestAnimationFrame(() => setShown(true));
@@ -40,71 +62,59 @@ export default function VisualCue() {
   // Nothing authored and nothing to say — show nothing, rather than a card
   // about an equation the student isn't working on.
   if (!visible || (!card && !description)) return null;
+  // Phase 3 is answered alone: no visual cues during an independent attempt
+  // (Phase 3 spec §3.2). Suppressed at the render rather than at the source so
+  // a cue the backend still sends cannot leak onto the screen.
+  if (isPhase3(currentPhase)) return null;
 
   return (
     <aside
-      // Right side (matches the design mockup: canvas left, cue right). Sits
-      // below the "Explain it back" chrome so it stacks under it, not over it.
-      className={cn(
-        'lg-glass fixed top-[84px] z-30 w-72 max-w-[calc(100vw-2rem)] rounded-card overflow-hidden transition-all duration-300',
-        panelSide === 'right' ? 'left-4' : 'right-4',
-      )}
+      // Position belongs to SupportLane, which stacks this under the hint —
+      // owning a `fixed` of its own is what would put the two cards on top of
+      // each other.
+      className="relative transition-all duration-300"
       style={{
         opacity: shown ? 1 : 0,
         transform: shown ? 'translateY(0)' : 'translateY(-6px)',
       }}
-      aria-label={`Visual cue: ${card?.title ?? 'guidance'}`}
+      aria-label={label}
     >
-      <div className="flex items-center justify-between px-3 py-2 border-b border-muted-gray bg-reading-surface">
-        <div className="flex items-center gap-1.5 text-[12px] font-semibold text-slate-blue">
-          <Lightbulb size={14} strokeWidth={1.9} /> Visual cue{card ? `: ${card.title}` : ''}
-        </div>
+      <div className="relative">
         <button
           onClick={() => setVisible(false)}
-          aria-label="Dismiss visual cue"
-          className="w-5 h-5 rounded flex items-center justify-center text-slate-blue hover:bg-muted-gray/50 hover:text-ink transition-colors"
+          aria-label={`Dismiss ${label.toLowerCase()}`}
+          className="absolute -right-1 -top-1 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-white/70 text-[#8A6407] shadow-sm hover:bg-white"
         >
-          <X size={14} strokeWidth={2} />
+          <X size={13} strokeWidth={2.2} />
         </button>
-      </div>
 
-      <div className="p-3 space-y-3">
-        {/* The illustrated card, only when the backend named a cue_type we
-            actually have artwork for. Everything in here is authored on our
-            side, so it must never stand in for a cue the backend didn't ask
-            for — see resolveCueCard. */}
-        {card && (
-          <>
-            {/* Worked example — the equation this card is guiding, not the answer. */}
-            <div className="rounded-lg bg-reading-surface border border-muted-gray py-3 px-2 text-center">
-              <span className="text-[16px] font-semibold text-ink" style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}>
-                {card.example}
-              </span>
-            </div>
+        {/* Amber is the cue tone: "notice something", the default nudge. The
+            steps are the tutor's words about the example, so they sit under it
+            as the annotation rather than beside it. */}
+        <StickyNote tone="amber" label={label} lines={card ? [card.example] : undefined}>
+          {card?.caption}
+          {/* The description is the TUTOR'S script, not the student's caption —
+              "that text is for the tutor to explain" (Manjusha, 13 Aug 2026).
+              With a picture on the card, printing it too makes the student read
+              the explanation they are about to be given.
 
-            {/* Steps toward the next move. */}
-            <ol className="space-y-1.5">
-              {card.steps.map((step, i) => (
-                <li key={i} className="flex gap-2 text-[12px] text-ink leading-snug">
-                  <span className="flex-shrink-0 w-4 h-4 mt-[1px] rounded-full bg-slate-blue/15 text-slate-blue text-[10px] font-bold flex items-center justify-center">
-                    {i + 1}
-                  </span>
-                  {step}
-                </li>
-              ))}
-            </ol>
-
-            <p className="text-[12px] text-ink leading-snug font-medium">{card.caption}</p>
-          </>
-        )}
-
-        {/* Backend's instructional description, when provided. */}
-        {description && (
-          <div className="flex gap-1.5 rounded-lg bg-slate-blue/[0.08] border border-slate-blue/20 px-2.5 py-2">
-            <Info size={13} strokeWidth={2} className="flex-shrink-0 mt-[1px] text-slate-blue" />
-            <p className="text-[11px] text-slate-blue leading-snug">{description}</p>
-          </div>
-        )}
+              It still renders when there is no usable image, because then the
+              text IS the cue — that is the whole degradation guarantee below,
+              and dropping it would leave an empty card. */}
+          {description && showDescription ? <span className="mt-2 block">{description}</span> : null}
+          {/* A missing, malformed or unreachable image must never cost the
+              student the cue, so a load failure hides the <img> and the text
+              above comes back (Sanya, 12 Aug 2026: "do not break the existing
+              text-card cue if the image is unavailable"). */}
+          {assetUrl && !imageFailed ? (
+            <img
+              src={assetUrl}
+              alt={description ?? 'Visual cue'}
+              onError={() => setImageFailed(true)}
+              className="mt-3 block w-full rounded-md border border-muted-gray bg-white object-contain"
+            />
+          ) : null}
+        </StickyNote>
       </div>
     </aside>
   );

@@ -66,11 +66,12 @@ describe('TurnWatchdog: never cancels a reply that is still coming', () => {
   });
 
   it('outlasts the slowest reply the server can produce', () => {
-    // UtteranceEnd's 1.5s silence threshold plus the tutor call's own 15s
-    // timeout. By then the server has sent either tutor_response or error, and
-    // both disarm us. If this ever fails, the window is too short and the
-    // rescue can cancel a working response.
-    const SLOWEST_SERVER_REPLY_MS = 1_500 + 15_000;
+    // UtteranceEnd's 1.5s silence threshold plus the tutor call's own timeout
+    // (40s since 31 Jul, matching /canvas/submit — backend commit 514f628).
+    // By then the server has sent either tutor_response or error, and both
+    // disarm us. If this ever fails, the window is too short and the rescue
+    // can cancel a working response.
+    const SLOWEST_SERVER_REPLY_MS = 1_500 + 40_000;
     expect(TURN_RESCUE_MS).toBeGreaterThan(SLOWEST_SERVER_REPLY_MS);
   });
 
@@ -113,5 +114,36 @@ describe('TurnWatchdog: does not outlive its socket', () => {
       w.dispose();
       w.dispose();
     }).not.toThrow();
+  });
+});
+
+describe('TurnWatchdog: carries the identity of the turn it was armed for', () => {
+  it('hands the armed turn id to onStuck so the callback can refuse a moved-on turn', () => {
+    const onStuck = vi.fn();
+    const w = new TurnWatchdog(onStuck);
+    w.noteStudentSpeech('turn-7');
+
+    vi.advanceTimersByTime(TURN_RESCUE_MS);
+    expect(onStuck).toHaveBeenCalledWith('turn-7');
+  });
+
+  it('re-arming replaces the identity — the rescue belongs to the LATEST speech', () => {
+    const onStuck = vi.fn();
+    const w = new TurnWatchdog(onStuck);
+    w.noteStudentSpeech('turn-7');
+    vi.advanceTimersByTime(TURN_RESCUE_MS - 1);
+    w.noteStudentSpeech('turn-8');
+
+    vi.advanceTimersByTime(TURN_RESCUE_MS);
+    expect(onStuck).toHaveBeenCalledTimes(1);
+    expect(onStuck).toHaveBeenCalledWith('turn-8');
+  });
+
+  it('an armed watchdog with no turn id still fires (never let identity block the rescue)', () => {
+    const onStuck = vi.fn();
+    new TurnWatchdog(onStuck).noteStudentSpeech();
+
+    vi.advanceTimersByTime(TURN_RESCUE_MS);
+    expect(onStuck).toHaveBeenCalledWith(null);
   });
 });

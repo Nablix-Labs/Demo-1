@@ -4,7 +4,7 @@
 the code: who owns what, how the pieces are wired in production, and the traps
 that have already cost somebody a day.
 
-Last updated 30 July 2026.
+Last updated 31 July 2026.
 
 ---
 
@@ -32,9 +32,11 @@ on debugging somebody else's layer.
 | RAG — question bank, hints, worked examples, visual cues | **Aditya** |
 | Product / lead | **Manjusha** |
 
-**The standing rule for this repo: frontend only.** The backend is read and
-pulled, never modified. If a backend change is needed, write it up in
-`docs/BACKEND-ASKS-*.md` and name the owner.
+**Backend changes are allowed since 31 Jul (Manjusha), with one condition:
+every backend change is its own clearly-labelled, individually revertible
+commit — never mixed with frontend changes.** Before that the rule was
+frontend-only. Design-level backend asks still go to `docs/BACKEND-ASKS-*.md`
+with the owner named.
 
 ---
 
@@ -179,15 +181,18 @@ provider+voice on **both** transports. Tier → provider:
 
 | Tier | Provider | Default voice |
 |---|---|---|
-| `premium`, `enterprise` | `cartesia` | Skylar |
-| `basic` | `inworld` | Ashley |
+| all tiers (31 Jul, Manjusha) | `inworld` | Ashley |
+
+(Cartesia was premium/enterprise until 31 Jul; it ran out of credits twice in
+four days at ~7.5x Inworld's price. It remains the degradation target in
+`lib/tts.ts` — flipping `TIER_PROVIDER` in `lib/voiceOptions.ts` switches back.)
 
 The student picks a voice within their tier's provider, never a provider. There
 is deliberately **no cross-provider fallback** — it used to silently switch to
 OpenAI and never switch back, which is what "the voice keeps changing" was.
 
 Turn detection is entirely Deepgram's `UtteranceEnd` after 1.5s of silence.
-`lib/turnWatchdog.ts` is a 20s rescue for when that never fires — read the
+`lib/turnWatchdog.ts` is a 45s rescue (moves with the backend tutor-call timeout) for when that never fires — read the
 comment in that file before changing the window; it is load-bearing.
 
 ---

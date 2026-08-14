@@ -38,7 +38,7 @@ numera/
 │   ├── layout.tsx        # Root layout + global CSS
 │   └── page.tsx          # Main session page
 ├── components/
-│   ├── ToolRail.tsx      # Far-left dark nav rail
+│   ├── Dock.tsx          # Bottom macOS-style dock (app navigation)
 │   ├── MediaPanel/       # Tutor tile, voice bar, transcript
 │   ├── SlideDots.tsx     # Vertical slide navigation
 │   └── Canvas/           # Drawing stage + toolbar + bar model

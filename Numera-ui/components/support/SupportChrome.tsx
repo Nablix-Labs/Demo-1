@@ -10,17 +10,24 @@
  */
 
 import { usePathname } from 'next/navigation';
+import { useNumeraStore } from '@/store/useNumeraStore';
+import { isPhase3 } from '@/lib/phase3';
 import NeedHelpButton from './NeedHelpButton';
 import SupportPanel from './SupportPanel';
 import RemoteAssistBanner from './RemoteAssistBanner';
 
 /** Screens shown before a student is signed in. Kept in step with AppFrame. */
-const PRE_AUTH_ROUTES = ['/login', '/onboard', '/consent', '/restricted'];
+const PRE_AUTH_ROUTES = ['/login', '/onboard', '/consent', '/restricted', '/dev-screens'];
 
 export default function SupportChrome() {
   const pathname = usePathname();
+  // Phase 3 spec §3.2 lists "Need Help" among the affordances that must be
+  // unavailable during an independent attempt. Assist is product support rather
+  // than maths help, but it is a live channel to a person while the student is
+  // being assessed alone, so it closes with the rest of them.
+  const silentPhase3 = isPhase3(useNumeraStore((s) => s.currentPhase));
   const preAuth = PRE_AUTH_ROUTES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
-  if (preAuth) return null;
+  if (preAuth || silentPhase3) return null;
 
   return (
     <>

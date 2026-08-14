@@ -4,45 +4,56 @@ from typing import TypedDict
 from uuid import uuid4
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 from typing_extensions import NotRequired
 
 from app.adapters.provider import get_adapters
-from app.adapters.question_bank import fetch_question
 from app.core.config import get_settings
-from app.core.exceptions import QuestionFetchError
-from app.models.adapters import ConversationMessage, StudentModelResult, VisionOCRResult
-from app.models.canvas import CanvasSubmissionRecord
+from app.core.exceptions import JourneyVersionConflict
+from app.core.logger import logger
+from app.models.adapters import ConversationMessage, StudentModelResult, VisualCue, VisionOCRResult
+from app.models.canvas import CanvasQuestionMemory, CanvasStroke, CanvasSubmissionRecord
+from app.models.canvas_memory import CanvasEvent
 from app.models.fields import Phase
 from app.models.interaction import InteractionResponse
 from app.models.session import (
     CanvasState,
     DiagnosticCompleteRequest,
+    InactivityPolicy,
+    NudgeDeliveryRecord,
+    NudgeDeliveryStatus,
     OrientationCompletionRequest,
     OrientationPhaseRequest,
     PhaseTransitionRecord,
     QuestionAttemptRecord,
+    ReviewCompleteRequest,
     SessionEndRequest,
     SessionPerformance,
     SessionRecord,
     SessionStartRequest,
+    SessionResumeRequest,
     SessionSummary,
     VoiceState,
 )
+from app.models.session_review import SessionReviewResponse
 from app.models.student_model_session import (
     DiagnosticResult,
     DiagnosticCompletedEvent,
-    DiagnosticQuestionSetRequestedEvent,
     JourneyPhaseState,
     MicroSkillResult,
     OrientationCompletedEvent,
     QuestionType,
+    ReviewCompletedEvent,
     SessionOpenedEvent,
+    SessionResumedEvent,
+    StudentModelJourneyState,
     StudentModelPhasePayload,
     StudentModelPhase,
     StudentModelQuestion,
     StudentModelSessionEventResponse,
     WorkedExampleRequestedEvent,
 )
+from app.services.guided_question_opening import guided_question_opening
 from app.services.phase_transition import (
     TRANSITION_MESSAGES,
     UI_STATE_FLAGS,
@@ -57,11 +68,19 @@ from app.services.student_model_session import (
     schema_support_steps,
     schema_visual_cue,
 )
+from app.services.session_store import save_session
 
 
 _sessions: dict[str, SessionRecord] = {}
 _interaction_locks: dict[str, asyncio.Lock] = {}
-_last_interaction_responses: dict[str, InteractionResponse] = {}
+_last_interaction_responses: dict[tuple[str, str], InteractionResponse] = {}
+_interaction_payload_fingerprints: dict[tuple[str, str], str] = {}
+_nudge_deliveries: dict[tuple[str, str], NudgeDeliveryRecord] = {}
+
+_NUDGE_STATUS_TRANSITIONS: dict[NudgeDeliveryStatus, set[NudgeDeliveryStatus]] = {
+    "GENERATED": {"PRESENTED"},
+    "PRESENTED": set(),
+}
 
 
 class QuestionUpdates(TypedDict):
@@ -77,8 +96,12 @@ def _build_session_id() -> str:
     return f"SESSION{uuid4().hex}"
 
 
-def _student_model_request_id(session_id: str, event_type: str) -> str:
-    return f"{session_id}:{event_type}:{uuid4().hex}"
+def _student_model_request_id(
+    session_id: str,
+    source_turn_id: str,
+    event_type: str,
+) -> str:
+    return f"{session_id}:{source_turn_id}:{event_type}"
 
 
 def _session_not_found(session_id: str) -> HTTPException:
@@ -98,20 +121,145 @@ def interaction_lock_for(session_id: str) -> asyncio.Lock:
     return lock
 
 
-def last_interaction_response_for(session_id: str) -> InteractionResponse | None:
-    return _last_interaction_responses.get(session_id)
+def last_interaction_response_for(
+    session_id: str,
+    turn_id: str,
+) -> InteractionResponse | None:
+    return _last_interaction_responses.get((session_id, turn_id))
 
 
 def cache_interaction_response(
     session_id: str,
+    turn_id: str,
     response: InteractionResponse,
+    payload_fingerprint: str,
 ) -> None:
-    _last_interaction_responses[session_id] = response
+    _last_interaction_responses[(session_id, turn_id)] = response
+    _interaction_payload_fingerprints[(session_id, turn_id)] = payload_fingerprint
 
 
-# Single source of truth for demo questions: question_id -> (question, answer, number).
-# Adding one here feeds both the prompt (start_session) and grading (correct_answer_for),
-# so the two can't drift. Replace with a real question bank when one exists.
+def interaction_payload_fingerprint_for(session_id: str, turn_id: str) -> str | None:
+    return _interaction_payload_fingerprints.get((session_id, turn_id))
+
+
+def inactivity_policy() -> InactivityPolicy:
+    settings = get_settings()
+    return InactivityPolicy(
+        initial_idle_threshold_ms=settings.inactivity_initial_idle_threshold_ms,
+        cooldown_ms=settings.inactivity_cooldown_ms,
+        max_nudges_per_tutor_turn=settings.inactivity_max_nudges_per_tutor_turn,
+        generated_nudge_rate_limit=settings.inactivity_generated_nudge_rate_limit,
+    )
+
+
+def nudge_delivery_for(
+    session_id: str,
+    interaction_id: str,
+) -> NudgeDeliveryRecord | None:
+    return _nudge_deliveries.get((session_id, interaction_id))
+
+
+def nudge_deliveries_for_tutor_turn(
+    session_id: str,
+    source_tutor_turn_id: str,
+) -> list[NudgeDeliveryRecord]:
+    return [
+        record
+        for (stored_session_id, _), record in _nudge_deliveries.items()
+        if stored_session_id == session_id
+        and record.source_tutor_turn_id == source_tutor_turn_id
+    ]
+
+
+def clear_nudge_deliveries_for_session(session_id: str) -> None:
+    keys = [key for key in _nudge_deliveries if key[0] == session_id]
+    for key in keys:
+        del _nudge_deliveries[key]
+
+
+def store_nudge_delivery(record: NudgeDeliveryRecord) -> NudgeDeliveryRecord:
+    key = (record.session_id, record.interaction_id)
+    existing = _nudge_deliveries.get(key)
+    if existing is not None:
+        return existing
+    _nudge_deliveries[key] = record
+    return record
+
+
+def update_nudge_delivery_status(
+    session_id: str,
+    interaction_id: str,
+    status: NudgeDeliveryStatus,
+    presented_at: datetime | None,
+    acknowledged_at: datetime | None,
+) -> NudgeDeliveryRecord:
+    key = (session_id, interaction_id)
+    record = _nudge_deliveries.get(key)
+    if record is None:
+        raise KeyError(
+            f"Nudge delivery not found for session_id={session_id} "
+            f"interaction_id={interaction_id}."
+        )
+    if status not in _NUDGE_STATUS_TRANSITIONS[record.status]:
+        raise ValueError(
+            f"Invalid nudge delivery transition {record.status}->{status} for "
+            f"session_id={session_id} interaction_id={interaction_id}."
+        )
+    if status == "PRESENTED" and (presented_at is None or acknowledged_at is None):
+        raise ValueError(
+            "presented_at and acknowledged_at are required for an acknowledged nudge."
+        )
+    updated = record.model_copy(
+        update={
+            "status": status,
+            "presented_at": presented_at,
+            "acknowledged_at": acknowledged_at,
+        }
+    )
+    _nudge_deliveries[key] = updated
+    return updated
+
+
+_SIDE_CHANNEL_UPDATE_FIELDS = {
+    "conversation_history",
+    "last_processed_turn_id",
+    "last_tutor_turn_id",
+    "last_tutor_response_at",
+    "nudge_generated_count",
+    "nudge_presented_count",
+    "last_nudge_generated_at",
+    "pending_nudge_id",
+    "pending_nudge_message",
+}
+
+
+async def update_side_channel_state(
+    session: SessionRecord,
+    updates: dict[str, object],
+) -> SessionRecord:
+    unexpected = set(updates) - _SIDE_CHANNEL_UPDATE_FIELDS
+    if unexpected:
+        raise ValueError(
+            f"Side-channel update attempted protected fields: {sorted(unexpected)}."
+        )
+    updated = session.model_copy(update=updates)
+    _sessions[session.session_id] = updated
+    await save_session(updated)
+    return updated
+
+
+async def store_prerequisite_repair_event(
+    session: SessionRecord,
+    event: StudentModelSessionEventResponse,
+) -> SessionRecord:
+    updated = session.model_copy(update={"prerequisite_repair_event": event})
+    _sessions[session.session_id] = updated
+    await save_session(updated)
+    return updated
+
+
+# Retained only for legacy session-review fixtures; active sessions use the
+# question and answer specification returned by Student Model Schema 3.0.
 _DEMO_QUESTIONS: dict[str, tuple[str, str, int]] = {
     "ALG_EQ_DIAG_001": ("Solve for x: x + 4 = 9", "x = 5", 1),
     "ALG_EQ_CO_001": ("Solve for x: x - 3 = 7", "x = 10", 1),
@@ -119,65 +267,16 @@ _DEMO_QUESTIONS: dict[str, tuple[str, str, int]] = {
     "ALG_EQ_IP_001": ("Solve for x: 3x + 2 = 11", "x = 3", 1),
     "ALG_EQ_REV_001": ("Solve for x: x / 2 = 8", "x = 16", 1),
 }
-_DEFAULT_QUESTION_ID = "ALG_EQ_DIAG_001"
-_DEMO_STUDENT_ID = "ST001"
-
-# Answers of knowledge-base questions served this process, so lookups by bare
-# question_id (e.g. session review) keep working for non-demo questions.
-_served_answers: dict[str, str] = {}
-
 
 def correct_answer_for(question_id: str) -> str | None:
     """Return the expected answer for a question_id, or None if unknown."""
 
-    served = _served_answers.get(question_id)
-    if served is not None:
-        return served
     entry = _DEMO_QUESTIONS.get(question_id)
     return entry[1] if entry else None
 
 
-def _mock_diagnostic_question() -> tuple[str, str, int]:
-    """Return the first diagnostic question as (question, question_id, number).
-
-    Placeholder for Aditya's POST /diagnostic/question.
-    """
-
-    question, _answer, number = _DEMO_QUESTIONS[_DEFAULT_QUESTION_ID]
-    return (question, _DEFAULT_QUESTION_ID, number)
-
-
-async def get_next_question(
-    concept_id: str,
-    phase: Phase,
-    served_question_ids: list[str] | None = None,
-    difficulty: str = "FOUNDATION",
-) -> tuple[str, str, str] | None:
-    """Return (question_text, correct_answer, question_id) or None when exhausted.
-
-    Questions come directly from the Qdrant knowledge base. None means the
-    caller must fail loudly, never continue silently.
-    """
-
-    settings = get_settings()
-    if settings.qdrant_url == "" or settings.qdrant_api_key == "":
-        raise QuestionFetchError(concept_id, phase)
-    fetched = await fetch_question(concept_id, phase, served_question_ids, difficulty)
-    if fetched is not None:
-        _served_answers[fetched[2]] = fetched[1]
-    return fetched
-
-
 def _diagnostic_start_message() -> str:
     return load_phase0_tutor_config().intro_message
-
-
-def _legacy_start_message(question: str) -> str:
-    spoken_question: str = question.replace("+", "plus").replace("=", "equals")
-    return (
-        "Let us start with a quick question to see where you are. "
-        f"{spoken_question}."
-    )
 
 
 def _get_owned_session(session_id: str, student_id: str) -> SessionRecord:
@@ -197,116 +296,133 @@ def _get_owned_session_for_turn(
     current_phase: Phase,
     hint_count: int,
 ) -> SessionRecord:
-    """Recover request-carried demo state when Vercel starts a new instance."""
+    """Return an in-process Schema 3.0 session for the current turn."""
 
     session: SessionRecord | None = _sessions.get(session_id)
-    if session is None and student_id == _DEMO_STUDENT_ID:
-        session = _recover_demo_session(session_id, student_id, current_phase, hint_count)
     if session is None or session.student_id != student_id:
         raise _session_not_found(session_id)
+    if session.student_model_event is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Schema 3.0 session state is required.",
+        )
     return session
 
 
-def _recover_demo_session(
+def _skip_journey_reconcile(session_id: str, student_id: str, reason: str) -> None:
+    """Log why a 409 could not self-heal the session's cached journey state.
+
+    These conflicts otherwise leave no trace, which is the gap that made the
+    original loop so hard to diagnose. An identity mismatch is not routine: it
+    means the Student Model's conflict body named a different student or topic
+    than the session it was raised for.
+    """
+
+    logger.warning(
+        "journey_conflict_reconcile_skipped",
+        extra={"session_id": session_id, "student_id": student_id, "reason": reason},
+    )
+
+
+async def reconcile_journey_conflict(
     session_id: str,
     student_id: str,
-    current_phase: Phase,
-    hint_count: int,
-) -> SessionRecord:
-    """Rebuild the fixed demo session after Vercel drops in-memory state."""
+    conflict: JourneyVersionConflict,
+) -> None:
+    """Sync a session's cached journey state after the Student Model rejects it.
 
-    question, question_id, question_number = _mock_diagnostic_question()
-    # ponytail: demo-only stateless recovery; replace _sessions with real storage for multi-user deploys.
-    session = SessionRecord(
-        session_id=session_id,
-        student_id=student_id,
-        concept_id="ALG_LINEAR_ONE_STEP",
-        started_at=datetime.now(timezone.utc),
-        interaction_mode="VOICE",
-        current_phase=current_phase,
-        current_question=question,
-        question_id=question_id,
-        question_number=question_number,
-        correct_answer=correct_answer_for(question_id),
-        served_question_ids=[question_id],
-        ui_state=current_phase,
-        hint_count=hint_count,
-        status="started",
-        message=(
-            _diagnostic_start_message()
-            if current_phase == "DIAGNOSTIC"
-            else _legacy_start_message(question)
-        ),
-        diagnostic_transition_message=(
-            load_phase0_tutor_config().neutral_transition_message
-            if current_phase == "DIAGNOSTIC"
-            else None
-        ),
-        diagnostic_transition_messages=(
-            load_phase0_tutor_config().neutral_transition_messages
-            if current_phase == "DIAGNOSTIC"
-            else []
-        ),
-        show_canvas=UI_STATE_FLAGS[current_phase]["show_canvas"],
-        show_hint_button=UI_STATE_FLAGS[current_phase]["show_hint_button"],
+    The Student Model's 409 carries the journey it actually holds. Without this,
+    a session that fell behind (e.g. another session for the same student/topic
+    advanced it) resends the same stale expected_journey_version forever, since
+    nothing refreshes the cache that value is read from. Best-effort: anything
+    that stops it just leaves the existing 409 to reach the client unchanged.
+    """
+
+    session = _sessions.get(session_id)
+    if session is None or session.student_id != student_id:
+        _skip_journey_reconcile(session_id, student_id, "session_not_found_or_not_owned")
+        return
+    event = session.student_model_event
+    if event is None:
+        _skip_journey_reconcile(session_id, student_id, "schema_3_state_missing")
+        return
+
+    detail = conflict.conflict_detail
+    if not isinstance(detail, dict):
+        _skip_journey_reconcile(session_id, student_id, "conflict_detail_not_a_dict")
+        return
+    # Two raise sites, two shapes: the true 409 nests the journey under
+    # current_journey_state, while a 200 carrying a conflict status passes the
+    # whole response, where it sits under journey_state.
+    raw_journey = detail.get("current_journey_state", detail.get("journey_state"))
+    if not isinstance(raw_journey, dict):
+        _skip_journey_reconcile(session_id, student_id, "no_journey_state_in_conflict")
+        return
+
+    try:
+        fresh_journey = StudentModelJourneyState.model_validate(raw_journey)
+    except ValidationError:
+        _skip_journey_reconcile(session_id, student_id, "journey_state_failed_validation")
+        return
+    if (
+        fresh_journey.student_id != student_id
+        or fresh_journey.topic_id != event.journey_state.topic_id
+    ):
+        _skip_journey_reconcile(session_id, student_id, "journey_state_identity_mismatch")
+        return
+    if fresh_journey.version <= event.journey_state.version:
+        _skip_journey_reconcile(session_id, student_id, "journey_state_not_newer")
+        return
+
+    # Take the fresh version AND drop everything derived from the stale one. The
+    # 409 body carries journey_state only - no phase_payload - so the question,
+    # answer spec and served ids cannot be refreshed from it. Keeping them would
+    # splice the new journey onto the old question: a state the Student Model
+    # never held, and one that would submit already-used evidence against a
+    # version that now accepts it. Clearing them re-arms
+    # _initialize_restored_schema_phase, which every answer path runs first and
+    # which re-derives the whole envelope at the corrected version.
+    #
+    # phase_payload must go too: that restore path re-applies the stored event
+    # when its payload still carries questions, handing the stale question
+    # straight back. Dropping it forces a real question-set request.
+    updated = session.model_copy(
+        update={
+            "student_model_event": event.model_copy(
+                update={"journey_state": fresh_journey, "phase_payload": None}
+            ),
+            "current_phase": PHASE_FROM_STUDENT_MODEL[fresh_journey.current_phase],
+            "current_question": None,
+            "question_id": None,
+            "question_type": None,
+            "correct_answer": None,
+            "active_student_model_question": None,
+        }
     )
-    _sessions[session_id] = session
-    return session
-
-
-async def _start_legacy_session(
-    request: SessionStartRequest,
-    initial_phase: Phase,
-) -> SessionRecord:
-    fetched = await get_next_question(request.concept_id, initial_phase)
-    if fetched is None:
-        raise QuestionFetchError(request.concept_id, initial_phase)
-    question, correct_answer, question_id = fetched
-    session: SessionRecord = SessionRecord(
-        session_id=_build_session_id(),
-        student_id=request.student_id,
-        concept_id=request.concept_id,
-        started_at=datetime.now(timezone.utc),
-        interaction_mode=request.interaction_mode,
-        current_phase=initial_phase,
-        current_question=question,
-        question_id=question_id,
-        question_number=1,
-        correct_answer=correct_answer,
-        served_question_ids=[question_id],
-        ui_state=initial_phase,
-        hint_count=0,
-        status="started",
-        message=(
-            _diagnostic_start_message()
-            if initial_phase == "DIAGNOSTIC"
-            else _legacy_start_message(question)
-        ),
-        diagnostic_transition_message=(
-            load_phase0_tutor_config().neutral_transition_message
-            if initial_phase == "DIAGNOSTIC"
-            else None
-        ),
-        diagnostic_transition_messages=(
-            load_phase0_tutor_config().neutral_transition_messages
-            if initial_phase == "DIAGNOSTIC"
-            else []
-        ),
-        show_canvas=UI_STATE_FLAGS[initial_phase]["show_canvas"],
-        show_hint_button=UI_STATE_FLAGS[initial_phase]["show_hint_button"],
+    _sessions[session_id] = updated
+    await save_session(updated)
+    logger.info(
+        "journey_conflict_reconciled",
+        extra={
+            "session_id": session_id,
+            "student_id": student_id,
+            "stale_version": event.journey_state.version,
+            "authoritative_version": fresh_journey.version,
+        },
     )
-    _sessions[session.session_id] = session
-    return session
 
 
 async def start_session(
     request: SessionStartRequest,
     access_token: str,
 ) -> SessionRecord:
-    """Open the authoritative Schema 3.0 journey unless a legacy phase was requested."""
+    """Open the authoritative Schema 3.0 journey."""
 
     if request.initial_phase is not None:
-        return await _start_legacy_session(request, request.initial_phase)
+        raise HTTPException(
+            status_code=409,
+            detail="Legacy initial_phase sessions are not supported; use Schema 3.0.",
+        )
 
     settings = get_settings()
     topic_id = settings.student_model_topic_codes.get(request.concept_id)
@@ -319,54 +435,29 @@ async def start_session(
     session_id = _build_session_id()
     started_at = datetime.now(timezone.utc)
     timestamp = started_at.isoformat().replace("+00:00", "Z")
-    session_event = (
-        SessionOpenedEvent(
-            request_id=_student_model_request_id(session_id, "SESSION_OPENED"),
-            event_type="SESSION_OPENED",
-            topic_id=topic_id,
-            student_id=request.student_id,
-            timestamp=timestamp,
-        )
-        if settings.student_model_session_opened_enabled
-        else DiagnosticQuestionSetRequestedEvent(
-            request_id=_student_model_request_id(
-                session_id,
-                "DIAGNOSTIC_QUESTION_SET_REQUESTED",
-            ),
-            event_type="DIAGNOSTIC_QUESTION_SET_REQUESTED",
-            topic_id=topic_id,
-            student_id=request.student_id,
-            timestamp=timestamp,
-        )
+    session_event = SessionOpenedEvent(
+        request_id=_student_model_request_id(
+            session_id,
+            session_id,
+            "SESSION_OPENED",
+        ),
+        event_type="SESSION_OPENED",
+        topic_id=topic_id,
+        student_id=request.student_id,
+        timestamp=timestamp,
     )
     event = await get_adapters().student_model.send_session_event(
         session_event,
         access_token,
     )
-    if settings.student_model_session_opened_enabled:
-        payload = _validate_session_opened_payload(event)
-    else:
-        _require_schema_phase(event, ("PHASE_0_DIAGNOSTIC",))
-        payload = event.phase_payload
-        if (
-            payload is None
-            or payload.payload_type != "QUESTION_SET"
-            or payload.question_set is None
-            or not payload.question_set.questions
-        ):
-            raise HTTPException(
-                status_code=503,
-                detail="Student Model returned no diagnostic questions.",
-            )
+    payload = _validate_session_opened_payload(event)
+    if payload.phase != event.phase_payload.phase:
+        event = event.model_copy(update={"phase_payload": payload})
     phase = PHASE_FROM_STUDENT_MODEL[payload.phase]
     flags = UI_STATE_FLAGS[phase]
     question_updates = _question_updates(event)
     current_question = question_updates["current_question"]
-    recommended_phase = (
-        event.journey_state.recommended_entry_phase
-        if settings.student_model_session_opened_enabled
-        else payload.phase
-    )
+    recommended_phase = event.journey_state.recommended_entry_phase or payload.phase
     visual_cue = schema_visual_cue(event)
     support_steps = schema_support_steps(event)
     support_hint = schema_hint(event)
@@ -376,6 +467,7 @@ async def start_session(
         student_id=request.student_id,
         concept_id=request.concept_id,
         started_at=started_at,
+        last_tutor_response_at=started_at,
         current_phase=phase,
         current_question=current_question,
         question_type=question_updates["question_type"],
@@ -386,8 +478,20 @@ async def start_session(
         interaction_mode=request.interaction_mode,
         ui_state=phase,
         message=(
-            _diagnostic_start_message()
+            "Session Review — practice questions complete."
+            if phase == "REVIEW"
+            else _diagnostic_start_message()
             if phase == "DIAGNOSTIC"
+            else guided_question_opening(
+                current_question,
+                question_updates["question_type"],
+                "Let’s resume with this question.",
+            )
+            if (
+                phase == "GUIDED_PRACTICE"
+                and current_question is not None
+                and support_hint is None
+            )
             else support_hint or event.routing.reason
         ),
         diagnostic_transition_message=(
@@ -399,6 +503,7 @@ async def start_session(
         show_canvas=flags["show_canvas"],
         show_hint_button=flags["show_hint_button"],
         show_visual_cue=flags["show_visual_cue"] or visual_cue is not None,
+        active_visual_cue=visual_cue,
         show_scaffold_panel=flags["show_scaffold_panel"] or bool(support_steps),
         scaffold_steps=support_steps,
         allow_text_input=flags["allow_text_input"],
@@ -409,7 +514,10 @@ async def start_session(
             "current_attempt_sequence",
             1,
         ),
+        inactivity_policy=inactivity_policy(),
+        last_tutor_turn_id=f"TUTOR-{uuid4()}",
         scaffold_step_number=_restore_counter(
+
             phase_state,
             "current_scaffold_step_number",
             0,
@@ -423,8 +531,14 @@ async def start_session(
         ),
         student_model_event=event,
         student_model_state=project_student_model_state(event),
+        active_student_model_question=(
+            payload.question_set.questions[0]
+            if payload.question_set is not None and payload.question_set.questions
+            else None
+        ),
     )
     _sessions[session_id] = session
+    await save_session(session)
     return session
 
 
@@ -442,7 +556,9 @@ def _validate_session_opened_payload(
         event.journey_state.recommended_entry_phase
         or event.journey_state.current_phase
     )
-    if payload.phase != expected_phase:
+    if payload.phase != expected_phase and not (
+        expected_phase == "PHASE_3_INDEPENDENT_PRACTICE" and payload.phase == "REVIEW"
+    ):
         raise HTTPException(
             status_code=503,
             detail=(
@@ -483,6 +599,8 @@ def _validate_session_opened_payload(
     } and (
         payload.question_set is None or not payload.question_set.questions
     ):
+        if payload.phase == "PHASE_3_INDEPENDENT_PRACTICE":
+            return payload
         raise HTTPException(
             status_code=503,
             detail=f"Student Model returned no questions for {payload.phase}.",
@@ -527,10 +645,14 @@ def _schema_session(session_id: str, student_id: str) -> SessionRecord:
     return session
 
 
-def _schema_request_id(session: SessionRecord, event_type: str) -> str:
+def _schema_request_id(
+    session: SessionRecord,
+    source_turn_id: str,
+    event_type: str,
+) -> str:
     if session.student_model_event is None:
         raise RuntimeError("Schema 3.0 request id requires a stored Student Model event.")
-    return _student_model_request_id(session.session_id, event_type)
+    return _student_model_request_id(session.session_id, source_turn_id, event_type)
 
 
 def _schema_timestamp() -> str:
@@ -631,17 +753,34 @@ def _require_schema_phase(
         )
 
 
-def _apply_schema_event(
+async def _apply_schema_event(
     session: SessionRecord,
     event: StudentModelSessionEventResponse,
 ) -> SessionRecord:
     payload = event.phase_payload
-    if payload is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Student Model returned no phase payload.",
-        )
-    next_phase = PHASE_FROM_STUDENT_MODEL[payload.phase]
+    has_questions = (
+        payload is not None
+        and payload.question_set is not None
+        and bool(payload.question_set.questions)
+    )
+    if payload is not None and payload.payload_type in {
+        "QUESTION_SET",
+        "SUPPORT_AND_RETRY",
+        "SCAFFOLD",
+        "RESCUE_AND_FRESH_QUESTION",
+    } and not has_questions:
+        if payload.phase != "PHASE_3_INDEPENDENT_PRACTICE":
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Student Model returned no active question for "
+                    f"{payload.phase}."
+                ),
+            )
+
+    next_phase = PHASE_FROM_STUDENT_MODEL[
+        payload.phase if payload is not None else event.journey_state.current_phase
+    ]
     transition = resolve_transition(session.current_phase, next_phase)
     if next_phase != session.current_phase and transition is None:
         raise HTTPException(
@@ -652,9 +791,35 @@ def _apply_schema_event(
             ),
         )
 
+    preserve_active_question = (
+        next_phase == session.current_phase
+        and next_phase in {"GUIDED_PRACTICE", "INDEPENDENT_PRACTICE"}
+        and payload is not None
+        and payload.payload_type == "RESCUE"
+        and not has_questions
+    )
+    previous_used_ids = (
+        session.student_model_event.journey_state.phase_3_independent_practice.used_question_ids
+        if session.student_model_event is not None
+        else []
+    )
+    if payload is not None and payload.phase == "PHASE_3_INDEPENDENT_PRACTICE" and payload.question_set is not None:
+        reused_ids = [
+            question.question_id
+            for question in payload.question_set.questions
+            if question.question_id in previous_used_ids
+        ]
+        if reused_ids:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Student Model returned previously used fresh questions: {reused_ids}.",
+            )
+
     flags = UI_STATE_FLAGS[next_phase]
     phase1_messages = load_phase1_tutor_messages()
-    question_updates = _question_updates(event)
+    question_updates: QuestionUpdates | None = (
+        None if preserve_active_question else _question_updates(event)
+    )
     updates: dict[str, object] = {
         "current_phase": next_phase,
         "ui_state": next_phase,
@@ -672,13 +837,25 @@ def _apply_schema_event(
         "show_scaffold_panel": flags["show_scaffold_panel"],
         "allow_text_input": flags["allow_text_input"],
         "allow_voice_input": flags["allow_voice_input"],
-        **question_updates,
     }
+    if question_updates is not None:
+        updates.update(question_updates)
+        if payload is not None and payload.question_set is not None and payload.question_set.questions:
+            current_question_id = question_updates["question_id"]
+            updates["active_student_model_question"] = next(
+                question
+                for question in payload.question_set.questions
+                if question.question_id == current_question_id
+            )
     if next_phase == "CONCEPT_ORIENTATION":
         updates["orientation_messages"] = phase1_messages
         if next_phase == session.current_phase:
             updates["message"] = phase1_messages.before_video_message
-    next_question_id = question_updates["question_id"]
+    next_question_id = (
+        session.question_id
+        if question_updates is None
+        else question_updates["question_id"]
+    )
     if next_question_id != session.question_id:
         updates.update(
             {
@@ -691,6 +868,13 @@ def _apply_schema_event(
                 "question_completed": next_question_id is None,
                 "generated_question_rubric": None,
                 "active_teaching_objective": None,
+                "guided_teaching_state": None,
+                "guided_student_state": None,
+                "selected_error_code": None,
+                "wrong_attempt_count": 0,
+                "canvas_state": session.canvas_state.model_copy(
+                    update={"snapshot_id": None, "ocr_result": None}
+                ),
             }
         )
     if transition is not None:
@@ -733,8 +917,23 @@ def _apply_schema_event(
             transition_message = phase1_messages.worked_example_to_guided_message
         if transition_message is not None:
             updates["message"] = transition_message
+    if (
+        next_phase == "GUIDED_PRACTICE"
+        and next_question_id is not None
+        and next_question_id != session.question_id
+        and question_updates is not None
+    ):
+        next_question = question_updates["current_question"]
+        if next_question is None:
+            raise RuntimeError("Guided Practice question is missing its text.")
+        updates["message"] = guided_question_opening(
+            next_question,
+            question_updates["question_type"],
+            str(updates["message"]),
+        )
     updated = session.model_copy(update=updates)
     _sessions[session.session_id] = updated
+    await save_session(updated)
     return updated
 
 
@@ -825,8 +1024,14 @@ async def complete_diagnostic(
         raise RuntimeError("Schema 3.0 session is missing its stored event.")
     event = await get_adapters().student_model.send_session_event(
         DiagnosticCompletedEvent(
-            request_id=_schema_request_id(session, "DIAGNOSTIC_COMPLETED"),
+            request_id=_schema_request_id(
+                session,
+                "DIAGNOSTIC_COMPLETED",
+                "DIAGNOSTIC_COMPLETED",
+            ),
             event_type="DIAGNOSTIC_COMPLETED",
+            source_turn_id="DIAGNOSTIC_COMPLETED",
+            expected_journey_version=stored_event.journey_state.version,
             topic_id=stored_event.journey_state.topic_id,
             student_id=session.student_id,
             timestamp=_schema_timestamp(),
@@ -857,7 +1062,7 @@ async def complete_diagnostic(
             status_code=503,
             detail="Student Model returned no independent-practice questions.",
         )
-    return _apply_schema_event(session, event)
+    return await _apply_schema_event(session, event)
 
 
 def _orientation_targets(session: SessionRecord) -> list[str]:
@@ -973,8 +1178,14 @@ async def start_orientation(
         raise RuntimeError("Schema 3.0 session is missing its stored event.")
     response = await get_adapters().student_model.send_session_event(
         WorkedExampleRequestedEvent(
-            request_id=_schema_request_id(session, "WORKED_EXAMPLE_REQUESTED"),
+            request_id=_schema_request_id(
+                session,
+                "WORKED_EXAMPLE_REQUESTED",
+                "WORKED_EXAMPLE_REQUESTED",
+            ),
             event_type="WORKED_EXAMPLE_REQUESTED",
+            source_turn_id="WORKED_EXAMPLE_REQUESTED",
+            expected_journey_version=event.journey_state.version,
             topic_id=event.journey_state.topic_id,
             student_id=session.student_id,
             timestamp=_schema_timestamp(),
@@ -991,7 +1202,7 @@ async def start_orientation(
             status_code=503,
             detail="Student Model returned no orientation bundle.",
         )
-    return _apply_schema_event(session, response)
+    return await _apply_schema_event(session, response)
 
 
 async def complete_orientation(
@@ -1016,8 +1227,14 @@ async def complete_orientation(
     _validate_orientation_completion(session, request)
     response = await get_adapters().student_model.send_session_event(
         OrientationCompletedEvent(
-            request_id=_schema_request_id(session, "ORIENTATION_COMPLETED"),
+            request_id=_schema_request_id(
+                session,
+                "ORIENTATION_COMPLETED",
+                "ORIENTATION_COMPLETED",
+            ),
             event_type="ORIENTATION_COMPLETED",
+            source_turn_id="ORIENTATION_COMPLETED",
+            expected_journey_version=event.journey_state.version,
             topic_id=event.journey_state.topic_id,
             student_id=session.student_id,
             timestamp=_schema_timestamp(),
@@ -1035,16 +1252,73 @@ async def complete_orientation(
             status_code=503,
             detail="Student Model returned no guided-practice questions.",
         )
-    return _apply_schema_event(session, response)
+    return await _apply_schema_event(session, response)
 
 
-async def get_session(session_id: str) -> SessionRecord:
-    """Return a stored mock session or raise a standard 404."""
+async def get_session(session_id: str, student_id: str) -> SessionRecord:
+    """Return a session only when it belongs to the requesting student."""
 
     session: SessionRecord | None = _sessions.get(session_id)
-    if session is None:
+    if session is None or session.student_id != student_id:
         raise _session_not_found(session_id)
     return session
+
+
+async def resume_session(
+    session_id: str,
+    request: SessionResumeRequest,
+    access_token: str,
+) -> SessionRecord:
+    session = _schema_session(session_id, request.student_id)
+    stored_event = session.student_model_event
+    if stored_event is None:
+        raise RuntimeError("Schema session is missing its Student Model event.")
+    request_id = _schema_request_id(session, request.turn_id, "SESSION_RESUMED")
+    if stored_event.request_id == request_id:
+        return session
+    event = SessionResumedEvent(
+        request_id=request_id,
+        event_type="SESSION_RESUMED",
+        source_turn_id=request.turn_id,
+        expected_journey_version=stored_event.journey_state.version,
+        topic_id=stored_event.journey_state.topic_id,
+        student_id=session.student_id,
+        timestamp=_schema_timestamp(),
+        last_activity_at=request.last_activity_at.isoformat().replace("+00:00", "Z"),
+        continuity_threshold_days=request.continuity_threshold_days,
+        saved_journey=request.saved_journey,
+    )
+    response = await get_adapters().student_model.send_session_event(event, access_token)
+    return await _apply_schema_event(session, response)
+
+
+async def complete_review(
+    session_id: str,
+    request: ReviewCompleteRequest,
+    access_token: str,
+) -> SessionRecord:
+    session = _schema_session(session_id, request.student_id)
+    if session.current_phase != "REVIEW":
+        raise HTTPException(status_code=409, detail="The session is not in Review.")
+    stored_event = session.student_model_event
+    if stored_event is None:
+        raise RuntimeError("Schema session is missing its Student Model event.")
+    request_id = _schema_request_id(session, request.turn_id, "REVIEW_COMPLETED")
+    if stored_event.request_id == request_id:
+        return session
+    response = await get_adapters().student_model.send_session_event(
+        ReviewCompletedEvent(
+            request_id=request_id,
+            event_type="REVIEW_COMPLETED",
+            source_turn_id=request.turn_id,
+            expected_journey_version=stored_event.journey_state.version,
+            topic_id=stored_event.journey_state.topic_id,
+            student_id=session.student_id,
+            timestamp=_schema_timestamp(),
+        ),
+        access_token,
+    )
+    return await _apply_schema_event(session, response)
 
 
 def assemble_session_summary(session: SessionRecord, ended_at: datetime) -> SessionSummary:
@@ -1065,6 +1339,7 @@ def assemble_session_summary(session: SessionRecord, ended_at: datetime) -> Sess
         ),
         None,
     )
+
     correct_attempts: int = sum(
         attempt.evaluation == "CORRECT" for attempt in session.per_question_history
     )
@@ -1095,6 +1370,31 @@ def assemble_session_summary(session: SessionRecord, ended_at: datetime) -> Sess
         phase_transitions=session.phase_transitions,
         recommended_entry_phase=session.recommended_entry_phase,
         conversation_history=session.conversation_history,
+    )
+
+
+def _empty_session_review() -> SessionReviewResponse:
+    """Return the safe review contract for a session with no attempts."""
+
+    return SessionReviewResponse(
+        five_category_summary={
+            "category_1_strength": "No questions were attempted in this session.",
+            "category_2_first_error": None,
+            "category_3_pattern": None,
+            "category_4_next_practice": "Start a new practice session when ready.",
+            "category_5_mastery": "There is not enough attempt evidence to assess mastery.",
+        },
+        student_facing_summary="This session ended without any recorded attempts.",
+        b6_hook=None,
+        call_to_action="NONE",
+        voice_delivery_order=[
+            "category_1_strength",
+            "category_4_next_practice",
+            "category_5_mastery",
+            "student_facing_summary",
+        ],
+        answer_reveal_allowed=False,
+        guardrail_passed=True,
     )
 
 
@@ -1237,8 +1537,8 @@ def build_session_review_request(session: SessionRecord) -> "SessionReviewReques
 async def end_session(request: SessionEndRequest) -> SessionRecord:
     """Generate the engine review, then mark a stored mock session as ended.
 
-    Review generation runs first: if it fails (or the session has no graded
-    attempts), the caller gets an explicit error and the session stays active.
+    Review generation runs first; empty-attempt REVIEW sessions use the
+    deterministic zero-attempt review contract.
     """
 
     # Imported here: ai_engine.session_review imports this module for answers.
@@ -1250,13 +1550,12 @@ async def end_session(request: SessionEndRequest) -> SessionRecord:
     )
 
     session: SessionRecord = _get_owned_session(request.session_id, request.student_id)
-    if len(session.per_question_history) == 0:
-        raise HTTPException(
-            status_code=409,
-            detail="Cannot end the session yet: no graded attempts to review.",
-        )
     try:
-        review = generate_session_review(build_session_review_request(session))
+        review = (
+            _empty_session_review()
+            if not session.per_question_history
+            else generate_session_review(build_session_review_request(session))
+        )
     except (SessionReviewValidationError, ValidationError, RuntimeError) as error:
         raise HTTPException(
             status_code=502,
@@ -1273,10 +1572,12 @@ async def end_session(request: SessionEndRequest) -> SessionRecord:
         }
     )
     _sessions[request.session_id] = ended_session
+    await save_session(ended_session)
+    clear_nudge_deliveries_for_session(request.session_id)
     return ended_session
 
 
-def start_voice_stream(session_id: str, student_id: str) -> SessionRecord:
+async def start_voice_stream(session_id: str, student_id: str) -> SessionRecord:
     """Mark the voice stream active for an existing session."""
 
     session: SessionRecord = _get_owned_session(session_id, student_id)
@@ -1295,22 +1596,30 @@ def start_voice_stream(session_id: str, student_id: str) -> SessionRecord:
     )
     updated_session: SessionRecord = session.model_copy(update={"voice_state": voice_state})
     _sessions[session_id] = updated_session
+    await save_session(updated_session)
     return updated_session
 
 
 async def record_canvas_submission(
     session_id: str,
     student_id: str,
+    session: SessionRecord,
+    turn_session: SessionRecord,
     record: CanvasSubmissionRecord,
-    attempt_count: int,
-    question_completed: bool,
     conversation_history: list[ConversationMessage],
-    recommended_entry_phase: str | None,
-    last_student_model: StudentModelResult | None = None,
+    last_student_model: StudentModelResult | None,
+    strokes: list[CanvasStroke],
+    canvas_events: list[CanvasEvent],
 ) -> SessionRecord:
-    """Append a reviewed canvas submission and persist its attempt count."""
+    """Append a reviewed canvas submission without replacing Schema 3.0 state."""
 
-    session: SessionRecord = _get_owned_session(session_id, student_id)
+    if (
+        session.session_id != session_id
+        or session.student_id != student_id
+        or turn_session.session_id != session_id
+        or turn_session.student_id != student_id
+    ):
+        raise ValueError("Canvas session identity does not match the request.")
     if session.status == "ended":
         raise HTTPException(
             status_code=409,
@@ -1319,7 +1628,7 @@ async def record_canvas_submission(
 
     per_question_history: list[QuestionAttemptRecord] = session.per_question_history
     if record.tutor.evaluation != "UNCLEAR":
-        if session.question_id is None or session.current_question is None:
+        if turn_session.question_id is None or turn_session.current_question is None:
             raise HTTPException(
                 status_code=409,
                 detail="The current phase has no active question.",
@@ -1327,9 +1636,9 @@ async def record_canvas_submission(
         per_question_history = [
             *per_question_history,
             QuestionAttemptRecord(
-                question_id=session.question_id,
-                question_text=session.current_question,
-                phase=session.current_phase,
+                question_id=turn_session.question_id,
+                question_text=turn_session.current_question,
+                phase=turn_session.current_phase,
                 evaluation=record.tutor.evaluation,
                 error_type=(
                     record.tutor.error_type
@@ -1344,17 +1653,41 @@ async def record_canvas_submission(
     updated_session: SessionRecord = session.model_copy(
         update={
             "canvas_submissions": [*session.canvas_submissions, record],
-            "attempt_count": attempt_count,
-            "question_completed": question_completed,
-            "answer_value_confirmed": record.tutor.answer_value_confirmed,
+            # Schema 3.0 state was applied before this canvas record is stored.
+            # Keep those fields authoritative; the tutor result is descriptive.
+            "attempt_count": session.attempt_count,
+            "question_completed": session.question_completed,
+            "answer_value_confirmed": session.answer_value_confirmed,
             "conversation_history": conversation_history,
             "per_question_history": per_question_history,
-            "recommended_entry_phase": recommended_entry_phase,
+            "recommended_entry_phase": session.recommended_entry_phase,
             "last_student_model": last_student_model or session.last_student_model,
+            **build_canvas_memory_update(
+                session,
+                turn_session.question_id,
+                record.submission_id,
+                strokes,
+                canvas_events,
+            ),
+            "canvas_state": session.canvas_state.model_copy(
+                update={
+                    "snapshot_id": (
+                        record.submission_id
+                        if session.question_id == turn_session.question_id
+                        else None
+                    ),
+                    "ocr_result": (
+                        record.ocr
+                        if session.question_id == turn_session.question_id
+                        else None
+                    ),
+                }
+            ),
         }
     )
     # This read-modify-write is safe only while the mock backend uses one worker.
     _sessions[session_id] = updated_session
+    await save_session(updated_session)
     return updated_session
 
 
@@ -1362,6 +1695,8 @@ async def record_canvas_attachment(
     session_id: str,
     student_id: str,
     record: CanvasSubmissionRecord,
+    strokes: list[CanvasStroke],
+    canvas_events: list[CanvasEvent],
 ) -> SessionRecord:
     """Store voice-attached OCR without counting a second student attempt."""
 
@@ -1372,10 +1707,47 @@ async def record_canvas_attachment(
             detail=f"Session with ID {session_id} has ended.",
         )
     updated_session: SessionRecord = session.model_copy(
-        update={"canvas_submissions": [*session.canvas_submissions, record]}
+        update={
+            "canvas_submissions": [*session.canvas_submissions, record],
+            **build_canvas_memory_update(
+                session,
+                session.question_id,
+                record.submission_id,
+                strokes,
+                canvas_events,
+            ),
+            "canvas_state": session.canvas_state.model_copy(
+                update={
+                    "snapshot_id": record.submission_id,
+                    "ocr_result": record.ocr,
+                }
+            ),
+        }
     )
     _sessions[session_id] = updated_session
+    await save_session(updated_session)
     return updated_session
+
+
+def build_canvas_memory_update(
+    session: SessionRecord,
+    question_id: str | None,
+    turn_id: str,
+    strokes: list[CanvasStroke],
+    canvas_events: list[CanvasEvent],
+) -> dict[str, object]:
+    if question_id is None:
+        return {}
+    return {
+        "canvas_memory_by_question": {
+            **session.canvas_memory_by_question,
+            question_id: CanvasQuestionMemory(
+                updated_turn_id=turn_id,
+                strokes=strokes,
+                canvas_events=canvas_events,
+            ),
+        }
+    }
 
 
 def get_canvas_submission(
@@ -1396,25 +1768,10 @@ def get_canvas_submission(
     )
 
 
-def increment_hint_count(session_id: str) -> int:
-    """Bump the stored hint count for a session and return the new value."""
-
-    session: SessionRecord | None = _sessions.get(session_id)
-    if session is None:
-        raise _session_not_found(session_id)
-    new_count = session.hint_count + 1
-    _sessions[session_id] = session.model_copy(
-        update={
-            "hint_count": new_count,
-            "hint_levels_used": [*session.hint_levels_used, new_count],
-        }
-    )
-    return new_count
-
-
-def update_interaction_state(
+async def update_interaction_state(
     session_id: str,
     student_id: str,
+    session: SessionRecord,
     current_phase: Phase,
     hint_count: int,
     ui_state: str,
@@ -1433,15 +1790,32 @@ def update_interaction_state(
     last so it wins.
     """
 
-    session: SessionRecord = _get_owned_session(session_id, student_id)
+    if session.session_id != session_id or session.student_id != student_id:
+        raise ValueError("Interaction session identity does not match the request.")
     voice_state: VoiceState = session.voice_state.model_copy(
         update={"last_transcript_confidence": transcript_confidence}
     )
+    next_question_id = transition_updates.get("question_id", session.question_id)
+    question_changed = next_question_id != session.question_id
     canvas_state: CanvasState = session.canvas_state.model_copy(
         update={
-            "snapshot_id": canvas_snapshot_id,
-            "ocr_result": ocr_result,
+            "snapshot_id": None if question_changed else canvas_snapshot_id,
+            "ocr_result": None if question_changed else ocr_result,
         }
+    )
+    requested_active_visual_cue = transition_updates.get(
+        "active_visual_cue",
+        session.active_visual_cue,
+    )
+    if requested_active_visual_cue is not None and not isinstance(
+        requested_active_visual_cue,
+        VisualCue,
+    ):
+        raise ValueError("active_visual_cue must be a VisualCue or None.")
+    active_visual_cue = (
+        None
+        if current_phase != "GUIDED_PRACTICE" or question_changed
+        else requested_active_visual_cue
     )
     updated_session: SessionRecord = session.model_copy(
         update={
@@ -1453,11 +1827,15 @@ def update_interaction_state(
             # Phase-driven flags first; the tutor's per-turn cue/scaffold
             # outputs then override their always-False map entries.
             **UI_STATE_FLAGS[current_phase],
-            "show_visual_cue": show_visual_cue,
+            "show_visual_cue": active_visual_cue is not None,
+            "active_visual_cue": active_visual_cue,
             "show_scaffold_panel": show_scaffold_panel,
             "scaffold_steps": scaffold_steps,
             **transition_updates,
         }
     )
     _sessions[session_id] = updated_session
+    await save_session(updated_session)
     return updated_session
+    ReviewCompletedEvent,
+    SessionResumedEvent,

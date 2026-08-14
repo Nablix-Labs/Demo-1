@@ -12,7 +12,9 @@ import { useNumeraStore } from '@/store/useNumeraStore';
 import { cn } from '@/lib/cn';
 
 export default function AITutorBar() {
-  const { micMuted, toggleMic, addCommentary } = useNumeraStore();
+  const micMuted = useNumeraStore((s) => s.micMuted);
+  const toggleMic = useNumeraStore((s) => s.toggleMic);
+  const addCommentary = useNumeraStore((s) => s.addCommentary);
   const [text, setText] = useState('');
 
   const send = () => {

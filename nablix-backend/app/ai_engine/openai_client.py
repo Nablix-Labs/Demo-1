@@ -19,10 +19,13 @@ from app.ai_engine.prompt_registry import (
 from app.ai_engine.schemas import (
     ErrorType,
     EvaluationCategory,
+    ExplainAgainRequest,
+    ExplainAgainResponse,
     HintLevel,
     InputSource,
     IntentType,
     LearningPhase,
+    OpenAIExplainAgainMessage,
     ResponseStrategy,
     StrictSchema,
 )
@@ -31,16 +34,16 @@ from app.core.logger import logger
 from app.models.adapters import ConversationMessage, ConversationState, Phase2PromptContext
 from app.models.guided_learning import (
     ActiveTeachingObjective,
+    FocusedComponentEvidence,
+    GeneratedConcept,
     GeneratedQuestionRubric,
     GuidedEvaluation,
-    HybridSemanticEvaluation,
     HybridTutorRequest,
-    HybridTutorWording,
-    HybridTutorWordingRequest,
     HybridTutorTurn,
     HybridTutorTurnContext,
     ScaffoldEvaluationContext,
     ScaffoldStepEvaluation,
+    GuidedTutorContext,
 )
 from app.models.student_model_session import AnswerSpec, QuestionType
 
@@ -48,15 +51,110 @@ from app.models.student_model_session import AnswerSpec, QuestionType
 _OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 
 
-def _hybrid_current_step_payload(request: HybridTutorRequest) -> dict[str, object] | None:
-    current_index = request.pedagogical_state.current_answer_step_index
-    if current_index is None:
-        return None
+def _guided_conversation_history(
+    user_payload: dict[str, object],
+) -> list[ConversationMessage]:
+    raw_history = user_payload.get("recent_conversation", [])
+    if not isinstance(raw_history, list):
+        raise AdapterError(
+            "openai_ai_engine",
+            "Guided evaluator recent_conversation must be a list.",
+        )
+    try:
+        return [ConversationMessage.model_validate(message) for message in raw_history]
+    except ValidationError as error:
+        raise AdapterError(
+            "openai_ai_engine",
+            f"Guided evaluator received invalid conversation history: {error}",
+        ) from error
+
+
+def focused_component_evidence_schema(
+    component_id: str,
+) -> dict[str, object]:
+    """Constrain structured output to the component being adjudicated."""
+    schema: dict[str, object] = FocusedComponentEvidence.model_json_schema()
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        raise ValueError("Focused component evidence schema has no properties.")
+    component_property = properties.get("component_id")
+    if not isinstance(component_property, dict):
+        raise ValueError(
+            "Focused component evidence schema has no component_id property."
+        )
+    component_property["enum"] = [component_id]
+    return schema
+
+
+def build_explain_again_initial_payload(
+    request: ExplainAgainRequest,
+    prompt_version: str,
+) -> dict[str, object]:
     return {
-        "step_id": f"{request.answer_spec.answer_spec_id}:STEP:{current_index + 1}",
-        "step_index": current_index,
-        "text": request.answer_spec.answer_steps[current_index],
-        "component_id": f"{request.answer_spec.answer_spec_id}:COMPONENT:{current_index + 1}",
+        "question_id": request.question_id,
+        "question": request.question,
+        "answer_spec": request.answer_spec.model_dump(),
+        "required_components": [
+            component.model_dump()
+            for component in request.generated_question_rubric.required_concepts
+        ],
+        "active_teaching_objective": request.active_teaching_objective.model_dump(),
+        "first_unresolved_concept_id": request.first_unresolved_concept_id,
+        "guided_student_state": request.guided_student_state,
+        "selected_error_code": request.selected_error_code,
+        "recorded_misconception": (
+            request.recorded_misconception.model_dump()
+            if request.recorded_misconception is not None
+            else None
+        ),
+        "recent_conversation": [
+            message.model_dump() for message in request.recent_conversation
+        ],
+        "active_support_level": request.active_support_level,
+        "highest_support_used": request.highest_support_used,
+        "visible_visual_cue": (
+            request.visible_visual_cue.model_dump()
+            if request.visible_visual_cue is not None
+            else None
+        ),
+        "active_scaffold": (
+            request.active_scaffold.model_dump()
+            if request.active_scaffold is not None
+            else None
+        ),
+        "answer_reveal_allowed": request.answer_reveal_allowed,
+        "validation_feedback": None,
+        "prompt_version": prompt_version,
+    }
+
+
+def build_explain_again_guardrail_retry_payload(
+    request: ExplainAgainRequest,
+    validation_feedback: str,
+    prompt_version: str,
+) -> dict[str, object]:
+    visible_visual_cue: dict[str, object] | None = None
+    if request.visible_visual_cue is not None:
+        visible_visual_cue = {
+            "show": request.visible_visual_cue.show,
+            "cue_id": request.visible_visual_cue.cue_id,
+            "cue_type": request.visible_visual_cue.cue_type,
+        }
+    return {
+        "question_id": request.question_id,
+        "question": request.question,
+        "first_unresolved_concept_id": request.first_unresolved_concept_id,
+        "active_support_level": request.active_support_level,
+        "visible_visual_cue": visible_visual_cue,
+        "active_scaffold": (
+            request.active_scaffold.model_dump()
+            if request.active_scaffold is not None
+            else None
+        ),
+        "answer_reveal_allowed": False,
+        "guardrail_retry_mode": "SOCRATIC_QUESTION_ONLY",
+        "validation_feedback": validation_feedback,
+        "prompt_version": prompt_version,
     }
 
 
@@ -230,6 +328,7 @@ class OpenAIAIEngineClient:
         deterministic_evaluation: EvaluationCategory | None,
         generated_rubric: GeneratedQuestionRubric,
         active_objective: ActiveTeachingObjective,
+        guided_tutor_context: GuidedTutorContext,
         student_response: str,
         input_source: InputSource,
         allowed_error_codes: list[dict[str, object]],
@@ -249,6 +348,7 @@ class OpenAIAIEngineClient:
                 "deterministic_evaluation": deterministic_evaluation,
                 "generated_rubric": generated_rubric.model_dump(),
                 "active_objective": active_objective.model_dump(),
+                "guided_tutor_context": guided_tutor_context.model_dump(),
                 "student_response": student_response,
                 "input_source": input_source,
                 "allowed_error_codes": allowed_error_codes,
@@ -268,6 +368,55 @@ class OpenAIAIEngineClient:
                 "openai_ai_engine",
                 f"invalid guided evaluation: {error}",
             ) from error
+
+    def adjudicate_component_evidence(
+        self,
+        question_type: QuestionType | None,
+        question: str,
+        answer_spec: AnswerSpec,
+        target_component: GeneratedConcept,
+        active_objective: ActiveTeachingObjective,
+        student_response: str,
+        input_source: InputSource,
+        recent_conversation: list[ConversationMessage],
+        prompt_version: str,
+        system_prompt: str,
+    ) -> FocusedComponentEvidence:
+        content = self._request_guided_json(
+            name="guided_component_adjudication",
+            schema=focused_component_evidence_schema(
+                target_component.concept_id
+            ),
+            system_prompt=system_prompt,
+            user_payload={
+                "question_type": question_type,
+                "question": question,
+                "answer_spec": answer_spec.model_dump(),
+                "target_component": target_component.model_dump(),
+                "active_objective": active_objective.model_dump(),
+                "student_response": student_response,
+                "input_source": input_source,
+                "recent_conversation": [
+                    message.model_dump() for message in recent_conversation
+                ],
+                "prompt_version": prompt_version,
+            },
+        )
+        try:
+            evidence = FocusedComponentEvidence.model_validate(content)
+        except ValidationError as error:
+            raise AdapterError(
+                "openai_ai_engine",
+                f"invalid focused component evidence: {error}",
+            ) from error
+        if evidence.component_id != target_component.concept_id:
+            raise AdapterError(
+                "openai_ai_engine",
+                "Focused component evidence returned an unexpected component ID: "
+                f"expected={target_component.concept_id}, "
+                f"actual={evidence.component_id}.",
+            )
+        return evidence
 
     def evaluate_scaffold_step(
         self,
@@ -294,53 +443,23 @@ class OpenAIAIEngineClient:
                 f"invalid scaffold evaluation: {error}",
             ) from error
 
-    def evaluate_hybrid_semantics(
+    def generate_explain_again_response(
         self,
-        request: HybridTutorRequest,
+        request: ExplainAgainRequest,
         system_prompt: str,
-    ) -> HybridSemanticEvaluation:
-        current_step = _hybrid_current_step_payload(request)
+    ) -> ExplainAgainResponse:
         content = self._request_guided_json(
-            name="hybrid_semantic_evaluation",
-            schema=HybridSemanticEvaluation.model_json_schema(),
-            system_prompt=system_prompt,
-            user_payload={
-                "question_id": request.question_id,
-                "question": request.question,
-                "current_authored_step": current_step,
-                "completed_component_ids": request.pedagogical_state.completed_component_ids,
-                "student_evidence": request.student_evidence.model_dump(),
-                "ordered_canvas_memory": [
-                    item.model_dump() for item in request.ordered_canvas_memory
-                ],
-                "support_state": request.support_state.model_dump(),
-            },
-        )
-        try:
-            return HybridSemanticEvaluation.model_validate(content)
-        except ValidationError as error:
-            raise AdapterError(
-                "openai_ai_engine",
-                f"invalid hybrid semantic evaluation: {error}",
-            ) from error
-
-    def generate_hybrid_tutor_wording(
-        self,
-        request: HybridTutorWordingRequest,
-        system_prompt: str,
-    ) -> HybridTutorWording:
-        content = self._request_guided_json(
-            name="hybrid_tutor_wording",
-            schema=HybridTutorWording.model_json_schema(),
+            name="explain_again_response",
+            schema=ExplainAgainResponse.model_json_schema(),
             system_prompt=system_prompt,
             user_payload=request.model_dump(),
         )
         try:
-            return HybridTutorWording.model_validate(content)
+            return ExplainAgainResponse.model_validate(content)
         except ValidationError as error:
             raise AdapterError(
                 "openai_ai_engine",
-                f"invalid hybrid tutor wording: {error}",
+                f"invalid Explain Again response: {error}",
             ) from error
 
     def generate_hybrid_tutor_turn(
@@ -368,21 +487,30 @@ class OpenAIAIEngineClient:
                 "question": request.question,
                 "answer_spec": request.answer_spec.model_dump(),
                 "authored_steps": authored_steps,
-                "completed_step_ids": [step["step_id"] for step in authored_steps[:len(completed)]],
-                "unresolved_step_ids": [step["step_id"] for step in authored_steps[len(completed):]],
+                "completed_step_ids": [
+                    step["step_id"] for step in authored_steps[: len(completed)]
+                ],
+                "unresolved_step_ids": [
+                    step["step_id"] for step in authored_steps[len(completed) :]
+                ],
                 "selected_option": {
                     "option_id": request.student_evidence.selected_option_id,
                     "option_text": request.student_evidence.selected_option_text,
                 },
                 "resolved_student_meaning": context.resolved_student_meaning,
                 "student_evidence": request.student_evidence.model_dump(),
-                "relevant_history": [item.model_dump() for item in request.session_history],
+                "recent_conversation": [
+                    item.model_dump() for item in request.session_history
+                ],
                 "support_state": request.support_state.model_dump(),
                 "active_support_content": (
                     context.active_support_content.model_dump()
-                    if context.active_support_content is not None else None
+                    if context.active_support_content is not None
+                    else None
                 ),
-                "ordered_canvas_memory": [item.model_dump() for item in request.ordered_canvas_memory],
+                "ordered_canvas_memory": [
+                    item.model_dump() for item in request.ordered_canvas_memory
+                ],
                 "decision": context.decision.model_dump(),
                 "canvas_actions": [item.model_dump() for item in context.canvas_actions],
                 "approved_answer_reveal": context.approved_answer_reveal,
@@ -391,7 +519,10 @@ class OpenAIAIEngineClient:
         try:
             return HybridTutorTurn.model_validate(content)
         except ValidationError as error:
-            raise AdapterError("openai_ai_engine", f"invalid hybrid tutor turn: {error}") from error
+            raise AdapterError(
+                "openai_ai_engine",
+                f"invalid hybrid tutor turn: {error}",
+            ) from error
 
     def _request_guided_json(
         self,
@@ -400,18 +531,39 @@ class OpenAIAIEngineClient:
         system_prompt: str,
         user_payload: dict[str, object],
     ) -> dict[str, object]:
+        recent_conversation = _guided_conversation_history(user_payload)
+        session_context = {
+            key: value
+            for key, value in user_payload.items()
+            if key != "recent_conversation"
+        }
+        active_tutor_question = next(
+            (
+                message.content
+                for message in reversed(recent_conversation)
+                if message.role == "assistant"
+            ),
+            None,
+        )
+        if active_tutor_question is not None:
+            session_context["active_tutor_question"] = active_tutor_question
         request_content = json.dumps(
-            {"component": name, **user_payload},
+            {"component": name, **session_context},
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
         )
+        messages = build_openai_tutor_messages(
+            phase="GUIDED_PRACTICE",
+            active_triggers=[],
+            session_context={"component": name, **session_context},
+            conversation_history=[message.model_dump() for message in recent_conversation],
+            current_user_input=request_content,
+        )
+        messages.insert(3, {"role": "system", "content": system_prompt})
         request_body: dict[str, object] = {
             "model": self._model,
-            "input": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": request_content},
-            ],
+            "input": messages,
             "store": self._store_responses,
             "text": {
                 "format": {
@@ -469,6 +621,7 @@ class OpenAIAIEngineClient:
         phase: LearningPhase,
         conversation_history: list[ConversationMessage],
         canvas_context: dict[str, object] | None,
+        support_context: dict[str, object] | None,
         rejected_tutor_message: str | None,
         validation_feedback: str | None,
     ) -> OpenAITutorMessage:
@@ -487,12 +640,43 @@ class OpenAIAIEngineClient:
                 "response_strategy": response_strategy,
                 "hint_level": hint_level,
                 "canvas_context": canvas_context,
+                "support_context": support_context,
                 "rejected_tutor_message": rejected_tutor_message,
                 "validation_feedback": validation_feedback,
                 "answer_reveal_allowed": False,
             },
         )
         return OpenAITutorMessage.model_validate(content)
+
+    def generate_explain_again_message(
+        self,
+        request: ExplainAgainRequest,
+        validation_feedback: str | None,
+        prompt_version: str,
+        system_prompt: str,
+    ) -> OpenAIExplainAgainMessage:
+        user_payload = (
+            build_explain_again_initial_payload(request, prompt_version)
+            if validation_feedback is None
+            else build_explain_again_guardrail_retry_payload(
+                request,
+                validation_feedback,
+                prompt_version,
+            )
+        )
+        content = self._request_guided_json(
+            name="explain_again",
+            schema=OpenAIExplainAgainMessage.model_json_schema(),
+            system_prompt=system_prompt,
+            user_payload=user_payload,
+        )
+        try:
+            return OpenAIExplainAgainMessage.model_validate(content)
+        except ValidationError as error:
+            raise AdapterError(
+                "openai_ai_engine",
+                f"invalid Explain Again response: {error}",
+            ) from error
 
     def generate_session_review(
         self,
