@@ -13,6 +13,7 @@
  *   { type: 'tutor_response',     text: string, voice_text: string, ... }
  *   { type: 'tutor_audio_chunk',  chunk: string, chunk_index: number }   // base64 MP3
  *   { type: 'tutor_audio_end',    total_chunks: number, tts_latency_ms: number, error?: string }
+ *   { type: 'tutor_audio_cancel', reason: string, expect_new_turn: boolean }    // Flux barge-in
  *
  * Message schema (out):
  *   { type: 'audio_chunk', data: string }  // base64 PCM 16kHz mono
@@ -25,7 +26,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import { phaseAnnouncement, withTransitionVoice } from '@/lib/phaseTransition';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
-import { tutorAudioStream, effectiveVoice } from '@/lib/tts';
+import { tutorAudioStream, effectiveVoice, stopTutorSpeech } from '@/lib/tts';
 import { tutorSay } from '@/lib/tutorSpeech';
 import { buildVoiceStreamUrl, voiceStreamingEnabled, allowAnonTutorCalls } from '@/lib/runtimeConfig';
 import {
@@ -37,6 +38,7 @@ import { applyInteractionSupport, acceptResponse, type SupportPresentation } fro
 import { TurnWatchdog } from '@/lib/turnWatchdog';
 import { SpeechSettleTimer } from '@/lib/speechSettle';
 import { turnContextFrame } from '@/lib/voiceTurnContext';
+import { reopensStudentTurn, type TutorAudioCancelFrame } from '@/lib/tutorAudioCancel';
 import { reportFailure } from '@/lib/failureReport';
 
 
@@ -468,6 +470,33 @@ export function useWebSocket(sessionId: string | null) {
             if (discardAudioRef.current) { discardAudioRef.current = false; break; }
             tutorAudioStream.finishStream(msg.total_chunks as number, msg.error as string | undefined);
             break;
+
+          // The server gave up on the reply it was streaming — the student
+          // talked over it (Flux barge-in), or a typed answer replaced it.
+          case 'tutor_audio_cancel': {
+            // Nothing is owed on the cancelled turn any more, so stand the
+            // rescue and the settle clock down before anything else: firing
+            // either one now would act on a turn the server has abandoned.
+            watchdogRef.current?.noteTurnResolved();
+            processingTimerRef.current?.cancel();
+            // The server has stopped sending, but chunks already in flight are
+            // still on their way, and `tutor_audio_end` may still follow.
+            discardAudioRef.current = true;
+            // Silences the streamed audio AND the browser-speech and REST-audio
+            // fallbacks — the student is interrupting the tutor, not one
+            // particular way of playing it. hardStop() clears the chunks that
+            // arrived but never played (lib/tts), which is the tail they would
+            // otherwise hear.
+            stopTutorSpeech();
+            if (reopensStudentTurn(msg as TutorAudioCancelFrame)) {
+              // See lib/tutorAudioCancel: the idle handler that normally does
+              // this cannot run for audio that was cut off, so the barged-in
+              // turn would carry the previous turn's context.
+              useNumeraStore.getState().beginListeningTurn();
+              sendTurnContext();
+            }
+            break;
+          }
 
           // Voice server status/error — informational, no UI action needed.
           case 'status':
