@@ -9,6 +9,12 @@ from app.core.config import Settings
 from app.models.adapters import Phase2PromptContext
 from app.models.guided_learning import (
     ActiveTeachingObjective,
+    HybridCanvasPlannerRequest,
+    HybridPedagogyDecision,
+    HybridSemanticEvaluation,
+    HybridTutorRequest,
+    HybridTutorWordingRequest,
+    HybridAuthoredSupportContent,
     GeneratedConcept,
     GeneratedQuestionRubric,
     GuidedEvaluation,
@@ -125,6 +131,78 @@ AUTHORED_GUIDED_QUESTIONS: list[AuthoredQuestion] = [
         wrong_response="one half plus x",
     ),
 ]
+
+
+def _hybrid_topic_1_envelope() -> dict[str, object]:
+    return {
+        "schema_version": "1.0",
+        "question_id": "Q-T01-003",
+        "question_type": "SHORT_RESPONSE",
+        "question": "A player starts with score s and gains 6 bonus points. Write the new-score rule.",
+        "answer_spec": {
+            "answer_spec_id": "ANS-T01-003",
+            "canonical_answer": "s + 6",
+            "accepted_answers": ["s+6"],
+            "verification_method": "EXACT_NOTATION_MATCH",
+            "answer_steps": ["Identify the changing score.", "Write the rule."],
+        },
+        "support_state": {
+            "current_support": "NONE",
+            "highest_support_used": "NONE",
+            "active_support_id": None,
+            "support_history_ids": [],
+            "consecutive_stuck_count": 0,
+        },
+        "session_history": [],
+        "ordered_canvas_memory": [
+            {
+                "object_id": "student-score-note",
+                "order_index": 0,
+                "turn_id": "TURN-003",
+                "question_id": "Q-T01-003",
+                "actor": "STUDENT",
+                "action_type": "WRITE",
+                "content": "score changes",
+                "math_text": None,
+                "target_object_id": None,
+                "semantic_tag": "changing_value",
+                "source_id": None,
+                "active_state": "ACTIVE",
+                "reliability": "RELIABLE",
+            }
+        ],
+        "student_evidence": {
+            "input_source": "MULTIMODAL",
+            "raw_voice_transcript": "sex plus six",
+            "transcript_confidence": 0.98,
+            "transcript_alternatives": ["s plus six"],
+            "typed_answer": None,
+            "structured_answer": {},
+            "selected_option_id": None,
+            "selected_option_text": None,
+            "raw_ocr_text": "s + 6",
+            "processed_math_text": "s + 6",
+            "ocr_confidence": 0.96,
+            "canvas_object_ids": ["student-score-note"],
+        },
+        "pedagogical_state": {
+            "student_state": "PARTIAL",
+            "completed_component_ids": [],
+            "current_answer_step_index": 0,
+            "consecutive_stuck_count": 0,
+        },
+    }
+
+
+def _hybrid_enabled_rules() -> classifier.ClassifierRulesConfig:
+    rules = classifier.load_classifier_rules()
+    guided_learning = rules.guided_learning.model_copy(
+        update={
+            "v1_hybrid_enabled": True,
+            "canvas_pedagogy_action_planner_enabled": True,
+        }
+    )
+    return rules.model_copy(update={"guided_learning": guided_learning})
 
 
 def _rubric(question_id: str) -> GeneratedQuestionRubric:
@@ -334,3 +412,101 @@ def test_low_confidence_voice_never_records_an_authored_guided_attempt(
     assert response.evaluation == "UNCLEAR"
     assert response.attempt_increment == 0
     assert response.student_model_events == []
+
+
+def test_topic_1_hybrid_external_envelope_completes_the_contract_pipeline() -> None:
+    request = HybridTutorRequest.model_validate(_hybrid_topic_1_envelope())
+    rules = _hybrid_enabled_rules()
+
+    evidence = classifier.resolve_hybrid_student_evidence(
+        request.student_evidence,
+        request.question,
+        rules.low_transcript_confidence_threshold,
+    )
+    semantic = classifier.validate_hybrid_semantic_evaluation(
+        request,
+        HybridSemanticEvaluation(
+            pedagogical_state="PARTIAL",
+            completed_components=["ANS-T01-003:COMPONENT:1"],
+            current_answer_step_index=1,
+            current_answer_step_id="ANS-T01-003:STEP:2",
+        ),
+    )
+    decision = classifier.decide_hybrid_pedagogy(
+        request.pedagogical_state,
+        request.support_state,
+        [],
+        rules,
+    )
+    planner_request = HybridCanvasPlannerRequest(
+        turn_id="TURN-003",
+        question_id=request.question_id,
+        answer_spec=request.answer_spec,
+        component_ids=["ANS-T01-003:COMPONENT:1", "ANS-T01-003:COMPONENT:2"],
+        current_answer_step_index=request.pedagogical_state.current_answer_step_index,
+        current_answer_step_id="ANS-T01-003:STEP:1",
+        completed_component_ids=request.pedagogical_state.completed_component_ids,
+        input_reliability=evidence.input_reliability,
+        decision=decision,
+        ordered_canvas_memory=request.ordered_canvas_memory,
+        authored_support_content=[],
+        active_action_ids=[],
+    )
+    actions = classifier.plan_hybrid_canvas_pedagogy(planner_request, rules)
+    wording = classifier.validate_hybrid_tutor_wording(
+        "Look at the part I highlighted. What changes?",
+        actions,
+        request.answer_spec.canonical_answer,
+        rules,
+    )
+
+    assert evidence.resolved_student_meaning == "s + 6"
+    assert semantic.completed_components == ["ANS-T01-003:COMPONENT:1"]
+    assert decision.strategy == "AFFIRM_AND_ISOLATE"
+    assert actions[0].target_object_id == "student-score-note"
+    assert wording == "Look at the part I highlighted. What changes?"
+
+
+def test_topic_1_hybrid_stuck_envelope_uses_only_authored_support() -> None:
+    payload = _hybrid_topic_1_envelope()
+    support_state = payload["support_state"]
+    pedagogical_state = payload["pedagogical_state"]
+    assert isinstance(support_state, dict)
+    assert isinstance(pedagogical_state, dict)
+    support_state["consecutive_stuck_count"] = 1
+    pedagogical_state["student_state"] = "STUCK"
+    request = HybridTutorRequest.model_validate(payload)
+    rules = _hybrid_enabled_rules()
+    support = HybridAuthoredSupportContent(
+        source_id="SUPPORT-T01-HINT-01",
+        support_action="HINT",
+        text="Look at what changes in the score.",
+    )
+
+    decision = classifier.decide_hybrid_pedagogy(
+        request.pedagogical_state,
+        request.support_state,
+        [support],
+        rules,
+    )
+    actions = classifier.plan_hybrid_canvas_pedagogy(
+        HybridCanvasPlannerRequest(
+            turn_id="TURN-004",
+            question_id=request.question_id,
+            answer_spec=request.answer_spec,
+            component_ids=["ANS-T01-003:COMPONENT:1", "ANS-T01-003:COMPONENT:2"],
+            current_answer_step_index=request.pedagogical_state.current_answer_step_index,
+            current_answer_step_id="ANS-T01-003:STEP:1",
+            completed_component_ids=request.pedagogical_state.completed_component_ids,
+            input_reliability="RELIABLE",
+            decision=decision,
+            ordered_canvas_memory=request.ordered_canvas_memory,
+            authored_support_content=[support],
+            active_action_ids=[],
+        ),
+        rules,
+    )
+
+    assert decision.support_id == "SUPPORT-T01-HINT-01"
+    assert actions[0].source_id == "SUPPORT-T01-HINT-01"
+    assert actions[0].type == "SHOW_CUE"
