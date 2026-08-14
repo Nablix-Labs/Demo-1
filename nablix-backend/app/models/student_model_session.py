@@ -56,6 +56,7 @@ class AnswerSpec(BaseModel):
     accepted_answers: list[str]
     verification_method: str
     explanation_required: bool | None = None
+    answer_steps: list[str] = Field(default_factory=list)
 
 
 class TutorQuestionView(BaseModel):

@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.models.student_model_session import AnswerSpec, QuestionType
 from app.models.guided_learning import (
     ActiveTeachingObjective,
+    ConversationMessage,
     GeneratedQuestionRubric,
     GuidedStudentState,
     ScaffoldEvaluationContext,
@@ -116,11 +117,6 @@ class AdapterContext(BaseModel):
     generated_question_rubric: GeneratedQuestionRubric | None = None
     active_teaching_objective: ActiveTeachingObjective | None = None
     scaffold_evaluation_context: ScaffoldEvaluationContext | None = None
-
-
-class ConversationMessage(BaseModel):
-    role: Literal["user", "assistant"]
-    content: str
 
 
 class RetrievedDocument(BaseModel):

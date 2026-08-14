@@ -7,8 +7,11 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from app.models.adapters import ConversationAction
 from app.models.guided_learning import (
     ActiveTeachingObjective,
+    CanvasPedagogyAction,
     GeneratedQuestionRubric,
     GuidedStudentState,
+    HybridTutorRequest,
+    HybridTutorResponse,
 )
 
 
