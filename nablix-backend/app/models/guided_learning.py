@@ -150,11 +150,17 @@ class HybridAuthoredSupportContent(GuidedLearningModel):
     text: str = Field(min_length=1)
 
 
+class HybridTutorAnchor(GuidedLearningModel):
+    target_object_id: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+    semantic_tag: CanvasSemanticTag
+    component_id: str = Field(min_length=1)
+
+
 class HybridCanvasPlannerRequest(GuidedLearningModel):
     turn_id: str = Field(min_length=1)
     question_id: str = Field(min_length=1)
     answer_spec: AnswerSpec
-    component_ids: list[str]
     current_answer_step_index: int | None = Field(ge=0)
     current_answer_step_id: str | None
     completed_component_ids: list[str]
@@ -162,6 +168,8 @@ class HybridCanvasPlannerRequest(GuidedLearningModel):
     decision: HybridPedagogyDecision
     ordered_canvas_memory: list[OrderedCanvasMemoryItem]
     authored_support_content: list[HybridAuthoredSupportContent]
+    confirmed_tutor_anchors: list[HybridTutorAnchor]
+    approved_answer_reveal: StrictBool
     active_action_ids: list[str]
 
 
@@ -177,13 +185,30 @@ class HybridTutorWordingRequest(GuidedLearningModel):
     resolved_student_meaning: str | None
     semantic_evaluation: HybridSemanticEvaluation
     decision: HybridPedagogyDecision
-    canvas_actions: list[CanvasPedagogyAction]
+    canvas_actions: list["CanvasPedagogyAction"]
+    active_support_content: HybridAuthoredSupportContent | None
     current_answer_step_id: str | None
     current_answer_step_text: str | None
 
 
 class HybridTutorWording(GuidedLearningModel):
     tutor_voice_text: str = Field(min_length=1)
+
+
+class HybridTutorTurn(HybridSemanticEvaluation):
+    tutor_voice_text: str = Field(min_length=1)
+    requires_written_math_evidence: StrictBool
+    next_expected_input: HybridExpectedInput
+
+
+class HybridTutorTurnContext(GuidedLearningModel):
+    request: "HybridTutorRequest"
+    resolved_student_meaning: str | None
+    input_reliability: HybridInputReliability
+    decision: HybridPedagogyDecision
+    canvas_actions: list[CanvasPedagogyAction]
+    active_support_content: HybridAuthoredSupportContent | None
+    approved_answer_reveal: StrictBool
 
 
 class CanvasPedagogyAction(GuidedLearningModel):
@@ -194,7 +219,7 @@ class CanvasPedagogyAction(GuidedLearningModel):
     semantic_tag: CanvasSemanticTag
     text: str | None
     source_id: str | None
-    answer_reveal_allowed: Literal[False]
+    answer_reveal_allowed: StrictBool
 
 
 class HybridTutorRequest(GuidedLearningModel):

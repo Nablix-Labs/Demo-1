@@ -4,6 +4,8 @@ confidence:
   standard_response: 0.95
 guided_learning:
   v1_hybrid_enabled: false
+  minimum_voice_transcript_confidence: 0.85
+  minimum_ocr_confidence: 0.80
   canvas_pedagogy_action_planner_enabled: false
   hybrid_support_ladder:
     - NONE

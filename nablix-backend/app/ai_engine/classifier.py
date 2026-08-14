@@ -60,6 +60,7 @@ from app.models.guided_learning import (
     HybridTutorRequest,
     HybridTutorResponse,
     HybridSemanticEvaluation,
+    HybridTutorTurn,
     GuidedStudentState,
     ScaffoldEvaluationContext,
     ScaffoldStepEvaluation,
@@ -2276,7 +2277,8 @@ _VOICE_ADDITION_PATTERN = re.compile(
 def resolve_hybrid_student_evidence(
     evidence: HybridStudentEvidence,
     question: str,
-    minimum_transcript_confidence: float,
+    minimum_voice_transcript_confidence: float,
+    minimum_ocr_confidence: float,
 ) -> HybridEvidenceResolution:
     """Resolve reliable Hybrid evidence without changing the original evidence."""
 
@@ -2292,14 +2294,14 @@ def resolve_hybrid_student_evidence(
     if (
         processed_math_text is not None
         and evidence.ocr_confidence is not None
-        and evidence.ocr_confidence >= minimum_transcript_confidence
+        and evidence.ocr_confidence >= minimum_ocr_confidence
     ):
         return _reliable_hybrid_evidence_resolution(processed_math_text, "OCR")
 
     resolved_voice = _resolve_voice_math_from_question_context(
         evidence,
         question,
-        minimum_transcript_confidence,
+        minimum_voice_transcript_confidence,
     )
     if resolved_voice is not None:
         return _reliable_hybrid_evidence_resolution(resolved_voice, "VOICE_CONTEXT")
@@ -2461,6 +2463,53 @@ def validate_hybrid_semantic_evaluation(
     return evaluation
 
 
+def validate_hybrid_tutor_turn(
+    request: HybridTutorRequest,
+    resolution: HybridEvidenceResolution,
+    turn: HybridTutorTurn,
+) -> HybridTutorTurn:
+    """Validate the single Hybrid LLM result before any orchestration update."""
+
+    validate_hybrid_semantic_evaluation(
+        request,
+        HybridSemanticEvaluation(
+            pedagogical_state=turn.pedagogical_state,
+            completed_components=turn.completed_components,
+            current_answer_step_index=turn.current_answer_step_index,
+            current_answer_step_id=turn.current_answer_step_id,
+        ),
+    )
+    if turn.requires_written_math_evidence and turn.next_expected_input != "WRITE":
+        raise ValueError("Written-maths requirement must request WRITE input.")
+    if not hybrid_symbolic_completion_allowed(request, resolution) and (
+        turn.current_answer_step_index is None
+    ):
+        raise ValueError("Voice-only algebra evidence cannot complete the final rule.")
+    if resolution.input_reliability == "NEEDS_WRITING" and (
+        turn.completed_components != request.pedagogical_state.completed_component_ids
+    ):
+        raise ValueError("NEEDS_WRITING cannot update Hybrid learning state.")
+    return turn
+
+
+def hybrid_symbolic_completion_allowed(
+    request: HybridTutorRequest,
+    resolution: HybridEvidenceResolution,
+) -> bool:
+    """Require typed or reliable canvas maths for a final algebraic rule."""
+
+    current_index = request.pedagogical_state.current_answer_step_index
+    if current_index is None:
+        return True
+    is_final_step = current_index == len(request.answer_spec.answer_steps) - 1
+    if request.question_type != "SHORT_RESPONSE" or not is_final_step:
+        return resolution.can_update_learning_state is True
+    return (
+        resolution.resolution_source in {"TYPED", "OCR"}
+        and resolution.can_update_learning_state is True
+    )
+
+
 def decide_hybrid_pedagogy(
     pedagogical_state: HybridPedagogicalState,
     support_state: HybridSupportState,
@@ -2564,9 +2613,52 @@ def plan_hybrid_canvas_pedagogy(
     action = _planned_canvas_action(request, target.object_id)
     if action is None or _is_duplicate_canvas_action(action, request):
         return []
-    if _canvas_action_reveals_answer(action, request.answer_spec.canonical_answer, rules):
+    if (
+        _canvas_action_reveals_answer(action, request.answer_spec.canonical_answer, rules)
+        and not (
+            action.type == "TUTOR_SOLVED_STEP"
+            and request.decision.support_action == "TUTOR_SOLVED"
+            and request.approved_answer_reveal is True
+        )
+    ):
         return []
-    return [action]
+    actions = [action]
+    reliable_target_ids = {
+        item.object_id
+        for item in request.ordered_canvas_memory
+        if item.active_state == "ACTIVE" and item.reliability == "RELIABLE"
+    }
+    for anchor in request.confirmed_tutor_anchors:
+        if (
+            anchor.component_id not in request.completed_component_ids
+            or anchor.target_object_id not in reliable_target_ids
+        ):
+            continue
+        insert_math = CanvasPedagogyAction(
+            action_id=f"{request.turn_id}:canvas:{len(actions) + 1}",
+            type="INSERT_MATH",
+            layer="TUTOR",
+            target_object_id=anchor.target_object_id,
+            semantic_tag=anchor.semantic_tag,
+            text=anchor.text,
+            source_id=None,
+            answer_reveal_allowed=False,
+        )
+        if not _canvas_action_reveals_answer(
+            insert_math,
+            request.answer_spec.canonical_answer,
+            rules,
+        ) and not _is_duplicate_canvas_action(insert_math, request):
+            actions.append(insert_math)
+            insert_label = insert_math.model_copy(
+                update={
+                    "action_id": f"{request.turn_id}:canvas:{len(actions) + 1}",
+                    "type": "INSERT_LABEL",
+                    "text": f"{anchor.text} → {anchor.semantic_tag.replace('_', ' ')}",
+                }
+            )
+            actions.append(insert_label)
+    return actions
 
 
 def validate_hybrid_tutor_wording(
@@ -2587,6 +2679,22 @@ def validate_hybrid_tutor_wording(
     if not any(normalize_text(phrase) in normalized_text for phrase in action_phrases):
         return rules.guided_learning.canvas_pedagogy_planner.safe_action_free_question
     return tutor_voice_text
+
+
+def validate_hybrid_canvas_action_reveal_policy(
+    action: CanvasPedagogyAction,
+    support_action: SupportUsed,
+    approved_answer_reveal: bool,
+) -> CanvasPedagogyAction:
+    """Permit answer reveal only for the explicitly approved tutor-solved rung."""
+
+    if action.answer_reveal_allowed is True and not (
+        action.type == "TUTOR_SOLVED_STEP"
+        and support_action == "TUTOR_SOLVED"
+        and approved_answer_reveal is True
+    ):
+        raise ValueError("Canvas answer reveal is not approved for this action.")
+    return action
 
 
 def _next_hybrid_support_action(
@@ -2669,7 +2777,11 @@ def _planned_canvas_action(
         semantic_tag=semantic_tag,
         text=text,
         source_id=source_id,
-        answer_reveal_allowed=False,
+        answer_reveal_allowed=(
+            action_type == "TUTOR_SOLVED_STEP"
+            and decision.support_action == "TUTOR_SOLVED"
+            and request.approved_answer_reveal is True
+        ),
     )
 
 

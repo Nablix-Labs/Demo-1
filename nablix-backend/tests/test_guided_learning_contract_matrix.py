@@ -421,7 +421,8 @@ def test_topic_1_hybrid_external_envelope_completes_the_contract_pipeline() -> N
     evidence = classifier.resolve_hybrid_student_evidence(
         request.student_evidence,
         request.question,
-        rules.low_transcript_confidence_threshold,
+        rules.guided_learning.minimum_voice_transcript_confidence,
+        rules.guided_learning.minimum_ocr_confidence,
     )
     semantic = classifier.validate_hybrid_semantic_evaluation(
         request,
@@ -442,7 +443,6 @@ def test_topic_1_hybrid_external_envelope_completes_the_contract_pipeline() -> N
         turn_id="TURN-003",
         question_id=request.question_id,
         answer_spec=request.answer_spec,
-        component_ids=["ANS-T01-003:COMPONENT:1", "ANS-T01-003:COMPONENT:2"],
         current_answer_step_index=request.pedagogical_state.current_answer_step_index,
         current_answer_step_id="ANS-T01-003:STEP:1",
         completed_component_ids=request.pedagogical_state.completed_component_ids,
@@ -450,6 +450,8 @@ def test_topic_1_hybrid_external_envelope_completes_the_contract_pipeline() -> N
         decision=decision,
         ordered_canvas_memory=request.ordered_canvas_memory,
         authored_support_content=[],
+        confirmed_tutor_anchors=[],
+        approved_answer_reveal=False,
         active_action_ids=[],
     )
     actions = classifier.plan_hybrid_canvas_pedagogy(planner_request, rules)
@@ -494,7 +496,6 @@ def test_topic_1_hybrid_stuck_envelope_uses_only_authored_support() -> None:
             turn_id="TURN-004",
             question_id=request.question_id,
             answer_spec=request.answer_spec,
-            component_ids=["ANS-T01-003:COMPONENT:1", "ANS-T01-003:COMPONENT:2"],
             current_answer_step_index=request.pedagogical_state.current_answer_step_index,
             current_answer_step_id="ANS-T01-003:STEP:1",
             completed_component_ids=request.pedagogical_state.completed_component_ids,
@@ -502,6 +503,8 @@ def test_topic_1_hybrid_stuck_envelope_uses_only_authored_support() -> None:
             decision=decision,
             ordered_canvas_memory=request.ordered_canvas_memory,
             authored_support_content=[support],
+            confirmed_tutor_anchors=[],
+            approved_answer_reveal=False,
             active_action_ids=[],
         ),
         rules,

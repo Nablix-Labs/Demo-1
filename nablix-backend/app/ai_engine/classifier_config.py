@@ -177,6 +177,8 @@ class HybridPromptConfig(StrictSchema):
 
 class GuidedLearningConfig(StrictSchema):
     v1_hybrid_enabled: StrictBool
+    minimum_voice_transcript_confidence: float = Field(ge=0.0, le=1.0)
+    minimum_ocr_confidence: float = Field(ge=0.0, le=1.0)
     canvas_pedagogy_action_planner_enabled: StrictBool
     hybrid_support_ladder: list[SupportUsed]
     canvas_pedagogy_planner: CanvasPedagogyPlannerConfig

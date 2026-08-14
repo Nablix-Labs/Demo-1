@@ -394,7 +394,6 @@ def _hybrid_canvas_planner_request(
         turn_id="TURN-42",
         question_id="Q-T01-001",
         answer_spec=request.answer_spec,
-        component_ids=[step.component_id for step in authored_hybrid_answer_steps(request.answer_spec)],
         current_answer_step_index=request.pedagogical_state.current_answer_step_index,
         current_answer_step_id="ANS-T01-001:STEP:1",
         completed_component_ids=request.pedagogical_state.completed_component_ids,
@@ -408,6 +407,8 @@ def _hybrid_canvas_planner_request(
                 text="Look for the quantity that changes.",
             )
         ],
+        confirmed_tutor_anchors=[],
+        approved_answer_reveal=False,
         active_action_ids=[],
     )
 
@@ -689,6 +690,7 @@ def test_hybrid_wording_prompt_cannot_modify_the_validated_plan(monkeypatch) -> 
         ),
         decision=planner_request.decision,
         canvas_actions=actions,
+        active_support_content=None,
         current_answer_step_id="ANS-T01-001:STEP:1",
         current_answer_step_text="Identify the changing value.",
     )
@@ -726,7 +728,6 @@ def test_hybrid_wording_prompt_cannot_modify_the_validated_plan(monkeypatch) -> 
         ("type", "ERASE"),
         ("layer", "STUDENT"),
         ("semantic_tag", "final_answer"),
-        ("answer_reveal_allowed", True),
     ],
 )
 def test_canvas_pedagogy_action_rejects_invalid_contract_values(
@@ -738,6 +739,45 @@ def test_canvas_pedagogy_action_rejects_invalid_contract_values(
 
     with pytest.raises(ValueError):
         CanvasPedagogyAction.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("action_type", "support_action", "approved"),
+    [
+        ("HIGHLIGHT", "TUTOR_SOLVED", True),
+        ("TUTOR_SOLVED_STEP", "HINT", True),
+        ("TUTOR_SOLVED_STEP", "TUTOR_SOLVED", False),
+    ],
+)
+def test_canvas_answer_reveal_requires_approved_tutor_solved_final_rung(
+    action_type: str,
+    support_action: str,
+    approved: bool,
+) -> None:
+    payload = _hybrid_action_payload()
+    payload["type"] = action_type
+    payload["answer_reveal_allowed"] = True
+    action = CanvasPedagogyAction.model_validate(payload)
+
+    with pytest.raises(ValueError, match="not approved"):
+        classifier.validate_hybrid_canvas_action_reveal_policy(
+            action,
+            support_action,
+            approved,
+        )
+
+
+def test_canvas_answer_reveal_accepts_only_approved_tutor_solved_final_rung() -> None:
+    payload = _hybrid_action_payload()
+    payload["type"] = "TUTOR_SOLVED_STEP"
+    payload["answer_reveal_allowed"] = True
+    action = CanvasPedagogyAction.model_validate(payload)
+
+    assert classifier.validate_hybrid_canvas_action_reveal_policy(
+        action,
+        "TUTOR_SOLVED",
+        True,
+    ) == action
 
 
 def test_hybrid_contracts_reject_unknown_fields_and_states() -> None:
@@ -802,7 +842,8 @@ def test_hybrid_voice_resolves_sex_plus_six_only_with_unique_question_context() 
     resolution = classifier.resolve_hybrid_student_evidence(
         evidence,
         "A player starts with score s and gains 6 bonus points. Write the new-score rule.",
-        classifier.load_classifier_rules().low_transcript_confidence_threshold,
+        classifier.load_classifier_rules().guided_learning.minimum_voice_transcript_confidence,
+        classifier.load_classifier_rules().guided_learning.minimum_ocr_confidence,
     )
 
     assert resolution.input_reliability == "RELIABLE"
@@ -851,7 +892,8 @@ def test_hybrid_ambiguous_voice_math_returns_needs_writing_without_state_mutatio
     resolution = classifier.resolve_hybrid_student_evidence(
         evidence,
         question,
-        classifier.load_classifier_rules().low_transcript_confidence_threshold,
+        classifier.load_classifier_rules().guided_learning.minimum_voice_transcript_confidence,
+        classifier.load_classifier_rules().guided_learning.minimum_ocr_confidence,
     )
 
     assert resolution.input_reliability == "NEEDS_WRITING"
@@ -876,7 +918,8 @@ def test_hybrid_evidence_prefers_typed_math_over_voice_repair() -> None:
     resolution = classifier.resolve_hybrid_student_evidence(
         evidence,
         "A player starts with score s and gains 6 bonus points. Write the new-score rule.",
-        classifier.load_classifier_rules().low_transcript_confidence_threshold,
+        classifier.load_classifier_rules().guided_learning.minimum_voice_transcript_confidence,
+        classifier.load_classifier_rules().guided_learning.minimum_ocr_confidence,
     )
 
     assert resolution.resolution_source == "TYPED"
@@ -898,7 +941,8 @@ def test_hybrid_evidence_uses_confident_processed_canvas_math() -> None:
     resolution = classifier.resolve_hybrid_student_evidence(
         evidence,
         "A counter starts at any value c and increases by 4.",
-        classifier.load_classifier_rules().low_transcript_confidence_threshold,
+        classifier.load_classifier_rules().guided_learning.minimum_voice_transcript_confidence,
+        classifier.load_classifier_rules().guided_learning.minimum_ocr_confidence,
     )
 
     assert resolution.resolution_source == "OCR"
