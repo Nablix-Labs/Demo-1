@@ -7,6 +7,7 @@ import ssl
 import certifi
 import logging
 import base64
+from enum import Enum
 from datetime import datetime, timezone
 
 import httpx
@@ -14,6 +15,12 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 import websockets
+# Explicit: the websockets package lazy-loads submodules, so
+# `websockets.exceptions` only resolves after something has touched it.
+# Both receiver loops catch ConnectionClosed, and an unresolved attribute
+# inside an `except` clause would mask the real error. Importing it here
+# makes that impossible.
+import websockets.exceptions
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "adapters"))
@@ -43,9 +50,63 @@ logging.basicConfig(
 )
 logger = logging.getLogger("streaming")
 
-DEEPGRAM_WS_URL = "wss://api.deepgram.com/v1/listen"
+DEEPGRAM_WS_URL = "wss://api.deepgram.com/v1/listen"       # Nova-3 (v1)
+DEEPGRAM_FLUX_WS_URL = "wss://api.deepgram.com/v2/listen"  # Flux (v2)
 DEEPGRAM_API_KEY = voice_config.DEEPGRAM_API_KEY
 MAIN_BACKEND_URL = os.getenv("NABLIX_MAIN_BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
+
+# ---------------------------------------------------------------------------
+# STT model selection
+# ---------------------------------------------------------------------------
+# "nova-3" -> legacy path: Deepgram v1 + our own silence timer / UtteranceEnd
+#             turn detection.  This is what shipped before Flux.
+# "flux"   -> Deepgram v2 with model-integrated turn detection.  Flux tells us
+#             when a turn starts and ends, so all of our timer machinery is
+#             bypassed.
+#
+# Defaults to nova-3 on purpose: pulling this code onto the VM without setting
+# the env var must not silently change production behaviour.  Opt in with
+# VOICE_STT_MODEL=flux.
+STT_MODEL = os.getenv("VOICE_STT_MODEL", "nova-3").strip().lower()
+USE_FLUX = STT_MODEL == "flux"
+
+# Flux end-of-turn tuning.  See https://developers.deepgram.com/docs/flux/configuration
+#   eot_threshold  (0.5-0.9, default 0.7): confidence needed to fire EndOfTurn.
+#                  Higher = waits longer to be sure, fewer mid-sentence cutoffs.
+#                  We default to 0.8 because students pause mid-thought while
+#                  doing mental arithmetic and a false cutoff is worse for us
+#                  than an extra ~100ms of latency.
+#   eot_timeout_ms (500-60000, default 5000): hard ceiling on silence before a
+#                  turn is forced closed regardless of confidence.
+FLUX_EOT_THRESHOLD = float(os.getenv("VOICE_FLUX_EOT_THRESHOLD", "0.8"))
+FLUX_EOT_TIMEOUT_MS = int(os.getenv("VOICE_FLUX_EOT_TIMEOUT_MS", "5000"))
+
+
+class TurnState(str, Enum):
+    """Explicit conversation state for the Flux path.
+
+    The Nova-3 path tracked this implicitly across ~8 separate booleans and
+    strings (is_processing, turn_already_processed, pending_transcript, ...)
+    mutated from three concurrent coroutines with no locking.  That is where
+    both of the August bugs lived.  Flux gives us real turn events, so the
+    state becomes a single variable with explicit transitions.
+
+        IDLE       no Deepgram connection / no audio flowing
+        LISTENING  student is (or may be) speaking; Flux is accumulating
+        PROCESSING backend tutor call is in flight
+        SPEAKING   streaming TTS audio down to the frontend
+
+    Only ONE turn task exists at a time.  If a new turn starts while a
+    previous one is still PROCESSING or SPEAKING, the old task is cancelled
+    outright -- the student has moved on, so its answer is stale by
+    definition.  That single rule replaces the entire pending_transcript /
+    cancel-and-reprocess buffer.
+    """
+
+    IDLE = "IDLE"
+    LISTENING = "LISTENING"
+    PROCESSING = "PROCESSING"
+    SPEAKING = "SPEAKING"
 
 # Adaptive silence timeout (seconds).
 # Instead of a single fixed timeout, we use different timeouts based on
@@ -118,6 +179,73 @@ def _build_deepgram_params(language: str = "en") -> str:
         encoded = term.replace(" ", "+")
         params += f"&keyterm={encoded}"
     return params
+
+
+def _build_flux_params() -> str:
+    """Build the Deepgram Flux (/v2/listen) WebSocket query string.
+
+    Differences from the Nova-3 params above, all per Deepgram's docs:
+
+      - model must be `flux-general-en`, not `nova-3`.
+      - `language` must NOT be sent.  The docs list `language=en` as a
+        common mistake with flux-general-en; language is implied by the
+        model name.  (Only flux-general-multi accepts `language_hint`.)
+      - `smart_format` and `punctuate` are unsupported by Flux and are
+        dropped.  Transcripts come back unformatted, so numbers may arrive
+        as words ("six" rather than "6").  normalize_math() already runs
+        downstream and the LLM handles spoken numbers, so this is cosmetic.
+      - `interim_results` is gone; Flux sends `Update` events instead.
+      - `endpointing` / `utterance_end_ms` are gone; turn detection is in
+        the model now, tuned via eot_threshold / eot_timeout_ms.
+      - keyterm prompting IS supported and carries over unchanged, which
+        matters -- it is what keeps "coefficient" from becoming
+        "co efficient" and "x equals" from becoming "eggs equals".
+    """
+    params = (
+        f"?model=flux-general-en"
+        f"&encoding=linear16"
+        f"&sample_rate={voice_config.STT_SAMPLE_RATE}"
+        f"&eot_threshold={FLUX_EOT_THRESHOLD}"
+        f"&eot_timeout_ms={FLUX_EOT_TIMEOUT_MS}"
+    )
+    for term in MATH_KEYTERMS:
+        encoded = term.replace(" ", "+")
+        params += f"&keyterm={encoded}"
+    return params
+
+
+def _flux_confidence(turn_info: dict) -> float:
+    """Derive a transcript-level confidence from a Flux TurnInfo message.
+
+    Nova-3 hands us a single `alternatives[0].confidence`.  Flux does not --
+    it reports confidence per word.  The rest of the pipeline (and the
+    frontend's `needs_clarification` flag) expects one number, so we average
+    the word confidences.
+
+    Returns 0.0 when there are no words, which is the same "unknown" value
+    the Nova-3 path used.
+    """
+    words = turn_info.get("words") or []
+    scores = [
+        w.get("confidence")
+        for w in words
+        if isinstance(w, dict) and isinstance(w.get("confidence"), (int, float))
+    ]
+    if not scores:
+        return 0.0
+    return sum(scores) / len(scores)
+
+
+def _stt_connection_config(language: str = "en") -> tuple[str, str]:
+    """Return (websocket_url, human_readable_label) for the active STT model.
+
+    Flux ignores `language` -- it is baked into the model name.  The
+    parameter is accepted anyway so both connect paths can call this the
+    same way regardless of which model is active.
+    """
+    if USE_FLUX:
+        return DEEPGRAM_FLUX_WS_URL + _build_flux_params(), "Flux (v2)"
+    return DEEPGRAM_WS_URL + _build_deepgram_params(language), "Nova-3 (v1)"
 
 # Reuse one backend client, but create it lazily so importing app.main does not
 # initialize the voice streaming HTTP stack.
@@ -340,6 +468,28 @@ async def voice_stream(
     previous_tutor_turn_id: str | None = None
     transcript_final: bool | None = None
 
+    # --- Flux path state (unused when STT_MODEL=nova-3) ---
+    # One variable instead of the five booleans above, and exactly one
+    # in-flight turn task at a time.
+    turn_state = TurnState.IDLE
+    active_turn_task: asyncio.Task | None = None
+
+    # Latest canvas snapshot seen on ANY inbound message, awaiting a turn to
+    # attach to.  On the Nova-3 path the snapshot rides in on `stop` and is
+    # consumed by the turn processed in that same handler.  Flux ends turns
+    # on its own schedule, so there is no `stop` to hang it off -- we latch
+    # the most recent snapshot instead and attach it to the next turn, then
+    # clear it so it is never applied twice.
+    pending_canvas_snapshot: str | None = None
+
+    # Last turn_id actually dispatched to the backend, so a reused one can
+    # be called out in the logs.
+    last_dispatched_turn_id: str | None = None
+
+    def _note_dispatched_turn(dispatched: str | None) -> None:
+        nonlocal last_dispatched_turn_id
+        last_dispatched_turn_id = dispatched
+
     async def deepgram_keepalive() -> None:
         # Deepgram closes a stream that receives neither audio nor text for
         # ~10s (NET-0001). That happens on every mute, because the frontend
@@ -348,6 +498,17 @@ async def voice_stream(
         # The documented fix is a KeepAlive text frame; it is harmless while
         # audio is flowing and resets the idle timer while it is not.
         # https://developers.deepgram.com/docs/keep-alive
+        #
+        # Flux does NOT use this. Per the Flux/Nova-3 comparison, v2 replaces
+        # the KeepAlive text frame with WebSocket protocol pings and a 60s
+        # (not 12s) idle timeout. The `websockets` client already sends PING
+        # frames every 20s by default, so the connection is held open for us.
+        # `KeepAlive` is not a documented Flux control message -- only
+        # CloseStream and Configure are -- so sending it would at best be
+        # ignored and at worst draw an error frame.
+        if USE_FLUX:
+            return
+
         while True:
             await asyncio.sleep(5)
             ws_now = deepgram_ws
@@ -497,6 +658,263 @@ async def voice_stream(
             f"auto-processing: '{final_transcript}'"
         )
         await _process_buffer()
+
+    # ------------------------------------------------------------------
+    # Flux path (STT_MODEL=flux)
+    # ------------------------------------------------------------------
+
+    async def _cancel_active_turn(
+        reason: str,
+        notify_frontend: bool,
+        expect_new_turn: bool = False,
+    ) -> None:
+        """Cancel the in-flight turn task, if there is one.
+
+        `notify_frontend=True` also emits tutor_audio_cancel so the client
+        can stop playback mid-sentence.  We only do that for barge-in --
+        when a turn is merely superseded there was nothing audible yet.
+
+        `expect_new_turn` is carried on that message and tells the frontend
+        whether it must open a NEW student turn (mint a turn_id and re-send
+        turn_context) before the next transcript arrives.
+
+        This has to be explicit rather than something the client infers from
+        `reason`, because the two cases genuinely differ:
+
+          barge_in            -> True.  The student is speaking right now and
+                                 the tutor audio never reaches idle, so the
+                                 frontend's normal "audio finished, open next
+                                 turn" trigger never fires.  Without a new
+                                 turn_id the barged-in turn would arrive
+                                 carrying the previous turn's context and the
+                                 backend would reject it as stale.
+          superseded_by_text  -> False. The text path has already opened its
+                                 own turn; minting another would clobber the
+                                 id the answer was submitted under.
+
+        Encoding this server-side means adding a future reason does not
+        require the frontend to learn its turn semantics.
+        """
+        nonlocal active_turn_task
+
+        task = active_turn_task
+        active_turn_task = None
+        if task is None or task.done():
+            return
+
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.error(f"[{session_id}] Error awaiting cancelled turn: {exc}")
+
+        logger.info(f"[{session_id}] Cancelled in-flight turn ({reason})")
+
+        if notify_frontend:
+            try:
+                await ws.send_json({
+                    "type": "tutor_audio_cancel",
+                    "reason": reason,
+                    "expect_new_turn": expect_new_turn,
+                })
+            except Exception:
+                # Client already gone; nothing to stop.
+                pass
+
+    async def _run_turn(
+        transcript: str, confidence: float, duration: float
+    ) -> None:
+        """Own the state transitions around one call to process_and_respond."""
+        nonlocal turn_state, pending_canvas_snapshot
+
+        def _mark_speaking() -> None:
+            nonlocal turn_state
+            turn_state = TurnState.SPEAKING
+
+        # Consume any latched canvas snapshot so it is attached exactly once.
+        canvas_snapshot = pending_canvas_snapshot
+        pending_canvas_snapshot = None
+        if canvas_snapshot:
+            logger.info(
+                f"[{session_id}] Attaching pending canvas snapshot to turn"
+            )
+
+        turn_state = TurnState.PROCESSING
+        try:
+            if access_token is None:
+                await ws.close(code=4401, reason="Authentication required")
+                return
+
+            # Validate turn context BEFORE calling the backend.
+            #
+            # evaluate_voice_transcript raises ValueError when turn_id is
+            # missing or transcript_final is not True.  Inside a background
+            # task that surfaces as a one-line "Turn failed" with no clue
+            # which field was wrong -- which is how voice-logs-15 line 77
+            # read.  Flux makes this far more likely than Nova-3 did: it
+            # detects several turns per connection with no `stop` between
+            # them, so a frontend that mints turn context once per *session*
+            # rather than once per *turn* will fail from turn two onward.
+            missing = []
+            if turn_id is None:
+                missing.append("turn_id")
+            if transcript_final is not True:
+                missing.append("transcript_final")
+            if missing:
+                logger.error(
+                    f"[{session_id}] Skipping backend call for turn "
+                    f"'{transcript}': frontend did not supply "
+                    f"{' and '.join(missing)} over the WebSocket. "
+                    f"Flux needs these re-sent for EVERY turn, not once "
+                    f"per session."
+                )
+                await ws.send_json({
+                    "type": "error",
+                    "message": "Tutor unavailable. Please try again.",
+                    "fallback_mode": "TEXT",
+                })
+                return
+
+            # Reuse is not fatal -- the backend owns stale-turn dedupe via
+            # previous_tutor_turn_id -- but it is almost always the bug
+            # above, so say so loudly rather than silently letting the
+            # backend reject it.
+            if turn_id == last_dispatched_turn_id:
+                logger.warning(
+                    f"[{session_id}] turn_id '{turn_id}' reused for a second "
+                    f"turn ('{transcript}'). The backend will likely reject "
+                    f"this as stale. Frontend should mint a new turn_id per "
+                    f"turn."
+                )
+            _note_dispatched_turn(turn_id)
+
+            await process_and_respond(
+                ws, session_id, student_id,
+                transcript, confidence,
+                duration, access_token, canvas_snapshot,
+                tts_provider, tts_voice,
+                turn_id, previous_tutor_turn_id, transcript_final,
+                on_audio_start=_mark_speaking,
+            )
+        except asyncio.CancelledError:
+            # Barge-in or superseded turn. Expected, not an error.
+            raise
+        except Exception as exc:
+            logger.error(f"[{session_id}] Turn failed: {exc}")
+        finally:
+            # Whatever happened, we are ready to hear the student again.
+            turn_state = TurnState.LISTENING
+
+    async def _forward_flux_results(dg_ws):
+        """Drive the conversation off Flux's turn events.
+
+        Replaces the entire speech_final / UtteranceEnd / adaptive-silence-
+        timer stack.  There is no timer here at all: Flux decides when a
+        turn ends, and we act on that decision.
+        """
+        nonlocal turn_state, active_turn_task, audio_started_at
+
+        try:
+            async for msg in dg_ws:
+                data = json.loads(msg)
+                msg_type = data.get("type")
+
+                if msg_type != "TurnInfo":
+                    # Connected / Error / Fatal and friends.
+                    logger.info(f"[{session_id}] Flux message: {msg_type} {data}")
+                    continue
+
+                event = data.get("event")
+                transcript = (data.get("transcript") or "").strip()
+                turn_index = data.get("turn_index")
+
+                if event == "StartOfTurn":
+                    # Student started speaking.  If the tutor is mid-answer,
+                    # that is a barge-in: kill the answer and listen.
+                    if turn_state in (TurnState.PROCESSING, TurnState.SPEAKING):
+                        await _cancel_active_turn(
+                            "barge_in",
+                            notify_frontend=True,
+                            expect_new_turn=True,
+                        )
+                    turn_state = TurnState.LISTENING
+                    audio_started_at = time.time()
+                    logger.info(
+                        f"[{session_id}] Flux StartOfTurn (turn {turn_index})"
+                    )
+
+                elif event == "Update":
+                    # Interim transcript. Emitted on the same wire message
+                    # the frontend already handles, so no client change.
+                    if transcript:
+                        await ws.send_json({
+                            "type": "transcript_partial",
+                            "text": transcript,
+                            "confidence": round(_flux_confidence(data), 4),
+                            "is_final": False,
+                            "role": "student",
+                        })
+
+                elif event == "EndOfTurn":
+                    if not transcript:
+                        logger.info(
+                            f"[{session_id}] Flux EndOfTurn with empty "
+                            f"transcript (turn {turn_index}) - ignoring"
+                        )
+                        continue
+
+                    confidence = _flux_confidence(data)
+                    eot_confidence = data.get("end_of_turn_confidence", 0.0)
+
+                    await ws.send_json({
+                        "type": "transcript_final",
+                        "text": transcript,
+                        "confidence": round(confidence, 4),
+                        "is_final": True,
+                        "role": "student",
+                    })
+
+                    logger.info(
+                        f"[{session_id}] Flux EndOfTurn (turn {turn_index}, "
+                        f"eot_conf={eot_confidence:.3f}, "
+                        f"word_conf={confidence:.4f}): '{transcript}'"
+                    )
+
+                    # Anything still running belongs to an older turn.
+                    await _cancel_active_turn("superseded", notify_frontend=False)
+
+                    duration = max(time.time() - audio_started_at, 0.001)
+                    active_turn_task = asyncio.create_task(
+                        _run_turn(transcript, confidence, duration)
+                    )
+                    _background_tasks.add(active_turn_task)
+                    active_turn_task.add_done_callback(_background_tasks.discard)
+
+                elif event in ("EagerEndOfTurn", "TurnResumed"):
+                    # We do not set eager_eot_threshold, so these should not
+                    # arrive. Log rather than swallow if they ever do.
+                    logger.info(
+                        f"[{session_id}] Flux {event} received "
+                        f"(eager mode not enabled) - ignoring"
+                    )
+
+                else:
+                    logger.info(
+                        f"[{session_id}] Flux unhandled TurnInfo event: {event}"
+                    )
+
+        except websockets.exceptions.ConnectionClosed:
+            logger.info(f"[{session_id}] Flux connection closed")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"[{session_id}] Flux receiver error: {e}")
+
+    # ------------------------------------------------------------------
+    # Nova-3 path (STT_MODEL=nova-3) -- legacy, timer-driven
+    # ------------------------------------------------------------------
 
     async def forward_deepgram_results(dg_ws):
         nonlocal final_transcript, final_confidence, final_segment_count, audio_started_at, turn_already_processed
@@ -653,6 +1071,25 @@ async def voice_stream(
                 if "transcript_final" in data:
                     transcript_final = data.get("transcript_final")
 
+                # Latch a canvas snapshot from whichever message carries it.
+                #
+                # Two field names are in play: the `stop` message uses
+                # `canvas_snapshot`, while the frontend's canvas_submission
+                # message uses `png` (see useWebSocket.ts sendCanvasSubmission).
+                # Accept either.
+                #
+                # This latch is additive for Nova-3: its `stop` handler still
+                # prefers data["canvas_snapshot"] exactly as before, and only
+                # falls back to the latch when stop carried no snapshot --
+                # a case that previously meant "no canvas at all".
+                snapshot_in = data.get("canvas_snapshot") or data.get("png")
+                if snapshot_in:
+                    pending_canvas_snapshot = snapshot_in
+                    logger.info(
+                        f"[{session_id}] Canvas snapshot latched from "
+                        f"'{msg_type}' message"
+                    )
+
                 if msg_type == "authenticate":
                     candidate = data.get("access_token")
                     if not isinstance(candidate, str) or candidate == "":
@@ -690,14 +1127,16 @@ async def voice_stream(
                     audio_started_at = time.time()
                     turn_already_processed = False
 
-                    params = _build_deepgram_params(language)
+                    turn_state = TurnState.LISTENING
 
-                    dg_url = DEEPGRAM_WS_URL + params
+                    dg_url, model_label = _stt_connection_config(language)
                     extra_headers = {
                         "Authorization": f"Token {DEEPGRAM_API_KEY}"
                     }
 
-                    logger.info(f"[{session_id}] Connecting to Deepgram streaming...")
+                    logger.info(
+                        f"[{session_id}] Connecting to Deepgram {model_label}..."
+                    )
 
                     ssl_context = ssl.create_default_context(cafile=certifi.where())
 
@@ -707,10 +1146,15 @@ async def voice_stream(
                         ssl=ssl_context,
                     )
 
-                    logger.info(f"[{session_id}] Deepgram connected. Streaming started.")
+                    logger.info(
+                        f"[{session_id}] Deepgram {model_label} connected. "
+                        f"Streaming started."
+                    )
 
                     deepgram_receiver_task = asyncio.create_task(
-                        forward_deepgram_results(deepgram_ws)
+                        _forward_flux_results(deepgram_ws)
+                        if USE_FLUX
+                        else forward_deepgram_results(deepgram_ws)
                     )
 
                     await ws.send_json({
@@ -724,8 +1168,52 @@ async def voice_stream(
                     if silence_timer_task and not silence_timer_task.done():
                         silence_timer_task.cancel()
                         silence_timer_task = None
-                    canvas_snapshot = data.get("canvas_snapshot")
+                    # Prefer the snapshot on the stop message itself (original
+                    # behaviour); fall back to one latched from an earlier
+                    # canvas_submission, which previously would have been lost.
+                    canvas_snapshot = (
+                        data.get("canvas_snapshot") or pending_canvas_snapshot
+                    )
+                    pending_canvas_snapshot = None
                     logger.info(f"[{session_id}] Stop received. Finalizing...")
+
+                    if USE_FLUX:
+                        # Under Flux, "stop" is the student muting the mic --
+                        # it is NOT a turn boundary.  Flux owns turn detection
+                        # and will emit a final EndOfTurn in response to
+                        # CloseStream below, which _forward_flux_results
+                        # handles like any other turn.  Processing a buffer
+                        # here as well would double-send the turn.
+                        if deepgram_ws:
+                            try:
+                                await deepgram_ws.send(
+                                    json.dumps({"type": "CloseStream"})
+                                )
+                            except Exception:
+                                pass
+                            if deepgram_receiver_task:
+                                try:
+                                    await asyncio.wait_for(
+                                        deepgram_receiver_task, timeout=10.0
+                                    )
+                                except asyncio.TimeoutError:
+                                    logger.warning(
+                                        f"[{session_id}] Flux receiver timed out"
+                                    )
+                                    deepgram_receiver_task.cancel()
+                                    try:
+                                        await deepgram_receiver_task
+                                    except asyncio.CancelledError:
+                                        pass
+                            try:
+                                await deepgram_ws.close()
+                            except Exception:
+                                pass
+                            deepgram_ws = None
+                        turn_state = TurnState.IDLE
+                        # A turn spawned by the final EndOfTurn is still
+                        # running in _background_tasks; let it finish.
+                        continue
 
                     if deepgram_ws:
                         try:
@@ -772,6 +1260,61 @@ async def voice_stream(
                     elif not turn_already_processed:
                         logger.info(f"[{session_id}] Stop: no speech detected")
 
+                elif msg_type == "canvas_submission":
+                    # The frontend has sent this since June (useWebSocket.ts
+                    # sendCanvasSubmission) and the server had no handler, so
+                    # every canvas submission over the socket was silently
+                    # dropped.  The snapshot was already latched above; this
+                    # branch exists so the message is acknowledged rather
+                    # than falling through to the unknown-type warning.
+                    stroke_count = len(data.get("strokes") or [])
+                    logger.info(
+                        f"[{session_id}] canvas_submission received "
+                        f"({stroke_count} strokes) - snapshot latched for "
+                        f"the next turn"
+                    )
+                    await ws.send_json({
+                        "type": "status",
+                        "message": "canvas_received",
+                    })
+
+                elif msg_type == "text_message":
+                    # Typed student input. Same tutor path as a spoken turn,
+                    # just with no STT in front of it -- confidence is 1.0
+                    # because there is nothing to mis-hear.  Also previously
+                    # unhandled and silently dropped.
+                    text_input = (data.get("text") or "").strip()
+                    if not text_input:
+                        continue
+
+                    logger.info(
+                        f"[{session_id}] text_message received: '{text_input}'"
+                    )
+
+                    # A typed message supersedes anything still in flight,
+                    # exactly like a new spoken turn does.
+                    if USE_FLUX:
+                        await _cancel_active_turn(
+                            "superseded_by_text",
+                            notify_frontend=True,
+                            expect_new_turn=False,
+                        )
+
+                    snapshot_for_text = pending_canvas_snapshot
+                    pending_canvas_snapshot = None
+                    try:
+                        await process_and_respond(
+                            ws, session_id, student_id,
+                            text_input, 1.0,
+                            0.001, access_token, snapshot_for_text,
+                            tts_provider, tts_voice,
+                            turn_id, previous_tutor_turn_id, transcript_final,
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"[{session_id}] text_message processing failed: {e}"
+                        )
+
                 elif msg_type == "audio_chunk":
                     # Frontend sends base64-encoded PCM audio as JSON.
                     # Auto-connect to Deepgram on the first chunk -- no
@@ -798,9 +1341,9 @@ async def voice_stream(
                         turn_already_processed = False
                         receiving_audio = True
                         audio_started_at = time.time()
+                        turn_state = TurnState.LISTENING
 
-                        params = _build_deepgram_params(language)
-                        dg_url = DEEPGRAM_WS_URL + params
+                        dg_url, model_label = _stt_connection_config(language)
                         extra_headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}"}
                         ssl_context = ssl.create_default_context(cafile=certifi.where())
 
@@ -811,9 +1354,14 @@ async def voice_stream(
                                 ssl=ssl_context,
                             )
                             deepgram_receiver_task = asyncio.create_task(
-                                forward_deepgram_results(deepgram_ws)
+                                _forward_flux_results(deepgram_ws)
+                                if USE_FLUX
+                                else forward_deepgram_results(deepgram_ws)
                             )
-                            logger.info(f"[{session_id}] Deepgram auto-connected.")
+                            logger.info(
+                                f"[{session_id}] Deepgram {model_label} "
+                                f"auto-connected."
+                            )
                         except Exception as e:
                             logger.error(f"[{session_id}] Deepgram auto-connect failed: {e}")
                             deepgram_ws = None
@@ -869,7 +1417,16 @@ async def process_and_respond(
     turn_id: str | None,
     previous_tutor_turn_id: str | None,
     transcript_final: bool | None,
+    on_audio_start=None,
 ):
+    """Run one student turn through the tutor backend and stream the reply.
+
+    `on_audio_start` is an optional zero-arg callback fired just before TTS
+    audio starts streaming.  The Flux path uses it to move its state machine
+    from PROCESSING to SPEAKING so barge-in knows there is audible output to
+    interrupt.  Defaults to None so the existing callers and tests, which
+    pass 13 positional arguments, are unaffected.
+    """
     pipeline_start = time.time()
 
     normalized = normalize_math(transcript)
@@ -946,6 +1503,13 @@ async def process_and_respond(
     use_voice = tts_voice or voice_config.TTS_VOICE
     tts_adapter = get_tts_adapter(use_provider)
     supports_streaming = hasattr(tts_adapter, "generate_speech_stream")
+
+    # Tell the caller audible output is about to start (Flux barge-in).
+    if on_audio_start is not None:
+        try:
+            on_audio_start()
+        except Exception as exc:
+            logger.error(f"[{session_id}] on_audio_start callback failed: {exc}")
 
     if supports_streaming and tutor_voice_text:
         # -- Streaming path (OpenAI) --
