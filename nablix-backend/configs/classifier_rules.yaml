@@ -3,6 +3,7 @@ confidence:
   safety_response: 0.99
   standard_response: 0.95
 guided_learning:
+  v1_hybrid_enabled: false
   evaluation_mode: LLM_STATE_MACHINE
   confidence_threshold: 0.75
   state_confidence_thresholds:

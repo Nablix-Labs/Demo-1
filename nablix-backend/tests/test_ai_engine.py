@@ -15,7 +15,7 @@ from app.ai_engine.prompt_registry import (
     load_prompt_registry,
     serialize_session_context,
 )
-from app.ai_engine.schemas import CanvasTextRegion
+from app.ai_engine.schemas import CanvasTextRegion, TutorResponse
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AdapterError
 from app.core.logger import StructuredJsonFormatter
@@ -34,9 +34,16 @@ from app.models.adapters import (
 from app.models.student_model_session import AnswerSpec
 from app.models.guided_learning import (
     ActiveTeachingObjective,
+    CanvasPedagogyAction,
     GeneratedConcept,
     GeneratedQuestionRubric,
     GuidedEvaluation,
+    HybridPedagogicalState,
+    HybridStudentEvidence,
+    HybridSupportState,
+    HybridTutorRequest,
+    HybridTutorResponse,
+    OrderedCanvasMemoryItem,
     ScaffoldEvaluationContext,
     ScaffoldStepEvaluation,
 )
@@ -117,6 +124,240 @@ def _answer_spec(
         accepted_answers=accepted_answers,
         verification_method=verification_method,
     )
+
+
+def test_answer_spec_types_existing_student_model_answer_steps() -> None:
+    steps = [
+        "Identify the changing value.",
+        "Write the general rule.",
+    ]
+
+    answer_spec = AnswerSpec(
+        answer_spec_id="ANS-T01-001",
+        canonical_answer="n + 5",
+        accepted_answers=["n+5"],
+        verification_method="EXACT_NOTATION_MATCH",
+        answer_steps=steps,
+    )
+
+    assert answer_spec.answer_steps == steps
+    assert answer_spec.model_dump()["answer_steps"] == steps
+
+
+def test_answer_spec_defaults_missing_answer_steps_for_legacy_payloads() -> None:
+    answer_spec = _answer_spec("n + 5", ["n+5"], "EXACT_NOTATION_MATCH")
+
+    assert answer_spec.answer_steps == []
+
+
+def test_answer_spec_rejects_non_string_answer_steps() -> None:
+    with pytest.raises(ValueError):
+        AnswerSpec.model_validate(
+            {
+                "answer_spec_id": "ANS-T01-001",
+                "canonical_answer": "n + 5",
+                "accepted_answers": ["n+5"],
+                "verification_method": "EXACT_NOTATION_MATCH",
+                "answer_steps": [1],
+            }
+        )
+
+
+def _hybrid_action_payload() -> dict[str, object]:
+    return {
+        "action_id": "TURN-1:A1",
+        "type": "HIGHLIGHT",
+        "layer": "TUTOR",
+        "target_object_id": "canvas-object-1",
+        "semantic_tag": "changing_value",
+        "text": None,
+        "source_id": None,
+        "answer_reveal_allowed": False,
+    }
+
+
+def _hybrid_request_payload() -> dict[str, object]:
+    return {
+        "schema_version": "1.0",
+        "question_id": "Q-T01-001",
+        "question_type": "SHORT_RESPONSE",
+        "question": "Write the general rule.",
+        "answer_spec": {
+            "answer_spec_id": "ANS-T01-001",
+            "canonical_answer": "n + 5",
+            "accepted_answers": ["n+5"],
+            "verification_method": "EXACT_NOTATION_MATCH",
+            "answer_steps": [
+                "Identify the changing value.",
+                "Write the general rule.",
+            ],
+        },
+        "component_ids": ["CHANGING_VALUE", "GENERAL_RULE"],
+        "current_answer_step_index": 0,
+        "completed_component_ids": [],
+        "support_state": {
+            "current_support": "NONE",
+            "highest_support_used": "NONE",
+            "active_support_id": None,
+            "support_history_ids": [],
+            "consecutive_stuck_count": 0,
+        },
+        "session_history": [],
+        "ordered_canvas_memory": [
+            {
+                "object_id": "canvas-object-1",
+                "order_index": 0,
+                "turn_id": "TURN-1",
+                "question_id": "Q-T01-001",
+                "actor": "STUDENT",
+                "action_type": "WRITE",
+                "content": "The starting number changes.",
+                "math_text": None,
+                "target_object_id": None,
+                "semantic_tag": "changing_value",
+                "source_id": None,
+                "active_state": "ACTIVE",
+            }
+        ],
+        "student_evidence": {
+            "input_source": "VOICE",
+            "raw_voice_transcript": "the starting number changes",
+            "transcript_confidence": 0.98,
+            "transcript_alternatives": [],
+            "typed_answer": None,
+            "structured_answer": {},
+            "raw_ocr_text": None,
+            "processed_math_text": None,
+            "ocr_confidence": None,
+            "canvas_object_ids": ["canvas-object-1"],
+        },
+        "pedagogical_state": {
+            "student_state": "PARTIAL",
+            "completed_component_ids": [],
+            "current_answer_step_index": 0,
+            "consecutive_stuck_count": 0,
+        },
+    }
+
+
+def _hybrid_response_payload() -> dict[str, object]:
+    return {
+        "schema_version": "1.0",
+        "pedagogical_state": "PARTIAL",
+        "resolved_student_meaning": "The starting number changes.",
+        "input_reliability": "RELIABLE",
+        "tutor_voice_text": "Look at the part I highlighted. What stays fixed?",
+        "canvas_actions": [_hybrid_action_payload()],
+        "support_action": "NONE",
+        "next_expected_input": "VOICE_OR_WRITE",
+        "completed_components": ["CHANGING_VALUE"],
+        "current_answer_step_index": 0,
+    }
+
+
+def test_hybrid_contracts_validate_strict_versioned_payloads() -> None:
+    request = HybridTutorRequest.model_validate(_hybrid_request_payload())
+    response = HybridTutorResponse.model_validate(_hybrid_response_payload())
+
+    assert request.answer_spec.answer_steps == [
+        "Identify the changing value.",
+        "Write the general rule.",
+    ]
+    assert response.canvas_actions[0].target_object_id == "canvas-object-1"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("type", "ERASE"),
+        ("layer", "STUDENT"),
+        ("semantic_tag", "final_answer"),
+        ("answer_reveal_allowed", True),
+    ],
+)
+def test_canvas_pedagogy_action_rejects_invalid_contract_values(
+    field: str,
+    value: object,
+) -> None:
+    payload = _hybrid_action_payload()
+    payload[field] = value
+
+    with pytest.raises(ValueError):
+        CanvasPedagogyAction.model_validate(payload)
+
+
+def test_hybrid_contracts_reject_unknown_fields_and_states() -> None:
+    request_payload = _hybrid_request_payload()
+    request_payload["unexpected"] = True
+    response_payload = _hybrid_response_payload()
+    response_payload["pedagogical_state"] = "UNCLEAR"
+
+    with pytest.raises(ValueError):
+        HybridTutorRequest.model_validate(request_payload)
+    with pytest.raises(ValueError):
+        HybridTutorResponse.model_validate(response_payload)
+
+
+@pytest.mark.parametrize(
+    ("payload_name", "field", "value"),
+    [
+        ("request", "input_source", "VIDEO"),
+        ("response", "input_reliability", "UNCLEAR"),
+        ("response", "next_expected_input", "CANVAS_ONLY"),
+        ("response", "support_action", "EXPLANATION"),
+    ],
+)
+def test_hybrid_contracts_reject_invalid_input_and_support_values(
+    payload_name: str,
+    field: str,
+    value: object,
+) -> None:
+    if payload_name == "request":
+        request_payload = _hybrid_request_payload()
+        evidence = request_payload["student_evidence"]
+        assert isinstance(evidence, dict)
+        evidence[field] = value
+        with pytest.raises(ValueError):
+            HybridTutorRequest.model_validate(request_payload)
+        return
+
+    response_payload = _hybrid_response_payload()
+    response_payload[field] = value
+    with pytest.raises(ValueError):
+        HybridTutorResponse.model_validate(response_payload)
+
+
+def test_hybrid_support_evidence_memory_and_state_models_are_standalone() -> None:
+    request = HybridTutorRequest.model_validate(_hybrid_request_payload())
+
+    assert isinstance(request.support_state, HybridSupportState)
+    assert isinstance(request.student_evidence, HybridStudentEvidence)
+    assert isinstance(request.ordered_canvas_memory[0], OrderedCanvasMemoryItem)
+    assert isinstance(request.pedagogical_state, HybridPedagogicalState)
+
+
+def test_v1_hybrid_flag_is_loaded_disabled() -> None:
+    assert classifier.load_classifier_rules().guided_learning.v1_hybrid_enabled is False
+
+
+def test_legacy_tutor_response_schema_has_no_hybrid_field() -> None:
+    assert "hybrid_turn" not in TutorResponse.model_json_schema()["properties"]
+
+    response = classify_student_response(
+        ClassificationRequest(
+            question="Write the general rule.",
+            correct_answer="n + 5",
+            answer_spec=_answer_spec("n + 5", ["n+5"], "EXACT_NOTATION_MATCH"),
+            student_input="n + 5",
+            current_phase="GUIDED_PRACTICE",
+            input_source="TEXT",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert "hybrid_turn" not in response.model_dump()
 
 
 @pytest.fixture(autouse=True)
@@ -2084,6 +2325,7 @@ def test_guided_llm_partial_persists_only_the_missing_objective(monkeypatch) -> 
             return _guided_rubric()
 
         def evaluate_guided_turn(self, **kwargs):
+            captured["evaluation"] = kwargs
             return GuidedEvaluation(
                 student_state="PARTIAL",
                 newly_confirmed_concept_ids=["OPERATION"],
@@ -2107,16 +2349,24 @@ def test_guided_llm_partial_persists_only_the_missing_objective(monkeypatch) -> 
         "build_openai_ai_engine_client",
         lambda settings: _GuidedClient(),
     )
+    answer_spec = _answer_spec(
+        "c multiplied by d",
+        ["c times d"],
+        "CONCEPT_TEXT_MATCH",
+    ).model_copy(
+        update={
+            "answer_steps": [
+                "Identify the operation represented by adjacent letters.",
+                "Describe c multiplied by d.",
+            ]
+        }
+    )
     response = classify_student_response(
         ClassificationRequest(
             question_id="Q-T02-002",
             question="What does cd mean?",
             correct_answer="c multiplied by d",
-            answer_spec=_answer_spec(
-                "c multiplied by d",
-                ["c times d"],
-                "CONCEPT_TEXT_MATCH",
-            ),
+            answer_spec=answer_spec,
             phase_2_prompt_context=_guided_context(0),
             student_input="multiplication",
             current_phase="GUIDED_PRACTICE",
@@ -2135,6 +2385,9 @@ def test_guided_llm_partial_persists_only_the_missing_objective(monkeypatch) -> 
     assert response.active_teaching_objective.missing_concept_ids == ["EXPANDED_MEANING"]
     rubric_payload = captured["rubric"]
     assert isinstance(rubric_payload, dict)
+    rubric_answer_spec = rubric_payload["answer_spec"]
+    assert isinstance(rubric_answer_spec, AnswerSpec)
+    assert rubric_answer_spec.answer_steps == answer_spec.answer_steps
     assert rubric_payload["potential_errors"] == [
         {
             "error_code": "ERR-T02-ADDITION",
@@ -2142,6 +2395,11 @@ def test_guided_llm_partial_persists_only_the_missing_objective(monkeypatch) -> 
             "response_patterns": ["c + d"],
         }
     ]
+    evaluation_payload = captured["evaluation"]
+    assert isinstance(evaluation_payload, dict)
+    evaluation_answer_spec = evaluation_payload["answer_spec"]
+    assert isinstance(evaluation_answer_spec, AnswerSpec)
+    assert evaluation_answer_spec.answer_steps == answer_spec.answer_steps
 
 
 def test_guided_partial_without_confirmed_concepts_becomes_safe_unclear(

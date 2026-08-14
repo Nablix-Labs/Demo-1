@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Annotated
 
 import yaml
-from pydantic import Field, model_validator
+from pydantic import Field, StrictBool, model_validator
 
 from app.ai_engine.schemas import ErrorType, IntentType, LearningPhase, ResponseStrategy, StrictSchema, VisualCueType
 from app.models.guided_learning import GuidedStudentState
@@ -166,6 +166,7 @@ class GuidedStateMappingConfig(StrictSchema):
 
 
 class GuidedLearningConfig(StrictSchema):
+    v1_hybrid_enabled: StrictBool
     evaluation_mode: str
     confidence_threshold: float = Field(ge=0.0, le=1.0)
     state_confidence_thresholds: dict[
