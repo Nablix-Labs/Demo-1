@@ -591,13 +591,29 @@ async def voice_stream(
                                 / final_segment_count
                             )
 
-                    await ws.send_json({
+                    # Guarded: this runs in a background task, so an
+                    # unguarded send-after-close raises RuntimeError, escapes
+                    # the `async for`, and is swallowed by the `except
+                    # Exception` at the bottom of this function -- killing the
+                    # receiver outright.  The session would keep its socket
+                    # and keep feeding audio to Deepgram while silently
+                    # producing no further transcripts, with one log line as
+                    # the only evidence.  This send fires every few hundred ms
+                    # for as long as the student is talking, so it has the
+                    # widest exposure of any send in the file.
+                    delivered = await _send_json_if_connected(ws, {
                         "type": "transcript_partial" if not is_final else "transcript_final",
                         "text": transcript,
                         "confidence": round(confidence, 4),
                         "is_final": is_final,
                         "role": "student",
                     })
+                    if not delivered:
+                        logger.info(
+                            f"[{session_id}] Client closed mid-speech - "
+                            f"stopping Deepgram receiver"
+                        )
+                        return
 
                     last_transcript_at = time.time()
 
@@ -686,7 +702,12 @@ async def voice_stream(
                         await ws.close(code=4401, reason="Authentication required")
                         return
                     access_token = candidate
-                    await ws.send_json({"type": "status", "message": "authenticated"})
+                    # No early return needed: this runs in the main receive
+                    # loop, so if the client has gone the next ws.receive()
+                    # yields websocket.disconnect and we break normally.
+                    await _send_json_if_connected(
+                        ws, {"type": "status", "message": "authenticated"}
+                    )
 
                 elif access_token is None:
                     await ws.close(code=4401, reason="Authenticate before sending data")
@@ -740,7 +761,9 @@ async def voice_stream(
                         forward_deepgram_results(deepgram_ws)
                     )
 
-                    await ws.send_json({
+                    # Deepgram's connect above takes 100-300ms, which is long
+                    # enough for a client to disappear before this lands.
+                    await _send_json_if_connected(ws, {
                         "type": "status",
                         "message": "streaming_started",
                     })
