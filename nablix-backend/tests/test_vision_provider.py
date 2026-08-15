@@ -285,6 +285,25 @@ def test_mathpix_adapter_maps_line_data_regions(monkeypatch) -> None:
     assert result.detected_regions[0].confidence == 0.93
 
 
+def test_mathpix_adapter_preserves_mathml_data_blocks(monkeypatch) -> None:
+    response = _FakeResponse(
+        200,
+        {
+            "text": "x = 5",
+            "confidence": 0.99,
+            "data": [
+                {"type": "mathml", "value": "<math><mi>x</mi><mo>=</mo><mn>5</mn></math>"},
+                {"type": "latex", "value": "x=5"},
+            ],
+        },
+    )
+    _patch_mathpix_post(monkeypatch, response)
+
+    result = asyncio.run(_mathpix_adapter().recognize(DATA_URL))
+
+    assert result.mathml_blocks == ["<math><mi>x</mi><mo>=</mo><mn>5</mn></math>"]
+
+
 def test_mathpix_adapter_splits_array_output_into_step_regions(monkeypatch) -> None:
     response = _FakeResponse(
         200,

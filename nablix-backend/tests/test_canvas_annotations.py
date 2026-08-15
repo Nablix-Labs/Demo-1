@@ -63,7 +63,7 @@ def _ellipse_from(elements: list[TutorElement]) -> TutorElement:
     return ellipse
 
 
-def test_canvas_planner_circles_the_whole_wrong_line() -> None:
+def test_canvas_planner_does_not_mark_without_grounded_tokens() -> None:
     regions = assign_step_ids([_region()])
     tutor = _tutor_result(
         TutorMistakeClassification(
@@ -77,21 +77,10 @@ def test_canvas_planner_circles_the_whole_wrong_line() -> None:
         _intents(),
     )
 
-    payloads = plan_canvas_draw(tutor, regions)
-
-    assert len(payloads) == 1
-    elements = payloads[0].elements
-    ellipse = _ellipse_from(elements)
-    line = regions[0]
-    # Marks are line-level: the ellipse is the OCR line box, span is ignored.
-    assert ellipse.w == line.w
-    assert ellipse.x == line.x + line.w / 2
-    assert ellipse.y == line.y + line.h / 2
-    assert any(element.kind == "math" and element.text == "x = 9 - 4" for element in elements)
-    assert any(element.kind == "arrow" for element in elements)
+    assert plan_canvas_draw(tutor, regions) == []
 
 
-def test_canvas_planner_emits_circle_only_when_no_correction_intent() -> None:
+def test_canvas_planner_does_not_mark_without_grounded_tokens_when_no_correction_intent() -> None:
     regions = assign_step_ids([_region()])
     tutor = _tutor_result(
         TutorMistakeClassification(
@@ -105,6 +94,25 @@ def test_canvas_planner_emits_circle_only_when_no_correction_intent() -> None:
         [AnnotationIntent(kind="circle_target", target_step_id="step-1")],
     )
 
-    payloads = plan_canvas_draw(tutor, regions)
+    assert plan_canvas_draw(tutor, regions) == []
 
-    assert [element.kind for element in payloads[0].elements] == ["ellipse"]
+
+def test_canvas_planner_circles_explicit_whole_line_mistake() -> None:
+    regions = assign_step_ids([_region()])
+    tutor = _tutor_result(
+        TutorMistakeClassification(
+            status="mistake_found",
+            mistake_step_id="step-1",
+            target_text="x = 9 - 5",
+            target_span=None,
+            replacement_text=None,
+            confidence=0.95,
+        ),
+        [AnnotationIntent(kind="circle_target", target_step_id="step-1")],
+    )
+
+    draw = plan_canvas_draw(tutor, regions)
+
+    assert len(draw) == 1
+    assert draw[0].action_id == "canvas-line-review-step-1"
+    assert [element.kind for element in draw[0].elements] == ["ellipse"]

@@ -18,7 +18,7 @@
  * next. (Phase 2 lets both write; Phase 3 is the student alone.)
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { notFound } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
@@ -32,11 +32,10 @@ import {
   orientationFor,
   orientationCheckFor,
   orientationVideoForTopicCode,
-  orientationYouTubeIdForTopicCode,
   type OrientationMedia,
 } from '@/lib/demoContent';
 import { useNumeraStore, type TutorElement } from '@/store/useNumeraStore';
-import { beginSession, sessionStartError } from '@/hooks/useDemoTutor';
+import { beginSession, resumeSession, sessionStartError } from '@/hooks/useDemoTutor';
 import { useAuthStore } from '@/store/useAuthStore';
 import {
   completeOrientation,
@@ -50,6 +49,8 @@ import {
   type SchemaWorkedExample,
   type SchemaWorkedExampleStep,
 } from '@/lib/api';
+import { applyPhaseHandoff } from '@/lib/phaseHandoff';
+import { useWorkedExamplePlayer } from '@/hooks/useWorkedExamplePlayer';
 import { speakTutor, stopTutorSpeech } from '@/lib/tts';
 import { cn } from '@/lib/cn';
 import { Skeleton } from '@/components/PageShell';
@@ -57,8 +58,12 @@ import ConceptArt from '@/components/ConceptArt';
 
 // react-konva is client-only (no SSR), same as everywhere else the canvas mounts.
 const DrawingCanvas = dynamic(() => import('@/components/Canvas/DrawingCanvas'), { ssr: false });
-// Client-only: it injects the YouTube IFrame API and touches window.
-const YouTubeVideo = dynamic(() => import('@/components/YouTubeVideo'), { ssr: false });
+
+/**
+ * How long to wait for the tutor's introduction before starting the video
+ * anyway. A speech engine that never reports the end must not strand the lesson.
+ */
+const INTRO_FAILSAFE_MS = 12_000;
 
 type Status = 'loading' | 'ready' | 'empty' | 'error';
 /** Phase 1 runs content → concept check (tutor writes) → on to Teacher Mode. */
@@ -362,20 +367,43 @@ function VideoFile({
   const [failed, setFailed] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  // Say the tutor's line before the video starts. Stopped on the way out so it
-  // can't talk over the video or follow the student to the next screen.
+  /**
+   * Say the tutor's line, THEN start the video.
+   *
+   * These used to be two effects that both ran on mount, so the tutor introduced
+   * the lesson over the top of the lesson (Manjusha, row 37). The line is an
+   * introduction — it only works before the video, not alongside it.
+   *
+   * Browsers block autoplay WITH SOUND unless the page has user activation, and
+   * a lesson video muted is pointless — so when the attempt is refused we leave
+   * the poster and controls up and let the student press play. Never force it
+   * muted just to make autoplay succeed.
+   *
+   * The failsafe matters: speech engines do not reliably fire onEnd when audio
+   * is muted or interrupted, and without it a silent TTS failure would leave the
+   * video permanently unstarted.
+   */
   useEffect(() => {
-    if (spoken) speakTutor(spoken);
-    return () => stopTutorSpeech();
+    let cancelled = false;
+    const startVideo = () => {
+      if (cancelled) return;
+      videoRef.current?.play().catch(() => {/* blocked — the controls are there */});
+    };
+    if (!spoken) {
+      startVideo();
+      return;
+    }
+    speakTutor(spoken, startVideo);
+    const failsafe = setTimeout(startVideo, INTRO_FAILSAFE_MS);
+    // Stopped on the way out so the line can't follow the student to the next
+    // screen.
+    return () => { cancelled = true; clearTimeout(failsafe); stopTutorSpeech(); };
   }, [spoken]);
 
-  // Try to start on arrival. Browsers block autoplay WITH SOUND unless the page
-  // has user activation, and a lesson video muted is pointless — so when the
-  // attempt is refused we simply leave the poster and controls up and let the
-  // student press play. Never force it muted just to make autoplay succeed.
-  useEffect(() => {
-    videoRef.current?.play().catch(() => {/* blocked — the controls are there */});
-  }, []);
+  // The student pressing play is a decision to move on. Anything the tutor is
+  // still saying would now be talking over the video, which is the very thing
+  // row 37 was about.
+  const hushForVideo = useCallback(() => stopTutorSpeech(), []);
 
   if (failed) {
     return (
@@ -402,6 +430,7 @@ function VideoFile({
         controls
         playsInline
         preload="metadata"
+        onPlay={hushForVideo}
         onEnded={onEnded}
         onError={() => setFailed(true)}
         className="w-full h-full"
@@ -503,7 +532,6 @@ function BackendOrientation({ topicId }: { topicId: string }) {
   const activeConceptId = useNumeraStore((s) => s.activeConceptId);
   const backendSession = useNumeraStore((s) => s.backendSession);
   const setBackendSession = useNumeraStore((s) => s.setBackendSession);
-  const setCurrentPhase = useNumeraStore((s) => s.setCurrentPhase);
 
   const [status, setStatus] = useState<Status>('loading');
   // Position in the delivery sequence — the video, then the worked example.
@@ -547,11 +575,15 @@ function BackendOrientation({ topicId }: { topicId: string }) {
     setStatus('loading');
     setError(null);
     try {
+      if (sessionId) {
+        await resumeSession();
+      }
+      const currentSessionId = useNumeraStore.getState().sessionId;
       // No local session — a returning student on a fresh load. Open one; the
       // backend always starts it in DIAGNOSTIC, and usePhaseRouting then moves
       // them to the phase it actually reports. (A true mid-journey resume needs
       // the backend change tracked as ask #3.)
-      const active = sessionId ?? (await beginSession(activeConceptId, 'TEXT'))?.session_id;
+      const active = currentSessionId ?? (await beginSession(activeConceptId, 'TEXT'))?.session_id;
       if (!active) {
         setError(sessionStartError() ?? "Couldn't reach the tutor to load this topic.");
         setStatus('error');
@@ -619,11 +651,12 @@ function BackendOrientation({ topicId }: { topicId: string }) {
       });
       setBackendSession(rec);
       // usePhaseRouting follows this to the next phase's screen.
-      useNumeraStore.setState({
-        activeQuestionId: rec.question_id,
-        questionText: rec.current_question?.trim() ?? '',
-      });
-      setCurrentPhase(rec.current_phase);
+      //
+      // Through applyBackendPhase rather than a raw setState: it swaps the
+      // question text, type and options together, so the phase being left
+      // cannot leave its choices sitting under the next phase's question
+      // (Manjusha, 8 Aug — diagnostic options under a Phase 2 question).
+      applyPhaseHandoff(rec);
     } catch {
       setError("Couldn't mark this as done. Please try again.");
       setFinishing(false);
@@ -774,39 +807,32 @@ function OrientationItem({
   const [replayKey, setReplayKey] = useState(0);
 
   if (item.content_type === 'ORIENTATION_VIDEO' && item.video) {
-    // The backend now sends asset_url — but pointed at the ~163 MB Azure blob,
-    // which is exactly what made the whole app sluggish while a video was on
-    // screen. So YouTube wins over an asset_url that IS one of those blobs
-    // (same video, adaptive CDN stream) and over the blob fallback.
+    // Back on Azure blob (2026-08-10): everything orientation serves now comes
+    // from the one storage account, so a backend asset_url and our own fallback
+    // point at the same place and there is no hosting preference left to encode.
     //
-    // Any other asset_url is used as given, so the moment the Student Model
-    // serves a CDN or YouTube link itself this override stops applying and the
-    // whole branch can be deleted.
-    const assetUrl = item.video.asset_url;
-    const isHeavyBlob = Boolean(assetUrl?.includes('nablixmathvideos.blob.core.windows.net'));
-    const youTubeId = !assetUrl || isHeavyBlob ? orientationYouTubeIdForTopicCode(topicCode) : null;
-    const src = assetUrl ?? orientationVideoForTopicCode(topicCode);
+    // The blob MP4s are ~163 MB each and stream unadaptively, which is what made
+    // the app sluggish while one was on screen in July. Re-encoding them (see
+    // the Addendum 1 note: H.264 CRF 23 with `-movflags +faststart`) is what
+    // fixes that now, not a second host.
+    const src = item.video.asset_url ?? orientationVideoForTopicCode(topicCode);
     return (
       <section>
         <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-2 inline-flex items-center gap-1.5">
           <Film size={12} strokeWidth={1.8} /> Concept video
         </div>
         <h2 className="text-[17px] font-semibold text-ink mb-3">{item.video.title}</h2>
-        {youTubeId ? (
+        {src ? (
           <>
-            {messages?.before_video_message && (
-              <p className="text-[13.5px] text-ink leading-relaxed mb-3">{messages.before_video_message}</p>
-            )}
-            <YouTubeVideo
+            <VideoFile
               key={replayKey}
-              videoId={youTubeId}
-              title={item.video.title}
+              media={{ kind: 'video', title: item.video.title, duration: '', summary: '', src }}
+              spoken={messages?.before_video_message ?? null}
               onEnded={() => onFinished({ videoId: item.video!.video_id })}
             />
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              {/* Remounting the player is the replay: the IFrame API owns
-                  playback state, so a fresh instance is cleaner than reaching
-                  into it. */}
+              {/* Remounting is the replay: VideoFile starts playback on mount,
+                  so a fresh instance restarts it without reaching into its ref. */}
               <button
                 onClick={() => setReplayKey((k) => k + 1)}
                 className="inline-flex items-center gap-1.5 rounded-md border border-muted-gray px-3 py-2 text-[12.5px] font-semibold text-ink transition-colors hover:border-focus-navy"
@@ -822,22 +848,6 @@ function OrientationItem({
                 </button>
               )}
             </div>
-          </>
-        ) : src ? (
-          <>
-            <VideoFile
-              media={{ kind: 'video', title: item.video.title, duration: '', summary: '', src }}
-              spoken={messages?.before_video_message ?? null}
-              onEnded={() => onFinished({ videoId: item.video!.video_id })}
-            />
-            {!isLast && (
-              <button
-                onClick={() => onFinished({ videoId: item.video!.video_id })}
-                className="mt-3 text-[12px] font-semibold text-slate-blue hover:text-ink transition-colors"
-              >
-                Skip the video
-              </button>
-            )}
           </>
         ) : (
           <div className="flex flex-col items-center justify-center text-center rounded-xl border border-dashed border-muted-gray bg-reading-surface aspect-video w-full">
@@ -894,105 +904,30 @@ function WorkedExampleCanvas({
   const applyCanvasDraw = useNumeraStore((s) => s.applyCanvasDraw);
   const clearTutorMarks = useNumeraStore((s) => s.clearTutorMarks);
 
-  const steps = useMemo(
-    () => [...example.steps].sort((a, b) => a.sequence_no - b.sequence_no),
-    [example.steps],
+  // `replace`, not `append`: the canvas shows ONE step at a time. Stacking every
+  // step turned the sheet back into the list of eight this was meant to get away
+  // from (Manjusha, 2026-07-28) — by the end the student is reading a wall of
+  // working instead of watching one idea being written.
+  const draw = useCallback(
+    (step: SchemaWorkedExampleStep, index: number, total: number) => {
+      applyCanvasDraw({
+        author: 'tutor',
+        mode: 'replace',
+        actionId: `${example.worked_example_id}-${step.step_id}`,
+        elements: stepElements(step, index, total),
+      });
+    },
+    [applyCanvasDraw, example.worked_example_id],
   );
 
-  // -1 = nothing written yet; steps.length = finished.
-  const [index, setIndex] = useState(-1);
-  const advance = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  /**
-   * Paused means "don't advance by yourself" — the student still moves with the
-   * step buttons. The walkthrough used to run start to finish with no way to
-   * hold it, go back over a step, or replay it (Manjusha, 2026-07-28), which is
-   * exactly what a student needs when a step goes past too fast.
-   *
-   * Mirrored into a ref because the advance callback is created inside the step
-   * effect and would otherwise close over a stale value.
-   */
-  const [paused, setPaused] = useState(false);
-  const pausedRef = useRef(false);
-
-  /**
-   * Set the ref FIRST, then the state.
-   *
-   * Mirroring the ref during render left a window where a narration finishing
-   * between the click and the re-render still saw `paused === false` and
-   * scheduled the next step — pressing Pause visibly advanced anyway. The ref
-   * is what the advance callback reads, so it has to change synchronously.
-   */
-  const setPausedNow = (next: boolean) => {
-    pausedRef.current = next;
-    if (next && advance.current) clearTimeout(advance.current);
-    setPaused(next);
-  };
-
-  // Start on a clean sheet, and never let this phase's marks follow the student
-  // into the next one — the tutor layer is global.
-  useEffect(() => {
-    clearTutorMarks();
-    const kick = setTimeout(() => setIndex(0), 500);
-    return () => {
-      clearTimeout(kick);
-      if (advance.current) clearTimeout(advance.current);
-      stopTutorSpeech();
-      clearTutorMarks();
-    };
-  }, [clearTutorMarks, example.worked_example_id]);
-
-  useEffect(() => {
-    if (index < 0 || index >= steps.length) return;
-    const step = steps[index];
-
-    // `replace`, not `append`: the canvas shows ONE step at a time. Stacking
-    // every step turned the sheet back into the list of eight this was meant to
-    // get away from (Manjusha, 2026-07-28) — by the end the student is reading a
-    // wall of working instead of watching one idea being written.
-    applyCanvasDraw({
-      author: 'tutor',
-      mode: 'replace',
-      actionId: `${example.worked_example_id}-${step.step_id}`,
-      elements: stepElements(step, index, steps.length),
-    });
-
-    // Move on when the narration finishes. `done` is latched because speakTutor
-    // fires onEnd immediately for empty text and the browser-speech fallback can
-    // fire it more than once; the timeout is the safety net for a provider that
-    // never calls back at all, so a silent failure can't strand the lesson.
-    let done = false;
-    const next = () => {
-      if (done) return;
-      done = true;
-      if (pausedRef.current) return;   // held — the student advances manually
-      // Re-check on fire: Pause pressed inside this 450ms window would
-      // otherwise still land one more step, so the button looked ignored.
-      advance.current = setTimeout(() => {
-        if (pausedRef.current) return;
-        setIndex((n) => n + 1);
-      }, 450);
-    };
-    speakTutor(step.narration_text ?? '', next);
-    const failsafe = setTimeout(next, 15_000);
-    return () => clearTimeout(failsafe);
-  }, [index, steps, applyCanvasDraw, example.worked_example_id]);
-
-  /** Jump to a step: stops any narration and any pending auto-advance first. */
-  const goTo = (n: number) => {
-    if (advance.current) clearTimeout(advance.current);
-    stopTutorSpeech();
-    setIndex(Math.max(0, Math.min(n, steps.length - 1)));
-  };
-
-  // Stepping by hand means the student is driving; don't yank them along.
-  const stepBy = (delta: number) => {
-    setPausedNow(true);
-    goTo(index + delta);
-  };
-
-  const current = index >= 0 && index < steps.length ? steps[index] : null;
-  const finished = index >= steps.length;
+  const {
+    current, index, steps, finished, paused, setPaused, stepBy, restart, skip,
+  } = useWorkedExamplePlayer({
+    exampleId: example.worked_example_id,
+    steps: example.steps,
+    draw,
+    onClear: clearTutorMarks,
+  });
 
   // Report completion once the last step lands, and say the backend's hand-off
   // line. Guarded by a ref because `finished` stays true on every later render.
@@ -1058,7 +993,7 @@ function WorkedExampleCanvas({
 
         {!finished && (
           <button
-            onClick={() => setPausedNow(!paused)}
+            onClick={() => setPaused(!paused)}
             className="inline-flex items-center gap-1.5 rounded-md border border-muted-gray px-3 py-2 text-[12.5px] font-semibold text-ink transition-colors hover:border-focus-navy"
           >
             {paused ? <><Play size={14} strokeWidth={2} /> Continue</> : <><Pause size={14} strokeWidth={2} /> Pause</>}
@@ -1074,7 +1009,7 @@ function WorkedExampleCanvas({
         </button>
 
         <button
-          onClick={() => { clearTutorMarks(); reported.current = false; goTo(0); }}
+          onClick={() => { reported.current = false; restart(); }}
           className="inline-flex items-center gap-1.5 rounded-md border border-muted-gray px-3 py-2 text-[12.5px] font-semibold text-ink transition-colors hover:border-focus-navy"
         >
           <RotateCw size={14} strokeWidth={2} /> Start again
@@ -1082,7 +1017,7 @@ function WorkedExampleCanvas({
 
         {!finished && (
           <button
-            onClick={() => { stopTutorSpeech(); setIndex(steps.length); }}
+            onClick={skip}
             className="ml-auto text-[12px] font-semibold text-slate-blue transition-colors hover:text-ink"
           >
             Skip the walkthrough
@@ -1130,4 +1065,3 @@ function stepElements(
     },
   ];
 }
-

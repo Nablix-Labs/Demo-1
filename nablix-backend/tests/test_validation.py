@@ -98,6 +98,24 @@ def test_validation_requires_stable_turn_id() -> None:
     assert response.json()["field"] == "turn_id"
 
 
+def test_interaction_requires_canvas_state_for_rest_voice_turn() -> None:
+    body = _valid_interaction_body(SESSION_ID)
+    body.update(
+        {
+            "input_source": "VOICE",
+            "text_input": None,
+            "voice_transcript": "Is this right?",
+            "transcript_confidence": 0.95,
+            "transcript_final": True,
+        }
+    )
+
+    response = client.post("/interaction", json=body)
+
+    assert response.status_code == 422
+    assert response.json()["message"] == "canvas_state is required for REST VOICE answer submissions."
+
+
 def test_validation_returns_invalid_json_code() -> None:
     response = client.post(
         "/session/start",

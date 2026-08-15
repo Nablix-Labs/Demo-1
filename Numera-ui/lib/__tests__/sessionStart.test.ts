@@ -13,34 +13,41 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { SessionRecord } from '@/lib/api';
 
 const startSession = vi.fn();
+const getSession = vi.fn();
 
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   startSession: (...args: unknown[]) => startSession(...args),
+  getSession: (...args: unknown[]) => getSession(...args),
 }));
 vi.mock('@/lib/tts', () => ({ speakTutor: vi.fn() }));
 
+// Only the fields these tests read; the rest of SessionRecord is irrelevant here.
 const RECORD = {
   session_id: 'SESSION001',
   current_phase: 'DIAGNOSTIC',
   current_question: 'What does 4y mean?',
   question_id: 'Q-T02-D01',
-};
+} as unknown as SessionRecord;
 
 /** Fresh module state per test — the guard is module-level by design. */
 async function loadTutor() {
   vi.resetModules();
   process.env.NEXT_PUBLIC_API_BASE_URL = '/api';
-  const { beginSession, resetSessionStart } = await import('@/hooks/useDemoTutor');
+  const { beginSession, recoverIfStaleSession, resetSessionStart, resumeSession } = await import('@/hooks/useDemoTutor');
   const { useNumeraStore } = await import('@/store/useNumeraStore');
   useNumeraStore.setState({ sessionId: null, backendSession: null });
-  return { beginSession, resetSessionStart, useNumeraStore };
+  return { beginSession, recoverIfStaleSession, resetSessionStart, resumeSession, useNumeraStore };
 }
 
 describe('session start', () => {
-  beforeEach(() => { startSession.mockReset(); });
+  beforeEach(() => {
+    startSession.mockReset();
+    getSession.mockReset();
+  });
   afterEach(() => { delete process.env.NEXT_PUBLIC_API_BASE_URL; });
 
   it('collapses a burst of concurrent starts into ONE request', async () => {
@@ -73,5 +80,59 @@ describe('session start', () => {
     resetSessionStart();
     expect(await beginSession('ALG_LINEAR_ONE_STEP')).toEqual(RECORD);
     expect(startSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops a backend-forgotten session so the lesson can restart', async () => {
+    const { recoverIfStaleSession, useNumeraStore } = await loadTutor();
+    useNumeraStore.setState({ sessionId: 'SESSION-FORGOTTEN', backendSession: RECORD });
+
+    const recovered = recoverIfStaleSession({
+      response: {
+        status: 404,
+        data: { message: 'Session with ID SESSION-FORGOTTEN was not found.' },
+      },
+    });
+
+    expect(recovered).toBe(true);
+    expect(useNumeraStore.getState().sessionId).toBeNull();
+    expect(useNumeraStore.getState().backendSession).toBeNull();
+  });
+
+  it('restores the complete tutor-turn contract after a refresh', async () => {
+    getSession.mockResolvedValue({
+      ...RECORD,
+      question_number: 3,
+      message: 'What operation connects the changing value and five?',
+      conversation_history: [
+        { role: 'assistant', content: 'Write the general rule.' },
+        { role: 'user', content: 'n + 5' },
+        { role: 'assistant', content: 'Why does n make it general?' },
+      ],
+      last_tutor_turn_id: 'TUTOR-RESTORED',
+      expected_student_response: 'ANSWER',
+      allow_voice_input: true,
+      inactivity_policy: {
+        initial_idle_threshold_ms: 45000,
+        cooldown_ms: 30000,
+        max_nudges_per_tutor_turn: 2,
+        generated_nudge_rate_limit: 2,
+      },
+    });
+    const { resumeSession, useNumeraStore } = await loadTutor();
+    useNumeraStore.setState({ sessionId: 'SESSION001', backendSession: null, transcript: [] });
+
+    await resumeSession();
+
+    const state = useNumeraStore.getState();
+    expect(state.questionNumber).toBe(3);
+    expect(state.lastTutorTurnId).toBe('TUTOR-RESTORED');
+    expect(state.expectsStudentResponse).toBe(true);
+    expect(state.allowVoiceInput).toBe(true);
+    expect(state.inactivityPolicy?.initialIdleThresholdMs).toBe(45000);
+    expect(state.transcript.map(({ role, text }) => ({ role, text }))).toEqual([
+      { role: 'ai', text: 'Write the general rule.' },
+      { role: 'student', text: 'n + 5' },
+      { role: 'ai', text: 'Why does n make it general?' },
+    ]);
   });
 });

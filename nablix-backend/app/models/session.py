@@ -9,9 +9,10 @@ from app.models.adapters import (
     ExpectedStudentResponse,
     StudentModelResult,
     TutorAction,
+    VisualCue,
     VisionOCRResult,
 )
-from app.models.canvas import CanvasSubmissionRecord
+from app.models.canvas import CanvasQuestionMemory, CanvasSubmissionRecord
 from app.models.fields import (
     ConceptId,
     InteractionMode,
@@ -24,6 +25,7 @@ from app.models.fields import (
 )
 from app.models.guided_learning import (
     ActiveTeachingObjective,
+    GuidedTeachingState,
     GeneratedQuestionRubric,
     GuidedStudentState,
     InactivityPolicy,
@@ -35,6 +37,7 @@ from app.models.student_model_session import (
     QuestionType,
     StudentModelCoreState,
     StudentModelSessionEventResponse,
+    StudentModelQuestion,
 )
 from app.services.phase1_tutor import Phase1TutorMessages
 
@@ -100,6 +103,23 @@ class SessionEndRequest(BaseModel):
 
     session_id: SessionId
     student_id: StudentId
+
+
+class SessionResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    student_id: StudentId
+    turn_id: TurnId
+    last_activity_at: datetime
+    continuity_threshold_days: int = Field(ge=1)
+    saved_journey: dict[str, object]
+
+
+class ReviewCompleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    student_id: StudentId
+    turn_id: TurnId
 
 
 class DiagnosticAnswer(BaseModel):
@@ -205,6 +225,7 @@ class SessionRecord(BaseModel):
     show_canvas: bool = True
     show_hint_button: bool = False
     show_visual_cue: bool = False
+    active_visual_cue: VisualCue | None = None
     show_scaffold_panel: bool = False
     scaffold_steps: list[str] = Field(default_factory=list)
     allow_text_input: bool = True
@@ -231,6 +252,7 @@ class SessionRecord(BaseModel):
     explanation_request_count: int = 0
     generated_question_rubric: GeneratedQuestionRubric | None = None
     active_teaching_objective: ActiveTeachingObjective | None = None
+    guided_teaching_state: GuidedTeachingState | None = None
     guided_student_state: GuidedStudentState | None = None
     selected_error_code: str | None = None
     question_completed: bool = False
@@ -252,6 +274,9 @@ class SessionRecord(BaseModel):
     status: Literal["started", "ended"]
     mode: Literal["inprocess"] = "inprocess"
     canvas_submissions: list[CanvasSubmissionRecord] = Field(default_factory=list)
+    canvas_memory_by_question: dict[str, CanvasQuestionMemory] = Field(
+        default_factory=dict
+    )
     per_question_history: list[QuestionAttemptRecord] = Field(default_factory=list)
     hint_levels_used: list[int] = Field(default_factory=list)
     phase_transitions: list[PhaseTransitionRecord] = Field(default_factory=list)
@@ -260,7 +285,9 @@ class SessionRecord(BaseModel):
     # end-of-session review reflects his data rather than a reconstruction.
     last_student_model: StudentModelResult | None = None
     student_model_event: StudentModelSessionEventResponse | None = None
+    prerequisite_repair_event: StudentModelSessionEventResponse | None = None
     student_model_state: StudentModelCoreState | None = None
+    active_student_model_question: StudentModelQuestion | None = None
     session_summary: SessionSummary | None = None
     session_review: SessionReviewResponse | None = None
 
@@ -272,6 +299,14 @@ class SessionResponse(SessionRecord):
     scaffold_steps: list[str] = Field(default_factory=list, exclude=True)
     scaffold_expected_response: str | None = Field(default=None, exclude=True)
     student_model_event: PublicStudentModelEvent | None = None
+    prerequisite_repair_event: StudentModelSessionEventResponse | None = Field(
+        default=None,
+        exclude=True,
+    )
+    active_student_model_question: StudentModelQuestion | None = Field(
+        default=None,
+        exclude=True,
+    )
     generated_question_rubric: GeneratedQuestionRubric | None = Field(
         default=None,
         exclude=True,

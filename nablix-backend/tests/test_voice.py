@@ -196,7 +196,7 @@ def test_voice_session_start_sets_stream_active_state() -> None:
     assert body["voice_session_token"] == f"mock_voice_token_{session_id}"
     assert body["fallback_active"] is False
 
-    session_response = client.get(f"/session/{session_id}")
+    session_response = client.get(f"/session/{session_id}", params={"student_id": "ST010"})
     assert session_response.status_code == 200
     assert session_response.json()["voice_state"]["stream_active"] is True
 
@@ -228,10 +228,11 @@ def test_voice_transcript_routes_through_interaction_flow() -> None:
     body = response.json()
     assert body["session_id"] == session_id
     assert body["student_id"] == "ST011"
-    assert body["message"] == (
-        "Let us review the equation and try the next step carefully. "
-        "Undo the addition first."
-    )
+    # The authored support hint is delivered alongside the tutor reply, not in
+    # place of it (see "fix: preserve guided tutor reply alongside support").
+    assert body["support_message"] == "Undo the addition first."
+    assert body["message"]
+    assert body["message"] != "Undo the addition first."
     assert body["message_voice"] == body["message"]
     assert body["voice_state"]["stream_active"] is True
     assert body["voice_state"]["current_turn"] == "STUDENT"

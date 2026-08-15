@@ -3,6 +3,41 @@ confidence:
   safety_response: 0.99
   standard_response: 0.95
 guided_learning:
+  v1_hybrid_enabled: false
+  minimum_voice_transcript_confidence: 0.85
+  minimum_ocr_confidence: 0.80
+  canvas_pedagogy_action_planner_enabled: false
+  hybrid_support_ladder:
+    - NONE
+    - HINT
+    - VISUAL_CUE
+    - SCAFFOLD
+    - PARALLEL_EXAMPLE
+    - TUTOR_SOLVED
+  canvas_pedagogy_planner:
+    action_reference_phrases:
+      HIGHLIGHT: ["highlight"]
+      CIRCLE: ["circle"]
+      GROUP: ["group"]
+      ARROW: ["arrow"]
+      INSERT_MATH: ["wrote", "inserted"]
+      INSERT_LABEL: ["label"]
+      SHOW_CUE: ["cue", "look"]
+      OPEN_SCAFFOLD_STEP: ["step", "scaffold"]
+      SHOW_PARALLEL: ["parallel", "example"]
+      TUTOR_SOLVED_STEP: ["worked", "step"]
+      FOCUS: ["focus"]
+    safe_action_free_question: "What is the next part you can work out?"
+  hybrid_prompts:
+    semantic_prompt: >-
+      Evaluate only the current authored target from reliable student evidence.
+      Do not invent, reorder, or skip components. Return only semantic state and
+      ordered confirmed components; do not write tutor wording or canvas actions.
+    wording_prompt: >-
+      Write one concise Phase 2 tutor turn using exactly the supplied pedagogical
+      decision and canvas actions. Refer naturally to the active visual action.
+      Do not change state, completed components, support action, or canvas actions.
+      Never reveal an unresolved final answer.
   evaluation_mode: LLM_STATE_MACHINE
   confidence_threshold: 0.75
   state_confidence_thresholds:
@@ -16,7 +51,8 @@ guided_learning:
   maximum_recent_history_turns: 6
   rubric_prompt_version: "1.1.0"
   evaluator_prompt_version: "1.2.0"
-  explain_again_prompt_version: "1.0.0"
+  component_adjudicator_prompt_version: "1.0.0"
+  explain_again_prompt_version: "1.0.1"
   rubric_system_prompt: |
     You create a compact assessment rubric for one mathematics question.
     Infer concepts only from the supplied question and answer specification.
@@ -59,6 +95,17 @@ guided_learning:
     matches the expression being decoded; do not confuse it with an extra variable.
     Evaluate the active objective first and preserve previously confirmed concepts
     unless the student explicitly contradicts them.
+    guided_tutor_context is the authoritative persistent lesson state. Its
+    active_tutor_question is the only learner question for this turn; its ordered
+    teaching steps define the permitted focus order. recent_conversation is only
+    wording context and must never override guided_tutor_context. The backend,
+    not this evaluator, owns progression and support-rung selection.
+    The active_tutor_question is the exact focused question the tutor is waiting
+    for the learner to answer. Treat it as the highest-priority conversational
+    context. If the learner responds to it with a concise phrase, evaluate that
+    phrase against the active_tutor_question rather than treating it as unrelated
+    to the full original question. Do not replace it with a generic question when
+    it remains unanswered; restate or narrow that same focused question instead.
     Copy every concept ID exactly from generated_rubric or active_objective; never
     create, rename, paraphrase, or translate a concept ID. The backend derives
     preserved concepts, missing concepts, and the next objective from confirmed
@@ -77,6 +124,32 @@ guided_learning:
     message must be suitable for display. The voice message must express the same
     meaning in speech-friendly notation.
     Return only the requested JSON schema.
+  component_adjudicator_confidence_threshold: 0.85
+  component_adjudicator_system_prompt: |
+    Decide whether the student's latest response demonstrates exactly the one
+    supplied target component. Judge mathematical meaning rather than exact
+    wording, spelling, punctuation, notation, or input modality. Use the
+    question, answer specification, active objective, and recent conversation
+    only as context. Previously confirmed components may supply context, but do
+    not treat tutor wording as student evidence. Return DEMONSTRATED only when
+    the student's own response communicates the target meaning, CONTRADICTED
+    only for an explicit incompatible claim, and NOT_DEMONSTRATED otherwise.
+    Respect the role assigned to every value or symbol. Mentioning an expected
+    symbol or number in the wrong role is CONTRADICTED, not DEMONSTRATED. Saying
+    a variable is fixed contradicts a component requiring that variable to
+    change; saying a constant changes contradicts a component requiring that
+    constant to remain fixed.
+    For an explanation, reason, or why component, accept a concise supporting
+    mathematical fact or relationship when it explains why the already selected
+    answer applies. The student does not need to repeat the selected answer, use
+    the word "because", write a complete sentence, or restate every fact already
+    established in the conversation. Statements identifying what varies, what
+    remains constant, which operation applies, what a symbol represents, or the
+    mathematical relationship involved are valid explanation evidence when they
+    answer the question's requested justification. Do not demand wording that is
+    absent from the authored question and answer specification.
+    Copy component_id exactly. Evidence must identify the relevant student
+    wording and must never invent an answer. Return only the requested JSON.
   explain_again_system_prompt: |
     Re-express only the currently unresolved runtime answer component for a
     student who selected Explain Again. The runtime components were generated
@@ -93,7 +166,10 @@ guided_learning:
     Set answer_reveal_risk true when either message gives the canonical answer or
     every required component, including a semantic paraphrase without words such
     as "the answer is". Do not reveal the final answer unless
-    answer_reveal_allowed is true. Return only the requested JSON schema.
+    answer_reveal_allowed is true. When guardrail_retry_mode is
+    SOCRATIC_QUESTION_ONLY, return exactly one question that makes the student
+    supply the unresolved fact. Do not state or paraphrase any answer component.
+    Return only the requested JSON schema.
   scaffold_evaluator_system_prompt: |
     You evaluate whether one student response satisfies the current scaffold step.
     The expected-response field is an authored semantic criterion, not necessarily
@@ -171,12 +247,20 @@ intent_phrases:
     - hint
     - help me
   EXPRESSING_CONFUSION:
+    - what
     - i don't know
     - i do not know
+    - idk
+    - i have no idea
+    - no idea
     - i do not understand
     - i don't understand
+    - what do you mean
+    - what do u mean
     - confused
     - stuck
+    - are you stupid
+    - are u stupid
   OFF_TOPIC:
     - pizza
     - play a game
@@ -269,6 +353,11 @@ strategy_rules:
   stuck_scaffold_min_count: 2
   scaffold_min_attempt_count: 3
   worked_example_min_attempt_count: 4
+independent_practice:
+  answer_recorded_message: "Answer recorded."
+  rescue_required_message: "We'll review this one before a fresh independent check."
+  awaiting_submission_message: "Please submit your best answer using the canvas or an approved choice."
+  input_unclear_message: "Please rewrite your answer clearly on the canvas, then submit it again."
 scaffold_response_rules:
   aliases:
     "½":

@@ -31,8 +31,13 @@ class RoutingReasonCode(str, Enum):
     ORIENTATION_COMPLETED = "ORIENTATION_COMPLETED"
     GUIDED_IN_PROGRESS = "GUIDED_IN_PROGRESS"
     GUIDED_HINT_REQUIRED = "GUIDED_HINT_REQUIRED"
+    GUIDED_VISUAL_SUPPORT_REQUIRED = "GUIDED_VISUAL_SUPPORT_REQUIRED"
     GUIDED_SCAFFOLD_REQUIRED = "GUIDED_SCAFFOLD_REQUIRED"
     GUIDED_COMPLETED = "GUIDED_COMPLETED"
+    GUIDED_PHASE_COMPLETED = "GUIDED_PHASE_COMPLETED"
+    PARALLEL_EXAMPLE_REQUIRED = "PARALLEL_EXAMPLE_REQUIRED"
+    INDEPENDENT_MASTERY = "INDEPENDENT_MASTERY"
+    SESSION_RESUMED = "SESSION_RESUMED"
 
 
 class MicroSkillMapping(BaseModel):
@@ -71,7 +76,6 @@ class AnswerSpec(BaseModel):
     verification_method: str
     explanation_required: bool | None = None
     answer_steps: list[str] = Field(default_factory=list)
-
 
 
 class TutorQuestionView(BaseModel):
@@ -316,6 +320,7 @@ class GuidedAttemptEvent(MutatingSessionEventBase):
 
 class GuidedSupportEvent(MutatingSessionEventBase):
     event_type: Literal[
+        "GUIDED_SUPPORT_REQUESTED",
         "GUIDED_SUPPORT_ESCALATION_REQUIRED",
         "MAXIMUM_GUIDED_SUPPORT_PARALLEL",
         "MAXIMUM_GUIDED_SUPPORT_REQUIRED",
@@ -371,6 +376,23 @@ class IndependentQuestionSetRequestedEvent(MutatingSessionEventBase):
     used_question_ids: list[str]
 
 
+class FreshIndependentQuestionRequestedEvent(MutatingSessionEventBase):
+    event_type: Literal["FRESH_INDEPENDENT_QUESTION_REQUESTED"]
+    target_micro_skill_ids: list[str]
+    used_question_ids: list[str]
+
+
+class SessionResumedEvent(MutatingSessionEventBase):
+    event_type: Literal["SESSION_RESUMED"]
+    last_activity_at: str
+    continuity_threshold_days: int
+    saved_journey: dict[str, object]
+
+
+class ReviewCompletedEvent(MutatingSessionEventBase):
+    event_type: Literal["REVIEW_COMPLETED"]
+
+
 StudentModelSessionEvent: TypeAlias = (
     SessionOpenedEvent
     | DiagnosticQuestionSetRequestedEvent
@@ -383,6 +405,9 @@ StudentModelSessionEvent: TypeAlias = (
     | IndependentRetryCompletedEvent
     | GuidedQuestionSetRequestedEvent
     | IndependentQuestionSetRequestedEvent
+    | FreshIndependentQuestionRequestedEvent
+    | SessionResumedEvent
+    | ReviewCompletedEvent
 )
 
 

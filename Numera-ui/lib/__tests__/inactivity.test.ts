@@ -25,6 +25,7 @@ const IDLE: ActivityGate = {
   pageHidden: false,
   disconnected: false,
   awaitingStudent: true,
+  tutorTurnFailed: false,
 };
 
 const nudge = (over: Partial<NudgeRecord> = {}): NudgeRecord => ({
@@ -45,6 +46,28 @@ describe('the idle clock only runs when it should (rules 1, 2)', () => {
     expect(clockMayRun({ ...IDLE, awaitingStudent: false })).toBe(false);
   });
 
+  it('does not run after the tutor turn failed', () => {
+    // Reported 10 Aug: the student answered "n+6", the tutor returned
+    // INTERNAL_ERROR, they answered again, it failed again, they stopped — and
+    // were then asked "what is the first thing you would try?". A failed turn
+    // leaves awaitingStudent true and lastTutorTurnId on the last turn that
+    // worked, so without this the silence is indistinguishable from being stuck.
+    expect(clockMayRun({ ...IDLE, tutorTurnFailed: true })).toBe(false);
+  });
+
+  it('will not claim after a failed turn even once past the threshold', () => {
+    expect(
+      shouldClaimNudge({
+        policy: POLICY,
+        gate: { ...IDLE, tutorTurnFailed: true },
+        elapsedMs: 120_000,
+        sinceLastNudgeMs: null,
+        nudgesThisTurn: 0,
+        tutorTurnId: 't1',
+      }),
+    ).toEqual({ claim: false, reason: 'blocked' });
+  });
+
   it.each([
     ['drawing, typing or speaking', 'studentActive'],
     ['a request in flight', 'requestInFlight'],
@@ -56,7 +79,13 @@ describe('the idle clock only runs when it should (rules 1, 2)', () => {
 });
 
 describe('claiming a nudge', () => {
-  const base = { policy: POLICY, gate: IDLE, sinceLastNudgeMs: null, nudgesThisTurn: 0 };
+  const base = {
+    policy: POLICY,
+    gate: IDLE,
+    sinceLastNudgeMs: null,
+    nudgesThisTurn: 0,
+    tutorTurnId: 't1',
+  };
 
   it('claims once past the threshold', () => {
     expect(shouldClaimNudge({ ...base, elapsedMs: 20_000 })).toEqual({
@@ -96,6 +125,23 @@ describe('claiming a nudge', () => {
     for (const elapsedMs of [60_000, 600_000, 3_600_000]) {
       expect(shouldClaimNudge({ ...base, elapsedMs, nudgesThisTurn: 5 }).claim).toBe(false);
     }
+  });
+
+  /**
+   * A nudge belongs to a tutor turn — NudgeRecord carries its id, and the
+   * backend rejects the interaction outright without one:
+   * "previous_tutor_turn_id is required for inactivity interactions"
+   * (nablix-backend/app/models/interaction.py:85).
+   *
+   * Claiming anyway posted a request that could only ever 422. Because the
+   * controller ticks on an interval it did not do that once, it did it every
+   * tick, and each rejection escaped as an uncaught promise (7 Aug, VM).
+   */
+  it('does not claim before the tutor has taken a turn', () => {
+    expect(shouldClaimNudge({ ...base, tutorTurnId: null, elapsedMs: 999_999 })).toEqual({
+      claim: false,
+      reason: 'no_tutor_turn',
+    });
   });
 
   it('a blocked gate beats an expired clock', () => {

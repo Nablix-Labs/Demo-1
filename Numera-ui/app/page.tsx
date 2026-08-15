@@ -9,22 +9,22 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import SlideDots from '@/components/SlideDots';
 import CanvasStage from '@/components/Canvas';
 import ContinuityCheck from '@/components/ContinuityCheck';
 import FloatingMicButton from '@/components/FloatingMicButton';
-import VisualCue from '@/components/VisualCue';
+import SupportLane from '@/components/SupportLane';
 import { useFlowNav } from '@/lib/useFlowNav';
 import { useRouter } from 'next/navigation';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useMicLevel } from '@/store/useMicLevel';
-import { useDemoTutor, resetSessionStart, sessionStartError } from '@/hooks/useDemoTutor';
+import { useDemoTutor, resetSessionStart, resumeSession, sessionStartError } from '@/hooks/useDemoTutor';
 import { useVoiceTurn } from '@/hooks/useVoiceTurn';
 import { useVoiceStream } from '@/hooks/useVoiceStream';
 import { useInactivityNudge } from '@/hooks/useInactivityNudge';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { demoFor } from '@/lib/demoContent';
+import { setStudentWriting, tutorSay } from '@/lib/tutorSpeech';
 
 // Voice turn transport. 'rest' (default): browser STT (useVoiceTurn) → REST +
 // browser TTS. 'server': stream mic audio to the :8004 voice server, which does
@@ -50,6 +50,7 @@ export default function LessonPage() {
   const currentPhase = useNumeraStore((s) => s.currentPhase);
   const updatePartialTranscript = useNumeraStore((s) => s.updatePartialTranscript);
   const voiceStatus = useNumeraStore((s) => s.voiceStatus);
+  const allowVoiceInput = useNumeraStore((s) => s.allowVoiceInput);
   const beginListeningTurn = useNumeraStore((s) => s.beginListeningTurn);
   // True while tutor audio is genuinely playing — the echo gate below.
   const tutorSpeaking = useMicLevel((s) => s.aiSpeaking);
@@ -114,6 +115,16 @@ export default function LessonPage() {
     acknowledge: tutor.acknowledgeInactivityNudge,
   });
 
+  // A refresh keeps sessionId (persisted) but loses the session record, the
+  // question and the phase — and the start effect below short-circuits on the
+  // surviving id, so the lesson used to come back blank and unresponsive.
+  // Refetch the record; a 404 inside resumeSession drops the dead session,
+  // sessionId goes null, and the start effect takes over with a fresh one.
+  const backendSession = useNumeraStore((s) => s.backendSession);
+  useEffect(() => {
+    if (hydrated && apiEnabled && sessionId && !backendSession) void resumeSession();
+  }, [hydrated, apiEnabled, sessionId, backendSession]);
+
   // Start a backend session on lesson entry and let it drive the displayed
   // question/number/opening message. Mic starts muted so capture is opt-in.
   useEffect(() => {
@@ -134,6 +145,16 @@ export default function LessonPage() {
       setQuestionText((rec.current_question ?? '').replace(/^solve for\s*x\s*:?\s*/i, '').trim());
       setQuestionNumber(rec.question_number);
       setTranscript([{ role: 'ai', text: rec.message }]);
+      if (rec.current_phase === 'GUIDED_PRACTICE') {
+        // A fresh guided question gives the floor to the tutor. Canvas-writing
+        // state is module-scoped and can otherwise survive navigation from the
+        // previous question, silently dropping this opening narration.
+        setStudentWriting(false);
+        useNumeraStore.getState().setVoiceStatus('speaking');
+        tutorSay(rec.message, {
+          onEnd: () => useNumeraStore.getState().beginListeningTurn(),
+        });
+      }
       clearTutorMarks();
       // Only the question TEXT is set here. Its type and options come off the
       // same record via syncBackendSession → applyBackendPhase, which already
@@ -143,9 +164,31 @@ export default function LessonPage() {
       useNumeraStore.getState().setVisualCueVisible(rec.show_visual_cue);
       // Open the student's first LISTENING turn (mints turn_id). Mic stays muted
       // until the student opts in; half-duplex gating does the rest.
-      beginListeningTurn();
+      if (rec.current_phase !== 'GUIDED_PRACTICE') beginListeningTurn();
     });
   }, [hydrated, apiEnabled, sessionId, activeConceptId, startSession, setMicMuted, setQuestionText, setQuestionNumber, setTranscript, clearTutorMarks, beginListeningTurn]);
+
+  // Speak the line the previous screen queued for us.
+  //
+  // The phase-entry message belongs to the screen being ENTERED: orientation
+  // cannot speak it, because by then it is unmounting and speech started on a
+  // dying route is how two tutor voices once ended up talking at once. It
+  // showed the line and queued the voice; this claims it. Claim-and-clear is
+  // atomic in the store so React's double-mount in development cannot say it
+  // twice (row 4, "displayed but not spoken", 11 Aug).
+  //
+  // Watches the queue rather than firing once on mount: a resume sets it AFTER
+  // this screen has mounted (the fetch has to come back first), so a mount-only
+  // effect would miss every resumed session.
+  const pendingSpeech = useNumeraStore((s) => s.pendingTutorSpeech);
+  useEffect(() => {
+    if (!hydrated || !pendingSpeech) return;
+    const queued = useNumeraStore.getState().claimPendingTutorSpeech();
+    if (!queued) return;
+    setStudentWriting(false);
+    useNumeraStore.getState().setVoiceStatus('speaking');
+    tutorSay(queued, { onEnd: () => useNumeraStore.getState().beginListeningTurn() });
+  }, [hydrated, pendingSpeech]);
 
   // Mic capture is half-duplex (voice contract §12): it runs ONLY during the
   // student's LISTENING turn and while unmuted. During PROCESSING (request in
@@ -170,7 +213,10 @@ export default function LessonPage() {
   // Both signals clear inside the same funnel (TutorAudioStream.finish), so
   // they can never disagree — and gating on both means neither one being missed
   // can leave the tutor listening to itself.
-  const listening = !micMuted && voiceStatus === 'listening' && !tutorSpeaking;
+  // allowVoiceInput: some tutor replies forbid a voice answer; the store has
+  // recorded it since Phase 2 but nothing consulted it, so the mic opened
+  // anyway and room noise was transcribed into an unwanted turn.
+  const listening = !micMuted && voiceStatus === 'listening' && !tutorSpeaking && allowVoiceInput;
 
   // Depend on the individual callbacks, not on `capture`. The hooks return a
   // fresh object every render, so depending on it re-ran this effect on EVERY
@@ -178,12 +224,36 @@ export default function LessonPage() {
   // is what made it possible for the mic to end up live while muted.
   // start/stop are useCallback-stable, so this now runs only when the
   // listening decision actually changes.
+  //
+  // The two transports gate differently on purpose. The REST path (browser
+  // STT) starts and stops its recogniser per turn — that is how Web Speech
+  // works. The server path used to do the same with the raw mic, and paid
+  // 100-400ms of getUserMedia + AudioContext setup at the start of EVERY
+  // student turn: the first syllable of each answer was never captured, which
+  // is where the truncated Deepgram transcripts came from. Now the hardware
+  // stays open while unmuted and turn-taking gates only whether frames are
+  // SENT (setTransmitting below), so echo suppression is unchanged but the
+  // first word is no longer eaten.
   const { supported: captureSupported, start: startCapture, stop: stopCapture } = capture;
+  const muteCapture = voiceStream.setMuted;
+  const captureOn = VOICE_TRANSPORT === 'server' ? !micMuted : listening;
   useEffect(() => {
     if (!apiEnabled || !sessionId || !captureSupported) return;
-    if (listening) void startCapture();
+    if (captureOn) void startCapture();
+    // The two transports mute differently on purpose. Web Speech (REST) has to
+    // stop its recogniser — that is the API. The server path used to release
+    // the hardware here too, so every unmute paid getUserMedia + AudioContext
+    // again: 100-400ms of dead air, the missing first syllable of each answer
+    // (audit F-10). It now mutes at the track (silence by spec, device held)
+    // and the next unmute resumes on the same stream instantly.
+    else if (VOICE_TRANSPORT === 'server') muteCapture(true);
     else stopCapture();
-  }, [apiEnabled, sessionId, listening, captureSupported, startCapture, stopCapture]);
+  }, [apiEnabled, sessionId, captureOn, captureSupported, startCapture, stopCapture, muteCapture]);
+
+  const { setTransmitting } = voiceStream;
+  useEffect(() => {
+    if (VOICE_TRANSPORT === 'server') setTransmitting(listening);
+  }, [listening, setTransmitting]);
 
   // Whatever happens, the mic must not outlive this screen.
   useEffect(() => stopCapture, [stopCapture]);
@@ -223,11 +293,14 @@ export default function LessonPage() {
 
   return (
     <>
-      <SlideDots />
+      {/* SlideDots (the "Lesson progress" rail) is off for guided practice.
+          It sat as a 34px glass column wedged between the tutor panel and the
+          canvas, reading as a stray bar rather than as progress, and this phase
+          is one question at a time so there is no sequence for it to track. */}
       <CanvasStage />
       <ContinuityCheck />
       <FloatingMicButton />
-      <VisualCue />
+      <SupportLane />
     </>
   );
 }

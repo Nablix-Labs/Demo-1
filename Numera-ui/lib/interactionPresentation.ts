@@ -1,4 +1,5 @@
 import { activeScaffold, type InteractionResponse } from '@/lib/api';
+import { cueAssetUrl } from '@/lib/cueAsset';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import {
   shouldApply,
@@ -10,6 +11,7 @@ import {
 export type SupportPresentation = Pick<
   InteractionResponse,
   | 'message'
+  | 'support_message'
   | 'show_visual_cue'
   | 'visual_cue'
   | 'show_scaffold_panel'
@@ -36,22 +38,68 @@ export function acceptResponse(response: VersionedResponse): boolean {
   return true;
 }
 
+/**
+ * A hint the backend has already authorised on this turn.
+ *
+ * Sanya, 12 Aug 2026: on WRONG_1 and WRONG_2 the Student Model returns real
+ * hints with `conversation_action: GIVE_HINT` and the text in
+ * `support_message`. The client stored them for the "Need help?" replay and
+ * showed nothing — so a student who had already earned a hint had to know to
+ * ask for it. "The student should not have to press Need help? to receive a
+ * hint that the backend has already authorised."
+ *
+ * Null when there is nothing extra to present: no hint was served, or the
+ * support text IS the tutor's line, in which case showing both would say the
+ * same thing twice.
+ */
+export function authorisedHint(response: SupportPresentation): string | null {
+  if (response.conversation_action !== 'GIVE_HINT') return null;
+  const hint = response.support_message?.trim();
+  if (!hint) return null;
+  return hint === response.message?.trim() ? null : hint;
+}
+
 export function applyInteractionSupport(response: SupportPresentation): string {
-  // A GIVE_HINT turn is the only hint the frontend can still get: the backend
-  // deleted POST /hint/request in the Schema 3.0 refactor (3 Aug 2026), so the
-  // turn message IS the hint. Remembering it is what lets "Need help?" re-open
-  // rung 1 of the ladder instead of calling an endpoint that 404s.
-  if (response.conversation_action === 'GIVE_HINT' && response.message) {
-    useNumeraStore.getState().setLastHintText(response.message);
+  // Support is separate from the tutor's actual response. Keeping it apart
+  // prevents a generic content hint from replacing a question-aware correction
+  // in the chat, while preserving it for the existing Need help? control.
+  const supportMessage = response.support_message ?? response.message;
+  if (response.conversation_action === 'GIVE_HINT' && supportMessage) {
+    useNumeraStore.getState().setLastHintText(supportMessage);
   }
+
+  // Put the hint on screen as its own card, not only in the transcript.
+  //
+  // It was reaching the student as a plain tutor bubble — indistinguishable
+  // from the tutor talking, and invisible altogether once the transcript panel
+  // was collapsed, which is a persisted preference. So a hint the backend had
+  // authorised could be delivered, logged, counted in `hint_count`, and still
+  // never seen (Sanya, 13 Aug 2026).
+  //
+  // `authorisedHint` rather than `supportMessage`: it drops a support message
+  // that only repeats the tutor's own line, which would otherwise put the same
+  // sentence on the screen twice.
+  const hint = authorisedHint(response);
+  if (hint) useNumeraStore.getState().setVisibleHint(hint);
 
   const cue = response.visual_cue;
   const showCue = cue?.show ?? response.show_visual_cue;
-  if (typeof showCue === 'boolean') {
+  // False means no new cue was served on this turn. Keep the cue already
+  // authorised for the active question while its scaffold is open;
+  // applyBackendPhase clears it when the question or phase changes.
+  if (showCue === true) {
     useNumeraStore.getState().setVisualCue({
-      show: showCue,
+      show: true,
+      // Stored whole, as sent. `cue_id` is the cue's identity AND the evidence
+      // that this is an authored cue at all — `cue_type` is null on the real
+      // Topic 1 cues, so it can serve as neither (Sanya, 13 Aug 2026).
+      cueId: cue?.cue_id?.trim() || null,
       cueType: cue?.cue_type ?? null,
       description: cue?.description ?? null,
+      // Additive: null whenever the backend sent no usable URL, and the card
+      // renders text-only exactly as before (see lib/cueAsset).
+      assetUrl: cueAssetUrl(cue?.asset_url),
+      actions: cue?.actions ?? null,
     });
   }
 

@@ -11,6 +11,7 @@ from app.ai_engine.schemas import (
     ExplainAgainResponse,
     OpenAIExplainAgainMessage,
 )
+from app.ai_engine.openai_client import OpenAITutorMessage
 from app.core.config import Settings
 from app.main import app
 from app.models.adapters import VisualCue as AdapterVisualCue
@@ -18,6 +19,7 @@ from app.models.guided_learning import GeneratedConcept, GeneratedQuestionRubric
 
 from app.models.student_model_session import (
     GuidedSupportEvent,
+    RoutingReasonCode,
     StudentModelSessionEvent,
     StudentModelSessionEventResponse,
 )
@@ -26,6 +28,32 @@ from tests.test_session_events import _event_response, _session_opened_response
 
 
 client = TestClient(app, headers={"Authorization": "Bearer test-token"})
+
+
+@pytest.mark.parametrize(
+    "reason_code",
+    [
+        "GUIDED_VISUAL_SUPPORT_REQUIRED",
+        "GUIDED_PHASE_COMPLETED",
+        "PARALLEL_EXAMPLE_REQUIRED",
+        "SESSION_RESUMED",
+    ],
+)
+def test_all_guided_routing_reasons_are_response_safe(reason_code: str) -> None:
+    assert RoutingReasonCode(reason_code).value == reason_code
+
+
+def test_repeated_unresolved_guided_explanation_never_forces_completion() -> None:
+    assert interaction_service._may_force_complete_repeated_explanation(
+        "GUIDED_PRACTICE",
+        False,
+        3,
+    ) is False
+    assert interaction_service._may_force_complete_repeated_explanation(
+        "GUIDED_PRACTICE",
+        True,
+        3,
+    ) is False
 
 
 def test_atomic_guided_events_are_disabled_for_legacy_student_model() -> None:
@@ -85,6 +113,18 @@ def schema_student_model(monkeypatch: pytest.MonkeyPatch) -> None:
                 answer_reveal_allowed=False,
                 progression_change_requested=False,
                 attempt_increment=0,
+            )
+
+        def build_tutor_message(self, **kwargs: object) -> OpenAITutorMessage:
+            # Guided support is narrated through the AI engine since
+            # "feat: narrate guided support in tutor responses".
+            del kwargs
+            return OpenAITutorMessage(
+                tutor_message="Look at the support shown and try the next step.",
+                tutor_message_voice_optimised=(
+                    "Look at the support shown and try the next step."
+                ),
+                confidence=0.9,
             )
 
     monkeypatch.setattr(
@@ -193,7 +233,10 @@ def test_text_duplicate_and_stale_turns_do_not_mutate_state() -> None:
     assert stale.status_code == 409
     assert stale.json()["status"] == "STALE_TURN"
 
-    stored = client.get(f"/session/{session['session_id']}")
+    stored = client.get(
+        f"/session/{session['session_id']}",
+        params={"student_id": session["student_id"]},
+    )
     assert stored.status_code == 200
     assert stored.json()["attempt_count"] == first_body["attempt_count"]
 
@@ -255,18 +298,20 @@ def test_explain_again_is_cached_and_does_not_grade(
     student_id = "ST152"
     session = _start(student_id)
     stored_session = session_service._sessions[str(session["session_id"])]
+    # Explain Again reads the persisted authored cue since
+    # "fix: preserve authored visual cue payload".
     session_service._sessions[str(session["session_id"])] = stored_session.model_copy(
-        update={"show_visual_cue": True}
-    )
-    monkeypatch.setattr(
-        interaction_service,
-        "_schema_visual_cue",
-        lambda event: AdapterVisualCue(
-            show=True,
-            cue_type="VC-T01-ADD-NOT-MULTIPLY",
-            description="The starting value changes while the operation stays fixed.",
-            actions=[],
-        ),
+        update={
+            "show_visual_cue": True,
+            "active_visual_cue": AdapterVisualCue(
+                show=True,
+                cue_type="VC-T01-ADD-NOT-MULTIPLY",
+                description=(
+                    "The starting value changes while the operation stays fixed."
+                ),
+                actions=[],
+            ),
+        }
     )
     request = _interaction(
         session,
@@ -317,7 +362,10 @@ def test_help_request_without_active_support_is_explicit() -> None:
     assert response.status_code == 409
     assert response.json()["message"].startswith("NO_ACTIVE_SUPPORT:")
 
-    stored = client.get(f"/session/{session['session_id']}")
+    stored = client.get(
+        f"/session/{session['session_id']}",
+        params={"student_id": session["student_id"]},
+    )
     assert stored.status_code == 200
     assert stored.json()["attempt_count"] == session["attempt_count"]
 
@@ -352,6 +400,10 @@ def test_inactivity_nudge_is_cached_without_pedagogical_mutation() -> None:
     assert first_body["attempt_count"] == session["attempt_count"]
     assert first_body["question_id"] == session["question_id"]
     assert first_body["current_phase"] == session["current_phase"]
+    assert first_body["accepted_turn_id"] == request["turn_id"]
+    after_claim = session_service._sessions[str(session["session_id"])]
+    assert after_claim.last_processed_turn_id == stored_session.last_processed_turn_id
+    assert after_claim.last_tutor_turn_id == stored_session.last_tutor_turn_id
 
     duplicate = client.post("/interaction", json=request)
     assert duplicate.status_code == 200
@@ -381,6 +433,9 @@ def test_inactivity_nudge_is_cached_without_pedagogical_mutation() -> None:
     assert presented.json()["nudge_delivery"]["status"] == "PRESENTED"
     assert presented.json()["attempt_count"] == session["attempt_count"]
     assert presented.json()["current_phase"] == session["current_phase"]
+    after_presented = session_service._sessions[str(session["session_id"])]
+    assert after_presented.last_processed_turn_id == stored_session.last_processed_turn_id
+    assert after_presented.last_tutor_turn_id == stored_session.last_tutor_turn_id
     assert _pedagogical_state(session["session_id"]) == before
 
 

@@ -13,6 +13,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore, accessDecision } from '@/store/useAuthStore';
+import { msUntilExpiry } from '@/lib/auth/authApi';
 
 export default function AuthGate({ children }: { children: ReactNode }) {
   const router = useRouter();
@@ -24,6 +25,24 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   }, []);
 
   const state = useAuthStore();
+  // The decision is recomputed on render, and every other input to it changes
+  // the store — so a render is guaranteed. Expiry is the exception: it happens
+  // to a token nobody touched, on a screen nobody navigated away from. This
+  // wakes the gate at that moment so the lapse is acted on instead of waiting
+  // for the student's next click (Manjusha, 11 Aug).
+  const [expiryCheck, setExpiryCheck] = useState(0);
+  useEffect(() => {
+    const wait = msUntilExpiry(state.accessToken);
+    // Nothing to wait for (no token / no exp), or it has already lapsed — in
+    // which case accessDecision has the answer this render and re-arming a
+    // zero-delay timer would spin.
+    if (wait === null || wait === 0) return;
+    const id = setTimeout(() => setExpiryCheck((n) => n + 1), wait);
+    return () => clearTimeout(id);
+    // `expiryCheck` is a dependency so each wake re-arms: msUntilExpiry caps at
+    // ~24.8 days, so a longer-lived token needs more than one sleep.
+  }, [state.accessToken, expiryCheck]);
+
   const outcome = accessDecision(state);
 
   useEffect(() => {

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { MoreVertical, PanelLeft, PanelRight, Eye, EyeOff, FileDown, ChevronsLeft, ChevronsRight } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { exportNotesPDF } from '@/lib/exportNotes';
 import VoicePicker from '@/components/VoicePicker';
@@ -10,19 +11,17 @@ import VoiceBar from './VoiceBar';
 import Transcript from './Transcript';
 import ChatInput from './ChatInput';
 import { cn } from '@/lib/cn';
-
-const stateLabel: Record<string, string> = {
-  idle:    'Idle',
-  state_1: 'Warm-up',
-  state_2: 'Explanation',
-  state_3: 'Step-by-step',
-  state_4: 'Guided Practice',
-  state_5: 'Review',
-};
+import ResizeHandle from './ResizeHandle';
 
 /** ⋮ overflow menu — panel side + transcript visibility. */
 function PanelMenu() {
-  const { panelSide, transcriptVisible, togglePanelSide, toggleTranscript, togglePanelCollapsed } = useNumeraStore();
+  const { panelSide, transcriptVisible, togglePanelSide, toggleTranscript, togglePanelCollapsed } = useNumeraStore(
+    useShallow((s) => ({
+      panelSide: s.panelSide, transcriptVisible: s.transcriptVisible,
+      togglePanelSide: s.togglePanelSide, toggleTranscript: s.toggleTranscript,
+      togglePanelCollapsed: s.togglePanelCollapsed,
+    })),
+  );
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -31,7 +30,7 @@ function PanelMenu() {
     await exportNotesPDF({
       questionNumber: s.questionNumber,
       questionText: s.questionText,
-      canvasPng: s.canvasExporter?.() ?? null,
+      canvasPng: s.canvasExporter?.()?.snapshotDataUrl ?? null,
       transcript: s.transcript,
     });
   };
@@ -92,11 +91,12 @@ function PanelMenu() {
 }
 
 export default function MediaPanel() {
-  const sessionState = useNumeraStore((s) => s.sessionState);
   const transcriptVisible = useNumeraStore((s) => s.transcriptVisible);
   const panelSide = useNumeraStore((s) => s.panelSide);
   const panelCollapsed = useNumeraStore((s) => s.panelCollapsed);
+  const panelWidth = useNumeraStore((s) => s.panelWidth);
   const togglePanelCollapsed = useNumeraStore((s) => s.togglePanelCollapsed);
+  const [dragging, setDragging] = useState(false);
 
   // Single root element throughout, so collapsing animates the width instead
   // of unmounting/remounting a differently-typed node (which would also drop
@@ -106,13 +106,21 @@ export default function MediaPanel() {
   return (
     <aside
       className={cn(
-        'lg-glass flex flex-col flex-shrink-0 min-h-0 overflow-hidden rounded-2xl my-2',
+        // `relative` so the drag handle can sit on the edge; `overflow-visible`
+        // because the handle deliberately straddles it and would be clipped in
+        // half otherwise — which is the difference between a 9px grab target
+        // and a 4px one.
+        'lg-glass relative flex flex-col flex-shrink-0 min-h-0 rounded-2xl my-2',
+        panelCollapsed ? 'overflow-hidden' : 'overflow-visible',
         panelSide === 'left' ? 'ml-0 mr-2' : 'mr-0 ml-2',
-        'transition-[width] duration-200 ease-in-out'
+        // Animate the collapse, but never the drag: a 200ms ease on width makes
+        // the edge lag behind the pointer, which reads as the drag being broken.
+        dragging ? 'transition-none' : 'transition-[width] duration-200 ease-in-out',
       )}
-      style={{ width: panelCollapsed ? 28 : 234 }}
+      style={{ width: panelCollapsed ? 28 : panelWidth }}
       aria-label="Tutor and student panel"
     >
+      {!panelCollapsed && <ResizeHandle side={panelSide} onDraggingChange={setDragging} />}
       {panelCollapsed ? (
         <button
           onClick={togglePanelCollapsed}
@@ -127,7 +135,7 @@ export default function MediaPanel() {
         // <aside> is mid-transition between 234px and 28px.
         <div
           className="flex flex-col min-h-0 h-full"
-          style={{ width: 234 }}
+          style={{ width: panelWidth }}
         >
           {/* Header */}
           <div className="flex items-center justify-between px-3.5 py-3.5 border-b border-muted-gray flex-shrink-0">
@@ -136,10 +144,6 @@ export default function MediaPanel() {
               <div className="text-[8.5px] font-normal text-slate-blue tracking-[1.5px] uppercase">by Nablix</div>
             </div>
             <div className="flex items-center gap-1.5">
-              <div className="border border-muted-gray rounded-full px-2.5 py-1 text-[10px] tracking-[0.4px] flex items-center gap-1.5 text-slate-blue">
-                <span className="w-1.5 h-1.5 rounded-full bg-ai-cyan inline-block" />
-                {stateLabel[sessionState] ?? 'Guided'}
-              </div>
               {/* Testing-only tutor voice variant picker (see lib/voiceOptions.ts).
                   Sits by the tutor it controls so it's findable without the demo
                   panel, which isn't mounted anywhere. */}

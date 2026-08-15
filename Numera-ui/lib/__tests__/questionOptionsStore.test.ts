@@ -108,6 +108,23 @@ describe('applyBackendPhase — question shape', () => {
     expect(store().questionType).toBe('SHORT_RESPONSE');
   });
 
+  it('does not reuse stale choice options for a short-response phase transition', () => {
+    store().applyBackendPhase({
+      phase: 'DIAGNOSTIC',
+      questionId: 'Q1',
+      questionText: 'What does x mean in 2x?',
+      questionType: 'CHOICE_WITH_EXPLANATION',
+    });
+    store().applyBackendPhase({
+      phase: 'GUIDED_PRACTICE',
+      questionId: 'Q1',
+      questionText: 'Write the general rule.',
+      questionType: 'SHORT_RESPONSE',
+    });
+    expect(store().questionOptions).toEqual([]);
+    expect(store().questionType).toBe('SHORT_RESPONSE');
+  });
+
   it('drops the pick when the question moves', () => {
     store().applyBackendPhase({ phase: 'GUIDED_PRACTICE', questionId: 'Q1', questionText: 'a' });
     store().setSelectedOption('B');

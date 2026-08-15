@@ -95,3 +95,30 @@ export function nextSupport(
  */
 export const LADDER_EXHAUSTED =
   "I've shown you everything I can for this one. Tell me which part is confusing and we'll work on just that.";
+
+/** Shown when the request for a hint failed rather than came back empty. */
+export const HINT_UNAVAILABLE =
+  "I couldn't fetch a hint just then. Give it another try in a moment.";
+
+/**
+ * What the hint card should say when the request threw.
+ *
+ * A hint request has two very different failure shapes and they must not read
+ * the same. Since 11 Aug 2026 the backend answers HELP_REQUEST only by
+ * replaying support it has already authorised, and returns 409 NO_ACTIVE_SUPPORT
+ * when there is none — which is not an outage, it is the ladder being empty, so
+ * it earns the same wording as an exhausted ladder. Anything else (a 500, a
+ * dropped connection) really is a failure and has to say so instead of quietly
+ * claiming the tutor has nothing more to give.
+ *
+ * Either way this returns a string: the caller's job is to never leave the card
+ * blank, because a hint card that never resolves looks identical to a frozen app.
+ */
+export function hintFailureMessage(error: unknown): string {
+  const response = (error as { response?: { status?: number; data?: unknown } })?.response;
+  if (response?.status !== 409) return HINT_UNAVAILABLE;
+  const detail = (response.data as { detail?: unknown } | undefined)?.detail;
+  return typeof detail === 'string' && detail.startsWith('NO_ACTIVE_SUPPORT')
+    ? LADDER_EXHAUSTED
+    : HINT_UNAVAILABLE;
+}

@@ -16,6 +16,7 @@ from app.models.student_model_session import (
     StudentModelSessionEvent,
     StudentModelSessionEventResponse,
 )
+from app.services.student_model_debug import record_request, record_response
 
 
 class StudentModelServiceAdapter:
@@ -48,7 +49,7 @@ class StudentModelServiceAdapter:
         event: StudentModelSessionEvent,
         access_token: str,
     ) -> StudentModelSessionEventResponse:
-        """Persist one Schema 3.0 journey event and return its full state."""
+        """Serialize one Schema 3.0 event, persist it, and validate its full state."""
 
         if self._settings.use_mock_student_model:
             raise AdapterError(
@@ -60,16 +61,24 @@ class StudentModelServiceAdapter:
                 "student_model",
                 "NABLIX_STUDENT_MODEL_URL is required for Schema 3.0 session events",
             )
+        request_body = event.model_dump(mode="json", exclude_none=True)
+        record_request(request_body)
         try:
             response = await post_json(
                 "student_model",
                 f"{self._settings.student_model_url.rstrip('/')}/session/event",
-                event.model_dump(exclude_none=True),
+                request_body,
                 {"Authorization": f"Bearer {access_token}"},
                 self._settings.adapter_request_timeout_seconds,
                 self._settings.adapter_request_retry_count,
             )
         except AdapterRequestRejected as error:
+            record_response(
+                {
+                    "status_code": error.status_code,
+                    "response_body": error.response_body,
+                }
+            )
             if error.status_code != 409:
                 raise
             try:
@@ -81,6 +90,10 @@ class StudentModelServiceAdapter:
             ) != "JOURNEY_VERSION_CONFLICT":
                 raise
             raise JourneyVersionConflict(conflict_body) from error
+        except AdapterError as error:
+            record_response({"error": str(error)})
+            raise
+        record_response(response)
         try:
             parsed = StudentModelSessionEventResponse.model_validate(response)
         except ValidationError as error:
