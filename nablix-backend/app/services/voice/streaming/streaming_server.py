@@ -741,7 +741,7 @@ async def voice_stream(
 
         if notify_frontend:
             try:
-                await ws.send_json({
+                await _send_json_if_connected(ws, {
                     "type": "tutor_audio_cancel",
                     "reason": reason,
                     "expect_new_turn": expect_new_turn,
@@ -797,7 +797,7 @@ async def voice_stream(
                     f"Flux needs these re-sent for EVERY turn, not once "
                     f"per session."
                 )
-                await ws.send_json({
+                await _send_json_if_connected(ws, {
                     "type": "error",
                     "message": "Tutor unavailable. Please try again.",
                     "fallback_mode": "TEXT",
@@ -876,13 +876,23 @@ async def voice_stream(
                     # Interim transcript. Emitted on the same wire message
                     # the frontend already handles, so no client change.
                     if transcript:
-                        await ws.send_json({
+                        # Guarded for the same reason as the Nova-3 receiver:
+                        # this runs in a background task, so an unguarded
+                        # send-after-close would escape the async for and be
+                        # swallowed by the except Exception below, killing the
+                        # receiver while the session stayed open and deaf.
+                        if not await _send_json_if_connected(ws, {
                             "type": "transcript_partial",
                             "text": transcript,
                             "confidence": round(_flux_confidence(data), 4),
                             "is_final": False,
                             "role": "student",
-                        })
+                        }):
+                            logger.info(
+                                f"[{session_id}] Client closed mid-speech - "
+                                f"stopping Flux receiver"
+                            )
+                            return
 
                 elif event == "EndOfTurn":
                     if not transcript:
@@ -895,13 +905,22 @@ async def voice_stream(
                     confidence = _flux_confidence(data)
                     eot_confidence = data.get("end_of_turn_confidence", 0.0)
 
-                    await ws.send_json({
+                    # If this fails the client is gone, so return BEFORE
+                    # spawning the turn -- there is nobody to send the tutor's
+                    # reply to, and starting it would burn a backend call and
+                    # a TTS stream on a dead socket.
+                    if not await _send_json_if_connected(ws, {
                         "type": "transcript_final",
                         "text": transcript,
                         "confidence": round(confidence, 4),
                         "is_final": True,
                         "role": "student",
-                    })
+                    }):
+                        logger.info(
+                            f"[{session_id}] Client closed before EndOfTurn "
+                            f"delivery - stopping Flux receiver, turn dropped"
+                        )
+                        return
 
                     logger.info(
                         f"[{session_id}] Flux EndOfTurn (turn {turn_index}, "
@@ -1323,7 +1342,7 @@ async def voice_stream(
                         f"({stroke_count} strokes) - snapshot latched for "
                         f"the next turn"
                     )
-                    await ws.send_json({
+                    await _send_json_if_connected(ws, {
                         "type": "status",
                         "message": "canvas_received",
                     })
