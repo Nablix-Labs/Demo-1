@@ -19,11 +19,11 @@ import {
 import PageShell, { Chip } from '@/components/PageShell';
 import PhaseGate from '@/components/PhaseGate';
 import { useNumeraStore } from '@/store/useNumeraStore';
-import { useDemoTutor } from '@/hooks/useDemoTutor';
+import { useDemoTutor, resetSessionStart } from '@/hooks/useDemoTutor';
 import { useFlowNav } from '@/lib/useFlowNav';
 import { demoFor, type DemoWorksheet } from '@/lib/demoContent';
 import { cn } from '@/lib/cn';
-import type { FiveCategorySummary, QuestionOutcome } from '@/lib/api';
+import { sessionTopicTitle, type FiveCategorySummary, type QuestionOutcome } from '@/lib/api';
 import { speakTutor, stopTutorSpeech } from '@/lib/tts';
 
 /** Real session outcomes rendered through the same worksheet layout. */
@@ -63,10 +63,12 @@ export default function ReviewPage() {
   const [i, setI] = useState(0);
   const [showMarks, setShowMarks] = useState(false);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
+  const [endFailed, setEndFailed] = useState<'empty' | 'failed' | null>(null);
 
   const completePhase = useNumeraStore((s) => s.completePhase);
   const currentTopicId = useNumeraStore((s) => s.currentTopicId);
   const sessionSummary = useNumeraStore((s) => s.sessionSummary);
+  const backendSession = useNumeraStore((s) => s.backendSession);
   const sessionReview = useNumeraStore((s) => s.sessionReview);
   const { decideReview, goStage } = useFlowNav();
   const tutor = useDemoTutor();
@@ -74,18 +76,44 @@ export default function ReviewPage() {
   // Arriving here IS the session end. Backend-driven navigation (a REVIEW
   // phase recommendation) reaches this page without the explicit End-session
   // flows, so end any live session on arrival; end() stores the summary +
-  // engine review and clears sessionId, so this runs at most once. On failure
-  // (e.g. no graded attempts yet) the page just shows its fallback content.
+  // engine review and clears sessionId, so this runs at most once.
+  //
+  // Failure used to be swallowed, which meant the un-endable-session case
+  // (backend auto-transitions to REVIEW with zero graded questions, then
+  // /session/end 409s — reported by Aditya, 7 Aug) rendered the demo
+  // worksheets as if they were the student's real results, with no way out.
+  // Now it renders the empty state below instead.
   const { apiEnabled, sessionId, end } = tutor;
   useEffect(() => {
-    if (apiEnabled && sessionId) void end().catch(() => {});
+    if (apiEnabled && sessionId) {
+      void end().catch((err: unknown) => {
+        const status = (err as { response?: { status?: number } })?.response?.status;
+        setEndFailed(status === 409 ? 'empty' : 'failed');
+      });
+    }
   }, [apiEnabled, sessionId, end]);
+
+  // Escape hatch for a session the backend refuses to end: drop it locally so
+  // a fresh one can start, and go back to the lesson to produce reviewable work.
+  const backToLesson = useCallback(() => {
+    resetSessionStart();
+    useNumeraStore.getState().clearSessionId();
+    goStage('guided', currentTopicId);
+  }, [goStage, currentTopicId]);
 
   // Real session outcomes when the backend sent them; demo worksheets otherwise.
   const demo = demoFor(currentTopicId);
   const outcomes = sessionSummary?.outcomes ?? [];
   const live = outcomes.length > 0;
   const WORKSHEETS = live ? outcomeWorksheets(outcomes) : demo.worksheets;
+
+  // Row 42: the header read "Linear equations · today" for every student,
+  // because it used the mock worksheet's label even on a real session — so a
+  // student who had spent the lesson on "What Is Algebra?" was told otherwise.
+  // The demo label is correct for demo worksheets and wrong for anything else;
+  // when the session is real and unnamed, say only when it happened.
+  const topicLabel = live ? sessionTopicTitle(backendSession) : demo.label;
+  const subtitle = [topicLabel, 'today'].filter(Boolean).join(' · ');
 
   const total = WORKSHEETS.length;
   const done = i >= total;                 // past the last sheet → final summary
@@ -118,11 +146,38 @@ export default function ReviewPage() {
 
   const goto = (next: number) => { stop(); setShowMarks(false); setI(next); };
 
+  // The session couldn't be ended and nothing was graded — showing the demo
+  // worksheets here would present fake results as the student's own.
+  if (apiEnabled && endFailed && !sessionSummary) {
+    return (
+      <PhaseGate phase="review">
+        <PageShell title="Review & feedback" subtitle={subtitle}>
+          <div className="rounded-lg border border-muted-gray bg-white px-6 py-8 flex flex-col items-start gap-3">
+            <div className="text-[11px] font-semibold tracking-widest uppercase text-slate-blue">
+              {endFailed === 'empty' ? 'Nothing to review yet' : 'Review unavailable'}
+            </div>
+            <p className="text-[14px] text-ink leading-relaxed max-w-prose">
+              {endFailed === 'empty'
+                ? 'This session ended before any questions were completed, so there is no work to look back over. Head back to the lesson and solve a question or two — the review will be waiting.'
+                : 'Your session review could not be loaded. Head back to the lesson and try again in a moment.'}
+            </p>
+            <button
+              onClick={backToLesson}
+              className="mt-2 inline-flex items-center gap-1.5 rounded-md bg-focus-navy text-white px-5 py-2.5 text-[13px] font-semibold hover:opacity-80 transition-opacity"
+            >
+              Back to the lesson <ChevronRight size={15} strokeWidth={1.8} />
+            </button>
+          </div>
+        </PageShell>
+      </PhaseGate>
+    );
+  }
+
   return (
     <PhaseGate phase="review">
     <PageShell
       title="Review & feedback"
-      subtitle={`${demo.label} · today`}
+      subtitle={subtitle}
       action={<Chip tone="solid">{score} / {total}</Chip>}
     >
       <div className="flex flex-col gap-6">

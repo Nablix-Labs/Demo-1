@@ -295,8 +295,14 @@ export function hasAccountConsents(consents: Record<ConsentPurpose, ConsentRecor
 
 /** Is a single consent purpose currently active? */
 export function isConsentActive(consents: Record<ConsentPurpose, ConsentRecord>, purpose: ConsentPurpose): boolean {
-  const r = consents[purpose];
-  return Boolean(r.acceptedAt && !r.withdrawnAt);
+  // Optional chaining because a MISSING record is not a type error at runtime:
+  // an auth state persisted before a purpose existed, or a partial set from the
+  // backend, has no entry for it. Reading `.acceptedAt` off that undefined threw
+  // during render of CanvasStage, which white-screened the whole lesson with
+  // "Application error: a client-side exception has occurred" — a consent the
+  // student has not granted must read as not-granted, not as a crash.
+  const r = consents[purpose] as ConsentRecord | undefined;
+  return Boolean(r?.acceptedAt && !r.withdrawnAt);
 }
 
 export type AccessOutcome =

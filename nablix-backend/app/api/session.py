@@ -7,11 +7,13 @@ from app.ai_engine.session_review import (
     generate_session_review,
 )
 from app.api.auth import AccessToken
-from app.models.fields import SessionId
+from app.models.fields import SessionId, StudentId
 from app.models.session import (
     DiagnosticCompleteRequest,
     OrientationCompletionRequest,
     OrientationPhaseRequest,
+    ReviewCompleteRequest,
+    SessionResumeRequest,
     SessionEndRequest,
     SessionRecord,
     SessionResponse,
@@ -21,8 +23,10 @@ from app.models.session_review import SessionReviewRequest, SessionReviewRespons
 from app.services.session_service import (
     complete_diagnostic,
     complete_orientation,
+    complete_review,
     end_session,
     get_session,
+    resume_session,
     start_orientation,
     start_session,
 )
@@ -66,8 +70,30 @@ async def complete_orientation_endpoint(
 
 
 @router.get("/{session_id}", response_model=SessionResponse)
-async def get_session_endpoint(session_id: SessionId) -> SessionRecord:
-    return await get_session(session_id)
+async def get_session_endpoint(
+    session_id: SessionId,
+    student_id: StudentId,
+    access_token: AccessToken,
+) -> SessionRecord:
+    return await get_session(session_id, student_id)
+
+
+@router.post("/{session_id}/resume", response_model=SessionResponse)
+async def resume_session_endpoint(
+    session_id: SessionId,
+    request: SessionResumeRequest,
+    access_token: AccessToken,
+) -> SessionRecord:
+    return await resume_session(session_id, request, access_token)
+
+
+@router.post("/{session_id}/review/complete", response_model=SessionResponse)
+async def complete_review_endpoint(
+    session_id: SessionId,
+    request: ReviewCompleteRequest,
+    access_token: AccessToken,
+) -> SessionRecord:
+    return await complete_review(session_id, request, access_token)
 
 
 @router.post("/end", response_model=SessionResponse)

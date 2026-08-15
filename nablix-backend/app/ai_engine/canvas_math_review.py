@@ -22,6 +22,7 @@ from app.ai_engine.schemas import (
     HighlightInstruction,
     LearningPhase,
 )
+from app.models.adapters import SpatialMathToken
 
 
 _EQUATION_GRAMMAR = r"""
@@ -97,6 +98,7 @@ def review_canvas_math(
     correct_answer: str,
     current_phase: LearningPhase,
     canvas_regions: list[CanvasTextRegion],
+    spatial_tokens: list[SpatialMathToken],
     config: CanvasReviewConfig,
     confidence: float,
 ) -> CanvasMathReview:
@@ -132,7 +134,15 @@ def review_canvas_math(
             config.max_expression_characters,
         )
     except CanvasMathParseError:
-        return uncertain
+        direct_review: CanvasMathReview | None = _review_direct_expression(
+            correct_answer,
+            current_phase,
+            canvas_regions,
+            spatial_tokens,
+            config,
+            confidence,
+        )
+        return direct_review if direct_review is not None else uncertain
 
     previous_equation: Equality = original_equation
     previous_solutions: Set = expected_solutions
@@ -151,6 +161,7 @@ def review_canvas_math(
                 correct_answer=correct_answer,
                 current_phase=current_phase,
                 canvas_regions=canvas_regions,
+                spatial_tokens=spatial_tokens,
                 config=config,
                 confidence=confidence,
             )
@@ -170,6 +181,141 @@ def review_canvas_math(
             confidence=confidence,
         ),
         annotation_intents=[],
+    )
+
+
+def _review_direct_expression(
+    correct_answer: str,
+    current_phase: LearningPhase,
+    canvas_regions: list[CanvasTextRegion],
+    spatial_tokens: list[SpatialMathToken],
+    config: CanvasReviewConfig,
+    confidence: float,
+) -> CanvasMathReview | None:
+    """Correct one grounded token when it alone differs from the expected expression."""
+
+    if len(canvas_regions) != 1 or current_phase not in config.annotation_enabled_phases:
+        return None
+    region: CanvasTextRegion = canvas_regions[0]
+    step_id: str = region.step_id or "step-1"
+    tokens: list[SpatialMathToken] = [
+        token
+        for token in spatial_tokens
+        if token.step_id == step_id
+    ]
+    actual: str = "".join(_normalise_token_text(token.text) for token in tokens)
+    expected: str = _normalise_token_text(correct_answer)
+    if actual == "" or expected == "" or actual != _normalise_token_text(region.text):
+        return None
+    if actual == expected:
+        return CanvasMathReview(
+            error_type=None,
+            tutor_feedback=None,
+            canvas_feedback=CanvasFeedback(
+                has_feedback=False,
+                step_feedback=[],
+                highlight_instruction=None,
+            ),
+            mistake_classification=CanvasMistakeClassification(
+                status="no_mistake",
+                mistake_step_id=None,
+                target_text=None,
+                target_span=None,
+                replacement_text=None,
+                confidence=confidence,
+            ),
+            annotation_intents=[],
+        )
+
+    candidates: list[tuple[SpatialMathToken, str]] = []
+    offset: int = 0
+    for token in tokens:
+        token_text: str = _normalise_token_text(token.text)
+        prefix: str = actual[:offset]
+        suffix: str = actual[offset + len(token_text) :]
+        if expected.startswith(prefix) and expected.endswith(suffix):
+            replacement_end: int = len(expected) - len(suffix) if suffix else len(expected)
+            replacement: str = expected[len(prefix) : replacement_end]
+            if (
+                replacement != ""
+                and replacement != token_text
+                and token.alignment_confidence >= 0.9
+            ):
+                candidates.append((token, replacement))
+        offset += len(token_text)
+    if len(candidates) != 1:
+        classification = CanvasMistakeClassification(
+            status="mistake_found",
+            mistake_step_id=step_id,
+            target_token_ids=[],
+            error_token=None,
+            expected_token=None,
+            target_text=region.text,
+            target_span=None,
+            replacement_text=None,
+            confidence=confidence,
+        )
+        intent = CanvasAnnotationIntent(
+            kind="circle_target",
+            target_step_id=step_id,
+            text=None,
+            placement=None,
+        )
+        return CanvasMathReview(
+            error_type="CONCEPTUAL_MISUNDERSTANDING",
+            tutor_feedback=None,
+            canvas_feedback=CanvasFeedback(
+                has_feedback=False,
+                step_feedback=[],
+                highlight_instruction=None,
+            ),
+            mistake_classification=classification,
+            annotation_intents=[intent],
+        )
+
+    target, replacement = candidates[0]
+    classification = CanvasMistakeClassification(
+        status="mistake_found",
+        mistake_step_id=step_id,
+        target_token_ids=[target.token_id],
+        error_token=target.text,
+        expected_token=replacement,
+        target_text=target.text,
+        target_span=None,
+        replacement_text=replacement,
+        confidence=confidence,
+    )
+    intents: list[CanvasAnnotationIntent] = [
+        CanvasAnnotationIntent(
+            kind="circle_target",
+            target_step_id=step_id,
+            text=None,
+            placement=None,
+        ),
+        CanvasAnnotationIntent(
+            kind="write_correction",
+            target_step_id=step_id,
+            text=replacement,
+            placement="right",
+        ),
+        CanvasAnnotationIntent(
+            kind="draw_arrow",
+            target_step_id=step_id,
+            text=None,
+            placement=None,
+        ),
+    ]
+    message: str = config.messages.CONCEPTUAL_MISUNDERSTANDING
+    return CanvasMathReview(
+        error_type="CONCEPTUAL_MISUNDERSTANDING",
+        tutor_feedback=(message if current_phase in config.feedback_enabled_phases else None),
+        canvas_feedback=(
+            _mistake_step_feedback(0, canvas_regions, "CONCEPTUAL_MISUNDERSTANDING", message, config)
+            if current_phase in config.feedback_enabled_phases
+            else CanvasFeedback(has_feedback=False, step_feedback=[], highlight_instruction=None)
+        ),
+        mistake_classification=classification,
+        annotation_intents=intents,
     )
 
 
@@ -293,6 +439,7 @@ def _mistake_review(
     correct_answer: str,
     current_phase: LearningPhase,
     canvas_regions: list[CanvasTextRegion],
+    spatial_tokens: list[SpatialMathToken],
     config: CanvasReviewConfig,
     confidence: float,
 ) -> CanvasMathReview:
@@ -319,10 +466,21 @@ def _mistake_review(
             replacement_text = None
 
     step_id: str = region.step_id or f"step-{index + 1}"
+    error_token: str | None = (
+        region.text[target_span[0] : target_span[1]] if target_span is not None else None
+    )
+    target_token_ids: list[str] = _target_token_ids(
+        step_id=step_id,
+        error_token=error_token,
+        spatial_tokens=spatial_tokens,
+    )
     classification: CanvasMistakeClassification = CanvasMistakeClassification(
         status="mistake_found",
         mistake_step_id=step_id,
-        target_text=(region.text[target_span[0] : target_span[1]] if target_span is not None else region.text),
+        target_token_ids=target_token_ids,
+        error_token=error_token if len(target_token_ids) > 0 else None,
+        expected_token=replacement_text if len(target_token_ids) > 0 else None,
+        target_text=error_token or region.text,
         target_span=list(target_span) if target_span is not None else None,
         replacement_text=replacement_text,
         confidence=confidence,
@@ -344,6 +502,42 @@ def _mistake_review(
             else []
         ),
     )
+
+
+def _target_token_ids(
+    step_id: str,
+    error_token: str | None,
+    spatial_tokens: list[SpatialMathToken],
+) -> list[str]:
+    """Return consecutive, high-confidence OCR tokens matching the corrected text."""
+
+    if error_token is None:
+        return []
+
+    expected_text: str = _normalise_token_text(error_token)
+    if expected_text == "":
+        return []
+
+    step_tokens: list[SpatialMathToken] = [
+        token
+        for token in spatial_tokens
+        if token.step_id == step_id and token.alignment_confidence >= 0.9
+    ]
+    for start_index, _token in enumerate(step_tokens):
+        assembled_text: str = ""
+        matching_ids: list[str] = []
+        for token in step_tokens[start_index:]:
+            assembled_text += _normalise_token_text(token.text)
+            matching_ids.append(token.token_id)
+            if assembled_text == expected_text:
+                return matching_ids
+            if expected_text.startswith(assembled_text) is False:
+                break
+    return []
+
+
+def _normalise_token_text(value: str) -> str:
+    return "".join(normalize_canvas_math_text(value).split())
 
 
 def _classify_transition(

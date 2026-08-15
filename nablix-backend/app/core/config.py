@@ -9,10 +9,10 @@ class Settings(BaseSettings):
     app_version: str = "1.0.0"
 
     # External service URLs
-    tutor_engine_url: str = "http://localhost:8001"
     voice_service_url: str = "http://localhost:8004" #chiru+aditya
     safety_service_url: str = "http://localhost:8004" #manjusha
     student_model_url: str = ""
+    database_url: str = Field(default="", validation_alias="DATABASE_URL")
     student_model_topic_ids: dict[str, int] = Field(default_factory=dict)
     student_model_topic_codes: dict[str, str] = Field(default_factory=dict)
     cors_allowed_origins: list[str] = [
@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     use_mock_student_model: bool = False
     use_mock_voice: bool = True
     use_mock_vision: bool = True
+    # Dev-only: attach raw Student Model exchanges to interaction responses.
+    # ISOLATED TESTER DEPLOYMENTS ONLY. Raw responses carry
+    # phase_payload.question_set.questions[].tutor_view.answer_spec.canonical_answer,
+    # so enabling this where real students can reach the API hands them the answers.
+    debug_json_view: bool = False
     # Keep disabled until the deployed Student Model supports the dedicated
     # Wrong-4 and repeated-STUCK events. The legacy event path remains active.
     student_model_atomic_guided_events_enabled: bool = False

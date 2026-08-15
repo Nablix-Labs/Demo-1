@@ -5,11 +5,11 @@ from pathlib import Path
 from typing import Annotated
 
 import yaml
-from pydantic import Field, model_validator
+from pydantic import Field, StrictBool, model_validator
 
 from app.ai_engine.schemas import ErrorType, IntentType, LearningPhase, ResponseStrategy, StrictSchema, VisualCueType
 from app.models.guided_learning import GuidedStudentState
-from app.models.student_model_session import QuestionType
+from app.models.student_model_session import QuestionType, SupportUsed
 
 
 CONFIG_PATH: Path = Path("configs/classifier_rules.yaml")
@@ -117,6 +117,13 @@ class ReasoningCompletionConfig(StrictSchema):
     explanation_accepted_message: str
 
 
+class IndependentPracticeConfig(StrictSchema):
+    answer_recorded_message: str
+    rescue_required_message: str
+    awaiting_submission_message: str
+    input_unclear_message: str
+
+
 class CanvasReviewMessagesConfig(StrictSchema):
     ARITHMETIC_ERROR: str
     SIGN_ERROR: str
@@ -165,7 +172,24 @@ class GuidedStateMappingConfig(StrictSchema):
     strategy: str | None
 
 
+class CanvasPedagogyPlannerConfig(StrictSchema):
+    action_reference_phrases: dict[str, list[str]]
+    safe_action_free_question: str
+
+
+class HybridPromptConfig(StrictSchema):
+    semantic_prompt: str
+    wording_prompt: str
+
+
 class GuidedLearningConfig(StrictSchema):
+    v1_hybrid_enabled: StrictBool
+    minimum_voice_transcript_confidence: float = Field(ge=0.0, le=1.0)
+    minimum_ocr_confidence: float = Field(ge=0.0, le=1.0)
+    canvas_pedagogy_action_planner_enabled: StrictBool
+    hybrid_support_ladder: list[SupportUsed]
+    canvas_pedagogy_planner: CanvasPedagogyPlannerConfig
+    hybrid_prompts: HybridPromptConfig
     evaluation_mode: str
     confidence_threshold: float = Field(ge=0.0, le=1.0)
     state_confidence_thresholds: dict[
@@ -177,9 +201,12 @@ class GuidedLearningConfig(StrictSchema):
     maximum_recent_history_turns: int = Field(ge=0)
     rubric_prompt_version: str
     evaluator_prompt_version: str
+    component_adjudicator_prompt_version: str
     explain_again_prompt_version: str
     rubric_system_prompt: str
     evaluator_system_prompt: str
+    component_adjudicator_system_prompt: str
+    component_adjudicator_confidence_threshold: float = Field(ge=0.0, le=1.0)
     explain_again_system_prompt: str
     scaffold_evaluator_system_prompt: str
     answer_reveal_retry_feedback: str
@@ -220,6 +247,7 @@ class ClassifierRulesConfig(StrictSchema):
     progressive_hint_messages: dict[ErrorType, list[str]]
     messages: MessageConfig
     guided_learning: GuidedLearningConfig
+    independent_practice: IndependentPracticeConfig
 
 
 @lru_cache(maxsize=1)

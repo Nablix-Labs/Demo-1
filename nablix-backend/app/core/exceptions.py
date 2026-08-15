@@ -78,5 +78,12 @@ class JourneyVersionConflict(HTTPException):
     """The Student Model rejected a stale journey write."""
 
     def __init__(self, detail: object) -> None:
-        super().__init__(status_code=409, detail=str(detail))
+        super().__init__(
+            status_code=409,
+            detail=(
+                "Your learning progress changed while this answer was being "
+                "checked. Please submit it once more."
+            ),
+        )
         self.error_code = "JOURNEY_VERSION_CONFLICT"
+        self.conflict_detail = detail

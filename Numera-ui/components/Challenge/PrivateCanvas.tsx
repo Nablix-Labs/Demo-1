@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import { Lock } from 'lucide-react';
-import { useNumeraStore } from '@/store/useNumeraStore';
+import { useNumeraStore, type CanvasExporter } from '@/store/useNumeraStore';
 import Toolbar from '@/components/Canvas/Toolbar';
 
 const DrawingCanvas = dynamic(() => import('@/components/Canvas/DrawingCanvas'), { ssr: false });
@@ -19,9 +19,9 @@ export default function PrivateCanvas() {
   const reviewStatus = useNumeraStore((s) => s.reviewStatus);
   const setReviewStatus = useNumeraStore((s) => s.setReviewStatus);
   const setCanvasExporter = useNumeraStore((s) => s.setCanvasExporter);
-  const exportRef = useRef<(() => string | null) | null>(null);
+  const exportRef = useRef<CanvasExporter | null>(null);
 
-  const handleExportReady = useCallback((fn: () => string | null) => {
+  const handleExportReady = useCallback((fn: CanvasExporter) => {
     exportRef.current = fn;
     setCanvasExporter(fn);
   }, [setCanvasExporter]);

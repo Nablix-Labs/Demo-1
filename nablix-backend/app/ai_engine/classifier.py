@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import Field
 
 from app.ai_engine.canvas_math_review import review_canvas_math
 from app.ai_engine.classifier_config import ClassifierRulesConfig, load_classifier_rules
-from app.ai_engine.prompt_registry import Trigger
+from app.ai_engine.prompt_registry import Trigger, get_phase_block
 from app.ai_engine.schemas import (
     CanvasAnnotationIntent,
     CanvasFeedback,
@@ -27,6 +29,8 @@ from app.ai_engine.schemas import (
     IntentType,
     LearningEventType,
     LearningPhase,
+    IndependentOutcome,
+    Phase3ReviewEvidence,
     ResponseStrategy,
     SafetyCheck,
     StrictSchema,
@@ -42,16 +46,43 @@ from app.models.adapters import (
     ConversationMessage,
     ConversationState,
     Phase2PromptContext,
+    SpatialMathToken,
 )
+from app.models.canvas_memory import CanvasEvent
 from app.models.guided_learning import (
     ActiveTeachingObjective,
+    FocusedComponentEvidence,
+    GeneratedConcept,
     GeneratedQuestionRubric,
     GuidedEvaluation,
+    HybridEvidenceResolution,
+    HybridCanvasPlannerRequest,
+    HybridPedagogyDecision,
+    HybridPedagogicalState,
+    HybridAuthoredSupportContent,
+    HybridSupportState,
+    CanvasPedagogyAction,
+    CanvasActionLayer,
+    CanvasActionType,
+    CanvasSemanticTag,
+    OrderedCanvasMemoryItem,
+    HybridStudentEvidence,
+    HybridTutorRequest,
+    HybridTutorResponse,
+    HybridSemanticEvaluation,
+    HybridTutorTurn,
+    GuidedPromptType,
     GuidedStudentState,
+    GuidedTeachingState,
+    GuidedTeachingPlanStep,
+    GuidedTutorContext,
     ScaffoldEvaluationContext,
     ScaffoldStepEvaluation,
+    authored_hybrid_answer_steps,
+    current_hybrid_answer_step_id,
+    validate_hybrid_tutor_progression as validate_hybrid_tutor_progression_contract,
 )
-from app.models.student_model_session import AnswerSpec, QuestionType
+from app.models.student_model_session import AnswerSpec, QuestionType, SupportUsed
 
 if TYPE_CHECKING:
     from app.ai_engine.openai_client import (
@@ -82,11 +113,20 @@ class ClassificationRequest(StrictSchema):
     max_hint_results: int = Field(default=3, ge=1)
     exclude_content_ids: list[str] = Field(default_factory=list)
     canvas_regions: list[CanvasTextRegion] = Field(default_factory=list)
+    canvas_mathml_blocks: list[str] = Field(default_factory=list)
+    spatial_tokens: list[SpatialMathToken] = Field(default_factory=list)
+    canvas_events: list[CanvasEvent] = Field(default_factory=list)
+    has_canvas_evidence: bool = False
+    canvas_solution_complete_candidate: bool = False
     conversation_history: list[ConversationMessage] = Field(default_factory=list)
     conversation_state: ConversationState | None = None
     generated_question_rubric: GeneratedQuestionRubric | None = None
     active_teaching_objective: ActiveTeachingObjective | None = None
+    guided_teaching_state: GuidedTeachingState | None = None
     scaffold_evaluation_context: ScaffoldEvaluationContext | None = None
+    phase3_submission_confirmed: bool | None = None
+    phase3_submission_kind: str | None = None
+    phase3_allowed_error_definitions: list[dict[str, object]] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -106,6 +146,12 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
     openai_client: OpenAIAIEngineClient | None = build_openai_ai_engine_client(settings)
     safety_check: SafetyCheck = check_student_message_safety(request.student_input, rules)
     intent: IntentType = detect_student_intent(request.student_input, rules)
+
+    if (
+        request.current_phase == "INDEPENDENT_PRACTICE"
+        and request.phase3_submission_confirmed is not None
+    ):
+        return classify_independent_practice_response(request, rules, safety_check, intent)
 
     if safety_check.passed is False:
         safety_decision = TutorDecision(
@@ -358,7 +404,7 @@ def classify_scaffold_response(
         error_type=None if satisfied else "INSUFFICIENT_INFORMATION",
         response_strategy="CONFIRM_CORRECT" if satisfied else "CLARIFY",
         hint_level=None,
-        canvas_review=None,
+        canvas_review=_canvas_review_for(request, rules, result.confidence),
         reasoning_complete=satisfied,
     )
     response = build_tutor_response(
@@ -375,6 +421,105 @@ def classify_scaffold_response(
         update={
             "scaffold_original_answer_correct": original_answer_correct,
         }
+    )
+
+
+def classify_independent_practice_response(
+    request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
+    safety_check: SafetyCheck,
+    intent: IntentType,
+) -> TutorResponse:
+    """Evaluate a final independent submission without generating tutoring."""
+
+    submitted = request.phase3_submission_confirmed is True
+    kind = request.phase3_submission_kind
+    canvas_unclear = (
+        kind == "CANVAS"
+        and (
+            request.has_canvas_evidence is False
+            or any(
+                region.confidence < rules.canvas_review.min_region_confidence
+                for region in request.canvas_regions
+            )
+        )
+    )
+    evaluation = evaluate_answer_attempt(request, intent, rules) if submitted else None
+    if not submitted or kind not in {"CANVAS", "CHOICE"}:
+        outcome: IndependentOutcome = "AWAITING_SUBMISSION"
+    elif canvas_unclear or evaluation in {"UNCLEAR", "NO_ATTEMPT", None}:
+        outcome = "INPUT_UNCLEAR" if kind == "CANVAS" else "AWAITING_SUBMISSION"
+    elif evaluation == "CORRECT":
+        outcome = "INDEPENDENTLY_VERIFIED"
+    else:
+        outcome = "RESCUE_REQUIRED"
+    terminal = outcome in {"INDEPENDENTLY_VERIFIED", "RESCUE_REQUIRED"}
+    response_evaluation: EvaluationCategory | None = (
+        "CORRECT" if outcome == "INDEPENDENTLY_VERIFIED"
+        else "INCORRECT" if outcome == "RESCUE_REQUIRED"
+        else "UNCLEAR" if outcome == "INPUT_UNCLEAR"
+        else None
+    )
+    message = (
+        rules.independent_practice.answer_recorded_message
+        if outcome == "INDEPENDENTLY_VERIFIED"
+        else rules.independent_practice.rescue_required_message
+        if outcome == "RESCUE_REQUIRED"
+        else rules.independent_practice.input_unclear_message
+        if outcome == "INPUT_UNCLEAR"
+        else rules.independent_practice.awaiting_submission_message
+    )
+    first_error_step = (
+        request.canvas_regions[0].step_id
+        if outcome == "RESCUE_REQUIRED" and kind == "CANVAS" and request.canvas_regions
+        else None
+    )
+    generic_error = (
+        classify_student_error(request, response_evaluation, rules)
+        if outcome == "RESCUE_REQUIRED"
+        else None
+    )
+    return TutorResponse(
+        evaluation=response_evaluation,
+        error_type=generic_error,
+        intent="SUBMITTING_ANSWER" if submitted else intent,
+        response_strategy="CONFIRM_CORRECT" if outcome == "INDEPENDENTLY_VERIFIED" else "CLARIFY",
+        tutor_message=message,
+        tutor_message_voice_optimised="",
+        voice_optimised=True,
+        hint_level=None,
+        scaffold_steps_delivered=[],
+        visual_cue=VisualCue(show=False, cue_type=None, description=None),
+        canvas_feedback=CanvasFeedback(has_feedback=False, step_feedback=[], highlight_instruction=None),
+        mistake_classification=None,
+        annotation_intents=[],
+        next_phase_recommendation=request.current_phase,
+        answer_reveal_allowed=False,
+        confidence=rules.confidence.standard_response,
+        input_source=request.input_source,
+        transcript_confidence=request.transcript_confidence,
+        safety_check=safety_check,
+        guardrail_check=GuardrailCheck(passed=True, violation_type=None, action_taken=None),
+        student_model_events=[],
+        attempt_increment=1 if terminal else 0,
+        recommended_conversation_action="ADVANCE_TO_NEXT_QUESTION" if terminal else "WAIT_FOR_STUDENT",
+        question_completed=terminal,
+        answer_value_confirmed=outcome == "INDEPENDENTLY_VERIFIED",
+        reasoning_complete=terminal,
+        independent_outcome=outcome,
+        independent_success=(outcome == "INDEPENDENTLY_VERIFIED") if terminal else None,
+        independent_attempt_terminal=terminal,
+        first_error_step=first_error_step,
+        phase3_review_evidence=Phase3ReviewEvidence(
+            question_id=request.question_id or "",
+            submission_kind=kind if kind in {"CANVAS", "CHOICE"} else None,
+            submitted_work_present=bool(request.student_input.strip()),
+            ocr_clear=(not canvas_unclear) if kind == "CANVAS" else None,
+            evaluation=response_evaluation,
+            selected_error_code=None,
+            first_error_step=first_error_step,
+            confidence=rules.confidence.standard_response,
+        ),
     )
 
 
@@ -398,6 +543,8 @@ def should_use_guided_state_machine(
         return False
     if request.answer_spec is None or request.question_id is None:
         return False
+    if teaching_steps_for(request):
+        return True
     if (
         deterministic_evaluation == "CORRECT"
         and evaluate_answer_contract(request) == "CORRECT"
@@ -426,6 +573,35 @@ def resolve_guided_rubric(
     """Return the persisted runtime rubric or generate it once from existing content."""
 
     rubric = existing_rubric
+    if rubric is not None and rubric.question_id == question_id:
+        try:
+            validate_generated_rubric(
+                rubric,
+                question_id,
+                question_type,
+                answer_spec,
+                rules,
+            )
+            return rubric
+        except AdapterError as error:
+            logger.warning(
+                "guided_persisted_rubric_replaced",
+                extra={
+                    "question_id": question_id,
+                    "detail": error.detail,
+                },
+            )
+            rubric = None
+
+    authored_rubric = rubric_from_authored_answer_parts(
+        question_id,
+        question_type,
+        answer_spec,
+        rules.guided_learning.rubric_prompt_version,
+    )
+    if authored_rubric is not None:
+        return authored_rubric
+
     if rubric is None or rubric.question_id != question_id:
         rubric_error: AdapterError | None = None
         for attempt in range(rules.guided_learning.maximum_retries + 1):
@@ -473,6 +649,794 @@ def resolve_guided_rubric(
     return rubric
 
 
+def rubric_from_authored_answer_parts(
+    question_id: str,
+    question_type: QuestionType | None,
+    answer_spec: AnswerSpec,
+    prompt_version: str,
+) -> GeneratedQuestionRubric | None:
+    """Build stable multipart components from the existing authored contract."""
+
+    explanation_components: dict[
+        QuestionType,
+        tuple[tuple[str, str], tuple[str, str]],
+    ] = {
+        "CHOICE_WITH_EXPLANATION": (
+            ("ANSWER_SELECTION", "Selects the correct option or answer value."),
+            (
+                "ANSWER_EXPLANATION",
+                "Explains why the selected answer satisfies the question.",
+            ),
+        ),
+        "TRUE_FALSE_WITH_EXPLANATION": (
+            ("ANSWER_SELECTION", "States the correct true-or-false judgement."),
+            (
+                "ANSWER_EXPLANATION",
+                "Explains why the stated judgement satisfies the question.",
+            ),
+        ),
+    }
+    explanation_parts = explanation_components.get(question_type)
+    if explanation_parts is not None:
+        cache_source = json.dumps(
+            {
+                "question_id": question_id,
+                "question_type": question_type,
+                "answer_spec_id": answer_spec.answer_spec_id,
+                "prompt_version": prompt_version,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        return GeneratedQuestionRubric(
+            question_id=question_id,
+            required_concepts=[
+                GeneratedConcept(
+                    concept_id=component_id,
+                    description=description,
+                    required=True,
+                )
+                for component_id, description in explanation_parts
+            ],
+            completion_rule="ALL_REQUIRED_CONCEPTS",
+            cache_key=hashlib.sha256(cache_source.encode("utf-8")).hexdigest(),
+            prompt_version=prompt_version,
+        )
+
+    if question_type != "MULTI_PART_SHORT_RESPONSE":
+        return None
+    answer_parts = [
+        part.strip()
+        for part in answer_spec.canonical_answer.split(";")
+        if part.strip()
+    ]
+    if len(answer_parts) < 2:
+        return None
+    cache_source = json.dumps(
+        {
+            "question_id": question_id,
+            "answer_parts": answer_parts,
+            "prompt_version": prompt_version,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return GeneratedQuestionRubric(
+        question_id=question_id,
+        required_concepts=[
+            GeneratedConcept(
+                concept_id=f"REQUIRED_COMPONENT_{index}",
+                description=answer_part,
+                required=True,
+            )
+            for index, answer_part in enumerate(answer_parts, start=1)
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key=hashlib.sha256(cache_source.encode("utf-8")).hexdigest(),
+        prompt_version=prompt_version,
+    )
+
+
+def objective_for_rubric(
+    objective: ActiveTeachingObjective | None,
+    rubric: GeneratedQuestionRubric,
+) -> ActiveTeachingObjective:
+    """Keep persisted evidence only when it belongs to the current rubric."""
+
+    if objective is None:
+        return initial_guided_objective(rubric)
+    required_ids = {
+        concept.concept_id
+        for concept in rubric.required_concepts
+        if concept.required
+    }
+    objective_ids = {
+        *objective.confirmed_concept_ids,
+        *objective.missing_concept_ids,
+    }
+    if objective_ids != required_ids:
+        return initial_guided_objective(rubric)
+    return objective
+
+
+def focused_unresolved_prompt(
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+    default_message: str,
+) -> str:
+    """Ask for the first missing requirement without disclosing its answer."""
+
+    missing_ids = set(objective.missing_concept_ids)
+    missing_component = next(
+        (
+            component
+            for component in rubric.required_concepts
+            if component.required and component.concept_id in missing_ids
+        ),
+        None,
+    )
+    if missing_component is None:
+        return default_message
+    component_kind = (
+        f"{missing_component.concept_id} {missing_component.description}"
+    ).casefold()
+    if any(term in component_kind for term in ("explanation", "explain", "reason", "why")):
+        return "You have given the answer. Now explain why it is true in this situation."
+    if any(term in component_kind for term in ("changing", "changes", "variable")):
+        return "Which value can change from one example to another?"
+    if any(term in component_kind for term in ("fixed", "increment", "constant")):
+        return "What operation or amount stays fixed?"
+    if any(term in component_kind for term in ("general_rule", "general rule", "expression")):
+        return "What general rule represents this situation?"
+    if re.search(
+        r"\b[a-z]\s*(?:[+\-*/]|add|subtract|multiply|divide)\s*\d+\b",
+        component_kind,
+    ):
+        return "What general rule represents this situation?"
+    if any(term in component_kind for term in ("expanded", "repeated", "adjacent")):
+        return "What do the letters represent when the expression is expanded?"
+    if any(term in component_kind for term in ("choice", "selection", "option")):
+        return "Which option do you choose?"
+    return "State the remaining idea in your own words."
+
+
+def active_component_id(
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective | None,
+) -> str | None:
+    """Return the first authored unresolved component in its authored order."""
+
+    if objective is None:
+        return None
+    missing_ids = set(objective.missing_concept_ids)
+    return next(
+        (
+            component.concept_id
+            for component in rubric.required_concepts
+            if component.required and component.concept_id in missing_ids
+        ),
+        None,
+    )
+
+
+def prompt_type_for_message(message: str) -> GuidedPromptType:
+    """Classify only controller-owned prompts; prose is not state."""
+
+    normalized = message.casefold()
+    if "can one fixed starting number describe every possible case" in normalized:
+        return "OPTION_COMPARISON"
+    if normalized.startswith("check the example") or normalized.startswith(
+        "check the last example"
+    ):
+        return "SOURCE_CORRECTION"
+    return "COMPONENT"
+
+
+@dataclass(frozen=True)
+class TeachingStep:
+    """One deterministic question in a guided algebra conversation."""
+
+    step_id: str
+    prompt: str
+
+
+def _expression_parts(text: str) -> tuple[str, str, str] | None:
+    match = re.search(r"\b([a-z])\s*([+\-×x*])\s*(\d+)\b", text.casefold())
+    if match is None:
+        return None
+    return match.group(1), match.group(2), match.group(3)
+
+
+def teaching_steps_for(request: ClassificationRequest) -> list[TeachingStep]:
+    """Build a small, predictable plan from the authored question contract."""
+
+    answer_text = request.answer_spec.canonical_answer if request.answer_spec else ""
+    if (
+        _expression_parts(answer_text) or _expression_parts(request.question)
+    ) is None:
+        return []
+    question = request.question.casefold()
+    changing_prompt = "Which part can take different possible values?"
+    fixed_prompt = "Which value stays fixed in this rule?"
+    operation_prompt = "What operation does the sign tell us to use?"
+    rule_prompt = "What general rule represents this situation?"
+    if all(term in question for term in ("changing", "fixed", "operation")):
+        return [
+            TeachingStep("CHANGING_VALUE", changing_prompt),
+            TeachingStep("FIXED_VALUE", fixed_prompt),
+            TeachingStep("OPERATION", operation_prompt),
+        ]
+    if "general rule" in question and (
+        "changing" in question or "changes" in question
+    ):
+        return [
+            TeachingStep("GENERAL_RULE", rule_prompt),
+            TeachingStep("CHANGING_VALUE", changing_prompt),
+            TeachingStep("FIXED_VALUE", "What operation or amount stays fixed?"),
+        ]
+    if any(
+        phrase in question
+        for phrase in ("general rule", "new-score rule", "new score rule", "write the rule")
+    ):
+        return [TeachingStep("GENERAL_RULE", rule_prompt)]
+    return []
+
+
+def teaching_step_from_message(message: str, steps: list[TeachingStep]) -> str | None:
+    """Recover the exact pending step from a controller-owned prompt."""
+
+    normalized = message.casefold()
+    for step in steps:
+        if step.prompt.casefold() in normalized:
+            return step.step_id
+    if "replace the changing starting number with a letter" in normalized:
+        return "GENERAL_RULE"
+    return None
+
+
+def active_teaching_step(request: ClassificationRequest) -> TeachingStep | None:
+    """Return the persisted step, or initialise it from the question once."""
+
+    steps = teaching_steps_for(request)
+    if not steps:
+        return None
+    persisted = request.guided_teaching_state
+    if persisted is not None and persisted.question_id == request.question_id:
+        active_id = persisted.active_step_id
+        if active_id is not None:
+            return next((step for step in steps if step.step_id == active_id), steps[0])
+    return steps[0]
+
+
+def _component_for_step(
+    rubric: GeneratedQuestionRubric,
+    step_id: str,
+) -> str | None:
+    terms = {
+        "GENERAL_RULE": ("general", "rule", "expression"),
+        "CHANGING_VALUE": ("changing", "changes", "variable", "starting"),
+        "FIXED_VALUE": ("fixed", "constant", "increment"),
+        "OPERATION": ("operation", "add", "addition", "plus", "multiply"),
+    }[step_id]
+    matched_component = next(
+        (
+            component.concept_id
+            for component in rubric.required_concepts
+            if component.required
+            and any(term in f"{component.concept_id} {component.description}".casefold() for term in terms)
+        ),
+        None,
+    )
+    if matched_component is not None:
+        return matched_component
+    generic_components = [
+        component.concept_id
+        for component in rubric.required_concepts
+        if component.required and component.concept_id.startswith("REQUIRED_COMPONENT_")
+    ]
+    generic_index = {
+        "GENERAL_RULE": 0,
+        "CHANGING_VALUE": 1,
+        "FIXED_VALUE": 1,
+        "OPERATION": 2,
+    }[step_id]
+    return (
+        generic_components[generic_index]
+        if generic_index < len(generic_components)
+        else None
+    )
+
+
+def _controller_objective_after(
+    objective: ActiveTeachingObjective,
+    rubric: GeneratedQuestionRubric,
+    confirmed_step_id: str | None,
+) -> ActiveTeachingObjective:
+    confirmed = set(objective.confirmed_concept_ids)
+    if confirmed_step_id is not None:
+        component_id = _component_for_step(rubric, confirmed_step_id)
+        if component_id is not None:
+            confirmed.add(component_id)
+    required = {
+        component.concept_id for component in rubric.required_concepts if component.required
+    }
+    return ActiveTeachingObjective(
+        objective_type="ANSWER_QUESTION",
+        target_concept_ids=sorted(required - confirmed),
+        confirmed_concept_ids=sorted(confirmed),
+        missing_concept_ids=sorted(required - confirmed),
+    )
+
+
+def _controller_evaluation(
+    state: GuidedStudentState,
+    objective: ActiveTeachingObjective,
+    message: str,
+    confirmed_step_id: str | None,
+    rubric: GeneratedQuestionRubric,
+) -> GuidedEvaluation:
+    next_objective = _controller_objective_after(objective, rubric, confirmed_step_id)
+    newly_confirmed = []
+    if confirmed_step_id is not None:
+        component_id = _component_for_step(rubric, confirmed_step_id)
+        if component_id is not None and component_id not in objective.confirmed_concept_ids:
+            newly_confirmed = [component_id]
+    return GuidedEvaluation(
+        student_state=state,
+        newly_confirmed_concept_ids=newly_confirmed,
+        preserved_concept_ids=objective.confirmed_concept_ids,
+        contradicted_concept_ids=[],
+        missing_concept_ids=next_objective.missing_concept_ids,
+        selected_error_code=None,
+        confidence=1.0,
+        next_objective=next_objective,
+        tutor_message=message,
+        tutor_message_voice=message,
+    )
+
+
+def _describes_changing_starting_value(student_input: str) -> bool:
+    """Return whether a response identifies that the starting value varies."""
+
+    normalized = re.sub(r"\s+", " ", student_input.casefold()).strip()
+    describes_change = any(
+        marker in normalized for marker in ("change", "vary", "different")
+    )
+    describes_start = any(marker in normalized for marker in ("starting", "first"))
+    describes_value = any(marker in normalized for marker in ("number", "value"))
+    numeric_values = re.findall(r"\b\d+\b", normalized)
+    return describes_change and (
+        (describes_start and describes_value) or len(set(numeric_values)) >= 2
+    )
+
+
+def deterministic_teaching_step_evaluation(
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+) -> GuidedEvaluation | None:
+    """Evaluate direct replies to the current algebra sub-question without an LLM."""
+
+    step = active_teaching_step(request)
+    expression = (
+        _expression_parts(request.answer_spec.canonical_answer)
+        if request.answer_spec is not None
+        else None
+    ) or _expression_parts(request.question)
+    if step is None or expression is None:
+        return None
+    variable, operator, number = expression
+    normalized = re.sub(r"\s+", " ", request.student_input.casefold()).strip()
+    compact = re.sub(r"\s+", "", normalized)
+    if normalized in {
+        "idk",
+        "i have no idea",
+        "i do not understand",
+        "i didn't understand",
+        "i dont understand",
+        "not sure",
+        "what",
+        "what?",
+        "what do i state",
+        "are u stupid",
+    }:
+        return None
+    steps = teaching_steps_for(request)
+    step_index = next(index for index, item in enumerate(steps) if item.step_id == step.step_id)
+    next_step = steps[step_index + 1] if step_index + 1 < len(steps) else None
+
+    if operator == "+" and any(
+        word in normalized for word in ("minus", "subtract", "subtraction")
+    ):
+        message = (
+            "The word in the question means add, not subtract. "
+            "What operation does the sign tell us to use?"
+        )
+        return _controller_evaluation("WRONG", objective, message, None, rubric)
+    if operator == "-" and any(
+        word in normalized for word in ("plus", "add", "addition")
+    ):
+        message = (
+            "The word in the question means subtract, not add. "
+            "What operation does the sign tell us to use?"
+        )
+        return _controller_evaluation("WRONG", objective, message, None, rubric)
+
+    if step.step_id == "GENERAL_RULE":
+        if re.fullmatch(rf"{re.escape(variable)}\s*{re.escape(operator)}\s*{number}", compact):
+            if next_step is None:
+                return _controller_evaluation("CORRECT", objective, "Nice work.", step.step_id, rubric)
+            message = f"Good. {next_step.prompt}"
+            return _controller_evaluation("PARTIAL", objective, message, step.step_id, rubric)
+        if _numeric_expressions(request.student_input):
+            changing = next((item for item in steps if item.step_id == "CHANGING_VALUE"), None)
+            if changing is not None:
+                message = f"A general rule works for every starting number. {changing.prompt}"
+                return _controller_evaluation("PARTIAL", objective, message, None, rubric)
+        if _describes_changing_starting_value(request.student_input):
+            message = (
+                "Yes—the starting number changes. Replace it with a letter and keep "
+                "the operation that stays the same."
+            )
+            return _controller_evaluation("PARTIAL", objective, message, None, rubric)
+        return None
+
+    if step.step_id == "CHANGING_VALUE":
+        exact_aliases = {
+            variable,
+            "the starting number",
+            "starting number",
+            "the starting value",
+            "starting value",
+            "the first number",
+            "first number",
+        }
+        valid_variable_statement = variable in normalized and any(
+            marker in normalized for marker in ("change", "vary", "different")
+        )
+        if (
+            normalized in exact_aliases
+            or valid_variable_statement
+            or _describes_changing_starting_value(request.student_input)
+        ):
+            question = request.question.casefold()
+            if (
+                "general rule" in question
+                and f"use {variable}" in question
+                and "stays fixed" not in question
+            ):
+                message = (
+                    "Yes. Replace the changing starting number with a letter. "
+                    "Keep the operation that stays the same."
+                )
+                return _controller_evaluation(
+                    "PARTIAL", objective, message, None, rubric
+                )
+            if next_step is None:
+                return _controller_evaluation("CORRECT", objective, "Nice work.", step.step_id, rubric)
+            if next_step.step_id == "GENERAL_RULE":
+                message = "Yes. Replace the changing starting number with a letter. Keep the operation that stays the same."
+            else:
+                message = f"Yes. {next_step.prompt}"
+            return _controller_evaluation("PARTIAL", objective, message, step.step_id, rubric)
+        if number in compact:
+            message = (
+                "Not quite: the changing quantity is the letter, not the fixed number. "
+                f"{step.prompt}"
+            )
+            return _controller_evaluation("WRONG", objective, message, None, rubric)
+        message = f"Focus on the changing part only. {step.prompt}"
+        return _controller_evaluation("UNCLEAR", objective, message, None, rubric)
+
+    if step.step_id == "FIXED_VALUE":
+        expected = f"{operator}{number}"
+        if compact in {number, expected} or (number in normalized and any(word in normalized for word in ("fixed", "constant", "stays"))):
+            if next_step is None:
+                return _controller_evaluation("CORRECT", objective, "Nice work.", step.step_id, rubric)
+            return _controller_evaluation("PARTIAL", objective, f"Yes. {next_step.prompt}", step.step_id, rubric)
+        if f"-{number}" in compact and operator == "+":
+            message = f"Check the sign: this rule adds {number}, so the fixed amount is +{number}. {step.prompt}"
+            return _controller_evaluation("WRONG", objective, message, None, rubric)
+        if variable in normalized:
+            message = (
+                f"{variable} can change; we are looking for the number that stays the same. "
+                f"{step.prompt}"
+            )
+            return _controller_evaluation("WRONG", objective, message, None, rubric)
+        return _controller_evaluation(
+            "UNCLEAR", objective, f"Focus on the fixed value only. {step.prompt}", None, rubric
+        )
+
+    if step.step_id == "OPERATION":
+        accepted = ("add", "addition", "plus") if operator == "+" else ("subtract", "subtraction", "minus")
+        if any(word in normalized for word in accepted):
+            if next_step is None:
+                return _controller_evaluation("CORRECT", objective, "Nice work.", step.step_id, rubric)
+            return _controller_evaluation("PARTIAL", objective, f"Yes. {next_step.prompt}", step.step_id, rubric)
+        incorrect = ("multiplication", "multiply", "division", "divide") if operator == "+" else ()
+        if any(word in normalized for word in incorrect):
+            message = f"Not this time: the + sign means addition, not {next(word for word in incorrect if word in normalized)}. {step.prompt}"
+            return _controller_evaluation("WRONG", objective, message, None, rubric)
+        return _controller_evaluation(
+            "UNCLEAR", objective, f"Focus on the operation only. {step.prompt}", None, rubric
+        )
+    return None
+
+
+def teaching_state_for(
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective | None,
+    tutor_message: str,
+) -> GuidedTeachingState:
+    """Create the durable controller state for the next learner turn."""
+
+    required_ids = [
+        component.concept_id
+        for component in rubric.required_concepts
+        if component.required
+    ]
+    confirmed_ids = objective.confirmed_concept_ids if objective is not None else required_ids
+    missing_ids = objective.missing_concept_ids if objective is not None else []
+    previous = request.guided_teaching_state
+    teaching_steps = teaching_steps_for(request)
+    active_step_id = teaching_step_from_message(tutor_message, teaching_steps)
+    if active_step_id is None and previous is not None:
+        active_step_id = previous.active_step_id
+    return GuidedTeachingState(
+        question_id=request.question_id or rubric.question_id,
+        objective_component_ids=required_ids,
+        confirmed_component_ids=confirmed_ids,
+        missing_component_ids=missing_ids,
+        active_component_id=active_component_id(rubric, objective),
+        last_tutor_question_type=prompt_type_for_message(tutor_message),
+        selected_option_id=(
+            typed_choice_selection(request)
+            or (
+                previous.selected_option_id
+                if previous is not None
+                and previous.question_id == (request.question_id or rubric.question_id)
+                else None
+            )
+        ),
+        awaiting_response=objective is not None,
+        active_step_id=active_step_id,
+        teaching_step_ids=[step.step_id for step in teaching_steps],
+    )
+
+
+def typed_choice_selection(request: ClassificationRequest) -> str | None:
+    """Return a typed choice ID for an explanation-choice question."""
+
+    if request.question_type != "CHOICE_WITH_EXPLANATION":
+        return None
+    choice = normalized_choice_response(request.student_input)
+    return choice if len(choice) == 1 and choice.isalpha() else None
+
+
+def guided_tutor_context_for(
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+) -> GuidedTutorContext:
+    """Build the durable teaching context that is authoritative over chat prose."""
+
+    teaching_steps = teaching_steps_for(request)
+    active_step = active_teaching_step(request)
+    active_question = (
+        active_step.prompt
+        if active_step is not None
+        else focused_unresolved_prompt(
+            rubric,
+            objective,
+            "Which part should we look at first?",
+        )
+    )
+    phase_context = request.phase_2_prompt_context
+    support_state = phase_context.support_state if phase_context is not None else {}
+    current_support = (
+        phase_context.current_support if phase_context is not None else None
+    )
+    current_scaffold_step_number = (
+        phase_context.current_scaffold_step_number
+        if phase_context is not None
+        else 0
+    )
+    consecutive_stuck_count = (
+        phase_context.consecutive_stuck_count if phase_context is not None else 0
+    )
+    conversation_state_summary = (
+        "Confirmed concepts: "
+        f"{', '.join(objective.confirmed_concept_ids) or 'none'}. "
+        "Missing concepts: "
+        f"{', '.join(objective.missing_concept_ids) or 'none'}. "
+        f"Active question: {active_question} "
+        "The backend owns progression and support selection; do not advance "
+        "or request a support rung."
+    )
+    return GuidedTutorContext(
+        active_tutor_question=active_question,
+        active_step_id=active_step.step_id if active_step is not None else None,
+        ordered_teaching_steps=[
+            GuidedTeachingPlanStep(
+                step_id=teaching_step.step_id,
+                tutor_question=teaching_step.prompt,
+            )
+            for teaching_step in teaching_steps
+        ],
+        confirmed_concept_ids=objective.confirmed_concept_ids,
+        missing_concept_ids=objective.missing_concept_ids,
+        support_state=support_state,
+        current_support=current_support,
+        current_scaffold_step_number=current_scaffold_step_number,
+        consecutive_stuck_count=consecutive_stuck_count,
+        conversation_state_summary=conversation_state_summary,
+    )
+
+
+def _numeric_expressions(text: str) -> list[tuple[str, str, str]]:
+    """Extract simple numeric examples without interpreting the answer."""
+
+    return [
+        (match.group(1), match.group(2), match.group(3))
+        for match in re.finditer(r"\b(\d+)\s*([+\-×x*])\s*(\d+)\b", text)
+    ]
+
+
+def copied_example_correction(
+    question: str,
+    student_input: str,
+    objective: ActiveTeachingObjective,
+) -> GuidedEvaluation | None:
+    """Repair a copied numeric example before progressing to abstract reasoning."""
+
+    question_examples = _numeric_expressions(question)
+    for left, operator, right in _numeric_expressions(student_input):
+        matching_source = next(
+            (
+                source
+                for source in question_examples
+                if source[0] == left and source[1] == operator and source[2] != right
+            ),
+            None,
+        )
+        if matching_source is None:
+            continue
+        expected = f"{matching_source[0]} {matching_source[1]} {matching_source[2]}"
+        provided = f"{left} {operator} {right}"
+        message = (
+            f"Check the example with {left}: the question shows {expected}, not "
+            f"{provided}. What number is added each time?"
+        )
+        return GuidedEvaluation(
+            student_state="WRONG",
+            newly_confirmed_concept_ids=[],
+            preserved_concept_ids=objective.confirmed_concept_ids,
+            contradicted_concept_ids=[],
+            missing_concept_ids=objective.missing_concept_ids,
+            selected_error_code=None,
+            confidence=1.0,
+            next_objective=objective,
+            tutor_message=message,
+            tutor_message_voice=message,
+        )
+    return None
+
+
+def source_correction_follow_up(
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+) -> GuidedEvaluation | None:
+    """Accept the narrow correction that the controller explicitly requested."""
+
+    state = request.guided_teaching_state
+    if state is None or state.last_tutor_question_type != "SOURCE_CORRECTION":
+        return None
+    question_examples = _numeric_expressions(request.question)
+    if not question_examples:
+        return None
+    fixed_numbers = {example[2] for example in question_examples}
+    normalized = re.sub(r"[^0-9]", "", request.student_input)
+    if normalized not in fixed_numbers:
+        return None
+    prompt = focused_unresolved_prompt(
+        rubric,
+        objective,
+        "What general rule represents this situation?",
+    )
+    message = f"Yes. Now use that corrected pattern. {prompt}"
+    return GuidedEvaluation(
+        student_state="PARTIAL",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=objective.confirmed_concept_ids,
+        contradicted_concept_ids=[],
+        missing_concept_ids=objective.missing_concept_ids,
+        selected_error_code=None,
+        confidence=1.0,
+        next_objective=objective,
+        tutor_message=message,
+        tutor_message_voice=message,
+    )
+
+
+def option_comparison_follow_up(
+    conversation_history: list[ConversationMessage],
+    student_input: str,
+    objective: ActiveTeachingObjective,
+    teaching_state: GuidedTeachingState | None,
+) -> GuidedEvaluation | None:
+    """Resolve the yes/no check that follows a wrong multiple-choice selection."""
+
+    last_tutor_message = next(
+        (
+            message.content.casefold()
+            for message in reversed(conversation_history)
+            if message.role == "assistant"
+        ),
+        "",
+    )
+    awaiting_comparison = (
+        teaching_state is not None
+        and teaching_state.last_tutor_question_type == "OPTION_COMPARISON"
+    )
+    if (
+        "can one fixed starting number describe every possible case" not in last_tutor_message
+        and not awaiting_comparison
+    ):
+        return None
+
+    normalized_response = re.sub(r"[^a-z]", "", student_input.casefold())
+    selected_option = (
+        teaching_state.selected_option_id.casefold()
+        if teaching_state is not None and teaching_state.selected_option_id is not None
+        else None
+    )
+    selected_reference = re.fullmatch(
+        r"(?:ichoose(?:option)?|ichose(?:option)?|option|choose)?([a-z])",
+        normalized_response,
+    )
+    if (
+        selected_reference is not None
+        and selected_option is not None
+        and selected_reference.group(1) == selected_option
+    ):
+        message = (
+            "You have already chosen that option. Now test it: can one fixed "
+            "starting number describe every possible case?"
+        )
+        state: GuidedStudentState = "PARTIAL"
+    elif normalized_response in {"yes", "yeah", "yep", "correct", "true"}:
+        message = (
+            "Not quite. A fixed starting number only describes one case. "
+            "Try another starting number: would the option you chose still work?"
+        )
+        state: GuidedStudentState = "WRONG"
+    elif normalized_response in {"no", "nope", "false", "incorrect", "itsfalse", "itisfalse"}:
+        message = (
+            "Right. One fixed starting number cannot describe every case. "
+            "Choose the option that uses a changing value, then explain why it works."
+        )
+        state = "PARTIAL"
+    else:
+        return None
+
+    return GuidedEvaluation(
+        student_state=state,
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=objective.confirmed_concept_ids,
+        contradicted_concept_ids=[],
+        missing_concept_ids=objective.missing_concept_ids,
+        selected_error_code=None,
+        confidence=1.0,
+        next_objective=objective,
+        tutor_message=message,
+        tutor_message_voice=message,
+    )
+
+
 def classify_guided_learning_response(
     request: ClassificationRequest,
     rules: ClassifierRulesConfig,
@@ -514,13 +1478,76 @@ def classify_guided_learning_response(
         rules=rules,
         openai_client=openai_client,
     )
-    objective = request.active_teaching_objective or initial_guided_objective(rubric)
+    objective = objective_for_rubric(request.active_teaching_objective, rubric)
+    copied_example = copied_example_correction(
+        request.question,
+        request.student_input,
+        objective,
+    )
+    if copied_example is not None:
+        return build_guided_tutor_response(
+            request,
+            rules,
+            safety_check,
+            rubric,
+            copied_example,
+            objective,
+        )
+    corrected_source_follow_up = source_correction_follow_up(
+        request,
+        rubric,
+        objective,
+    )
+    if corrected_source_follow_up is not None:
+        return build_guided_tutor_response(
+            request,
+            rules,
+            safety_check,
+            rubric,
+            corrected_source_follow_up,
+            objective,
+        )
+    choice_follow_up = option_comparison_follow_up(
+        request.conversation_history,
+        request.student_input,
+        objective,
+        request.guided_teaching_state,
+    )
+    if choice_follow_up is not None:
+        return build_guided_tutor_response(
+            request,
+            rules,
+            safety_check,
+            rubric,
+            choice_follow_up,
+            objective,
+        )
+    controller_evaluation = (
+        None
+        if is_authoritative_guided_completion(request)
+        else deterministic_teaching_step_evaluation(
+            request,
+            rubric,
+            objective,
+        )
+    )
+    if controller_evaluation is not None:
+        next_objective = normalized_guided_objective(controller_evaluation, objective)
+        return build_guided_tutor_response(
+            request,
+            rules,
+            safety_check,
+            rubric,
+            controller_evaluation,
+            next_objective,
+        )
     evaluation: GuidedEvaluation | None = None
     raw_student_state: GuidedStudentState | None = None
     raw_confidence: float | None = None
     last_error: AdapterError | None = None
     rejected_evaluation: GuidedEvaluation | None = None
     validation_feedback: str | None = None
+    guided_tutor_context = guided_tutor_context_for(request, rubric, objective)
     for attempt in range(rules.guided_learning.maximum_retries + 1):
         try:
             candidate = openai_client.evaluate_guided_turn(
@@ -530,6 +1557,7 @@ def classify_guided_learning_response(
                 deterministic_evaluation=evaluate_answer_contract(request),
                 generated_rubric=rubric,
                 active_objective=objective,
+                guided_tutor_context=guided_tutor_context,
                 student_response=request.student_input,
                 input_source=request.input_source,
                 allowed_error_codes=allowed_errors,
@@ -539,6 +1567,11 @@ def classify_guided_learning_response(
                 validation_feedback=validation_feedback,
                 evaluator_prompt_version=rules.guided_learning.evaluator_prompt_version,
                 system_prompt=rules.guided_learning.evaluator_system_prompt,
+            )
+            candidate = merge_authored_component_evidence(
+                candidate,
+                rubric,
+                request.student_input,
             )
             raw_student_state = candidate.student_state
             raw_confidence = candidate.confidence
@@ -551,10 +1584,11 @@ def classify_guided_learning_response(
             )
             if (
                 evaluation.student_state != "CORRECT"
-                and message_reveals_answer(
+                and guided_message_reveals_undemonstrated_answer(
                     evaluation.tutor_message,
                     evaluation.tutor_message_voice,
-                    request.correct_answer,
+                    request,
+                    evaluation,
                     rules,
                 )
             ):
@@ -593,10 +1627,19 @@ def classify_guided_learning_response(
                     "student_state": rejected_evaluation.student_state,
                 },
             )
+            unresolved_objective = (
+                normalized_guided_objective(rejected_evaluation, objective)
+                or objective
+            )
+            safe_message = focused_unresolved_prompt(
+                rubric,
+                unresolved_objective,
+                rules.guided_learning.reconciliation_message,
+            )
             evaluation = rejected_evaluation.model_copy(
                 update={
-                    "tutor_message": rules.guided_learning.reconciliation_message,
-                    "tutor_message_voice": rules.guided_learning.reconciliation_message,
+                    "tutor_message": safe_message,
+                    "tutor_message_voice": safe_message,
                 }
             )
         else:
@@ -604,9 +1647,83 @@ def classify_guided_learning_response(
                 "openai_ai_engine",
                 "Guided turn evaluation failed without a validated response.",
             )
+    adjudication_targets = component_adjudication_targets(
+        evaluation,
+        objective,
+        rubric,
+        request.student_input,
+        request.question,
+        request.answer_spec,
+    )
+    adjudicator = getattr(openai_client, "adjudicate_component_evidence", None)
+    if adjudication_targets and callable(adjudicator):
+        for adjudication_target in adjudication_targets:
+            logger.info(
+                "guided_component_adjudication_started",
+                extra={
+                    "question_id": request.question_id,
+                    "component_id": adjudication_target.concept_id,
+                },
+            )
+            evidence = adjudicator(
+                question_type=request.question_type,
+                question=request.question,
+                answer_spec=request.answer_spec,
+                target_component=adjudication_target,
+                active_objective=objective,
+                student_response=request.student_input,
+                input_source=request.input_source,
+                recent_conversation=request.conversation_history[
+                    -rules.guided_learning.maximum_recent_history_turns:
+                ],
+                prompt_version=(
+                    rules.guided_learning.component_adjudicator_prompt_version
+                ),
+                system_prompt=(
+                    rules.guided_learning.component_adjudicator_system_prompt
+                ),
+            )
+            evaluation = apply_focused_component_evidence(
+                evaluation,
+                evidence,
+                rules.guided_learning.component_adjudicator_confidence_threshold,
+            )
+            logger.info(
+                "guided_component_adjudication_completed",
+                extra={
+                    "question_id": request.question_id,
+                    "component_id": evidence.component_id,
+                    "status": evidence.status,
+                    "confidence": evidence.confidence,
+                    "student_state": evaluation.student_state,
+                },
+            )
+        evaluation = validate_guided_evaluation(
+            evaluation,
+            rubric,
+            objective,
+            allowed_errors,
+            rules,
+        )
     if is_authoritative_guided_completion(request):
         evaluation = authoritative_guided_completion(evaluation, rules)
     next_objective = normalized_guided_objective(evaluation, objective)
+    evaluation = rewrite_invalid_guided_message_once(
+        evaluation,
+        request,
+        rubric,
+        next_objective,
+        openai_client,
+        allowed_errors,
+        guided_tutor_context,
+        rules,
+    )
+    evaluation = align_guided_follow_up(
+        evaluation,
+        request,
+        rubric,
+        next_objective,
+    )
     logger.info(
         "guided_state_evaluated",
         extra={
@@ -632,6 +1749,692 @@ def classify_guided_learning_response(
         evaluation,
         next_objective,
     )
+
+
+def controller_prompt_for_objective(
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+) -> str:
+    """Return the one controller-owned question for the remaining objective."""
+
+    missing_ids = set(objective.missing_concept_ids)
+    for teaching_step in teaching_steps_for(request):
+        component_id = _component_for_step(rubric, teaching_step.step_id)
+        if component_id in missing_ids:
+            return teaching_step.prompt
+    return focused_unresolved_prompt(
+        rubric,
+        objective,
+        "Which part should we look at first?",
+    )
+
+
+def rewrite_invalid_guided_message_once(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective | None,
+    openai_client: OpenAIAIEngineClient,
+    allowed_errors: list[dict[str, object]],
+    guided_tutor_context: GuidedTutorContext,
+    rules: ClassifierRulesConfig,
+) -> GuidedEvaluation:
+    """Ask the LLM once to repair invalid prose without changing teaching state."""
+
+    if evaluation.student_state == "CORRECT" or objective is None:
+        return evaluation
+
+    evaluation = remove_unsupported_guided_praise(evaluation, request)
+    controller_prompt = controller_prompt_for_objective(request, rubric, objective)
+    rejection_reason = guided_tutor_message_validation_reason(
+        evaluation,
+        request,
+        rubric,
+        objective,
+        controller_prompt,
+    )
+    if rejection_reason is None:
+        return evaluation
+
+    logger.warning(
+        "guided_tutor_message_rewrite_requested",
+        extra={
+            "question_id": request.question_id,
+            "student_state": evaluation.student_state,
+            "rejection_reason": rejection_reason,
+            "active_prompt": controller_prompt,
+        },
+    )
+    try:
+        rewritten = openai_client.evaluate_guided_turn(
+            question_type=request.question_type,
+            question=request.question,
+            answer_spec=request.answer_spec,
+            deterministic_evaluation=evaluate_answer_contract(request),
+            generated_rubric=rubric,
+            active_objective=objective,
+            guided_tutor_context=guided_tutor_context,
+            student_response=request.student_input,
+            input_source=request.input_source,
+            allowed_error_codes=allowed_errors,
+            recent_conversation=request.conversation_history[
+                -rules.guided_learning.maximum_recent_history_turns:
+            ],
+            validation_feedback=guided_message_rewrite_feedback(
+                rejection_reason,
+                controller_prompt,
+            ),
+            evaluator_prompt_version=rules.guided_learning.evaluator_prompt_version,
+            system_prompt=rules.guided_learning.evaluator_system_prompt,
+        )
+    except AdapterError as error:
+        logger.warning(
+            "guided_tutor_message_rewrite_failed",
+            extra={
+                "question_id": request.question_id,
+                "student_state": evaluation.student_state,
+                "rejection_reason": rejection_reason,
+                "detail": error.detail,
+            },
+        )
+        return evaluation
+
+    rewritten_evaluation = evaluation.model_copy(
+        update={
+            "tutor_message": rewritten.tutor_message,
+            "tutor_message_voice": rewritten.tutor_message_voice,
+        }
+    )
+    rewritten_evaluation = remove_unsupported_guided_praise(
+        rewritten_evaluation,
+        request,
+    )
+    rewritten_reason = guided_tutor_message_validation_reason(
+        rewritten_evaluation,
+        request,
+        rubric,
+        objective,
+        controller_prompt,
+    )
+    if rewritten_reason is None:
+        logger.info(
+            "guided_tutor_message_rewrite_accepted",
+            extra={
+                "question_id": request.question_id,
+                "student_state": evaluation.student_state,
+                "initial_rejection_reason": rejection_reason,
+            },
+        )
+        return rewritten_evaluation
+
+    logger.warning(
+        "guided_tutor_message_rewrite_rejected",
+        extra={
+            "question_id": request.question_id,
+            "student_state": evaluation.student_state,
+            "initial_rejection_reason": rejection_reason,
+            "rewritten_rejection_reason": rewritten_reason,
+        },
+    )
+    return evaluation
+
+
+def guided_message_rewrite_feedback(
+    rejection_reason: str,
+    controller_prompt: str,
+) -> str:
+    """Tell the LLM how to repair only its wording for one guided turn."""
+
+    return (
+        "Your previous tutor wording was rejected for "
+        f"{rejection_reason}. Keep the same student-state classification and "
+        "component evidence. Rewrite only tutor_message and tutor_message_voice. "
+        "Respond naturally to the student's exact words or misconception, do not "
+        "reveal any unresolved answer, and end with one focused question about "
+        f"the active step: {controller_prompt}"
+    )
+
+
+def align_guided_follow_up(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective | None,
+) -> GuidedEvaluation:
+    """Replace empty, unsafe, generic, or off-topic LLM wording with the active question."""
+
+    if evaluation.student_state == "CORRECT" or objective is None:
+        return evaluation
+    evaluation = remove_unsupported_guided_praise(
+        evaluation,
+        request,
+    )
+    prompt = controller_prompt_for_objective(request, rubric, objective)
+    rejection_reason = guided_tutor_message_validation_reason(
+        evaluation,
+        request,
+        rubric,
+        objective,
+        prompt,
+    )
+    if rejection_reason is None:
+        return evaluation
+    prefix = {
+        "PARTIAL": "Good.",
+        "WRONG": "Let's check that carefully.",
+        "STUCK": "That's okay.",
+        "UNCLEAR": "Let's focus on this part.",
+    }[evaluation.student_state]
+    acknowledgement = safe_guided_acknowledgement_prefix(
+        evaluation,
+        request,
+        rubric,
+        objective,
+    )
+    message = f"{acknowledgement or prefix} {prompt}"
+    logger.warning(
+        "guided_tutor_message_replaced",
+        extra={
+            "question_id": request.question_id,
+            "student_state": evaluation.student_state,
+            "active_prompt": prompt,
+            "rejection_reason": rejection_reason,
+        },
+    )
+    return evaluation.model_copy(
+        update={
+            "tutor_message": message,
+            "tutor_message_voice": message,
+        }
+    )
+
+
+def remove_unsupported_guided_praise(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+) -> GuidedEvaluation:
+    """Remove only praise that is not supported by this turn's component evidence."""
+
+    confirmed_component_ids = {
+        *evaluation.newly_confirmed_concept_ids,
+        *evaluation.preserved_concept_ids,
+    } - set(evaluation.contradicted_concept_ids)
+    tutor_message = remove_unsupported_praise_sentences(
+        evaluation.tutor_message,
+        request,
+        confirmed_component_ids,
+    )
+    tutor_message_voice = remove_unsupported_praise_sentences(
+        evaluation.tutor_message_voice,
+        request,
+        confirmed_component_ids,
+    )
+    if (
+        tutor_message == evaluation.tutor_message
+        and tutor_message_voice == evaluation.tutor_message_voice
+    ):
+        return evaluation
+    logger.warning(
+        "guided_unsupported_praise_removed",
+        extra={
+            "question_id": request.question_id,
+            "student_state": evaluation.student_state,
+            "confirmed_component_ids": sorted(confirmed_component_ids),
+        },
+    )
+    return evaluation.model_copy(
+        update={
+            "tutor_message": tutor_message,
+            "tutor_message_voice": tutor_message_voice,
+        }
+    )
+
+
+def remove_unsupported_praise_sentences(
+    message: str,
+    request: ClassificationRequest,
+    confirmed_component_ids: set[str],
+) -> str:
+    """Keep useful correction prose while removing only unsupported praise clauses."""
+
+    sentences = re.split(r"(?<=[.!?])\s+", message.strip())
+    retained_sentences = []
+    for sentence in sentences:
+        if not unsupported_guided_praise_sentence(
+            sentence,
+            request,
+            confirmed_component_ids,
+        ):
+            retained_sentences.append(sentence)
+            continue
+        correction = correction_after_unsupported_praise(sentence)
+        if correction is not None:
+            retained_sentences.append(correction)
+    return " ".join(retained_sentences)
+
+
+def unsupported_guided_praise_sentence(
+    sentence: str,
+    request: ClassificationRequest,
+    confirmed_component_ids: set[str],
+) -> bool:
+    """Return whether praise claims evidence that the evaluation does not support."""
+
+    normalized = normalize_semantic_answer(sentence)
+    praise_terms = (
+        "correct",
+        "good",
+        "great",
+        "nice",
+        "right",
+        "well done",
+        "on the right track",
+    )
+    if not any(term in normalized for term in praise_terms):
+        return False
+    if not confirmed_component_ids:
+        return True
+
+    expression = _expression_parts(
+        request.answer_spec.canonical_answer if request.answer_spec else ""
+    )
+    if expression is None:
+        return False
+    variable, _, fixed_value = expression
+    if re.search(
+        rf"\b{re.escape(variable)}\b\s+(?:is|stays|remains)\s+(?:fixed|constant)",
+        normalized,
+    ):
+        return True
+    if re.search(
+        rf"\b{re.escape(fixed_value)}\b\s+(?:is|can|does)\s+(?:change|vary|changes|varies)",
+        normalized,
+    ):
+        return True
+
+    return False
+
+
+def correction_after_unsupported_praise(sentence: str) -> str | None:
+    """Keep the corrective clause when it follows unsupported praise with 'but'."""
+
+    match = re.search(r"\bbut\s+(.+)", sentence, flags=re.IGNORECASE)
+    if match is None:
+        return None
+    correction = match.group(1).strip()
+    return correction if correction else None
+
+
+def guided_tutor_message_is_safe_and_relevant(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+    controller_prompt: str,
+) -> bool:
+    """Return whether the LLM reply is safe and tied to the current tutor turn."""
+
+    return (
+        guided_tutor_message_validation_reason(
+            evaluation,
+            request,
+            rubric,
+            objective,
+            controller_prompt,
+        )
+        is None
+    )
+
+
+def guided_tutor_message_validation_reason(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+    controller_prompt: str,
+) -> str | None:
+    """Return the precise reason a guided message cannot be shown unchanged."""
+
+    message = evaluation.tutor_message.strip()
+    voice_message = evaluation.tutor_message_voice.strip()
+    if message == "" or voice_message == "":
+        return "EMPTY"
+
+    rules = load_classifier_rules()
+    if guided_message_reveals_undemonstrated_answer(
+        message,
+        voice_message,
+        request,
+        evaluation,
+        rules,
+    ):
+        return "ANSWER_REVEAL"
+
+    if guided_message_reveals_unresolved_teaching_step(
+        message,
+        request,
+        rubric,
+        objective,
+    ):
+        return "OFF_ACTIVE_STEP"
+
+    normalized_message = normalize_semantic_answer(message)
+    if normalize_semantic_answer(controller_prompt) in normalized_message:
+        return None
+
+    if (
+        evaluation.selected_error_code is not None
+        and guided_message_repairs_selected_misconception(normalized_message)
+    ):
+        return None
+
+    message_tokens = significant_component_tokens(message)
+    turn_context_tokens = (
+        significant_component_tokens(request.student_input)
+        | significant_component_tokens(request.question)
+    )
+    if message_tokens.intersection(turn_context_tokens):
+        return None
+    return "UNRELATED"
+
+
+def guided_message_reveals_unresolved_teaching_step(
+    message: str,
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+) -> bool:
+    """Reject prose that gives a pending guided-step answer before asking it."""
+
+    answer_spec = request.answer_spec
+    if answer_spec is None:
+        return False
+    expression = _expression_parts(answer_spec.canonical_answer)
+    active_step = active_teaching_step(request)
+    if expression is None or active_step is None:
+        return False
+
+    variable, operator, fixed_value = expression
+    teaching_steps = teaching_steps_for(request)
+    active_index = next(
+        (
+            index
+            for index, teaching_step in enumerate(teaching_steps)
+            if teaching_step.step_id == active_step.step_id
+        ),
+        None,
+    )
+    if active_index is None:
+        return False
+    missing_step_ids = {
+        teaching_step.step_id
+        for teaching_step in teaching_steps[active_index:]
+        if _component_for_step(rubric, teaching_step.step_id)
+        in set(objective.missing_concept_ids)
+    }
+    if not missing_step_ids:
+        return False
+
+    normalized = normalize_semantic_answer(message)
+    normalized_student_input = normalize_semantic_answer(request.student_input)
+    if (
+        "CHANGING_VALUE" in missing_step_ids
+        and not teaches_changing_value(
+            normalized_student_input,
+            variable,
+        )
+        and teaches_changing_value(
+            normalized,
+            variable,
+        )
+    ):
+        return True
+    if (
+        "FIXED_VALUE" in missing_step_ids
+        and not teaches_fixed_value(
+            normalized_student_input,
+            fixed_value,
+        )
+        and teaches_fixed_value(
+            normalized,
+            fixed_value,
+        )
+    ):
+        return True
+    operation_terms = operation_answer_terms(operator)
+    return (
+        "OPERATION" in missing_step_ids
+        and not teaches_operation(normalized_student_input, operation_terms)
+        and teaches_operation(normalized, operation_terms)
+    )
+
+
+def teaches_changing_value(message: str, variable: str) -> bool:
+    """Return whether prose directly supplies the changing-value answer."""
+
+    escaped_variable = re.escape(variable)
+    return bool(
+        re.search(
+            rf"\b(?:changing (?:quantity|value)|variable|letter|symbol)\b"
+            rf"[^.?!]{{0,32}}\b{escaped_variable}\b",
+            message,
+        )
+        or re.search(
+            rf"\b{escaped_variable}\b\s+(?:is|represents|can change|varies)",
+            message,
+        )
+    )
+
+
+def teaches_fixed_value(message: str, fixed_value: str) -> bool:
+    """Return whether prose directly supplies the fixed-value answer."""
+
+    escaped_value = re.escape(fixed_value)
+    return bool(
+        re.search(
+            rf"\b(?:fixed value|fixed number|constant|increment)\b"
+            rf"[^.?!]{{0,32}}\b{escaped_value}\b",
+            message,
+        )
+        or re.search(
+            rf"\b{escaped_value}\b\s+(?:is|stays|remains)\s+(?:fixed|constant)",
+            message,
+        )
+    )
+
+
+def teaches_operation(message: str, operation_terms: set[str]) -> bool:
+    """Return whether prose directly supplies the pending operation answer."""
+
+    alternatives = "|".join(sorted(map(re.escape, operation_terms)))
+    return bool(
+        re.search(
+            rf"\b(?:operation|plus sign|minus sign|sign)\b"
+            rf"[^.?!]{{0,32}}\b(?:{alternatives})\b",
+            message,
+        )
+    )
+
+
+def operation_answer_terms(operator: str) -> set[str]:
+    """Return verbal answer terms that disclose an operation step."""
+
+    terms_by_operator = {
+        "+": {"add", "added", "adding", "addition", "plus"},
+        "-": {"subtract", "subtracted", "subtracting", "subtraction", "minus"},
+        "×": {"multiply", "multiplied", "multiplying", "multiplication", "times"},
+        "x": {"multiply", "multiplied", "multiplying", "multiplication", "times"},
+        "*": {"multiply", "multiplied", "multiplying", "multiplication", "times"},
+    }
+    return terms_by_operator[operator]
+
+
+def safe_guided_acknowledgement_prefix(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+) -> str | None:
+    """Keep a safe brief acknowledgement while replacing an unsafe explanation."""
+
+    first_sentence = re.split(r"(?<=[.!?])\s+", evaluation.tutor_message.strip())[0]
+    acknowledgement_starts = (
+        "good",
+        "great",
+        "nice",
+        "yes",
+        "you are right",
+        "you're right",
+        "youre right",
+        "you are on the right track",
+        "you're on the right track",
+        "youre on the right track",
+    )
+    if not first_sentence.casefold().startswith(acknowledgement_starts):
+        return None
+    if guided_message_reveals_unresolved_teaching_step(
+        first_sentence,
+        request,
+        rubric,
+        objective,
+    ):
+        return None
+    return first_sentence
+
+
+def guided_message_repairs_selected_misconception(normalized_message: str) -> bool:
+    """Recognise specific corrective wording when surface tokens differ."""
+
+    correction_terms = {
+        "add",
+        "added",
+        "adding",
+        "addition",
+        "decrease",
+        "decreased",
+        "decreasing",
+        "divide",
+        "divided",
+        "dividing",
+        "division",
+        "increase",
+        "increased",
+        "increasing",
+        "minus",
+        "multiply",
+        "multiplied",
+        "multiplying",
+        "multiplication",
+        "plus",
+        "subtract",
+        "subtracted",
+        "subtracting",
+        "subtraction",
+        "variable",
+        "fixed",
+        "constant",
+    }
+    return (
+        len(significant_component_tokens(normalized_message)) >= 3
+        and bool(set(normalized_message.split()).intersection(correction_terms))
+    )
+
+
+def guided_message_reveals_undemonstrated_answer(
+    message: str,
+    voice_message: str,
+    request: ClassificationRequest,
+    evaluation: GuidedEvaluation,
+    rules: ClassifierRulesConfig,
+) -> bool:
+    """Block a final answer only when the learner has not already supplied it."""
+
+    if not message_reveals_answer(
+        message,
+        voice_message,
+        request.correct_answer,
+        rules,
+    ):
+        return False
+    return not guided_turn_has_answer_evidence(request, evaluation)
+
+
+def guided_turn_has_answer_evidence(
+    request: ClassificationRequest,
+    evaluation: GuidedEvaluation,
+) -> bool:
+    """Return whether this turn or its durable state already proves the answer."""
+
+    if learner_input_matches_canonical_answer(request):
+        return True
+    return guided_choice_selection_is_confirmed(request, evaluation)
+
+
+def learner_input_matches_canonical_answer(request: ClassificationRequest) -> bool:
+    """Recognise a full canonical answer already present in the learner input."""
+
+    if request.answer_spec is None:
+        return False
+    if request.question_type in {
+        "CHOICE_WITH_EXPLANATION",
+        "TRUE_FALSE_WITH_EXPLANATION",
+    } or request.answer_spec.verification_method == "EXACT_CHOICE_MATCH":
+        return normalized_choice_response(request.student_input) in {
+            normalized_choice_response(answer)
+            for answer in [
+                request.answer_spec.canonical_answer,
+                *request.answer_spec.accepted_answers,
+            ]
+        }
+    canonical_answer = normalize_semantic_answer(
+        request.answer_spec.canonical_answer
+    )
+    learner_answer = normalize_semantic_answer(request.student_input)
+    if canonical_answer == "" or learner_answer == "":
+        return False
+    if len(canonical_answer) == 1 and canonical_answer.isalnum():
+        return re.search(
+            rf"(?<!\w){re.escape(canonical_answer)}(?!\w)",
+            learner_answer,
+        ) is not None
+    return canonical_answer in learner_answer
+
+
+def guided_choice_selection_is_confirmed(
+    request: ClassificationRequest,
+    evaluation: GuidedEvaluation,
+) -> bool:
+    """Allow explanation of the correct choice once the learner selected it."""
+
+    if request.answer_spec is None:
+        return False
+    if request.question_type not in {
+        "CHOICE_WITH_EXPLANATION",
+        "TRUE_FALSE_WITH_EXPLANATION",
+    }:
+        return False
+    teaching_state = request.guided_teaching_state
+    if teaching_state is None or teaching_state.selected_option_id is None:
+        return False
+    accepted_choices = {
+        normalized_choice_response(answer)
+        for answer in [
+            request.answer_spec.canonical_answer,
+            *request.answer_spec.accepted_answers,
+        ]
+    }
+    selected_choice = normalized_choice_response(teaching_state.selected_option_id)
+    if selected_choice not in accepted_choices:
+        return False
+    learner_choice = normalized_choice_response(request.student_input)
+    if len(learner_choice) == 1 and learner_choice.isalpha() and learner_choice != selected_choice:
+        return False
+    confirmed_ids = {
+        *evaluation.newly_confirmed_concept_ids,
+        *evaluation.preserved_concept_ids,
+    }
+    return "ANSWER_SELECTION" in confirmed_ids
 
 
 def authoritative_guided_completion(
@@ -660,10 +2463,20 @@ def is_authoritative_guided_completion(
     """Return whether the contract has proven the whole requested response."""
     if evaluate_answer_contract(request) != "CORRECT" or request.answer_spec is None:
         return False
-    return not (
+    if (
         request.answer_spec.explanation_required
         and request.answer_spec.verification_method == "EXACT_CHOICE_MATCH"
-    )
+    ):
+        return False
+    rules = load_classifier_rules()
+    if (
+        request.question_type == "MULTI_PART_SHORT_RESPONSE"
+        or requires_multi_component_completion(request, rules)
+    ):
+        return normalize_semantic_answer(request.student_input) == normalize_semantic_answer(
+            request.answer_spec.canonical_answer
+        )
+    return True
 
 
 def guided_error_definitions(
@@ -735,6 +2548,313 @@ def validate_generated_rubric(
         )
 
 
+_COMPONENT_TOKEN_ALIASES = {
+    "added": "add",
+    "addition": "add",
+    "adding": "add",
+    "adds": "add",
+    "changed": "change",
+    "changes": "change",
+    "changing": "change",
+    "constant": "fixed",
+    "remains": "stay",
+    "stays": "stay",
+    "unchanged": "fixed",
+}
+_COMPONENT_LINKING_TOKENS = {
+    "a",
+    "an",
+    "is",
+    "means",
+    "operation",
+    "quantity",
+    "the",
+    "value",
+    "stay",
+}
+_NEGATION_PATTERN = re.compile(r"\b(?:not|isn't|isnt|doesn't|doesnt|never)\b")
+
+
+def component_evidence_tokens(value: str) -> set[str]:
+    """Normalize harmless wording differences in one authored answer part."""
+
+    normalized_tokens = {
+        _COMPONENT_TOKEN_ALIASES.get(token, token)
+        for token in normalize_semantic_answer(value).split()
+    }
+    return normalized_tokens - _COMPONENT_LINKING_TOKENS
+
+
+def authored_component_is_demonstrated(
+    component: GeneratedConcept,
+    response_tokens: set[str],
+    normalized_response: str,
+) -> bool:
+    if not component.concept_id.startswith("REQUIRED_COMPONENT_"):
+        return False
+    required_tokens = component_evidence_tokens(component.description)
+    return bool(required_tokens) and required_tokens.issubset(response_tokens)
+
+
+def concise_explanation_is_demonstrated(
+    component: GeneratedConcept,
+    response_tokens: set[str],
+) -> bool:
+    """Recognise a short valid reason without demanding a fixed sentence form."""
+
+    component_kind = f"{component.concept_id} {component.description}".casefold()
+    is_reason_component = any(
+        term in component_kind
+        for term in ("explanation", "explain", "reason", "why")
+    )
+    if not is_reason_component:
+        return False
+    justification_tokens = {"variable", "change", "different", "any", "represent"}
+    return bool(response_tokens.intersection(justification_tokens))
+
+
+def contradicted_authored_component_ids(
+    rubric: GeneratedQuestionRubric,
+    student_input: str,
+) -> set[str]:
+    """Detect a direct reversal such as saying a fixed addend changes."""
+
+    response_tokens = component_evidence_tokens(normalize_semantic_answer(student_input))
+    property_tokens = {"change", "fixed"}
+    operation_tokens = {"add", "subtract", "multiply", "divide"}
+    response_property = next(
+        (token for token in property_tokens if token in response_tokens),
+        None,
+    )
+    if response_property is None:
+        return set()
+    normalized_input = student_input.casefold()
+    contradicted: set[str] = set()
+    for component in rubric.required_concepts:
+        component_tokens = component_evidence_tokens(component.description)
+        component_property = next(
+            (token for token in property_tokens if token in component_tokens),
+            None,
+        )
+        component_terms = component_tokens - property_tokens - operation_tokens
+        describes_reversed_component = any(
+            re.search(
+                (
+                    rf"(?<![a-z0-9]){re.escape(term)}(?:\s+is)?\s+"
+                    rf"{response_property}(?:s|d|ing)?\b"
+                ),
+                normalized_input,
+            )
+            is not None
+            for term in component_terms
+        )
+        if (
+            component_property is not None
+            and component_property != response_property
+            and describes_reversed_component
+        ):
+            contradicted.add(component.concept_id)
+    return contradicted
+
+
+def merge_authored_component_evidence(
+    evaluation: GuidedEvaluation,
+    rubric: GeneratedQuestionRubric,
+    student_input: str,
+) -> GuidedEvaluation:
+    """Confirm clear lexical paraphrases without replacing semantic LLM review."""
+
+    if _NEGATION_PATTERN.search(student_input.lower()) is not None:
+        return evaluation
+    normalized_response = normalize_semantic_answer(student_input)
+    response_tokens = component_evidence_tokens(normalized_response)
+    directly_contradicted_ids = contradicted_authored_component_ids(
+        rubric,
+        student_input,
+    )
+    if directly_contradicted_ids:
+        required_ids = {
+            component.concept_id
+            for component in rubric.required_concepts
+            if component.required
+        }
+        return evaluation.model_copy(
+            update={
+                "student_state": "WRONG",
+                "newly_confirmed_concept_ids": [],
+                "contradicted_concept_ids": sorted(
+                    set(evaluation.contradicted_concept_ids)
+                    | directly_contradicted_ids
+                ),
+                "missing_concept_ids": sorted(required_ids),
+            }
+        )
+    demonstrated_ids = {
+        component.concept_id
+        for component in rubric.required_concepts
+        if (
+            authored_component_is_demonstrated(
+                component,
+                response_tokens,
+                normalized_response,
+            )
+            or concise_explanation_is_demonstrated(component, response_tokens)
+        )
+    }
+    if not demonstrated_ids:
+        return evaluation
+    contradicted_ids = set(evaluation.contradicted_concept_ids)
+    newly_confirmed_ids = (
+        set(evaluation.newly_confirmed_concept_ids) | demonstrated_ids
+    ) - contradicted_ids
+    confirmed_ids = (
+        newly_confirmed_ids | set(evaluation.preserved_concept_ids)
+    ) - contradicted_ids
+    required_ids = {
+        component.concept_id
+        for component in rubric.required_concepts
+        if component.required
+    }
+    missing_ids = required_ids - confirmed_ids - contradicted_ids
+    # A small lexical reason can prevent a repeat loop, but it cannot by itself
+    # promote an answer to complete; only deterministic completion or validated
+    # semantic evaluation may do that.
+    student_state: GuidedStudentState = (
+        "CORRECT" if evaluation.student_state == "CORRECT" else "PARTIAL"
+    )
+    return evaluation.model_copy(
+        update={
+            "student_state": student_state,
+            "newly_confirmed_concept_ids": sorted(newly_confirmed_ids),
+            "missing_concept_ids": sorted(missing_ids),
+        }
+    )
+
+
+def significant_component_tokens(value: str) -> set[str]:
+    """Return cheap relevance tokens while retaining numbers and variables."""
+
+    tokens = set(normalize_semantic_answer(value).split())
+    ignored = {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "be",
+        "because",
+        "briefly",
+        "can",
+        "does",
+        "explain",
+        "for",
+        "how",
+        "is",
+        "it",
+        "of",
+        "or",
+        "the",
+        "this",
+        "to",
+        "what",
+        "which",
+        "why",
+        "with",
+    }
+    return {
+        token
+        for token in tokens - ignored
+        if len(token) >= 3 or token.isdigit() or token.isalpha() and len(token) == 1
+    }
+
+
+def component_adjudication_targets(
+    evaluation: GuidedEvaluation,
+    objective: ActiveTeachingObjective,
+    rubric: GeneratedQuestionRubric,
+    student_response: str,
+    question: str,
+    answer_spec: AnswerSpec,
+) -> list[GeneratedConcept]:
+    """Verify claimed evidence before it can enter persistent guided state."""
+
+    claimed_ids = set(evaluation.newly_confirmed_concept_ids) - set(
+        objective.confirmed_concept_ids
+    )
+    claimed = [
+        component
+        for component in rubric.required_concepts
+        if component.required and component.concept_id in claimed_ids
+    ]
+    if claimed:
+        return claimed
+
+    if (
+        evaluation.student_state != "PARTIAL"
+        or evaluation.contradicted_concept_ids
+        or not objective.confirmed_concept_ids
+        or not evaluation.missing_concept_ids
+        or not student_response.strip()
+    ):
+        return []
+    missing_ids = set(evaluation.missing_concept_ids)
+    target = next(
+        (
+            component
+            for component in rubric.required_concepts
+            if component.required and component.concept_id in missing_ids
+        ),
+        None,
+    )
+    if target is None:
+        return []
+    response_tokens = significant_component_tokens(student_response)
+    context = " ".join(
+        [
+            target.description,
+            question,
+            answer_spec.canonical_answer,
+            *answer_spec.accepted_answers,
+        ]
+    )
+    if not response_tokens.intersection(significant_component_tokens(context)):
+        return []
+    return [target]
+
+
+def apply_focused_component_evidence(
+    evaluation: GuidedEvaluation,
+    evidence: FocusedComponentEvidence,
+    confidence_threshold: float,
+) -> GuidedEvaluation:
+    """Apply independently verified evidence to one authored component."""
+
+    confirmed_ids = set(evaluation.newly_confirmed_concept_ids)
+    contradicted_ids = set(evaluation.contradicted_concept_ids)
+    if (
+        evidence.status == "DEMONSTRATED"
+        and evidence.confidence >= confidence_threshold
+    ):
+        confirmed_ids.add(evidence.component_id)
+        contradicted_ids.discard(evidence.component_id)
+    else:
+        # A model claim is never persistent evidence on its own. If the
+        # independent adjudicator cannot positively demonstrate the component,
+        # remove the new claim and retain the unresolved teaching step.
+        confirmed_ids.discard(evidence.component_id)
+        if (
+            evidence.status == "CONTRADICTED"
+            and evidence.confidence >= confidence_threshold
+        ):
+            contradicted_ids.add(evidence.component_id)
+    return evaluation.model_copy(
+        update={
+            "newly_confirmed_concept_ids": sorted(confirmed_ids),
+            "contradicted_concept_ids": sorted(contradicted_ids),
+        }
+    )
+
+
 def initial_guided_objective(
     rubric: GeneratedQuestionRubric,
 ) -> ActiveTeachingObjective:
@@ -767,6 +2887,7 @@ def validate_guided_evaluation(
         return reconcile_guided_evaluation(
             evaluation,
             objective,
+            rubric,
             rules,
             f"unknown concept IDs: {sorted(returned_ids - concept_ids)}",
         )
@@ -782,6 +2903,7 @@ def validate_guided_evaluation(
         return reconcile_guided_evaluation(
             evaluation,
             objective,
+            rubric,
             rules,
             f"disallowed error code: {evaluation.selected_error_code}",
         )
@@ -805,6 +2927,7 @@ def validate_guided_evaluation(
         return reconcile_guided_evaluation(
             evaluation,
             objective,
+            rubric,
             rules,
             (
                 f"confidence {evaluation.confidence} below "
@@ -831,28 +2954,46 @@ def validate_guided_evaluation(
             "openai_ai_engine",
             "Guided evaluation must return non-empty text and voice messages.",
         )
+    if not remaining:
+        return evaluation.model_copy(
+            update={
+                "student_state": "CORRECT",
+                "preserved_concept_ids": sorted(
+                    set(objective.confirmed_concept_ids) - contradicted
+                ),
+                "missing_concept_ids": [],
+                "selected_error_code": None,
+                "next_objective": None,
+                "tutor_message": rules.messages.CORRECT,
+                "tutor_message_voice": rules.messages.CORRECT,
+            }
+        )
     if evaluation.student_state == "CORRECT" and remaining:
         return reconcile_guided_evaluation(
             evaluation,
             objective,
+            rubric,
             rules,
             "CORRECT left required concepts missing",
         )
-    if evaluation.student_state == "PARTIAL" and (
-        not confirmed or not remaining
+    if (
+        evaluation.student_state == "PARTIAL"
+        and not confirmed
+        and remaining
+        and evaluation.selected_error_code is not None
     ):
+        # PARTIAL requires positive evidence for at least one authored
+        # component. When the model found only an authored misconception, this
+        # is an incorrect attempt, not an unclear partial. Preserving that error
+        # lets the deterministic Wrong-1..Wrong-4 ladder reach its scaffold.
+        evaluation = evaluation.model_copy(update={"student_state": "WRONG"})
+    if evaluation.student_state == "PARTIAL" and (not confirmed or not remaining):
         return reconcile_guided_evaluation(
             evaluation,
             objective,
+            rubric,
             rules,
             "PARTIAL did not contain both confirmed and missing concepts",
-        )
-    if evaluation.student_state == "WRONG" and not remaining:
-        return reconcile_guided_evaluation(
-            evaluation,
-            objective,
-            rules,
-            "WRONG confirmed every required concept",
         )
     if evaluation.student_state in {"STUCK", "UNCLEAR"} and (
         evaluation.newly_confirmed_concept_ids
@@ -861,6 +3002,7 @@ def validate_guided_evaluation(
         return reconcile_guided_evaluation(
             evaluation,
             objective,
+            rubric,
             rules,
             f"{evaluation.student_state} attempted to create evidence",
         )
@@ -892,6 +3034,7 @@ def validate_guided_evaluation(
 def reconcile_guided_evaluation(
     evaluation: GuidedEvaluation,
     objective: ActiveTeachingObjective,
+    rubric: GeneratedQuestionRubric,
     rules: ClassifierRulesConfig,
     reason: str,
 ) -> GuidedEvaluation:
@@ -903,7 +3046,11 @@ def reconcile_guided_evaluation(
             "reason": reason,
         },
     )
-    message = rules.guided_learning.reconciliation_message
+    message = focused_unresolved_prompt(
+        rubric,
+        objective,
+        rules.guided_learning.reconciliation_message,
+    )
     return evaluation.model_copy(
         update={
             "student_state": "UNCLEAR",
@@ -982,14 +3129,14 @@ def build_guided_tutor_response(
     objective: ActiveTeachingObjective | None,
 ) -> TutorResponse:
     state = evaluation.student_state
+    canvas_review: CanvasMathReview | None = _canvas_review_for(
+        request,
+        rules,
+        evaluation.confidence,
+    )
     response_strategy: ResponseStrategy = (
         "CONFIRM_CORRECT"
         if state == "CORRECT"
-        else "SCAFFOLD"
-        if state == "STUCK"
-        and request.phase_2_prompt_context is not None
-        and request.phase_2_prompt_context.consecutive_stuck_count + 1
-        >= rules.guided_learning.stuck_escalation_count
         else "CLARIFY"
         if state in {"PARTIAL", "STUCK", "UNCLEAR"}
         else "ENCOURAGE_RETRY"
@@ -1007,7 +3154,13 @@ def build_guided_tutor_response(
     )
     response = TutorResponse(
         evaluation=mapped_evaluation,
-        error_type="UNKNOWN_ERROR" if state == "WRONG" else None,
+        error_type=(
+            canvas_review.error_type
+            if canvas_review is not None and canvas_review.error_type is not None
+            else "UNKNOWN_ERROR"
+            if state == "WRONG"
+            else None
+        ),
         intent="EXPRESSING_CONFUSION" if state == "STUCK" else "SUBMITTING_ANSWER",
         response_strategy=response_strategy,
         tutor_message=evaluation.tutor_message,
@@ -1016,15 +3169,32 @@ def build_guided_tutor_response(
         hint_level=None,
         scaffold_steps_delivered=[],
         visual_cue=VisualCue(show=False, cue_type=None, description=None),
-        canvas_feedback=CanvasFeedback(
-            has_feedback=False,
-            step_feedback=[],
-            highlight_instruction=None,
+        canvas_feedback=(
+            canvas_review.canvas_feedback
+            if canvas_review is not None
+            else CanvasFeedback(
+                has_feedback=False,
+                step_feedback=[],
+                highlight_instruction=None,
+            )
         ),
-        mistake_classification=None,
-        annotation_intents=[],
+        mistake_classification=(
+            canvas_review.mistake_classification
+            if canvas_review is not None
+            else None
+        ),
+        annotation_intents=(
+            canvas_review.annotation_intents
+            if canvas_review is not None
+            else []
+        ),
         next_phase_recommendation=request.current_phase,
-        answer_reveal_allowed=False,
+        # A tutor may safely discuss an answer the learner has already supplied
+        # or selected; it must not introduce a new final answer.
+        answer_reveal_allowed=(
+            prompt_type_for_message(evaluation.tutor_message) == "SOURCE_CORRECTION"
+            or guided_turn_has_answer_evidence(request, evaluation)
+        ),
         confidence=evaluation.confidence,
         input_source=request.input_source,
         transcript_confidence=request.transcript_confidence,
@@ -1052,6 +3222,12 @@ def build_guided_tutor_response(
         selected_error_code=evaluation.selected_error_code,
         generated_question_rubric=rubric,
         active_teaching_objective=objective,
+        guided_teaching_state=teaching_state_for(
+            request,
+            rubric,
+            objective,
+            evaluation.tutor_message,
+        ),
     )
     return apply_answer_reveal_guardrail(
         response,
@@ -1093,6 +3269,7 @@ def generate_explain_again_response(
 
     last_error: AdapterError | None = None
     validation_feedback: str | None = None
+    answer_reveal_rejected = False
     for attempt in range(rules.guided_learning.maximum_retries + 1):
         recent_conversation = request.recent_conversation[
             -rules.guided_learning.maximum_recent_history_turns:
@@ -1127,24 +3304,19 @@ def generate_explain_again_response(
             rules,
             )
         ):
-            return ExplainAgainResult(
-                interaction_type="EXPLAIN_AGAIN",
-                tutor_message=message.tutor_message,
-                tutor_message_voice_optimised=message.tutor_message_voice_optimised,
-                confidence=message.confidence,
-                attempt_increment=0,
-                evaluation_reason_code="EXPLAIN_AGAIN_REEXPRESSION",
-                guided_student_state=request.guided_student_state,
-                active_teaching_objective=request.active_teaching_objective,
-                first_unresolved_concept_id=request.first_unresolved_concept_id,
-                selected_error_code=request.selected_error_code,
-                support_served_this_turn=None,
-                active_support_level=request.active_support_level,
-                highest_support_used=request.highest_support_used,
-                active_scaffold=request.active_scaffold,
-                progression_change_requested=False,
+            return _explain_again_result(
+                request,
+                message.tutor_message,
+                message.tutor_message_voice_optimised,
+                message.confidence,
             )
-        validation_feedback = rules.answer_reveal_guardrail.rewrite_feedback
+        answer_reveal_rejected = True
+        validation_feedback = (
+            f"{rules.answer_reveal_guardrail.rewrite_feedback} "
+            "Guardrail retry mode: return exactly one Socratic question that "
+            "asks the student to supply the unresolved fact. Do not state, "
+            "summarise, or paraphrase any answer component."
+        )
         last_error = AdapterError(
             "openai_ai_engine",
             (
@@ -1156,9 +3328,63 @@ def generate_explain_again_response(
             "explain_again_answer_reveal_retry",
             extra={"question_id": request.question_id, "attempt": attempt + 1},
         )
+    if answer_reveal_rejected:
+        safe_message = _safe_explain_again_message(request)
+        logger.warning(
+            "explain_again_safe_response_used",
+            extra={"question_id": request.question_id},
+        )
+        return _explain_again_result(
+            request,
+            safe_message,
+            safe_message,
+            1.0,
+        )
     raise last_error or AdapterError(
         "openai_ai_engine",
         f"Explain Again generation failed for question_id={request.question_id}.",
+    )
+
+
+def _explain_again_result(
+    request: ExplainAgainRequest,
+    tutor_message: str,
+    tutor_message_voice_optimised: str,
+    confidence: float,
+) -> ExplainAgainResult:
+    return ExplainAgainResult(
+        interaction_type="EXPLAIN_AGAIN",
+        tutor_message=tutor_message,
+        tutor_message_voice_optimised=tutor_message_voice_optimised,
+        confidence=confidence,
+        attempt_increment=0,
+        evaluation_reason_code="EXPLAIN_AGAIN_REEXPRESSION",
+        guided_student_state=request.guided_student_state,
+        active_teaching_objective=request.active_teaching_objective,
+        first_unresolved_concept_id=request.first_unresolved_concept_id,
+        selected_error_code=request.selected_error_code,
+        support_served_this_turn=None,
+        active_support_level=request.active_support_level,
+        highest_support_used=request.highest_support_used,
+        active_scaffold=request.active_scaffold,
+        progression_change_requested=False,
+    )
+
+
+def _safe_explain_again_message(request: ExplainAgainRequest) -> str:
+    if request.active_scaffold is not None:
+        return (
+            "Let’s look at the step already on your screen in a different way. "
+            "What do you notice first?"
+        )
+    if request.visible_visual_cue is not None and request.visible_visual_cue.show:
+        return (
+            "Let’s use the visual already on your screen. "
+            "What is the first difference you notice?"
+        )
+    return (
+        "Let’s break the question into one smaller part. "
+        "What information would you start with?"
     )
 
 
@@ -1454,6 +3680,7 @@ def build_tutor_message_with_openai(
                 phase=request.current_phase,
                 conversation_history=request.conversation_history,
                 canvas_context=canvas_context,
+                support_context=None,
                 rejected_tutor_message=rejected_message,
                 validation_feedback=validation_feedback,
             )
@@ -1479,6 +3706,64 @@ def build_tutor_message_with_openai(
                 "attempt": attempt + 1,
                 "input_source": request.input_source,
             },
+        )
+    return None
+
+
+def build_support_aware_tutor_message(
+    question_id: str | None,
+    question: str,
+    correct_answer: str,
+    student_input: str,
+    evaluation: EvaluationCategory | None,
+    error_type: ErrorType | None,
+    response_strategy: ResponseStrategy,
+    hint_level: HintLevel | None,
+    conversation_history: list[ConversationMessage],
+    support_context: dict[str, object],
+    openai_client: OpenAIAIEngineClient | None,
+) -> OpenAITutorMessage | None:
+    """Write a response that explicitly connects an authored support item to a turn."""
+
+    if openai_client is None:
+        return None
+    rules = load_classifier_rules()
+    rejected_message: str | None = None
+    validation_feedback: str | None = None
+    for attempt in range(rules.guided_learning.maximum_retries + 1):
+        try:
+            message = openai_client.build_tutor_message(
+                question=question,
+                student_input=student_input,
+                evaluation=evaluation,
+                error_type=error_type,
+                response_strategy=response_strategy,
+                hint_level=hint_level,
+                phase="GUIDED_PRACTICE",
+                conversation_history=conversation_history,
+                canvas_context=None,
+                support_context=support_context,
+                rejected_tutor_message=rejected_message,
+                validation_feedback=validation_feedback,
+            )
+        except AdapterError as error:
+            logger.warning(
+                "support_aware_tutor_message_fallback",
+                extra={"question_id": question_id, "detail": error.message},
+            )
+            return None
+        if not message_reveals_answer(
+            message.tutor_message,
+            message.tutor_message_voice_optimised,
+            correct_answer,
+            rules,
+        ):
+            return message
+        rejected_message = message.tutor_message
+        validation_feedback = rules.answer_reveal_guardrail.rewrite_feedback
+        logger.warning(
+            "support_aware_tutor_message_answer_reveal_retry",
+            extra={"question_id": question_id, "attempt": attempt + 1},
         )
     return None
 
@@ -1591,7 +3876,7 @@ def evaluate_answer_contract(
         *answer_spec.accepted_answers,
     ]
     if method == "EXACT_CHOICE_MATCH":
-        student_choice = request.student_input.strip().upper()
+        student_choice = normalized_choice_response(request.student_input)
         accepted_choices = {answer.strip().upper() for answer in accepted_answers}
         return "CORRECT" if student_choice in accepted_choices else "INCORRECT"
     if method == "EXACT_NOTATION_MATCH":
@@ -1638,6 +3923,17 @@ def evaluate_answer_contract(
     ):
         return "CORRECT"
     return None
+
+
+def normalized_choice_response(student_input: str) -> str:
+    """Return the selected option ID from a short typed choice response."""
+
+    normalized = student_input.strip().upper()
+    match = re.fullmatch(
+        r"(?:I\s+(?:CHOOSE|CHOSE)\s+(?:OPTION\s+)?|(?:THE\s+)?(?:OPTION|CHOICE)\s+)?([A-Z])\.?",
+        normalized,
+    )
+    return match.group(1) if match is not None else normalized
 
 
 def normalize_exact_notation(value: str) -> str:
@@ -1723,27 +4019,59 @@ def is_symbolically_equivalent(
     from sympy import Symbol, simplify, sympify
 
     allowed_pattern = r"[A-Za-z0-9+\-*/^().\s]+"
-    if re.fullmatch(allowed_pattern, student_input) is None:
+    normalized_student = normalize_compact_spoken_expression(student_input)
+    candidates = [normalized_student]
+    candidates.extend(
+        match.group(0)
+        for match in re.finditer(r"\b[A-Za-z]\s*[+\-*/]\s*\d+(?:\.\d+)?\b", normalized_student)
+    )
+    if not candidates or all(re.fullmatch(allowed_pattern, candidate) is None for candidate in candidates):
         return False
-    expressions = [student_input, *accepted_answers]
-    symbol_names = set(re.findall(r"[A-Za-z]+", " ".join(expressions)))
-    symbols = {name: Symbol(name) for name in symbol_names}
-    try:
-        student_expression = sympify(
-            student_input.replace("^", "**"),
-            locals=symbols,
+    for candidate in candidates:
+        if re.fullmatch(allowed_pattern, candidate) is None:
+            continue
+        expressions = [candidate, *accepted_answers]
+        symbol_names = set(re.findall(r"[A-Za-z]+", " ".join(expressions)))
+        symbols = {name: Symbol(name) for name in symbol_names}
+        try:
+            student_expression = sympify(candidate.replace("^", "**"), locals=symbols)
+            if any(
+                simplify(
+                    student_expression
+                    - sympify(answer.replace("^", "**"), locals=symbols)
+                )
+                == 0
+                for answer in accepted_answers
+                if re.fullmatch(allowed_pattern, answer) is not None
+            ):
+                return True
+        except (TypeError, ValueError, SyntaxError):
+            continue
+    return False
+
+
+def normalize_compact_spoken_expression(value: str) -> str:
+    """Turn unspaced spoken algebra such as ``NPlus5`` into safe notation."""
+
+    normalized = unicodedata.normalize("NFKC", value).replace("−", "-")
+    operations = {
+        "plus": "+",
+        "add": "+",
+        "minus": "-",
+        "subtract": "-",
+        "times": "*",
+        "multiply": "*",
+        "dividedby": "/",
+        "divide": "/",
+    }
+    for word, symbol in operations.items():
+        normalized = re.sub(
+            rf"\b([A-Za-z])\s*{word}\s*(-?\d+(?:\.\d+)?)\b",
+            rf"\1 {symbol} \2",
+            normalized,
+            flags=re.IGNORECASE,
         )
-        return any(
-            simplify(
-                student_expression
-                - sympify(answer.replace("^", "**"), locals=symbols)
-            )
-            == 0
-            for answer in accepted_answers
-            if re.fullmatch(allowed_pattern, answer) is not None
-        )
-    except (TypeError, ValueError, SyntaxError):
-        return False
+    return normalized.casefold()
 
 
 def classify_student_error(
@@ -1870,16 +4198,11 @@ def build_tutor_decision(
     hint_level: HintLevel | None,
     confidence: float,
 ) -> TutorDecision:
-    canvas_review: CanvasMathReview | None = None
-    if request.input_source == "CANVAS" and intent == "SUBMITTING_ANSWER":
-        canvas_review = review_canvas_math(
-            question=request.question,
-            correct_answer=request.correct_answer,
-            current_phase=request.current_phase,
-            canvas_regions=request.canvas_regions,
-            config=rules.canvas_review,
-            confidence=confidence,
-        )
+    canvas_review: CanvasMathReview | None = _canvas_review_for(
+        request,
+        rules,
+        confidence,
+    )
 
     effective_error_type: ErrorType | None = (
         canvas_review.error_type
@@ -1891,7 +4214,18 @@ def build_tutor_decision(
         and canvas_review.mistake_classification.status == "mistake_found"
     )
     effective_evaluation: EvaluationCategory | None = evaluation
-    if canvas_mistake_found and evaluation == "CORRECT":
+    if (
+        canvas_review is not None
+        and canvas_review.mistake_classification.status == "no_mistake"
+        and request.canvas_solution_complete_candidate
+    ):
+        effective_evaluation = "CORRECT"
+    elif (
+        canvas_review is not None
+        and canvas_review.mistake_classification.status == "mistake_found"
+    ):
+        effective_evaluation = "INCORRECT"
+    if canvas_mistake_found and evaluation == "CORRECT" and not request.has_canvas_evidence:
         effective_evaluation = "PARTIALLY_CORRECT"
 
     effective_response_strategy: ResponseStrategy = response_strategy
@@ -1918,6 +4252,26 @@ def build_tutor_decision(
         hint_level=effective_hint_level,
         canvas_review=canvas_review,
         reasoning_complete=has_reasoning_evidence(request, rules),
+    )
+
+
+def _canvas_review_for(
+    request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
+    confidence: float,
+) -> CanvasMathReview | None:
+    """Review Canvas evidence for every tutor path that may annotate submitted work."""
+
+    if not request.has_canvas_evidence and request.input_source != "CANVAS":
+        return None
+    return review_canvas_math(
+        question=request.question,
+        correct_answer=request.correct_answer,
+        current_phase=request.current_phase,
+        canvas_regions=request.canvas_regions,
+        spatial_tokens=request.spatial_tokens,
+        config=rules.canvas_review,
+        confidence=confidence,
     )
 
 
@@ -2191,13 +4545,39 @@ def apply_retrieved_hint(
 def contains_answer_reveal(message: str, correct_answer: str, rules: ClassifierRulesConfig) -> bool:
     normalized_message: str = normalize_text(message)
     normalized_correct_answer: str = normalize_text(correct_answer)
+    semantic_message = normalize_semantic_answer(message)
+    semantic_correct_answer = normalize_semantic_answer(correct_answer)
 
-    if normalized_correct_answer != "" and normalized_correct_answer in normalized_message:
+    exact_answer_present = False
+    if len(normalized_correct_answer) == 1 and normalized_correct_answer.isalnum():
+        exact_answer_present = (
+            re.search(
+                rf"(?<!\w){re.escape(normalized_correct_answer)}(?!\w)",
+                normalized_message,
+            )
+            is not None
+        )
+    elif normalized_correct_answer != "":
+        exact_answer_present = normalized_correct_answer in normalized_message
+    if (
+        len(semantic_correct_answer.split()) > 1
+        and semantic_correct_answer in semantic_message
+    ):
+        exact_answer_present = True
+    if exact_answer_present:
         return True
     if contains_any(normalized_message, rules.answer_reveal_guardrail.reveal_phrases):
         return True
     correct_numbers: list[str] = re.findall(r"-?\d+(?:\.\d+)?", correct_answer)
-    if len(correct_numbers) != 1:
+    is_single_numeric_answer = (
+        len(correct_numbers) == 1
+        and (
+            re.search(r"[a-z]", semantic_correct_answer) is None
+            or re.fullmatch(r"[a-z]\s*=\s*-?\d+(?:\.\d+)?", correct_answer.casefold().strip())
+            is not None
+        )
+    )
+    if not is_single_numeric_answer:
         return False
 
     correct_value: float = float(correct_numbers[0])
@@ -2480,6 +4860,586 @@ def is_low_confidence(transcript_confidence: float | None, rules: ClassifierRule
     if transcript_confidence is None:
         return False
     return transcript_confidence < rules.low_transcript_confidence_threshold
+
+
+_SPOKEN_MATH_NUMBERS: dict[str, str] = {
+    "zero": "0",
+    "one": "1",
+    "two": "2",
+    "three": "3",
+    "four": "4",
+    "for": "4",
+    "five": "5",
+    "six": "6",
+    "seven": "7",
+    "eight": "8",
+    "nine": "9",
+    "ten": "10",
+}
+_QUESTION_VARIABLE_PATTERN = re.compile(
+    r"\b(?:score|value|number|counter|quantity|variable)\s+"
+    r"(?:is\s+)?(?:represented\s+by\s+)?([a-z])\b",
+    flags=re.IGNORECASE,
+)
+_VOICE_ADDITION_PATTERN = re.compile(
+    r"^\s*(sex|[a-z])\s+(?:plus|add)\s+([a-z]+|\d+)\s*[.!?]?\s*$",
+    flags=re.IGNORECASE,
+)
+
+
+def resolve_hybrid_student_evidence(
+    evidence: HybridStudentEvidence,
+    question: str,
+    minimum_voice_transcript_confidence: float,
+    minimum_ocr_confidence: float,
+) -> HybridEvidenceResolution:
+    """Resolve reliable Hybrid evidence without changing the original evidence."""
+
+    typed_answer = _non_empty_evidence_text(evidence.typed_answer)
+    if typed_answer is not None:
+        return _reliable_hybrid_evidence_resolution(typed_answer, "TYPED")
+
+    structured_answer = _structured_evidence_meaning(evidence.structured_answer)
+    if structured_answer is not None:
+        return _reliable_hybrid_evidence_resolution(structured_answer, "STRUCTURED")
+
+    processed_math_text = _non_empty_evidence_text(evidence.processed_math_text)
+    if (
+        processed_math_text is not None
+        and evidence.ocr_confidence is not None
+        and evidence.ocr_confidence >= minimum_ocr_confidence
+    ):
+        return _reliable_hybrid_evidence_resolution(processed_math_text, "OCR")
+
+    resolved_voice = _resolve_voice_math_from_question_context(
+        evidence,
+        question,
+        minimum_voice_transcript_confidence,
+    )
+    if resolved_voice is not None:
+        return _reliable_hybrid_evidence_resolution(resolved_voice, "VOICE_CONTEXT")
+
+    return HybridEvidenceResolution(
+        input_reliability="NEEDS_WRITING",
+        resolved_student_meaning=None,
+        resolution_source="NEEDS_WRITING",
+        can_update_learning_state=False,
+    )
+
+
+def _non_empty_evidence_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped_value = value.strip()
+    return stripped_value if stripped_value else None
+
+
+def _structured_evidence_meaning(values: dict[str, str]) -> str | None:
+    non_empty_values = [value.strip() for value in values.values() if value.strip()]
+    return "; ".join(non_empty_values) if non_empty_values else None
+
+
+def _reliable_hybrid_evidence_resolution(
+    meaning: str,
+    source: Literal["TYPED", "STRUCTURED", "OCR", "VOICE_CONTEXT"],
+) -> HybridEvidenceResolution:
+    return HybridEvidenceResolution(
+        input_reliability="RELIABLE",
+        resolved_student_meaning=meaning,
+        resolution_source=source,
+        can_update_learning_state=True,
+    )
+
+
+def _resolve_voice_math_from_question_context(
+    evidence: HybridStudentEvidence,
+    question: str,
+    minimum_transcript_confidence: float,
+) -> str | None:
+    if evidence.input_source not in {"VOICE", "MULTIMODAL"}:
+        return None
+    if (
+        evidence.transcript_confidence is None
+        or evidence.transcript_confidence < minimum_transcript_confidence
+    ):
+        return None
+    transcript = _non_empty_evidence_text(evidence.raw_voice_transcript)
+    if transcript is None:
+        return None
+    match = _VOICE_ADDITION_PATTERN.fullmatch(transcript)
+    if match is None:
+        return None
+
+    question_variables = _question_variable_symbols(question)
+    question_numbers = _question_number_values(question)
+    if len(question_variables) != 1 or len(question_numbers) != 1:
+        return None
+    if _question_supports_addition(question) is False:
+        return None
+
+    spoken_symbol = match.group(1).lower()
+    candidate_symbol = "s" if spoken_symbol == "sex" else spoken_symbol
+    candidate_number = _spoken_math_number(match.group(2))
+    if candidate_number is None:
+        return None
+    if candidate_symbol not in question_variables or candidate_number not in question_numbers:
+        return None
+    return f"{candidate_symbol} + {candidate_number}"
+
+
+def _question_variable_symbols(question: str) -> set[str]:
+    return {
+        match.group(1).lower()
+        for match in _QUESTION_VARIABLE_PATTERN.finditer(question)
+    }
+
+
+def _question_number_values(question: str) -> set[str]:
+    normalized_question = normalize_text(question)
+    numeric_values = set(re.findall(r"\b\d+\b", normalized_question))
+    spoken_values = {
+        _SPOKEN_MATH_NUMBERS[word]
+        for word in re.findall(r"\b[a-z]+\b", normalized_question)
+        if word in _SPOKEN_MATH_NUMBERS
+    }
+    return numeric_values | spoken_values
+
+
+def _question_supports_addition(question: str) -> bool:
+    return (
+        re.search(
+            r"\b(?:gain|gains|gained|increase|increases|increased|add|adds|added|plus)\b",
+            question,
+            re.IGNORECASE,
+        )
+        is not None
+    )
+
+
+def _spoken_math_number(value: str) -> str | None:
+    normalized_value = value.lower()
+    if normalized_value.isdigit():
+        return normalized_value
+    return _SPOKEN_MATH_NUMBERS.get(normalized_value)
+
+
+def validate_hybrid_tutor_progression(
+    request: HybridTutorRequest,
+    response: HybridTutorResponse,
+) -> HybridTutorResponse:
+    """Validate that a Hybrid tutor result follows authored answer progression."""
+
+    return validate_hybrid_tutor_progression_contract(request, response)
+
+
+def hybrid_phase2_system_prompt(
+    prompt_kind: Literal["SEMANTIC", "WORDING"],
+    rules: ClassifierRulesConfig,
+) -> str:
+    """Use the shared Phase 2 prompt as the main Hybrid prompt layer."""
+
+    hybrid_prompt = (
+        rules.guided_learning.hybrid_prompts.semantic_prompt
+        if prompt_kind == "SEMANTIC"
+        else rules.guided_learning.hybrid_prompts.wording_prompt
+    )
+    return f"{get_phase_block('GUIDED_PRACTICE')}\n\n{hybrid_prompt}"
+
+
+def validate_hybrid_semantic_evaluation(
+    request: HybridTutorRequest,
+    evaluation: HybridSemanticEvaluation,
+) -> HybridSemanticEvaluation:
+    """Reject semantic output that changes the authored progression order."""
+
+    authored_steps = authored_hybrid_answer_steps(request.answer_spec)
+    expected_completed = [
+        step.component_id for step in authored_steps[: len(evaluation.completed_components)]
+    ]
+    if evaluation.completed_components != expected_completed:
+        raise ValueError("Hybrid semantics must retain ordered authored components.")
+    previous_components = request.pedagogical_state.completed_component_ids
+    if evaluation.completed_components[: len(previous_components)] != previous_components:
+        raise ValueError("Hybrid semantics cannot remove confirmed components.")
+    expected_index = (
+        None
+        if len(evaluation.completed_components) == len(authored_steps)
+        else len(evaluation.completed_components)
+    )
+    if evaluation.current_answer_step_index != expected_index:
+        raise ValueError("Hybrid semantics must name the earliest unresolved step.")
+    if evaluation.current_answer_step_id != current_hybrid_answer_step_id(
+        authored_steps,
+        expected_index,
+    ):
+        raise ValueError("Hybrid semantics returned an invalid current answer-step ID.")
+    return evaluation
+
+
+def validate_hybrid_tutor_turn(
+    request: HybridTutorRequest,
+    resolution: HybridEvidenceResolution,
+    turn: HybridTutorTurn,
+) -> HybridTutorTurn:
+    """Validate the single Hybrid LLM result before any orchestration update."""
+
+    validate_hybrid_semantic_evaluation(
+        request,
+        HybridSemanticEvaluation(
+            pedagogical_state=turn.pedagogical_state,
+            completed_components=turn.completed_components,
+            current_answer_step_index=turn.current_answer_step_index,
+            current_answer_step_id=turn.current_answer_step_id,
+        ),
+    )
+    if turn.requires_written_math_evidence and turn.next_expected_input != "WRITE":
+        raise ValueError("Written-maths requirement must request WRITE input.")
+    if not hybrid_symbolic_completion_allowed(request, resolution) and (
+        turn.current_answer_step_index is None
+    ):
+        raise ValueError("Voice-only algebra evidence cannot complete the final rule.")
+    if resolution.input_reliability == "NEEDS_WRITING" and (
+        turn.completed_components != request.pedagogical_state.completed_component_ids
+    ):
+        raise ValueError("NEEDS_WRITING cannot update Hybrid learning state.")
+    return turn
+
+
+def hybrid_symbolic_completion_allowed(
+    request: HybridTutorRequest,
+    resolution: HybridEvidenceResolution,
+) -> bool:
+    """Require typed or reliable canvas maths for a final algebraic rule."""
+
+    current_index = request.pedagogical_state.current_answer_step_index
+    if current_index is None:
+        return True
+    is_final_step = current_index == len(request.answer_spec.answer_steps) - 1
+    if request.question_type != "SHORT_RESPONSE" or not is_final_step:
+        return resolution.can_update_learning_state is True
+    return (
+        resolution.resolution_source in {"TYPED", "OCR"}
+        and resolution.can_update_learning_state is True
+    )
+
+
+def decide_hybrid_pedagogy(
+    pedagogical_state: HybridPedagogicalState,
+    support_state: HybridSupportState,
+    authored_support_content: list[HybridAuthoredSupportContent],
+    rules: ClassifierRulesConfig,
+) -> HybridPedagogyDecision:
+    """Choose one Hybrid teaching move without changing support state."""
+
+    if pedagogical_state.student_state == "CORRECT":
+        return HybridPedagogyDecision(
+            strategy="ADVANCE_AND_FADE",
+            support_action="NONE",
+            support_id=None,
+            next_expected_input="VOICE_OR_WRITE",
+        )
+    if pedagogical_state.student_state == "PARTIAL":
+        return HybridPedagogyDecision(
+            strategy="AFFIRM_AND_ISOLATE",
+            support_action="NONE",
+            support_id=None,
+            next_expected_input="VOICE_OR_WRITE",
+        )
+    if pedagogical_state.student_state == "WRONG":
+        return HybridPedagogyDecision(
+            strategy="SOCRATIC_MISCONCEPTION_TEST",
+            support_action="NONE",
+            support_id=None,
+            next_expected_input="VOICE_OR_WRITE",
+        )
+    if pedagogical_state.student_state == "NEEDS_WRITING":
+        return HybridPedagogyDecision(
+            strategy="LOAD_REDUCTION",
+            support_action="NONE",
+            support_id=None,
+            next_expected_input="WRITE",
+        )
+    if pedagogical_state.student_state != "STUCK":
+        raise ValueError(
+            f"Hybrid pedagogy does not support {pedagogical_state.student_state}."
+        )
+    if support_state.consecutive_stuck_count == 0:
+        return HybridPedagogyDecision(
+            strategy="LOAD_REDUCTION",
+            support_action="NONE",
+            support_id=None,
+            next_expected_input="VOICE_OR_WRITE",
+        )
+    next_support = _next_hybrid_support_action(support_state, rules)
+    support_id = _authored_support_id(
+        authored_support_content,
+        next_support,
+    )
+    if next_support == "NONE" or support_id is None:
+        return HybridPedagogyDecision(
+            strategy="LOAD_REDUCTION",
+            support_action="NONE",
+            support_id=None,
+            next_expected_input="VOICE_OR_WRITE",
+        )
+    return HybridPedagogyDecision(
+        strategy="SUPPORT_ESCALATION",
+        support_action=next_support,
+        support_id=support_id,
+        next_expected_input="VOICE_OR_WRITE",
+    )
+
+
+def plan_hybrid_canvas_pedagogy(
+    request: HybridCanvasPlannerRequest,
+    rules: ClassifierRulesConfig,
+) -> list[CanvasPedagogyAction]:
+    """Create one safe, deduplicated canvas action for a Hybrid tutor turn."""
+
+    if (
+        rules.guided_learning.v1_hybrid_enabled is False
+        or rules.guided_learning.canvas_pedagogy_action_planner_enabled is False
+    ):
+        return []
+    authored_steps = authored_hybrid_answer_steps(request.answer_spec)
+    current_step_id = current_hybrid_answer_step_id(
+        authored_steps,
+        request.current_answer_step_index,
+    )
+    if current_step_id != request.current_answer_step_id:
+        raise ValueError("Canvas planner request does not name the current authored step.")
+    target = _reliable_active_canvas_target(request)
+    if target is None:
+        return []
+    if request.input_reliability == "NEEDS_WRITING":
+        action = CanvasPedagogyAction(
+            action_id=f"{request.turn_id}:canvas:1",
+            type="FOCUS",
+            layer="SUPPORT",
+            target_object_id=target.object_id,
+            semantic_tag="student_attempt",
+            text=None,
+            source_id=None,
+            answer_reveal_allowed=False,
+        )
+        return [] if _is_duplicate_canvas_action(action, request) else [action]
+    action = _planned_canvas_action(request, target.object_id)
+    if action is None or _is_duplicate_canvas_action(action, request):
+        return []
+    if (
+        _canvas_action_reveals_answer(action, request.answer_spec.canonical_answer, rules)
+        and not (
+            action.type == "TUTOR_SOLVED_STEP"
+            and request.decision.support_action == "TUTOR_SOLVED"
+            and request.approved_answer_reveal is True
+        )
+    ):
+        return []
+    actions = [action]
+    reliable_target_ids = {
+        item.object_id
+        for item in request.ordered_canvas_memory
+        if item.active_state == "ACTIVE" and item.reliability == "RELIABLE"
+    }
+    for anchor in request.confirmed_tutor_anchors:
+        if (
+            anchor.component_id not in request.completed_component_ids
+            or anchor.target_object_id not in reliable_target_ids
+        ):
+            continue
+        insert_math = CanvasPedagogyAction(
+            action_id=f"{request.turn_id}:canvas:{len(actions) + 1}",
+            type="INSERT_MATH",
+            layer="TUTOR",
+            target_object_id=anchor.target_object_id,
+            semantic_tag=anchor.semantic_tag,
+            text=anchor.text,
+            source_id=None,
+            answer_reveal_allowed=False,
+        )
+        if not _canvas_action_reveals_answer(
+            insert_math,
+            request.answer_spec.canonical_answer,
+            rules,
+        ) and not _is_duplicate_canvas_action(insert_math, request):
+            actions.append(insert_math)
+            insert_label = insert_math.model_copy(
+                update={
+                    "action_id": f"{request.turn_id}:canvas:{len(actions) + 1}",
+                    "type": "INSERT_LABEL",
+                    "text": f"{anchor.text} → {anchor.semantic_tag.replace('_', ' ')}",
+                }
+            )
+            actions.append(insert_label)
+    return actions
+
+
+def validate_hybrid_tutor_wording(
+    tutor_voice_text: str,
+    actions: list[CanvasPedagogyAction],
+    canonical_answer: str,
+    rules: ClassifierRulesConfig,
+) -> str:
+    """Keep Hybrid wording answer-safe and tied to its active visual action."""
+
+    if contains_answer_reveal(tutor_voice_text, canonical_answer, rules):
+        return rules.guided_learning.canvas_pedagogy_planner.safe_action_free_question
+    if not actions:
+        return tutor_voice_text
+    phrases = rules.guided_learning.canvas_pedagogy_planner.action_reference_phrases
+    action_phrases = phrases.get(actions[0].type, [])
+    normalized_text = normalize_text(tutor_voice_text)
+    if not any(normalize_text(phrase) in normalized_text for phrase in action_phrases):
+        return rules.guided_learning.canvas_pedagogy_planner.safe_action_free_question
+    return tutor_voice_text
+
+
+def validate_hybrid_canvas_action_reveal_policy(
+    action: CanvasPedagogyAction,
+    support_action: SupportUsed,
+    approved_answer_reveal: bool,
+) -> CanvasPedagogyAction:
+    """Permit answer reveal only for the explicitly approved tutor-solved rung."""
+
+    if action.answer_reveal_allowed is True and not (
+        action.type == "TUTOR_SOLVED_STEP"
+        and support_action == "TUTOR_SOLVED"
+        and approved_answer_reveal is True
+    ):
+        raise ValueError("Canvas answer reveal is not approved for this action.")
+    return action
+
+
+def _next_hybrid_support_action(
+    support_state: HybridSupportState,
+    rules: ClassifierRulesConfig,
+) -> SupportUsed:
+    ladder = rules.guided_learning.hybrid_support_ladder
+    current_rank = max(
+        ladder.index(support_state.current_support),
+        ladder.index(support_state.highest_support_used),
+    )
+    if current_rank + 1 >= len(ladder):
+        return "NONE"
+    return ladder[current_rank + 1]
+
+
+def _authored_support_id(
+    authored_support_content: list[HybridAuthoredSupportContent],
+    support_action: SupportUsed,
+) -> str | None:
+    for content in authored_support_content:
+        if content.support_action == support_action:
+            return content.source_id
+    return None
+
+
+def _reliable_active_canvas_target(
+    request: HybridCanvasPlannerRequest,
+) -> OrderedCanvasMemoryItem | None:
+    targets = [
+        item
+        for item in request.ordered_canvas_memory
+        if item.active_state == "ACTIVE" and item.reliability == "RELIABLE"
+    ]
+    return max(targets, key=lambda item: item.order_index) if targets else None
+
+
+def _planned_canvas_action(
+    request: HybridCanvasPlannerRequest,
+    target_object_id: str,
+) -> CanvasPedagogyAction | None:
+    decision = request.decision
+    action_by_strategy: dict[
+        str,
+        tuple[CanvasActionType, CanvasActionLayer, CanvasSemanticTag],
+    ] = {
+        "ADVANCE_AND_FADE": ("FOCUS", "TUTOR", "answer_step"),
+        "AFFIRM_AND_ISOLATE": ("HIGHLIGHT", "TUTOR", "student_attempt"),
+        "SOCRATIC_MISCONCEPTION_TEST": ("CIRCLE", "TUTOR", "misconception_test"),
+        "LOAD_REDUCTION": ("FOCUS", "SUPPORT", "answer_step"),
+    }
+    if decision.strategy == "SUPPORT_ESCALATION":
+        action_type, layer, semantic_tag = _support_canvas_action(decision.support_action)
+    else:
+        action_type, layer, semantic_tag = action_by_strategy[decision.strategy]
+    source_id: str | None = None
+    text: str | None = None
+    if decision.strategy == "SUPPORT_ESCALATION":
+        source_id = decision.support_id
+        if source_id is None:
+            return None
+        support = next(
+            (
+                item
+                for item in request.authored_support_content
+                if item.source_id == source_id
+                and item.support_action == decision.support_action
+            ),
+            None,
+        )
+        if support is None:
+            return None
+        if action_type == "TUTOR_SOLVED_STEP":
+            text = support.text
+    return CanvasPedagogyAction(
+        action_id=f"{request.turn_id}:canvas:1",
+        type=action_type,
+        layer=layer,
+        target_object_id=target_object_id,
+        semantic_tag=semantic_tag,
+        text=text,
+        source_id=source_id,
+        answer_reveal_allowed=(
+            action_type == "TUTOR_SOLVED_STEP"
+            and decision.support_action == "TUTOR_SOLVED"
+            and request.approved_answer_reveal is True
+        ),
+    )
+
+
+def _support_canvas_action(
+    support_action: SupportUsed,
+) -> tuple[CanvasActionType, CanvasActionLayer, CanvasSemanticTag]:
+    action_by_support: dict[
+        SupportUsed,
+        tuple[CanvasActionType, CanvasActionLayer, CanvasSemanticTag],
+    ] = {
+        "HINT": ("SHOW_CUE", "SUPPORT", "answer_step"),
+        "VISUAL_CUE": ("SHOW_CUE", "SUPPORT", "answer_step"),
+        "SCAFFOLD": ("OPEN_SCAFFOLD_STEP", "SUPPORT", "answer_step"),
+        "PARALLEL_EXAMPLE": ("SHOW_PARALLEL", "SUPPORT", "operation"),
+        "TUTOR_SOLVED": ("TUTOR_SOLVED_STEP", "TUTOR", "answer_step"),
+    }
+    if support_action not in action_by_support:
+        raise ValueError(f"No canvas action is allowed for {support_action} support.")
+    return action_by_support[support_action]
+
+
+def _is_duplicate_canvas_action(
+    action: CanvasPedagogyAction,
+    request: HybridCanvasPlannerRequest,
+) -> bool:
+    if action.action_id in request.active_action_ids:
+        return True
+    return any(
+        item.active_state == "ACTIVE"
+        and item.actor != "STUDENT"
+        and item.action_type == action.type
+        and item.target_object_id == action.target_object_id
+        and item.semantic_tag == action.semantic_tag
+        for item in request.ordered_canvas_memory
+    )
+
+
+def _canvas_action_reveals_answer(
+    action: CanvasPedagogyAction,
+    canonical_answer: str,
+    rules: ClassifierRulesConfig,
+) -> bool:
+    if action.text is None:
+        return False
+    return contains_answer_reveal(action.text, canonical_answer, rules)
 
 
 def is_ambiguous_answer(normalized_input: str, rules: ClassifierRulesConfig) -> bool:

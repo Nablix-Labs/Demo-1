@@ -46,7 +46,7 @@ def _coerce_learning_phase(value: str | None) -> LearningPhase:
 
 
 def _coerce_input_source(value: str | None) -> InputSource:
-    if value in {"TEXT", "VOICE", "CANVAS"}:
+    if value in {"TEXT", "VOICE", "CANVAS", "CHOICE"}:
         return cast(InputSource, value)
     return "TEXT"
 
@@ -58,7 +58,10 @@ def _coerce_hint_level(value: int | None) -> HintLevel | None:
 
 
 def _coerce_canvas_regions(regions: list[OCRTextRegion]) -> list[CanvasTextRegion]:
-    return [CanvasTextRegion(**region.model_dump()) for region in regions]
+    return [
+        CanvasTextRegion(**region.model_dump(exclude={"mathml"}))
+        for region in regions
+    ]
 
 
 class TutorEngineServiceAdapter:
@@ -112,11 +115,22 @@ class TutorEngineServiceAdapter:
                     max_hint_results=3,
                     exclude_content_ids=[],
                     canvas_regions=_coerce_canvas_regions(context.canvas_regions),
+                    canvas_mathml_blocks=context.canvas_mathml_blocks,
+                    spatial_tokens=context.spatial_tokens,
+                    canvas_events=context.canvas_events,
+                    has_canvas_evidence=context.has_canvas_evidence,
+                    canvas_solution_complete_candidate=(
+                        context.canvas_solution_complete_candidate
+                    ),
                     conversation_history=context.conversation_history,
                     conversation_state=context.conversation_state,
                     generated_question_rubric=context.generated_question_rubric,
                     active_teaching_objective=context.active_teaching_objective,
+                    guided_teaching_state=context.guided_teaching_state,
                     scaffold_evaluation_context=context.scaffold_evaluation_context,
+                    phase3_submission_confirmed=context.phase3_submission_confirmed,
+                    phase3_submission_kind=context.phase3_submission_kind,
+                    phase3_allowed_error_definitions=context.phase3_allowed_error_definitions,
                 )
             )
             return _tutor_result_from_ai_response(ai_response)
@@ -177,6 +191,7 @@ def _tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:
         scaffold_steps_delivered=response.scaffold_steps_delivered,
         visual_cue=VisualCue(
             show=response.visual_cue.show,
+            cue_id=response.visual_cue.cue_id,
             cue_type=response.visual_cue.cue_type,
             description=response.visual_cue.description,
             actions=response.visual_cue.actions,
@@ -206,6 +221,9 @@ def _tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:
             TutorMistakeClassification(
                 status=response.mistake_classification.status,
                 mistake_step_id=response.mistake_classification.mistake_step_id,
+                target_token_ids=response.mistake_classification.target_token_ids,
+                error_token=response.mistake_classification.error_token,
+                expected_token=response.mistake_classification.expected_token,
                 target_text=response.mistake_classification.target_text,
                 target_span=(
                     (
@@ -261,7 +279,17 @@ def _tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:
         selected_error_code=response.selected_error_code,
         generated_question_rubric=response.generated_question_rubric,
         active_teaching_objective=response.active_teaching_objective,
+        guided_teaching_state=response.guided_teaching_state,
         scaffold_original_answer_correct=response.scaffold_original_answer_correct,
+        independent_outcome=response.independent_outcome,
+        independent_success=response.independent_success,
+        independent_attempt_terminal=response.independent_attempt_terminal,
+        first_error_step=response.first_error_step,
+        phase3_review_evidence=(
+            response.phase3_review_evidence.model_dump()
+            if response.phase3_review_evidence is not None
+            else None
+        ),
     )
 
 

@@ -1,7 +1,9 @@
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
+import asyncio
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.adapters import provider, student_model
@@ -9,6 +11,8 @@ from app.core.config import Settings
 from app.core.exceptions import AdapterError
 from app.main import app
 from app.ai_engine.classifier_config import load_classifier_rules
+from app.models.adapters import TutorResult
+from app.models.guided_learning import GuidedRescue
 from app.services import interaction_service, session_service
 
 
@@ -17,6 +21,133 @@ SessionEventPost = Callable[
     [str, str, dict[str, object], dict[str, str], int, int],
     Awaitable[dict[str, object]],
 ]
+
+
+def test_guided_partial_answers_do_not_advance_wrong_support() -> None:
+    wrong_partial = TutorResult.model_construct(
+        guided_student_state="PARTIAL",
+        evaluation="PARTIALLY_CORRECT",
+        intent="SUBMITTING_ANSWER",
+        answer_value_confirmed=False,
+    )
+    defence_partial = wrong_partial.model_copy(
+        update={"answer_value_confirmed": True}
+    )
+    stuck = wrong_partial.model_copy(
+        update={"intent": "EXPRESSING_CONFUSION"}
+    )
+
+    assert not interaction_service._is_support_failure(wrong_partial)
+    assert not interaction_service._is_support_failure(defence_partial)
+    assert not interaction_service._is_support_failure(stuck)
+
+
+def test_unresolved_partial_does_not_emit_an_incorrect_attempt() -> None:
+    rules = load_classifier_rules()
+    unresolved = TutorResult.model_construct(
+        guided_student_state="PARTIAL",
+        evaluation="PARTIALLY_CORRECT",
+        intent="SUBMITTING_ANSWER",
+        answer_value_confirmed=False,
+    )
+    defence = unresolved.model_copy(update={"answer_value_confirmed": True})
+
+    assert interaction_service._guided_attempt_event_type(unresolved, rules) is None
+    assert interaction_service._guided_attempt_event_type(defence, rules) is None
+
+
+@pytest.mark.parametrize("support_type", ["HINT", "VISUAL_CUE", "SCAFFOLD"])
+def test_empty_support_keeps_the_tutor_response_available(
+    support_type: str,
+) -> None:
+    response = _event_response("INCORRECT_ATTEMPT", "REQ-EMPTY-VISUAL")
+    phase_payload = response["phase_payload"]
+    assert isinstance(phase_payload, dict)
+    phase_payload["support_to_serve"] = {
+        "support_type": support_type,
+        "items": [],
+        "retry_same_question": True,
+    }
+    event = session_service.StudentModelSessionEventResponse.model_validate(response)
+
+    message, visual_cue, steps, action, support_used = (
+        interaction_service._support_presentation(event)
+    )
+
+    assert message is None
+    assert visual_cue is None
+    assert steps == []
+    assert action is None
+    assert support_used is None
+
+
+def test_visual_cue_requires_an_authored_visual_cue_item() -> None:
+    response = _event_response("INCORRECT_ATTEMPT", "REQ-MISSING-VISUAL")
+    phase_payload = response["phase_payload"]
+    assert isinstance(phase_payload, dict)
+    phase_payload["support_to_serve"] = {
+        "support_type": "VISUAL_CUE",
+        "items": [
+            {
+                "content_type": "HINT",
+                "content_id": "HINT-T01-L2",
+                "content": "Compare the changing and fixed parts.",
+            }
+        ],
+        "retry_same_question": True,
+    }
+    event = session_service.StudentModelSessionEventResponse.model_validate(response)
+
+    message, visual_cue, steps, action, support_used = (
+        interaction_service._support_presentation(event)
+    )
+
+    assert message == "Compare the changing and fixed parts."
+    assert visual_cue is None
+    assert steps == []
+    assert action == "GIVE_HINT"
+    assert support_used == "HINT"
+
+
+def test_schema_visual_cue_preserves_the_authored_identity_and_asset() -> None:
+    event = session_service.StudentModelSessionEventResponse.model_validate(
+        _event_response("INCORRECT_ATTEMPT", "REQ-VISUAL-CUE-ASSET")
+    )
+    assert event.phase_payload is not None
+    event.phase_payload.support_to_serve = {
+        "support_type": "VISUAL_CUE",
+        "items": [
+            {
+                "content_type": "VISUAL_CUE",
+                "content_id": "VC-T01-GENERAL-VS-PARTICULAR",
+                "description": "Compare a particular case with the general rule.",
+                "asset_url": "https://example.test/cues/general-rule.png",
+                "actions": [],
+            }
+        ],
+    }
+
+    visual_cue = interaction_service._schema_visual_cue(event)
+
+    assert visual_cue is not None
+    assert visual_cue.cue_id == "VC-T01-GENERAL-VS-PARTICULAR"
+    assert visual_cue.asset_url == "https://example.test/cues/general-rule.png"
+
+
+@pytest.mark.parametrize("rescue_type", ["PARALLEL_EXAMPLE", "TUTOR_SOLVED"])
+def test_empty_rescue_keeps_the_tutor_response_available(
+    rescue_type: str,
+) -> None:
+    rescue = GuidedRescue.model_validate(
+        {
+            "rescue_type": rescue_type,
+            "micro_skill_id": "T01.M1",
+            "parallel_example": None,
+            "tutor_solved": None,
+        }
+    )
+
+    assert interaction_service._guided_rescue_message(rescue) is None
 
 
 def test_scaffold_response_matching_accepts_safe_variants() -> None:
@@ -48,6 +179,7 @@ def test_scaffold_response_matching_accepts_safe_variants() -> None:
             student_message,
             expected_response,
             "INCORRECT",
+            "n + 5",
             rules,
         )
     for student_message, expected_response in rejected:
@@ -55,6 +187,16 @@ def test_scaffold_response_matching_accepts_safe_variants() -> None:
             student_message,
             expected_response,
             "PARTIALLY_CORRECT",
+            "n + 5",
+            rules,
+        )
+
+    for student_message in ["the starting variable", "n"]:
+        assert interaction_service._scaffold_response_is_correct(
+            student_message,
+            "Starting number",
+            "INCORRECT",
+            "n + 5",
             rules,
         )
 
@@ -488,7 +630,10 @@ def _event_response(
                 "next_action": "DELIVER_SUPPORT_AND_RETRY",
             }
         )
-    elif event_type == "GUIDED_PHASE_COMPLETED":
+    elif event_type in {
+        "GUIDED_PHASE_COMPLETED",
+        "INDEPENDENT_QUESTION_SET_REQUESTED",
+    }:
         response = _event_response("ORIENTATION_COMPLETED", request_id)
         journey = response["journey_state"]
         payload = response["phase_payload"]
@@ -519,7 +664,11 @@ def _event_response(
                 "next_action": "START_INDEPENDENT",
             }
         )
-    elif event_type == "GUIDED_SUPPORT_ESCALATION_REQUIRED":
+    elif event_type in {
+        "GUIDED_SUPPORT_REQUESTED",
+        "GUIDED_SUPPORT_ESCALATION_REQUIRED",
+        "GUIDED_STUCK_SUPPORT_REQUIRED",
+    }:
         response = _event_response("ORIENTATION_COMPLETED", request_id)
         journey = response["journey_state"]
         payload = response["phase_payload"]
@@ -566,6 +715,84 @@ def _event_response(
                 "reason_code": "GUIDED_SCAFFOLD_REQUIRED",
                 "reason": "Delivering scaffolded support.",
                 "next_action": "DELIVER_SCAFFOLD_STEP",
+            }
+        )
+    elif event_type == "MAXIMUM_GUIDED_SUPPORT_PARALLEL":
+        response = _event_response("ORIENTATION_COMPLETED", request_id)
+        journey = response["journey_state"]
+        payload = response["phase_payload"]
+        routing = response["routing"]
+        assert isinstance(journey, dict)
+        assert isinstance(payload, dict)
+        assert isinstance(routing, dict)
+        journey["phase_2_guided_learning"]["highest_support_used_by_skill"] = {
+            "T02.M1": "PARALLEL_EXAMPLE"
+        }
+        payload.update(
+            {
+                "payload_type": "RESCUE",
+                "question_set": None,
+                "support_to_serve": None,
+                "rescue_to_serve": {
+                    "rescue_type": "PARALLEL_EXAMPLE",
+                    "micro_skill_id": "T02.M1",
+                    "parallel_example": {
+                        "parallel_example_id": "PAR-T02-M1",
+                        "problem": "Solve y + 3 = 8.",
+                        "worked_steps": [
+                            "Step 1: Subtract 3 from both sides.",
+                            "Step 2: y = 5.",
+                        ],
+                        "final_answer": "y = 5",
+                    },
+                },
+            }
+        )
+        routing.update(
+            {
+                "reason_code": "PARALLEL_EXAMPLE_REQUIRED",
+                "reason": "Delivering a parallel example.",
+                "next_action": "DELIVER_PARALLEL_EXAMPLE",
+            }
+        )
+    elif event_type == "MAXIMUM_GUIDED_SUPPORT_REQUIRED":
+        response = _event_response("ORIENTATION_COMPLETED", request_id)
+        journey = response["journey_state"]
+        payload = response["phase_payload"]
+        routing = response["routing"]
+        assert isinstance(journey, dict)
+        assert isinstance(payload, dict)
+        assert isinstance(routing, dict)
+        journey["phase_2_guided_learning"].update(
+            {
+                "status": "COMPLETED",
+                "completed_micro_skill_ids": ["T02.M1"],
+                "remaining_micro_skill_ids": [],
+                "highest_support_used_by_skill": {"T02.M1": "TUTOR_SOLVED"},
+                "used_question_ids": ["Q-T02-004"],
+            }
+        )
+        payload.update(
+            {
+                "payload_type": "RESCUE",
+                "question_set": None,
+                "support_to_serve": None,
+                "rescue_to_serve": {
+                    "rescue_type": "TUTOR_SOLVED",
+                    "micro_skill_id": "T02.M1",
+                    "tutor_solved": {
+                        "explanation": "Subtract 4 from both sides. The correct answer is x = 5.",
+                        "final_answer": "x = 5",
+                        "answer_steps": ["x + 4 - 4 = 9 - 4", "x = 5"],
+                    },
+                },
+            }
+        )
+        routing.update(
+            {
+                "reason_code": "GUIDED_PHASE_COMPLETED",
+                "reason": "Tutor-solved support completed the guided skill.",
+                "next_action": "PROCEED_TO_PHASE_3",
             }
         )
     return response
@@ -913,7 +1140,10 @@ def test_repeated_session_start_restores_authoritative_progress(
         "SESSION_OPENED",
         "SESSION_OPENED",
     ]
-    restored = client.get(f"/session/{second_body['session_id']}")
+    restored = client.get(
+        f"/session/{second_body['session_id']}",
+        params={"student_id": second_body["student_id"]},
+    )
     assert restored.status_code == 200
     assert restored.json() == second_body
 
@@ -1147,19 +1377,18 @@ def test_restored_not_started_phase_initializes_before_answer(
     )
 
     assert answered.status_code == 200
+    if phase == "PHASE_3_INDEPENDENT_PRACTICE":
+        assert [event["event_type"] for event in events] == ["SESSION_OPENED"]
+        assert answered.json()["independent_outcome"] == "AWAITING_SUBMISSION"
+        assert answered.json()["attempt_increment"] == 0
+        return
     assert [event["event_type"] for event in events[:3]] == [
         "SESSION_OPENED",
         expected_initializer,
         "INCORRECT_ATTEMPT",
     ]
     assert events[2]["question_id"] == "Q-T02-INITIALIZED"
-    if phase == "PHASE_3_INDEPENDENT_PRACTICE":
-        assert events[1]["phase2_repair_results"] == [
-            {"micro_skill_id": "T02.M1", "highest_support_used": "NONE"}
-        ]
-        assert events[1]["used_question_ids"] == []
-    else:
-        assert events[1]["target_micro_skill_ids"] == ["T02.M1"]
+    assert events[1]["target_micro_skill_ids"] == ["T02.M1"]
 def test_student_model_request_ids_are_stable_across_retries() -> None:
     first = session_service._student_model_request_id(
         "SESSION001",
@@ -1291,7 +1520,11 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert completed["current_phase"] == "GUIDED_PRACTICE"
     assert completed["question_id"] == "Q-T02-004"
     assert completed["student_model_state"]["target_micro_skill_ids"] == ["T02.M1"]
-    assert completed["message"] == "Now let’s use this idea together in a question."
+    assert completed["message"] == (
+        "Now let’s use this idea together in a question. "
+        "Solve for x: x + 4 = 9. "
+        "Look through the choices carefully—you already know enough to make a start."
+    )
     assert [event["event_type"] for event in events] == [
         "SESSION_OPENED",
         "DIAGNOSTIC_COMPLETED",
@@ -1325,17 +1558,20 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
             assert stuck.json()["current_scaffold_step_id"] is None
         else:
             assert len(events) == event_count_before_stuck + 1
-            assert events[-1]["event_type"] == "GUIDED_SUPPORT_ESCALATION_REQUIRED"
-
-
+            assert events[-1]["event_type"] == "GUIDED_SUPPORT_REQUESTED"
             assert events[-1]["micro_skill_id"] == "T02.M1"
+            assert events[-1].get("triggering_response") is None
+            assert events[-1].get("error_code") is None
             assert stuck.json()["scaffold_step_text"] == (
                 "Which operation should you undo first?"
             )
             assert stuck.json()["current_scaffold_step_id"] == "SCF-T02-M1-S1"
-            assert stuck.json()["message"] == "Which operation should you undo first?"
+            # The scaffold prompt is surfaced beside the tutor reply, not as it
+            # (see "feat: narrate guided support in tutor responses").
+            assert stuck.json()["message"]
+            assert stuck.json()["message"] != "Which operation should you undo first?"
         assert "scaffold_expected_response" not in stuck.json()
-        assert client.get(f"/session/{session_id}").json()["stuck_count"] == (
+        assert client.get(f"/session/{session_id}", params={"student_id": "ST001"}).json()["stuck_count"] == (
             expected_stuck_count
         )
 
@@ -1484,15 +1720,17 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert events[-1]["micro_skill_ids"] == ["T02.M1"]
     assert events[-1]["student_response"] == "x = 4"
     assert events[-1]["error_code"] == "ERR-T02-SUBTRACTION-MISAPPLIED"
-    assert client.get(f"/session/{session_id}").json()["stuck_count"] == 0
+    assert client.get(f"/session/{session_id}", params={"student_id": "ST001"}).json()["stuck_count"] == 0
     assert guided_incorrect.json()["student_model_state"][
         "highest_support_used_by_skill"
     ] == {"T02.M1": "HINT"}
     assert guided_incorrect.json()["show_visual_cue"] is True
     assert guided_incorrect.json()["visual_cue"] == {
         "show": True,
-            "cue_type": "VC-T02-COEFFICIENT-COUNT",
+            "cue_id": "VC-T02-COEFFICIENT-COUNT",
+            "cue_type": None,
             "description": "Count the equal letter terms.",
+            "asset_url": None,
             "actions": [
                 {
                     "action": "HIGHLIGHT_TOKEN",
@@ -1501,10 +1739,9 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
                 }
             ],
         }
-    assert guided_incorrect.json()["message"] == (
-        "Let us review the equation and try the next step carefully. "
-        "Undo the addition first."
-    )
+    assert guided_incorrect.json()["message"] != "Undo the addition first."
+    assert guided_incorrect.json()["message"]
+    assert guided_incorrect.json()["support_message"] == "Undo the addition first."
 
     for wrong_number in range(2, 5):
         guided_incorrect = client.post(
@@ -1529,7 +1766,11 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert events[-1]["micro_skill_id"] == "T02.M1"
     assert events[-1]["triggering_response"] == "x = 4"
     assert events[-1]["error_code"] == "ERR-T02-SUBTRACTION-MISAPPLIED"
-    assert guided_incorrect.json()["support_reason_code"] == "WRONG_4_INTERVENTION"
+    # Wrong-4 defers to the Student Model's scaffold routing reason when a
+    # scaffold is actually served (see "fix(interaction): require evidence for
+    # Wrong-4 escalation").
+    assert guided_incorrect.json()["support_reason_code"] == "GUIDED_SCAFFOLD_REQUIRED"
+    assert guided_incorrect.json()["intervention_triggered"] is False
     assert guided_incorrect.json()["show_scaffold_panel"] is True
     assert guided_incorrect.json()["current_scaffold_step_id"] == "SCF-T02-M1-S1"
 
@@ -1554,34 +1795,57 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert scaffold_response.json()["show_scaffold_panel"] is False
     assert scaffold_response.json()["current_scaffold_step_id"] is None
 
-    guided = client.post(
+    parallel = client.post(
         "/interaction",
         json={
             "session_id": session_id,
             "student_id": "ST001",
             "interaction_type": "ANSWER_SUBMISSION",
             "input_source": "TEXT",
-            "turn_id": "TURN-GUIDED-CORRECT-1",
-            "text_input": "x = 5",
+            "turn_id": "TURN-GUIDED-POST-SCAFFOLD-WRONG",
+            "text_input": "x = 4",
             "current_phase": "GUIDED_PRACTICE",
             "concept_id": "ALG_LINEAR_ONE_STEP",
             "question_id": "Q-T02-004",
             "hint_count": 0,
         },
     )
+    assert parallel.status_code == 200
+    assert events[-1]["event_type"] == "MAXIMUM_GUIDED_SUPPORT_PARALLEL"
+    assert events[-1]["error_code"] == "ERR-T02-SUBTRACTION-MISAPPLIED"
+    assert parallel.json()["guided_rescue"]["rescue_type"] == "PARALLEL_EXAMPLE"
+    assert parallel.json()["support_served_this_turn"] == "PARALLEL_EXAMPLE"
+    assert "Solve y + 3 = 8" in parallel.json()["message"]
+    assert "try the original question again" in parallel.json()["message"]
 
-    assert guided.status_code == 200
-    assert events[-2]["event_type"] == "CORRECT_ATTEMPT"
-    assert events[-2]["question_id"] == "Q-T02-004"
-    assert events[-2]["micro_skill_ids"] == ["T02.M1"]
-    assert events[-2]["student_response"] == "x = 5"
-    assert events[-2]["support_used"] == "SCAFFOLD"
-    assert events[-1]["event_type"] == "GUIDED_PHASE_COMPLETED"
-    assert events[-1]["completed_micro_skill_ids"] == ["T02.M1"]
-    assert guided.json()["current_phase"] == "INDEPENDENT_PRACTICE"
-    state = guided.json()["student_model_state"]
-    assert state["target_micro_skill_ids"] == ["T02.M1"]
-    assert state["completed_micro_skill_ids"] == []
+    tutor_solved = client.post(
+        "/interaction",
+        json={
+            "session_id": session_id,
+            "student_id": "ST001",
+            "interaction_type": "ANSWER_SUBMISSION",
+            "input_source": "TEXT",
+            "turn_id": "TURN-GUIDED-POST-PARALLEL-WRONG",
+            "text_input": "x = 4",
+            "current_phase": "GUIDED_PRACTICE",
+            "concept_id": "ALG_LINEAR_ONE_STEP",
+            "question_id": "Q-T02-004",
+            "hint_count": 0,
+        },
+    )
+    assert tutor_solved.status_code == 200, tutor_solved.text
+    assert events[-2]["event_type"] == "MAXIMUM_GUIDED_SUPPORT_REQUIRED"
+    assert events[-2]["error_code"] == "ERR-T02-SUBTRACTION-MISAPPLIED"
+    assert events[-1]["event_type"] == "INDEPENDENT_QUESTION_SET_REQUESTED"
+    assert events[-1]["phase2_repair_results"] == [
+        {"micro_skill_id": "T02.M1", "highest_support_used": "TUTOR_SOLVED"}
+    ]
+    assert events[-1]["used_question_ids"] == ["Q-T02-004"]
+    assert tutor_solved.json()["guided_rescue"]["rescue_type"] == "TUTOR_SOLVED"
+    assert tutor_solved.json()["support_served_this_turn"] == "TUTOR_SOLVED"
+    assert "correct answer is x = 5" in tutor_solved.json()["message"]
+    assert tutor_solved.json()["current_phase"] == "INDEPENDENT_PRACTICE"
+    assert tutor_solved.json()["student_model_state"] is None
 
 
 def test_diagnostic_no_gaps_honors_direct_independent_transition(monkeypatch) -> None:
@@ -2047,7 +2311,7 @@ def test_legacy_initial_phase_session_is_rejected(monkeypatch) -> None:
     assert captured == {}
 
 
-def test_phase3_content_exhaustion_auto_transitions_to_review() -> None:
+def test_phase3_content_gap_is_persisted_without_synthetic_review() -> None:
     event_dict = {
         "schema_version": "3.0",
         "request_id": "SESSION001:SESSION_OPENED",
@@ -2111,8 +2375,254 @@ def test_phase3_content_exhaustion_auto_transitions_to_review() -> None:
     }
     parsed = session_service.StudentModelSessionEventResponse.model_validate(event_dict)
     validated = session_service._validate_session_opened_payload(parsed)
-    assert validated.phase == "REVIEW"
-    assert validated.payload_type == "REVIEW_SUMMARY"
-    assert validated.review_summary is not None
-    assert validated.review_summary["summary_id"] == "SUMMARY-CONTENT-EXHAUSTED"
+    assert validated == parsed.phase_payload
 
+
+def test_tc21_phase3_null_payload_is_stored_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_post_json(
+        adapter_name: str,
+        url: str,
+        payload: dict[str, object],
+        headers: dict[str, str],
+        timeout_seconds: int,
+        retry_count: int,
+    ) -> dict[str, object]:
+        del adapter_name, url, headers, timeout_seconds, retry_count
+        response = _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+        response["request_id"] = payload["request_id"]
+        return response
+
+    _use_live_student_model(monkeypatch, fake_post_json)
+    started = client.post(
+        "/session/start",
+        json={"student_id": "ST001", "concept_id": "ALG_LINEAR_ONE_STEP", "interaction_mode": "TEXT"},
+    )
+    session = session_service._sessions[started.json()["session_id"]]
+    stored_event = session.student_model_event
+    assert stored_event is not None
+    stored_phase3 = stored_event.journey_state.phase_3_independent_practice.model_copy(
+        update={"used_question_ids": ["Q-T02-004"]}
+    )
+    stored_journey = stored_event.journey_state.model_copy(
+        update={"phase_3_independent_practice": stored_phase3}
+    )
+    session = session.model_copy(
+        update={"student_model_event": stored_event.model_copy(update={"journey_state": stored_journey})}
+    )
+    body = _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+    body["phase_payload"] = None
+    body["routing"].update(
+        {
+            "reason_code": "FRESH_CONTENT_UNAVAILABLE",
+            "reason": "No fresh question is available.",
+            "next_action": "WAIT_FOR_CONTENT",
+            "content_gap_detected": True,
+            "missing_micro_skill_ids": ["T02.M1"],
+        }
+    )
+    body["status"].update(
+        {
+            "status_code": "CONTENT_GAP",
+            "intervention_required": True,
+            "intervention_reason": "Missing fresh independent question.",
+        }
+    )
+    event = session_service.StudentModelSessionEventResponse.model_validate(body)
+
+    updated = asyncio.run(session_service._apply_schema_event(session, event))
+
+    assert updated.current_phase == "INDEPENDENT_PRACTICE"
+    assert updated.question_id is None
+    assert updated.student_model_event == event
+    assert updated.student_model_event.routing.missing_micro_skill_ids == ["T02.M1"]
+
+
+def test_tc21_rejects_reused_fresh_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_post_json(
+        adapter_name: str,
+        url: str,
+        payload: dict[str, object],
+        headers: dict[str, str],
+        timeout_seconds: int,
+        retry_count: int,
+    ) -> dict[str, object]:
+        del adapter_name, url, headers, timeout_seconds, retry_count
+        response = _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+        response["request_id"] = payload["request_id"]
+        return response
+
+    _use_live_student_model(monkeypatch, fake_post_json)
+    started = client.post(
+        "/session/start",
+        json={"student_id": "ST001", "concept_id": "ALG_LINEAR_ONE_STEP", "interaction_mode": "TEXT"},
+    )
+    session = session_service._sessions[started.json()["session_id"]]
+    body = _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+    stored_event = session.student_model_event
+    assert stored_event is not None
+    stored_phase3 = stored_event.journey_state.phase_3_independent_practice.model_copy(
+        update={"used_question_ids": ["Q-T02-004"]}
+    )
+    session = session.model_copy(
+        update={
+            "student_model_event": stored_event.model_copy(
+                update={
+                    "journey_state": stored_event.journey_state.model_copy(
+                        update={"phase_3_independent_practice": stored_phase3}
+                    )
+                }
+            )
+        }
+    )
+    journey = body["journey_state"]["phase_3_independent_practice"]
+    journey["used_question_ids"] = ["Q-T02-004"]
+    event = session_service.StudentModelSessionEventResponse.model_validate(body)
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(session_service._apply_schema_event(session, event))
+    assert error.value.status_code == 503
+    assert "previously used" in str(error.value.detail)
+
+
+@pytest.mark.parametrize(
+    ("phase", "reason_code", "continuity_status"),
+    [
+        ("PHASE_2_GUIDED_LEARNING", "SESSION_RESUMED", "RESUMED"),
+        ("PHASE_3_INDEPENDENT_PRACTICE", "SESSION_RESUMED", "RESUMED"),
+        ("PHASE_2_GUIDED_LEARNING", "SESSION_RESUMED_WITHIN_THRESHOLD", "ON_TRACK"),
+    ],
+)
+def test_tc22_tc24_resume_forwards_saved_journey_and_persists_returned_state(
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+    reason_code: str,
+    continuity_status: str,
+) -> None:
+    events: list[object] = []
+
+    async def send_session_event(adapter: object, event: object, access_token: str):
+        del adapter, access_token
+        events.append(event)
+        event_type = getattr(event, "event_type")
+        body = _session_opened_response(
+            "PHASE_2_GUIDED_LEARNING" if event_type == "SESSION_OPENED" else phase
+        )
+        body["request_id"] = getattr(event, "request_id")
+        if event_type == "SESSION_RESUMED":
+            body["journey_state"]["continuity_status"] = continuity_status
+            body["routing"]["reason_code"] = reason_code
+            body["routing"]["next_action"] = (
+                "RESUME_INDEPENDENT_PRACTICE"
+                if phase == "PHASE_3_INDEPENDENT_PRACTICE"
+                else "RESUME_GUIDED_LEARNING"
+            )
+        return session_service.StudentModelSessionEventResponse.model_validate(body)
+
+    monkeypatch.setattr(
+        student_model.StudentModelServiceAdapter,
+        "send_session_event",
+        send_session_event,
+    )
+    settings = Settings(
+        student_model_url="https://student-model.example",
+        student_model_topic_codes={"ALG_LINEAR_ONE_STEP": "ALG-ORI-02"},
+        use_mock_student_model=False,
+    )
+    monkeypatch.setattr(provider, "get_settings", lambda: settings)
+    monkeypatch.setattr(session_service, "get_settings", lambda: settings)
+    started = client.post(
+        "/session/start",
+        json={"student_id": "ST001", "concept_id": "ALG_LINEAR_ONE_STEP", "interaction_mode": "TEXT"},
+    )
+    session_id = started.json()["session_id"]
+    saved_journey = {
+        "phase_2_guided_learning": {
+            "target_micro_skill_ids": ["T02.M1"],
+            "remaining_micro_skill_ids": ["T02.M1"],
+            "used_question_ids": ["Q-T02-OLD"],
+        }
+    }
+
+    resumed = client.post(
+        f"/session/{session_id}/resume",
+        json={
+            "student_id": "ST001",
+            "turn_id": f"TURN-{reason_code}-{phase}",
+            "last_activity_at": "2026-07-22T10:00:00Z",
+            "continuity_threshold_days": 3,
+            "saved_journey": saved_journey,
+        },
+    )
+
+    assert resumed.status_code == 200, resumed.text
+    resume_event = events[-1]
+    assert getattr(resume_event, "event_type") == "SESSION_RESUMED"
+    assert getattr(resume_event, "saved_journey") == saved_journey
+    assert getattr(resume_event, "expected_journey_version") == 1
+    stored = session_service._sessions[session_id]
+    assert stored.student_model_event is not None
+    assert stored.student_model_event.routing.reason_code == reason_code
+    assert stored.student_model_event.journey_state.continuity_status == continuity_status
+
+
+def test_tc25_review_complete_forwards_correlated_event_and_persists_next_topic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[object] = []
+
+    async def send_session_event(adapter: object, event: object, access_token: str):
+        del adapter, access_token
+        events.append(event)
+        body = _session_opened_response("REVIEW")
+        body["request_id"] = getattr(event, "request_id")
+        if getattr(event, "event_type") == "REVIEW_COMPLETED":
+            body["phase_payload"] = None
+            body["journey_state"]["topic_status"] = "COMPLETED"
+            body["journey_state"]["mastery_status"] = "MASTERED"
+            body["journey_state"]["recommended_entry_phase"] = None
+            body["journey_state"]["review"]["status"] = "COMPLETED"
+            body["routing"].update(
+                {
+                    "reason_code": "REVIEW_COMPLETED",
+                    "next_action": "START_NEXT_TOPIC",
+                    "next_topic_id": "ALG-ORI-02",
+                    "next_topic_entry_phase": "PHASE_0_DIAGNOSTIC",
+                }
+            )
+        return session_service.StudentModelSessionEventResponse.model_validate(body)
+
+    monkeypatch.setattr(
+        student_model.StudentModelServiceAdapter,
+        "send_session_event",
+        send_session_event,
+    )
+    settings = Settings(
+        student_model_url="https://student-model.example",
+        student_model_topic_codes={"ALG_LINEAR_ONE_STEP": "ALG-ORI-02"},
+        use_mock_student_model=False,
+    )
+    monkeypatch.setattr(provider, "get_settings", lambda: settings)
+    monkeypatch.setattr(session_service, "get_settings", lambda: settings)
+    started = client.post(
+        "/session/start",
+        json={"student_id": "ST001", "concept_id": "ALG_LINEAR_ONE_STEP", "interaction_mode": "TEXT"},
+    )
+    session_id = started.json()["session_id"]
+
+    completed = client.post(
+        f"/session/{session_id}/review/complete",
+        json={"student_id": "ST001", "turn_id": "TURN-TC25"},
+    )
+
+    assert completed.status_code == 200, completed.text
+    review_event = events[-1]
+    assert getattr(review_event, "event_type") == "REVIEW_COMPLETED"
+    assert getattr(review_event, "source_turn_id") == "TURN-TC25"
+    assert getattr(review_event, "expected_journey_version") == 1
+    stored = session_service._sessions[session_id]
+    assert stored.student_model_event is not None
+    assert stored.student_model_event.routing.next_topic_id == "ALG-ORI-02"

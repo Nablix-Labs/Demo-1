@@ -11,6 +11,7 @@
 import { useEffect, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
 import { usePathname } from 'next/navigation';
+import { cn } from '@/lib/cn';
 import AuthGate from './auth/AuthGate';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
@@ -79,6 +80,8 @@ function ConfigError() {
 export default function AppFrame({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const panelSide = useNumeraStore((s) => s.panelSide);
+  const panelWidth = useNumeraStore((s) => s.panelWidth);
+  const panelCollapsed = useNumeraStore((s) => s.panelCollapsed);
 
   // Follow the backend's phase across the flow (no-op until a phase advances).
   usePhaseRouting();
@@ -121,7 +124,7 @@ export default function AppFrame({ children }: { children: ReactNode }) {
     // only mounts inside MediaPanel on the lesson route. Since routing follows
     // the backend phase, a tester now spends most of their time on diagnostic /
     // orientation / teach and could never reach the picker at all.
-    return (
+    const page = (
       <div className="flex-1 flex min-w-0 relative">
         {children}
         {!preAuth && (
@@ -132,6 +135,16 @@ export default function AppFrame({ children }: { children: ReactNode }) {
         )}
       </div>
     );
+    // Focus mode is a LAYOUT choice, not an access one. Returning the page bare
+    // meant /diagnostic, /orientation, /teach and /complete ran the access
+    // decision never — and since routing follows the backend phase, that is
+    // where a student spends most of the lesson. An expired login stayed on
+    // screen indefinitely there (Manjusha, 11 Aug).
+    //
+    // The pre-auth screens must stay outside the gate: they are where someone
+    // with no session is meant to land, and gating /login would bounce them to
+    // /login.
+    return preAuth ? page : <AuthGate>{page}</AuthGate>;
   }
 
   // The AI tutor panel belongs to the live lesson only; every other in-app
@@ -157,8 +170,21 @@ export default function AppFrame({ children }: { children: ReactNode }) {
       {/* Log out only — no VoicePicker here. MediaPanel already mounts one on
           the lesson route, and a second would be two controls writing the same
           store field from opposite corners of the same screen. */}
+      {/* Clear of the tutor panel, not on top of it.
+          bottom-left was chosen when nothing else lived there. The MediaPanel
+          now sits on that side with its message box at the bottom, so this
+          cluster landed directly on the composer — measured live on the VM:
+          logout at x20 y805, composer at x15 y806, overlapping. It shifts past
+          whichever edge the panel is docked to. */}
       {tutoring && (
-        <div className="fixed bottom-5 left-5 z-50 flex items-center gap-1">
+        <div
+          className="fixed bottom-5 z-50 flex items-center gap-1"
+          // Follows the panel now that its width is draggable. This was
+          // `left-[250px]`, hardcoded off the old fixed 234 — widening the
+          // panel used to slide it back underneath the composer, which is the
+          // overlap the comment above was written about in the first place.
+          style={{ left: panelSide === 'left' ? (panelCollapsed ? 28 : panelWidth) + 16 : 20 }}
+        >
           {!isLesson && <VoicePicker />}
           <LogOutButton />
         </div>

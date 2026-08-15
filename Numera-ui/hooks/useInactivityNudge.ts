@@ -41,6 +41,24 @@ const TICK_MS = 1_000;
 
 /** Module scope: a per-mount counter, so two live controllers get distinct ids. */
 let controllerSeq = 0;
+let activeControllerId: string | null = null;
+const presentedNudgeIds = new Set<string>();
+const MAX_PRESENTED_NUDGE_IDS = 100;
+
+export type NudgeClaimResult =
+  | { status: 'DELIVERED'; delivery: NudgeDelivery }
+  | { status: 'SUPPRESSED' }
+  | { status: 'OUT_OF_SYNC' };
+
+function markNudgePresentedOnce(nudgeId: string): boolean {
+  if (presentedNudgeIds.has(nudgeId)) return false;
+  presentedNudgeIds.add(nudgeId);
+  if (presentedNudgeIds.size > MAX_PRESENTED_NUDGE_IDS) {
+    const oldest = presentedNudgeIds.values().next().value;
+    if (typeof oldest === 'string') presentedNudgeIds.delete(oldest);
+  }
+  return true;
+}
 
 export interface InactivityNudgeOptions {
   /** True while any tutor request is in flight. */
@@ -48,11 +66,11 @@ export interface InactivityNudgeOptions {
   /** True while the socket is down or reconnecting. */
   disconnected?: boolean;
   /**
-   * Claim a nudge from the backend. Returns the nudge id, or null if the
-   * backend declined (its own clock disagreed, cooldown, rate limit).
+   * Claim a nudge from the backend. The result distinguishes an ordinary
+   * policy suppression from stale turn state that has just been synchronized.
    * Without this callback nothing is ever claimed.
    */
-  claim?: (idleDurationMs: number) => Promise<NudgeDelivery | null>;
+  claim?: (idleDurationMs: number) => Promise<NudgeClaimResult>;
   /** Show/speak the nudge. Called at most once per nudge, never retried. */
   present?: (delivery: NudgeDelivery) => void;
   /** Tell the backend it was presented. Retried; the presentation is not. */
@@ -73,6 +91,12 @@ export function useInactivityNudge(options: InactivityNudgeOptions = {}): void {
   const instanceId = useRef(`c${++controllerSeq}`).current;
 
   useEffect(() => {
+    if (activeControllerId !== null) {
+      console.warn(`[nudge] controller ${instanceId} is dormant; ${activeControllerId} owns the lease`);
+      return;
+    }
+    activeControllerId = instanceId;
+
     const gateNow = (): ActivityGate => {
       const s = useNumeraStore.getState();
       const speaking = useMicLevel.getState().aiSpeaking;
@@ -91,6 +115,7 @@ export function useInactivityNudge(options: InactivityNudgeOptions = {}): void {
         disconnected: Boolean(optsRef.current.disconnected),
         // Only meaningful when the backend is actually waiting on the student.
         awaitingStudent: s.expectsStudentResponse,
+        tutorTurnFailed: s.tutorTurnFailed,
       };
     };
 
@@ -109,8 +134,12 @@ export function useInactivityNudge(options: InactivityNudgeOptions = {}): void {
         suppressPending();
         return;
       }
-      if (!gate.awaitingStudent) {
+      // Nothing to nudge about: either the tutor still owes a reply, or its last
+      // one failed. Reset rather than pause, so recovery starts a fresh silence
+      // window instead of firing on time the student spent staring at an error.
+      if (!gate.awaitingStudent || gate.tutorTurnFailed) {
         idleSinceRef.current = null;
+        suppressPending();
         return;
       }
 
@@ -122,6 +151,7 @@ export function useInactivityNudge(options: InactivityNudgeOptions = {}): void {
         elapsedMs: now - idleSinceRef.current,
         sinceLastNudgeMs: lastClaimAtRef.current === null ? null : now - lastClaimAtRef.current,
         nudgesThisTurn: nudgesThisTurnRef.current,
+        tutorTurnId: useNumeraStore.getState().lastTutorTurnId,
       });
       if (!decision.claim) return;
 
@@ -130,8 +160,18 @@ export function useInactivityNudge(options: InactivityNudgeOptions = {}): void {
 
       claimingRef.current = true;
       try {
-        const delivery = await claim(now - (idleSinceRef.current ?? now));
-        if (!delivery) return;
+        const result = await claim(now - (idleSinceRef.current ?? now));
+        if (result.status === 'SUPPRESSED') return;
+        if (result.status === 'OUT_OF_SYNC') {
+          // The claim repaired lastTutorTurnId from the backend's authoritative
+          // response. Start a fresh silence window; never retry stale context
+          // on the next one-second controller tick.
+          idleSinceRef.current = null;
+          lastClaimAtRef.current = Date.now();
+          suppressPending();
+          return;
+        }
+        const delivery = result.delivery;
         const id = delivery.interaction_id;
 
         lastClaimAtRef.current = Date.now();
@@ -157,7 +197,7 @@ export function useInactivityNudge(options: InactivityNudgeOptions = {}): void {
         // The student may have started working while the claim was in flight.
         // Re-read rather than trusting the gate from before the await.
         const after = gateNow();
-        if (after.studentActive || !after.awaitingStudent) {
+        if (after.studentActive || !after.awaitingStudent || after.tutorTurnFailed) {
           suppressPending();
           return;
         }
@@ -166,6 +206,7 @@ export function useInactivityNudge(options: InactivityNudgeOptions = {}): void {
         // One-way from here: only the acknowledgement is ever retried.
         record = markPresented(record);
         recordsRef.current = recordsRef.current.map((r) => (r.id === id ? record : r));
+        if (!markNudgePresentedOnce(id)) return;
         present?.(delivery);
 
         if (acknowledge) {
@@ -184,6 +225,12 @@ export function useInactivityNudge(options: InactivityNudgeOptions = {}): void {
             );
           }
         }
+      } catch (err) {
+        // A claim that throws used to escape this interval entirely — there was
+        // a `finally` here but no `catch`, so every rejected claim surfaced as
+        // "Uncaught (in promise) AxiosError" and the tick kept firing (7 Aug).
+        // The nudge is optional; a failed one is a log line, not a page error.
+        console.warn('[nudge] claim failed — skipping this one', err);
       } finally {
         claimingRef.current = false;
       }
@@ -204,6 +251,7 @@ export function useInactivityNudge(options: InactivityNudgeOptions = {}): void {
       document.removeEventListener('visibilitychange', onVisibility);
       // Nothing claimed before teardown may be delivered afterwards.
       recordsRef.current = onDisconnect(recordsRef.current);
+      if (activeControllerId === instanceId) activeControllerId = null;
     };
   }, []);
 

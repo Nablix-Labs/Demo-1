@@ -7,9 +7,42 @@ SpatialMathTokens with normalized bounding boxes.
 
 import xml.etree.ElementTree as ET
 from typing import Literal
+from unicodedata import normalize
 
 from app.models.adapters import OCRTextRegion, SpatialMathToken
 from app.models.canvas import CanvasPoint, CanvasStroke
+
+
+_MATH_OPERATOR_EQUIVALENTS = str.maketrans(
+    {
+        "−": "-",
+        "–": "-",
+        "—": "-",
+        "﹣": "-",
+        "×": "*",
+        "·": "*",
+        "∙": "*",
+        "⋅": "*",
+        "÷": "/",
+        "∕": "/",
+        "⁄": "/",
+    }
+)
+
+_LATEX_OPERATOR_EQUIVALENTS: tuple[tuple[str, str], ...] = (
+    (r"\times", "*"),
+    (r"\cdot", "*"),
+    (r"\div", "/"),
+)
+
+
+def canonical_math_token_text(value: str) -> str:
+    """Normalize OCR and MathML text for supported tutor-error comparisons."""
+
+    normalized = value
+    for source, replacement in _LATEX_OPERATOR_EQUIVALENTS:
+        normalized = normalized.replace(source, replacement)
+    return "".join(normalize("NFKC", normalized).translate(_MATH_OPERATOR_EQUIVALENTS).split())
 
 
 class StrokeBox:
@@ -68,7 +101,7 @@ def associate_strokes_with_steps(
             reg_top = region.y - 0.05
             reg_bottom = region.y + region.h + 0.05
             if reg_top <= box.cy <= reg_bottom:
-                overlap = min(box.max_y, region.y + region.h) - max(box.min_x, region.y)
+                overlap = min(box.max_y, region.y + region.h) - max(box.min_y, region.y)
                 if overlap > best_overlap:
                     best_overlap = overlap
                     best_step_id = step_id
