@@ -501,6 +501,14 @@ async def voice_stream(
     turn_state = TurnState.IDLE
     active_turn_task: asyncio.Task | None = None
 
+    # Per-turn suppression cell, flipped by barge-in.
+    #
+    # A mutable dict rather than a plain bool because a suppressed turn keeps
+    # running in the background while a NEW turn starts, and each needs its
+    # own flag.  A single nonlocal bool would leak the suppression onto the
+    # next turn and silence a reply the student is waiting for.
+    active_turn_suppress: dict | None = None
+
     # Latest canvas snapshot seen on ANY inbound message, awaiting a turn to
     # attach to.  On the Nova-3 path the snapshot rides in on `stop` and is
     # consumed by the turn processed in that same handler.  Flux ends turns
@@ -690,12 +698,58 @@ async def voice_stream(
     # Flux path (STT_MODEL=flux)
     # ------------------------------------------------------------------
 
+    async def _emit_audio_cancel(reason: str, expect_new_turn: bool) -> None:
+        """Tell the client to stop playback and, if needed, open a new turn."""
+        try:
+            await _send_json_if_connected(ws, {
+                "type": "tutor_audio_cancel",
+                "reason": reason,
+                "expect_new_turn": expect_new_turn,
+            })
+        except Exception:
+            # Client already gone; nothing left to stop.
+            pass
+
+    async def _suppress_active_turn(reason: str) -> None:
+        """Barge-in during PROCESSING: silence the turn but let it finish.
+
+        Deliberately does NOT cancel the task.  The 15 August logs settled
+        this: the backend ran the full pipeline and returned 200 three
+        seconds AFTER we stopped listening, committing the turn and its
+        state_version regardless.  Cancelling therefore saves no work and
+        no spend -- it only throws away the tutor_turn_id in that response.
+
+        Losing it is not cosmetic.  The frontend advances
+        previous_tutor_turn_id from what it receives, so a discarded reply
+        freezes its lineage pointer and every later turn is rejected with
+        STALE_TURN.  One barge-in killed the rest of that session.
+
+        So we flag the turn as suppressed and let it run.  It will skip the
+        tutor text and the TTS, and send a lineage-only tutor_turn_committed
+        instead.  We drop our handle on it so a later supersede cannot
+        cancel it; _background_tasks keeps it alive until it finishes.
+        """
+        nonlocal active_turn_task, active_turn_suppress
+
+        if active_turn_suppress is not None:
+            active_turn_suppress["value"] = True
+        active_turn_task = None
+        active_turn_suppress = None
+        logger.info(
+            f"[{session_id}] Suppressed in-flight turn ({reason}) - "
+            f"letting the backend call finish to preserve turn lineage"
+        )
+
     async def _cancel_active_turn(
         reason: str,
         notify_frontend: bool,
         expect_new_turn: bool = False,
     ) -> None:
         """Cancel the in-flight turn task, if there is one.
+
+        Only safe once the tutor_response has already gone out, because that
+        message carries accepted_turn_id and tutor_turn_id.  While the
+        backend call is still in flight, use _suppress_active_turn instead.
 
         `notify_frontend=True` also emits tutor_audio_cancel so the client
         can stop playback mid-sentence.  We only do that for barge-in --
@@ -722,10 +776,11 @@ async def voice_stream(
         Encoding this server-side means adding a future reason does not
         require the frontend to learn its turn semantics.
         """
-        nonlocal active_turn_task
+        nonlocal active_turn_task, active_turn_suppress
 
         task = active_turn_task
         active_turn_task = None
+        active_turn_suppress = None
         if task is None or task.done():
             return
 
@@ -740,25 +795,21 @@ async def voice_stream(
         logger.info(f"[{session_id}] Cancelled in-flight turn ({reason})")
 
         if notify_frontend:
-            try:
-                await _send_json_if_connected(ws, {
-                    "type": "tutor_audio_cancel",
-                    "reason": reason,
-                    "expect_new_turn": expect_new_turn,
-                })
-            except Exception:
-                # Client already gone; nothing to stop.
-                pass
+            await _emit_audio_cancel(reason, expect_new_turn)
 
     async def _run_turn(
         transcript: str, confidence: float, duration: float
     ) -> None:
         """Own the state transitions around one call to process_and_respond."""
-        nonlocal turn_state, pending_canvas_snapshot
+        nonlocal turn_state, pending_canvas_snapshot, active_turn_suppress
 
         def _mark_speaking() -> None:
             nonlocal turn_state
             turn_state = TurnState.SPEAKING
+
+        # One suppression cell per turn, published so barge-in can flip it.
+        suppress = {"value": False}
+        active_turn_suppress = suppress
 
         # Consume any latched canvas snapshot so it is attached exactly once.
         canvas_snapshot = pending_canvas_snapshot
@@ -824,6 +875,7 @@ async def voice_stream(
                 tts_provider, tts_voice,
                 turn_id, previous_tutor_turn_id, transcript_final,
                 on_audio_start=_mark_speaking,
+                should_suppress=lambda: suppress["value"],
             )
         except asyncio.CancelledError:
             # Barge-in or superseded turn. Expected, not an error.
@@ -858,14 +910,27 @@ async def voice_stream(
                 turn_index = data.get("turn_index")
 
                 if event == "StartOfTurn":
-                    # Student started speaking.  If the tutor is mid-answer,
-                    # that is a barge-in: kill the answer and listen.
-                    if turn_state in (TurnState.PROCESSING, TurnState.SPEAKING):
+                    # Student started speaking. If the tutor is mid-answer,
+                    # that is a barge-in -- but what we do about it depends
+                    # on how far the turn has got, because the two states
+                    # differ in whether the frontend already has the lineage.
+                    if turn_state == TurnState.SPEAKING:
+                        # tutor_response already went out, carrying
+                        # accepted_turn_id and tutor_turn_id. The frontend's
+                        # lineage is current, so cancelling costs nothing and
+                        # stops the audio immediately.
                         await _cancel_active_turn(
                             "barge_in",
                             notify_frontend=True,
                             expect_new_turn=True,
                         )
+                    elif turn_state == TurnState.PROCESSING:
+                        # Backend call still in flight, so the frontend has
+                        # NOT seen the lineage yet. Cancelling would strand it
+                        # (see _suppress_active_turn). Silence the turn but
+                        # let it finish and report the ids.
+                        await _emit_audio_cancel("barge_in", expect_new_turn=True)
+                        await _suppress_active_turn("barge_in")
                     turn_state = TurnState.LISTENING
                     audio_started_at = time.time()
                     logger.info(
@@ -1487,6 +1552,7 @@ async def process_and_respond(
     previous_tutor_turn_id: str | None,
     transcript_final: bool | None,
     on_audio_start=None,
+    should_suppress=None,
 ):
     """Run one student turn through the tutor backend and stream the reply.
 
@@ -1495,6 +1561,11 @@ async def process_and_respond(
     from PROCESSING to SPEAKING so barge-in knows there is audible output to
     interrupt.  Defaults to None so the existing callers and tests, which
     pass 13 positional arguments, are unaffected.
+
+    `should_suppress` is an optional zero-arg predicate checked once the
+    backend has replied.  When it returns True the student has barged in
+    while we were waiting, so the tutor text and audio are dropped and only
+    the turn lineage is forwarded.  Also defaults to None.
     """
     pipeline_start = time.time()
 
@@ -1539,6 +1610,30 @@ async def process_and_respond(
             "message": "Tutor unavailable. Please try again.",
             "fallback_mode": "TEXT",
         })
+        return
+
+    # ---- Barge-in check: did the student start talking while we waited? ----
+    # The backend has committed this turn either way, so its reply carries a
+    # turn lineage the frontend must not miss. Forward the ids only, drop the
+    # text and the audio, and stop here.
+    if should_suppress is not None and should_suppress():
+        await _send_json_if_connected(ws, {
+            "type": "tutor_turn_committed",
+            "accepted_turn_id": tutor_response.get("accepted_turn_id"),
+            "tutor_turn_id": tutor_response.get("tutor_turn_id"),
+            "interaction_state_version": tutor_response.get(
+                "interaction_state_version"
+            ),
+            "reason": "barge_in",
+            "transcript": transcript,
+        })
+        logger.info(
+            f"[{session_id}] Turn suppressed by barge-in after "
+            f"{int((time.time() - pipeline_start) * 1000)}ms - "
+            f"forwarded lineage "
+            f"(tutor_turn_id={tutor_response.get('tutor_turn_id')}), "
+            f"dropped tutor text and audio"
+        )
         return
 
     tutor_text = str(tutor_response.get("message") or "")
