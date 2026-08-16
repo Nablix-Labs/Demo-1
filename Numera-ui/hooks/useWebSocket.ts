@@ -513,6 +513,19 @@ export function useWebSocket(sessionId: string | null) {
             // was added to fix.
             if (!acceptResponse(msg as Parameters<typeof acceptResponse>[0])) break;
             useNumeraStore.getState().noteTutorLineage(lineage);
+            // Re-send the context for the turn ALREADY in progress.
+            //
+            // Without this the fix does nothing. The server evaluates a turn
+            // against whichever context frame arrived most recently, and ours
+            // went out on `tutor_audio_cancel` seconds ago — carrying the
+            // pointer we had then, which is the stale one. Updating the store
+            // alone would leave the live turn to fail as STALE_TURN exactly as
+            // it did at 11:08; the corrected pointer has to reach the server
+            // before it dispatches, and this is the only frame that carries it.
+            //
+            // Same turn_id as the frame sent at cancel time, deliberately: this
+            // revises the turn in flight, it does not open another one.
+            sendTurnContext();
             break;
           }
 

@@ -18,9 +18,17 @@
  * the student walked away from this answer deliberately, and putting it on
  * screen two seconds into their next sentence is the tutor talking over them.
  *
- * TIMING is the whole hazard. The frame describes the turn BEFORE the one now in
- * progress, and lands two to four seconds into it. So only the tutor pointer may
- * move — see `noteTutorLineage` in the store for what must not.
+ * TIMING is the whole hazard, in two directions.
+ *
+ * The frame describes the turn BEFORE the one now in progress, and lands two to
+ * four seconds into it. So only the tutor pointer may move — see
+ * `noteTutorLineage` in the store for what must not.
+ *
+ * And adopting it is not enough on its own: the server evaluates a turn against
+ * whichever `turn_context` frame arrived most recently, and ours went out when
+ * the barge-in was announced, carrying the pointer we held then. The handler
+ * therefore re-sends the context for the turn already in progress. Without that
+ * the corrected pointer never leaves the browser and the live turn still fails.
  */
 
 export interface TutorTurnCommittedFrame {
