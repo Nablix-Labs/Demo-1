@@ -14,6 +14,7 @@
  *   { type: 'tutor_audio_chunk',  chunk: string, chunk_index: number }   // base64 MP3
  *   { type: 'tutor_audio_end',    total_chunks: number, tts_latency_ms: number, error?: string }
  *   { type: 'tutor_audio_cancel', reason: string, expect_new_turn: boolean }    // Flux barge-in
+ *   { type: 'tutor_turn_committed', tutor_turn_id: string, accepted_turn_id: string, ... } // lineage only
  *
  * Message schema (out):
  *   { type: 'audio_chunk', data: string }  // base64 PCM 16kHz mono
@@ -39,6 +40,7 @@ import { TurnWatchdog } from '@/lib/turnWatchdog';
 import { SpeechSettleTimer } from '@/lib/speechSettle';
 import { turnContextFrame } from '@/lib/voiceTurnContext';
 import { reopensStudentTurn, type TutorAudioCancelFrame } from '@/lib/tutorAudioCancel';
+import { committedLineage, type TutorTurnCommittedFrame } from '@/lib/tutorTurnCommitted';
 import { reportFailure } from '@/lib/failureReport';
 
 
@@ -495,6 +497,22 @@ export function useWebSocket(sessionId: string | null) {
               useNumeraStore.getState().beginListeningTurn();
               sendTurnContext();
             }
+            break;
+          }
+
+          // A turn the student barged in on, which the backend committed anyway.
+          // Lineage only — see lib/tutorTurnCommitted for why it renders nothing.
+          case 'tutor_turn_committed': {
+            const lineage = committedLineage(msg as TutorTurnCommittedFrame);
+            if (!lineage) break;
+            // Gate on version before adopting it. The frame is already two to
+            // four seconds old when it lands, so it is exactly the shape of
+            // message that can arrive after a newer turn has resolved — and
+            // moving the pointer BACKWARDS onto an abandoned turn would make
+            // every turn after it STALE_TURN, which is the failure this frame
+            // was added to fix.
+            if (!acceptResponse(msg as Parameters<typeof acceptResponse>[0])) break;
+            useNumeraStore.getState().noteTutorLineage(lineage);
             break;
           }
 

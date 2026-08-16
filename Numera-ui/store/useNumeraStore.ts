@@ -562,6 +562,21 @@ export interface NumeraState {
   /** Record the tutor's reply turn (voice contract §11): store its tutor_turn_id
    *  as the next previous_tutor_turn_id, and the backend gating for the next turn. */
   setTutorTurn: (tutorTurnId: string | null, gating: { expects: boolean; allow: boolean }) => void;
+  /**
+   * Adopt the lineage of a tutor turn whose REPLY was never delivered.
+   *
+   * A turn the student barged in on is still evaluated and committed by the
+   * backend — it just drops the tutor's text and audio (Aditya, 15 Aug 2026).
+   * Its `tutor_turn_id` is the one the NEXT turn has to point at, and it arrives
+   * two to four seconds late, by which time the student is already mid-turn.
+   *
+   * Which is why this is not `setTutorTurn`: that also moves
+   * `expectsStudentResponse` and `allowVoiceInput` and clears `tutorTurnFailed`,
+   * and applying an abandoned turn's gating to the live one would let a stale
+   * frame close a mic the student is currently talking into. Only the pointer
+   * moves. `currentTurnId` is untouched for the same reason.
+   */
+  noteTutorLineage: (tutorTurnId: string) => void;
   /** The tutor turn failed; the student is owed a reply, not a nudge. */
   markTutorTurnFailed: () => void;
   setVisibleHint: (hint: string | null) => void;
@@ -658,7 +673,7 @@ export interface NumeraState {
 const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
-  | 'setQuestionText' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'markTutorTurnFailed'
+  | 'setQuestionText' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'noteTutorLineage' | 'markTutorTurnFailed'
   | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue' | 'setVisibleHint'
   | 'setSupportShown' | 'setLastHintText' | 'lockPhase3Attempt'
   | 'setPendingTutorSpeech' | 'claimPendingTutorSpeech' | 'setQuestionProgress' | 'setAppliedResponse' | 'setInactivityPolicy'
@@ -976,6 +991,8 @@ export const useNumeraStore = create<NumeraState>()(
       // A turn landed, so whatever failed before it is over.
       tutorTurnFailed: false,
     }),
+
+  noteTutorLineage: (lastTutorTurnId) => set({ lastTutorTurnId }),
 
   markTutorTurnFailed: () => set({ tutorTurnFailed: true }),
 
