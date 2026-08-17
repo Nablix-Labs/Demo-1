@@ -4339,7 +4339,11 @@ def canvas_expected_answer(request: ClassificationRequest) -> str:
     )
     if (
         component_expression is not None
-        and component_text in canonical_text
+        and re.search(
+            rf"{re.escape(component_text)}(?![A-Za-z0-9])",
+            canonical_text,
+        )
+        is not None
     ):
         return component_expression
 
