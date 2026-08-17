@@ -105,7 +105,19 @@ USE_FLUX = STT_MODEL == "flux"
 #                  than an extra ~100ms of latency.
 #   eot_timeout_ms (500-60000, default 5000): hard ceiling on silence before a
 #                  turn is forced closed regardless of confidence.
-FLUX_EOT_THRESHOLD = float(os.getenv("VOICE_FLUX_EOT_THRESHOLD", "0.8"))
+#   Raised from 0.8 to 0.85 on 17 Aug. At 0.8 we were accepting turn-ends
+#   barely over the line and cutting students off mid-sentence: "I'm asking
+#   what do you mean by general rule?" ended at 0.824 while the student was
+#   still talking, and the continuation became a second turn (voice-logs-17,
+#   12:01:29). Across 29 observed turns the confidences ranged 0.801 to 0.915
+#   with a median of 0.831, so the old threshold sat below the middle of the
+#   distribution.
+#   The cost is a little more silence before a genuinely finished turn ends,
+#   since Flux keeps accumulating until confidence crosses the bar. It is not
+#   a hard wait: confidence climbs as silence continues, so most turns should
+#   cross shortly after they would have at 0.8. eot_timeout_ms remains the
+#   backstop for a turn whose confidence never gets there.
+FLUX_EOT_THRESHOLD = float(os.getenv("VOICE_FLUX_EOT_THRESHOLD", "0.85"))
 FLUX_EOT_TIMEOUT_MS = int(os.getenv("VOICE_FLUX_EOT_TIMEOUT_MS", "5000"))
 
 
@@ -509,6 +521,22 @@ async def voice_stream(
     # next turn and silence a reply the student is waiting for.
     active_turn_suppress: dict | None = None
 
+    # True from the moment we finish SENDING audio until the next student turn
+    # is dispatched.
+    #
+    # TurnState.SPEAKING only covers transmission, which is under a second --
+    # "Audio streaming done: 5 chunks in 732ms" -- while the browser then plays
+    # that audio for five or ten. For most of the time the student can actually
+    # hear the tutor, the turn task has already finished and turn_state is back
+    # to LISTENING, so a StartOfTurn found nothing to cancel and no
+    # tutor_audio_cancel was sent at all. That is why talking over the tutor did
+    # nothing on 17 Aug: barge-in only worked during the one window where there
+    # was no audio to interrupt.
+    #
+    # There is no task to cancel in this window. Only the client can stop the
+    # sound, so all we do is tell it to.
+    client_audio_playing = False
+
     # Latest canvas snapshot seen on ANY inbound message, awaiting a turn to
     # attach to.  On the Nova-3 path the snapshot rides in on `stop` and is
     # consumed by the turn processed in that same handler.  Flux ends turns
@@ -802,10 +830,14 @@ async def voice_stream(
     ) -> None:
         """Own the state transitions around one call to process_and_respond."""
         nonlocal turn_state, pending_canvas_snapshot, active_turn_suppress
+        nonlocal client_audio_playing
 
         def _mark_speaking() -> None:
-            nonlocal turn_state
+            nonlocal turn_state, client_audio_playing
             turn_state = TurnState.SPEAKING
+            # From here the client has audio it will keep playing after we
+            # stop sending, so barge-in stays relevant beyond this task.
+            client_audio_playing = True
 
         # One suppression cell per turn, published so barge-in can flip it.
         suppress = {"value": False}
@@ -894,6 +926,7 @@ async def voice_stream(
         turn ends, and we act on that decision.
         """
         nonlocal turn_state, active_turn_task, audio_started_at
+        nonlocal client_audio_playing
 
         try:
             async for msg in dg_ws:
@@ -931,6 +964,21 @@ async def voice_stream(
                         # let it finish and report the ids.
                         await _emit_audio_cancel("barge_in", expect_new_turn=True)
                         await _suppress_active_turn("barge_in")
+                    elif client_audio_playing:
+                        # The turn task is long finished but the browser is
+                        # still playing its buffered audio, which is where
+                        # most real interruptions land. Nothing to cancel
+                        # server-side; just tell the client to stop.
+                        #
+                        # expect_new_turn is True because stopping playback
+                        # does not fire the client's "audio went idle" path,
+                        # so it has not opened the next turn yet and must.
+                        logger.info(
+                            f"[{session_id}] Barge-in during playback - "
+                            f"telling client to stop audio"
+                        )
+                        await _emit_audio_cancel("barge_in", expect_new_turn=True)
+                        client_audio_playing = False
                     turn_state = TurnState.LISTENING
                     audio_started_at = time.time()
                     logger.info(
@@ -995,6 +1043,10 @@ async def voice_stream(
 
                     # Anything still running belongs to an older turn.
                     await _cancel_active_turn("superseded", notify_frontend=False)
+
+                    # A new student turn supersedes any leftover playback, so
+                    # stop treating the previous reply as interruptible.
+                    client_audio_playing = False
 
                     duration = max(time.time() - audio_started_at, 0.001)
                     active_turn_task = asyncio.create_task(
