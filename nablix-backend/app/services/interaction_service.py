@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.adapters.base import StudentModelAdapter
+from app.adapters.hybrid_tutor_engine import HybridTutorEngineAdapter
 from app.adapters.provider import get_adapters
 from app.ai_engine.classifier import (
     build_openai_ai_engine_client,
@@ -98,6 +99,7 @@ from app.services.phase_transition import (
 )
 from app.services.session_service import (
     reconcile_journey_conflict,
+    _apply_hybrid_turn,
     _apply_schema_event,
     _get_owned_session_for_turn,
     cache_interaction_response,
@@ -417,6 +419,24 @@ def _evaluation_reason(tutor: TutorResult) -> EvaluationReasonCode:
     return EvaluationReasonCode.RESPONSE_UNCLEAR
 
 
+def _hybrid_orchestration_selected(context: AdapterContext) -> bool:
+    """The one place that decides legacy vs. Hybrid. Both feature flags — the
+    existing `v1_hybrid_enabled` in classifier_rules.yaml (Sanya's) and the
+    app-level `hybrid_orchestration_enabled` (this wiring's own) — plus the
+    student allowlist must all be open. Fail-closed: an empty allowlist means
+    nobody, even with both flags on, matching the handoff's "keep both Hybrid
+    feature flags disabled by default."
+    """
+
+    rules = load_classifier_rules()
+    settings = get_settings()
+    return (
+        rules.guided_learning.v1_hybrid_enabled
+        and settings.hybrid_orchestration_enabled
+        and context.student_id in settings.hybrid_allowed_student_ids
+    )
+
+
 async def run_tutor_pipeline(
     context: AdapterContext,
 ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
@@ -426,7 +446,10 @@ async def run_tutor_pipeline(
     # Classify first: error_type / response_strategy / chosen hint_level are tutor
     # outputs, so RAG can only target the right hint after evaluation.
     student = await adapters.student_model.assess(context)
-    tutor = await adapters.tutor.evaluate(context, _EMPTY_RAG, student)
+    tutor_engine = (
+        HybridTutorEngineAdapter() if _hybrid_orchestration_selected(context) else adapters.tutor
+    )
+    tutor = await tutor_engine.evaluate(context, _EMPTY_RAG, student)
 
     return _EMPTY_RAG, student, tutor
 
@@ -465,6 +488,26 @@ async def process_answer_with_session_event(
         )
 
     _, student, tutor = await run_tutor_pipeline(context)
+    if tutor.hybrid_turn is not None or tutor.requires_written_math_evidence:
+        # A Hybrid-adapter turn (see HybridTutorEngineAdapter.evaluate) never
+        # goes through the legacy attempt/event machinery below — its shape
+        # (6-rung support ladder, component IDs) doesn't fit it. NEEDS_WRITING
+        # (requires_written_math_evidence, hybrid_turn is None) persists
+        # nothing at all, matching "no attempt increment, error/misconception
+        # event, progression, or support escalation" from the handoff.
+        updated_session = (
+            await _apply_hybrid_turn(
+                session,
+                tutor.hybrid_turn,
+                tutor.hybrid_evidence_resolution,
+                tutor.hybrid_decision,
+                tutor.hybrid_canvas_memory,
+                load_classifier_rules(),
+            )
+            if tutor.hybrid_turn is not None
+            else session
+        )
+        return student, tutor, None, None, updated_session
     if (
         context.has_canvas_evidence
         and tutor.mistake_classification is not None

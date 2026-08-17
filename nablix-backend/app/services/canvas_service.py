@@ -37,6 +37,7 @@ from app.services.interaction_service import (
     _is_complete_correct_canvas,
     _initialize_restored_schema_phase,
     _phase_2_prompt_context,
+    _schema_visual_cue,
     _schema_question,
     _stale_turn_response,
     _guided_rescue,
@@ -364,6 +365,11 @@ async def submit_canvas(
         if tutor.evaluation == "UNCLEAR"
         else "processed"
     )
+    visual_cue = (
+        tutor.visual_cue
+        if tutor.visual_cue.show
+        else _schema_visual_cue(updated_session.student_model_event)
+    )
     response = _response_from(
         session_id=request.session_id,
         student_id=request.student_id,
@@ -373,7 +379,7 @@ async def submit_canvas(
         session=updated_session,
         message=response_message,
         message_voice=response_message_voice,
-        visual_cue=tutor.visual_cue if tutor.visual_cue.show else None,
+        visual_cue=visual_cue,
         scaffold_steps=tutor.scaffold_steps_delivered,
         session_summary=None,
         conversation_action=response_action,
@@ -388,6 +394,7 @@ async def submit_canvas(
         update={
             "tutor_message": response_message,
             "tutor_message_voice": response_message_voice,
+            "visual_cue": visual_cue or tutor.visual_cue,
         }
     )
     response.canvas_draw = canvas_draw

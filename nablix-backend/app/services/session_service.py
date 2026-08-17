@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from typing_extensions import NotRequired
 
 from app.adapters.provider import get_adapters
+from app.ai_engine.classifier_config import ClassifierRulesConfig
 from app.core.config import get_settings
 from app.core.exceptions import JourneyVersionConflict
 from app.core.logger import logger
@@ -15,6 +16,14 @@ from app.models.adapters import ConversationMessage, StudentModelResult, VisualC
 from app.models.canvas import CanvasQuestionMemory, CanvasStroke, CanvasSubmissionRecord
 from app.models.canvas_memory import CanvasEvent
 from app.models.fields import Phase
+from app.models.guided_learning import (
+    HybridEvidenceResolution,
+    HybridPedagogicalState,
+    HybridPedagogyDecision,
+    HybridSupportState,
+    HybridTutorTurn,
+    OrderedCanvasMemoryItem,
+)
 from app.models.interaction import InteractionResponse
 from app.models.session import (
     CanvasState,
@@ -932,6 +941,66 @@ async def _apply_schema_event(
             str(updates["message"]),
         )
     updated = session.model_copy(update=updates)
+    _sessions[session.session_id] = updated
+    await save_session(updated)
+    return updated
+
+
+async def _apply_hybrid_turn(
+    session: SessionRecord,
+    turn: HybridTutorTurn,
+    resolution: HybridEvidenceResolution,
+    decision: HybridPedagogyDecision,
+    ordered_canvas_memory: list[OrderedCanvasMemoryItem],
+    rules: ClassifierRulesConfig,
+) -> SessionRecord:
+    """Persist a validated Hybrid turn. Parallel to `_apply_schema_event`, but
+    writes Hybrid's own progression/support/canvas-memory fields instead of
+    the legacy event-driven ones.
+
+    NEEDS_WRITING is a hard early return: the handoff requires "no attempt
+    increment, error/misconception event, progression, or support escalation"
+    for it, so the session comes back byte-identical rather than partially
+    updated — this is what makes `validate_hybrid_tutor_turn`'s assertion
+    about the *response* shape true of the *persisted state* too.
+    """
+
+    if resolution.input_reliability == "NEEDS_WRITING":
+        return session
+
+    previous_support = session.hybrid_support_state
+    ladder = rules.guided_learning.hybrid_support_ladder
+    highest_rank = max(
+        ladder.index(previous_support.highest_support_used) if previous_support else 0,
+        ladder.index(decision.support_action),
+    )
+    consecutive_stuck_count = (
+        (previous_support.consecutive_stuck_count if previous_support else 0) + 1
+        if turn.pedagogical_state == "STUCK"
+        else 0
+    )
+    support_history_ids = list(previous_support.support_history_ids) if previous_support else []
+    if decision.strategy == "SUPPORT_ESCALATION" and decision.support_id is not None:
+        support_history_ids.append(decision.support_id)
+
+    updated = session.model_copy(
+        update={
+            "hybrid_pedagogical_state": HybridPedagogicalState(
+                student_state=turn.pedagogical_state,
+                completed_component_ids=turn.completed_components,
+                current_answer_step_index=turn.current_answer_step_index,
+                consecutive_stuck_count=consecutive_stuck_count,
+            ),
+            "hybrid_support_state": HybridSupportState(
+                current_support=decision.support_action,
+                highest_support_used=ladder[highest_rank],
+                active_support_id=decision.support_id,
+                support_history_ids=support_history_ids,
+                consecutive_stuck_count=consecutive_stuck_count,
+            ),
+            "hybrid_canvas_memory": ordered_canvas_memory,
+        }
+    )
     _sessions[session.session_id] = updated
     await save_session(updated)
     return updated
