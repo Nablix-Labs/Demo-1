@@ -99,6 +99,13 @@ _CANVAS_EXPRESSION = re.compile(
     r"^(?:(?:[A-Za-z]|\d|\s|[+\-−×*/÷=().]|\\(?:times|cdot|div)))+$"
 )
 _CANVAS_LATEX_COMMAND = re.compile(r"\\(?:times|cdot|div)")
+_CANVAS_EXPRESSION_FRAGMENT = re.compile(
+    r"(?<![A-Za-z0-9])(?:"
+    r"[A-Za-z](?:\s*(?:[+\-−×*/÷=]|\\(?:times|cdot|div))\s*"
+    r"(?:[A-Za-z]|\d+(?:\.\d+)?))+"
+    r"|[+\-−×÷]\s*\d+(?:\.\d+)?"
+    r")(?![A-Za-z0-9])"
+)
 
 
 class ClassificationRequest(StrictSchema):
@@ -4321,17 +4328,20 @@ def canvas_expected_answer(request: ClassificationRequest) -> str:
         for component in rubric.required_concepts
         if component.concept_id == component_id
     )
+    component_expression: str | None = _canvas_expression_from_description(
+        component_description
+    )
     canonical_text: str = normalize_canvas_math_text(request.correct_answer).replace(
         " ", ""
     )
-    component_text: str = normalize_canvas_math_text(component_description).replace(
+    component_text: str = normalize_canvas_math_text(component_expression or "").replace(
         " ", ""
     )
     if (
-        _looks_like_canvas_expression(component_description)
+        component_expression is not None
         and component_text in canonical_text
     ):
-        return component_description
+        return component_expression
 
     answer_parts: list[str] = [
         part.strip() for part in request.correct_answer.split(";")
@@ -4347,6 +4357,13 @@ def _looks_like_canvas_expression(text: str) -> bool:
         _CANVAS_EXPRESSION.fullmatch(expression) is not None
         and re.search(r"[A-Za-z]{2,}", expression) is None
     )
+
+
+def _canvas_expression_from_description(text: str) -> str | None:
+    if _looks_like_canvas_expression(text):
+        return text
+    match = _CANVAS_EXPRESSION_FRAGMENT.search(text)
+    return match.group(0) if match is not None else None
 
 
 def build_canvas_wording_context(

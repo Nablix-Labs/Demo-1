@@ -1478,7 +1478,7 @@ def test_canvas_expected_answer_uses_active_math_component_from_rubric() -> None
         question_id="Q-T01-006",
         question_type="MULTI_PART_SHORT_RESPONSE",
         question="Write the rule and state what changes.",
-        correct_answer="c + 4; c changes.",
+        correct_answer="The rule is c + 4, and c changes.",
         student_input="c - 4",
         current_phase="GUIDED_PRACTICE",
         input_source="CANVAS",
@@ -1495,6 +1495,27 @@ def test_canvas_expected_answer_uses_active_math_component_from_rubric() -> None
     )
 
     assert classifier.canvas_expected_answer(request) == "c + 4"
+    request_with_active_state = request.model_copy(
+        update={
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-T01-006",
+                objective_component_ids=[
+                    "REQUIRED_COMPONENT_1",
+                    "REQUIRED_COMPONENT_2",
+                ],
+                confirmed_component_ids=[],
+                missing_component_ids=[
+                    "REQUIRED_COMPONENT_1",
+                    "REQUIRED_COMPONENT_2",
+                ],
+                active_component_id="REQUIRED_COMPONENT_2",
+                last_tutor_question_type="COMPONENT",
+                selected_option_id=None,
+                awaiting_response=True,
+            )
+        }
+    )
+    assert classifier.canvas_expected_answer(request_with_active_state) == request.correct_answer
 
 
 def _explain_again_request() -> ExplainAgainRequest:
@@ -4427,10 +4448,13 @@ def test_canvas_math_review_writes_grounded_direct_expression_correction(
                 tutor_message_voice="Check the fixed amount in your rule.",
             )
 
+    def build_guided_client(settings: Settings) -> GuidedClient:
+        return GuidedClient()
+
     monkeypatch.setattr(
         classifier,
         "build_openai_ai_engine_client",
-        lambda settings: GuidedClient(),
+        build_guided_client,
     )
     rubric = GeneratedQuestionRubric(
         question_id="Q-T01-001",
@@ -4522,24 +4546,27 @@ def test_canvas_math_review_scopes_multipart_sentence_to_active_rule_component(
                 preserved_concept_ids=[],
                 contradicted_concept_ids=[],
                 missing_concept_ids=objective.missing_concept_ids,
-                selected_error_code="ERR-DIRECTION-REVERSED",
+                selected_error_code=None,
                 confidence=0.95,
                 next_objective=objective,
                 tutor_message="What general rule represents this situation?",
                 tutor_message_voice="What general rule represents this situation?",
             )
 
+    def build_guided_client(settings: Settings) -> GuidedClient:
+        return GuidedClient()
+
     monkeypatch.setattr(
         classifier,
         "build_openai_ai_engine_client",
-        lambda settings: GuidedClient(),
+        build_guided_client,
     )
     rubric = GeneratedQuestionRubric(
         question_id="Q-T01-006",
         required_concepts=[
             GeneratedConcept(
                 concept_id="REQUIRED_COMPONENT_1",
-                description="c + 4",
+                description="States the general rule c + 4.",
                 required=True,
             ),
             GeneratedConcept(
@@ -4557,11 +4584,10 @@ def test_canvas_math_review_scopes_multipart_sentence_to_active_rule_component(
         cache_key="counter-rule-canvas",
         prompt_version="1.0.0",
     )
-    monkeypatch.setattr(
-        classifier,
-        "resolve_guided_rubric",
-        lambda **kwargs: rubric,
-    )
+    def resolve_rubric(**kwargs: object) -> GeneratedQuestionRubric:
+        return rubric
+
+    monkeypatch.setattr(classifier, "resolve_guided_rubric", resolve_rubric)
     response = classify_student_response(
         ClassificationRequest(
             question_id="Q-T01-006",
