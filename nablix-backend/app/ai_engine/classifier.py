@@ -73,6 +73,11 @@ if TYPE_CHECKING:
     )
 
 
+_CANVAS_EXPRESSION = re.compile(
+    r"^(?:(?:[A-Za-z]|\d|\s|[+\-−×*/÷=().]|\\(?:times|cdot|div)))+$"
+)
+
+
 class ClassificationRequest(StrictSchema):
     question_id: str | None = None
     question_type: QuestionType | None = None
@@ -4467,13 +4472,55 @@ def _canvas_review_for(
         return None
     return review_canvas_math(
         question=request.question,
-        correct_answer=request.correct_answer,
+        correct_answer=canvas_expected_answer(request),
         current_phase=request.current_phase,
         canvas_regions=request.canvas_regions,
         spatial_tokens=request.spatial_tokens,
         config=rules.canvas_review,
         confidence=confidence,
     )
+
+
+def canvas_expected_answer(request: ClassificationRequest) -> str:
+    """Select the authored component that the current Canvas turn answers."""
+
+    rubric = request.generated_question_rubric
+    if rubric is None:
+        return request.correct_answer
+
+    component_id = (
+        request.guided_teaching_state.active_component_id
+        if request.guided_teaching_state is not None
+        else active_component_id(rubric, request.active_teaching_objective)
+    )
+    if component_id is None:
+        return request.correct_answer
+
+    component_index: int | None = next(
+        (
+            index
+            for index, component in enumerate(rubric.required_concepts)
+            if component.concept_id == component_id
+        ),
+        None,
+    )
+    if component_index is None:
+        return request.correct_answer
+
+    component_description: str = next(
+        component.description.strip()
+        for component in rubric.required_concepts
+        if component.concept_id == component_id
+    )
+    if _CANVAS_EXPRESSION.fullmatch(component_description) is not None:
+        return component_description
+
+    answer_parts: list[str] = [
+        part.strip() for part in request.correct_answer.split(";")
+    ]
+    if component_index < len(answer_parts):
+        return answer_parts[component_index]
+    return request.correct_answer
 
 
 def build_canvas_wording_context(

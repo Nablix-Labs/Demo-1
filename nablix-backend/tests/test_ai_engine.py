@@ -1511,6 +1511,48 @@ def _multipart_guided_rubric() -> GeneratedQuestionRubric:
     )
 
 
+def test_canvas_expected_answer_uses_active_math_component_from_rubric() -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-006",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="REQUIRED_COMPONENT_1",
+                description="c + 4",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="REQUIRED_COMPONENT_2",
+                description="c changes",
+                required=True,
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="canvas-component",
+        prompt_version="1.0.0",
+    )
+    request = ClassificationRequest(
+        question_id="Q-T01-006",
+        question_type="MULTI_PART_SHORT_RESPONSE",
+        question="Write the rule and state what changes.",
+        correct_answer="The rule is c + 4; c changes.",
+        student_input="c - 4",
+        current_phase="GUIDED_PRACTICE",
+        input_source="CANVAS",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+        generated_question_rubric=rubric,
+        active_teaching_objective=ActiveTeachingObjective(
+            objective_type="ANSWER_QUESTION",
+            target_concept_ids=["REQUIRED_COMPONENT_1", "REQUIRED_COMPONENT_2"],
+            confirmed_concept_ids=[],
+            missing_concept_ids=["REQUIRED_COMPONENT_1", "REQUIRED_COMPONENT_2"],
+        ),
+    )
+
+    assert classifier.canvas_expected_answer(request) == "c + 4"
+
+
 def _explain_again_request() -> ExplainAgainRequest:
     return ExplainAgainRequest(
         question_id="Q-T01-006",
