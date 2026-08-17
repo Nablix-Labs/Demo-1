@@ -60,6 +60,7 @@ from app.services.student_model_debug import payload as student_model_debug_payl
 _CANVAS_RELATION_PATTERN = re.compile(
     r"(?:\\+(?:rightarrow|to)|[→⟶⟹⇒])"
 )
+_UNRELIABLE_EVIDENCE_MESSAGE = "Please write out that step so I can check it."
 
 
 def _canvas_request_fingerprint(request: CanvasSubmitRequest) -> str:
@@ -81,7 +82,7 @@ def _semantic_canvas_text(ocr: VisionOCRResult) -> str:
 
 
 def _clarification_result(ocr: VisionOCRResult) -> TutorResult:
-    message = "I could not read that work clearly. Please rewrite it and submit again."
+    message = _UNRELIABLE_EVIDENCE_MESSAGE
     return TutorResult(
         evaluation="UNCLEAR",
         error_type="INSUFFICIENT_INFORMATION",
@@ -268,7 +269,10 @@ async def submit_canvas(
         student_result = None
         schema_content_response = None
         updated_session = session
-    elif ocr.needs_clarification or ocr.confidence < settings.min_ocr_confidence_threshold:
+    elif ocr.needs_clarification or ocr.confidence < max(
+        settings.min_ocr_confidence_threshold,
+        rules.guided_learning.minimum_ocr_confidence,
+    ):
         tutor = _clarification_result(ocr)
         student_result = None
         schema_content_response = None
