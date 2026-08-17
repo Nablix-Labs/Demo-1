@@ -290,6 +290,7 @@ def _tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:
             if response.phase3_review_evidence is not None
             else None
         ),
+        requires_written_math_evidence=response.requires_written_math_evidence,
     )
 
 

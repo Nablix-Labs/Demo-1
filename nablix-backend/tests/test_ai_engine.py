@@ -367,6 +367,68 @@ def test_new_score_rule_uses_the_same_guided_rule_controller() -> None:
     assert "falls" not in evaluation.tutor_message
 
 
+def test_voice_only_symbolic_rule_requires_written_evidence() -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-SCORE",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="GENERAL_RULE",
+                description="new score rule",
+                required=True,
+            )
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="score-rule",
+        prompt_version="1.0.0",
+    )
+    request = ClassificationRequest(
+        question_id="Q-T01-SCORE",
+        question_type="SHORT_RESPONSE",
+        question="A player starts with score s and gains 6 bonus points. Write the new-score rule.",
+        correct_answer="s + 6",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-SCORE",
+            canonical_answer="s + 6",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=False,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        student_input="s plus 6",
+        current_phase="GUIDED_PRACTICE",
+        input_source="VOICE",
+        transcript_confidence=0.96,
+        attempt_count=0,
+        current_hint_level=None,
+    )
+    evaluation = GuidedEvaluation(
+        student_state="CORRECT",
+        newly_confirmed_concept_ids=["GENERAL_RULE"],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=[],
+        selected_error_code=None,
+        confidence=0.96,
+        next_objective=None,
+        tutor_message="That is the right new-score rule.",
+        tutor_message_voice="That is the right new-score rule.",
+    )
+
+    response = classifier.build_guided_tutor_response(
+        request,
+        classifier.load_classifier_rules(),
+        classifier.SafetyCheck(passed=True, flag_type=None, action_taken=None),
+        rubric,
+        evaluation,
+        classifier.initial_guided_objective(rubric),
+    )
+
+    assert response.requires_written_math_evidence is True
+    assert response.question_completed is False
+    assert response.attempt_increment == 0
+    assert "write the rule" in response.tutor_message
+
+
 def test_guided_follow_up_replaces_an_unrelated_llm_question() -> None:
     rubric = GeneratedQuestionRubric(
         question_id="Q-T01-SCORE",

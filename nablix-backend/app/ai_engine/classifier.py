@@ -830,6 +830,21 @@ def _expression_parts(text: str) -> tuple[str, str, str] | None:
     return match.group(1), match.group(2), match.group(3)
 
 
+def requires_written_symbolic_rule_evidence(
+    request: ClassificationRequest,
+    student_state: GuidedStudentState,
+) -> bool:
+    """Keep a voice-only algebra rule from completing a written response."""
+
+    if student_state != "CORRECT":
+        return False
+    if request.question_type != "SHORT_RESPONSE" or request.input_source != "VOICE":
+        return False
+    if request.answer_spec is None:
+        return False
+    return _expression_parts(request.answer_spec.canonical_answer) is not None
+
+
 def teaching_steps_for(request: ClassificationRequest) -> list[TeachingStep]:
     """Build a small, predictable plan from the authored question contract."""
 
@@ -3392,10 +3407,33 @@ def build_guided_tutor_response(
             evaluation.tutor_message,
         ),
     )
-    return apply_answer_reveal_guardrail(
+    guarded_response = apply_answer_reveal_guardrail(
         response,
         request.correct_answer,
         rules,
+    )
+    if not requires_written_symbolic_rule_evidence(request, state):
+        return guarded_response
+    message = (
+        "You have explained the idea clearly. Now write the rule on the canvas "
+        "so I can check the mathematical form."
+    )
+    return guarded_response.model_copy(
+        update={
+            "evaluation": "PARTIALLY_CORRECT",
+            "response_strategy": "CLARIFY",
+            "tutor_message": message,
+            "tutor_message_voice_optimised": message,
+            "attempt_increment": 0,
+            "recommended_conversation_action": "REQUEST_CLARIFICATION",
+            "question_completed": False,
+            "answer_value_confirmed": False,
+            "reasoning_complete": False,
+            "guided_student_state": "PARTIAL",
+            "active_teaching_objective": request.active_teaching_objective,
+            "guided_teaching_state": request.guided_teaching_state,
+            "requires_written_math_evidence": True,
+        }
     )
 
 

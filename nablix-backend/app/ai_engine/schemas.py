@@ -323,6 +323,7 @@ class TutorResponse(StrictSchema):
     independent_attempt_terminal: StrictBool = False
     first_error_step: str | None = None
     phase3_review_evidence: Phase3ReviewEvidence | None = None
+    requires_written_math_evidence: StrictBool = False
 
 
 class ExplainAgainResult(StrictSchema):
