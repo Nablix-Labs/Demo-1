@@ -10,7 +10,10 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import Field
 
-from app.ai_engine.canvas_math_review import review_canvas_math
+from app.ai_engine.canvas_math_review import (
+    normalize_canvas_math_text,
+    review_canvas_math,
+)
 from app.ai_engine.classifier_config import ClassifierRulesConfig, load_classifier_rules
 from app.ai_engine.prompt_registry import Trigger
 from app.ai_engine.schemas import (
@@ -76,6 +79,7 @@ if TYPE_CHECKING:
 _CANVAS_EXPRESSION = re.compile(
     r"^(?:(?:[A-Za-z]|\d|\s|[+\-−×*/÷=().]|\\(?:times|cdot|div)))+$"
 )
+_CANVAS_LATEX_COMMAND = re.compile(r"\\(?:times|cdot|div)")
 
 
 class ClassificationRequest(StrictSchema):
@@ -3311,8 +3315,14 @@ def build_guided_tutor_response(
     objective: ActiveTeachingObjective | None,
 ) -> TutorResponse:
     state = evaluation.student_state
+    review_request = request.model_copy(
+        update={
+            "generated_question_rubric": rubric,
+            "active_teaching_objective": objective,
+        }
+    )
     canvas_review: CanvasMathReview | None = _canvas_review_for(
-        request,
+        review_request,
         rules,
         evaluation.confidence,
     )
@@ -4512,7 +4522,16 @@ def canvas_expected_answer(request: ClassificationRequest) -> str:
         for component in rubric.required_concepts
         if component.concept_id == component_id
     )
-    if _CANVAS_EXPRESSION.fullmatch(component_description) is not None:
+    canonical_text: str = normalize_canvas_math_text(request.correct_answer).replace(
+        " ", ""
+    )
+    component_text: str = normalize_canvas_math_text(component_description).replace(
+        " ", ""
+    )
+    if (
+        _looks_like_canvas_expression(component_description)
+        and component_text in canonical_text
+    ):
         return component_description
 
     answer_parts: list[str] = [
@@ -4521,6 +4540,14 @@ def canvas_expected_answer(request: ClassificationRequest) -> str:
     if component_index < len(answer_parts):
         return answer_parts[component_index]
     return request.correct_answer
+
+
+def _looks_like_canvas_expression(text: str) -> bool:
+    expression: str = _CANVAS_LATEX_COMMAND.sub("", text)
+    return (
+        _CANVAS_EXPRESSION.fullmatch(expression) is not None
+        and re.search(r"[A-Za-z]{2,}", expression) is None
+    )
 
 
 def build_canvas_wording_context(

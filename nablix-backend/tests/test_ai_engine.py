@@ -1517,7 +1517,7 @@ def test_canvas_expected_answer_uses_active_math_component_from_rubric() -> None
         required_concepts=[
             GeneratedConcept(
                 concept_id="REQUIRED_COMPONENT_1",
-                description="c + 4",
+                description="States the general rule c + 4.",
                 required=True,
             ),
             GeneratedConcept(
@@ -1534,7 +1534,7 @@ def test_canvas_expected_answer_uses_active_math_component_from_rubric() -> None
         question_id="Q-T01-006",
         question_type="MULTI_PART_SHORT_RESPONSE",
         question="Write the rule and state what changes.",
-        correct_answer="The rule is c + 4; c changes.",
+        correct_answer="c + 4; c changes.",
         student_input="c - 4",
         current_phase="GUIDED_PRACTICE",
         input_source="CANVAS",
@@ -3832,19 +3832,10 @@ def test_canvas_math_review_scopes_multipart_sentence_to_active_rule_component(
         cache_key="counter-rule-canvas",
         prompt_version="1.0.0",
     )
-    objective = ActiveTeachingObjective(
-        objective_type="ANSWER_QUESTION",
-        target_concept_ids=[
-            "REQUIRED_COMPONENT_1",
-            "REQUIRED_COMPONENT_2",
-            "REQUIRED_COMPONENT_3",
-        ],
-        confirmed_concept_ids=[],
-        missing_concept_ids=[
-            "REQUIRED_COMPONENT_1",
-            "REQUIRED_COMPONENT_2",
-            "REQUIRED_COMPONENT_3",
-        ],
+    monkeypatch.setattr(
+        classifier,
+        "resolve_guided_rubric",
+        lambda **kwargs: rubric,
     )
     response = classify_student_response(
         ClassificationRequest(
@@ -3867,8 +3858,6 @@ def test_canvas_math_review_scopes_multipart_sentence_to_active_rule_component(
                 explanation_required=True,
             ),
             phase_2_prompt_context=_guided_context(0),
-            generated_question_rubric=rubric,
-            active_teaching_objective=objective,
             student_input="c - 4",
             current_phase="GUIDED_PRACTICE",
             input_source="CANVAS",
