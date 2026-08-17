@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 from app.models.student_model_session import AnswerSpec, QuestionType, SupportUsed
+from app.models.canvas_memory import CanvasEvent
 
 
 GuidedStudentState = Literal["CORRECT", "PARTIAL", "WRONG", "STUCK", "UNCLEAR"]
@@ -421,9 +422,12 @@ class GuidedTeachingState(GuidedLearningModel):
     active_component_id: str | None
     last_tutor_question_type: GuidedPromptType
     selected_option_id: str | None
+    selected_option_text: str | None = None
     awaiting_response: StrictBool
     active_step_id: str | None = None
     teaching_step_ids: list[str] = Field(default_factory=list)
+    completed_step_ids: list[str] = Field(default_factory=list)
+    current_step_index: int | None = Field(default=None, ge=0)
 
 
 class GuidedTeachingPlanStep(GuidedLearningModel):
@@ -443,6 +447,10 @@ class GuidedTutorContext(GuidedLearningModel):
     missing_concept_ids: list[str]
     support_state: dict[str, object]
     current_support: dict[str, object] | None
+    active_support_content: dict[str, object] | None
+    selected_option_id: str | None
+    selected_option_text: str | None
+    active_canvas_events: list[CanvasEvent]
     current_scaffold_step_number: int
     consecutive_stuck_count: int
     conversation_state_summary: str

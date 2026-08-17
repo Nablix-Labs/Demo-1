@@ -304,6 +304,8 @@ def test_guided_evaluator_context_preserves_active_step_and_support_state() -> N
             awaiting_response=True,
             active_step_id="FIXED_VALUE",
             teaching_step_ids=["CHANGING_VALUE", "FIXED_VALUE", "OPERATION"],
+            completed_step_ids=["CHANGING_VALUE"],
+            current_step_index=1,
         ),
         student_input="7 stays fixed",
         current_phase="GUIDED_PRACTICE",
@@ -325,6 +327,10 @@ def test_guided_evaluator_context_preserves_active_step_and_support_state() -> N
     assert context.confirmed_concept_ids == ["CHANGING_VALUE"]
     assert context.missing_concept_ids == ["FIXED_VALUE", "OPERATION"]
     assert context.current_support == {"support_type": "VISUAL_CUE"}
+    assert context.active_support_content == {"support_type": "VISUAL_CUE"}
+    assert context.selected_option_id is None
+    assert context.selected_option_text is None
+    assert context.active_canvas_events == []
     assert context.current_scaffold_step_number == 1
     assert context.consecutive_stuck_count == 2
 
