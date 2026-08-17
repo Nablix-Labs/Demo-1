@@ -2969,6 +2969,7 @@ async def _process_interaction(
                 retry_safe=None,
             ).model_copy(
                 update={
+                    "next_expected_input": "WRITE",
                     "ocr": canvas_evidence.ocr if canvas_evidence is not None else None,
                     "snapshot_reference": (
                         canvas_evidence.snapshot_reference
