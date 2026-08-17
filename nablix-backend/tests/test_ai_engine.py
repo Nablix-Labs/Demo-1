@@ -5980,6 +5980,152 @@ def test_component_adjudication_ignores_an_already_confirmed_claim() -> None:
     assert [target.concept_id for target in targets] == ["ANSWER_EXPLANATION"]
 
 
+def test_generic_teaching_steps_map_to_distinct_components() -> None:
+    request = ClassificationRequest(
+        question_id="Q-T01-006",
+        question_type="MULTI_PART_SHORT_RESPONSE",
+        question=(
+            "A counter starts at any value c and increases by 4. Write the "
+            "general rule and state what changes and what stays fixed."
+        ),
+        correct_answer="c + 4",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-006",
+            canonical_answer="c + 4",
+            accepted_answers=["c + 4"],
+            verification_method="EXACT_MATCH",
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        student_input="c + 4",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+    )
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-006",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="REQUIRED_COMPONENT_1",
+                description="First required learner idea.",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="REQUIRED_COMPONENT_2",
+                description="Second required learner idea.",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="REQUIRED_COMPONENT_3",
+                description="Third required learner idea.",
+                required=True,
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="generic-components",
+        prompt_version="1.0.0",
+    )
+
+    mapped_components = [
+        classifier._component_for_step(request, rubric, step.step_id)
+        for step in classifier.teaching_steps_for(request)
+    ]
+
+    assert mapped_components == [
+        "REQUIRED_COMPONENT_1",
+        "REQUIRED_COMPONENT_2",
+        "REQUIRED_COMPONENT_3",
+    ]
+
+
+def test_component_evidence_cannot_leave_an_incomplete_turn_correct() -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-EXPLANATION",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="ANSWER_SELECTION",
+                description="Selects the correct answer.",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="ANSWER_EXPLANATION",
+                description="Explains why the selected answer is true.",
+                required=True,
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="explanation-rubric",
+        prompt_version="1.1.0",
+    )
+    objective = ActiveTeachingObjective(
+        objective_type="EXPLAIN_REASONING",
+        target_concept_ids=["ANSWER_EXPLANATION"],
+        confirmed_concept_ids=["ANSWER_SELECTION"],
+        missing_concept_ids=["ANSWER_EXPLANATION"],
+    )
+    evaluation = GuidedEvaluation(
+        student_state="CORRECT",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=["ANSWER_SELECTION"],
+        contradicted_concept_ids=[],
+        missing_concept_ids=["ANSWER_EXPLANATION"],
+        selected_error_code=None,
+        confidence=0.95,
+        next_objective=objective,
+        tutor_message="The option is correct.",
+        tutor_message_voice="The option is correct.",
+    )
+
+    derived = classifier.state_from_component_evidence(
+        evaluation,
+        objective,
+        rubric,
+    )
+
+    assert derived.student_state == "UNCLEAR"
+
+
+def test_choice_explanation_controller_prompt_is_specific() -> None:
+    request = ClassificationRequest(
+        question_id="Q-T01-004",
+        question_type="CHOICE_WITH_EXPLANATION",
+        question="Which is the general rule: 12 + 4 or n + 4? Explain briefly.",
+        correct_answer="B",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-004",
+            canonical_answer="B",
+            accepted_answers=["B"],
+            verification_method="CHOICE_MATCH",
+            explanation_required=True,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        student_input="n changes",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+    )
+    rubric = classifier.rubric_from_authored_answer_parts(
+        question_id="Q-T01-004",
+        question_type="CHOICE_WITH_EXPLANATION",
+        answer_spec=request.answer_spec,
+        prompt_version="1.1.0",
+    )
+    assert rubric is not None
+    objective = ActiveTeachingObjective(
+        objective_type="EXPLAIN_REASONING",
+        target_concept_ids=["ANSWER_EXPLANATION"],
+        confirmed_concept_ids=["ANSWER_SELECTION"],
+        missing_concept_ids=["ANSWER_EXPLANATION"],
+    )
+
+    prompt = classifier.controller_prompt_for_objective(request, rubric, objective)
+
+    assert prompt == "Why does the option you chose work for every case in the question?"
+
+
 def test_guided_llm_repeated_stuck_requests_one_scaffold_escalation(
     monkeypatch,
 ) -> None:
