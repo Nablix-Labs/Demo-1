@@ -169,7 +169,7 @@ _ADDITION_CHANGE_PATTERN: Final[re.Pattern[str]] = re.compile(
 
 
 _EMPTY_RAG = RAGResult(documents=[], retrieval_confidence=0.0)
-_LOW_CONFIDENCE_MESSAGE = "I’m not sure I heard that clearly. Could you say it again?"
+_UNRELIABLE_EVIDENCE_MESSAGE = "Please write out that step so I can check it."
 _STALE_TURN_MESSAGE = (
     "The conversation has moved forward. Please use the latest tutor response."
 )
@@ -889,6 +889,15 @@ def _normalize_voice_transcript(transcript: str) -> str:
     normalized = re.sub(r"\bequals?\b", "=", normalized, flags=re.IGNORECASE)
     normalized = re.sub(r"\s*=\s*", " = ", normalized)
     return " ".join(normalized.split())
+
+
+def _legacy_ocr_needs_writing(
+    ocr: VisionOCRResult,
+    minimum_ocr_confidence: float,
+) -> bool:
+    """Reject uncertain canvas evidence before the legacy tutor records a turn."""
+
+    return ocr.needs_clarification or ocr.confidence < minimum_ocr_confidence
 
 
 _EXPLICIT_ASSIGNMENT = re.compile(
@@ -2946,13 +2955,14 @@ async def _process_interaction(
     if (
         request.input_source == "VOICE"
         and request.transcript_confidence is not None
-        and request.transcript_confidence < rules.low_transcript_confidence_threshold
+        and request.transcript_confidence
+        < rules.guided_learning.minimum_voice_transcript_confidence
         and not canvas_complete_correct
     ):
         clarification_history = _updated_conversation_history(
             session.conversation_history,
             student_message,
-            _LOW_CONFIDENCE_MESSAGE,
+            _UNRELIABLE_EVIDENCE_MESSAGE,
             rules.conversation_rules.max_recent_messages,
         )
         updated_session = await update_interaction_state(
@@ -2965,9 +2975,9 @@ async def _process_interaction(
             request.transcript_confidence,
             canvas_evidence.submission_id if canvas_evidence is not None else request.canvas_snapshot_id,
             canvas_evidence.ocr if canvas_evidence is not None else None,
-            False,
-            False,
-            [],
+            session.show_visual_cue,
+            session.show_scaffold_panel,
+            session.scaffold_steps,
             {
                 "attempt_count": session.attempt_count,
                 "question_completed": session.question_completed,
@@ -2989,10 +2999,10 @@ async def _process_interaction(
                 interaction_type=request.interaction_type,
                 nudge_id=request.nudge_id,
                 session=updated_session,
-                message=_LOW_CONFIDENCE_MESSAGE,
-                message_voice=_LOW_CONFIDENCE_MESSAGE,
+                message=_UNRELIABLE_EVIDENCE_MESSAGE,
+                message_voice=_UNRELIABLE_EVIDENCE_MESSAGE,
                 visual_cue=None,
-                scaffold_steps=[],
+                scaffold_steps=updated_session.scaffold_steps,
                 session_summary=None,
                 conversation_action="REQUEST_CLARIFICATION",
                 attempt_increment=0,
@@ -3099,7 +3109,7 @@ async def _process_interaction(
                 message=message,
                 message_voice=message,
                 visual_cue=None,
-                scaffold_steps=[],
+                scaffold_steps=updated_session.scaffold_steps,
                 session_summary=None,
                 conversation_action="REQUEST_CLARIFICATION",
                 attempt_increment=0,
@@ -3201,8 +3211,12 @@ async def _process_interaction(
         ),
         phase3_allowed_error_definitions=_schema_question(session).tutor_view.potential_errors,
     )
-    if ocr is not None and ocr.needs_clarification:
-        message = "I’m having trouble reading your working on the board. Please rewrite it clearly and try again."
+    minimum_ocr_confidence = max(
+        get_settings().min_ocr_confidence_threshold,
+        rules.guided_learning.minimum_ocr_confidence,
+    )
+    if ocr is not None and _legacy_ocr_needs_writing(ocr, minimum_ocr_confidence):
+        message = _UNRELIABLE_EVIDENCE_MESSAGE
         updated_session = await update_interaction_state(
             request.session_id,
             request.student_id,
@@ -3213,9 +3227,9 @@ async def _process_interaction(
             request.transcript_confidence,
             canvas_evidence.submission_id if canvas_evidence is not None else request.canvas_snapshot_id,
             ocr,
-            False,
-            False,
-            [],
+            session.show_visual_cue,
+            session.show_scaffold_panel,
+            session.scaffold_steps,
             {
                 "attempt_count": session.attempt_count,
                 "question_completed": session.question_completed,
