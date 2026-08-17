@@ -231,8 +231,9 @@ def _build_flux_params() -> str:
         model name.  (Only flux-general-multi accepts `language_hint`.)
       - `smart_format` and `punctuate` are unsupported by Flux and are
         dropped.  Transcripts come back unformatted, so numbers may arrive
-        as words ("six" rather than "6").  normalize_math() already runs
-        downstream and the LLM handles spoken numbers, so this is cosmetic.
+        as words ("six" rather than "6").  That is correct for us: spec
+        section 10 wants the raw transcript, and the tutor engine resolves
+        spoken maths using question context, which it can do and we cannot.
       - `interim_results` is gone; Flux sends `Update` events instead.
       - `endpointing` / `utterance_end_ms` are gone; turn detection is in
         the model now, tuned via eot_threshold / eot_timeout_ms.
@@ -301,20 +302,21 @@ def get_backend_http_client() -> httpx.AsyncClient:
         )
     return _backend_http_client
 
-MATH_NORMALIZATIONS = {
-    "five over six": "5/6",
-    "x equals five": "x = 5",
-    "x equals six": "x = 6",
-    "x equals four": "x = 4",
-    "x equals seven": "x = 7",
-    "x equals three": "x = 3",
-    "two thirds plus one fourth": "2/3 + 1/4",
-    "x squared plus three": "x^2 + 3",
-}
-
-def normalize_math(transcript: str) -> str | None:
-    lower = transcript.lower().strip().rstrip(".")
-    return MATH_NORMALIZATIONS.get(lower)
+# NOTE: MATH_NORMALIZATIONS / normalize_math were removed on 17 Aug.
+#
+# Spec section 10 assigns the voice pipeline "send raw transcript ... do not
+# silently normalise mathematical tokens in the voice layer", and separately
+# "do not decide correctness, support level or mathematical meaning in the
+# voice service". Mapping "five over six" to "5/6" is the voice layer deciding
+# mathematical meaning, which the engine is supposed to own using question
+# context -- it knows the variable is s and we do not.
+#
+# Removing it changed no behaviour. The raw transcript was always what went to
+# the backend; the normalised value only ever travelled to the browser as
+# normalized_expression, which no frontend code reads. It also never fired in
+# any recorded session: it was an exact whole-string match against eight keys,
+# so the transcript had to equal "x equals five" and nothing else. Flux made
+# that rarer still by dropping smart formatting and transcribing filler words.
 
 
 async def evaluate_voice_transcript(
@@ -1621,10 +1623,6 @@ async def process_and_respond(
     """
     pipeline_start = time.time()
 
-    normalized = normalize_math(transcript)
-    if normalized:
-        logger.info(f"[{session_id}] Normalized: '{transcript}' -> '{normalized}'")
-
     try:
         tutor_start = time.time()
         canvas_draw: list[object] = []
@@ -1700,7 +1698,6 @@ async def process_and_respond(
         **tutor_response,
         "type": "tutor_response",
         "transcript": transcript,
-        "normalized_expression": normalized,
         "confidence": round(confidence, 4),
         "text": tutor_text,
         "voice_text": tutor_voice_text,
