@@ -100,6 +100,7 @@ def _clarification_result(ocr: VisionOCRResult) -> TutorResult:
         attempt_increment=0,
         recommended_conversation_action="REQUEST_CLARIFICATION",
         question_completed=False,
+        requires_written_math_evidence=True,
     )
 
 
@@ -400,6 +401,9 @@ async def submit_canvas(
             "tutor_message_voice": response_message_voice,
             "visual_cue": visual_cue or tutor.visual_cue,
         }
+    )
+    response.next_expected_input = (
+        "WRITE" if tutor.requires_written_math_evidence else None
     )
     response.canvas_draw = canvas_draw
     response.localization_status = (
