@@ -1,6 +1,7 @@
 from app.models.adapters import (
     AnnotationIntent,
     OCRTextRegion,
+    SpatialMathToken,
     TutorMistakeClassification,
     TutorResult,
 )
@@ -116,3 +117,75 @@ def test_canvas_planner_circles_explicit_whole_line_mistake() -> None:
     assert len(draw) == 1
     assert draw[0].action_id == "canvas-line-review-step-1"
     assert [element.kind for element in draw[0].elements] == ["ellipse"]
+
+
+def test_canvas_planner_uses_target_token_geometry() -> None:
+    regions = assign_step_ids(
+        [
+            OCRTextRegion(
+                text="c - 4",
+                x=0.10,
+                y=0.30,
+                w=0.40,
+                h=0.08,
+                confidence=0.95,
+            )
+        ]
+    )
+    tutor = _tutor_result(
+        TutorMistakeClassification(
+            status="mistake_found",
+            mistake_step_id="step-1",
+            target_token_ids=["step-1:token-2"],
+            error_token="-",
+            expected_token="+",
+            target_text="-",
+            replacement_text="+",
+            confidence=0.95,
+        ),
+        [
+            AnnotationIntent(kind="circle_target", target_step_id="step-1"),
+            AnnotationIntent(
+                kind="write_correction",
+                target_step_id="step-1",
+                text="+",
+                placement="right",
+            ),
+            AnnotationIntent(kind="draw_arrow", target_step_id="step-1"),
+        ],
+    )
+    draw = plan_canvas_draw(
+        tutor,
+        regions,
+        [
+            SpatialMathToken(
+                token_id="step-1:token-1",
+                step_id="step-1",
+                text="c",
+                bounding_box={"x": 0.10, "y": 0.30, "width": 0.05, "height": 0.08},
+                alignment_confidence=0.95,
+            ),
+            SpatialMathToken(
+                token_id="step-1:token-2",
+                step_id="step-1",
+                text="-",
+                bounding_box={"x": 0.20, "y": 0.30, "width": 0.05, "height": 0.08},
+                alignment_confidence=0.95,
+            ),
+            SpatialMathToken(
+                token_id="step-1:token-3",
+                step_id="step-1",
+                text="4",
+                bounding_box={"x": 0.30, "y": 0.30, "width": 0.05, "height": 0.08},
+                alignment_confidence=0.95,
+            ),
+        ],
+    )
+
+    assert [element.kind for element in draw[0].elements] == [
+        "ellipse",
+        "math",
+        "arrow",
+    ]
+    assert abs(draw[0].elements[0].w - 0.05) < 1e-9
+    assert abs(draw[0].elements[0].h - 0.08) < 1e-9
