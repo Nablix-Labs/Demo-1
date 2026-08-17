@@ -398,7 +398,7 @@ def _tutor_with_guided_rescue(
             "tutor_message": message,
             "tutor_message_voice": message,
             "voice_optimised": True,
-            "answer_reveal_allowed": not parallel,
+            "answer_reveal_allowed": rescue.rescue_type == "TUTOR_SOLVED",
             "recommended_conversation_action": (
                 "ASK_QUESTION" if parallel else "WAIT_FOR_STUDENT"
             ),
@@ -2402,7 +2402,7 @@ def _contextual_nudge_message(session: SessionRecord) -> str:
     return "I'm still here with you. Tell me what you are thinking so far."
 
 
-def _selected_option_message(session: SessionRecord, option_id: str) -> tuple[str, str]:
+def _selected_option_message(session: SessionRecord, option_id: str) -> tuple[str, str, str]:
     """Build a focused response for a recorded choice without grading an attempt."""
 
     question = _schema_question(session)
@@ -2422,10 +2422,12 @@ def _selected_option_message(session: SessionRecord, option_id: str) -> tuple[st
         return (
             selection,
             "You chose that option. Now explain why it works for every possible starting value.",
+            option.text,
         )
     return (
         selection,
         "You chose that option. Compare it with the situation: can one fixed starting number describe every possible case?",
+        option.text,
     )
 
 
@@ -2437,7 +2439,7 @@ async def _option_selected_interaction_response(
         raise HTTPException(status_code=409, detail="OPTION_SELECTED is available only in Guided Practice.")
     if request.selected_option_id is None:
         raise HTTPException(status_code=422, detail="selected_option_id is required.")
-    selection, message = _selected_option_message(session, request.selected_option_id)
+    selection, message, option_text = _selected_option_message(session, request.selected_option_id)
     rules = load_classifier_rules()
     updated_session = await update_interaction_state(
         request.session_id,
@@ -2463,6 +2465,7 @@ async def _option_selected_interaction_response(
                 session.guided_teaching_state.model_copy(
                     update={
                         "selected_option_id": request.selected_option_id,
+                        "selected_option_text": option_text,
                         "last_tutor_question_type": "OPTION_COMPARISON",
                         "awaiting_response": True,
                     }

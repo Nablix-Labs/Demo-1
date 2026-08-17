@@ -904,6 +904,15 @@ def active_teaching_step(request: ClassificationRequest) -> TeachingStep | None:
         return None
     persisted = request.guided_teaching_state
     if persisted is not None and persisted.question_id == request.question_id:
+        if persisted.current_step_index is not None:
+            if persisted.current_step_index >= len(steps):
+                raise ValueError(
+                    "guided current_step_index is outside the authored teaching plan; "
+                    f"question_id={request.question_id!r}, "
+                    f"current_step_index={persisted.current_step_index}, "
+                    f"step_count={len(steps)}"
+                )
+            return steps[persisted.current_step_index]
         active_id = persisted.active_step_id
         if active_id is not None:
             return next((step for step in steps if step.step_id == active_id), steps[0])
@@ -1182,9 +1191,27 @@ def teaching_state_for(
     missing_ids = objective.missing_concept_ids if objective is not None else []
     previous = request.guided_teaching_state
     teaching_steps = teaching_steps_for(request)
-    active_step_id = teaching_step_from_message(tutor_message, teaching_steps)
-    if active_step_id is None and previous is not None:
-        active_step_id = previous.active_step_id
+    confirmed_set = set(confirmed_ids)
+    completed_step_ids: list[str] = []
+    for step in teaching_steps:
+        component_id = _component_for_step(rubric, step.step_id)
+        if component_id is None or component_id not in confirmed_set:
+            break
+        completed_step_ids.append(step.step_id)
+    current_step_index = (
+        len(completed_step_ids)
+        if len(completed_step_ids) < len(teaching_steps)
+        else None
+    )
+    active_step_id = (
+        teaching_steps[current_step_index].step_id
+        if current_step_index is not None
+        else None
+    )
+    previous_matches_question = (
+        previous is not None
+        and previous.question_id == (request.question_id or rubric.question_id)
+    )
     return GuidedTeachingState(
         question_id=request.question_id or rubric.question_id,
         objective_component_ids=required_ids,
@@ -1196,14 +1223,18 @@ def teaching_state_for(
             typed_choice_selection(request)
             or (
                 previous.selected_option_id
-                if previous is not None
-                and previous.question_id == (request.question_id or rubric.question_id)
+                if previous_matches_question
                 else None
             )
+        ),
+        selected_option_text=(
+            previous.selected_option_text if previous_matches_question else None
         ),
         awaiting_response=objective is not None,
         active_step_id=active_step_id,
         teaching_step_ids=[step.step_id for step in teaching_steps],
+        completed_step_ids=completed_step_ids,
+        current_step_index=current_step_index,
     )
 
 
@@ -1239,6 +1270,22 @@ def guided_tutor_context_for(
     current_support = (
         phase_context.current_support if phase_context is not None else None
     )
+    persisted_state = request.guided_teaching_state
+    selected_option_id = (
+        typed_choice_selection(request)
+        or (
+            persisted_state.selected_option_id
+            if persisted_state is not None
+            and persisted_state.question_id == request.question_id
+            else None
+        )
+    )
+    selected_option_text = (
+        persisted_state.selected_option_text
+        if persisted_state is not None
+        and persisted_state.question_id == request.question_id
+        else None
+    )
     current_scaffold_step_number = (
         phase_context.current_scaffold_step_number
         if phase_context is not None
@@ -1253,6 +1300,8 @@ def guided_tutor_context_for(
         "Missing concepts: "
         f"{', '.join(objective.missing_concept_ids) or 'none'}. "
         f"Active question: {active_question} "
+        "If active support is present, explain that exact support in plain language "
+        "before asking one focused question about it. "
         "The backend owns progression and support selection; do not advance "
         "or request a support rung."
     )
@@ -1270,6 +1319,10 @@ def guided_tutor_context_for(
         missing_concept_ids=objective.missing_concept_ids,
         support_state=support_state,
         current_support=current_support,
+        active_support_content=current_support,
+        selected_option_id=selected_option_id,
+        selected_option_text=selected_option_text,
+        active_canvas_events=request.canvas_events,
         current_scaffold_step_number=current_scaffold_step_number,
         consecutive_stuck_count=consecutive_stuck_count,
         conversation_state_summary=conversation_state_summary,
@@ -3189,8 +3242,9 @@ def build_guided_tutor_response(
             else []
         ),
         next_phase_recommendation=request.current_phase,
-        # A tutor may safely discuss an answer the learner has already supplied
-        # or selected; it must not introduce a new final answer.
+        # Normal turns may refer to an answer the learner already supplied or
+        # selected, but may not introduce a new final answer. The explicit
+        # TutorSolved rescue path is the only authorised new-answer route.
         answer_reveal_allowed=(
             prompt_type_for_message(evaluation.tutor_message) == "SOURCE_CORRECTION"
             or guided_turn_has_answer_evidence(request, evaluation)
