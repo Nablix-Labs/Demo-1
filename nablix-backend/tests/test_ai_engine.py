@@ -3785,6 +3785,128 @@ def test_canvas_math_review_writes_grounded_direct_expression_correction(
     assert response.annotation_intents[1].text == "+"
 
 
+def test_canvas_math_review_scopes_multipart_sentence_to_active_rule_component(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class GuidedClient:
+        def evaluate_guided_turn(self, **kwargs: object) -> GuidedEvaluation:
+            objective = cast(ActiveTeachingObjective, kwargs["active_objective"])
+            return GuidedEvaluation(
+                student_state="WRONG",
+                newly_confirmed_concept_ids=[],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=objective.missing_concept_ids,
+                selected_error_code="ERR-DIRECTION-REVERSED",
+                confidence=0.95,
+                next_objective=objective,
+                tutor_message="What general rule represents this situation?",
+                tutor_message_voice="What general rule represents this situation?",
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: GuidedClient(),
+    )
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-006",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="REQUIRED_COMPONENT_1",
+                description="c + 4",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="REQUIRED_COMPONENT_2",
+                description="c changes",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="REQUIRED_COMPONENT_3",
+                description="+4 stays fixed",
+                required=True,
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="counter-rule-canvas",
+        prompt_version="1.0.0",
+    )
+    objective = ActiveTeachingObjective(
+        objective_type="ANSWER_QUESTION",
+        target_concept_ids=[
+            "REQUIRED_COMPONENT_1",
+            "REQUIRED_COMPONENT_2",
+            "REQUIRED_COMPONENT_3",
+        ],
+        confirmed_concept_ids=[],
+        missing_concept_ids=[
+            "REQUIRED_COMPONENT_1",
+            "REQUIRED_COMPONENT_2",
+            "REQUIRED_COMPONENT_3",
+        ],
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T01-006",
+            question_type="MULTI_PART_SHORT_RESPONSE",
+            question=(
+                "A counter starts at any value c and increases by 4. Write the "
+                "general rule and state what changes and what stays fixed."
+            ),
+            correct_answer=(
+                "The general rule is c + 4, c changes, and +4 stays fixed."
+            ),
+            answer_spec=AnswerSpec(
+                answer_spec_id="ANS-T01-006",
+                canonical_answer=(
+                    "The general rule is c + 4, c changes, and +4 stays fixed."
+                ),
+                accepted_answers=[],
+                verification_method="STRUCTURED_TEXT_AND_SYMBOLIC_MATCH",
+                explanation_required=True,
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            generated_question_rubric=rubric,
+            active_teaching_objective=objective,
+            student_input="c - 4",
+            current_phase="GUIDED_PRACTICE",
+            input_source="CANVAS",
+            transcript_confidence=None,
+            attempt_count=3,
+            current_hint_level=None,
+            has_canvas_evidence=True,
+            canvas_regions=[_canvas_region("step-1", "c - 4", 1.0)],
+            spatial_tokens=[
+                SpatialMathToken(
+                    token_id=f"step-1:token-{index}",
+                    step_id="step-1",
+                    text=text,
+                    bounding_box={
+                        "x": index / 10,
+                        "y": 0.1,
+                        "width": 0.05,
+                        "height": 0.1,
+                    },
+                    alignment_confidence=0.95,
+                )
+                for index, text in enumerate(["c", "-", "4"], start=1)
+            ],
+        )
+    )
+
+    assert response.mistake_classification is not None
+    assert response.mistake_classification.target_token_ids == ["step-1:token-2"]
+    assert response.mistake_classification.error_token == "-"
+    assert response.mistake_classification.expected_token == "+"
+    assert [intent.kind for intent in response.annotation_intents] == [
+        "circle_target",
+        "write_correction",
+        "draw_arrow",
+    ]
+    assert response.annotation_intents[1].text == "+"
+
+
 def test_canvas_math_review_circles_direct_expression_with_multiple_errors() -> None:
     review = review_canvas_math(
         question=(
