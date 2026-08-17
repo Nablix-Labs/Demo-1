@@ -18,12 +18,6 @@ from app.models.guided_learning import (
     GuidedTeachingState,
     GeneratedQuestionRubric,
     GuidedStudentState,
-    HybridEvidenceResolution,
-    HybridPedagogicalState,
-    HybridPedagogyDecision,
-    HybridSupportState,
-    HybridTutorTurn,
-    OrderedCanvasMemoryItem,
     ScaffoldEvaluationContext,
 )
 
@@ -135,15 +129,9 @@ class AdapterContext(BaseModel):
     phase3_submission_kind: Literal["CANVAS", "CHOICE"] | None = None
     phase3_allowed_error_definitions: list[dict[str, object]] = Field(default_factory=list)
 
-    # Hybrid-only evidence the legacy adapter never reads. All optional/defaulted
-    # so existing AdapterContext construction sites are unaffected.
+    # Explicit choice evidence used by Guided Learning option evaluation.
     selected_option_id: str | None = None
     selected_option_text: str | None = None
-    structured_answer: dict[str, str] = Field(default_factory=dict)
-    raw_voice_transcript: str | None = None
-    transcript_alternatives: list[str] = Field(default_factory=list)
-    hybrid_support_state: HybridSupportState | None = None
-    hybrid_pedagogical_state: HybridPedagogicalState | None = None
 
 
 class RetrievedDocument(BaseModel):
@@ -302,17 +290,6 @@ class TutorResult(BaseModel):
     first_error_step: str | None = None
     phase3_review_evidence: dict[str, object] | None = None
 
-    # Set only by HybridTutorEngineAdapter. When hybrid_turn is not None, the
-    # caller must persist via the Hybrid path (_apply_hybrid_turn) instead of
-    # the legacy student_model_events/_apply_schema_event path — these carry
-    # Hybrid's own shape (6-rung support ladder, component IDs), which the
-    # legacy fields above cannot represent without lossy translation. Carried
-    # here, rather than re-derived downstream, so _apply_hybrid_turn's inputs
-    # are exactly what this adapter already validated.
-    hybrid_turn: HybridTutorTurn | None = None
-    hybrid_evidence_resolution: HybridEvidenceResolution | None = None
-    hybrid_decision: HybridPedagogyDecision | None = None
-    hybrid_canvas_memory: list[OrderedCanvasMemoryItem] = Field(default_factory=list)
     requires_written_math_evidence: bool = False
 
 
