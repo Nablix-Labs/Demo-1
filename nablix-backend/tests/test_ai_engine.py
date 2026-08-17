@@ -2028,6 +2028,60 @@ def test_answer_spec_defaults_missing_answer_steps_for_legacy_payloads() -> None
     assert answer_spec.answer_steps == []
 
 
+def test_authored_answer_steps_get_stable_guided_ids() -> None:
+    request = _guided_context(0)
+    classification_request = ClassificationRequest(
+        question_id="Q-T01-STEPS",
+        question_type="MULTI_PART_SHORT_RESPONSE",
+        question="Write the general rule and explain what changes and what stays fixed.",
+        correct_answer="c + 4; c changes; +4 stays fixed",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-STEPS",
+            canonical_answer="c + 4; c changes; +4 stays fixed",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=True,
+            answer_steps=[
+                "Write the rule.",
+                "Explain what changes.",
+                "Explain what stays fixed.",
+            ],
+        ),
+        phase_2_prompt_context=request,
+        student_input="c + 4",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+    )
+
+    rubric = _guided_rubric().model_copy(update={"question_id": "Q-T01-STEPS"})
+    objective = classifier.initial_guided_objective(rubric)
+    state = classifier.teaching_state_for(
+        classification_request,
+        rubric,
+        objective,
+        "What general rule represents this situation?",
+    )
+    context = classifier.guided_tutor_context_for(
+        classification_request,
+        rubric,
+        objective,
+    )
+
+    assert state.answer_step_ids == [
+        "ANS-T01-STEPS:STEP:1",
+        "ANS-T01-STEPS:STEP:2",
+        "ANS-T01-STEPS:STEP:3",
+    ]
+    assert [step.answer_step_id for step in context.ordered_teaching_steps] == [
+        "ANS-T01-STEPS:STEP:1",
+        "ANS-T01-STEPS:STEP:2",
+        "ANS-T01-STEPS:STEP:3",
+    ]
+
+
 def test_answer_spec_rejects_non_string_answer_steps() -> None:
     with pytest.raises(ValueError):
         AnswerSpec.model_validate(

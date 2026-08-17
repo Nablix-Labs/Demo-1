@@ -94,6 +94,7 @@ class GuidedTeachingState(GuidedLearningModel):
     awaiting_response: StrictBool
     active_step_id: str | None = None
     teaching_step_ids: list[str] = Field(default_factory=list)
+    answer_step_ids: list[str] = Field(default_factory=list)
     completed_step_ids: list[str] = Field(default_factory=list)
     current_step_index: int | None = Field(default=None, ge=0)
 
@@ -103,6 +104,7 @@ class GuidedTeachingPlanStep(GuidedLearningModel):
 
     step_id: str
     tutor_question: str
+    answer_step_id: str | None = None
 
 
 class GuidedTutorContext(GuidedLearningModel):

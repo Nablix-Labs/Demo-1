@@ -896,6 +896,18 @@ def teaching_steps_for(request: ClassificationRequest) -> list[TeachingStep]:
     return []
 
 
+def answer_step_ids_for(request: ClassificationRequest) -> list[str]:
+    """Derive stable learner-step IDs from the authored answer contract."""
+
+    answer_spec = request.answer_spec
+    if answer_spec is None:
+        return []
+    return [
+        f"{answer_spec.answer_spec_id}:STEP:{index}"
+        for index, _step in enumerate(answer_spec.answer_steps, start=1)
+    ]
+
+
 def teaching_step_from_message(message: str, steps: list[TeachingStep]) -> str | None:
     """Recover the exact pending step from a controller-owned prompt."""
 
@@ -1258,6 +1270,7 @@ def teaching_state_for(
         awaiting_response=objective is not None,
         active_step_id=active_step_id,
         teaching_step_ids=[step.step_id for step in teaching_steps],
+        answer_step_ids=answer_step_ids_for(request),
         completed_step_ids=completed_step_ids,
         current_step_index=current_step_index,
     )
@@ -1330,6 +1343,7 @@ def guided_tutor_context_for(
         "The backend owns progression and support selection; do not advance "
         "or request a support rung."
     )
+    authored_step_ids = answer_step_ids_for(request)
     return GuidedTutorContext(
         active_tutor_question=active_question,
         active_step_id=active_step.step_id if active_step is not None else None,
@@ -1337,8 +1351,13 @@ def guided_tutor_context_for(
             GuidedTeachingPlanStep(
                 step_id=teaching_step.step_id,
                 tutor_question=teaching_step.prompt,
+                answer_step_id=(
+                    authored_step_ids[index]
+                    if index < len(authored_step_ids)
+                    else None
+                ),
             )
-            for teaching_step in teaching_steps
+            for index, teaching_step in enumerate(teaching_steps)
         ],
         confirmed_concept_ids=objective.confirmed_concept_ids,
         missing_concept_ids=objective.missing_concept_ids,
