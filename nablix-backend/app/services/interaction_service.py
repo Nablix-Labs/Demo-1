@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.adapters.base import StudentModelAdapter
+from app.adapters.hybrid_tutor_engine import HybridTutorEngineAdapter
 from app.adapters.provider import get_adapters
 from app.ai_engine.classifier import (
     build_openai_ai_engine_client,
@@ -98,6 +99,7 @@ from app.services.phase_transition import (
 )
 from app.services.session_service import (
     reconcile_journey_conflict,
+    _apply_hybrid_turn,
     _apply_schema_event,
     _get_owned_session_for_turn,
     cache_interaction_response,
@@ -167,7 +169,7 @@ _ADDITION_CHANGE_PATTERN: Final[re.Pattern[str]] = re.compile(
 
 
 _EMPTY_RAG = RAGResult(documents=[], retrieval_confidence=0.0)
-_LOW_CONFIDENCE_MESSAGE = "I’m not sure I heard that clearly. Could you say it again?"
+_UNRELIABLE_EVIDENCE_MESSAGE = "Please write out that step so I can check it."
 _STALE_TURN_MESSAGE = (
     "The conversation has moved forward. Please use the latest tutor response."
 )
@@ -396,7 +398,7 @@ def _tutor_with_guided_rescue(
             "tutor_message": message,
             "tutor_message_voice": message,
             "voice_optimised": True,
-            "answer_reveal_allowed": not parallel,
+            "answer_reveal_allowed": rescue.rescue_type == "TUTOR_SOLVED",
             "recommended_conversation_action": (
                 "ASK_QUESTION" if parallel else "WAIT_FOR_STUDENT"
             ),
@@ -417,6 +419,24 @@ def _evaluation_reason(tutor: TutorResult) -> EvaluationReasonCode:
     return EvaluationReasonCode.RESPONSE_UNCLEAR
 
 
+def _hybrid_orchestration_selected(context: AdapterContext) -> bool:
+    """The one place that decides legacy vs. Hybrid. Both feature flags — the
+    existing `v1_hybrid_enabled` in classifier_rules.yaml (Sanya's) and the
+    app-level `hybrid_orchestration_enabled` (this wiring's own) — plus the
+    student allowlist must all be open. Fail-closed: an empty allowlist means
+    nobody, even with both flags on, matching the handoff's "keep both Hybrid
+    feature flags disabled by default."
+    """
+
+    rules = load_classifier_rules()
+    settings = get_settings()
+    return (
+        rules.guided_learning.v1_hybrid_enabled
+        and settings.hybrid_orchestration_enabled
+        and context.student_id in settings.hybrid_allowed_student_ids
+    )
+
+
 async def run_tutor_pipeline(
     context: AdapterContext,
 ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
@@ -426,7 +446,10 @@ async def run_tutor_pipeline(
     # Classify first: error_type / response_strategy / chosen hint_level are tutor
     # outputs, so RAG can only target the right hint after evaluation.
     student = await adapters.student_model.assess(context)
-    tutor = await adapters.tutor.evaluate(context, _EMPTY_RAG, student)
+    tutor_engine = (
+        HybridTutorEngineAdapter() if _hybrid_orchestration_selected(context) else adapters.tutor
+    )
+    tutor = await tutor_engine.evaluate(context, _EMPTY_RAG, student)
 
     return _EMPTY_RAG, student, tutor
 
@@ -465,6 +488,26 @@ async def process_answer_with_session_event(
         )
 
     _, student, tutor = await run_tutor_pipeline(context)
+    if tutor.hybrid_turn is not None or tutor.requires_written_math_evidence:
+        # A Hybrid-adapter turn (see HybridTutorEngineAdapter.evaluate) never
+        # goes through the legacy attempt/event machinery below — its shape
+        # (6-rung support ladder, component IDs) doesn't fit it. NEEDS_WRITING
+        # (requires_written_math_evidence, hybrid_turn is None) persists
+        # nothing at all, matching "no attempt increment, error/misconception
+        # event, progression, or support escalation" from the handoff.
+        updated_session = (
+            await _apply_hybrid_turn(
+                session,
+                tutor.hybrid_turn,
+                tutor.hybrid_evidence_resolution,
+                tutor.hybrid_decision,
+                tutor.hybrid_canvas_memory,
+                load_classifier_rules(),
+            )
+            if tutor.hybrid_turn is not None
+            else session
+        )
+        return student, tutor, None, None, updated_session
     if (
         context.has_canvas_evidence
         and tutor.mistake_classification is not None
@@ -846,6 +889,15 @@ def _normalize_voice_transcript(transcript: str) -> str:
     normalized = re.sub(r"\bequals?\b", "=", normalized, flags=re.IGNORECASE)
     normalized = re.sub(r"\s*=\s*", " = ", normalized)
     return " ".join(normalized.split())
+
+
+def _legacy_ocr_needs_writing(
+    ocr: VisionOCRResult,
+    minimum_ocr_confidence: float,
+) -> bool:
+    """Reject uncertain canvas evidence before the legacy tutor records a turn."""
+
+    return ocr.needs_clarification or ocr.confidence < minimum_ocr_confidence
 
 
 _EXPLICIT_ASSIGNMENT = re.compile(
@@ -2359,7 +2411,7 @@ def _contextual_nudge_message(session: SessionRecord) -> str:
     return "I'm still here with you. Tell me what you are thinking so far."
 
 
-def _selected_option_message(session: SessionRecord, option_id: str) -> tuple[str, str]:
+def _selected_option_message(session: SessionRecord, option_id: str) -> tuple[str, str, str]:
     """Build a focused response for a recorded choice without grading an attempt."""
 
     question = _schema_question(session)
@@ -2379,10 +2431,12 @@ def _selected_option_message(session: SessionRecord, option_id: str) -> tuple[st
         return (
             selection,
             "You chose that option. Now explain why it works for every possible starting value.",
+            option.text,
         )
     return (
         selection,
         "You chose that option. Compare it with the situation: can one fixed starting number describe every possible case?",
+        option.text,
     )
 
 
@@ -2394,7 +2448,7 @@ async def _option_selected_interaction_response(
         raise HTTPException(status_code=409, detail="OPTION_SELECTED is available only in Guided Practice.")
     if request.selected_option_id is None:
         raise HTTPException(status_code=422, detail="selected_option_id is required.")
-    selection, message = _selected_option_message(session, request.selected_option_id)
+    selection, message, option_text = _selected_option_message(session, request.selected_option_id)
     rules = load_classifier_rules()
     updated_session = await update_interaction_state(
         request.session_id,
@@ -2420,6 +2474,7 @@ async def _option_selected_interaction_response(
                 session.guided_teaching_state.model_copy(
                     update={
                         "selected_option_id": request.selected_option_id,
+                        "selected_option_text": option_text,
                         "last_tutor_question_type": "OPTION_COMPARISON",
                         "awaiting_response": True,
                     }
@@ -2900,13 +2955,14 @@ async def _process_interaction(
     if (
         request.input_source == "VOICE"
         and request.transcript_confidence is not None
-        and request.transcript_confidence < rules.low_transcript_confidence_threshold
+        and request.transcript_confidence
+        < rules.guided_learning.minimum_voice_transcript_confidence
         and not canvas_complete_correct
     ):
         clarification_history = _updated_conversation_history(
             session.conversation_history,
             student_message,
-            _LOW_CONFIDENCE_MESSAGE,
+            _UNRELIABLE_EVIDENCE_MESSAGE,
             rules.conversation_rules.max_recent_messages,
         )
         updated_session = await update_interaction_state(
@@ -2919,9 +2975,9 @@ async def _process_interaction(
             request.transcript_confidence,
             canvas_evidence.submission_id if canvas_evidence is not None else request.canvas_snapshot_id,
             canvas_evidence.ocr if canvas_evidence is not None else None,
-            False,
-            False,
-            [],
+            session.show_visual_cue,
+            session.show_scaffold_panel,
+            session.scaffold_steps,
             {
                 "attempt_count": session.attempt_count,
                 "question_completed": session.question_completed,
@@ -2943,10 +2999,10 @@ async def _process_interaction(
                 interaction_type=request.interaction_type,
                 nudge_id=request.nudge_id,
                 session=updated_session,
-                message=_LOW_CONFIDENCE_MESSAGE,
-                message_voice=_LOW_CONFIDENCE_MESSAGE,
+                message=_UNRELIABLE_EVIDENCE_MESSAGE,
+                message_voice=_UNRELIABLE_EVIDENCE_MESSAGE,
                 visual_cue=None,
-                scaffold_steps=[],
+                scaffold_steps=updated_session.scaffold_steps,
                 session_summary=None,
                 conversation_action="REQUEST_CLARIFICATION",
                 attempt_increment=0,
@@ -3053,7 +3109,7 @@ async def _process_interaction(
                 message=message,
                 message_voice=message,
                 visual_cue=None,
-                scaffold_steps=[],
+                scaffold_steps=updated_session.scaffold_steps,
                 session_summary=None,
                 conversation_action="REQUEST_CLARIFICATION",
                 attempt_increment=0,
@@ -3155,8 +3211,12 @@ async def _process_interaction(
         ),
         phase3_allowed_error_definitions=_schema_question(session).tutor_view.potential_errors,
     )
-    if ocr is not None and ocr.needs_clarification:
-        message = "I’m having trouble reading your working on the board. Please rewrite it clearly and try again."
+    minimum_ocr_confidence = max(
+        get_settings().min_ocr_confidence_threshold,
+        rules.guided_learning.minimum_ocr_confidence,
+    )
+    if ocr is not None and _legacy_ocr_needs_writing(ocr, minimum_ocr_confidence):
+        message = _UNRELIABLE_EVIDENCE_MESSAGE
         updated_session = await update_interaction_state(
             request.session_id,
             request.student_id,
@@ -3167,9 +3227,9 @@ async def _process_interaction(
             request.transcript_confidence,
             canvas_evidence.submission_id if canvas_evidence is not None else request.canvas_snapshot_id,
             ocr,
-            False,
-            False,
-            [],
+            session.show_visual_cue,
+            session.show_scaffold_panel,
+            session.scaffold_steps,
             {
                 "attempt_count": session.attempt_count,
                 "question_completed": session.question_completed,

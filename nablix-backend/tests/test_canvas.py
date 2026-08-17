@@ -759,7 +759,7 @@ def test_voice_canvas_attachment_does_not_record_a_second_attempt(
     assert len(stored_session["canvas_submissions"]) == 1
 
 
-def test_canvas_submit_stops_before_tutor_when_ocr_needs_clarification(
+def test_canvas_submit_stops_before_tutor_below_legacy_reliability_threshold(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def low_confidence_ocr(
@@ -770,8 +770,10 @@ def test_canvas_submit_stops_before_tutor_when_ocr_needs_clarification(
             raw_ocr_text="x + ? = 9",
             detected_equation="x + ? = 9",
             detected_steps=["x + ? = 9"],
-            confidence=0.5,
-            needs_clarification=True,
+            # The service setting is 0.75. This proves the legacy path also
+            # applies Guided Learning's stricter 0.80 reliability threshold.
+            confidence=0.78,
+            needs_clarification=False,
         )
 
     async def unexpected_tutor_call(*args: object) -> object:
@@ -797,6 +799,7 @@ def test_canvas_submit_stops_before_tutor_when_ocr_needs_clarification(
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "CLARIFICATION_REQUIRED"
+    assert body["message"] == "Please write out that step so I can check it."
     assert body["canvas_draw"] == []
     assert body["localization_status"] == "uncertain"
     stored_session = client.get(f"/session/{session_id}", params={"student_id": "ST012"}).json()

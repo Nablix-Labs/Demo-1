@@ -920,6 +920,15 @@ def active_teaching_step(request: ClassificationRequest) -> TeachingStep | None:
         return None
     persisted = request.guided_teaching_state
     if persisted is not None and persisted.question_id == request.question_id:
+        if persisted.current_step_index is not None:
+            if persisted.current_step_index >= len(steps):
+                raise ValueError(
+                    "guided current_step_index is outside the authored teaching plan; "
+                    f"question_id={request.question_id!r}, "
+                    f"current_step_index={persisted.current_step_index}, "
+                    f"step_count={len(steps)}"
+                )
+            return steps[persisted.current_step_index]
         active_id = persisted.active_step_id
         if active_id is not None:
             return next((step for step in steps if step.step_id == active_id), steps[0])
@@ -927,6 +936,7 @@ def active_teaching_step(request: ClassificationRequest) -> TeachingStep | None:
 
 
 def _component_for_step(
+    request: ClassificationRequest,
     rubric: GeneratedQuestionRubric,
     step_id: str,
 ) -> str | None:
@@ -952,12 +962,17 @@ def _component_for_step(
         for component in rubric.required_concepts
         if component.required and component.concept_id.startswith("REQUIRED_COMPONENT_")
     ]
-    generic_index = {
-        "GENERAL_RULE": 0,
-        "CHANGING_VALUE": 1,
-        "FIXED_VALUE": 1,
-        "OPERATION": 2,
-    }[step_id]
+    teaching_steps = teaching_steps_for(request)
+    generic_index = next(
+        (
+            index
+            for index, teaching_step in enumerate(teaching_steps)
+            if teaching_step.step_id == step_id
+        ),
+        None,
+    )
+    if generic_index is None:
+        return None
     return (
         generic_components[generic_index]
         if generic_index < len(generic_components)
@@ -966,13 +981,14 @@ def _component_for_step(
 
 
 def _controller_objective_after(
+    request: ClassificationRequest,
     objective: ActiveTeachingObjective,
     rubric: GeneratedQuestionRubric,
     confirmed_step_id: str | None,
 ) -> ActiveTeachingObjective:
     confirmed = set(objective.confirmed_concept_ids)
     if confirmed_step_id is not None:
-        component_id = _component_for_step(rubric, confirmed_step_id)
+        component_id = _component_for_step(request, rubric, confirmed_step_id)
         if component_id is not None:
             confirmed.add(component_id)
     required = {
@@ -987,16 +1003,22 @@ def _controller_objective_after(
 
 
 def _controller_evaluation(
+    request: ClassificationRequest,
     state: GuidedStudentState,
     objective: ActiveTeachingObjective,
     message: str,
     confirmed_step_id: str | None,
     rubric: GeneratedQuestionRubric,
 ) -> GuidedEvaluation:
-    next_objective = _controller_objective_after(objective, rubric, confirmed_step_id)
+    next_objective = _controller_objective_after(
+        request,
+        objective,
+        rubric,
+        confirmed_step_id,
+    )
     newly_confirmed = []
     if confirmed_step_id is not None:
-        component_id = _component_for_step(rubric, confirmed_step_id)
+        component_id = _component_for_step(request, rubric, confirmed_step_id)
         if component_id is not None and component_id not in objective.confirmed_concept_ids:
             newly_confirmed = [component_id]
     return GuidedEvaluation(
@@ -1070,7 +1092,7 @@ def deterministic_teaching_step_evaluation(
             "The word in the question means add, not subtract. "
             "What operation does the sign tell us to use?"
         )
-        return _controller_evaluation("WRONG", objective, message, None, rubric)
+        return _controller_evaluation(request, "WRONG", objective, message, None, rubric)
     if operator == "-" and any(
         word in normalized for word in ("plus", "add", "addition")
     ):
@@ -1078,25 +1100,25 @@ def deterministic_teaching_step_evaluation(
             "The word in the question means subtract, not add. "
             "What operation does the sign tell us to use?"
         )
-        return _controller_evaluation("WRONG", objective, message, None, rubric)
+        return _controller_evaluation(request, "WRONG", objective, message, None, rubric)
 
     if step.step_id == "GENERAL_RULE":
         if re.fullmatch(rf"{re.escape(variable)}\s*{re.escape(operator)}\s*{number}", compact):
             if next_step is None:
-                return _controller_evaluation("CORRECT", objective, "Nice work.", step.step_id, rubric)
+                return _controller_evaluation(request, "CORRECT", objective, "Nice work.", step.step_id, rubric)
             message = f"Good. {next_step.prompt}"
-            return _controller_evaluation("PARTIAL", objective, message, step.step_id, rubric)
+            return _controller_evaluation(request, "PARTIAL", objective, message, step.step_id, rubric)
         if _numeric_expressions(request.student_input):
             changing = next((item for item in steps if item.step_id == "CHANGING_VALUE"), None)
             if changing is not None:
                 message = f"A general rule works for every starting number. {changing.prompt}"
-                return _controller_evaluation("PARTIAL", objective, message, None, rubric)
+                return _controller_evaluation(request, "PARTIAL", objective, message, None, rubric)
         if _describes_changing_starting_value(request.student_input):
             message = (
                 "Yes—the starting number changes. Replace it with a letter and keep "
                 "the operation that stays the same."
             )
-            return _controller_evaluation("PARTIAL", objective, message, None, rubric)
+            return _controller_evaluation(request, "PARTIAL", objective, message, None, rubric)
         return None
 
     if step.step_id == "CHANGING_VALUE":
@@ -1128,55 +1150,55 @@ def deterministic_teaching_step_evaluation(
                     "Keep the operation that stays the same."
                 )
                 return _controller_evaluation(
-                    "PARTIAL", objective, message, None, rubric
+                    request, "PARTIAL", objective, message, None, rubric
                 )
             if next_step is None:
-                return _controller_evaluation("CORRECT", objective, "Nice work.", step.step_id, rubric)
+                return _controller_evaluation(request, "CORRECT", objective, "Nice work.", step.step_id, rubric)
             if next_step.step_id == "GENERAL_RULE":
                 message = "Yes. Replace the changing starting number with a letter. Keep the operation that stays the same."
             else:
                 message = f"Yes. {next_step.prompt}"
-            return _controller_evaluation("PARTIAL", objective, message, step.step_id, rubric)
+            return _controller_evaluation(request, "PARTIAL", objective, message, step.step_id, rubric)
         if number in compact:
             message = (
                 "Not quite: the changing quantity is the letter, not the fixed number. "
                 f"{step.prompt}"
             )
-            return _controller_evaluation("WRONG", objective, message, None, rubric)
+            return _controller_evaluation(request, "WRONG", objective, message, None, rubric)
         message = f"Focus on the changing part only. {step.prompt}"
-        return _controller_evaluation("UNCLEAR", objective, message, None, rubric)
+        return _controller_evaluation(request, "UNCLEAR", objective, message, None, rubric)
 
     if step.step_id == "FIXED_VALUE":
         expected = f"{operator}{number}"
         if compact in {number, expected} or (number in normalized and any(word in normalized for word in ("fixed", "constant", "stays"))):
             if next_step is None:
-                return _controller_evaluation("CORRECT", objective, "Nice work.", step.step_id, rubric)
-            return _controller_evaluation("PARTIAL", objective, f"Yes. {next_step.prompt}", step.step_id, rubric)
+                return _controller_evaluation(request, "CORRECT", objective, "Nice work.", step.step_id, rubric)
+            return _controller_evaluation(request, "PARTIAL", objective, f"Yes. {next_step.prompt}", step.step_id, rubric)
         if f"-{number}" in compact and operator == "+":
             message = f"Check the sign: this rule adds {number}, so the fixed amount is +{number}. {step.prompt}"
-            return _controller_evaluation("WRONG", objective, message, None, rubric)
+            return _controller_evaluation(request, "WRONG", objective, message, None, rubric)
         if variable in normalized:
             message = (
                 f"{variable} can change; we are looking for the number that stays the same. "
                 f"{step.prompt}"
             )
-            return _controller_evaluation("WRONG", objective, message, None, rubric)
+            return _controller_evaluation(request, "WRONG", objective, message, None, rubric)
         return _controller_evaluation(
-            "UNCLEAR", objective, f"Focus on the fixed value only. {step.prompt}", None, rubric
+            request, "UNCLEAR", objective, f"Focus on the fixed value only. {step.prompt}", None, rubric
         )
 
     if step.step_id == "OPERATION":
         accepted = ("add", "addition", "plus") if operator == "+" else ("subtract", "subtraction", "minus")
         if any(word in normalized for word in accepted):
             if next_step is None:
-                return _controller_evaluation("CORRECT", objective, "Nice work.", step.step_id, rubric)
-            return _controller_evaluation("PARTIAL", objective, f"Yes. {next_step.prompt}", step.step_id, rubric)
+                return _controller_evaluation(request, "CORRECT", objective, "Nice work.", step.step_id, rubric)
+            return _controller_evaluation(request, "PARTIAL", objective, f"Yes. {next_step.prompt}", step.step_id, rubric)
         incorrect = ("multiplication", "multiply", "division", "divide") if operator == "+" else ()
         if any(word in normalized for word in incorrect):
             message = f"Not this time: the + sign means addition, not {next(word for word in incorrect if word in normalized)}. {step.prompt}"
-            return _controller_evaluation("WRONG", objective, message, None, rubric)
+            return _controller_evaluation(request, "WRONG", objective, message, None, rubric)
         return _controller_evaluation(
-            "UNCLEAR", objective, f"Focus on the operation only. {step.prompt}", None, rubric
+            request, "UNCLEAR", objective, f"Focus on the operation only. {step.prompt}", None, rubric
         )
     return None
 
@@ -1198,9 +1220,27 @@ def teaching_state_for(
     missing_ids = objective.missing_concept_ids if objective is not None else []
     previous = request.guided_teaching_state
     teaching_steps = teaching_steps_for(request)
-    active_step_id = teaching_step_from_message(tutor_message, teaching_steps)
-    if active_step_id is None and previous is not None:
-        active_step_id = previous.active_step_id
+    confirmed_set = set(confirmed_ids)
+    completed_step_ids: list[str] = []
+    for step in teaching_steps:
+        component_id = _component_for_step(request, rubric, step.step_id)
+        if component_id is None or component_id not in confirmed_set:
+            break
+        completed_step_ids.append(step.step_id)
+    current_step_index = (
+        len(completed_step_ids)
+        if len(completed_step_ids) < len(teaching_steps)
+        else None
+    )
+    active_step_id = (
+        teaching_steps[current_step_index].step_id
+        if current_step_index is not None
+        else None
+    )
+    previous_matches_question = (
+        previous is not None
+        and previous.question_id == (request.question_id or rubric.question_id)
+    )
     return GuidedTeachingState(
         question_id=request.question_id or rubric.question_id,
         objective_component_ids=required_ids,
@@ -1212,14 +1252,18 @@ def teaching_state_for(
             typed_choice_selection(request)
             or (
                 previous.selected_option_id
-                if previous is not None
-                and previous.question_id == (request.question_id or rubric.question_id)
+                if previous_matches_question
                 else None
             )
+        ),
+        selected_option_text=(
+            previous.selected_option_text if previous_matches_question else None
         ),
         awaiting_response=objective is not None,
         active_step_id=active_step_id,
         teaching_step_ids=[step.step_id for step in teaching_steps],
+        completed_step_ids=completed_step_ids,
+        current_step_index=current_step_index,
     )
 
 
@@ -1255,6 +1299,22 @@ def guided_tutor_context_for(
     current_support = (
         phase_context.current_support if phase_context is not None else None
     )
+    persisted_state = request.guided_teaching_state
+    selected_option_id = (
+        typed_choice_selection(request)
+        or (
+            persisted_state.selected_option_id
+            if persisted_state is not None
+            and persisted_state.question_id == request.question_id
+            else None
+        )
+    )
+    selected_option_text = (
+        persisted_state.selected_option_text
+        if persisted_state is not None
+        and persisted_state.question_id == request.question_id
+        else None
+    )
     current_scaffold_step_number = (
         phase_context.current_scaffold_step_number
         if phase_context is not None
@@ -1269,6 +1329,8 @@ def guided_tutor_context_for(
         "Missing concepts: "
         f"{', '.join(objective.missing_concept_ids) or 'none'}. "
         f"Active question: {active_question} "
+        "If active support is present, explain that exact support in plain language "
+        "before asking one focused question about it. "
         "The backend owns progression and support selection; do not advance "
         "or request a support rung."
     )
@@ -1286,6 +1348,10 @@ def guided_tutor_context_for(
         missing_concept_ids=objective.missing_concept_ids,
         support_state=support_state,
         current_support=current_support,
+        active_support_content=current_support,
+        selected_option_id=selected_option_id,
+        selected_option_text=selected_option_text,
+        active_canvas_events=request.canvas_events,
         current_scaffold_step_number=current_scaffold_step_number,
         consecutive_stuck_count=consecutive_stuck_count,
         conversation_state_summary=conversation_state_summary,
@@ -1672,7 +1738,9 @@ def classify_guided_learning_response(
         request.answer_spec,
     )
     adjudicator = getattr(openai_client, "adjudicate_component_evidence", None)
+    component_evidence_summaries: list[dict[str, str | float]] = []
     if adjudication_targets and callable(adjudicator):
+        state_before_adjudication = evaluation.student_state
         for adjudication_target in adjudication_targets:
             logger.info(
                 "guided_component_adjudication_started",
@@ -1704,6 +1772,13 @@ def classify_guided_learning_response(
                 evidence,
                 rules.guided_learning.component_adjudicator_confidence_threshold,
             )
+            component_evidence_summaries.append(
+                {
+                    "component_id": evidence.component_id,
+                    "status": evidence.status,
+                    "confidence": evidence.confidence,
+                }
+            )
             logger.info(
                 "guided_component_adjudication_completed",
                 extra={
@@ -1711,9 +1786,18 @@ def classify_guided_learning_response(
                     "component_id": evidence.component_id,
                     "status": evidence.status,
                     "confidence": evidence.confidence,
-                    "student_state": evaluation.student_state,
                 },
             )
+        evaluation = state_from_component_evidence(evaluation, objective, rubric)
+        logger.info(
+            "guided_component_adjudication_state_derived",
+            extra={
+                "question_id": request.question_id,
+                "state_before_adjudication": state_before_adjudication,
+                "student_state": evaluation.student_state,
+                "newly_confirmed_concept_ids": evaluation.newly_confirmed_concept_ids,
+            },
+        )
         evaluation = validate_guided_evaluation(
             evaluation,
             rubric,
@@ -1755,6 +1839,9 @@ def classify_guided_learning_response(
             "raw_student_state": raw_student_state,
             "raw_confidence": raw_confidence,
             "selected_error_code": evaluation.selected_error_code,
+            "student_input": request.student_input,
+            "component_evidence": component_evidence_summaries,
+            "displayed_tutor_message": evaluation.tutor_message,
         },
     )
     return build_guided_tutor_response(
@@ -1775,8 +1862,16 @@ def controller_prompt_for_objective(
     """Return the one controller-owned question for the remaining objective."""
 
     missing_ids = set(objective.missing_concept_ids)
+    if (
+        request.question_type == "CHOICE_WITH_EXPLANATION"
+        and "ANSWER_SELECTION" not in missing_ids
+        and "ANSWER_EXPLANATION" in missing_ids
+    ):
+        return (
+            "Why does the option you chose work for every case in the question?"
+        )
     for teaching_step in teaching_steps_for(request):
-        component_id = _component_for_step(rubric, teaching_step.step_id)
+        component_id = _component_for_step(request, rubric, teaching_step.step_id)
         if component_id in missing_ids:
             return teaching_step.prompt
     return focused_unresolved_prompt(
@@ -2186,7 +2281,7 @@ def guided_message_reveals_unresolved_teaching_step(
     missing_step_ids = {
         teaching_step.step_id
         for teaching_step in teaching_steps[active_index:]
-        if _component_for_step(rubric, teaching_step.step_id)
+        if _component_for_step(request, rubric, teaching_step.step_id)
         in set(objective.missing_concept_ids)
     }
     if not missing_step_ids:
@@ -2871,6 +2966,34 @@ def apply_focused_component_evidence(
     )
 
 
+def state_from_component_evidence(
+    evaluation: GuidedEvaluation,
+    objective: ActiveTeachingObjective,
+    rubric: GeneratedQuestionRubric,
+) -> GuidedEvaluation:
+    """Derive completion from validated component evidence, never an adjudicator state."""
+
+    required_ids = {
+        component.concept_id
+        for component in rubric.required_concepts
+        if component.required
+    }
+    confirmed_ids = (
+        set(objective.confirmed_concept_ids)
+        | set(evaluation.newly_confirmed_concept_ids)
+    ) - set(evaluation.contradicted_concept_ids)
+    remaining_ids = required_ids - confirmed_ids
+    if not remaining_ids:
+        return evaluation.model_copy(update={"student_state": "CORRECT"})
+    if set(evaluation.newly_confirmed_concept_ids) - set(
+        objective.confirmed_concept_ids
+    ):
+        return evaluation.model_copy(update={"student_state": "PARTIAL"})
+    if evaluation.student_state == "CORRECT":
+        return evaluation.model_copy(update={"student_state": "UNCLEAR"})
+    return evaluation
+
+
 def initial_guided_objective(
     rubric: GeneratedQuestionRubric,
 ) -> ActiveTeachingObjective:
@@ -3211,8 +3334,9 @@ def build_guided_tutor_response(
             else []
         ),
         next_phase_recommendation=request.current_phase,
-        # A tutor may safely discuss an answer the learner has already supplied
-        # or selected; it must not introduce a new final answer.
+        # Normal turns may refer to an answer the learner already supplied or
+        # selected, but may not introduce a new final answer. The explicit
+        # TutorSolved rescue path is the only authorised new-answer route.
         answer_reveal_allowed=(
             prompt_type_for_message(evaluation.tutor_message) == "SOURCE_CORRECTION"
             or guided_turn_has_answer_evidence(request, evaluation)

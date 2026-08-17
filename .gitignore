@@ -26,6 +26,7 @@ dist/
 # Local agent workspaces
 .agents/
 .codex*/
+.local-testing/
 mathtutor-student/
 
 # graphify
