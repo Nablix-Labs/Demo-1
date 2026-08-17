@@ -1573,6 +1573,26 @@ def test_canvas_expected_answer_uses_active_math_component_from_rubric() -> None
     )
     assert classifier.canvas_expected_answer(request_with_active_state) == request.correct_answer
 
+    stale_rubric = rubric.model_copy(
+        update={
+            "required_concepts": [
+                GeneratedConcept(
+                    concept_id="REQUIRED_COMPONENT_1",
+                    description="c + 5",
+                    required=True,
+                ),
+                rubric.required_concepts[1],
+            ]
+        }
+    )
+    canonical_components = request.model_copy(
+        update={
+            "correct_answer": "c + 4; c changes.",
+            "generated_question_rubric": stale_rubric,
+        }
+    )
+    assert classifier.canvas_expected_answer(canonical_components) == "c + 4"
+
 
 def _explain_again_request() -> ExplainAgainRequest:
     return ExplainAgainRequest(

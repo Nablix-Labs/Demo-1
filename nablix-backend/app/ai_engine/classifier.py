@@ -4529,6 +4529,14 @@ def canvas_expected_answer(request: ClassificationRequest) -> str:
         for component in rubric.required_concepts
         if component.concept_id == component_id
     )
+    answer_parts: list[str] = [
+        part.strip() for part in request.correct_answer.split(";")
+    ]
+    if component_index < len(answer_parts) and _looks_like_canvas_expression(
+        answer_parts[component_index]
+    ):
+        return answer_parts[component_index]
+
     component_expression: str | None = _canvas_expression_from_description(
         component_description
     )
@@ -4541,16 +4549,13 @@ def canvas_expected_answer(request: ClassificationRequest) -> str:
     if (
         component_expression is not None
         and re.search(
-            rf"{re.escape(component_text)}(?![A-Za-z0-9])",
+            rf"{re.escape(component_text)}(?![A-Za-z0-9.])",
             canonical_text,
         )
         is not None
     ):
         return component_expression
 
-    answer_parts: list[str] = [
-        part.strip() for part in request.correct_answer.split(";")
-    ]
     if component_index < len(answer_parts):
         return answer_parts[component_index]
     return request.correct_answer
