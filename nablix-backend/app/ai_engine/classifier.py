@@ -2187,13 +2187,13 @@ def guided_tutor_message_validation_reason(
     ):
         return "ANSWER_REVEAL"
 
-    if guided_message_reveals_unresolved_teaching_step(
+    if guided_message_reveals_multiple_unresolved_teaching_steps(
         message,
         request,
         rubric,
         objective,
     ):
-        return "OFF_ACTIVE_STEP"
+        return "ANSWER_REVEAL"
 
     normalized_message = normalize_semantic_answer(message)
     if normalize_semantic_answer(controller_prompt) in normalized_message:
@@ -2212,16 +2212,71 @@ def guided_tutor_message_validation_reason(
     )
     if message_tokens.intersection(turn_context_tokens):
         return None
+    if message_tokens.intersection(active_support_context_tokens(request)):
+        return None
+    if guided_message_mentions_selected_option(normalized_message, request):
+        return None
     return "UNRELATED"
 
 
-def guided_message_reveals_unresolved_teaching_step(
+def active_support_context_tokens(request: ClassificationRequest) -> set[str]:
+    """Return meaningful words from the currently displayed authored support."""
+
+    phase_context = request.phase_2_prompt_context
+    if phase_context is None or phase_context.current_support is None:
+        return set()
+    return significant_component_tokens(
+        support_context_text(phase_context.current_support)
+    )
+
+
+def support_context_text(value: object) -> str:
+    """Flatten the small support payload into text for relevance validation."""
+
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return " ".join(support_context_text(item) for item in value.values())
+    if isinstance(value, list):
+        return " ".join(support_context_text(item) for item in value)
+    return ""
+
+
+def guided_message_mentions_selected_option(
+    normalized_message: str,
+    request: ClassificationRequest,
+) -> bool:
+    """Keep a response that directly addresses the student's persisted choice."""
+
+    state = request.guided_teaching_state
+    if state is None or state.question_id != request.question_id:
+        return False
+    option_id = state.selected_option_id
+    option_text = state.selected_option_text
+    if option_id is not None and re.search(
+        rf"\boption\s+{re.escape(option_id.casefold())}\b",
+        normalized_message,
+    ):
+        return True
+    if option_text is None:
+        return False
+    option_tokens = significant_component_tokens(option_text)
+    return bool(option_tokens and option_tokens.intersection(
+        significant_component_tokens(normalized_message)
+    ))
+
+
+def guided_message_reveals_multiple_unresolved_teaching_steps(
     message: str,
     request: ClassificationRequest,
     rubric: GeneratedQuestionRubric,
     objective: ActiveTeachingObjective,
 ) -> bool:
-    """Reject prose that gives a pending guided-step answer before asking it."""
+    """Reject prose that supplies several pending steps in one tutor turn.
+
+    A focused correction may name one idea to repair a misconception.  It must
+    not, however, complete the rest of a multi-part response for the learner.
+    """
 
     answer_spec = request.answer_spec
     if answer_spec is None:
@@ -2254,6 +2309,7 @@ def guided_message_reveals_unresolved_teaching_step(
 
     normalized = normalize_semantic_answer(message)
     normalized_student_input = normalize_semantic_answer(request.student_input)
+    revealed_step_count = 0
     if (
         "CHANGING_VALUE" in missing_step_ids
         and not teaches_changing_value(
@@ -2265,7 +2321,7 @@ def guided_message_reveals_unresolved_teaching_step(
             variable,
         )
     ):
-        return True
+        revealed_step_count += 1
     if (
         "FIXED_VALUE" in missing_step_ids
         and not teaches_fixed_value(
@@ -2277,13 +2333,15 @@ def guided_message_reveals_unresolved_teaching_step(
             fixed_value,
         )
     ):
-        return True
+        revealed_step_count += 1
     operation_terms = operation_answer_terms(operator)
-    return (
+    if (
         "OPERATION" in missing_step_ids
         and not teaches_operation(normalized_student_input, operation_terms)
         and teaches_operation(normalized, operation_terms)
-    )
+    ):
+        revealed_step_count += 1
+    return revealed_step_count >= 2
 
 
 def teaches_changing_value(message: str, variable: str) -> bool:
