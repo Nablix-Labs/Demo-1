@@ -28,10 +28,7 @@ from app.models.guided_learning import (
     GuidedTeachingState,
     GeneratedQuestionRubric,
     GuidedStudentState,
-    HybridPedagogicalState,
-    HybridSupportState,
     InactivityPolicy,
-    OrderedCanvasMemoryItem,
     inactivity_policy,
 )
 from app.models.session_review import SessionReviewResponse
@@ -257,12 +254,6 @@ class SessionRecord(BaseModel):
     active_teaching_objective: ActiveTeachingObjective | None = None
     guided_teaching_state: GuidedTeachingState | None = None
     guided_student_state: GuidedStudentState | None = None
-    # Hybrid Tutor Engine's own progression/support/canvas-memory state — kept
-    # separate from the legacy fields above rather than forced through their
-    # shape (legacy hint levels are 1-3; Hybrid's support ladder has 6 rungs).
-    hybrid_pedagogical_state: HybridPedagogicalState | None = None
-    hybrid_support_state: HybridSupportState | None = None
-    hybrid_canvas_memory: list[OrderedCanvasMemoryItem] = Field(default_factory=list)
     selected_error_code: str | None = None
     question_completed: bool = False
     answer_value_confirmed: bool = False

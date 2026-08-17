@@ -3,41 +3,8 @@ confidence:
   safety_response: 0.99
   standard_response: 0.95
 guided_learning:
-  v1_hybrid_enabled: false
   minimum_voice_transcript_confidence: 0.85
   minimum_ocr_confidence: 0.80
-  canvas_pedagogy_action_planner_enabled: false
-  hybrid_support_ladder:
-    - NONE
-    - HINT
-    - VISUAL_CUE
-    - SCAFFOLD
-    - PARALLEL_EXAMPLE
-    - TUTOR_SOLVED
-  canvas_pedagogy_planner:
-    action_reference_phrases:
-      HIGHLIGHT: ["highlight"]
-      CIRCLE: ["circle"]
-      GROUP: ["group"]
-      ARROW: ["arrow"]
-      INSERT_MATH: ["wrote", "inserted"]
-      INSERT_LABEL: ["label"]
-      SHOW_CUE: ["cue", "look"]
-      OPEN_SCAFFOLD_STEP: ["step", "scaffold"]
-      SHOW_PARALLEL: ["parallel", "example"]
-      TUTOR_SOLVED_STEP: ["worked", "step"]
-      FOCUS: ["focus"]
-    safe_action_free_question: "What is the next part you can work out?"
-  hybrid_prompts:
-    semantic_prompt: >-
-      Evaluate only the current authored target from reliable student evidence.
-      Do not invent, reorder, or skip components. Return only semantic state and
-      ordered confirmed components; do not write tutor wording or canvas actions.
-    wording_prompt: >-
-      Write one concise Phase 2 tutor turn using exactly the supplied pedagogical
-      decision and canvas actions. Refer naturally to the active visual action.
-      Do not change state, completed components, support action, or canvas actions.
-      Never reveal an unresolved final answer.
   evaluation_mode: LLM_STATE_MACHINE
   confidence_threshold: 0.75
   state_confidence_thresholds:
