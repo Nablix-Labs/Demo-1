@@ -164,3 +164,62 @@ def test_plan_canvas_draw_omits_uncertain_token_alignment() -> None:
     payloads = plan_canvas_draw(tutor_res, regions, [])
 
     assert payloads == []
+
+
+_CMINUS4 = "<math><mi>c</mi><mo>-</mo><mn>4</mn></math>"
+_LINE = OCRTextRegion(text="c-4", step_id="step-1", x=0.10, y=0.30, w=0.40, h=0.08, confidence=0.95)
+
+
+def _symbol_boxes() -> list[OCRTextRegion]:
+    return [
+        OCRTextRegion(text="c", x=0.10, y=0.31, w=0.05, h=0.06, confidence=0.95),
+        OCRTextRegion(text="-", x=0.20, y=0.33, w=0.04, h=0.01, confidence=0.94),
+        OCRTextRegion(text="4", x=0.30, y=0.31, w=0.05, h=0.06, confidence=0.96),
+    ]
+
+
+def _stroke(stroke_id: str, x0: float, x1: float) -> CanvasStroke:
+    return CanvasStroke(
+        stroke_id=stroke_id,
+        tool="pen",
+        points=[CanvasPoint(x=x0, y=0.32), CanvasPoint(x=x1, y=0.34)],
+        width=0.01,
+    )
+
+
+def test_stroke_clusters_are_not_trusted_when_they_do_not_match_the_symbols() -> None:
+    """Joining 'c-' into one stroke shifts every later pairing.
+
+    Positional pairing would hand token '-' the geometry of whatever was written
+    third, at grounded confidence: a confident circle around the wrong symbol.
+    """
+
+    tokens = align_step_tokens(
+        "step-1",
+        _CMINUS4,
+        "c-4",
+        [_stroke("s1", 0.11, 0.24), _stroke("s2", 0.31, 0.34)],
+        _LINE,
+    )
+
+    assert [token.text for token in tokens] == ["c", "-", "4"]
+    assert all(token.alignment_confidence < 0.9 for token in tokens)
+
+
+def test_ocr_symbol_boxes_localize_tokens_without_any_strokes() -> None:
+    """A snapshot-only submission still gets per-symbol geometry from OCR."""
+
+    tokens = align_step_tokens("step-1", _CMINUS4, "c-4", [], _LINE, _symbol_boxes())
+
+    minus = next(token for token in tokens if token.text == "-")
+    assert minus.alignment_confidence >= 0.9
+    assert minus.bounding_box["width"] < _LINE.w
+    assert minus.bounding_box["x"] == 0.20
+
+
+def test_ocr_symbol_boxes_are_rejected_when_they_disagree_with_the_symbols() -> None:
+    disagreeing = _symbol_boxes()[:2]
+
+    tokens = align_step_tokens("step-1", _CMINUS4, "c-4", [], _LINE, disagreeing)
+
+    assert all(token.alignment_confidence < 0.9 for token in tokens)

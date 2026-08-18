@@ -212,6 +212,7 @@ def align_step_tokens(
     text_fallback: str,
     strokes: list[CanvasStroke],
     step_region: OCRTextRegion | None = None,
+    word_boxes: list[OCRTextRegion] | None = None,
 ) -> list[SpatialMathToken]:
     """Align parsed MathML or fallback text tokens with candidate stroke clusters."""
     mathml_tokens = parse_mathml_tokens(mathml_xml)
@@ -228,12 +229,19 @@ def align_step_tokens(
         ]
 
     clusters = group_strokes_into_candidates(strokes)
+    # Pairing is positional, so it only means anything when the writer produced
+    # exactly one cluster per symbol. A student who joins "c-" in one stroke, or
+    # draws "4" in two, shifts every later pairing: the token labelled "-" then
+    # carries the box of whatever was written third. Counting first keeps a
+    # mis-pairing from being published at grounded confidence.
+    clusters_match_tokens = len(clusters) == len(mathml_tokens)
+    symbol_boxes = _ocr_symbol_boxes(word_boxes, mathml_tokens)
     spatial_tokens: list[SpatialMathToken] = []
 
     for idx, token in enumerate(mathml_tokens, start=1):
         token_id = f"{step_id}:token-{idx}"
 
-        if idx - 1 < len(clusters):
+        if clusters_match_tokens:
             cluster = clusters[idx - 1]
             stroke_ids = [b.stroke_id for b in cluster]
             min_x = min(b.min_x for b in cluster)
@@ -249,6 +257,18 @@ def align_step_tokens(
                 "height": max(0.01, (max_y - min_y) + 2 * pad),
             }
             confidence = 0.95
+        elif symbol_boxes is not None:
+            # OCR read a box per symbol, so geometry does not depend on how the
+            # student happened to break the strokes up.
+            symbol = symbol_boxes[idx - 1]
+            stroke_ids = []
+            box_dict = {
+                "x": symbol.x,
+                "y": symbol.y,
+                "width": symbol.w,
+                "height": symbol.h,
+            }
+            confidence = 0.9
         else:
             stroke_ids = []
             if step_region is not None:
@@ -278,3 +298,22 @@ def align_step_tokens(
         )
 
     return spatial_tokens
+
+
+def _ocr_symbol_boxes(
+    word_boxes: list[OCRTextRegion] | None,
+    mathml_tokens: list["ParsedMathMLToken"],
+) -> list[OCRTextRegion] | None:
+    """Return per-symbol OCR boxes only when they line up with the parsed tokens.
+
+    Mathpix word boxes and MathML tokens are two readings of the same line, so
+    they are usable as geometry only when they agree symbol for symbol.
+    """
+
+    if not word_boxes or len(word_boxes) != len(mathml_tokens):
+        return None
+    boxes_text = canonical_math_token_text("".join(box.text for box in word_boxes))
+    tokens_text = canonical_math_token_text("".join(token.text for token in mathml_tokens))
+    if boxes_text != tokens_text:
+        return None
+    return word_boxes
