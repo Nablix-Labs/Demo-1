@@ -123,8 +123,7 @@ export default function TutorStage({
   // would otherwise find the next phase's tutor slowed down too.
   useEffect(() => () => setTutorSpeechRate(1), []);
 
-  const pages = replay.work_artifact.pages;
-  const page = pages.find((p) => p.page_no === pageNo) ?? pages[0] ?? null;
+  const { pdf_url: pdfUrl, page_count: pageCount } = replay.work_artifact;
   const stepPosition = Math.min(Math.max(index, 0) + 1, steps.length);
 
   return (
@@ -177,13 +176,19 @@ export default function TutorStage({
                 record of what was submitted, not something to revise now. */}
             <span className="text-[10px] text-slate-blue/70">Locked</span>
           </div>
-          <div className="flex-1 min-h-0 overflow-y-auto p-2.5">
-            {page ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={page.image_url}
-                alt={`Your submitted work, page ${page.page_no}`}
-                className="w-full rounded border border-muted-gray bg-white"
+          <div className="flex-1 min-h-0 p-2.5">
+            {/* The work is stored as one combined PDF, not as page images
+                (WorkArtifactPersistResponse — Chiru PR #156), so the page
+                selector moves the PDF viewer rather than swapping a src. The
+                fragment is how every browser's built-in viewer takes a page;
+                `toolbar=0` hides its chrome, which would otherwise put a second
+                set of page controls inside a 210px column. */}
+            {pdfUrl ? (
+              <iframe
+                key={pageNo}
+                src={`${pdfUrl}#page=${pageNo}&view=FitH&toolbar=0&navpanes=0`}
+                title={`Your submitted work, page ${pageNo} of ${pageCount}`}
+                className="w-full h-full rounded border border-muted-gray bg-white"
               />
             ) : (
               <p className="text-[11.5px] text-slate-blue leading-relaxed">
@@ -193,21 +198,21 @@ export default function TutorStage({
           </div>
           {/* Only when there is more than one page — a selector over a single
               page is a control that cannot do anything. */}
-          {pages.length > 1 && (
+          {pageCount > 1 && (
             <div className="flex items-center justify-center gap-1 p-2 border-t border-muted-gray">
-              {pages.map((p) => (
+              {Array.from({ length: pageCount }, (_, i) => i + 1).map((n) => (
                 <button
-                  key={p.page_no}
-                  onClick={() => setPageNo(p.page_no)}
-                  aria-current={p.page_no === pageNo ? 'true' : undefined}
+                  key={n}
+                  onClick={() => setPageNo(n)}
+                  aria-current={n === pageNo ? 'true' : undefined}
                   className={cn(
                     'w-6 h-6 rounded text-[11px] font-semibold transition-colors',
-                    p.page_no === pageNo
+                    n === pageNo
                       ? 'bg-focus-navy text-white'
                       : 'text-slate-blue hover:bg-white',
                   )}
                 >
-                  {p.page_no}
+                  {n}
                 </button>
               ))}
             </div>

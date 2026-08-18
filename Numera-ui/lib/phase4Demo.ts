@@ -20,14 +20,10 @@
 
 import type { Phase4Review } from '@/lib/api';
 
-const PAGE = 'data:image/svg+xml;utf8,' + encodeURIComponent(
-  `<svg xmlns="http://www.w3.org/2000/svg" width="240" height="320">
-     <rect width="240" height="320" fill="#fff"/>
-     <text x="20" y="60" font-family="Georgia" font-size="22" fill="#1B2A4A">a)  n × 4</text>
-     <text x="20" y="110" font-family="Georgia" font-size="22" fill="#1B2A4A">b)  n × 4</text>
-     <text x="20" y="160" font-family="Georgia" font-size="22" fill="#1B2A4A">c)  n × 4</text>
-   </svg>`,
-);
+// The real artifact is a stored PDF; the dev screen has no storage service, so
+// the viewer shows its unavailable state. That is the honest fixture — inventing
+// a PDF here would demo a panel that behaves differently from the real one.
+const NO_PDF = '';
 
 export const PHASE_4_DEMO: Phase4Review = {
   student_id: 'ST003',
@@ -65,12 +61,7 @@ export const PHASE_4_DEMO: Phase4Review = {
         { sequence_no: 3, narration: 'The four never changes, and neither does the operation.', tutor_write: '+ 4  →  stays the same' },
         { sequence_no: 4, narration: 'So we add four to a starting number we can call n.', tutor_write: 'Rule:  n + 4' },
       ],
-      work_artifact: {
-        artifact_id: 'ART-P3-000122',
-        page_count: 1,
-        pages: [{ page_no: 1, image_url: PAGE }],
-        pdf_url: null,
-      },
+      work_artifact: { artifact_id: 'ART-P3-000122', page_count: 1, pdf_url: NO_PDF },
     },
     {
       review_item_id: 'REV-002',
@@ -87,15 +78,7 @@ export const PHASE_4_DEMO: Phase4Review = {
         { sequence_no: 2, narration: 'The word falls tells us the value goes down, not up.', tutor_write: 'falls by 3  →  subtract 3' },
         { sequence_no: 3, narration: 'So we subtract three from the starting value.', tutor_write: 't − 3' },
       ],
-      work_artifact: {
-        artifact_id: 'ART-P3-000124',
-        page_count: 2,
-        pages: [
-          { page_no: 1, image_url: PAGE },
-          { page_no: 2, image_url: PAGE },
-        ],
-        pdf_url: null,
-      },
+      work_artifact: { artifact_id: 'ART-P3-000124', page_count: 2, pdf_url: NO_PDF },
     },
   ],
 

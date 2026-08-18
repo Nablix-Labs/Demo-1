@@ -23,7 +23,7 @@ function replay(id: string, over: Partial<Phase4Replay> = {}): Phase4Replay {
     question_text: 'Find a rule for each set.',
     first_error: { summary: 'Treated "falls by 3" as addition.', student_page_no: null },
     replay_steps: [{ sequence_no: 1, narration: 'Start with t.', tutor_write: 'Start: t' }],
-    work_artifact: { artifact_id: `ART-${id}`, page_count: 1, pages: [{ page_no: 1, image_url: '/p1.png' }] },
+    work_artifact: { artifact_id: `ART-${id}`, page_count: 1, pdf_url: '/work.pdf' },
     ...over,
   };
 }
@@ -176,11 +176,7 @@ describe('reading a replay by index', () => {
 });
 
 describe('which page of the work to open on', () => {
-  const threePages = {
-    artifact_id: 'ART-1',
-    page_count: 3,
-    pages: [1, 2, 3].map((page_no) => ({ page_no, image_url: `/p${page_no}.png` })),
-  };
+  const threePages = { artifact_id: 'ART-1', page_count: 3, pdf_url: '/work.pdf' };
 
   it('opens on the page the first error is on', () => {
     expect(openingPageNo(replay('REV-1', {

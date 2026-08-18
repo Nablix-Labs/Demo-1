@@ -898,17 +898,21 @@ export function toSessionSummary(res: SessionEndResponse | null | undefined): Se
  * and routing authoritative backend data, and a screen that recomputes any of
  * them is a second source of truth for the thing the spec says has one.
  */
-export interface Phase4WorkArtifactPage {
-  page_no: number;
-  image_url: string;
-}
-
+/**
+ * The student's submitted Phase 3 work.
+ *
+ * One PDF per attempt, not a list of page images. §5.4 of the specification
+ * suggests Phase 4 "should primarily use the ordered page images", but the
+ * shipped storage contract does not produce them: `WorkArtifactPersistResponse`
+ * (nablix-backend/app/models/work_artifact.py, Chiru PR #156) returns
+ * `artifact_id`, `pdf_url` and `page_count` only, and the binary is a single
+ * combined PDF. Page references work through PDF page numbers instead, which is
+ * what `first_error.student_page_no` indexes into.
+ */
 export interface Phase4WorkArtifact {
   artifact_id: string;
   page_count: number;
-  /** Ordered page images (§5.4: Phase 4 uses these, not the combined PDF). */
-  pages: Phase4WorkArtifactPage[];
-  pdf_url?: string | null;
+  pdf_url: string;
 }
 
 export interface Phase4FirstError {
