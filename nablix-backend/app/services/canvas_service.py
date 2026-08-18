@@ -11,7 +11,7 @@ from fastapi import HTTPException
 from app.adapters.provider import get_adapters
 from app.ai_engine.classifier_config import ClassifierRulesConfig, load_classifier_rules
 from app.core.config import get_settings
-from app.core.exceptions import AdapterError, JourneyVersionConflict
+from app.core.exceptions import DOWNSTREAM_FAILURE, JourneyVersionConflict
 from app.core.logger import logger
 from app.models.adapters import (
     AdapterContext,
@@ -152,6 +152,7 @@ async def _store_work_artifact(
         pdf = assemble_pdf(evidence.page_data_urls)
         stored = await get_adapters().student_model.persist_work_artifact(
             WorkArtifactPersistRequest(
+                submission_id=evidence.submission_id,
                 student_id=session.student_id,
                 topic_id=event.journey_state.topic_id,
                 question_id=session.question_id,
@@ -163,7 +164,7 @@ async def _store_work_artifact(
             ),
             access_token,
         )
-    except (AdapterError, PdfAssemblyError) as error:
+    except (*DOWNSTREAM_FAILURE, PdfAssemblyError) as error:
         logger.warning(
             "work_artifact_not_stored",
             extra={

@@ -11,6 +11,10 @@ from pydantic import BaseModel, Field
 
 
 class WorkArtifactPersistRequest(BaseModel):
+    # Idempotency key: one submission is one artifact. Requests are retried on
+    # timeouts and 5xx, so storing by this key avoids duplicate artifacts for
+    # the same attempt.
+    submission_id: str
     student_id: str
     topic_id: str
     question_id: str

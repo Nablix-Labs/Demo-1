@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from app.adapters.student_model import StudentModelServiceAdapter
-from app.core.exceptions import AdapterError
+from app.core.exceptions import AdapterError, AdapterRequestRejected
 from app.models.phase4_review import (
     FirstError,
     Phase4ReviewResponse,
@@ -237,6 +237,126 @@ def test_review_is_not_persisted_when_generation_failed(
     )
 
     assert persisted == []
+
+
+def test_rejected_history_request_does_not_block_review(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 4xx is a sibling of AdapterError, not a subclass; catch it too.
+
+    The history endpoint 404s until it is built, so this is the live path.
+    """
+
+    async def rejected(
+        adapter: StudentModelServiceAdapter,
+        student_id: str,
+        topic_id: str,
+        access_token: str,
+    ) -> TopicEventHistoryResponse:
+        del adapter, student_id, topic_id, access_token
+        raise AdapterRequestRejected(
+            "student_model",
+            "https://student-model.example/topic/event-history",
+            404,
+            "not found",
+            {},
+        )
+
+    monkeypatch.setattr(
+        StudentModelServiceAdapter, "fetch_topic_event_history", rejected
+    )
+
+    result = asyncio.run(
+        session_service.generate_phase4_review_for(
+            _review_ready_session(),
+            _event("REVIEW"),
+            "test-token",
+        )
+    )
+
+    assert result is None
+
+
+def test_malformed_evidence_does_not_block_review(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bad data from the service must degrade to no review, not an error."""
+
+    async def fetch(
+        adapter: StudentModelServiceAdapter,
+        student_id: str,
+        topic_id: str,
+        access_token: str,
+    ) -> TopicEventHistoryResponse:
+        del adapter, student_id, topic_id, access_token
+        return TopicEventHistoryResponse(
+            topic_id="ALG-KS3-01",
+            student_id="ST003",
+            topic_info=TOPIC_INFO,
+            whole_topic_evidence={"error_cluster_counts": {"ERR-X": "not-an-int"}},
+            attempts=[_attempt("A1", "INCORRECT")],
+        )
+
+    monkeypatch.setattr(
+        StudentModelServiceAdapter, "fetch_topic_event_history", fetch
+    )
+
+    result = asyncio.run(
+        session_service.generate_phase4_review_for(
+            _review_ready_session(),
+            _event("REVIEW"),
+            "test-token",
+        )
+    )
+
+    assert result is None
+
+
+def test_rejected_persistence_keeps_the_generated_review(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fetch(
+        adapter: StudentModelServiceAdapter,
+        student_id: str,
+        topic_id: str,
+        access_token: str,
+    ) -> TopicEventHistoryResponse:
+        del adapter, student_id, topic_id, access_token
+        return _history()
+
+    async def rejected(
+        adapter: StudentModelServiceAdapter,
+        request: Phase4ReviewPersistRequest,
+        access_token: str,
+    ) -> None:
+        del adapter, request, access_token
+        raise AdapterRequestRejected(
+            "student_model",
+            "https://student-model.example/phase4-review",
+            404,
+            "not found",
+            {},
+        )
+
+    monkeypatch.setattr(
+        StudentModelServiceAdapter, "fetch_topic_event_history", fetch
+    )
+    monkeypatch.setattr(
+        StudentModelServiceAdapter, "persist_phase4_review", rejected
+    )
+    monkeypatch.setattr(
+        session_service, "generate_phase4_review", lambda request: _review()
+    )
+
+    result = asyncio.run(
+        session_service.generate_phase4_review_for(
+            _review_ready_session(),
+            _event("REVIEW"),
+            "test-token",
+        )
+    )
+
+    assert result is not None
 
 
 def test_review_generation_failure_does_not_raise(

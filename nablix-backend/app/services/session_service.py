@@ -9,18 +9,12 @@ from typing_extensions import NotRequired
 
 from app.adapters.provider import get_adapters
 from app.core.config import get_settings
-from app.core.exceptions import AdapterError, JourneyVersionConflict
+from app.core.exceptions import DOWNSTREAM_FAILURE, JourneyVersionConflict
 from app.core.logger import logger
-from app.ai_engine.phase4_review import (
-    Phase4ReviewValidationError,
-    generate_phase4_review,
-)
+from app.ai_engine.phase4_review import generate_phase4_review
 from app.models.phase4_review import Phase4ReviewResponse
 from app.models.work_artifact import Phase4ReviewPersistRequest
-from app.services.phase4_context_builder import (
-    Phase4ContextError,
-    build_phase4_review_request,
-)
+from app.services.phase4_context_builder import build_phase4_review_request
 from app.services.phase4_replay_filter import filter_replay_attempts
 from app.models.adapters import ConversationMessage, StudentModelResult, VisualCue, VisionOCRResult
 from app.models.canvas import CanvasQuestionMemory, CanvasStroke, CanvasSubmissionRecord
@@ -789,11 +783,10 @@ async def generate_phase4_review_for(
                 event.routing.next_action,
             )
         )
-    except (
-        AdapterError,
-        Phase4ContextError,
-        Phase4ReviewValidationError,
-    ) as error:
+    # ValueError covers Phase4ContextError, Phase4ReviewValidationError and
+    # pydantic's ValidationError, so malformed evidence degrades to no review
+    # rather than stranding the student outside Review.
+    except (*DOWNSTREAM_FAILURE, ValueError) as error:
         logger.warning(
             "phase4_review_not_generated",
             extra={
@@ -816,7 +809,7 @@ async def generate_phase4_review_for(
             ),
             access_token,
         )
-    except AdapterError as error:
+    except DOWNSTREAM_FAILURE as error:
         # The review is already generated; the student should still see it
         # even if it could not be stored for reuse.
         logger.warning(

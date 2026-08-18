@@ -74,6 +74,12 @@ class AdapterRequestRejected(HTTPException):
         )
 
 
+# A downstream call fails in two unrelated ways: AdapterError for transport
+# faults and 5xx, AdapterRequestRejected for 4xx. They are siblings, not
+# parent and child, so catching only AdapterError silently misses every 4xx.
+DOWNSTREAM_FAILURE = (AdapterError, AdapterRequestRejected)
+
+
 class JourneyVersionConflict(HTTPException):
     """The Student Model rejected a stale journey write."""
 

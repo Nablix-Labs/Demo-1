@@ -18,6 +18,7 @@ def _settings() -> Settings:
 
 def _request() -> WorkArtifactPersistRequest:
     return WorkArtifactPersistRequest(
+        submission_id="TURN-ST003-CANVAS-1",
         student_id="ST003",
         topic_id="ALG-KS3-01",
         question_id="Q-T01-005",
@@ -63,6 +64,8 @@ def test_persist_work_artifact_posts_and_parses(monkeypatch: pytest.MonkeyPatch)
     assert isinstance(body, dict)
     assert body["question_usage_id"] == "QU-T01-005-P3"
     assert body["per_page_ocr_text"] == ["t + 3", "so t + 3"]
+    # Idempotency key, so a retried request does not store a second artifact.
+    assert body["submission_id"] == "TURN-ST003-CANVAS-1"
 
 
 def test_persist_work_artifact_rejects_malformed_response(

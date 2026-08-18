@@ -16,7 +16,7 @@ from app.adapters.vision_ocr import MockVisionOCRAdapter
 from app.ai_engine.classifier import ClassificationRequest
 from app.ai_engine.schemas import TutorResponse
 from app.core.config import Settings, get_settings
-from app.core.exceptions import AdapterError
+from app.core.exceptions import AdapterError, AdapterRequestRejected
 from app.models.work_artifact import (
     WorkArtifactPersistRequest,
     WorkArtifactPersistResponse,
@@ -1438,8 +1438,25 @@ def test_canvas_links_stored_work_artifact_to_the_attempt(
     assert persisted[0].combined_pdf_base64
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        AdapterError("student_model", "storage unavailable"),
+        # A 4xx is a sibling of AdapterError, not a subclass. The storage
+        # endpoint 404s until it is built, so this is the live path.
+        AdapterRequestRejected(
+            "student_model",
+            "https://student-model.example/work-artifacts",
+            404,
+            "not found",
+            {},
+        ),
+    ],
+    ids=["unavailable", "rejected"],
+)
 def test_canvas_submission_survives_work_artifact_failure(
     monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
 ) -> None:
     async def failing_persist(
         adapter: StudentModelServiceAdapter,
@@ -1447,7 +1464,7 @@ def test_canvas_submission_survives_work_artifact_failure(
         access_token: str,
     ) -> WorkArtifactPersistResponse:
         del adapter, request, access_token
-        raise AdapterError("student_model", "storage unavailable")
+        raise error
 
     session_id = _independent_practice_session(monkeypatch)
     monkeypatch.setattr(
