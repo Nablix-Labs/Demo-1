@@ -57,6 +57,16 @@ def _intents() -> list[AnnotationIntent]:
     ]
 
 
+def _token() -> SpatialMathToken:
+    return SpatialMathToken(
+        token_id="step-1:token-1",
+        step_id="step-1",
+        text="x",
+        bounding_box={"x": 0.12, "y": 0.30, "width": 0.05, "height": 0.08},
+        alignment_confidence=0.95,
+    )
+
+
 def _ellipse_from(elements: list[TutorElement]) -> TutorElement:
     ellipse = next(element for element in elements if element.kind == "ellipse")
     assert ellipse.x is not None
@@ -112,11 +122,28 @@ def test_canvas_planner_circles_explicit_whole_line_mistake() -> None:
         [AnnotationIntent(kind="circle_target", target_step_id="step-1")],
     )
 
-    draw = plan_canvas_draw(tutor, regions)
+    draw = plan_canvas_draw(tutor, regions, [_token()])
 
     assert len(draw) == 1
     assert draw[0].action_id == "canvas-line-review-step-1"
     assert [element.kind for element in draw[0].elements] == ["ellipse"]
+
+
+def test_canvas_planner_does_not_mark_a_broad_ocr_region_without_tokens() -> None:
+    regions = assign_step_ids([_region()])
+    tutor = _tutor_result(
+        TutorMistakeClassification(
+            status="mistake_found",
+            mistake_step_id="step-1",
+            target_text="x = 9 - 5",
+            target_span=None,
+            replacement_text=None,
+            confidence=0.95,
+        ),
+        [AnnotationIntent(kind="circle_target", target_step_id="step-1")],
+    )
+
+    assert plan_canvas_draw(tutor, regions) == []
 
 
 def test_canvas_planner_uses_target_token_geometry() -> None:

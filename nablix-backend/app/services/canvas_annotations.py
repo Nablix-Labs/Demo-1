@@ -41,6 +41,12 @@ def plan_canvas_draw(
     if target_region is None:
         return []
 
+    # Without verified token geometry the submission is a broad OCR region only,
+    # which localizes as "uncertain": guide in text rather than marking a target
+    # the tutor cannot actually point at.
+    if not spatial_tokens:
+        return []
+
     if len(classification.target_token_ids) == 0 or classification.error_token is None:
         return _whole_region_draw(tutor, classification, target_region)
 
