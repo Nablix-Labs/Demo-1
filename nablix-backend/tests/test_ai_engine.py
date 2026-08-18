@@ -367,7 +367,10 @@ def test_new_score_rule_uses_the_same_guided_rule_controller() -> None:
     assert "falls" not in evaluation.tutor_message
 
 
-def test_voice_only_symbolic_rule_requires_written_evidence() -> None:
+@pytest.mark.parametrize("question_type", ["SHORT_RESPONSE", "MULTI_PART_SHORT_RESPONSE"])
+def test_voice_only_symbolic_rule_requires_written_evidence(
+    question_type: str,
+) -> None:
     rubric = GeneratedQuestionRubric(
         question_id="Q-T01-SCORE",
         required_concepts=[
@@ -383,7 +386,7 @@ def test_voice_only_symbolic_rule_requires_written_evidence() -> None:
     )
     request = ClassificationRequest(
         question_id="Q-T01-SCORE",
-        question_type="SHORT_RESPONSE",
+        question_type=question_type,
         question="A player starts with score s and gains 6 bonus points. Write the new-score rule.",
         correct_answer="s + 6",
         answer_spec=AnswerSpec(
