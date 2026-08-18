@@ -350,6 +350,48 @@ def test_canvas_submit_returns_mock_ocr_result() -> None:
     assert len(summary["canvas_feedback_history"]) == 1
 
 
+def test_canvas_submit_ocrs_each_page_in_order() -> None:
+    session_id = _start_session("ST001")
+    single_page_text = "x + 4 = 9, x = 9 - 4, x = 5"
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST001",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+            "additional_pages": [
+                VALID_SNAPSHOT_DATA_URL,
+                VALID_SNAPSHOT_DATA_URL,
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    # One attempt, one submission — not one per page.
+    assert body["status"] == "processed"
+    # Every page was recognised separately and combined in page order.
+    assert body["ocr"]["raw_ocr_text"] == "\n".join([single_page_text] * 3)
+
+
+def test_canvas_submit_without_additional_pages_is_unchanged() -> None:
+    session_id = _start_session("ST001")
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST001",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+        },
+    )
+
+    assert response.status_code == 200
+    # Single-page submissions keep the unjoined single-page text.
+    assert response.json()["ocr"]["raw_ocr_text"] == "x + 4 = 9, x = 9 - 4, x = 5"
+
+
 def test_canvas_initializes_recommended_phase_before_answer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

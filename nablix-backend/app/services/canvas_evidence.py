@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import perf_counter
 
 from fastapi import HTTPException
@@ -29,6 +29,11 @@ class CanvasEvidence:
     ocr: VisionOCRResult
     spatial_tokens: list[SpatialMathToken]
     ocr_latency_ms: float
+    # Ordered per-page data, page 1 first. Single-page submissions carry one
+    # entry each; both are consumed when building the work artifact (PDF +
+    # per-page OCR) for Phase 4 review.
+    page_ocr_texts: list[str] = field(default_factory=list)
+    page_data_urls: list[str] = field(default_factory=list)
 
 
 def validate_canvas_payload(
@@ -98,13 +103,16 @@ async def collect_canvas_evidence(
     strokes: list[CanvasStroke],
     submission_id: str,
     vision: VisionOCRAdapter,
+    additional_pages: list[str] | None = None,
 ) -> CanvasEvidence:
     settings = get_settings()
-    if len(snapshot_data_url) > settings.max_snapshot_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Canvas snapshot exceeds the {settings.max_snapshot_bytes} byte limit.",
-        )
+    pages = [snapshot_data_url, *(additional_pages or [])]
+    for page in pages:
+        if len(page) > settings.max_snapshot_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Canvas snapshot exceeds the {settings.max_snapshot_bytes} byte limit.",
+            )
 
     snapshot_reference = build_reference(submission_id)
     store_snapshot(snapshot_reference, snapshot_data_url)
@@ -128,10 +136,24 @@ async def collect_canvas_evidence(
                 region,
             )
         )
+    # Pages 2..N: OCR each in order and keep the text only. Structural analysis
+    # (regions, spatial tokens) stays page-1-only because strokes belong to the
+    # live canvas. Never stitch pages into one tall image before OCR.
+    page_ocr_texts = [ocr.raw_ocr_text]
+    for page in pages[1:]:
+        page_ocr_texts.append((await vision.recognize(page)).raw_ocr_text)
+
+    if len(pages) > 1:
+        ocr = ocr.model_copy(
+            update={"raw_ocr_text": "\n".join(page_ocr_texts)}
+        )
+
     return CanvasEvidence(
         submission_id=submission_id,
         snapshot_reference=snapshot_reference,
         ocr=ocr,
         spatial_tokens=spatial_tokens,
         ocr_latency_ms=(perf_counter() - started) * 1000,
+        page_ocr_texts=page_ocr_texts,
+        page_data_urls=pages,
     )

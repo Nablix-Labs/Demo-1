@@ -181,6 +181,7 @@ async def submit_canvas(
         request.strokes,
         submission_id,
         get_adapters().vision,
+        request.additional_pages,
     )
     snapshot_reference = canvas_evidence.snapshot_reference
     ocr = canvas_evidence.ocr
