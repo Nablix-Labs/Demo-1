@@ -1,8 +1,11 @@
 import asyncio
+import base64
 from copy import deepcopy
 from dataclasses import replace
+from io import BytesIO
 
 import pytest
+from PIL import Image
 from fastapi.testclient import TestClient
 
 from app.api import canvas as canvas_api
@@ -13,6 +16,11 @@ from app.adapters.vision_ocr import MockVisionOCRAdapter
 from app.ai_engine.classifier import ClassificationRequest
 from app.ai_engine.schemas import TutorResponse
 from app.core.config import Settings, get_settings
+from app.core.exceptions import AdapterError, AdapterRequestRejected
+from app.models.work_artifact import (
+    WorkArtifactPersistRequest,
+    WorkArtifactPersistResponse,
+)
 from app.main import app
 from app.models.adapters import (
     AdapterContext,
@@ -41,6 +49,18 @@ from tests.test_session_events import (
 client = TestClient(app, headers={"Authorization": "Bearer test-token"})
 
 VALID_SNAPSHOT_DATA_URL = "data:image/png;base64,aGVsbG8="
+
+
+def _real_png_data_url() -> str:
+    """A decodable PNG, for paths that actually render the page (PDF assembly).
+
+    VALID_SNAPSHOT_DATA_URL only satisfies the base64 field validator; it is
+    not real image bytes.
+    """
+
+    buffer = BytesIO()
+    Image.new("RGB", (8, 8), "white").save(buffer, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()
 
 
 @pytest.mark.parametrize(
@@ -348,6 +368,48 @@ def test_canvas_submit_returns_mock_ocr_result() -> None:
     assert summary["session_performance"]["total_attempts"] == 1
     assert summary["session_performance"]["canvas_submissions"] == 1
     assert len(summary["canvas_feedback_history"]) == 1
+
+
+def test_canvas_submit_ocrs_each_page_in_order() -> None:
+    session_id = _start_session("ST001")
+    single_page_text = "x + 4 = 9, x = 9 - 4, x = 5"
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST001",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+            "additional_pages": [
+                VALID_SNAPSHOT_DATA_URL,
+                VALID_SNAPSHOT_DATA_URL,
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    # One attempt, one submission — not one per page.
+    assert body["status"] == "processed"
+    # Every page was recognised separately and combined in page order.
+    assert body["ocr"]["raw_ocr_text"] == "\n".join([single_page_text] * 3)
+
+
+def test_canvas_submit_without_additional_pages_is_unchanged() -> None:
+    session_id = _start_session("ST001")
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST001",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+        },
+    )
+
+    assert response.status_code == 200
+    # Single-page submissions keep the unjoined single-page text.
+    assert response.json()["ocr"]["raw_ocr_text"] == "x + 4 = 9, x = 9 - 4, x = 5"
 
 
 def test_canvas_initializes_recommended_phase_before_answer(
@@ -1215,6 +1277,218 @@ def test_canvas_final_independent_attempt_is_recorded_before_review(
     assert attempt.input_source == "CANVAS"
     assert len(stored.canvas_submissions) == 1
     assert terminal_events.count("CORRECT_ATTEMPT") == 1
+
+
+def _review_transition_session(monkeypatch: pytest.MonkeyPatch) -> str:
+    """Start a Phase 3 session whose next correct answer completes the topic."""
+
+    async def send_session_event(
+        adapter: StudentModelServiceAdapter,
+        event: StudentModelSessionEvent,
+        access_token: str,
+    ) -> StudentModelSessionEventResponse:
+        del adapter, access_token
+        body = (
+            _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+            if event.event_type == "SESSION_OPENED"
+            else _session_opened_response("REVIEW")
+        )
+        body["request_id"] = event.request_id
+        return StudentModelSessionEventResponse.model_validate(body)
+
+    async def correct_pipeline(
+        context: AdapterContext,
+    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
+        del context
+        student = StudentModelResult(
+            mastery_status="MASTERED",
+            continuity_status="on_track",
+            recommended_entry_phase="REVIEW",
+            hint_dependency_score=0.0,
+            intervention_required=False,
+        )
+        return RAGResult(documents=[], retrieval_confidence=0.0), student, _correct_canvas_tutor()
+
+    monkeypatch.setattr(
+        StudentModelServiceAdapter,
+        "send_session_event",
+        send_session_event,
+    )
+    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", correct_pipeline)
+    return _start_session("ST042")
+
+
+def _correct_canvas_tutor() -> TutorResult:
+    return TutorResult(
+        evaluation="CORRECT",
+        error_type="NONE",
+        intent="SUBMITTING_ANSWER",
+        response_strategy="CONFIRM_CORRECT",
+        tutor_message="Correct.",
+        tutor_message_voice="Correct.",
+        voice_optimised=True,
+        hint_level=0,
+        answer_reveal_allowed=False,
+        confidence=0.95,
+        input_source="CANVAS",
+        attempt_increment=1,
+        recommended_conversation_action="ADVANCE_TO_NEXT_QUESTION",
+        question_completed=True,
+        answer_value_confirmed=True,
+        reasoning_complete=True,
+    )
+
+
+def _independent_practice_session(monkeypatch: pytest.MonkeyPatch) -> str:
+    """Start a session sitting in Phase 3 with a correct-answer pipeline."""
+
+    async def send_session_event(
+        adapter: StudentModelServiceAdapter,
+        event: StudentModelSessionEvent,
+        access_token: str,
+    ) -> StudentModelSessionEventResponse:
+        del adapter, access_token
+        body = _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+        body["request_id"] = event.request_id
+        return StudentModelSessionEventResponse.model_validate(body)
+
+    async def correct_pipeline(
+        context: AdapterContext,
+    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
+        del context
+        student = StudentModelResult(
+            mastery_status="DEVELOPING",
+            continuity_status="on_track",
+            recommended_entry_phase="INDEPENDENT_PRACTICE",
+            hint_dependency_score=0.0,
+            intervention_required=False,
+        )
+        tutor = TutorResult(
+            evaluation="CORRECT",
+            error_type="NONE",
+            intent="SUBMITTING_ANSWER",
+            response_strategy="CONFIRM_CORRECT",
+            tutor_message="Correct.",
+            tutor_message_voice="Correct.",
+            voice_optimised=True,
+            hint_level=0,
+            answer_reveal_allowed=False,
+            confidence=0.95,
+            input_source="CANVAS",
+            attempt_increment=1,
+            recommended_conversation_action="ADVANCE_TO_NEXT_QUESTION",
+            question_completed=True,
+            answer_value_confirmed=True,
+            reasoning_complete=True,
+        )
+        return RAGResult(documents=[], retrieval_confidence=0.0), student, tutor
+
+    monkeypatch.setattr(
+        StudentModelServiceAdapter,
+        "send_session_event",
+        send_session_event,
+    )
+    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", correct_pipeline)
+    return _start_session("ST031")
+
+
+def test_canvas_links_stored_work_artifact_to_the_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    persisted: list[WorkArtifactPersistRequest] = []
+
+    async def persist_work_artifact(
+        adapter: StudentModelServiceAdapter,
+        request: WorkArtifactPersistRequest,
+        access_token: str,
+    ) -> WorkArtifactPersistResponse:
+        del adapter, access_token
+        persisted.append(request)
+        return WorkArtifactPersistResponse(
+            artifact_id="ART-P3-000124",
+            pdf_url="https://blob.example/submission.pdf",
+            page_count=request.page_count,
+        )
+
+    session_id = _independent_practice_session(monkeypatch)
+    monkeypatch.setattr(
+        StudentModelServiceAdapter,
+        "persist_work_artifact",
+        persist_work_artifact,
+    )
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST031",
+            "turn_id": "TURN-ST031-CANVAS-1",
+            "snapshot_data_url": _real_png_data_url(),
+            "additional_pages": [_real_png_data_url()],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    stored = session_service._get_owned_session(session_id, "ST031")
+    assert stored.per_question_history[-1].work_artifact_id == "ART-P3-000124"
+    # One artifact per attempt, carrying both pages and their ordered OCR.
+    assert len(persisted) == 1
+    assert persisted[0].page_count == 2
+    assert len(persisted[0].per_page_ocr_text) == 2
+    assert persisted[0].combined_pdf_base64
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        AdapterError("student_model", "storage unavailable"),
+        # A 4xx is a sibling of AdapterError, not a subclass. The storage
+        # endpoint 404s until it is built, so this is the live path.
+        AdapterRequestRejected(
+            "student_model",
+            "https://student-model.example/work-artifacts",
+            404,
+            "not found",
+            {},
+        ),
+    ],
+    ids=["unavailable", "rejected"],
+)
+def test_canvas_submission_survives_work_artifact_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+) -> None:
+    async def failing_persist(
+        adapter: StudentModelServiceAdapter,
+        request: WorkArtifactPersistRequest,
+        access_token: str,
+    ) -> WorkArtifactPersistResponse:
+        del adapter, request, access_token
+        raise error
+
+    session_id = _independent_practice_session(monkeypatch)
+    monkeypatch.setattr(
+        StudentModelServiceAdapter,
+        "persist_work_artifact",
+        failing_persist,
+    )
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST031",
+            "turn_id": "TURN-ST031-CANVAS-2",
+            "snapshot_data_url": _real_png_data_url(),
+        },
+    )
+
+    # The student's turn is evaluated and routed as normal; only the Phase 4
+    # replay of this attempt is lost.
+    assert response.status_code == 200, response.text
+    stored = session_service._get_owned_session(session_id, "ST031")
+    assert stored.per_question_history[-1].work_artifact_id is None
+    assert stored.per_question_history[-1].evaluation == "CORRECT"
 
 
 def _incorrect_independent_tutor() -> TutorResult:

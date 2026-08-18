@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 import re
@@ -10,7 +11,8 @@ from fastapi import HTTPException
 from app.adapters.provider import get_adapters
 from app.ai_engine.classifier_config import ClassifierRulesConfig, load_classifier_rules
 from app.core.config import get_settings
-from app.core.exceptions import JourneyVersionConflict
+from app.core.exceptions import DOWNSTREAM_FAILURE, JourneyVersionConflict
+from app.core.logger import logger
 from app.models.adapters import (
     AdapterContext,
     ConversationMessage,
@@ -25,12 +27,17 @@ from app.models.canvas import (
 )
 from app.models.interaction import InteractionResponse, StaleTurnResponse
 from app.services.canvas_annotations import plan_canvas_draw
+from app.models.session import SessionRecord
+from app.models.student_model_session import StudentModelQuestion
 from app.services.canvas_evidence import (
+    CanvasEvidence,
     canvas_events_are_stale,
     collect_canvas_evidence,
     validate_canvas_payload,
 )
 from app.services.guided_question_opening import guided_question_opening
+from app.services.pdf_assembly import PdfAssemblyError, assemble_pdf
+from app.models.work_artifact import WorkArtifactPersistRequest
 from app.services.interaction_service import (
     _current_hint_level_from,
     _independent_correct_in_session,
@@ -125,6 +132,51 @@ def _attachment_result(ocr: VisionOCRResult) -> TutorResult:
     )
 
 
+async def _store_work_artifact(
+    session: SessionRecord,
+    schema_question: StudentModelQuestion,
+    evidence: CanvasEvidence,
+    access_token: str,
+) -> str | None:
+    """Store this attempt's Phase 3 work as one PDF; return its artifact id.
+
+    Storage failures must never fail the student's submission, so this returns
+    None and logs instead of raising. The attempt is still evaluated and routed
+    exactly as before; only the Phase 4 replay of this attempt is lost.
+    """
+
+    event = session.student_model_event
+    if event is None or session.question_id is None:
+        return None
+    try:
+        pdf = assemble_pdf(evidence.page_data_urls)
+        stored = await get_adapters().student_model.persist_work_artifact(
+            WorkArtifactPersistRequest(
+                submission_id=evidence.submission_id,
+                student_id=session.student_id,
+                topic_id=event.journey_state.topic_id,
+                question_id=session.question_id,
+                question_usage_id=schema_question.question_usage_id,
+                page_count=len(evidence.page_data_urls),
+                combined_pdf_base64=base64.b64encode(pdf).decode(),
+                per_page_ocr_text=evidence.page_ocr_texts,
+                combined_ocr_text=evidence.ocr.raw_ocr_text,
+            ),
+            access_token,
+        )
+    except (*DOWNSTREAM_FAILURE, PdfAssemblyError) as error:
+        logger.warning(
+            "work_artifact_not_stored",
+            extra={
+                "session_id": session.session_id,
+                "question_id": session.question_id,
+                "error": str(error),
+            },
+        )
+        return None
+    return stored.artifact_id
+
+
 async def submit_canvas(
     request: CanvasSubmitRequest,
     access_token: str,
@@ -181,11 +233,25 @@ async def submit_canvas(
         request.strokes,
         submission_id,
         get_adapters().vision,
+        request.additional_pages,
     )
     snapshot_reference = canvas_evidence.snapshot_reference
     ocr = canvas_evidence.ocr
     canvas_regions = ocr.detected_regions
     ocr_latency_ms = canvas_evidence.ocr_latency_ms
+    # Every Phase 3 submit stores its work, wrong or right: correct attempts are
+    # evidence, wrong ones are replayed in Phase 4.
+    work_artifact_id: str | None = None
+    if (
+        session.current_phase == "INDEPENDENT_PRACTICE"
+        and request.submission_role == "STANDALONE_ATTEMPT"
+    ):
+        work_artifact_id = await _store_work_artifact(
+            session,
+            schema_question,
+            canvas_evidence,
+            access_token,
+        )
 
     written_work = _semantic_canvas_text(ocr)
     message = "\n".join(part for part in [written_work, request.transcript] if part)
@@ -361,6 +427,7 @@ async def submit_canvas(
             student_result,
             request.strokes,
             request.canvas_events,
+            work_artifact_id,
         )
     phase_changed = updated_session.current_phase != turn_session.current_phase
     status_to_return = (

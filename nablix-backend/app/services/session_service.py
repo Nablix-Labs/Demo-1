@@ -9,8 +9,13 @@ from typing_extensions import NotRequired
 
 from app.adapters.provider import get_adapters
 from app.core.config import get_settings
-from app.core.exceptions import JourneyVersionConflict
+from app.core.exceptions import DOWNSTREAM_FAILURE, JourneyVersionConflict
 from app.core.logger import logger
+from app.ai_engine.phase4_review import generate_phase4_review
+from app.models.phase4_review import Phase4ReviewResponse
+from app.models.work_artifact import Phase4ReviewPersistRequest
+from app.services.phase4_context_builder import build_phase4_review_request
+from app.services.phase4_replay_filter import filter_replay_attempts
 from app.models.adapters import ConversationMessage, StudentModelResult, VisualCue, VisionOCRResult
 from app.models.canvas import CanvasQuestionMemory, CanvasStroke, CanvasSubmissionRecord
 from app.models.canvas_memory import CanvasEvent
@@ -752,9 +757,76 @@ def _require_schema_phase(
         )
 
 
+async def generate_phase4_review_for(
+    session: SessionRecord,
+    event: StudentModelSessionEventResponse,
+    access_token: str,
+) -> Phase4ReviewResponse | None:
+    """Review the finished topic as the student enters Phase 4.
+
+    A failure here must not strand the student outside Review, so the phase
+    transition still happens and the review is simply absent; the frontend
+    shows the topic outcome without a tutor replay.
+    """
+
+    try:
+        history = await get_adapters().student_model.fetch_topic_event_history(
+            session.student_id,
+            event.journey_state.topic_id,
+            access_token,
+        )
+        review = generate_phase4_review(
+            build_phase4_review_request(
+                history,
+                filter_replay_attempts(history.attempts),
+                event.journey_state.mastery_status,
+                event.routing.next_action,
+            )
+        )
+    # ValueError covers Phase4ContextError, Phase4ReviewValidationError and
+    # pydantic's ValidationError, so malformed evidence degrades to no review
+    # rather than stranding the student outside Review.
+    except (*DOWNSTREAM_FAILURE, ValueError) as error:
+        logger.warning(
+            "phase4_review_not_generated",
+            extra={
+                "session_id": session.session_id,
+                "topic_id": event.journey_state.topic_id,
+                "error": str(error),
+            },
+        )
+        return None
+
+    try:
+        await get_adapters().student_model.persist_phase4_review(
+            Phase4ReviewPersistRequest(
+                student_id=session.student_id,
+                topic_id=event.journey_state.topic_id,
+                tutor_replays=[
+                    replay.model_dump(mode="json") for replay in review.tutor_replays
+                ],
+                student_insights=review.student_insights.model_dump(mode="json"),
+            ),
+            access_token,
+        )
+    except DOWNSTREAM_FAILURE as error:
+        # The review is already generated; the student should still see it
+        # even if it could not be stored for reuse.
+        logger.warning(
+            "phase4_review_not_persisted",
+            extra={
+                "session_id": session.session_id,
+                "topic_id": event.journey_state.topic_id,
+                "error": str(error),
+            },
+        )
+    return review
+
+
 async def _apply_schema_event(
     session: SessionRecord,
     event: StudentModelSessionEventResponse,
+    access_token: str | None = None,
 ) -> SessionRecord:
     payload = event.phase_payload
     has_questions = (
@@ -893,6 +965,12 @@ async def _apply_schema_event(
                 ],
             }
         )
+        if next_phase == "REVIEW" and access_token is not None:
+            updates["phase4_review"] = await generate_phase4_review_for(
+                session,
+                event,
+                access_token,
+            )
         phase0_config = load_phase0_tutor_config()
         transition_message = (
             _orientation_entry_message(event)
@@ -1423,6 +1501,7 @@ async def record_canvas_submission(
     last_student_model: StudentModelResult | None,
     strokes: list[CanvasStroke],
     canvas_events: list[CanvasEvent],
+    work_artifact_id: str | None = None,
 ) -> SessionRecord:
     """Append a reviewed canvas submission without replacing Schema 3.0 state."""
 
@@ -1461,6 +1540,7 @@ async def record_canvas_submission(
                 input_source="CANVAS",
                 hint_level_used=record.tutor.hint_level,
                 attempted_at=record.submitted_at,
+                work_artifact_id=work_artifact_id,
             ),
         ]
     updated_session: SessionRecord = session.model_copy(

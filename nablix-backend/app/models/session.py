@@ -13,6 +13,7 @@ from app.models.adapters import (
     VisionOCRResult,
 )
 from app.models.canvas import CanvasQuestionMemory, CanvasSubmissionRecord
+from app.models.phase4_review import Phase4ReviewResponse
 from app.models.fields import (
     ConceptId,
     InteractionMode,
@@ -159,6 +160,10 @@ class QuestionAttemptRecord(BaseModel):
     input_source: Literal["TEXT", "VOICE", "CANVAS"]
     hint_level_used: int
     attempted_at: datetime
+    # Links this attempt to its stored Phase 3 canvas work, so Phase 4 can
+    # replay it. None when the work could not be stored, and for every attempt
+    # made before work artifacts existed.
+    work_artifact_id: str | None = None
 
 
 class PhaseTransitionRecord(BaseModel):
@@ -284,6 +289,9 @@ class SessionRecord(BaseModel):
     # end-of-session review reflects his data rather than a reconstruction.
     last_student_model: StudentModelResult | None = None
     student_model_event: StudentModelSessionEventResponse | None = None
+    # Tutor replay and learning summary, generated once on entering Review.
+    # None when the topic has not reached Review, or generation failed.
+    phase4_review: Phase4ReviewResponse | None = None
     prerequisite_repair_event: StudentModelSessionEventResponse | None = None
     student_model_state: StudentModelCoreState | None = None
     active_student_model_question: StudentModelQuestion | None = None

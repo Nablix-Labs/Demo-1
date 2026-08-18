@@ -16,6 +16,12 @@ from app.models.student_model_session import (
     StudentModelSessionEvent,
     StudentModelSessionEventResponse,
 )
+from app.models.topic_event_history import TopicEventHistoryResponse
+from app.models.work_artifact import (
+    Phase4ReviewPersistRequest,
+    WorkArtifactPersistRequest,
+    WorkArtifactPersistResponse,
+)
 from app.services.student_model_debug import record_request, record_response
 
 
@@ -51,22 +57,13 @@ class StudentModelServiceAdapter:
     ) -> StudentModelSessionEventResponse:
         """Serialize one Schema 3.0 event, persist it, and validate its full state."""
 
-        if self._settings.use_mock_student_model:
-            raise AdapterError(
-                "student_model",
-                "Schema 3.0 session events require NABLIX_USE_MOCK_STUDENT_MODEL=false",
-            )
-        if self._settings.student_model_url == "":
-            raise AdapterError(
-                "student_model",
-                "NABLIX_STUDENT_MODEL_URL is required for Schema 3.0 session events",
-            )
+        url = self._require_student_model_url("Schema 3.0 session events")
         request_body = event.model_dump(mode="json", exclude_none=True)
         record_request(request_body)
         try:
             response = await post_json(
                 "student_model",
-                f"{self._settings.student_model_url.rstrip('/')}/session/event",
+                f"{url}/session/event",
                 request_body,
                 {"Authorization": f"Bearer {access_token}"},
                 self._settings.adapter_request_timeout_seconds,
@@ -126,6 +123,85 @@ class StudentModelServiceAdapter:
                 ),
             )
         return parsed
+
+    async def persist_work_artifact(
+        self,
+        request: WorkArtifactPersistRequest,
+        access_token: str,
+    ) -> WorkArtifactPersistResponse:
+        """Store one attempt's canvas work and return its storage references."""
+
+        url = self._require_student_model_url("work artifacts")
+        response = await post_json(
+            "student_model",
+            f"{url}/work-artifacts",
+            request.model_dump(mode="json"),
+            {"Authorization": f"Bearer {access_token}"},
+            self._settings.adapter_request_timeout_seconds,
+            self._settings.adapter_request_retry_count,
+        )
+        try:
+            return WorkArtifactPersistResponse.model_validate(response)
+        except ValidationError as error:
+            raise AdapterError(
+                "student_model",
+                f"invalid work artifact response body={response}: {error}",
+            ) from error
+
+    async def persist_phase4_review(
+        self,
+        request: Phase4ReviewPersistRequest,
+        access_token: str,
+    ) -> None:
+        """Store the finished review on the topic learning summary."""
+
+        url = self._require_student_model_url("Phase 4 review persistence")
+        await post_json(
+            "student_model",
+            f"{url}/phase4-review",
+            request.model_dump(mode="json"),
+            {"Authorization": f"Bearer {access_token}"},
+            self._settings.adapter_request_timeout_seconds,
+            self._settings.adapter_request_retry_count,
+        )
+
+    async def fetch_topic_event_history(
+        self,
+        student_id: str,
+        topic_id: str,
+        access_token: str,
+    ) -> TopicEventHistoryResponse:
+        """Read the student's whole journey through one topic, for Phase 4."""
+
+        url = self._require_student_model_url("topic event history")
+        response = await post_json(
+            "student_model",
+            f"{url}/topic/event-history",
+            {"student_id": student_id, "topic_id": topic_id},
+            {"Authorization": f"Bearer {access_token}"},
+            self._settings.adapter_request_timeout_seconds,
+            self._settings.adapter_request_retry_count,
+        )
+        try:
+            return TopicEventHistoryResponse.model_validate(response)
+        except ValidationError as error:
+            raise AdapterError(
+                "student_model",
+                f"invalid topic event history body={response}: {error}",
+            ) from error
+
+    def _require_student_model_url(self, purpose: str) -> str:
+        if self._settings.use_mock_student_model:
+            raise AdapterError(
+                "student_model",
+                f"{purpose} require NABLIX_USE_MOCK_STUDENT_MODEL=false",
+            )
+        if self._settings.student_model_url == "":
+            raise AdapterError(
+                "student_model",
+                f"NABLIX_STUDENT_MODEL_URL is required for {purpose}",
+            )
+        return self._settings.student_model_url.rstrip("/")
 
     def _local_response(self, context: AdapterContext) -> StudentModelResult:
         """Return the stable in-process learner-state snapshot."""
