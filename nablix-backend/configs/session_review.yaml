@@ -1,0 +1,54 @@
+generation_instructions: >-
+  Generate a concise Phase 4 student review using only the supplied evidence.
+  Category 1 must name a specific successful strategy and must not use ability labels.
+  Category 2 must describe only the first error and may mention one independent later error.
+  Category 3 must use possible-pattern language unless the pattern is confirmed.
+  Category 4 must name one actionable practice focus. Category 5 must use provisional
+  mastery language. Do not include equations, correct values, answer-reveal language,
+  pathway claims, comparisons, backend terminology, identifiers, or invented facts.
+  Keep every category voice-ready and brief.
+stricter_guardrail_instruction: >-
+  Rewrite the review without any equation, number, calculated value, result, or direct-answer
+  phrase. Refer only to the strategy, the location or type of difficulty, and the next action.
+error_labels:
+  ARITHMETIC_ERROR: calculation-checking
+  SIGN_ERROR: sign-checking
+  OPPOSITE_OPERATION_ERROR: inverse-operation
+  CONCEPTUAL_MISUNDERSTANDING: concept-understanding
+  PROCEDURAL_ERROR: step-order
+  NOTATION_ISSUE: notation
+  INSUFFICIENT_INFORMATION: visible-working
+  UNKNOWN_ERROR: step-checking
+possible_pattern_template: A possible {error_label} pattern appeared during this session. We will continue to watch it together.
+confirmed_pattern_template: A {error_label} pattern appeared during this session. We will focus on it in the next practice.
+forbidden_output_phrases:
+  - you are good at maths
+  - you're good at maths
+  - you are bad at maths
+  - you're bad at maths
+  - you have mastered this
+  - you've mastered this
+  - keep practising
+  - keep practicing
+practice_focus_by_error:
+  ARITHMETIC_ERROR: Check the final calculation before submitting.
+  SIGN_ERROR: Check each sign before moving to the next line.
+  OPPOSITE_OPERATION_ERROR: Identify and apply the inverse operation carefully.
+  CONCEPTUAL_MISUNDERSTANDING: Review what the operation beside the variable represents.
+  PROCEDURAL_ERROR: Apply the same valid operation to both sides before simplifying.
+  NOTATION_ISSUE: Write the final statement using complete mathematical notation.
+  INSUFFICIENT_INFORMATION: Show each operation as a separate visible step.
+  UNKNOWN_ERROR: Explain each change before continuing to the next line.
+default_practice_focus: Check each mathematical change before submitting.
+fallback:
+  category_1_strength_template: "One successful strategy today was: {strength}."
+  category_2_first_error_template: "The first difficulty appeared here: {error_description}."
+  category_4_next_practice_template: "Next time, focus on this: {practice_focus}"
+  category_5_mastery_by_status:
+    NOT_STARTED: Today's evidence is still limited, so this skill has not been assessed yet.
+    EMERGING: Today, the skill began to emerge in the problems you completed.
+    DEVELOPING: Today's evidence is still provisional, and the skill is continuing to develop.
+    SECURE: Today, this skill looked secure in the problems you completed.
+    MASTERED: Today, this skill looked secure in the problems you completed.
+  student_facing_summary_template: "You completed today's review. Your next focus is: {practice_focus}"
+  b6_hook: Next time, we will begin by checking one mathematical change carefully.

@@ -31,6 +31,7 @@
     "react-dom": "^19.2.7",
     "react-katex": "^3.0.1",
     "react-konva": "^19.2.5",
+    "react-pageflip": "^2.0.3",
     "tailwind-merge": "^2.4.0",
     "three": "^0.169.0",
     "zustand": "^5.0.14"

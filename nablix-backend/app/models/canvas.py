@@ -4,7 +4,9 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.adapters import TutorResult, VisionOCRResult
-from app.models.fields import Phase, SessionId, SnapshotDataUrl, StudentId
+from app.models.canvas_memory import CanvasEvent, validate_canvas_event_order
+from app.models.fields import Phase, SessionId, SnapshotDataUrl, StudentId, TurnId
+from app.models.guided_learning import GuidedRescue
 
 TutorElementKind = Literal[
     "text", "math", "line", "arrow", "rect", "ellipse", "freehand", "highlight"
@@ -85,12 +87,27 @@ class CanvasDrawPayload(BaseModel):
     elements: list[TutorElement] = Field(default_factory=list)
 
 
+class CanvasPoint(BaseModel):
+    x: float = Field(ge=0.0, le=1.0)
+    y: float = Field(ge=0.0, le=1.0)
+
+
+class CanvasStroke(BaseModel):
+    stroke_id: str
+    tool: Literal["pen", "pencil", "eraser", "highlighter"]
+    points: list[CanvasPoint]
+    width: float = 0.0
+
+
 class CanvasSubmitRequest(BaseModel):
     """Validated request to submit a canvas artifact for later analysis."""
 
     session_id: SessionId
     student_id: StudentId
+    turn_id: TurnId | None = None
     snapshot_data_url: SnapshotDataUrl
+    strokes: list[CanvasStroke] = Field(default_factory=list)
+    canvas_events: list[CanvasEvent] = Field(default_factory=list)
     # Optional spoken transcript to grade alongside the canvas (VAD turn). Omitted by
     # the Check button, which stays canvas-only.
     transcript: str | None = None
@@ -98,6 +115,11 @@ class CanvasSubmitRequest(BaseModel):
     submission_role: Literal["STANDALONE_ATTEMPT", "VOICE_ATTACHMENT"] = (
         "STANDALONE_ATTEMPT"
     )
+
+    @model_validator(mode="after")
+    def validate_canvas_events(self) -> "CanvasSubmitRequest":
+        validate_canvas_event_order(self.canvas_events)
+        return self
 
 
 class CanvasLatency(BaseModel):
@@ -117,6 +139,12 @@ class CanvasSubmissionRecord(BaseModel):
     submitted_at: datetime
 
 
+class CanvasQuestionMemory(BaseModel):
+    updated_turn_id: str
+    strokes: list[CanvasStroke] = Field(default_factory=list)
+    canvas_events: list[CanvasEvent] = Field(default_factory=list)
+
+
 class CanvasSubmitResponse(BaseModel):
     """Processed canvas submission with its OCR result and tutor feedback."""
 
@@ -129,6 +157,7 @@ class CanvasSubmitResponse(BaseModel):
     tutor: TutorResult
     latency: CanvasLatency
     canvas_draw: list[CanvasDrawPayload] = Field(default_factory=list)
+    guided_rescue: GuidedRescue | None = None
     # Phase state after this submission — same contract as InteractionResponse,
     # so canvas turns can drive the frontend's phase routing.
     phase_changed: bool = False

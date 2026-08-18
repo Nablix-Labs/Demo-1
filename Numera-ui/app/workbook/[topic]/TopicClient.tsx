@@ -1,20 +1,38 @@
 'use client';
 
+/**
+ * A topic from the workbook, opened.
+ *
+ * This was a list of lesson rows on the shared glass shell, which had no
+ * relationship to the book the student had just clicked on the shelf. It is now
+ * that book, opening: same colour, same cover, lessons on the sheets inside.
+ *
+ * The route leaves PageShell for the same reason the shelf did — paper and
+ * cloth seen through a translucent panel over the ambient gradient stop reading
+ * as objects.
+ */
+
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { notFound } from 'next/navigation';
-import { ChevronLeft, Check, BookOpen } from 'lucide-react';
-import PageShell, { Chip, EmptyState } from '@/components/PageShell';
+import { ChevronLeft, BookOpen } from 'lucide-react';
+import { EmptyState } from '@/components/PageShell';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import {
-  getTopic, effectiveStatus, subtopicsForStage, keyStageForAge,
-  type LessonStatus,
+  getTopic, subtopicsForStage, keyStageForAge, topicProgressForStage,
 } from '@/lib/curriculum';
 
-const ACTION: Record<LessonStatus, string> = {
-  mastered: 'Learn again',
-  'in-progress': 'Continue',
-  'not-started': 'Start',
-};
+/** StPageFlip touches the DOM on mount, so the book is browser-only. */
+const TopicBook = dynamic(() => import('@/components/workbook/TopicBook'), {
+  ssr: false,
+  loading: () => (
+    <div
+      className="rounded-md bg-[#F1EDE4]"
+      style={{ width: 860, height: 580 }}
+      aria-hidden="true"
+    />
+  ),
+});
 
 export default function TopicClient({ topicId }: { topicId: string }) {
   const topic = getTopic(topicId);
@@ -27,88 +45,45 @@ export default function TopicClient({ topicId }: { topicId: string }) {
   // Only show subtopics for the student's Key Stage (age-gated).
   const ks = keyStageForAge(age);
   const subtopics = subtopicsForStage(topic, ks);
-
-  // A new lesson starts via the topic-entry (small) diagnostic; resuming or
-  // re-learning goes straight to the guided lesson.
-  const linkFor = (status: LessonStatus, lessonId: string) =>
-    status === 'not-started'
-      ? `/diagnostic/${topic.id}?lesson=${lessonId}`
-      : '/';
+  const pct = topicProgressForStage(topic, ks, completed);
 
   return (
-    <PageShell
-      title={topic.title}
-      subtitle={topic.blurb}
-      action={
+    <main className="flex-1 min-w-0 overflow-y-auto bg-white" aria-label={topic.title}>
+      <div className="mx-auto w-full max-w-[1180px] px-10 py-8">
         <Link
           href="/workbook"
-          className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-slate-blue hover:text-ink transition-colors"
+          className="mb-6 inline-flex items-center gap-1.5 text-[12px] font-semibold text-slate-blue transition-colors hover:text-ink"
         >
           <ChevronLeft size={15} strokeWidth={1.8} /> Workbook
         </Link>
-      }
-    >
-      <div className="flex flex-col gap-7">
-        {subtopics.length === 0 && (
+
+        {subtopics.length === 0 ? (
           <EmptyState
             icon={<BookOpen size={20} strokeWidth={1.6} />}
             title="Nothing at your level here yet"
             body={`${topic.title} has no subtopics for your school year right now. Pick another topic from your workbook.`}
             action={
-              <Link href="/workbook" className="inline-flex items-center gap-1.5 rounded-md bg-focus-navy text-white px-4 py-2.5 text-[12.5px] font-semibold hover:opacity-80 transition-opacity">
+              <Link
+                href="/workbook"
+                className="inline-flex items-center gap-1.5 rounded-md bg-focus-navy px-4 py-2.5 text-[12.5px] font-semibold text-white transition-opacity hover:opacity-80"
+              >
                 <ChevronLeft size={15} strokeWidth={1.8} /> Back to workbook
               </Link>
             }
           />
+        ) : (
+          <div className="flex justify-center">
+            <TopicBook
+              topic={topic}
+              subtopics={subtopics}
+              keyStage={ks}
+              progress={pct}
+              completed={completed}
+              onToggleLesson={toggleLessonLearned}
+            />
+          </div>
         )}
-        {subtopics.map((sub) => (
-          <section key={sub.id}>
-            <div className="flex items-center gap-2 mb-2.5">
-              <span className="text-[11px] font-semibold tracking-widest uppercase text-slate-blue">
-                {sub.title}
-              </span>
-              <Chip>{sub.keyStage}</Chip>
-            </div>
-            <div className="rounded-lg border border-muted-gray divide-y divide-muted-gray overflow-hidden">
-              {sub.lessons.map((l) => {
-                const status = effectiveStatus(l, completed);
-                const done = status === 'mastered';
-                return (
-                  <div key={l.id} className="flex items-center gap-4 px-5 py-3.5 hover:bg-reading-surface transition-colors">
-                    {/* status toggle — mark learned / unlearned */}
-                    <button
-                      onClick={() => toggleLessonLearned(l.id)}
-                      title={done ? 'Mark as not learned' : 'Mark as learned'}
-                      aria-label={done ? `Mark ${l.title} as not learned` : `Mark ${l.title} as learned`}
-                      aria-pressed={done}
-                      className={
-                        'flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center border transition-colors ' +
-                        (done
-                          ? 'bg-focus-navy border-focus-navy text-white'
-                          : 'border-muted-gray text-transparent hover:border-focus-navy')
-                      }
-                    >
-                      <Check size={13} strokeWidth={2.4} />
-                    </button>
-                    <div className="min-w-0 flex-1">
-                      <div className={'text-[13.5px] ' + (done ? 'text-slate-blue' : 'text-ink font-medium')}>
-                        {l.title}
-                      </div>
-                    </div>
-                    {status === 'in-progress' && <Chip>In progress</Chip>}
-                    <Link
-                      href={linkFor(status, l.id)}
-                      className="flex-shrink-0 inline-flex items-center justify-center rounded-md border border-focus-navy text-ink text-[12px] font-semibold px-3.5 py-1.5 hover:bg-focus-navy hover:text-white transition-colors"
-                    >
-                      {ACTION[status]}
-                    </Link>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        ))}
       </div>
-    </PageShell>
+    </main>
   );
 }

@@ -12,11 +12,15 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
-import { useNumeraStore } from '@/store/useNumeraStore';
+import { useShallow } from 'zustand/react/shallow';
+import { useNumeraStore, type CanvasExporter } from '@/store/useNumeraStore';
+import { isPhase3 } from '@/lib/phase3';
 import { useAuthStore, isConsentActive } from '@/store/useAuthStore';
+import type { SchemaQuestionOption } from '@/lib/api';
 import { useDemoTutor } from '@/hooks/useDemoTutor';
 import { gridBackground, GRID_OPTIONS } from '@/lib/canvasGrid';
-import { isBareEquation } from '@/lib/questionText';
+import { tutorSay } from '@/lib/tutorSpeech';
+import QuestionDisplay from '@/components/QuestionDisplay';
 import ScaffoldPanel from '@/components/ScaffoldPanel';
 import Toolbar from './Toolbar';
 import TeachBack from './TeachBack';
@@ -34,19 +38,76 @@ const HELP_TIPS = [
 ];
 
 export default function CanvasStage() {
-  const { questionText, questionNumber, items, setCanvasExporter, canvasGrid, setCanvasGrid } = useNumeraStore();
+  // Selected, not destructured off the whole store: a bare useNumeraStore()
+  // subscribes to every write, and the transcript writes several times a
+  // second while the student speaks — which re-rendered the entire canvas per
+  // partial transcript (audit F-14).
+  const { questionText, questionNumber, items, setCanvasExporter, canvasGrid, setCanvasGrid } = useNumeraStore(
+    useShallow((s) => ({
+      questionText: s.questionText, questionNumber: s.questionNumber, items: s.items,
+      setCanvasExporter: s.setCanvasExporter, canvasGrid: s.canvasGrid, setCanvasGrid: s.setCanvasGrid,
+    })),
+  );
   const activeScaffold = useNumeraStore((s) => s.activeScaffold);
+  // Phase 3 spec §3.2: no scaffold panels during an independent attempt. Read
+  // from the phase rather than the route — the phase is what decides whether
+  // the tutor is allowed to be helping right now.
+  const silentPhase3 = isPhase3(useNumeraStore((s) => s.currentPhase));
+  const visualCueType = useNumeraStore((s) => s.visualCueType);
+  const visualCueDescription = useNumeraStore((s) => s.visualCueDescription);
+  const setVisualCueVisible = useNumeraStore((s) => s.setVisualCueVisible);
   const canvasConsents = useAuthStore((s) => s.consents);
   const canvasAllowed = isConsentActive(canvasConsents, 'canvas_processing');
   const tutor = useDemoTutor();
 
-  const exportRef = useRef<(() => string | null) | null>(null);
+  // Explain Again replays the current explanation. It was gated on a visual cue
+  // having arrived, which made it invisible on an ordinary question — the
+  // student only ever saw it after climbing the ladder as far as VISUAL_CUE,
+  // which is not what §2 asks for and is how it went missing in testing
+  // (Sanya, 5 Aug). The backend implements EXPLAIN_AGAIN now, so the control
+  // only needs something to replay: a tutor turn on the current question. A
+  // held cue still qualifies on its own, for the offline/demo path.
+  const hasTutorTurn = useNumeraStore((s) => s.transcript.some((m) => m.role === 'ai'));
+  const canReplayCue = Boolean(visualCueType ?? visualCueDescription) || hasTutorTurn;
+
+  // Choice questions. The pick is recorded and the option text goes into the
+  // answer box, because the interaction contract carries no option id — an
+  // answer travels as `text_input` either way. That also keeps one submit path
+  // rather than a second one that only choice questions use.
+  //
+  // The text is REPLACED, not appended: re-picking after changing your mind
+  // should swap the answer, not leave both options sitting in the box. Anything
+  // the student typed after the option is preserved.
+  const questionType = useNumeraStore((s) => s.questionType);
+  const questionOptions = useNumeraStore((s) => s.questionOptions);
+  const selectedOptionId = useNumeraStore((s) => s.selectedOptionId);
+  const setSelectedOption = useNumeraStore((s) => s.setSelectedOption);
+  const setTextInput = useNumeraStore((s) => s.setTextInput);
+  const { explainAgain, explainAgainPending, selectOption, submitTeachBack } = tutor;
+  const pickOption = useCallback(
+    (option: SchemaQuestionOption) => {
+      const s = useNumeraStore.getState();
+      const previous = s.questionOptions.find((o) => o.option_id === s.selectedOptionId);
+      const trailing = previous
+        ? s.textInput.replace(previous.text, '').trimStart()
+        : s.textInput.trimStart();
+      setSelectedOption(option.option_id);
+      setTextInput(trailing ? `${option.text} ${trailing}` : option.text);
+      void selectOption(option.option_id, option.text);
+    },
+    [setSelectedOption, setTextInput, selectOption],
+  );
+  const replayCue = useCallback(() => {
+    if (!explainAgainPending) void explainAgain();
+  }, [explainAgain, explainAgainPending]);
+
+  const exportRef = useRef<CanvasExporter | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [gridOpen, setGridOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const handleExportReady = useCallback((fn: () => string | null) => {
+  const handleExportReady = useCallback((fn: CanvasExporter) => {
     exportRef.current = fn;
     setCanvasExporter(fn); // expose to the panel menu for "Save as PDF"
   }, [setCanvasExporter]);
@@ -66,8 +127,8 @@ export default function CanvasStage() {
       showToast('Canvas processing is not available until the required consent is completed.');
       return;
     }
-    const png = exportRef.current?.();
-    if (!png || items.length === 0) {
+    const canvasSnapshot = exportRef.current?.();
+    if (!canvasSnapshot || items.length === 0) {
       showToast('Show your working on the canvas first, then tap Check.');
       return;
     }
@@ -76,7 +137,9 @@ export default function CanvasStage() {
     if (tutor.apiEnabled && tutor.sessionId) {
       showToast('Reading your working…');
       void tutor.submitCanvasWork().then((res) => {
-        showToast(res ? res.tutor.tutor_message : 'Submitted — see your session trail.');
+        // An accepted Phase 3 submission carries no tutor block at all — the
+        // phase is silent by design — so there is nothing to quote back here.
+        showToast(res?.tutor?.tutor_message?.trim() || 'Submitted — see your session trail.');
       });
     } else {
       showToast('Nice work — your working has been submitted.');
@@ -89,23 +152,46 @@ export default function CanvasStage() {
       aria-label="Canvas workspace"
       style={gridBackground(canvasGrid)}
     >
-      {/* Question header — a bare equation gets the "Solve for x:" lead-in and
-          maths type; anything with its own wording (e.g. a word problem) is shown
-          verbatim as prose that wraps. See lib/questionText.ts. */}
-      <div className="absolute top-[26px] left-[34px] right-[34px] flex items-start gap-3 z-10">
+      {/* Question strip (§2) — question number, the task, and Explain Again.
+          A bare equation gets the "Solve for x:" lead-in and maths type; anything
+          with its own wording (e.g. a word problem) is shown verbatim as prose
+          that wraps. See lib/questionText.ts. */}
+      {/* The right padding is what keeps this clear of TeachBack, which pins
+          "Explain it back" to the same corner (right-[34px]) at a higher
+          z-index. Without it "Explain again" renders underneath and is simply
+          invisible — which is exactly how it went missing in testing (Sanya,
+          5 Aug). It also stops a long question running under that button.
+
+          150px because that button measures 131px with the app's own styles;
+          the rest is the gap. If its label changes, re-measure. */}
+      <div className="absolute top-[26px] left-[34px] right-[34px] z-10">
+      <div className="flex items-start gap-3 pr-[150px]">
         <div className="w-[30px] h-[30px] rounded-md border border-muted-gray bg-reading-surface flex items-center justify-center text-xs font-semibold text-slate-blue flex-shrink-0">
           {questionNumber}
         </div>
-        {isBareEquation(questionText) ? (
-          <div className="text-[22px] font-semibold text-ink">
-            Solve for{' '}
-            <span className="italic font-[Cambria_Math,Georgia,serif]">x</span>:{' '}
-            <span className="font-[Cambria_Math,Georgia,serif]">{questionText}</span>
-          </div>
-        ) : (
-          <p className="text-[17px] font-semibold text-ink leading-snug max-w-[62ch]">
-            {questionText}
-          </p>
+        <QuestionDisplay
+          question={questionText}
+          size="lesson"
+          questionType={questionType}
+          options={questionOptions}
+          selectedOptionId={selectedOptionId}
+          onSelectOption={pickOption}
+        />
+        {/* §2: "Explain Again — replays the current concept visually without
+            counting as an attempt." The backend generates the re-expression;
+            while that request is in flight the disabled busy state prevents a
+            second click from creating a duplicate turn. */}
+        {/* §3.2: Explain Again is unavailable in Phase 3 — it is help, and the
+            attempt is meant to be unaided. */}
+        {!silentPhase3 && canReplayCue && (
+          <button
+            onClick={replayCue}
+            disabled={explainAgainPending}
+            aria-busy={explainAgainPending}
+            className="ml-auto flex-shrink-0 rounded-full border border-muted-gray bg-white px-3.5 py-1.5 text-[12px] font-semibold text-slate-blue hover:text-ink hover:bg-reading-surface disabled:cursor-wait disabled:opacity-60 transition-colors"
+          >
+            {explainAgainPending ? 'Explaining…' : 'Explain again'}
+          </button>
         )}
       </div>
 
@@ -113,12 +199,19 @@ export default function CanvasStage() {
           column. It was in the 234px chat panel, where a guiding question wrapped
           over four lines and read as another chat bubble (Manjusha, 2026-07-29).
           Here it sits under the question it is helping with, on the surface the
-          student is actually working on. */}
-      {activeScaffold && (
-        <div className="absolute top-[76px] left-[34px] z-10 w-[min(560px,calc(100%-68px))]">
+          student is actually working on.
+
+          In FLOW beneath the question, not at a fixed offset. It used to be
+          pinned at top-[76px], which is 50px below the question strip — exactly
+          one line of it. A question that wrapped to two lines, or carried
+          multiple-choice options, was covered by the card that was supposed to
+          be helping with it (Manjusha, 10 Aug). */}
+      {!silentPhase3 && activeScaffold && (
+        <div className="mt-3 w-[min(560px,100%)]">
           <ScaffoldPanel scaffold={activeScaffold} />
         </div>
       )}
+      </div>
 
       {/* §14: canvas consent missing */}
       {!canvasAllowed && (
@@ -133,7 +226,7 @@ export default function CanvasStage() {
       </div>
 
       {/* Teaching-back prompt */}
-      <TeachBack />
+      <TeachBack onSubmit={submitTeachBack} />
 
       {/* Check-work feedback toast */}
       {toast && (

@@ -12,9 +12,12 @@
  *    `session_id` from /session/start and reuse it for the whole run.
  */
 import axios from 'axios';
-import type { CanvasDrawPayload } from '@/store/useNumeraStore';
+import type { CanvasDrawPayload, CanvasStrokeSnapshot } from '@/store/useNumeraStore';
+import type { CanvasEvent } from '@/lib/canvasMemory';
 import { useAuthStore } from '@/store/useAuthStore';
 import { allowAnonTutorCalls } from '@/lib/runtimeConfig';
+import type { Phase3ResponseFields } from '@/lib/phase3';
+import { recordDebugCall } from '@/lib/debugJson';
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
 
@@ -68,6 +71,74 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+/**
+ * A rejected LOGIN ends the session — the student is sent back to sign in.
+ *
+ * Expiry can be noticed two ways: the client sees the token's `exp` pass (the
+ * gate's own timer), or the server rejects it first — a token revoked, a key
+ * rotated, or a clock that disagrees. Only the first was handled, so a student
+ * whose login the server had already stopped accepting kept working against a
+ * wall of 401s, each one surfacing as "we couldn't reach the tutor". That reads
+ * as an outage rather than a finished session (Manjusha, 11 Aug: "if any issues
+ * redirect the user to log in again").
+ *
+ * Clearing the token rather than navigating here: AuthGate already decides
+ * where an unauthenticated student belongs, and it re-runs on any auth change.
+ * A redirect from inside a network layer would race it and has no idea which
+ * screens are reachable signed-out.
+ *
+ * Deliberately NOT fired for the anonymous placeholder. That bearer is 401'd by
+ * student_model BY DESIGN when no one has logged in; treating it as an expiry
+ * would bounce every anonymous tester to a login screen they were never on.
+ */
+api.interceptors.response.use(
+  (response) => {
+    // Dev-only JSON capture (lib/debugJson.ts). Filtered to tutoring calls, so
+    // /voice/tts cannot overwrite the turn under inspection.
+    recordDebugCall(
+      `${response.config.method?.toUpperCase() ?? 'POST'} ${response.config.url ?? ''}`,
+      safeRequestBody(response.config.data),
+      response.data,
+    );
+    return response;
+  },
+  (error: unknown) => {
+    const status = (error as { response?: { status?: number } })?.response?.status;
+    // A FAILED call is the one a tester most needs to see, so capture it too.
+    const failed = error as {
+      config?: { method?: string; url?: string; data?: unknown };
+      response?: { data?: unknown };
+    };
+    if (failed?.config) {
+      recordDebugCall(
+        `${failed.config.method?.toUpperCase() ?? 'POST'} ${failed.config.url ?? ''} (failed)`,
+        safeRequestBody(failed.config.data),
+        failed.response?.data ?? String(error),
+      );
+    }
+    const realLogin = useAuthStore.getState().accessToken !== null;
+    if (status === 401 && realLogin) {
+      console.warn('[auth] the server rejected our login — signing out');
+      useAuthStore.getState().logout();
+    }
+    return Promise.reject(error);
+  },
+);
+
+/**
+ * Axios hands back the request body already serialised. Parse it so the panel
+ * can pretty-print it, and never let a malformed body break the capture.
+ */
+function safeRequestBody(data: unknown): unknown {
+  if (typeof data !== 'string') return data;
+  try {
+    return JSON.parse(data);
+  } catch {
+    return data;
+  }
+}
+
+
 // ── Error shape ───────────────────────────────────────────────────────────────
 // Every backend error returns this shape (never a raw stack trace).
 export interface ApiError {
@@ -79,6 +150,7 @@ export interface ApiError {
     | 'INVALID_JSON'
     | 'HTTP_ERROR'
     | 'INTERNAL_ERROR'
+    | 'JOURNEY_VERSION_CONFLICT'
     // The bearer we sent was rejected — either by this backend or by a service it
     // calls on our behalf (e.g. student_model). Observed 2026-07-26 on the first
     // CORRECT_ATTEMPT of a session: the backend posts a progress event to
@@ -100,6 +172,74 @@ export interface ApiError {
  * must never be shown to a student. Anything we don't have specific copy for
  * falls back to the caller's generic message.
  */
+/**
+ * What to say when the VOICE SERVER gives up on a turn.
+ *
+ * The socket's `error` frame is not an HTTP error, so it never reaches
+ * `studentFacingError` — it arrives as a bare string meant for a server log
+ * ("Tutor unavailable", "upstream timeout"). Showing that to an eleven-year-old
+ * is no better than showing nothing, and showing NOTHING is what we did: the
+ * turn ended in silence with the status still reading "Listening…", so a
+ * student sat waiting for a reply that was never coming.
+ *
+ * The engineer-facing text stays in the console; this is the sentence the
+ * student gets. It says the tutor failed rather than implying the student did,
+ * and it says what to do next.
+ */
+/**
+ * What to say when the transcript was too unclear to answer.
+ *
+ * Not a failure — nothing broke, the words just did not come through. It has
+ * to say so in a way an eleven-year-old cannot read as their fault, and it has
+ * to ask for the one thing that helps: saying it again.
+ */
+export function transcriptUnclearMessage(): string {
+  return "I didn't quite catch that. Could you say it once more?";
+}
+
+export function voiceTurnFailedMessage(serverMessage?: string): string {
+  const raw = (serverMessage ?? '').toLowerCase();
+  if (/auth|token|unauthor|forbidden/.test(raw)) {
+    return 'Your session needs to be signed in again before I can answer that. Please log in and try once more.';
+  }
+  // Only wording that actually says TIMEOUT gets the timeout copy.
+  //
+  // `unavailable` and `upstream` used to land here too, and that was wrong:
+  // "Tutor unavailable. Please try again." is the voice server's single
+  // catch-all (streaming_server.py:689), sent for a timeout AND for every
+  // non-200 the tutor call returns — a 409, a 500, anything. Mapping it to
+  // "my side was too slow" described a plain backend rejection as slowness,
+  // and read from a screenshot it looks like a frontend timeout, which is the
+  // one place the fault never was (7 Aug). The generic line below is what an
+  // unexplained failure gets; the real reason is in the console, from the
+  // server's own message.
+  if (/timeout|timed out/.test(raw)) {
+    return 'I didn’t manage to answer that in time — my side was too slow. Say it again and I’ll have another go.';
+  }
+  return 'Something went wrong on my side and I couldn’t answer that. Say it again in a moment and I’ll try again.';
+}
+
+/**
+ * Is this failure "the session you are using no longer exists"?
+ *
+ * Backend session state is in-memory and dies with the process, so a session id
+ * that was perfectly good five minutes ago can start answering 404. That is the
+ * price of persisting the id across reloads — and persisting it is worth paying
+ * for, because NOT persisting it meant every reload opened a brand-new session
+ * on a topic the student already had in progress. The Student Model then
+ * resumed it and stamped routing_reason_code=SESSION_RESUMED, which the backend
+ * cannot serialise, so every turn in that session 500s (7 Aug: 164 session
+ * starts, 16 resumed).
+ *
+ * So: keep the id, and recognise when it has gone stale so the lesson can open
+ * a fresh one instead of wedging on a session the backend has forgotten.
+ */
+export function isStaleSessionError(err: unknown): boolean {
+  const res = (err as { response?: { status?: number; data?: { message?: string } } })?.response;
+  if (res?.status !== 404) return false;
+  return /session/i.test(res?.data?.message ?? '');
+}
+
 export function studentFacingError(err: unknown): string | null {
   const res = (err as { response?: { status?: number; data?: Partial<ApiError> } })?.response;
   // 409 on a session call means the Student Model already has this topic part
@@ -107,6 +247,10 @@ export function studentFacingError(err: unknown): string | null {
   // (backend ask #3), so say what is actually true rather than blaming the
   // network and sending the student off retrying forever.
   const backendMessage = typeof res?.data?.message === 'string' ? res.data.message.trim() : '';
+  const code = res?.data?.error_code;
+  if (code === 'JOURNEY_VERSION_CONFLICT') {
+    return 'Two submissions arrived together. Your work is safe—please press Check once more.';
+  }
   if (res?.status === 409) {
     // Not every 409 is the resume case. On 2026-07-29 a guided-practice turn
     // came back 409 "Student Model did not return metadata for
@@ -116,25 +260,93 @@ export function studentFacingError(err: unknown): string | null {
     if (!backendMessage || /already|in progress|resume/i.test(backendMessage)) {
       return 'You already have this topic in progress, and the tutor can\u2019t pick it back up yet. Ask the team to reset it for you.';
     }
-    return `The tutor couldn\u2019t load this question. ${backendMessage}`;
+    // A non-resume conflict is a service-contract failure. Backend messages can
+    // contain adapter URLs, payloads, student IDs, or authored error codes; none
+    // of that belongs in learner chat. Keep the diagnostic in the browser
+    // console/network response and give the learner safe, actionable wording.
+    return 'The tutor hit a problem on its side. Nothing you did\u2014please try again in a moment.';
   }
-  const code = res?.data?.error_code;
   switch (code) {
     case 'AUTHENTICATION_FAILED':
       return 'Your session needs to be signed in again before I can mark that. Please log in and retry.';
     case 'INTERNAL_ERROR':
       return 'The tutor hit a problem on its side. Please try that again in a moment.';
-    default:
-      return null;
   }
+
+  /**
+   * Attribute the failure to whatever actually failed.
+   *
+   * Everything that reached this point used to return null, so the caller fell
+   * back to "Sorry — I couldn't reach the tutor just now." That sentence
+   * describes a network problem. A 500, 502 or 422 is not a network problem —
+   * the request arrived and the server rejected or broke on it — and describing
+   * it as unreachable sends whoever is testing to look at the frontend and the
+   * wifi while the actual fault sits in a service log nobody opened.
+   *
+   * Naming the source is not about deflecting blame; it is about the next
+   * person spending their time in the right place. A student still gets one
+   * plain sentence and something to do.
+   */
+  const status = res?.status;
+
+  // No response at all: request never completed. This is the only case where
+  // "couldn't reach" is the true story.
+  if (status === undefined) return null;
+
+  // Timeouts first: 504 is also a 5xx, and "took too long" is more actionable
+  // than "hit an error" — it tells the student retrying is worth it.
+  if (status === 408 || status === 504) {
+    return 'The tutor took too long to answer that one. Try sending it again.';
+  }
+  if (status >= 500) {
+    return 'The tutor service hit an error on its side. Nothing you did — try again in a moment.';
+  }
+  if (status === 429) {
+    return 'The tutor is handling a lot right now. Give it a few seconds and try again.';
+  }
+  if (status === 422) {
+    // A contract mismatch between frontend and backend. The student cannot fix
+    // it and retrying will fail identically, so say so rather than inviting a
+    // loop of futile retries.
+    return 'The tutor could not accept that submission — this one needs the team to look at it.';
+  }
+  if (status === 403) {
+    return 'This session belongs to a different student, so the tutor will not mark it.';
+  }
+  if (status >= 400) {
+    return backendMessage
+      ? `The tutor could not process that. ${backendMessage}`
+      : 'The tutor could not process that request.';
+  }
+  return null;
 }
 
 // ── Shared enums ──────────────────────────────────────────────────────────────
 export type InteractionMode = 'VOICE' | 'TEXT';
-export type InputSource = 'TEXT' | 'VOICE';
+/**
+ * Where a turn came from. SYSTEM is not the student: it marks turns the platform
+ * originated, which today means inactivity nudges. Keeping it distinct is what
+ * stops a nudge being counted as a learner interaction anywhere downstream.
+ */
+export type InputSource = 'TEXT' | 'VOICE' | 'CANVAS' | 'CHOICE' | 'SYSTEM';
 export type InteractionType =
   | 'ANSWER_SUBMISSION'
-  | 'HINT_REQUEST'
+  | 'OPTION_SELECTED'
+  | 'TEACH_BACK_SUBMISSION'
+  | 'CLARIFICATION_REQUEST'
+  // Replay the current explanation. Neither an answer nor a help escalation:
+  // the backend returns attempt_increment 0 and emits no Student Model event
+  // (Phase 2 handoff, Chirudeva — Explain Again).
+  | 'EXPLAIN_AGAIN'
+  // Non-learner events (Phase 2 handoff, Chirudeva — Inactivity events). Neither
+  // is an attempt: they change no attempt count, STUCK count, support state,
+  // scaffold, question or phase.
+  //   INACTIVITY_NUDGE  — the client claims a nudge after server-validated silence
+  //   NUDGE_PRESENTED   — acknowledgement that one was actually shown or spoken
+  | 'INACTIVITY_NUDGE'
+  | 'NUDGE_PRESENTED'
+  | 'HELP_REQUEST'
+  | 'SUPPORT_REPLAY'
   | 'CANVAS_SUBMISSION'
   | 'SESSION_START'
   | 'SESSION_END';
@@ -236,6 +448,7 @@ export interface SchemaPhasePayload {
   payload_type: string;
   question_set: SchemaQuestionSet | null;
   orientation_bundle: SchemaOrientationBundle | null;
+  review_summary?: Record<string, unknown> | null;
 }
 
 export interface StudentModelEvent {
@@ -279,12 +492,18 @@ export interface SessionRecord {
   question_type?: QuestionType | null;
   question_id: string | null;
   question_number: number;
+  last_tutor_turn_id?: string | null;
+  expected_student_response?: string;
   student_model_event?: StudentModelEvent | null;
   student_model_state?: StudentModelState | null;
   voice_state: VoiceState;
   canvas_state: CanvasState;
   ui_state: string;
   message: string;
+  conversation_history?: Array<{
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+  }>;
   diagnostic_transition_message?: string | null;
   diagnostic_transition_messages?: string[];
   orientation_messages?: OrientationMessages | null;
@@ -302,6 +521,20 @@ export interface SessionRecord {
   status: string;
   mode: string;
   canvas_submissions: CanvasSubmissionResult[];
+  inactivity_policy?: InactivityPolicyResponse;
+}
+
+export interface InactivityPolicyResponse {
+  initial_idle_threshold_ms: number;
+  cooldown_ms: number;
+  max_nudges_per_tutor_turn: number;
+  generated_nudge_rate_limit: number;
+}
+
+export interface NudgeDelivery {
+  interaction_id: string;
+  status: 'GENERATED' | 'PRESENTED';
+  message: string;
 }
 
 // ── /session/start ────────────────────────────────────────────────────────────
@@ -332,6 +565,71 @@ export function diagnosticQuestions(record: SessionRecord | null | undefined): S
   return payload.question_set.questions.filter((q) => q.student_view?.question_text);
 }
 
+/**
+ * Where a question sits in the phase's question set, for the progress rail.
+ *
+ * The rail is supposed to show question progress (§2 of the Phase 2 spec), and
+ * this is the only place the frontend can learn the denominator: the Student
+ * Model ships the whole set on the session record, while `/interaction` replies
+ * only ever name the current question.
+ *
+ * Returns `{ index: 0, total: 0 }` when the set is absent or the id isn't in it
+ * — the rail treats a zero total as "nothing true to show yet" and hides,
+ * rather than inventing a position.
+ */
+export function questionProgress(
+  record: SessionRecord | null | undefined,
+  questionId: string | null | undefined,
+): { index: number; total: number } {
+  const questions = record?.student_model_event?.phase_payload?.question_set?.questions ?? [];
+  if (questions.length === 0) return { index: 0, total: 0 };
+  const index = questions.findIndex((q) => q.question_id === questionId);
+  return index < 0
+    ? { index: 0, total: 0 }
+    : { index, total: questions.length };
+}
+
+/**
+ * The student's view of one question in the session's set.
+ *
+ * `/interaction` replies name the current question and its `question_type`, but
+ * never carry its options — the Student Model ships those once, on the session
+ * record. So anything that needs to RENDER a choice question has to come back
+ * here and look it up by id.
+ *
+ * Null when the set is absent or the id isn't in it. Callers render the plain
+ * question rather than inventing options.
+ */
+export function studentViewFor(
+  record: SessionRecord | null | undefined,
+  questionId: string | null | undefined,
+): SchemaStudentQuestionView | null {
+  if (!questionId) return null;
+  const questions = record?.student_model_event?.phase_payload?.question_set?.questions ?? [];
+  return questions.find((q) => q.question_id === questionId)?.student_view ?? null;
+}
+
+/** Question types where the student picks from `options` rather than free-typing. */
+const CHOICE_TYPES: QuestionType[] = [
+  'SINGLE_CHOICE',
+  'CHOICE_WITH_EXPLANATION',
+  'TRUE_FALSE_WITH_EXPLANATION',
+];
+
+/**
+ * Should this question show its options?
+ *
+ * Both halves matter. A type that expects a choice but arrived with an empty
+ * `options` array must fall back to free response — rendering an empty chooser
+ * would leave the student with a question and no way to answer it.
+ */
+export function hasSelectableOptions(
+  view: Pick<SchemaStudentQuestionView, 'question_type' | 'options'> | null | undefined,
+): boolean {
+  if (!view) return false;
+  return CHOICE_TYPES.includes(view.question_type) && view.options.length > 0;
+}
+
 /** The orientation bundle for this session, or null when there isn't one. */
 export function orientationBundle(
   record: SessionRecord | null | undefined,
@@ -351,6 +649,23 @@ export function orientationSequence(
 /** Workbook topic code for this session (e.g. 'ALG-ORI-02'), or null. */
 export function sessionTopicCode(record: SessionRecord | null | undefined): string | null {
   return record?.student_model_event?.journey_state?.topic_id ?? null;
+}
+
+/**
+ * What to CALL this session's topic on screen, or null when we don't know.
+ *
+ * The only human-readable name the backend sends is the orientation video's
+ * title — `journey_state.topic_id` is a code ('ALG-ORI-02'), which is not
+ * something to show a student. Null is a real answer here and callers must
+ * handle it: the alternative is what row 42 reported, a Review header
+ * confidently labelled "Linear equations" on a session about something else,
+ * because the screen fell back to mock content instead of admitting it had
+ * nothing.
+ */
+export function sessionTopicTitle(record: SessionRecord | null | undefined): string | null {
+  const video = orientationBundle(record)?.delivery_sequence
+    .find((item) => item.video?.title)?.video;
+  return video?.title?.trim() || null;
 }
 
 // ── Phase 0 → 1 lifecycle ────────────────────────────────────────────────────
@@ -452,9 +767,11 @@ export function requiredOrientationContent(record: SessionRecord | null | undefi
 }
 
 // ── GET /session/{session_id} ─────────────────────────────────────────────────
-/** GET /session/{session_id} — metadata + canvas submissions only (no transcript). */
-export async function getSession(sessionId: string) {
-  const res = await api.get<SessionRecord>(`/session/${sessionId}`);
+/** GET /session/{session_id} — restore one student-owned session. */
+export async function getSession(sessionId: string, student: string = studentId()) {
+  const res = await api.get<SessionRecord>(`/session/${sessionId}`, {
+    params: { student_id: student },
+  });
   return res.data;
 }
 
@@ -568,6 +885,28 @@ export async function endSession(sessionId: string, student: string = studentId(
 }
 
 // ── /interaction (text) ───────────────────────────────────────────────────────
+export interface InteractionCanvasState {
+  snapshot_data_url: string;
+  strokes: Array<{
+    stroke_id: string;
+    tool: 'pen' | 'pencil' | 'highlighter' | 'eraser';
+    points: Array<{ x: number; y: number }>;
+    width: number;
+  }>;
+  captured_at: string;
+  /**
+   * Ordered canvas memory for the current question (§8 of the V1-Hybrid spec).
+   *
+   * Sent alongside the snapshot, not instead of it: the snapshot is what OCR
+   * reads, the log is what tells the tutor the order things appeared in — and
+   * §7 asks that Sanya be called "with compact current canvas memory, not just
+   * a flat screenshot".
+   *
+   * Optional so the request stays valid before the backend adds the field.
+   */
+  canvas_events?: CanvasEvent[];
+}
+
 export interface InteractionPayload {
   session_id: string;
   student_id: string;
@@ -575,11 +914,17 @@ export interface InteractionPayload {
   input_source: InputSource;
   /** 1–500 chars for TEXT input. */
   text_input?: string;
+  /** Authoritative option identifier selected on a choice question. */
+  selected_option_id?: string;
   /** Use for VOICE input instead of text_input. */
   voice_transcript?: string;
   transcript_confidence?: number;
-  /** Reference to a prior /canvas/submit so the turn carries the canvas work. */
+  /** Legacy reference to a prior /canvas/submit. */
   canvas_snapshot_id?: string;
+  /** Frozen at voice-turn end so speech and board work are evaluated together. */
+  canvas_state?: InteractionCanvasState;
+  idle_duration_ms?: number;
+  nudge_id?: string;
   current_phase: string;
   concept_id: string;
   question_id: string;
@@ -599,11 +944,103 @@ export interface InteractionPayload {
  *  which visual to render. Matches the backend VisualCue model. */
 export interface VisualCue {
   show: boolean;
+  cue_id?: string | null;
   cue_type: string | null;
   description: string | null;
+  /**
+   * Illustration for the cue. Optional because the backend does not forward it
+   * yet — Sanya, 12 Aug 2026: "a later enhancement is to preserve and forward
+   * asset_url in the backend visual-cue response". The client reads it now so
+   * the image appears the moment it starts arriving, and renders text-only
+   * until then. Values are sanitised by lib/cueAsset.
+   */
+  asset_url?: string | null;
+  /** Structured cue actions (backend adapters.py:175). Not rendered yet — Phase 2 §6. */
+  actions?: Array<Record<string, unknown>>;
 }
 
-export interface InteractionResponse {
+/**
+ * Guided-practice state the backend owns (Phase 2 handoff, Chirudeva —
+ * "Response contract"). Every field is optional because none of them exist on
+ * the backend yet; the frontend handling for each is written and inert, and
+ * lights up the moment the field starts arriving.
+ *
+ * Nothing here is ever shown to a learner verbatim — component ids, error codes,
+ * STUCK counts and reason codes are diagnostic, and handoff item 6 forbids
+ * putting them on screen.
+ */
+export interface GuidedStateFields {
+  guided_student_state?: 'CORRECT' | 'PARTIAL' | 'WRONG' | 'STUCK' | 'UNCLEAR' | null;
+  active_teaching_objective?: {
+    target_concept_ids?: string[];
+    confirmed_concept_ids?: string[];
+    missing_concept_ids?: string[];
+  } | null;
+  /** The component the student still has to resolve — drives AFFIRM-THEN-ISOLATE. */
+  first_unresolved_concept_id?: string | null;
+  selected_error_code?: string | null;
+  evaluation_reason_code?: string | null;
+  support_reason_code?: string | null;
+  /**
+   * Newly served support for THIS accepted turn; null when nothing new.
+   * A bare SupportUsed value, not an object — matches the backend
+   * (models/interaction.py: `SupportUsed | None`).
+   */
+  support_served_this_turn?: SupportLevel | null;
+  /** Persisted currently-active support level. Defaults to 'NONE', never null. */
+  active_support_level?: SupportLevel;
+  /** Persisted maximum for the question's mapped micro-skills. */
+  highest_support_used?: SupportLevel;
+  /** Persisted scaffold + authorised current step, independent of this turn. */
+  active_scaffold?: {
+    scaffold_id: string;
+    current_step_id: string;
+    step_number: number;
+    step_text: string;
+    step_voice?: string | null;
+    total_steps: number;
+  } | null;
+  guided_rescue?: {
+    rescue_type: 'PARALLEL_EXAMPLE' | 'TUTOR_SOLVED';
+    micro_skill_id: string;
+    parallel_example: {
+      parallel_example_id: string;
+      problem: string;
+      worked_steps: string[];
+      final_answer: string;
+    } | null;
+    tutor_solved: {
+      explanation: string;
+      final_answer: string;
+      answer_steps: string[];
+    } | null;
+  } | null;
+  consecutive_stuck_count?: number;
+  /** Matches models/guided_learning.py:PrerequisiteRepair. */
+  prerequisite_repair?: {
+    prerequisite_micro_skill_ids: string[];
+    reason_code: string;
+  } | null;
+  /**
+   * Monotonic per accepted response, defaulting to 0.
+   *
+   * Only incremented on turns that mutate pedagogical state, so consecutive
+   * responses CAN share a version — see lib/responseGate.ts for why that case
+   * fails open rather than dropping the response.
+   */
+  interaction_state_version?: number;
+}
+
+/** The support ladder rung, as the backend spells it (SupportUsed). */
+export type SupportLevel =
+  | 'NONE'
+  | 'HINT'
+  | 'VISUAL_CUE'
+  | 'SCAFFOLD'
+  | 'PARALLEL_EXAMPLE'
+  | 'TUTOR_SOLVED';
+
+export interface InteractionResponse extends GuidedStateFields, Phase3ResponseFields {
   session_id: string;
   student_id: string;
   current_phase: string;
@@ -614,10 +1051,14 @@ export interface InteractionResponse {
   interaction_mode: InteractionMode;
   message: string;
   message_voice: string;
+  /** Authored support held separately from the tutor's conversational reply. */
+  support_message?: string | null;
   hint_count: number;
   phase_indicator: string;
   /** Optional tutor drawing to render on the canvas alongside this reply. */
   canvas_draw?: CanvasDrawPayload[];
+  /** OCR from the frozen voice-turn canvas. */
+  ocr?: OcrResult | null;
   /** Whether to show the supporting visual cue after this turn. The backend also
    *  sends the richer `visual_cue` object; prefer that when present. */
   show_visual_cue?: boolean;
@@ -626,11 +1067,32 @@ export interface InteractionResponse {
   // implements the contract; the frontend falls back sensibly when they're absent.
   /** Turn-level status: normal turns omit it; DUPLICATE_TURN / STALE_TURN /
    *  CLARIFICATION_REQUIRED signal the frontend to not treat this as a fresh reply. */
-  status?: 'DUPLICATE_TURN' | 'STALE_TURN' | 'CLARIFICATION_REQUIRED';
+  status?:
+    | 'DUPLICATE_TURN'
+    | 'CLARIFICATION_REQUIRED'
+    | 'NUDGE_SUPPRESSED';
   /** The student turn_id this reply corresponds to. */
   accepted_turn_id?: string | null;
   /** New tutor turn id — becomes previous_tutor_turn_id on the next request. */
   tutor_turn_id?: string | null;
+  /** Authoritative tutor turn returned when a request used stale context. */
+  expected_previous_tutor_turn_id?: string | null;
+  /** Spoken/shown framing when this reply moves the student into a new phase.
+   *  The canvas response documents its phase block as "same contract as
+   *  InteractionResponse", but these two were only ever declared there. */
+  phase_transition_message?: string | null;
+  phase_transition_voice?: string | null;
+  /**
+   * The Student Model event behind this turn, including the question set.
+   *
+   * The backend has always sent this (interaction.py:172) and the client never
+   * declared it, so the cached session record was only ever refreshed at
+   * session start and resume. Everything looked up out of that record —
+   * question options above all — therefore went stale the moment the backend
+   * issued a NEW question set, which is exactly what a phase change does.
+   */
+  student_model_event?: StudentModelEvent | null;
+  student_model_state?: StudentModelState | null;
   /** Backend's next conversational move (ASK_QUESTION, ADVANCE_TO_NEXT_QUESTION, …). */
   conversation_action?: string;
   /** Whether another student response is expected after this reply. */
@@ -639,6 +1101,11 @@ export interface InteractionResponse {
   expected_student_response?: string;
   /** Whether voice input is currently permitted. */
   allow_voice_input?: boolean;
+  inactivity_policy?: InactivityPolicyResponse;
+  nudge_delivery?: NudgeDelivery | null;
+  is_canvas_solution_correct?: boolean | null;
+  advance_to_next_question?: boolean;
+  feedback_type?: 'PRAISE' | 'HINT' | 'CORRECTION' | 'CLARIFICATION' | null;
 
   // ── Phase 2 scaffolding (frontend handoff, 2026-07-29) ────────────────────
   //
@@ -664,6 +1131,24 @@ export interface InteractionResponse {
   scaffold_step_voice?: string | null;
   /** Total steps — a progress indicator, NOT permission to reveal later ones. */
   total_scaffold_steps?: number | null;
+}
+
+export interface StaleTurnResponse {
+  status: 'STALE_TURN';
+  accepted_turn_id: null;
+  expected_previous_tutor_turn_id: string | null;
+  conversation_action: 'WAIT_FOR_STUDENT';
+  attempt_increment: 0;
+  retry_safe: false;
+  message: string;
+}
+
+export type InteractionResult = InteractionResponse | StaleTurnResponse;
+
+export function isStaleTurnResponse(
+  response: InteractionResult,
+): response is StaleTurnResponse {
+  return response.status === 'STALE_TURN';
 }
 
 /**
@@ -713,34 +1198,39 @@ export function activeScaffold(res: InteractionResponse | null | undefined): Act
 }
 
 /** POST /interaction — core tutoring call. Requires a started, owned session. */
-export async function sendInteraction(payload: InteractionPayload) {
-  const res = await api.post<InteractionResponse>('/interaction', payload);
-  return res.data;
+export async function sendInteraction(payload: InteractionPayload): Promise<InteractionResult> {
+  try {
+    const res = await api.post<InteractionResponse>('/interaction', payload);
+    return res.data;
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 409) {
+      const data: unknown = error.response.data;
+      if (
+        typeof data === 'object'
+        && data !== null
+        && 'status' in data
+        && data.status === 'STALE_TURN'
+        && 'expected_previous_tutor_turn_id' in data
+      ) {
+        return data as StaleTurnResponse;
+      }
+    }
+    throw error;
+  }
 }
 
-// ── /hint/request ─────────────────────────────────────────────────────────────
-export interface HintPayload {
-  session_id: string;
-  student_id: string;
-  current_phase: string;
-  current_hint_count: number;
-  concept_id: string;
-  question_id: string;
-}
-
-export interface HintResponse {
-  session_id: string;
-  student_id: string;
-  hint_level: number;
-  hint: string;
-  response_strategy: string;
-}
-
-/** POST /hint/request */
-export async function requestHint(payload: HintPayload) {
-  const res = await api.post<HintResponse>('/hint/request', payload);
-  return res.data;
-}
+// ── /hint/request — REMOVED ───────────────────────────────────────────────────
+//
+// The backend deleted this endpoint in the Schema 3.0 refactor on 3 Aug 2026
+// (app/api/hint.py, hint_service.py and models/hint.py are all gone, and
+// HINT_REQUEST was dropped from InteractionType). The client is removed rather
+// than left in place, because a dead endpoint that still type-checks is an
+// invitation to call it, and calling it 404s.
+//
+// Hints have not disappeared — they arrive as the turn message when
+// `conversation_action` is GIVE_HINT. lib/supportLadder.ts reads them from
+// there. An explicit "ask for the next support item" request needs a new
+// endpoint; that is ask B1 in docs/PHASE2-GUIDED-BACKEND-ASKS.md.
 
 // ── /canvas/submit (live OCR) ─────────────────────────────────────────────────
 export interface OcrResult {
@@ -771,24 +1261,36 @@ export interface CanvasLatency {
   total_latency_ms: number;
 }
 
-export interface CanvasSubmissionResult {
+export interface CanvasSubmissionResult extends Phase3ResponseFields {
   session_id: string;
   student_id: string;
   status: string;
   submission_id: string;
   snapshot_reference: string;
-  ocr: OcrResult;
-  tutor: TutorResult;
+  /**
+   * Both are NULL on a live Phase 3 submission (Sanya, 12 Aug 2026).
+   *
+   * That is by design, not a fault: Independent Practice is silent, so there is
+   * no tutor message to send, and a submission the backend accepted without
+   * reading the ink back has no OCR block either. Typing them as always-present
+   * meant the client dereferenced both, threw, and reported an ACCEPTED
+   * submission to the student as a failure.
+   */
+  ocr: OcrResult | null;
+  tutor: TutorResult | null;
   latency: CanvasLatency;
   /** Tutor drawing actions (e.g. mark up the student's working). The backend
    *  sends a LIST of draw actions here, unlike the WS path (one per message). */
   canvas_draw?: CanvasDrawPayload[];
+  guided_rescue?: GuidedStateFields['guided_rescue'];
   /** Phase state after this submission — same contract as InteractionResponse. */
   phase_changed?: boolean;
   previous_phase?: string | null;
   current_phase?: string;
-  current_question?: string;
-  question_id?: string;
+  current_question?: string | null;
+  question_id?: string | null;
+  student_model_event?: StudentModelEvent | null;
+  student_model_state?: StudentModelState | null;
   ui_state?: string;
   recommended_entry_phase?: string | null;
   phase_transition_message?: string | null;
@@ -814,6 +1316,47 @@ export async function submitCanvas(
   sessionId: string,
   snapshotDataUrl: string,
   submissionRole: 'STANDALONE_ATTEMPT' | 'VOICE_ATTACHMENT',
+  /**
+   * The turn this submission belongs to — REQUIRED in Independent Practice.
+   *
+   * `canvas_service.py:130` answers 422 "turn_id is required for Independent
+   * Practice Canvas submissions" without it, so every Phase 3 canvas submission
+   * was being rejected (Chiru, 12 Aug 2026). It is also what makes a retry safe:
+   * the backend keys the submission on this id, so re-sending the same turn is
+   * deduplicated instead of counting as a second attempt.
+   *
+   * Mint it with the store's `beginSubmissionTurn()` and reuse it verbatim on a
+   * retry — a fresh id on a retry is a NEW submission, which is the bug this
+   * field exists to prevent.
+   */
+  turnId: string,
+  /**
+   * The pen strokes behind the snapshot — REQUIRED, not optional.
+   *
+   * The image alone tells the backend WHAT was written; the strokes are what
+   * let it say WHERE. `canvas_service` turns them into spatial tokens, and
+   * without tokens the tutor can read a wrong answer but cannot circle the
+   * symbol that is wrong — it can only mark the whole line (Sanya, 13 Aug 2026).
+   *
+   * Required for the same reason `turnId` is: this call sent no strokes for
+   * weeks while the field existed on both sides and every submission validated
+   * cleanly, because the omission is invisible to a type that allows it. The
+   * voice path has always sent them via `canvas_state.strokes`; the Check
+   * button had not.
+   */
+  strokes: CanvasStrokeSnapshot[],
+  /**
+   * Ordered canvas memory for the current question — REQUIRED (§8, §9).
+   *
+   * Strokes say where the ink is; this says what happened and in what order,
+   * including the work the student rubbed out. §13 asks that the tutor "does
+   * not repeat already-completed reasoning steps", and nothing in a snapshot or
+   * a stroke list can tell it which steps those were.
+   *
+   * Required for the same reason `strokes` is — the field the caller may omit
+   * is the field that silently stops being sent.
+   */
+  canvasEvents: CanvasEvent[],
   student: string = studentId()
 ) {
   if (!snapshotDataUrl.startsWith(PNG_DATA_URL_PREFIX)) {
@@ -825,7 +1368,16 @@ export async function submitCanvas(
   const res = await api.post<CanvasSubmissionResult>('/canvas/submit', {
     session_id: sessionId,
     student_id: student,
+    turn_id: turnId,
     snapshot_data_url: snapshotDataUrl,
+    // Field name and shape match `CanvasSubmitRequest.strokes` (canvas.py:108)
+    // and are the same objects the voice turn already sends.
+    strokes,
+    // Not yet on `CanvasSubmitRequest`, and safe to send: the model does not
+    // forbid extra fields, so it is ignored until Chirudeva adds it (§12
+    // stage 2). Sending it now means the day the field lands, the data is
+    // already arriving — no second frontend release in the middle of his work.
+    canvas_events: canvasEvents,
     submission_role: submissionRole,
   });
   return res.data;

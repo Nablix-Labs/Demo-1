@@ -9,6 +9,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Users, Copy, Check, LogOut, Sparkles, X, LayoutGrid, User } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useChallenge } from '@/hooks/useChallenge';
 import PrivateCanvas from '@/components/Challenge/PrivateCanvas';
@@ -27,7 +28,14 @@ export default function ChallengePage() {
   const {
     challengeActive, challengeProblem, participants,
     privateFeedback, startChallenge, endChallenge, setPrivateFeedback,
-  } = useNumeraStore();
+  } = useNumeraStore(
+    useShallow((s) => ({
+      challengeActive: s.challengeActive, challengeProblem: s.challengeProblem,
+      participants: s.participants, privateFeedback: s.privateFeedback,
+      startChallenge: s.startChallenge, endChallenge: s.endChallenge,
+      setPrivateFeedback: s.setPrivateFeedback,
+    })),
+  );
 
   const [copied, setCopied] = useState(false);
   const [teacherView, setTeacherView] = useState(false);
@@ -74,7 +82,10 @@ export default function ChallengePage() {
 
   // ── Active challenge ──
   return (
-    <div className="flex-1 min-w-0 flex flex-col bg-white" aria-label="Group challenge room">
+    // pb clears the dock. This is the one dock route that does not use
+    // PageShell, and AITutorBar docks flush to the bottom — exactly where the
+    // dock floats — so the tutor's voice bar needs lifting above it.
+    <div className="flex-1 min-w-0 flex flex-col bg-white pb-32" aria-label="Group challenge room">
       {/* Header */}
       <header className="flex items-center gap-4 px-6 py-3.5 border-b border-muted-gray flex-shrink-0">
         <div className="min-w-0">

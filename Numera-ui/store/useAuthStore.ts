@@ -84,6 +84,15 @@ interface StudentProfile {
   ageBand: string;   // e.g. "11-14 (KS3)"
   gradeBand: string; // e.g. "Year 9"
   preferredMode: 'voice' | 'text' | 'balanced';
+  /**
+   * Profile photo as a data URL, set from the profile page.
+   *
+   * Downscaled to 256px square before it gets here. The whole store is
+   * persisted to localStorage, and a full-size phone photo is several MB of
+   * base64 — enough to blow the ~5MB quota and take every other persisted key
+   * down with it.
+   */
+  avatar?: string | null;
 }
 
 interface Guardian {
@@ -286,13 +295,19 @@ export function hasAccountConsents(consents: Record<ConsentPurpose, ConsentRecor
 
 /** Is a single consent purpose currently active? */
 export function isConsentActive(consents: Record<ConsentPurpose, ConsentRecord>, purpose: ConsentPurpose): boolean {
-  const r = consents[purpose];
-  return Boolean(r.acceptedAt && !r.withdrawnAt);
+  // Optional chaining because a MISSING record is not a type error at runtime:
+  // an auth state persisted before a purpose existed, or a partial set from the
+  // backend, has no entry for it. Reading `.acceptedAt` off that undefined threw
+  // during render of CanvasStage, which white-screened the whole lesson with
+  // "Application error: a client-side exception has occurred" — a consent the
+  // student has not granted must read as not-granted, not as a crash.
+  const r = consents[purpose] as ConsentRecord | undefined;
+  return Boolean(r?.acceptedAt && !r.withdrawnAt);
 }
 
 export type AccessOutcome =
   | { allowed: true }
-  | { allowed: false; reason: AccountStatus | 'consent_pending' | 'not_student'; redirect: string };
+  | { allowed: false; reason: AccountStatus | 'consent_pending' | 'not_student' | 'session_expired'; redirect: string };
 
 /**
  * The backend access-decision chain from §13, run client-side for the demo.
@@ -304,6 +319,14 @@ export function accessDecision(
   // A valid server-issued token means the platform already authenticated and
   // authorized this user — that decision wins over the client-side mock chain.
   if (isTokenValid(s.accessToken)) return { allowed: true };
+  // A STORED token that is no longer valid means a real login has expired.
+  // Falling through to the mock chain here let yesterday's student straight
+  // into the lesson (persisted role === 'student'), where session start then
+  // 401'd into a dead-end "Couldn't start your lesson" card — reported with
+  // a screenshot on 31 Jul, and it hits everyone whose overnight token
+  // lapses. Expired login -> log in again.
+  if (s.accessToken !== null)
+    return { allowed: false, reason: 'session_expired', redirect: '/login' };
   if (s.role !== 'student') return { allowed: false, reason: 'not_student', redirect: '/login' };
   if (s.accountStatus === 'suspended' || s.accountStatus === 'locked' || s.accountStatus === 'deleted')
     return { allowed: false, reason: s.accountStatus, redirect: '/restricted' };

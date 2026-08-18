@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, field_validator
 
-from app.models.fields import BoundedText, NonEmptyText, SessionId, StudentId
+from app.models.fields import BoundedText, NonEmptyText, SessionId, StudentId, TurnId
 
 
 class VoiceRequest(BaseModel):
@@ -65,6 +65,10 @@ class VoiceTranscriptRequest(BaseModel):
     audio_duration_seconds: float
     turn: Literal["STUDENT"]
     timestamp: datetime
+    turn_id: TurnId
+    previous_tutor_turn_id: TurnId | None = None
+    transcript_final: Literal[True]
+    canvas_snapshot_id: str | None = None
 
     @field_validator("confidence")
     @classmethod

@@ -22,7 +22,7 @@
 
 import { useMicLevel } from '@/store/useMicLevel';
 import { useAuthStore } from '@/store/useAuthStore';
-import { defaultVoiceForTier } from '@/lib/voiceOptions';
+import { defaultVoiceForTier, providersForTier } from '@/lib/voiceOptions';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { synthesizeSpeech } from '@/lib/api';
 
@@ -72,15 +72,96 @@ const ttsApiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
  */
 export function effectiveVoice(): { provider: string | null; voice: string | null } {
   const { ttsProvider, ttsVoice } = useNumeraStore.getState();
-  if (ttsProvider) return { provider: ttsProvider, voice: ttsVoice };
-  const tierDefault = defaultVoiceForTier(useAuthStore.getState().tier);
-  return { provider: tierDefault?.provider ?? null, voice: tierDefault?.voice ?? null };
+  const tier = useAuthStore.getState().tier;
+  // A persisted picker choice only counts while its provider is one the
+  // student's tier still offers. Without this, everyone who ever picked a
+  // Cartesia voice kept getting Cartesia after the 31 Jul switch to Inworld —
+  // the stale selection outlived the product decision.
+  const offered = new Set(providersForTier(tier).map((p) => p.id as string));
+  const chosen = ttsProvider && offered.has(ttsProvider)
+    ? { provider: ttsProvider as string | null, voice: ttsVoice as string | null }
+    : (() => {
+        const tierDefault = defaultVoiceForTier(tier);
+        return { provider: tierDefault?.provider ?? null, voice: tierDefault?.voice ?? null };
+      })();
+  // Session-sticky degradation: if this student's provider has hard-failed
+  // (e.g. Cartesia out of credits, live on 31 Jul), speak in the OTHER product
+  // voice instead of flapping robot/real every cool-off cycle.
+  const downgraded = degradedReplacement(chosen.provider);
+  return downgraded ?? chosen;
+}
+
+// ── Product-voice degradation (Cartesia ⇄ Inworld) ──────────────────────────
+/**
+ * What happens when the student's own provider is genuinely down — not a
+ * hiccup, but e.g. Cartesia returning 402 quota_exceeded on every call, which
+ * has now happened twice (28 and 31 Jul).
+ *
+ * The old cross-provider fallback was removed for good reasons: it switched
+ * silently, to OpenAI (a voice in nobody's plan), and never switched back.
+ * This is the deliberate version, different on every point that made that one
+ * a bug:
+ *
+ *   • only between the two PRODUCT voices (premium Cartesia ⇄ basic Inworld —
+ *     both voices a Numera student can legitimately hear), never anything else;
+ *   • only after the same-provider retry has failed twice in one cool-off
+ *     cycle (a transient 502 still just retries);
+ *   • sticky for DEGRADE_RECOVERY_MS rather than forever, so topping up the
+ *     account brings the right voice back on its own within a few minutes;
+ *   • logged loudly, so "the voice changed" is one console line, not a mystery.
+ *
+ * Without this, a quota outage sounds like: real voice → robot → (60s) → slow
+ * robot → … in the diagnostic, and total silence in guided practice. That
+ * flip-flopping is what got reported as "Cartesia is not synced with voice".
+ */
+const PRODUCT_FALLBACK: Record<string, { provider: string; voice: string }> = {
+  cartesia: { provider: 'inworld', voice: 'Ashley' },
+  inworld: { provider: 'cartesia', voice: 'db6b0ed5-d5d3-463d-ae85-518a07d3c2b4' }, // Skylar
+};
+const DEGRADE_RECOVERY_MS = 5 * 60_000;
+const degradedAt = new Map<string, number>();
+
+/** The replacement product voice while `provider` is degraded, else null. */
+function degradedReplacement(
+  provider: string | null,
+): { provider: string; voice: string } | null {
+  if (!provider) return null;
+  const at = degradedAt.get(provider);
+  if (at === undefined) return null;
+  if (Date.now() - at >= DEGRADE_RECOVERY_MS) {
+    degradedAt.delete(provider); // window over — let the real voice try again
+    return null;
+  }
+  return PRODUCT_FALLBACK[provider] ?? null;
+}
+
+/** Test hook + the marker speakTutor uses when a provider hard-fails. */
+export function markProviderDegraded(provider: string, now = Date.now()): void {
+  if (!(provider in PRODUCT_FALLBACK)) return; // never degrade onto non-product voices
+  degradedAt.set(provider, now);
+  console.warn(
+    `[tts] ${provider} is down; speaking as ${PRODUCT_FALLBACK[provider].provider} ` +
+      `for the next ${Math.round(DEGRADE_RECOVERY_MS / 60_000)} minutes`,
+  );
+}
+
+/** Test hook. */
+export function resetVoiceDegradation(): void {
+  degradedAt.clear();
+  failedAt.clear();
 }
 
 let currentAudio: HTMLAudioElement | null = null;
 let speakToken = 0; // invalidates in-flight TTS fetches when superseded/stopped
 
-/** Stop whichever engine is currently voicing the tutor. */
+/** Stop whichever engine is currently voicing the tutor.
+ *
+ * "Whichever" includes the STREAMING player. It didn't used to — this only
+ * silenced speechSynthesis and the REST <audio>, so every caller that assumed
+ * it silences the tutor (student picks up the pen, a hint plays, sign-out,
+ * navigation) left the streamed reply talking underneath, and a REST-voiced
+ * line then played ON TOP of it: two tutor voices at once. hardStop() silences
+ * without firing onIdle, so callers keep owning what happens next. */
 export function stopTutorSpeech(): void {
   speakToken++;
   if (typeof window !== 'undefined') window.speechSynthesis?.cancel();
@@ -88,18 +169,37 @@ export function stopTutorSpeech(): void {
     try { currentAudio.pause(); } catch { /* noop */ }
     currentAudio = null;
   }
+  tutorAudioStream.hardStop();
   useMicLevel.getState().setAiSpeaking(false);
 }
 
-function playBase64Mp3(base64: string, onEnd?: () => void): void {
+function playBase64Mp3(
+  base64: string,
+  fallbackText: string,
+  onEnd?: () => void,
+): void {
   const audio = new Audio(`data:${AUDIO_MIME};base64,${base64}`);
   currentAudio = audio;
   let mouthTimer: ReturnType<typeof setInterval> | null = null;
-  const finish = () => {
+  let settled = false;
+  const cleanUp = () => {
     if (mouthTimer) clearInterval(mouthTimer);
+    mouthTimer = null;
     useMicLevel.getState().setAiSpeaking(false);
     if (currentAudio === audio) currentAudio = null;
+  };
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    cleanUp();
     onEnd?.();
+  };
+  const speakBlockedAudioInBrowser = () => {
+    if (settled) return;
+    settled = true;
+    cleanUp();
+    console.warn('[tts] generated audio playback was blocked; using browser speech');
+    speakBrowser(fallbackText, onEnd);
   };
   audio.onplaying = () => {
     useMicLevel.getState().setAiSpeaking(true);
@@ -121,7 +221,7 @@ function playBase64Mp3(base64: string, onEnd?: () => void): void {
   };
   audio.onended = finish;
   audio.onerror = finish;
-  void audio.play().catch(finish);
+  void audio.play().catch(speakBlockedAudioInBrowser);
 }
 
 /**
@@ -166,40 +266,53 @@ export function speakTutor(text: string, onEnd?: () => void): void {
   stopTutorSpeech();
   if (!ttsApiEnabled()) { speakBrowser(text, onEnd); return; }
   const token = speakToken;
+  // effectiveVoice() already accounts for an active degradation window, so a
+  // student whose provider is down asks for the replacement voice up front.
   const { provider, voice } = effectiveVoice();
 
   // Don't spend a request on a provider that failed moments ago.
   if (coolingOff(provider)) { speakBrowser(text, onEnd); return; }
 
-  const attempt = (allowRetry: boolean): void => {
-    synthesizeSpeech(text, { provider, voice })
+  const attemptWith = (
+    p: string | null,
+    v: string | null,
+    onFail: () => void,
+  ): void => {
+    synthesizeSpeech(text, { provider: p, voice: v })
       .then((audioBase64) => {
         if (token !== speakToken) return; // superseded while fetching
         if (audioBase64) {
-          failedAt.delete(provider ?? '');
-          playBase64Mp3(audioBase64, onEnd);
+          failedAt.delete(p ?? '');
+          playBase64Mp3(audioBase64, text, onEnd);
           return;
         }
-        giveUp(allowRetry);
+        onFail();
       })
       .catch(() => {
         if (token !== speakToken) return;
-        giveUp(allowRetry);
+        onFail();
       });
   };
 
-  const giveUp = (allowRetry: boolean): void => {
-    if (allowRetry) {
-      console.warn(`[tts] ${provider ?? 'default'} failed; retrying once`);
-      attempt(false);
-      return;
-    }
-    if (provider) failedAt.set(provider, Date.now());
-    console.warn(`[tts] ${provider ?? 'default'} unavailable; using browser speech`);
-    speakBrowser(text, onEnd);
-  };
-
-  attempt(true);
+  // same provider → same provider once more → the OTHER product voice →
+  // browser. Each arrow is logged; nothing switches silently.
+  attemptWith(provider, voice, () => {
+    console.warn(`[tts] ${provider ?? 'default'} failed; retrying once`);
+    attemptWith(provider, voice, () => {
+      if (provider) failedAt.set(provider, Date.now());
+      const replacement = provider ? (markProviderDegraded(provider), degradedReplacement(provider)) : null;
+      if (replacement && replacement.provider !== provider) {
+        attemptWith(replacement.provider, replacement.voice, () => {
+          failedAt.set(replacement.provider, Date.now());
+          console.warn('[tts] replacement voice also unavailable; using browser speech');
+          speakBrowser(text, onEnd);
+        });
+        return;
+      }
+      console.warn(`[tts] ${provider ?? 'default'} unavailable; using browser speech`);
+      speakBrowser(text, onEnd);
+    });
+  });
 }
 
 function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
@@ -215,6 +328,12 @@ function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
  * push() per tutor_audio_chunk, finish() on tutor_audio_end. Chunks are appended in
  * chunk_index order (WS preserves order, but we honour the index defensively).
  */
+/** How long a reply may sit with NO audio ever having played before the words
+ *  are voiced through the fallback chain instead. Covers server-side synthesis
+ *  plus first-chunk buffering with room to spare — a healthy stream starts in
+ *  well under 3s. */
+const AUDIO_ARRIVAL_MS = 12_000;
+
 class TutorAudioStream {
   private audio: HTMLAudioElement | null = null;
   private media: MediaSource | null = null;
@@ -226,17 +345,37 @@ class TutorAudioStream {
   private pending = new Map<number, Uint8Array<ArrayBuffer>>(); // chunks held until their turn
   private ended = false;
   private mouthTimer: ReturnType<typeof setInterval> | null = null;
+  /** Bumped by every begin()/hardStop(). Async callbacks (play() rejection,
+   *  the arrival guard) compare the generation they were created in so a
+   *  callback for a superseded reply can never touch the current one. */
+  private generation = 0;
+  private playbackStarted = false;
+  private arrivalGuard: ReturnType<typeof setTimeout> | null = null;
+  /** The words this stream is meant to say — spoken via speakTutor if the
+   *  server's audio never arrives (streaming TTS failed, e.g. quota). */
+  private fallbackText: string | null = null;
 
   /** A new tutor reply is starting — reset and prepare to receive audio chunks. */
-  begin(): void {
-    stopTutorSpeech(); // streamed audio supersedes any browser/REST tutor voice
-    this.teardown();
+  begin(voiceText?: string): void {
+    stopTutorSpeech(); // streamed audio supersedes any browser/REST tutor voice (this also hardStop()s us)
+    const myGeneration = ++this.generation;
+    this.fallbackText = voiceText?.trim() || null;
+    this.playbackStarted = false;
 
     const supported =
       typeof window !== 'undefined' &&
       typeof MediaSource !== 'undefined' &&
       MediaSource.isTypeSupported(AUDIO_MIME);
-    if (!supported) return; // text is already shown; skip audio on this browser
+    if (!supported) {
+      // No MSE (iPhone Safari < 17.1) or no MP3-in-MSE. This used to just
+      // return, with `active` still false — every chunk dropped, finishStream a
+      // no-op, onIdle NEVER fired. voiceStatus stayed 'speaking' and the mic
+      // never reopened: the lesson was dead after one turn. Voice the words
+      // through the REST fallback chain instead, and always reach onIdle.
+      console.warn('[tts] MediaSource unsupported here; voicing the turn via fallback');
+      this.failToFallback(myGeneration);
+      return;
+    }
 
     this.active = true;
     this.nextIndex = 0;
@@ -263,12 +402,34 @@ class TutorAudioStream {
     });
 
     audio.onplaying = () => {
+      this.playbackStarted = true;
+      this.clearArrivalGuard();
       useMicLevel.getState().setAiSpeaking(true);
       this.startMouth();
     };
     audio.onended = () => this.finish();
     audio.onerror = () => this.finish();
-    void audio.play().catch(() => { /* may defer until buffered data lands */ });
+    void audio.play().catch((err: unknown) => {
+      // A rejection here is a real refusal (autoplay policy / unsupported
+      // src), not "no data yet" — with MSE the promise stays pending until
+      // data lands. It used to be swallowed, and with playback never starting
+      // neither the stall detector nor onended could ever run: a silent,
+      // permanent 'speaking' deadlock. Route to the fallback voice instead.
+      if (myGeneration !== this.generation || this.playbackStarted) return;
+      console.warn('[tts] streamed audio play() was refused; voicing via fallback', err);
+      this.failToFallback(myGeneration);
+    });
+
+    // The last line of defence for the audio phase: the turn watchdog stands
+    // down when tutor_response arrives, so if the audio then never comes
+    // (server died mid-stream, chunks lost) nothing else would ever end the
+    // turn. If nothing has PLAYED by the deadline, speak the text instead.
+    this.arrivalGuard = setTimeout(() => {
+      this.arrivalGuard = null;
+      if (myGeneration !== this.generation || this.playbackStarted) return;
+      console.warn('[tts] no streamed audio played within the arrival window; voicing via fallback');
+      this.failToFallback(myGeneration);
+    }, AUDIO_ARRIVAL_MS);
   }
 
   /** One tutor_audio_chunk: base64 MP3 bytes at chunk_index. */
@@ -278,21 +439,66 @@ class TutorAudioStream {
     this.pump();
   }
 
-  /** tutor_audio_end: no more chunks. total<=0 or an error means text-only (no audio). */
+  /** tutor_audio_end: no more chunks. total<=0 or an error means the server
+   *  produced no audio for this turn. */
   finishStream(totalChunks: number, error?: string): void {
     if (!this.active) return;
     if (error || totalChunks <= 0) {
-      this.finish(); // nothing to play — leave the text on screen
+      // The streamed audio never came (streaming TTS failed server-side —
+      // Cartesia quota, 31 Jul). This used to just fall silent, so guided
+      // practice lost its voice entirely while the diagnostic kept talking.
+      // If nothing has played yet, voice the same words through the REST
+      // fallback chain (own voice → other product voice → browser).
+      if (this.nextIndex === 0) {
+        console.warn('[tts] streamed audio failed; voicing the turn via fallback');
+        this.failToFallback(this.generation);
+      } else {
+        this.finish();
+      }
       return;
     }
     this.ended = true;
     this.pump();
   }
 
+  /**
+   * The stream is dead — voice its words through the REST fallback chain
+   * (own voice → other product voice → browser speech) and only report idle
+   * once THAT has finished, so the mic can't reopen mid-fallback-sentence.
+   * Every no-audio failure (unsupported browser, refused play(), nothing
+   * arrived, server-reported TTS error) funnels through here, which is what
+   * guarantees onIdle always eventually fires.
+   */
+  private failToFallback(generation: number): void {
+    if (generation !== this.generation) return;
+    const speakInstead = this.fallbackText;
+    const idle = this.onIdle;
+    this.finish();
+    if (speakInstead) {
+      useMicLevel.getState().setAiSpeaking(true);
+      speakTutor(speakInstead, () => {
+        useMicLevel.getState().setAiSpeaking(false);
+        idle?.();
+      });
+    }
+  }
+
   /** Stop playback immediately (e.g. student barge-in). */
   stop(): void {
     window.speechSynthesis?.cancel();
     this.finish();
+  }
+
+  /**
+   * Silence this player without reporting idle — for stopTutorSpeech(), whose
+   * callers (student picked up the pen, another line is about to be voiced,
+   * sign-out) own what happens to the turn next. finish()/stop() remain the
+   * paths that hand the floor back to the student.
+   */
+  hardStop(): void {
+    this.generation++;
+    this.stopMouth();
+    this.teardown();
   }
 
   // Append in-order chunks as they arrive; close the stream once fully drained.
@@ -345,10 +551,32 @@ class TutorAudioStream {
     }, MOUTH_PULSE_MS);
   }
 
+  /**
+   * Called when the tutor has genuinely stopped making sound — cleanly, on
+   * error, or on a stall.
+   *
+   * The mic gate depends on this. Every path that ends a reply funnels through
+   * `finish()`, so this fires from all of them (onended, onerror, the stall
+   * detector, a failed stream, an explicit stop). That single funnel is the
+   * reason the mic cannot be left shut by a reply that died quietly.
+   */
+  private onIdle: (() => void) | null = null;
+
+  setOnIdle(handler: (() => void) | null): void {
+    this.onIdle = handler;
+  }
+
   private finish(): void {
+    this.generation++; // invalidate any in-flight play()/arrival callbacks
     this.stopMouth();
     useMicLevel.getState().setAiSpeaking(false);
     this.teardown();
+    this.onIdle?.();
+  }
+
+  private clearArrivalGuard(): void {
+    if (this.arrivalGuard) clearTimeout(this.arrivalGuard);
+    this.arrivalGuard = null;
   }
 
   private stopMouth(): void {
@@ -358,6 +586,8 @@ class TutorAudioStream {
 
   private teardown(): void {
     this.stopMouth();
+    this.clearArrivalGuard();
+    this.playbackStarted = false;
     if (this.audio) {
       this.audio.onplaying = this.audio.onended = this.audio.onerror = null;
       try { this.audio.pause(); } catch { /* noop */ }

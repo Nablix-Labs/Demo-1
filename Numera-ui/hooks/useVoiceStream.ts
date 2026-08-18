@@ -84,21 +84,54 @@ export function useVoiceStream({ onAudio }: UseVoiceStreamOptions) {
   const streamRef = useRef<MediaStream | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
   const procRef = useRef<ScriptProcessorNode | null>(null);
+  /**
+   * Whether captured frames are actually SENT. The mic used to be fully torn
+   * down and re-acquired on every turn boundary, which cost 100-400ms of dead
+   * air per turn — the opening syllable of every answer was simply never
+   * captured, and Deepgram graded "It is" instead of "It is 5". The hardware
+   * now stays open for the whole session (start/stop = mute/unmute and
+   * unmount); turn-taking only flips this flag.
+   */
+  const transmitting = useRef(true);
+
+  /**
+   * Muted by the student. Distinct from `transmitting` (turn-taking): mute is
+   * the student's own switch, turn-taking is the tutor's.
+   *
+   * Muting no longer releases the hardware. It did until 10 Aug, which meant
+   * every mute/unmute cycle paid getUserMedia + AudioContext setup again —
+   * 100-400ms of dead air in which the first syllable of the answer was never
+   * captured ("It is" graded instead of "It is 5"). A muted-then-unmuted mic
+   * now resumes on the SAME stream, instantly, the way a call app's mute does.
+   *
+   * What makes that safe to do: mute sets `track.enabled = false` at the
+   * SOURCE. The track then produces silence by spec — this is not a JS flag a
+   * refactor can forget to check, and the 2026-07-28 class of bug ("Muted" on
+   * screen while the tutor kept hearing the student) cannot come back through a
+   * desynced flag, because even a wrongly-set `transmitting` would be
+   * transmitting silence. The onaudioprocess guard below is belt and braces.
+   *
+   * The browser's mic-in-use indicator stays lit while muted. Deliberate: the
+   * indicator tells the truth (the device is held, reading silence), and a
+   * lesson is a call — releasing the device on every mute is why the first
+   * word kept going missing.
+   */
+  const muted = useRef(false);
 
   /**
    * Bumped by every stop(). A start() that was awaiting getUserMedia compares
    * the generation it began in against this: if they differ it was cancelled
    * while waiting, and must throw away the stream it just acquired.
    *
-   * Without it the mic could go live AFTER being muted — start()'s only guard
-   * was `ctxRef.current`, which isn't set until after the await, so a stop()
-   * during permission/acquisition cleared nothing and the pending start() then
-   * installed a live capture. The student saw "Muted" while the tutor kept
-   * hearing them and answering (reported 2026-07-28).
+   * Without it the mic could go live AFTER being released — start()'s only
+   * guard was `ctxRef.current`, which isn't set until after the await, so a
+   * stop() during permission/acquisition cleared nothing and the pending
+   * start() then installed a live capture.
    */
   const generation = useRef(0);
   const starting = useRef(false);
 
+  /** Full release. Unmount and sign-out only — NOT the mute button. */
   const stop = useCallback(() => {
     generation.current += 1;
     starting.current = false;
@@ -107,16 +140,42 @@ export function useVoiceStream({ onAudio }: UseVoiceStreamOptions) {
     procRef.current = null;
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
-    void ctxRef.current?.close();
+    // close() rejects if the context is already closed/closing — that used to
+    // surface as an unhandled promise rejection in the console.
+    void ctxRef.current?.close().catch(() => { /* already closed */ });
     ctxRef.current = null;
     useMicLevel.getState().setActive(false);
   }, []);
 
+  /**
+   * The student's mute switch. Applies immediately even if start() is still
+   * awaiting the permission prompt — start() re-applies `muted.current` after
+   * acquisition, so a mute that lands mid-acquire wins.
+   */
+  const setMuted = useCallback((on: boolean) => {
+    muted.current = on;
+    streamRef.current?.getAudioTracks().forEach((t) => { t.enabled = !on; });
+    if (on) useMicLevel.getState().setLevels(new Array(MIC_BARS).fill(0));
+  }, []);
+
+  /** Gate transmission without releasing the hardware (turn-taking). */
+  const setTransmitting = useCallback((on: boolean) => {
+    transmitting.current = on;
+    if (!on) useMicLevel.getState().setLevels(new Array(MIC_BARS).fill(0));
+  }, []);
+
   const start = useCallback(async () => {
+    // Already capturing: an unmute, not an acquisition. Resume on the stream
+    // we already hold — this is the instant path that kills the dead air.
+    if (ctxRef.current) {
+      setMuted(false);
+      return;
+    }
     // `starting` is checked synchronously so two calls in the same tick can't
     // both get past the guard and open two microphones.
-    if (!supported || ctxRef.current || starting.current) return;
+    if (!supported || starting.current) return;
     starting.current = true;
+    muted.current = false;
     const myGeneration = generation.current;
 
     let stream: MediaStream;
@@ -124,10 +183,17 @@ export function useVoiceStream({ onAudio }: UseVoiceStreamOptions) {
       stream = await navigator.mediaDevices.getUserMedia({
         audio: audioConstraints({ echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }),
       });
-    } catch {
+    } catch (err) {
       starting.current = false;   // permission refused or no device
+      // This used to be swallowed whole. A denied or missing mic then looked
+      // exactly like the tutor ignoring the student: the panel said
+      // "Listening…" while zero audio was being sent. Say so, everywhere.
+      const denied = (err as { name?: string })?.name === 'NotAllowedError';
+      console.error('[voice] microphone capture failed:', err);
+      useMicLevel.getState().setMicError(denied ? 'denied' : 'failed');
       return;
     }
+    useMicLevel.getState().setMicError(null);
 
     // Muted (or unmounted) while we were waiting — release the mic immediately
     // rather than wiring up a capture nobody asked for.
@@ -139,14 +205,69 @@ export function useVoiceStream({ onAudio }: UseVoiceStreamOptions) {
     streamRef.current = stream;
 
     const Ctx = window.AudioContext ?? (window as SpeechWindow).webkitAudioContext!;
-    const ctx = new Ctx();
+    /**
+     * Ask for the capture rate Deepgram is actually configured for
+     * (`encoding=linear16&sample_rate=16000`, streaming_server.py:86-87)
+     * instead of taking the hardware's 44.1/48kHz and squashing it ourselves.
+     *
+     * `downsample()` below is a box average: it sums ~3 input samples per
+     * output sample and divides. That is a low-pass filter with a very poor
+     * response, so everything above 8kHz folds back into the speech band as
+     * aliasing rather than being filtered out. Sibilants and plosives are
+     * exactly where that lands, and it is the ASR that pays — garbled,
+     * repeated-word transcripts of the kind reported on 7 Aug ("I call BBB.
+     * Because that that that has an extra support").
+     *
+     * Browsers resample in the audio thread with a proper polyphase filter, so
+     * asking for 16kHz here hands the job to code built for it. When the
+     * browser honours it, `downsample()` sees inRate === TARGET_RATE and
+     * returns its input untouched; when it doesn't, the old path still runs.
+     * Either way the wire format is unchanged.
+     *
+     * This does NOT make transcription accurate on its own — model and
+     * language are the voice server's to tune. It removes damage we were
+     * adding.
+     */
+    let ctx: AudioContext;
+    try {
+      try {
+        ctx = new Ctx({ sampleRate: TARGET_RATE });
+      } catch {
+        // Older Safari rejects the option outright rather than ignoring it.
+        ctx = new Ctx();
+      }
+    } catch (err) {
+      // Even the bare constructor failed (context limit hit, platform bug).
+      // Uncaught, this was an unhandled rejection and a mic held open with no
+      // graph behind it.
+      console.error('[voice] AudioContext creation failed:', err);
+      stream.getTracks().forEach((t) => t.stop());
+      starting.current = false;
+      useMicLevel.getState().setMicError('failed');
+      return;
+    }
     ctxRef.current = ctx;
     const source = ctx.createMediaStreamSource(stream);
     const proc = ctx.createScriptProcessor(4096, 1, 1);
     procRef.current = proc;
     const inRate = ctx.sampleRate;
+    // Whether the browser honoured the request is not knowable from the code —
+    // say which path is live so a transcription complaint can be checked
+    // against it rather than guessed at.
+    console.log(
+      `[voice] capture ${inRate}Hz → ${TARGET_RATE}Hz`,
+      inRate === TARGET_RATE ? '(native, no resampling)' : '(falling back to box-average downsample)',
+    );
+
+    // A mute that arrived while getUserMedia was up takes effect before the
+    // first frame can be read (see setMuted).
+    stream.getAudioTracks().forEach((t) => { t.enabled = !muted.current; });
 
     proc.onaudioprocess = (e: AudioProcessingEvent) => {
+      // Hardware stays open; mute and turn-taking only gate what is SENT.
+      // Muted frames are silence anyway (track.enabled=false at the source),
+      // but there is no reason to ship silence either.
+      if (!transmitting.current || muted.current) return;
       const input = e.inputBuffer.getChannelData(0);
       const down = downsample(input, inRate);
       onAudioRef.current(bytesToBase64(floatToPcm16(down)));
@@ -175,5 +296,5 @@ export function useVoiceStream({ onAudio }: UseVoiceStreamOptions) {
   // Clean up on unmount.
   useEffect(() => stop, [stop]);
 
-  return { active, supported, start, stop };
+  return { active, supported, start, stop, setMuted, setTransmitting };
 }

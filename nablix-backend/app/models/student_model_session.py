@@ -1,6 +1,8 @@
+from enum import Enum
 from typing import Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
 
 
 StudentModelPhase = Literal[
@@ -19,6 +21,23 @@ SupportUsed = Literal[
     "PARALLEL_EXAMPLE",
     "TUTOR_SOLVED",
 ]
+
+
+class RoutingReasonCode(str, Enum):
+    DIAGNOSTIC_STARTED = "DIAGNOSTIC_STARTED"
+    DIAGNOSTIC_GAPS_FOUND = "DIAGNOSTIC_GAPS_FOUND"
+    DIAGNOSTIC_NO_GAPS = "DIAGNOSTIC_NO_GAPS"
+    ORIENTATION_STARTED = "ORIENTATION_STARTED"
+    ORIENTATION_COMPLETED = "ORIENTATION_COMPLETED"
+    GUIDED_IN_PROGRESS = "GUIDED_IN_PROGRESS"
+    GUIDED_HINT_REQUIRED = "GUIDED_HINT_REQUIRED"
+    GUIDED_VISUAL_SUPPORT_REQUIRED = "GUIDED_VISUAL_SUPPORT_REQUIRED"
+    GUIDED_SCAFFOLD_REQUIRED = "GUIDED_SCAFFOLD_REQUIRED"
+    GUIDED_COMPLETED = "GUIDED_COMPLETED"
+    GUIDED_PHASE_COMPLETED = "GUIDED_PHASE_COMPLETED"
+    PARALLEL_EXAMPLE_REQUIRED = "PARALLEL_EXAMPLE_REQUIRED"
+    INDEPENDENT_MASTERY = "INDEPENDENT_MASTERY"
+    SESSION_RESUMED = "SESSION_RESUMED"
 
 
 class MicroSkillMapping(BaseModel):
@@ -265,27 +284,32 @@ class SessionOpenedEvent(SessionEventBase):
     event_type: Literal["SESSION_OPENED"]
 
 
+class MutatingSessionEventBase(SessionEventBase):
+    source_turn_id: str
+    expected_journey_version: int
+
+
 class MicroSkillResult(BaseModel):
     micro_skill_id: str
     result: DiagnosticResult
 
 
-class DiagnosticCompletedEvent(SessionEventBase):
+class DiagnosticCompletedEvent(MutatingSessionEventBase):
     event_type: Literal["DIAGNOSTIC_COMPLETED"]
     micro_skill_results: list[MicroSkillResult]
 
 
-class WorkedExampleRequestedEvent(SessionEventBase):
+class WorkedExampleRequestedEvent(MutatingSessionEventBase):
     event_type: Literal["WORKED_EXAMPLE_REQUESTED"]
     target_micro_skill_ids: list[str]
 
 
-class OrientationCompletedEvent(SessionEventBase):
+class OrientationCompletedEvent(MutatingSessionEventBase):
     event_type: Literal["ORIENTATION_COMPLETED"]
     target_micro_skill_ids: list[str]
 
 
-class GuidedAttemptEvent(SessionEventBase):
+class GuidedAttemptEvent(MutatingSessionEventBase):
     event_type: Literal["CORRECT_ATTEMPT", "INCORRECT_ATTEMPT"]
     question_id: str
     micro_skill_ids: list[str]
@@ -294,22 +318,40 @@ class GuidedAttemptEvent(SessionEventBase):
     error_code: str | None = None
 
 
-class GuidedSupportEvent(SessionEventBase):
+class GuidedSupportEvent(MutatingSessionEventBase):
     event_type: Literal[
+        "GUIDED_SUPPORT_REQUESTED",
         "GUIDED_SUPPORT_ESCALATION_REQUIRED",
         "MAXIMUM_GUIDED_SUPPORT_PARALLEL",
         "MAXIMUM_GUIDED_SUPPORT_REQUIRED",
+        "GUIDED_STUCK_SUPPORT_REQUIRED",
     ]
+
     question_id: str
     micro_skill_id: str
+    triggering_response: str | None = None
+    error_code: str | None = None
+
+    @model_validator(mode="after")
+    def validate_wrong_four_evidence(self) -> "GuidedSupportEvent":
+        if self.event_type != "GUIDED_SUPPORT_ESCALATION_REQUIRED":
+            return self
+        if self.triggering_response is None and self.error_code is None:
+            return self
+        if self.triggering_response is None or not self.triggering_response.strip():
+            raise ValueError("triggering_response is required for Wrong 4 escalation.")
+        if self.error_code is None or not self.error_code.strip():
+            raise ValueError("error_code is required for Wrong 4 escalation.")
+        return self
 
 
-class GuidedPhaseCompletedEvent(SessionEventBase):
+
+class GuidedPhaseCompletedEvent(MutatingSessionEventBase):
     event_type: Literal["GUIDED_PHASE_COMPLETED"]
     completed_micro_skill_ids: list[str]
 
 
-class IndependentRetryCompletedEvent(SessionEventBase):
+class IndependentRetryCompletedEvent(MutatingSessionEventBase):
     event_type: Literal["INDEPENDENT_RETRY_COMPLETED"]
     question_id: str
     micro_skill_ids: list[str]
@@ -318,7 +360,7 @@ class IndependentRetryCompletedEvent(SessionEventBase):
     error_code: str | None = None
 
 
-class GuidedQuestionSetRequestedEvent(SessionEventBase):
+class GuidedQuestionSetRequestedEvent(MutatingSessionEventBase):
     event_type: Literal["GUIDED_QUESTION_SET_REQUESTED"]
     target_micro_skill_ids: list[str]
 
@@ -328,10 +370,27 @@ class Phase2RepairResult(BaseModel):
     highest_support_used: SupportUsed
 
 
-class IndependentQuestionSetRequestedEvent(SessionEventBase):
+class IndependentQuestionSetRequestedEvent(MutatingSessionEventBase):
     event_type: Literal["INDEPENDENT_QUESTION_SET_REQUESTED"]
     phase2_repair_results: list[Phase2RepairResult]
     used_question_ids: list[str]
+
+
+class FreshIndependentQuestionRequestedEvent(MutatingSessionEventBase):
+    event_type: Literal["FRESH_INDEPENDENT_QUESTION_REQUESTED"]
+    target_micro_skill_ids: list[str]
+    used_question_ids: list[str]
+
+
+class SessionResumedEvent(MutatingSessionEventBase):
+    event_type: Literal["SESSION_RESUMED"]
+    last_activity_at: str
+    continuity_threshold_days: int
+    saved_journey: dict[str, object]
+
+
+class ReviewCompletedEvent(MutatingSessionEventBase):
+    event_type: Literal["REVIEW_COMPLETED"]
 
 
 StudentModelSessionEvent: TypeAlias = (
@@ -346,6 +405,9 @@ StudentModelSessionEvent: TypeAlias = (
     | IndependentRetryCompletedEvent
     | GuidedQuestionSetRequestedEvent
     | IndependentQuestionSetRequestedEvent
+    | FreshIndependentQuestionRequestedEvent
+    | SessionResumedEvent
+    | ReviewCompletedEvent
 )
 
 

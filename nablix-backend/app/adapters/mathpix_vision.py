@@ -17,6 +17,7 @@ _ARRAY_BLOCK = re.compile(
 
 class _MathpixLineData(BaseModel):
     text: str | None = None
+    mathml: str | None = None
     cnt: list[list[float]] = Field(default_factory=list)
     confidence: float | None = None
     conversion_output: bool | None = None
@@ -25,13 +26,20 @@ class _MathpixLineData(BaseModel):
 class _MathpixOCRPayload(BaseModel):
     text: str = ""
     latex_styled: str | None = None
+    mathml: str | None = None
     confidence: float | None = None
     confidence_rate: float | None = None
     line_data: list[_MathpixLineData] = Field(default_factory=list)
+    data: list["_MathpixDataItem"] = Field(default_factory=list)
     image_width: int | None = None
     image_height: int | None = None
     error: str | None = None
     error_info: object | None = None
+
+
+class _MathpixDataItem(BaseModel):
+    type: str
+    value: str
 
 
 class MathpixVisionOCRAdapter:
@@ -54,9 +62,14 @@ class MathpixVisionOCRAdapter:
 
         request_body: dict[str, object] = {
             "src": snapshot_data_url,
+            "formats": ["text", "latex_styled", "data"],
+            "data_options": {
+                "include_mathml": True,
+            },
             "include_line_data": True,
             "rm_spaces": True,
         }
+
         headers: dict[str, str] = {
             "app_id": self._app_id,
             "app_key": self._app_key,
@@ -100,6 +113,7 @@ class MathpixVisionOCRAdapter:
                 or _contains_incomplete_equation(detected_steps)
             ),
             latex=payload.latex_styled or payload.text,
+            mathml_blocks=[item.value for item in payload.data if item.type == "mathml"],
             detected_shapes=[],
             confidence_source="ocr_native",
             provider="mathpix",

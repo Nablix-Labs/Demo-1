@@ -44,6 +44,8 @@ export default function TutorMathOverlay({ width, height }: { width: number; hei
         return (
           <span
             key={el.id}
+            // The hand overlay measures this box to find the pen tip for maths.
+            data-tutor-math-id={el.id}
             style={{
               position: 'absolute',
               left: (el.x ?? 0.5) * width,

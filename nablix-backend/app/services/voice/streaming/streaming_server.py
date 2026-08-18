@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.websockets import WebSocketState
 
 import websockets
 
@@ -41,11 +42,62 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+
+
+def _websocket_is_connected(ws: WebSocket) -> bool:
+    """Return whether both sides of the ASGI WebSocket remain connected."""
+    client_state = getattr(ws, "client_state", WebSocketState.CONNECTED)
+    application_state = getattr(ws, "application_state", WebSocketState.CONNECTED)
+    return (
+        client_state == WebSocketState.CONNECTED
+        and application_state == WebSocketState.CONNECTED
+    )
+
+
+async def _send_json_if_connected(
+    ws: WebSocket,
+    payload: dict[str, object],
+) -> bool:
+    """Send once, returning false only when the peer closed concurrently."""
+    if not _websocket_is_connected(ws):
+        return False
+    try:
+        await ws.send_json(payload)
+        return True
+    except RuntimeError:
+        if not _websocket_is_connected(ws):
+            return False
+        raise
 logger = logging.getLogger("streaming")
 
 DEEPGRAM_WS_URL = "wss://api.deepgram.com/v1/listen"
 DEEPGRAM_API_KEY = voice_config.DEEPGRAM_API_KEY
-MAIN_BACKEND_URL = os.getenv("NABLIX_MAIN_BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
+MAIN_BACKEND_URL = os.getenv("NABLIX_MAIN_BACKEND_URL", "http://127.0.0.1:8001").rstrip("/")
+
+# Adaptive silence timeout (seconds).
+# Instead of a single fixed timeout, we use different timeouts based on
+# how many words the student has spoken so far.  Short utterances like
+# "yes" or "hello" use a short timeout for quick responses.  Longer
+# utterances (student mid-explanation) use a longer timeout so thinking
+# pauses don't fragment the sentence.
+SILENCE_SHORT_SECONDS = float(os.getenv("VOICE_SILENCE_SHORT_SECONDS", "3.0"))    # 1-3 words
+SILENCE_MEDIUM_SECONDS = float(os.getenv("VOICE_SILENCE_MEDIUM_SECONDS", "5.0"))  # 4-6 words
+SILENCE_LONG_SECONDS = float(os.getenv("VOICE_SILENCE_LONG_SECONDS", "12.5"))     # 7+ words
+
+def _get_adaptive_timeout(transcript: str) -> float:
+    """Return silence timeout based on word count of current buffer.
+
+    Short utterances (1-3 words) -> 3.0s  (likely complete: "yes", "I don't know")
+    Medium utterances (4-6 words) -> 5.0s (could be complete or mid-sentence)
+    Long utterances (7+ words) -> 12.5s   (likely mid-explanation, give thinking room)
+    """
+    word_count = len(transcript.split())
+    if word_count <= 3:
+        return SILENCE_SHORT_SECONDS
+    elif word_count <= 6:
+        return SILENCE_MEDIUM_SECONDS
+    else:
+        return SILENCE_LONG_SECONDS
 
 # Math-domain keyterms for Deepgram Nova-3 keyterm prompting.
 # These help the STT model recognize math vocabulary that it
@@ -82,7 +134,8 @@ def _build_deepgram_params(language: str = "en") -> str:
         f"&smart_format=true"
         f"&punctuate=true"
         f"&interim_results=true"
-        f"&utterance_end_ms=1500"
+        f"&endpointing=3500"
+        f"&utterance_end_ms=5000"
         f"&encoding=linear16"
         f"&sample_rate=16000"
         f"&channels=1"
@@ -131,7 +184,15 @@ async def evaluate_voice_transcript(
     confidence: float,
     audio_duration_seconds: float,
     access_token: str,
+    turn_id: str | None,
+    previous_tutor_turn_id: str | None,
+    transcript_final: bool | None,
+    canvas_snapshot_id: str | None,
 ) -> dict[str, object]:
+    if turn_id is None:
+        raise ValueError("turn_id is required for voice interactions")
+    if transcript_final is not True:
+        raise ValueError("transcript_final must be true for voice interactions")
     payload = {
         "session_id": session_id,
         "student_id": student_id,
@@ -140,12 +201,21 @@ async def evaluate_voice_transcript(
         "audio_duration_seconds": audio_duration_seconds,
         "turn": "STUDENT",
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "turn_id": turn_id,
+        "previous_tutor_turn_id": previous_tutor_turn_id,
+        "transcript_final": transcript_final,
+        "canvas_snapshot_id": canvas_snapshot_id,
     }
     logger.info(f"[{session_id}] POST /voice/transcript")
     response = await get_backend_http_client().post(
         "/voice/transcript",
         json=payload,
         headers={"Authorization": f"Bearer {access_token}"},
+        # Same budget as /canvas/submit below. This call previously inherited
+        # the client default of 15s while canvas got 40s for comparable LLM
+        # work; slowest observed voice turn was 12.5s (30 Jul, n=121), which
+        # left 17% headroom before a timeout indistinguishable from an outage.
+        timeout=40.0,
     )
     if response.status_code != 200:
         raise RuntimeError(f"status={response.status_code} body={response.text}")
@@ -166,6 +236,7 @@ async def submit_canvas_work(
         "snapshot_data_url": snapshot_data_url,
         "transcript": transcript or None,
         "transcript_confidence": confidence,
+        "submission_role": "VOICE_ATTACHMENT",
     }
     logger.info(f"[{session_id}] POST {MAIN_BACKEND_URL}/canvas/submit")
     response = await get_backend_http_client().post(
@@ -177,57 +248,6 @@ async def submit_canvas_work(
     if response.status_code != 200:
         raise RuntimeError(f"status={response.status_code} body={response.text}")
     return response.json()
-
-
-def _tutor_response_from_canvas(result: dict[str, object]) -> dict[str, object]:
-    tutor = result.get("tutor")
-    if not isinstance(tutor, dict):
-        raise RuntimeError("canvas response missing tutor object")
-
-    tutor_message = tutor.get("tutor_message")
-    if not isinstance(tutor_message, str) or tutor_message == "":
-        raise RuntimeError("canvas tutor response missing tutor_message")
-
-    tutor_message_voice = tutor.get("tutor_message_voice")
-    return {
-        **_phase_fields_from(result),
-        "message": tutor_message,
-        "message_voice": tutor_message_voice if isinstance(tutor_message_voice, str) else tutor_message,
-    }
-
-
-PHASE_FIELDS = (
-    "phase_changed",
-    "previous_phase",
-    "current_phase",
-    "current_question",
-    "question_id",
-    "ui_state",
-    "recommended_entry_phase",
-    "phase_transition_message",
-    "phase_transition_voice",
-)
-
-SUPPORT_FIELDS = (
-    "show_visual_cue",
-    "visual_cue",
-    "show_scaffold_panel",
-    "scaffold_id",
-    "current_scaffold_step_id",
-    "scaffold_step_number",
-    "scaffold_step_text",
-    "scaffold_step_voice",
-    "total_scaffold_steps",
-)
-
-
-def _phase_fields_from(result: dict[str, object]) -> dict[str, object]:
-    """Pass the backend's phase state through to the frontend unchanged."""
-    return {key: result.get(key) for key in PHASE_FIELDS if key in result}
-
-
-def _support_fields_from(result: dict[str, object]) -> dict[str, object]:
-    return {key: result.get(key) for key in SUPPORT_FIELDS if key in result}
 
 
 def _canvas_draw_from(result: dict[str, object]) -> list[object]:
@@ -338,18 +358,192 @@ async def voice_stream(
     receiving_audio = False
     audio_started_at = 0.0
     turn_already_processed = False  # True when UtteranceEnd auto-triggered a response
+    last_transcript_at = time.time()  # when Deepgram last sent a transcript
+    is_processing = False  # True while process_and_respond is running (Tier 2)
+    pending_transcript = ""  # Speech that arrived during processing (Tier 2)
+    pending_confidence = 0.0
     access_token: str | None = None
+    turn_id: str | None = None
+    previous_tutor_turn_id: str | None = None
+    transcript_final: bool | None = None
+
+    async def deepgram_keepalive() -> None:
+        # Deepgram closes a stream that receives neither audio nor text for
+        # ~10s (NET-0001). That happens on every mute, because the frontend
+        # stops sending chunks while muted — 8 such kills in the 30-31 Jul
+        # logs, each costing the student an utterance mid-conversation.
+        # The documented fix is a KeepAlive text frame; it is harmless while
+        # audio is flowing and resets the idle timer while it is not.
+        # https://developers.deepgram.com/docs/keep-alive
+        while True:
+            await asyncio.sleep(5)
+            ws_now = deepgram_ws
+            if ws_now is None:
+                continue
+            try:
+                await ws_now.send(json.dumps({"type": "KeepAlive"}))
+            except Exception:
+                # Closed or resetting mid-send; the reconnect paths own recovery.
+                pass
+
+    keepalive_task = asyncio.create_task(deepgram_keepalive())
 
     deepgram_receiver_task = None
+    silence_timer_task = None
+
+    # Background tasks set — prevents garbage collection of fire-and-forget
+    # tasks (V-1 fix: process_and_respond runs as a background task instead
+    # of blocking the Deepgram receiver loop).
+    _background_tasks: set[asyncio.Task] = set()
+
+    async def _process_buffer():
+        """Process whatever is in the final_transcript buffer.
+
+        Called by:
+          - speech_final (primary: Deepgram VAD detected end of speech)
+          - UtteranceEnd (backup: transcript word-timing gap detected)
+          - silence fallback timer (last resort: no messages for N seconds)
+
+        Tier 2 (cancel-and-reprocess): If new speech arrives WHILE this
+        function is running (is_processing=True), the receiver stores it
+        in pending_transcript.  When this function finishes, it checks
+        for pending speech and processes it automatically.
+        """
+        nonlocal final_transcript, final_confidence, final_segment_count
+        nonlocal audio_started_at, turn_already_processed
+        nonlocal turn_id, previous_tutor_turn_id, transcript_final
+        nonlocal silence_timer_task, is_processing
+        nonlocal pending_transcript, pending_confidence
+
+        if not final_transcript:
+            return
+
+        is_processing = True
+        transcript_to_process = final_transcript
+        confidence_to_process = final_confidence
+        duration = max(time.time() - audio_started_at, 0.001)
+
+        # Reset buffer for potential next utterance
+        final_transcript = ""
+        final_confidence = 0.0
+        final_segment_count = 0
+        audio_started_at = time.time()
+        turn_already_processed = True
+
+        try:
+            if access_token is None:
+                await ws.close(code=4401, reason="Authentication required")
+                return
+            await process_and_respond(
+                ws, session_id, student_id,
+                transcript_to_process, confidence_to_process,
+                duration, access_token, None,
+                tts_provider, tts_voice,
+                turn_id, previous_tutor_turn_id, transcript_final,
+            )
+        except Exception as e:
+            turn_already_processed = False
+            logger.error(f"[{session_id}] _process_buffer failed: {e}")
+        finally:
+            is_processing = False
+            # NOTE: Do NOT clear turn_id, previous_tutor_turn_id,
+            # or transcript_final here.  The frontend sends these
+            # once per turn via turn_context messages.  If we clear
+            # them after the first fragment, any pending speech that
+            # gets processed next will fail with "turn_id is required"
+            # because the frontend won't re-send them.
+            silence_timer_task = None
+
+            # Tier 2: Check if speech arrived while we were processing.
+            # If so, move it into the main buffer and process again.
+            if pending_transcript:
+                logger.info(
+                    f"[{session_id}] Pending speech from during processing: "
+                    f"'{pending_transcript}' - moving to buffer"
+                )
+                final_transcript = pending_transcript
+                final_confidence = pending_confidence
+                final_segment_count = 1
+                pending_transcript = ""
+                pending_confidence = 0.0
+                # Start a new silence timer for the pending speech.
+                # Don't process immediately -- give the student time
+                # to continue speaking.
+                silence_timer_task = asyncio.create_task(
+                    _silence_fallback_handler()
+                )
+
+    async def _silence_fallback_handler():
+        """Last-resort fallback when neither speech_final nor UtteranceEnd fire.
+
+        Uses adaptive timeout based on word count:
+          1-3 words  -> 3.0s  (short utterance, likely complete)
+          4-6 words  -> 5.0s  (medium, could go either way)
+          7+ words   -> 12.5s (long, student probably thinking mid-sentence)
+
+        DEBOUNCE LOOP: instead of a flat asyncio.sleep(timeout), this
+        loops and re-checks how much time has passed since the last
+        Deepgram message (partial OR final).  If new messages arrived
+        (meaning the student is still speaking), last_transcript_at
+        will have been updated, and the timer keeps waiting.  Only
+        when truly no Deepgram messages arrive for the full timeout
+        period does it process the buffer.
+
+        This prevents the bug where FINAL "So see." starts a 3s timer,
+        but partials "I believe on the left..." arrive during the sleep
+        and the timer fires anyway (actual gap 0.7s).
+        """
+        nonlocal silence_timer_task
+
+        while True:
+            # Recalculate timeout from current buffer (may have
+            # grown since the timer started if new FINALs arrived).
+            timeout = (
+                _get_adaptive_timeout(final_transcript)
+                if final_transcript
+                else SILENCE_LONG_SECONDS
+            )
+            elapsed = time.time() - last_transcript_at
+            remaining = timeout - elapsed
+
+            if remaining <= 0:
+                # Full timeout elapsed with no new messages.
+                break
+
+            await asyncio.sleep(remaining)
+
+        if not final_transcript:
+            return
+
+        actual_gap = round(time.time() - last_transcript_at, 1)
+        timeout = _get_adaptive_timeout(final_transcript)
+        logger.info(
+            f"[{session_id}] Silence fallback (adaptive {timeout}s, "
+            f"{len(final_transcript.split())} words) - "
+            f"actual gap {actual_gap}s - "
+            f"auto-processing: '{final_transcript}'"
+        )
+        await _process_buffer()
 
     async def forward_deepgram_results(dg_ws):
         nonlocal final_transcript, final_confidence, final_segment_count, audio_started_at, turn_already_processed
+        nonlocal turn_id, previous_tutor_turn_id, transcript_final
+        nonlocal silence_timer_task, last_transcript_at
+        nonlocal pending_transcript, pending_confidence
 
         try:
             async for msg in dg_ws:
                 data = json.loads(msg)
+                msg_type = data.get("type", "unknown")
 
-                if data.get("type") == "Results":
+                # Debug: log every Deepgram message type so we can
+                # check whether UtteranceEnd is actually being sent.
+                if msg_type != "Results":
+                    logger.info(
+                        f"[{session_id}] Deepgram event: {msg_type}"
+                    )
+
+                if msg_type == "Results":
                     channel = data.get("channel", {})
                     alternatives = channel.get("alternatives", [])
 
@@ -360,67 +554,126 @@ async def voice_stream(
                     transcript = best.get("transcript", "").strip()
                     confidence = best.get("confidence", 0.0)
                     is_final = data.get("is_final", False)
+                    # speech_final is Deepgram's VAD-based endpointing signal.
+                    # It fires after `endpointing` ms of actual audio silence
+                    # (detected by Voice Activity Detection on the raw audio,
+                    # NOT transcript timing).  This is our PRIMARY signal that
+                    # the student has stopped speaking.
+                    speech_final = data.get("speech_final", False)
 
                     if not transcript:
                         continue
 
                     if is_final:
-                        if final_transcript:
-                            final_transcript += " " + transcript
+                        # Tier 2: If we're currently processing a previous
+                        # turn, store new speech in the pending buffer.
+                        # It will be picked up after processing finishes.
+                        if is_processing:
+                            if pending_transcript:
+                                pending_transcript += " " + transcript
+                            else:
+                                pending_transcript = transcript
+                            pending_confidence = confidence
+                            logger.info(
+                                f"[{session_id}] Speech during processing, "
+                                f"queued: '{pending_transcript}'"
+                            )
                         else:
-                            final_transcript = transcript
-                        # Track a running average confidence across all
-                        # final segments instead of just keeping the last
-                        final_segment_count += 1
-                        final_confidence = (
-                            (final_confidence * (final_segment_count - 1) + confidence)
-                            / final_segment_count
-                        )
+                            if final_transcript:
+                                final_transcript += " " + transcript
+                            else:
+                                final_transcript = transcript
+                            # Track a running average confidence across all
+                            # final segments instead of just keeping the last
+                            final_segment_count += 1
+                            final_confidence = (
+                                (final_confidence * (final_segment_count - 1) + confidence)
+                                / final_segment_count
+                            )
 
-                    await ws.send_json({
+                    # Guarded: this runs in a background task, so an
+                    # unguarded send-after-close raises RuntimeError, escapes
+                    # the `async for`, and is swallowed by the `except
+                    # Exception` at the bottom of this function -- killing the
+                    # receiver outright.  The session would keep its socket
+                    # and keep feeding audio to Deepgram while silently
+                    # producing no further transcripts, with one log line as
+                    # the only evidence.  This send fires every few hundred ms
+                    # for as long as the student is talking, so it has the
+                    # widest exposure of any send in the file.
+                    delivered = await _send_json_if_connected(ws, {
                         "type": "transcript_partial" if not is_final else "transcript_final",
                         "text": transcript,
                         "confidence": round(confidence, 4),
                         "is_final": is_final,
                         "role": "student",
                     })
+                    if not delivered:
+                        logger.info(
+                            f"[{session_id}] Client closed mid-speech - "
+                            f"stopping Deepgram receiver"
+                        )
+                        return
+
+                    last_transcript_at = time.time()
 
                     logger.info(
-                        f"[{session_id}] {'FINAL' if is_final else 'partial'}: "
+                        f"[{session_id}] {'FINAL' if is_final else 'partial'}"
+                        f"{'(speech_final)' if speech_final else ''}: "
                         f"'{transcript}' (conf={confidence:.4f})"
                     )
 
-                elif data.get("type") == "UtteranceEnd":
-                    # Deepgram detected 1.5s silence after speech.
-                    # Auto-trigger tutor response without requiring mic mute.
-                    if final_transcript:
+                    # --- Turn processing logic ---
+                    #
+                    # PRIMARY signal: speech_final=true from Deepgram's VAD.
+                    #   Deepgram's endpointing (3500ms) detected real audio
+                    #   silence.  Process the buffer immediately.
+                    #
+                    # FALLBACK signal: silence timer (adaptive timeout).
+                    #   If speech_final never fires (noisy environment, or
+                    #   Deepgram VAD fails), our timer processes the buffer
+                    #   after N seconds of no transcript messages.
+                    #
+                    if speech_final and final_transcript:
+                        # Deepgram's VAD confirms the student stopped speaking.
+                        # Cancel any pending silence timer and process now.
+                        if silence_timer_task and not silence_timer_task.done():
+                            silence_timer_task.cancel()
+                            silence_timer_task = None
                         logger.info(
-                            f"[{session_id}] UtteranceEnd - auto-processing: "
-                            f"'{final_transcript}'"
+                            f"[{session_id}] speech_final triggered - "
+                            f"processing: '{final_transcript}'"
                         )
-                        transcript_to_process = final_transcript
-                        confidence_to_process = final_confidence
-                        duration = max(time.time() - audio_started_at, 0.001)
+                        await _process_buffer()
+                    elif is_final and final_transcript:
+                        # is_final but NOT speech_final: Deepgram finalized a
+                        # segment (happens every ~3-5s) but the student may
+                        # still be talking.  Start/reset the fallback timer.
+                        if silence_timer_task and not silence_timer_task.done():
+                            silence_timer_task.cancel()
+                        silence_timer_task = asyncio.create_task(
+                            _silence_fallback_handler()
+                        )
 
-                        # Reset for potential next utterance in same session
-                        final_transcript = ""
-                        final_confidence = 0.0
-                        final_segment_count = 0
-                        audio_started_at = time.time()
-                        turn_already_processed = True
-
-                        try:
-                            if access_token is None:
-                                await ws.close(code=4401, reason="Authentication required")
-                                return
-                            await process_and_respond(
-                                ws, session_id, student_id,
-                                transcript_to_process, confidence_to_process,
-                                duration, access_token, None,
-                                tts_provider, tts_voice,
-                            )
-                        except Exception as e:
-                            logger.error(f"[{session_id}] Auto-process failed: {e}")
+                elif data.get("type") == "UtteranceEnd":
+                    # UtteranceEnd fires after utterance_end_ms (5000ms) of
+                    # no new words in transcripts.  It's a BACKUP for noisy
+                    # environments where speech_final might not fire.
+                    # If there's still content in the buffer, process it.
+                    if final_transcript:
+                        if silence_timer_task and not silence_timer_task.done():
+                            silence_timer_task.cancel()
+                            silence_timer_task = None
+                        logger.info(
+                            f"[{session_id}] UtteranceEnd triggered (backup) - "
+                            f"processing: '{final_transcript}'"
+                        )
+                        await _process_buffer()
+                    else:
+                        logger.info(
+                            f"[{session_id}] UtteranceEnd received "
+                            f"(buffer empty, nothing to process)"
+                        )
 
         except websockets.exceptions.ConnectionClosed:
             logger.info(f"[{session_id}] Deepgram connection closed")
@@ -436,6 +689,12 @@ async def voice_stream(
             if "text" in message:
                 data = json.loads(message["text"])
                 msg_type = data.get("type", "")
+                if "turn_id" in data:
+                    turn_id = data.get("turn_id")
+                if "previous_tutor_turn_id" in data:
+                    previous_tutor_turn_id = data.get("previous_tutor_turn_id")
+                if "transcript_final" in data:
+                    transcript_final = data.get("transcript_final")
 
                 if msg_type == "authenticate":
                     candidate = data.get("access_token")
@@ -443,7 +702,12 @@ async def voice_stream(
                         await ws.close(code=4401, reason="Authentication required")
                         return
                     access_token = candidate
-                    await ws.send_json({"type": "status", "message": "authenticated"})
+                    # No early return needed: this runs in the main receive
+                    # loop, so if the client has gone the next ws.receive()
+                    # yields websocket.disconnect and we break normally.
+                    await _send_json_if_connected(
+                        ws, {"type": "status", "message": "authenticated"}
+                    )
 
                 elif access_token is None:
                     await ws.close(code=4401, reason="Authenticate before sending data")
@@ -497,13 +761,19 @@ async def voice_stream(
                         forward_deepgram_results(deepgram_ws)
                     )
 
-                    await ws.send_json({
+                    # Deepgram's connect above takes 100-300ms, which is long
+                    # enough for a client to disappear before this lands.
+                    await _send_json_if_connected(ws, {
                         "type": "status",
                         "message": "streaming_started",
                     })
 
                 elif msg_type == "stop":
                     receiving_audio = False
+                    # Cancel silence fallback -- explicit stop takes over
+                    if silence_timer_task and not silence_timer_task.done():
+                        silence_timer_task.cancel()
+                        silence_timer_task = None
                     canvas_snapshot = data.get("canvas_snapshot")
                     logger.info(f"[{session_id}] Stop received. Finalizing...")
 
@@ -536,11 +806,19 @@ async def voice_stream(
                     if final_transcript:
                         logger.info(f"[{session_id}] Processing on stop: '{final_transcript}'")
                         audio_duration_seconds = max(time.time() - audio_started_at, 0.001)
-                        await process_and_respond(
-                            ws, session_id, student_id, final_transcript,
-                            final_confidence, audio_duration_seconds, access_token, canvas_snapshot,
-                            tts_provider, tts_voice,
-                        )
+                        try:
+                            await process_and_respond(
+                                ws, session_id, student_id, final_transcript,
+                                final_confidence, audio_duration_seconds, access_token, canvas_snapshot,
+                                tts_provider, tts_voice,
+                                turn_id, previous_tutor_turn_id, transcript_final,
+                            )
+                        except Exception as e:
+                            logger.error(f"[{session_id}] Stop-path process failed: {e}")
+                        finally:
+                            turn_id = None
+                            previous_tutor_turn_id = None
+                            transcript_final = None
                     elif not turn_already_processed:
                         logger.info(f"[{session_id}] Stop: no speech detected")
 
@@ -612,8 +890,14 @@ async def voice_stream(
     except Exception as e:
         logger.error(f"[{session_id}] Error: {e}")
     finally:
+        keepalive_task.cancel()
         if deepgram_receiver_task and not deepgram_receiver_task.done():
             deepgram_receiver_task.cancel()
+        # Cancel any background process_and_respond tasks still running
+        for bg_task in _background_tasks:
+            if not bg_task.done():
+                bg_task.cancel()
+        _background_tasks.clear()
         if deepgram_ws:
             try:
                 await deepgram_ws.close()
@@ -629,9 +913,12 @@ async def process_and_respond(
     confidence: float,
     audio_duration_seconds: float,
     access_token: str,
-    canvas_snapshot: str | None = None,
-    tts_provider: str | None = None,
-    tts_voice: str | None = None,
+    canvas_snapshot: str | None,
+    tts_provider: str | None,
+    tts_voice: str | None,
+    turn_id: str | None,
+    previous_tutor_turn_id: str | None,
+    transcript_final: bool | None,
 ):
     pipeline_start = time.time()
 
@@ -651,22 +938,27 @@ async def process_and_respond(
                 confidence,
                 access_token,
             )
-            tutor_response = _tutor_response_from_canvas(canvas_response)
             canvas_draw = _canvas_draw_from(canvas_response)
+            canvas_snapshot_id = str(canvas_response["submission_id"])
         else:
-            tutor_response = await evaluate_voice_transcript(
-                session_id,
-                student_id,
-                transcript,
-                confidence,
-                audio_duration_seconds,
-                access_token,
-            )
+            canvas_snapshot_id = None
+        tutor_response = await evaluate_voice_transcript(
+            session_id,
+            student_id,
+            transcript,
+            confidence,
+            audio_duration_seconds,
+            access_token,
+            turn_id,
+            previous_tutor_turn_id,
+            transcript_final,
+            canvas_snapshot_id,
+        )
         tutor_ms = int((time.time() - tutor_start) * 1000)
         logger.info(f"[{session_id}] Backend tutor call took {tutor_ms}ms")
     except Exception as e:
         logger.error(f"[{session_id}] Main backend tutor call failed: {e}")
-        await ws.send_json({
+        await _send_json_if_connected(ws, {
             "type": "error",
             "message": "Tutor unavailable. Please try again.",
             "fallback_mode": "TEXT",
@@ -681,7 +973,8 @@ async def process_and_respond(
     # NOTE: audio_base64 is NOT included here anymore.
     text_sent_ms = int((time.time() - pipeline_start) * 1000)
 
-    await ws.send_json({
+    text_sent = await _send_json_if_connected(ws, {
+        **tutor_response,
         "type": "tutor_response",
         "transcript": transcript,
         "normalized_expression": normalized,
@@ -691,9 +984,10 @@ async def process_and_respond(
         "needs_clarification": confidence < voice_config.CONFIDENCE_THRESHOLD,
         "text_latency_ms": text_sent_ms,
         "canvas_draw": canvas_draw,
-        **_phase_fields_from(tutor_response),
-        **_support_fields_from(tutor_response),
     })
+    if not text_sent:
+        logger.info(f"[{session_id}] Client closed before tutor response delivery")
+        return
 
     logger.info(f"[{session_id}] Text sent to frontend: {text_sent_ms}ms")
 
@@ -708,6 +1002,9 @@ async def process_and_respond(
 
     if supports_streaming and tutor_voice_text:
         # -- Streaming path (OpenAI) --
+        if not _websocket_is_connected(ws):
+            logger.info(f"[{session_id}] Client closed before audio streaming")
+            return
         tts_start = time.time()
         chunk_index = 0
 
@@ -717,13 +1014,19 @@ async def process_and_respond(
                 voice=use_voice,
                 audio_format="mp3",
             ):
+                if not _websocket_is_connected(ws):
+                    logger.info(f"[{session_id}] Client closed during audio streaming")
+                    return
                 chunk_b64 = base64.b64encode(chunk).decode("utf-8")
 
-                await ws.send_json({
+                sent = await _send_json_if_connected(ws, {
                     "type": "tutor_audio_chunk",
                     "chunk": chunk_b64,
                     "chunk_index": chunk_index,
                 })
+                if not sent:
+                    logger.info(f"[{session_id}] Client closed during audio streaming")
+                    return
 
                 if chunk_index == 0:
                     first_chunk_ms = int((time.time() - tts_start) * 1000)
@@ -736,7 +1039,7 @@ async def process_and_respond(
             tts_latency = int((time.time() - tts_start) * 1000)
 
             # Step 3: Tell frontend that audio is done
-            await ws.send_json({
+            await _send_json_if_connected(ws, {
                 "type": "tutor_audio_end",
                 "total_chunks": chunk_index,
                 "tts_latency_ms": tts_latency,
@@ -750,7 +1053,7 @@ async def process_and_respond(
         except Exception as e:
             logger.error(f"[{session_id}] Streaming TTS failed: {e}")
             # Tell frontend audio won't be coming
-            await ws.send_json({
+            await _send_json_if_connected(ws, {
                 "type": "tutor_audio_end",
                 "total_chunks": 0,
                 "tts_latency_ms": 0,
@@ -777,13 +1080,16 @@ async def process_and_respond(
             audio_b64 = base64.b64encode(audio_data).decode("utf-8")
 
             # Send as single chunk so frontend uses same handling
-            await ws.send_json({
+            audio_sent = await _send_json_if_connected(ws, {
                 "type": "tutor_audio_chunk",
                 "chunk": audio_b64,
                 "chunk_index": 0,
             })
+            if not audio_sent:
+                logger.info(f"[{session_id}] Client closed before audio delivery")
+                return
 
-            await ws.send_json({
+            await _send_json_if_connected(ws, {
                 "type": "tutor_audio_end",
                 "total_chunks": 1,
                 "tts_latency_ms": tts_latency,
@@ -793,7 +1099,7 @@ async def process_and_respond(
 
         except Exception as e:
             logger.error(f"[{session_id}] TTS fallback failed: {e}")
-            await ws.send_json({
+            await _send_json_if_connected(ws, {
                 "type": "tutor_audio_end",
                 "total_chunks": 0,
                 "tts_latency_ms": 0,
@@ -802,7 +1108,7 @@ async def process_and_respond(
 
     else:
         # No voice text to synthesize
-        await ws.send_json({
+        await _send_json_if_connected(ws, {
             "type": "tutor_audio_end",
             "total_chunks": 0,
             "tts_latency_ms": 0,

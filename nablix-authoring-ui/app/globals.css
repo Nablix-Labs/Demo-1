@@ -1,0 +1,259 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Numera brand palette — fixed meanings, never decoration alone */
+  --focus-navy: #1b2a4a;
+  --learning-blue: #4169e1;
+  --slate-blue: #4a6984;
+  --ai-cyan: #00b4d8;
+  --dark-cyan: #008b8b;
+  --highlight-amber: #ff9f1c;
+  --action-orange: #f77f00;
+  --success-sage: #8a9a86;
+  --ink: #2b2d42;
+  --reading-surface: #f4f6f9;
+  --off-white: #fafafa;
+  --muted-gray: #e0e2e5;
+  --danger: #e5484d;
+  /* Premium "hybrid" additions: navy spotlight base + electric-lime punch */
+  --lime: #cbf24a;
+  --lime-deep: #b4d62e;
+  --spotlight: #0e1a33;
+  --page: #eef1f6;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  color: var(--ink);
+  font-family: var(--font-body), 'Helvetica Neue', system-ui, sans-serif;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+/* Headings: Public Sans at heavy weight, tight tracking — big and confident. */
+.font-display {
+  letter-spacing: -0.02em;
+}
+
+/* ── Liquid Glass ambient backdrop ─────────────────────────────────
+   The whole portal floats on a living navy field so every glass
+   surface has something vivid to lens. (Ported from Numera-ui.) */
+/* Colourful light field — soft brand-hued glows give the frosted glass something
+   to lens (true Apple-glass needs colour behind it, not flat white). */
+.lg-root {
+  min-height: 100%;
+  background: var(--page);
+}
+.lg-ambient {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(760px 520px at 8% 2%, rgba(65, 105, 225, 0.22), transparent 60%),
+    radial-gradient(720px 520px at 96% 4%, rgba(0, 180, 216, 0.2), transparent 58%),
+    radial-gradient(860px 620px at 88% 98%, rgba(203, 242, 74, 0.22), transparent 60%),
+    radial-gradient(760px 560px at 4% 96%, rgba(65, 105, 225, 0.16), transparent 60%),
+    var(--page);
+}
+
+/* Frosted glass — translucent, heavy blur + saturation, a bright specular rim.
+   Lenses the colourful field behind it (Apple Liquid Glass recipe). */
+.lg-glass {
+  background: rgba(255, 255, 255, 0.55);
+  -webkit-backdrop-filter: blur(34px) saturate(185%);
+  backdrop-filter: blur(34px) saturate(185%);
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  box-shadow:
+    0 10px 40px rgba(20, 33, 61, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.35);
+}
+/* Spotlight — the dark navy hero/detail panel (the reference's charcoal card).
+   Light content + lime accents live on top; the one dramatic surface per view. */
+.spotlight {
+  position: relative;
+  background:
+    radial-gradient(120% 140% at 100% 0%, rgba(203, 242, 74, 0.1), transparent 45%),
+    linear-gradient(155deg, #1a2d52 0%, #101c38 55%, #0b1428 100%);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow:
+    0 24px 60px rgba(8, 12, 24, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+/* Dark frosted rail — the sidebar, translucent so the colour field bleeds
+   through faintly behind it. */
+.lg-glass-dark {
+  background: linear-gradient(180deg, rgba(20, 34, 66, 0.86) 0%, rgba(14, 25, 50, 0.88) 100%);
+  -webkit-backdrop-filter: blur(30px) saturate(150%);
+  backdrop-filter: blur(30px) saturate(150%);
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+}
+/* Elevated sheet — modals, wizards, popovers. */
+.lg-sheet {
+  background:
+    linear-gradient(152deg, rgba(255, 255, 255, 0.3) 0%, rgba(255, 255, 255, 0.06) 42%, rgba(255, 255, 255, 0.14) 100%),
+    rgba(252, 253, 255, 0.66);
+  -webkit-backdrop-filter: blur(30px) saturate(200%);
+  backdrop-filter: blur(30px) saturate(200%);
+  border: 1px solid rgba(255, 255, 255, 0.62);
+  box-shadow:
+    0 24px 64px rgba(11, 16, 32, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+/* Small glass capsule — chips, quiet controls, tree +Add buttons. */
+.lg-chip {
+  background: rgba(255, 255, 255, 0.55);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
+  backdrop-filter: blur(12px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow:
+    0 2px 8px rgba(11, 16, 32, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  transition: transform 150ms ease, box-shadow 150ms ease, background-color 150ms ease;
+}
+.lg-chip:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.82);
+  transform: translateY(-1px);
+  box-shadow:
+    0 5px 14px rgba(11, 16, 32, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+.lg-chip:active:not(:disabled) { transform: translateY(0) scale(0.98); }
+
+/* Glass text field — inputs, selects, textareas. */
+.lg-field {
+  background: rgba(255, 255, 255, 0.66);
+  -webkit-backdrop-filter: blur(10px) saturate(150%);
+  backdrop-filter: blur(10px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  box-shadow:
+    inset 0 1px 3px rgba(11, 16, 32, 0.07),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  transition: border-color 150ms ease, box-shadow 150ms ease, background-color 150ms ease;
+}
+.lg-field:focus-within,
+.lg-field:focus {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(65, 105, 225, 0.55);
+  box-shadow:
+    inset 0 1px 3px rgba(11, 16, 32, 0.05),
+    0 0 0 3px rgba(65, 105, 225, 0.16);
+  outline: none;
+}
+
+/* Scrim behind modals. */
+.lg-scrim {
+  background: rgba(11, 16, 32, 0.34);
+  -webkit-backdrop-filter: blur(7px) saturate(120%);
+  backdrop-filter: blur(7px) saturate(120%);
+}
+
+/* Slim scrollbars inside glass. */
+.lg-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.lg-scroll::-webkit-scrollbar-thumb {
+  background: rgba(43, 45, 66, 0.18);
+  border-radius: 6px;
+}
+.lg-scroll::-webkit-scrollbar-thumb:hover { background: rgba(43, 45, 66, 0.3); }
+.lg-scroll::-webkit-scrollbar-track { background: transparent; }
+
+/* Motion — CSS-only (the embedded browser pane suppresses rAF). */
+@keyframes lg-rise-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes lg-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes lg-pop-in {
+  from { opacity: 0; transform: scale(0.96) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+.lg-anim-rise { animation: lg-rise-in 220ms cubic-bezier(0.32, 0.72, 0.24, 1) both; }
+.lg-anim-fade { animation: lg-fade-in 200ms ease both; }
+.lg-anim-pop { animation: lg-pop-in 240ms cubic-bezier(0.34, 1.28, 0.44, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .lg-ambient::after,
+  .lg-anim-rise,
+  .lg-anim-fade,
+  .lg-anim-pop { animation: none; }
+  .lg-chip,
+  .lg-chip:hover:not(:disabled),
+  .lg-chip:active:not(:disabled) { transform: none; }
+}
+
+/* ── Brand primitives ─────────────────────────────────────────────
+   Token buttons per Brand Guidelines §05. Min tap 40px, radius 12px,
+   clear keyboard focus ring. Accent buttons use dark ink for contrast. */
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 min-h-[40px]
+           px-4 py-2 rounded-btn text-sm font-semibold
+           transition-all duration-150 whitespace-nowrap
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2
+           disabled:cursor-not-allowed disabled:opacity-50 disabled:translate-y-0;
+  }
+  /* Primary CTA — electric lime with navy ink. The single punch colour. */
+  .btn-primary {
+    @apply bg-lime text-focus-navy
+           hover:brightness-105 hover:-translate-y-px focus-visible:ring-lime;
+    box-shadow: 0 6px 18px rgba(203, 242, 74, 0.4);
+  }
+  .btn-accent {
+    @apply bg-highlight-amber text-ink
+           hover:brightness-95 hover:-translate-y-px focus-visible:ring-highlight-amber;
+  }
+  .btn-action {
+    @apply bg-action-orange text-white
+           hover:brightness-95 hover:-translate-y-px focus-visible:ring-action-orange;
+  }
+  .btn-ghost {
+    @apply text-ink/80 hover:bg-reading-surface hover:text-ink focus-visible:ring-slate-blue;
+  }
+  .btn-secondary {
+    @apply bg-white text-ink border border-muted-gray
+           hover:bg-reading-surface focus-visible:ring-slate-blue;
+  }
+  /* Ghost-on-dark — for controls inside the navy spotlight panel. */
+  .btn-onspot {
+    @apply border border-white/15 bg-white/5 text-white/90
+           hover:bg-white/12 focus-visible:ring-lime;
+  }
+  .field {
+    @apply w-full rounded-btn border border-muted-gray bg-white px-3 py-2 text-sm text-ink
+           placeholder:text-slate-blue/60;
+    transition: border-color 150ms ease, box-shadow 150ms ease;
+  }
+  .field:focus,
+  .field:focus-within {
+    border-color: var(--lime-deep);
+    box-shadow: 0 0 0 3px rgba(203, 242, 74, 0.25);
+    outline: none;
+  }
+  .label {
+    @apply block text-xs font-semibold uppercase tracking-wide text-slate-blue mb-1.5;
+  }
+  /* Frosted "sheet" — the standard content card, translucent so it lenses the
+     colour field. Kept a touch more opaque than hero glass for text legibility. */
+  .sheet {
+    @apply rounded-card;
+    background: rgba(255, 255, 255, 0.66);
+    -webkit-backdrop-filter: blur(30px) saturate(180%);
+    backdrop-filter: blur(30px) saturate(180%);
+    border: 1px solid rgba(255, 255, 255, 0.7);
+    box-shadow: 0 8px 30px rgba(20, 33, 61, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  }
+}

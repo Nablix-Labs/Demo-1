@@ -10,13 +10,79 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import type { LearningPhase } from '@/lib/phases';
 import type { FlowStage } from '@/lib/flow';
 import { TOPICS } from '@/lib/topics';
-import { DEMO_CONCEPT_ID, type ActiveScaffold, type SessionRecord, type SessionReview, type SessionSummary } from '@/lib/api';
+import { isPhase3 } from '@/lib/phase3';
+import {
+  DEMO_CONCEPT_ID,
+  studentViewFor,
+  hasSelectableOptions,
+  type ActiveScaffold,
+  type QuestionType,
+  type SchemaQuestionOption,
+  type SessionRecord,
+  type SessionReview,
+  type SessionSummary,
+} from '@/lib/api';
 import { uid } from '@/lib/uid';
+import type { SupportRung } from '@/lib/supportLadder';
+import { EMPTY_APPLIED, type AppliedState } from '@/lib/responseGate';
+import type { InactivityPolicy } from '@/lib/inactivity';
+import {
+  appendCanvasEvent,
+  clearCanvasEvents,
+  itemBBox,
+  supersedeCanvasEvents,
+  tutorActionType,
+  tutorElementBBox,
+  tutorElementText,
+  type CanvasEvent,
+  type CanvasEventContext,
+  type CanvasEventDraft,
+  type CanvasSize,
+} from '@/lib/canvasMemory';
 
-// Sequential, human-readable student turn ids (voice contract §3): TURN-0001, …
-// One per LISTENING turn; kept sequential (not uuid) so logs read cleanly.
-let turnCounter = 0;
-const nextTurnId = () => `TURN-${String(++turnCounter).padStart(4, '0')}`;
+// A turn id is an idempotency key, so it must remain unique across reloads and
+// reconnects. A module-local counter restarted at TURN-0001 after refresh and
+// collided with the backend's cached turns from the same session.
+const nextTurnId = (): string => `TURN-${uid()}`;
+
+/**
+ * Tutor panel width.
+ *
+ * The default is the width the panel was designed at. The minimum is where the
+ * chat bubbles stop being readable; below it the panel should be collapsed, not
+ * shrunk, which is what the collapse control is for.
+ *
+ * The maximum is a share of the window rather than a fixed number of pixels,
+ * because the thing actually being protected is the canvas — a student writing
+ * maths needs room whatever monitor they are on. Half the window is generous
+ * and still leaves the canvas usable.
+ */
+export const PANEL_WIDTH_DEFAULT = 234;
+export const PANEL_WIDTH_MIN = 200;
+const PANEL_WIDTH_MAX_FRACTION = 0.5;
+/** Fallback for SSR and tests, where there is no window to measure. */
+const PANEL_WIDTH_MAX_FALLBACK = 560;
+
+export function panelWidthMax(viewportWidth?: number): number {
+  const w = viewportWidth ?? (typeof window === 'undefined' ? undefined : window.innerWidth);
+  if (w === undefined) return PANEL_WIDTH_MAX_FALLBACK;
+  // Never below the minimum: on a narrow window the fraction alone would invert
+  // the bounds and clamp() would then throw the two ends the wrong way round.
+  return Math.max(PANEL_WIDTH_MIN, Math.round(w * PANEL_WIDTH_MAX_FRACTION));
+}
+
+/**
+ * Clamped on write, not on read.
+ *
+ * A width dragged wide on an external monitor and restored on a laptop would
+ * otherwise leave the canvas a sliver, and the student would have to go find
+ * the drag handle before they could work. Rounded because a fractional width
+ * makes the panel's inner text land on half-pixels and blur.
+ */
+export function clampPanelWidth(px: number, viewportWidth?: number): number {
+  if (!Number.isFinite(px)) return PANEL_WIDTH_DEFAULT;
+  return Math.round(Math.min(Math.max(px, PANEL_WIDTH_MIN), panelWidthMax(viewportWidth)));
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -51,6 +117,21 @@ export type DrawnItem =
   | { id: string; kind: 'ellipse'; x: number; y: number; w: number; h: number; color: string; size: number }
   | { id: string; kind: 'triangle'; points: number[]; color: string; size: number };
 
+export interface CanvasStrokeSnapshot {
+  stroke_id: string;
+  tool: 'pen' | 'pencil' | 'highlighter' | 'eraser';
+  points: Array<{ x: number; y: number }>;
+  width: number;
+}
+
+export interface CanvasSnapshot {
+  snapshotDataUrl: string;
+  strokes: CanvasStrokeSnapshot[];
+  capturedAt: string;
+}
+
+export type CanvasExporter = () => CanvasSnapshot | null;
+
 /**
  * Tutor-drawn element, rendered on a separate (non-erasable) canvas layer.
  * Geometry is NORMALISED 0–1 relative to canvas width/height, so the backend
@@ -83,11 +164,35 @@ export interface CanvasDrawPayload {
 // (not React state) since it's plumbing, not UI.
 const seenDrawActionIds = new Set<string>();
 
+/**
+ * Which turn and question a canvas event belongs to (§8: "links canvas activity
+ * to the conversation turn and active problem").
+ *
+ * Read off live state at emit time rather than passed in by callers — a
+ * component that drew before the ids updated would otherwise file the event
+ * against the previous question, which is precisely the mix-up ordered memory
+ * exists to prevent.
+ */
+function eventContext(s: { currentTurnId: string | null; activeQuestionId: string | null }): CanvasEventContext {
+  return { turnId: s.currentTurnId, questionId: s.activeQuestionId };
+}
+
 export interface TranscriptMessage {
   id: string;
   role: 'ai' | 'student';
   text: string;
   partial?: boolean; // true while still transcribing
+  /**
+   * The student is still mid-turn — more speech may join this message.
+   *
+   * Streaming ASR emits a FINAL at every speech-final point, which in practice
+   * means every breath the student takes. Committing each one as its own
+   * message turned one spoken answer into six bubbles ("Okay. I think the
+   * answer for this question is" / "option b." / "Again, plus four." / …,
+   * Manjusha 6 Aug). How many bubbles a turn becomes is a presentation
+   * decision, so it is made here rather than blamed on the transcriber.
+   */
+  open?: boolean;
   timestamp: number;
 }
 
@@ -162,6 +267,22 @@ export interface NumeraState {
   activeConceptId: string;
   activeQuestionId: string | null;
 
+  // How the current question expects to be answered, and the choices it offers.
+  //
+  // The Student Model sends both — `question_type` on the interaction reply,
+  // `options` once on the session record — and until now the frontend read
+  // neither, so every question rendered as free response no matter what it was.
+  // A CHOICE_WITH_EXPLANATION question showed its text and nothing to choose
+  // from.
+  //
+  // Empty rather than null when there are no options, so callers can render the
+  // list unconditionally. `selectedOptionId` is the student's current pick; it
+  // is deliberately NOT persisted (see partialize) — a choice belongs to the
+  // attempt being made, not to the browser.
+  questionType: QuestionType | null;
+  questionOptions: SchemaQuestionOption[];
+  selectedOptionId: string | null;
+
   // Tutoring phase the session is in. Seeded from the session's current_phase
   // and advanced from each interaction response's current_phase — the value we
   // send back on the next turn, so the backend can drive phase transitions.
@@ -197,6 +318,20 @@ export interface NumeraState {
   // opens the mic when both are true.
   expectsStudentResponse: boolean;
   allowVoiceInput: boolean;
+  /**
+   * The tutor's last turn failed and nothing has replaced it.
+   *
+   * A failed turn leaves `expectsStudentResponse` true — deliberately, so the
+   * student can retry — and leaves `lastTutorTurnId` pointing at the last turn
+   * that DID work. To the inactivity controller that is indistinguishable from a
+   * student who has gone quiet on a live question, so it nudges them: the tutor
+   * errors twice, the student stops, and the third bubble asks "what is the
+   * first thing you would try?" (10 Aug). They already tried. Twice.
+   *
+   * Cleared by `setTutorTurn`, which is the only place a real tutor turn is
+   * established, so recovery needs no separate signal.
+   */
+  tutorTurnFailed: boolean;
 
   // Visual cue card — supporting guidance shown when the AI Engine flags a
   // mistake. `visualCueType` is the backend cue_type (picks which card renders);
@@ -210,9 +345,77 @@ export interface NumeraState {
    * step restored on reload would contradict the Student Model.
    */
   activeScaffold: ActiveScaffold | null;
+  /**
+   * The authorised hint currently ON SCREEN, or null.
+   *
+   * Distinct from `lastHintText`, which is the record kept for the "Need help?"
+   * replay and for `hint_count` — that one has to survive being dismissed. This
+   * is only what the student can see right now, so dismissing it clears this
+   * and leaves the record alone.
+   *
+   * It exists because a hint had no UI of its own in Guided Practice: it was
+   * appended to the transcript as an ordinary tutor bubble, so it looked exactly
+   * like the tutor talking and vanished entirely when the panel was collapsed
+   * (Sanya, 13 Aug 2026: "hints are gone noww").
+   *
+   * Never persisted — support state belongs to the live turn, and a hint
+   * restored on reload would contradict the Student Model.
+   */
+  visibleHint: string | null;
   visualCueVisible: boolean;
+  /**
+   * The backend's `cue_id` (e.g. 'VC-T01-ADD-NOT-MULTIPLY'), when it sent one.
+   *
+   * This is the cue's IDENTITY, and the only reliable evidence that what we are
+   * holding is an authored visual cue at all. `cue_type` is null on the real
+   * Topic 1 cues (Sanya, 13 Aug), so it can answer neither question.
+   */
+  visualCueId: string | null;
   visualCueType: string | null;
   visualCueDescription: string | null;
+  /** Illustration for the cue, when the backend sent a usable asset_url. */
+  visualCueAssetUrl: string | null;
+  /** Structured cue actions as sent. Stored whole; not rendered yet (Phase 2 §6). */
+  visualCueActions: Array<Record<string, unknown>> | null;
+
+  // Support ladder (§6 of the Phase 2 spec). `supportShown` is the highest rung
+  // revealed for the CURRENT question, so "Need help?" climbs rather than
+  // repeating itself; `lastHintText` is the tutor message from the most recent
+  // GIVE_HINT turn, which is the only hint source left now that /hint/request
+  // has been removed from the backend. Both reset when the question changes.
+  supportShown: SupportRung | null;
+  lastHintText: string | null;
+  /**
+   * The question whose Phase 3 attempt has been accepted and locked.
+   *
+   * Keyed by question id, not a flag: the lock must survive a reconnect and a
+   * duplicate reply (replaying it changes nothing) and must lift for a rescue
+   * question by virtue of its different id — Phase 3 spec §3.3/§3.4.
+   */
+  phase3LockedQuestionId: string | null;
+  /**
+   * A tutor line that has been shown but not yet spoken.
+   *
+   * Set when one screen hands the student to another: the phase-entry line
+   * belongs to the screen being ENTERED, so the departing screen cannot speak
+   * it — starting speech on a route that is unmounting is how this codebase
+   * previously ended up with two tutor voices at once. The arriving screen
+   * claims it, speaks it, and clears it.
+   */
+  pendingTutorSpeech: string | null;
+
+  // Ordering guard for interaction responses (Phase 2 handoff item 2). Holds the
+  // highest interaction_state_version applied and the accepted_turn_ids already
+  // rendered at it, so an out-of-order reply cannot overwrite newer state and a
+  // cached replay is applied exactly once. Never persisted — it describes what
+  // is on screen right now, not the lesson.
+  appliedResponse: AppliedState;
+
+  // Server-owned inactivity policy. Null until the backend sends one, and that
+  // is what keeps nudging off: the handoff requires explicit validated config
+  // with no model defaults, so a locally invented threshold would interrupt the
+  // first student who paused to think on a number nobody agreed.
+  inactivityPolicy: InactivityPolicy | null;
 
   // Transcript
   transcript: TranscriptMessage[];
@@ -230,6 +433,30 @@ export interface NumeraState {
   undone: DrawnItem[];         // student redo stack
   tutorElements: TutorElement[]; // AI-tutor marks (separate, non-erasable layer)
 
+  /**
+   * Ordered canvas memory — §8 of the Phase 2 V1-Hybrid spec.
+   *
+   * Append-only for the life of a question, so it records the ORDER in which
+   * the maths appeared and not just what survived. `items` answers "what is on
+   * the board"; this answers "what happened, and in what order" — which is the
+   * question the tutor needs answered to resume at the first unresolved step
+   * rather than starting the question again. See lib/canvasMemory.ts.
+   *
+   * Not persisted: it describes one live question, and a log restored from
+   * storage would tell the tutor about reasoning the student cannot see.
+   */
+  canvasEvents: CanvasEvent[];
+
+  /**
+   * Live pixel size of the drawing surface, reported by DrawingCanvas.
+   *
+   * The store holds raw Konva pixels in `items` but §8's bbox has to be
+   * normalised, like all tutor geometry — so the size has to be readable
+   * outside the component that measures it. Zero until first measured, which
+   * `itemBBox` treats as "no box yet" rather than inventing one.
+   */
+  canvasSize: CanvasSize;
+
   // Input mode (voice | text | canvas)
   inputMode: InputMode;
   textInput: string;
@@ -237,6 +464,14 @@ export interface NumeraState {
   // UI preferences (guided-learning layout)
   panelSide: 'left' | 'right';        // assistant panel side relative to canvas
   panelCollapsed: boolean;            // panel collapsed to a thin edge tab, giving canvas the width back
+  /**
+   * Tutor panel width in px, dragged by the student and kept across reloads.
+   *
+   * Clamped on write rather than on read: a width persisted on a wide monitor
+   * and restored on a laptop would otherwise leave the canvas a sliver, and the
+   * student would have to find the handle to get their work back.
+   */
+  panelWidth: number;
   transcriptVisible: boolean;         // transcript can be hidden
   toolbarPos: { x: number; y: number } | null; // null = default docked position
   toolbarCollapsed: boolean;          // collapsed to a small bubble
@@ -252,7 +487,7 @@ export interface NumeraState {
   ttsVoice: string | null;
 
   // Runtime: canvas PNG exporter, registered by the canvas for PDF notes
-  canvasExporter: (() => string | null) | null;
+  canvasExporter: CanvasExporter | null;
 
   // Group / live session (collaboration)
   sessionMode: 'solo' | 'group';
@@ -295,7 +530,11 @@ export interface NumeraState {
     phase: string;
     questionId: string | null;
     questionText: string | null;
+    /** From the interaction reply. Falls back to the session record's view. */
+    questionType?: QuestionType | null;
   }) => void;
+  /** The student picked an option. Null clears the pick. */
+  setSelectedOption: (optionId: string | null) => void;
   setQuestionNumber: (n: number) => void;
   setActiveEquation: (conceptId: string, questionId: string, label?: string) => void;
   setCurrentPhase: (phase: string) => void;
@@ -310,15 +549,63 @@ export interface NumeraState {
    *  phase. Call when the student's turn starts (session open, or after the tutor
    *  finishes and another response is expected). */
   beginListeningTurn: () => void;
+  /**
+   * Mint a turn id for a NON-voice submission (typed answer, Explain Again).
+   *
+   * Voice turns get theirs from beginListeningTurn when the mic opens, but text
+   * and Explain Again had no turn at all, so they sent none — which meant the
+   * backend could not dedupe them and a retry looked like a second answer.
+   * Returns the id so the caller can reuse it verbatim on a retry, which is the
+   * whole point of the contract.
+   */
+  beginSubmissionTurn: () => string;
   /** Record the tutor's reply turn (voice contract §11): store its tutor_turn_id
    *  as the next previous_tutor_turn_id, and the backend gating for the next turn. */
   setTutorTurn: (tutorTurnId: string | null, gating: { expects: boolean; allow: boolean }) => void;
+  /**
+   * Adopt the lineage of a tutor turn whose REPLY was never delivered.
+   *
+   * A turn the student barged in on is still evaluated and committed by the
+   * backend — it just drops the tutor's text and audio (Aditya, 15 Aug 2026).
+   * Its `tutor_turn_id` is the one the NEXT turn has to point at, and it arrives
+   * two to four seconds late, by which time the student is already mid-turn.
+   *
+   * Which is why this is not `setTutorTurn`: that also moves
+   * `expectsStudentResponse` and `allowVoiceInput` and clears `tutorTurnFailed`,
+   * and applying an abandoned turn's gating to the live one would let a stale
+   * frame close a mic the student is currently talking into. Only the pointer
+   * moves. `currentTurnId` is untouched for the same reason.
+   */
+  noteTutorLineage: (tutorTurnId: string) => void;
+  /** The tutor turn failed; the student is owed a reply, not a nudge. */
+  markTutorTurnFailed: () => void;
+  setVisibleHint: (hint: string | null) => void;
   setVisualCueVisible: (v: boolean) => void;
   setActiveScaffold: (s: ActiveScaffold | null) => void;
 
-  setVisualCue: (cue: { show: boolean; cueType?: string | null; description?: string | null }) => void;
+  setVisualCue: (cue: {
+    show: boolean;
+    cueId?: string | null;
+    cueType?: string | null;
+    description?: string | null;
+    assetUrl?: string | null;
+    actions?: Array<Record<string, unknown>> | null;
+  }) => void;
+  setSupportShown: (rung: SupportRung | null) => void;
+  setAppliedResponse: (a: AppliedState) => void;
+  setInactivityPolicy: (p: InactivityPolicy | null) => void;
+  setLastHintText: (text: string | null) => void;
+  lockPhase3Attempt: (questionId: string | null) => void;
+  /** Queue a line for the next screen to speak. */
+  setPendingTutorSpeech: (text: string | null) => void;
+  /** Take the queued line, clearing it — so two mounts cannot speak it twice. */
+  claimPendingTutorSpeech: () => string | null;
+  /** Position within this phase's question set, for the progress rail. */
+  setQuestionProgress: (index: number, total: number) => void;
   toggleVisualCue: () => void;
-  addTranscriptMessage: (msg: Omit<TranscriptMessage, 'id' | 'timestamp'>) => void;
+  /** Returns the new message's id, so a caller can later retract it. */
+  addTranscriptMessage: (msg: Omit<TranscriptMessage, 'id' | 'timestamp'>) => string;
+  removeTranscriptMessage: (id: string) => void;
   setTranscript: (msgs: Pick<TranscriptMessage, 'role' | 'text'>[]) => void;
   updatePartialTranscript: (text: string) => void;
   commitPartialTranscript: (text: string) => void;
@@ -336,9 +623,16 @@ export interface NumeraState {
   clearCanvas: () => void;
   applyCanvasDraw: (payload: CanvasDrawPayload | CanvasDrawPayload[]) => void;
   clearTutorMarks: () => void;
+  setCanvasSize: (size: CanvasSize) => void;
+  /** Record a support action (cue shown, scaffold step opened) in canvas memory. */
+  recordSupportEvent: (draft: CanvasEventDraft) => void;
   setInputMode: (m: InputMode) => void;
   setTextInput: (v: string) => void;
   setPanelSide: (s: 'left' | 'right') => void;
+  /** Drag the panel edge. Clamped — see `clampPanelWidth`. */
+  setPanelWidth: (px: number) => void;
+  /** Back to the designed width (double-click the handle). */
+  resetPanelWidth: () => void;
   togglePanelSide: () => void;
   togglePanelCollapsed: () => void;
   toggleTranscript: () => void;
@@ -348,7 +642,7 @@ export interface NumeraState {
   setMicButtonPos: (pos: { x: number; y: number } | null) => void;
   setCanvasGrid: (g: CanvasGrid) => void;
   setTtsVoice: (provider: string | null, voice: string | null) => void;
-  setCanvasExporter: (fn: (() => string | null) | null) => void;
+  setCanvasExporter: (fn: CanvasExporter | null) => void;
   startGroupSession: () => void;
   endGroupSession: () => void;
   upsertParticipant: (p: Participant) => void;
@@ -379,14 +673,16 @@ export interface NumeraState {
 const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
-  | 'setQuestionText' | 'applyBackendPhase' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'setTutorTurn'
-  | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue'
-  | 'addTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript' | 'commitPartialTranscript'
+  | 'setQuestionText' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'noteTutorLineage' | 'markTutorTurnFailed'
+  | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue' | 'setVisibleHint'
+  | 'setSupportShown' | 'setLastHintText' | 'lockPhase3Attempt'
+  | 'setPendingTutorSpeech' | 'claimPendingTutorSpeech' | 'setQuestionProgress' | 'setAppliedResponse' | 'setInactivityPolicy'
+  | 'addTranscriptMessage' | 'removeTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript' | 'commitPartialTranscript'
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
   | 'setShapeKind' | 'setEraserMode'
   | 'setStrokeColor' | 'setStrokeWidth' | 'addItem' | 'removeItem' | 'undo' | 'redo'
-  | 'clearCanvas' | 'applyCanvasDraw' | 'clearTutorMarks'
-  | 'setInputMode' | 'setTextInput' | 'setPanelSide' | 'togglePanelSide' | 'togglePanelCollapsed'
+  | 'clearCanvas' | 'applyCanvasDraw' | 'clearTutorMarks' | 'setCanvasSize' | 'recordSupportEvent'
+  | 'setInputMode' | 'setTextInput' | 'setPanelSide' | 'setPanelWidth' | 'resetPanelWidth' | 'togglePanelSide' | 'togglePanelCollapsed'
   | 'toggleTranscript' | 'setToolbarPos' | 'toggleToolbarCollapsed' | 'setToolbarOrientation' | 'setMicButtonPos' | 'setCanvasGrid' | 'setTtsVoice' | 'setActiveScaffold'
   | 'setCanvasExporter' | 'startGroupSession' | 'endGroupSession'
   | 'upsertParticipant' | 'removeParticipant' | 'setParticipantCursor'
@@ -399,8 +695,13 @@ const initial: Omit<
 > = {
   sessionId: null,
   sessionState: 'idle',
-  activeSlide: 2,
-  totalSlides: 9,
+  // Progress rail position. Both zero until a session reports a question set —
+  // they used to default to 2 and 9 and were never assigned by anything, so
+  // every student saw "step 3 of 9" for the whole lesson no matter where they
+  // actually were. The rail now hides itself until it knows something true
+  // (§2: "Progress rail — shows question progress, not mastery labels").
+  activeSlide: 0,
+  totalSlides: 0,
   // No hardcoded equation: the backend session drives the question. Empty until
   // it loads so a stale demo equation never flashes on the live build.
   questionText: '',
@@ -413,20 +714,38 @@ const initial: Omit<
   // routing the student to the lesson screen before the backend had spoken.
   activeConceptId: DEMO_CONCEPT_ID,
   activeQuestionId: null,
+  questionType: null as QuestionType | null,
+  questionOptions: [] as SchemaQuestionOption[],
+  selectedOptionId: null as string | null,
   currentPhase: '',
   backendSession: null,
   sessionSummary: null,
   sessionReview: null,
   micMuted: false,
-  voiceStatus: 'listening',
+  // 'idle' until something real happens: the socket opening or a session
+  // starting promotes it. Starting at 'listening' had the panel claiming
+  // "Listening…" — and the capture effect opening the mic — before any
+  // socket existed to receive the audio, which was then simply discarded.
+  voiceStatus: 'idle',
   currentTurnId: null,
   lastTutorTurnId: null,
   expectsStudentResponse: true,
   allowVoiceInput: true,
+  tutorTurnFailed: false,
   activeScaffold: null as ActiveScaffold | null,
+  visibleHint: null as string | null,
   visualCueVisible: false,
+  visualCueId: null as string | null,
   visualCueType: null,
   visualCueDescription: null,
+  visualCueAssetUrl: null as string | null,
+  visualCueActions: null as Array<Record<string, unknown>> | null,
+  supportShown: null as SupportRung | null,
+  lastHintText: null as string | null,
+  phase3LockedQuestionId: null as string | null,
+  pendingTutorSpeech: null as string | null,
+  appliedResponse: EMPTY_APPLIED,
+  inactivityPolicy: null as InactivityPolicy | null,
   // Empty. This used to seed a three-message demo conversation about
   // "2x + 5 = 13", which rendered for every student before the backend had said
   // anything — a real tester reported it as "I am getting my old questions"
@@ -442,10 +761,13 @@ const initial: Omit<
   items: [],
   undone: [],
   tutorElements: [],
+  canvasEvents: [] as CanvasEvent[],
+  canvasSize: { width: 0, height: 0 } as CanvasSize,
   inputMode: 'voice',
   textInput: '',
   panelSide: 'left',
   panelCollapsed: false,
+  panelWidth: PANEL_WIDTH_DEFAULT,
   transcriptVisible: true,
   toolbarPos: null,
   toolbarCollapsed: false,
@@ -480,10 +802,19 @@ const initial: Omit<
 
 export const useNumeraStore = create<NumeraState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
   ...initial,
 
-  setSessionId: (id) => set({ sessionId: id }),
+  // Opening a session resets the ordering guard. interaction_state_version is
+  // monotonic WITHIN a session, so a fresh session starts counting again — and
+  // carrying the previous session's high-water mark forward would make every
+  // reply in the new one look stale and be dropped, freezing the lesson.
+  // A Phase 3 lock belongs to the session that took the attempt. Persisting it
+  // (so a refresh cannot reopen closed evidence) means it can otherwise outlive
+  // its session and freeze the FIRST question of the next one, because a lock
+  // held with no active question yet reads as locked by design.
+  setSessionId: (id) =>
+    set({ sessionId: id, appliedResponse: EMPTY_APPLIED, phase3LockedQuestionId: null }),
   setSessionState: (sessionState) => set({ sessionState }),
   setActiveSlide: (activeSlide) => set({ activeSlide }),
   setTotalSlides: (totalSlides) => set({ totalSlides }),
@@ -507,7 +838,7 @@ export const useNumeraStore = create<NumeraState>()(
    *     `current_question`; treating that as "no question" blanked the canvas
    *     while the student was still working on it (Manjusha, 2026-07-29).
    */
-  applyBackendPhase: ({ phase, questionId, questionText }) =>
+  applyBackendPhase: ({ phase, questionId, questionText, questionType }) =>
     set((s) => {
       const phaseChanged = phase !== s.currentPhase;
       const text = questionText?.trim() ?? '';
@@ -519,15 +850,68 @@ export const useNumeraStore = create<NumeraState>()(
       // already finished (Sanya, 2026-07-29). Moving question or phase drops
       // it; the backend re-sends a cue when the new question needs one.
       const questionChanged = nextQuestionId !== s.activeQuestionId || phaseChanged;
+      // Options live on the session record, not on the reply, so they have to be
+      // looked up by id every time the question moves. The reply's own
+      // `question_type` wins when it sent one — it is the more current of the
+      // two — and the record's view fills in when it didn't.
+      const view = studentViewFor(s.backendSession, nextQuestionId);
+      const nextQuestionType =
+        questionType ?? view?.question_type ?? (questionChanged ? null : s.questionType);
+      const questionUsesOptions =
+        nextQuestionType === 'SINGLE_CHOICE' ||
+        nextQuestionType === 'CHOICE_WITH_EXPLANATION' ||
+        nextQuestionType === 'TRUE_FALSE_WITH_EXPLANATION';
       return {
         currentPhase: phase,
         activeQuestionId: nextQuestionId,
         questionText: text || (phaseChanged ? '' : s.questionText),
+        questionType: nextQuestionType,
+        questionOptions: questionUsesOptions
+          ? view?.options ?? (questionChanged ? [] : s.questionOptions)
+          : [],
+        // The support ladder is per-question too (§6: support is requested one
+        // rung at a time for the question being worked on). Carrying `supportShown`
+        // across a question boundary would leave the next question's "Need help?"
+        // starting at the scaffold, skipping the hint the student should get first.
         ...(questionChanged
-          ? { visualCueVisible: false, visualCueType: null, visualCueDescription: null }
+          ? {
+              visualCueVisible: false,
+              visualCueId: null,
+              visualCueType: null,
+              visualCueDescription: null,
+              visualCueAssetUrl: null,
+              visualCueActions: null,
+              supportShown: null,
+              lastHintText: null,
+              // A hint is about the question it was given on. Left up, it would
+              // sit beside the next question nudging the wrong step.
+              visibleHint: null,
+              // A pick belongs to the question it was made on. Carrying it over
+              // would show the next question opening with an answer already
+              // chosen.
+              selectedOptionId: null,
+              // So does the working. Nothing cleared the student's ink on a
+              // question change, so the next question opened underneath the
+              // last one's solution — and since the canvas is what gets
+              // submitted, the OCR then read both (row 32, 11 Aug).
+              items: [],
+              undone: [],
+              // The tutor's marks belong to the question they annotated.
+              tutorElements: [],
+              // Ordered memory is scoped to one question (§8: it exists so the
+              // tutor can resume at the first unresolved step of the CURRENT
+              // problem). Carrying it over would offer the tutor a completed
+              // question's reasoning as if it were unfinished. Cross-question
+              // history is session state, which the backend persists (§7).
+              canvasEvents: [],
+              // Ink and marks are gone, so a Phase 3 lock on the question just
+              // left has nothing to hold; keeping it would freeze the new one.
+              phase3LockedQuestionId: null,
+            }
           : {}),
       };
     }),
+  setSelectedOption: (selectedOptionId) => set({ selectedOptionId }),
   setQuestionNumber: (questionNumber) => set({ questionNumber }),
 
   // Switch the question the session runs on. Clearing sessionId makes the lesson
@@ -542,10 +926,43 @@ export const useNumeraStore = create<NumeraState>()(
     }),
 
   setCurrentPhase: (currentPhase) => set({ currentPhase }),
-  setBackendSession: (backendSession) => set({ backendSession }),
+  /**
+   * Store the session record — and backfill the options that depend on it.
+   *
+   * Options do not travel on an interaction reply; they are looked up out of
+   * this record by question id. So any turn applied BEFORE the record has
+   * loaded finds nothing and sets `questionOptions: []` — and nothing ever put
+   * them back, because every later reply is for the same question and so leaves
+   * the (empty) list alone. The student was left with a choice question and no
+   * choices: "Which is the general rule:" and nothing under it.
+   *
+   * That is the intermittent refresh case (Manjusha, 13 Aug 2026): reload
+   * clears the record, and whether the options survive depends on whether the
+   * record or the first reply lands first — a race the student should not be
+   * exposed to. Re-deriving here removes the ordering dependency entirely.
+   */
+  setBackendSession: (backendSession) =>
+    set((s) => {
+      const view = studentViewFor(backendSession, s.activeQuestionId);
+      if (!hasSelectableOptions(view) || s.questionOptions.length > 0) {
+        return { backendSession };
+      }
+      return {
+        backendSession,
+        questionOptions: view!.options,
+        // The record is also the authority on the type when the reply omitted
+        // it, which is what decides that a chooser is rendered at all.
+        questionType: s.questionType ?? view!.question_type,
+      };
+    }),
   setSessionSummary: (sessionSummary) => set({ sessionSummary }),
   setSessionReview: (sessionReview) => set({ sessionReview }),
-  clearSessionId: () => set({ sessionId: null }),
+  clearSessionId: () => set({
+    sessionId: null,
+    backendSession: null,
+    appliedResponse: EMPTY_APPLIED,
+    phase3LockedQuestionId: null,
+  }),
 
   // Mute is orthogonal to the turn phase (voice contract §12): the LISTENING/
   // PROCESSING/SPEAKING phase is owned by the turn machine (beginListeningTurn /
@@ -557,6 +974,12 @@ export const useNumeraStore = create<NumeraState>()(
 
   setVoiceStatus: (voiceStatus) => set({ voiceStatus }),
 
+  beginSubmissionTurn: () => {
+    const id = nextTurnId();
+    set({ currentTurnId: id });
+    return id;
+  },
+
   beginListeningTurn: () =>
     set({ currentTurnId: nextTurnId(), voiceStatus: 'listening' }),
 
@@ -565,22 +988,106 @@ export const useNumeraStore = create<NumeraState>()(
       lastTutorTurnId: tutorTurnId,
       expectsStudentResponse: expects,
       allowVoiceInput: allow,
+      // A turn landed, so whatever failed before it is over.
+      tutorTurnFailed: false,
     }),
 
-  setVisualCueVisible: (visualCueVisible) => set({ visualCueVisible }),
-  setActiveScaffold: (activeScaffold) => set({ activeScaffold }),
+  noteTutorLineage: (lastTutorTurnId) => set({ lastTutorTurnId }),
 
-  setVisualCue: ({ show, cueType = null, description = null }) =>
-    set({ visualCueVisible: show, visualCueType: cueType, visualCueDescription: description }),
+  markTutorTurnFailed: () => set({ tutorTurnFailed: true }),
+
+  setVisibleHint: (visibleHint) => set({ visibleHint }),
+
+  setVisualCueVisible: (visualCueVisible) => set({ visualCueVisible }),
+
+  // §8 logs SCAFFOLD_STEP as a SYSTEM_SUPPORT action, with `source_id` so every
+  // support action stays traceable to the DB content it came from (§13). Only a
+  // step the student can actually see is recorded: closing the panel is not a
+  // teaching move, it is the absence of one.
+  setActiveScaffold: (activeScaffold) =>
+    set((s) => ({
+      activeScaffold,
+      canvasEvents: activeScaffold
+        ? appendCanvasEvent(s.canvasEvents, {
+            actor: 'SYSTEM_SUPPORT',
+            action_type: 'SCAFFOLD_STEP',
+            content: activeScaffold.stepText,
+            source_id: activeScaffold.currentStepId,
+            target_object_id: activeScaffold.scaffoldId,
+          }, eventContext(s))
+        : s.canvasEvents,
+    })),
+
+  setVisualCue: ({
+    show, cueId = null, cueType = null, description = null, assetUrl = null, actions = null,
+  }) =>
+    set((s) => ({
+      visualCueVisible: show,
+      visualCueId: cueId,
+      visualCueType: cueType,
+      visualCueDescription: description,
+      visualCueAssetUrl: assetUrl,
+      visualCueActions: actions,
+      // The cue REPLACES the hint (Sanya, 13 Aug 2026: "i think it should be
+      // replaced after cue appears"). The ladder escalates hint → hint → cue,
+      // so a cue means the hints did not land — leaving them stacked above it
+      // gives the student three cards to read at the moment they are already
+      // stuck, and the newest support is the one meant to be acted on.
+      //
+      // Only on the way UP: hiding a cue must not also clear a hint that is
+      // still the active support.
+      ...(show ? { visibleHint: null } : {}),
+      canvasEvents: appendCanvasEvent(s.canvasEvents, {
+        actor: 'SYSTEM_SUPPORT',
+        action_type: show ? 'SHOW_CUE' : 'HIDE_CUE',
+        content: description,
+        // The cue's own id is its identity AND its DB provenance, so it is both
+        // what was acted on and where the support came from (Sanya, 13 Aug).
+        target_object_id: cueId,
+        source_id: cueId,
+      }, eventContext(s)),
+    })),
+  setSupportShown: (supportShown) => set({ supportShown }),
+  setAppliedResponse: (appliedResponse) => set({ appliedResponse }),
+  setInactivityPolicy: (inactivityPolicy) => set({ inactivityPolicy }),
+  setLastHintText: (lastHintText) => set({ lastHintText }),
+
+  // Idempotent by construction: locking the same question twice is the same
+  // state, which is what makes a duplicate reply harmless.
+  lockPhase3Attempt: (phase3LockedQuestionId) => set({ phase3LockedQuestionId }),
+
+  setPendingTutorSpeech: (pendingTutorSpeech) => set({ pendingTutorSpeech }),
+
+  // Claim-and-clear in one call: React mounts effects twice in development, and
+  // a read-then-clear pair would speak the line twice before the clear landed.
+  claimPendingTutorSpeech: () => {
+    const { pendingTutorSpeech } = get();
+    if (pendingTutorSpeech !== null) set({ pendingTutorSpeech: null });
+    return pendingTutorSpeech;
+  },
+  setQuestionProgress: (index, total) =>
+    set({ activeSlide: Math.max(0, index), totalSlides: Math.max(0, total) }),
   toggleVisualCue: () => set((s) => ({ visualCueVisible: !s.visualCueVisible })),
 
-  addTranscriptMessage: (msg) =>
+  addTranscriptMessage: (msg) => {
+    const id = uid();
     set((s) => ({
+      // Anything the tutor says ends the student's turn, so the next thing they
+      // say starts a new bubble instead of joining the last one. This is the
+      // only place the turn closes, because it is the only true signal: the
+      // tutor answering IS the turn being over.
       transcript: [
-        ...s.transcript,
-        { ...msg, id: uid(), timestamp: Date.now() },
+        ...(msg.role === 'ai'
+          ? s.transcript.map((m) => (m.open ? { ...m, open: false } : m))
+          : s.transcript),
+        { ...msg, id, timestamp: Date.now() },
       ],
-    })),
+    }));
+    return id;
+  },
+
+  removeTranscriptMessage: (id) =>
+    set((s) => ({ transcript: s.transcript.filter((m) => m.id !== id) })),
 
   setTranscript: (msgs) =>
     set({
@@ -628,13 +1135,27 @@ export const useNumeraStore = create<NumeraState>()(
   commitPartialTranscript: (text) =>
     set((s) => {
       const existing = s.transcript.find((m) => m.partial);
+      const settled = s.transcript.filter((m) => !m.partial);
+      const last = settled[settled.length - 1];
+
+      // Still the same spoken turn: join this segment onto it rather than
+      // starting another bubble. The turn is closed by the tutor replying, in
+      // addTranscriptMessage.
+      if (last && last.role === 'student' && last.open) {
+        const joined = `${last.text} ${text}`.replace(/\s+/g, ' ').trim();
+        return {
+          transcript: [...settled.slice(0, -1), { ...last, text: joined }],
+        };
+      }
+
       return {
         transcript: [
-          ...s.transcript.filter((m) => !m.partial),
+          ...settled,
           {
             id: existing?.id ?? uid(),
             role: 'student',
             text,
+            open: true,
             timestamp: existing?.timestamp ?? Date.now(),
           },
         ],
@@ -657,41 +1178,121 @@ export const useNumeraStore = create<NumeraState>()(
   setStrokeColor: (strokeColor) => set({ strokeColor }),
   setStrokeWidth: (strokeWidth) => set({ strokeWidth }),
 
+  // ── Canvas mutations, each also written to ordered memory (§8) ─────────────
+  //
+  // The events are emitted HERE rather than in DrawingCanvas because the store
+  // is the one place every path goes through — pointer strokes, the object
+  // eraser, undo/redo and the toolbar's clear. An emitter in the component
+  // would have to be repeated at each, and the one that got missed would be
+  // invisible: the board would still look right, and only the tutor would be
+  // working from an incomplete history.
+
   addItem: (item) =>
-    set((s) => ({ items: [...s.items, item], undone: [] })),
+    set((s) => ({
+      items: [...s.items, item],
+      undone: [],
+      canvasEvents: appendCanvasEvent(s.canvasEvents, {
+        actor: 'STUDENT',
+        action_type: 'WRITE',
+        target_object_id: item.id,
+        bbox: itemBBox(item, s.canvasSize),
+        content: item.kind === 'stroke' ? item.tool : item.kind,
+      }, eventContext(s)),
+    })),
 
   removeItem: (id) =>
-    set((s) => ({ items: s.items.filter((it) => it.id !== id) })),
+    set((s) => {
+      const removed = s.items.find((it) => it.id === id);
+      if (!removed) return s;
+      return {
+        items: s.items.filter((it) => it.id !== id),
+        canvasEvents: appendCanvasEvent(
+          supersedeCanvasEvents(s.canvasEvents, [id]),
+          { actor: 'STUDENT', action_type: 'ERASE', target_object_id: id },
+          eventContext(s),
+        ),
+      };
+    }),
 
+  // Undo is an ERASE in the log, not a rewind of it. The student did write the
+  // thing and then take it back, and that sequence is evidence — §8 keeps the
+  // trail of thinking, so removing the WRITE would make the log claim they
+  // never tried it.
   undo: () =>
     set((s) => {
       if (s.items.length === 0) return s;
       const last = s.items[s.items.length - 1];
-      return { items: s.items.slice(0, -1), undone: [...s.undone, last] };
+      return {
+        items: s.items.slice(0, -1),
+        undone: [...s.undone, last],
+        canvasEvents: appendCanvasEvent(
+          supersedeCanvasEvents(s.canvasEvents, [last.id]),
+          { actor: 'STUDENT', action_type: 'ERASE', target_object_id: last.id },
+          eventContext(s),
+        ),
+      };
     }),
 
   redo: () =>
     set((s) => {
       if (s.undone.length === 0) return s;
       const last = s.undone[s.undone.length - 1];
-      return { items: [...s.items, last], undone: s.undone.slice(0, -1) };
+      return {
+        items: [...s.items, last],
+        undone: s.undone.slice(0, -1),
+        canvasEvents: appendCanvasEvent(s.canvasEvents, {
+          actor: 'STUDENT',
+          action_type: 'WRITE',
+          target_object_id: last.id,
+          bbox: itemBBox(last, s.canvasSize),
+          content: last.kind === 'stroke' ? last.tool : last.kind,
+        }, eventContext(s)),
+      };
     }),
 
-  clearCanvas: () => set({ items: [], undone: [] }),
+  clearCanvas: () =>
+    set((s) => ({
+      items: [],
+      undone: [],
+      canvasEvents: appendCanvasEvent(
+        clearCanvasEvents(s.canvasEvents),
+        { actor: 'STUDENT', action_type: 'CLEAR' },
+        eventContext(s),
+      ),
+    })),
+
+  setCanvasSize: (canvasSize) => set({ canvasSize }),
+
+  recordSupportEvent: (draft) =>
+    set((s) => ({ canvasEvents: appendCanvasEvent(s.canvasEvents, draft, eventContext(s)) })),
 
   applyCanvasDraw: (payload) =>
     set((s) => {
+      // Phase 3 spec §3.2/§1.5: no tutor ink or correction overlays during an
+      // independent attempt, and no canvas_draw built from Phase 3 metadata.
+      // Refused HERE rather than hidden at the render, so a drawing the backend
+      // still sends never enters the tutor layer at all — hiding it would leave
+      // it waiting to appear the moment the phase changed.
+      if (isPhase3(s.currentPhase)) return {};
       // The WS path delivers one action per message; REST responses deliver a
       // list of actions. Accept both here so no caller has to care.
       const actions = Array.isArray(payload) ? payload : [payload];
       let tutorElements = s.tutorElements;
+      let canvasEvents = s.canvasEvents;
+      const context = eventContext(s);
       for (const action of actions) {
         // A new "replace" resets the layer and the idempotency window.
         if (action.mode === 'replace') {
           seenDrawActionIds.clear();
+          // The marks leave the screen; their events stay in the log as
+          // SUPERSEDED. The tutor drew them, so they are part of how the
+          // reasoning unfolded even once they are gone (§11).
+          canvasEvents = supersedeCanvasEvents(canvasEvents, tutorElements.map((el) => el.id));
           tutorElements = [];
         }
-        // Drop a duplicate command (re-delivered on reconnect).
+        // Drop a duplicate command (re-delivered on reconnect). It must not
+        // reach the log either — a reconnect would otherwise show the tutor
+        // annotating twice and read as a repeated teaching move.
         if (action.actionId) {
           if (seenDrawActionIds.has(action.actionId)) continue;
           seenDrawActionIds.add(action.actionId);
@@ -700,9 +1301,20 @@ export const useNumeraStore = create<NumeraState>()(
           ...el,
           id: el.id ?? uid(),
         }));
+        for (const element of incoming) {
+          canvasEvents = appendCanvasEvent(canvasEvents, {
+            actor: 'TUTOR',
+            action_type: tutorActionType(element.kind),
+            target_object_id: element.id,
+            bbox: tutorElementBBox(element),
+            content: tutorElementText(element),
+            math_text: element.tex?.trim() || null,
+            source_id: action.actionId ?? null,
+          }, context);
+        }
         tutorElements = [...tutorElements, ...incoming];
       }
-      return { tutorElements };
+      return { tutorElements, canvasEvents };
     }),
 
   clearTutorMarks: () => {
@@ -713,6 +1325,8 @@ export const useNumeraStore = create<NumeraState>()(
   setInputMode: (inputMode) => set({ inputMode }),
   setTextInput: (textInput) => set({ textInput }),
 
+  setPanelWidth: (px) => set({ panelWidth: clampPanelWidth(px) }),
+  resetPanelWidth: () => set({ panelWidth: PANEL_WIDTH_DEFAULT }),
   setPanelSide: (panelSide) => set({ panelSide }),
   togglePanelSide: () => set((s) => ({ panelSide: s.panelSide === 'left' ? 'right' : 'left' })),
   togglePanelCollapsed: () => set((s) => ({ panelCollapsed: !s.panelCollapsed })),
@@ -812,11 +1426,30 @@ export const useNumeraStore = create<NumeraState>()(
     {
       name: 'numera-store',
       storage: createJSONStorage(() => localStorage),
-      // Persist only durable UI preferences + learning progress — never
-      // session/canvas/transcript state, which is backend-driven & ephemeral.
+      // Persist durable UI preferences, learning progress — and the session id.
+      //
+      // The id used to be excluded with the rest of the "backend-driven &
+      // ephemeral" state, and that reasoning was wrong in one specific way:
+      // dropping it did not give the student a clean slate, it gave them a
+      // SECOND session on a topic they already had open. The Student Model
+      // resumed it and stamped routing_reason_code=SESSION_RESUMED, which the
+      // backend cannot serialise into InteractionResponse, so every turn in
+      // that session answered 500 (7 Aug: 164 session starts, 16 resumed).
+      //
+      // Canvas and transcript stay out — those really are per-session.
+      // A persisted id CAN outlive the backend, whose sessions are in memory;
+      // isStaleSessionError + clearSessionId in useDemoTutor is what recovers
+      // from that, rather than leaving the lesson wedged.
       partialize: (s) => ({
+        sessionId: s.sessionId,
+        // Phase 3 spec §3.3: "Keep the locked state through reconnect." The
+        // canvas and transcript are deliberately per-session below, but an
+        // accepted independent attempt must NOT come back editable after a
+        // refresh — that would let a student reopen closed evidence.
+        phase3LockedQuestionId: s.phase3LockedQuestionId,
         panelSide: s.panelSide,
         panelCollapsed: s.panelCollapsed,
+        panelWidth: s.panelWidth,
         transcriptVisible: s.transcriptVisible,
         toolbarPos: s.toolbarPos,
         toolbarCollapsed: s.toolbarCollapsed,

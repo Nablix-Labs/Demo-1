@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { ORIENTATION_VIDEOS, orientationFor, orientationVideoForTopicCode, orientationYouTubeIdForTopicCode } from '@/lib/demoContent';
+import { ORIENTATION_VIDEOS, orientationFor, orientationVideoForTopicCode } from '@/lib/demoContent';
 
 describe('ORIENTATION_VIDEOS', () => {
   it('covers exactly the six files that exist in the container', () => {
@@ -71,44 +71,8 @@ describe('orientation video source precedence', () => {
 });
 
 /**
- * YouTube takes priority over the blob file (2026-07-28).
- *
- * The blob MP4s are ~163 MB each and made the whole app sluggish while one was
- * playing. A backend-supplied asset_url still wins over both — the Student
- * Model owning its own content beats either of our stopgaps.
+ * Reverted to Azure blob on 2026-08-10 (storage decision: one ecosystem), so
+ * there is no second host to prefer any more — asset_url, then the file we
+ * resolve from the topic code, and that is the whole rule. The precedence
+ * block above is now the only one, which is the point.
  */
-describe('orientation video hosting preference', () => {
-  const resolve = (assetUrl: string | null, topicCode: string) => {
-    const heavy = Boolean(assetUrl && assetUrl.includes('nablixmathvideos.blob.core.windows.net'));
-    if (assetUrl && !heavy) return { kind: 'backend', value: assetUrl };
-    const yt = orientationYouTubeIdForTopicCode(topicCode);
-    if (yt) return { kind: 'youtube', value: yt };
-    const blob = orientationVideoForTopicCode(topicCode);
-    return blob ? { kind: 'blob', value: blob } : { kind: 'none', value: null };
-  };
-
-  it('prefers YouTube over the heavy blob file', () => {
-    expect(resolve(null, 'ALG-ORI-02')).toEqual({ kind: 'youtube', value: 'Yl-uS9s4xM0' });
-  });
-
-  it('lets a non-blob backend asset_url win over both', () => {
-    expect(resolve('https://cdn.example.com/x.mp4', 'ALG-ORI-02').kind).toBe('backend');
-  });
-
-  it('overrides an asset_url that points at the heavy blob', () => {
-    // The backend now sends asset_url — at the ~163 MB Azure file, which is
-    // exactly the thing making the app sluggish.
-    expect(resolve(
-      'https://nablixmathvideos.blob.core.windows.net/numeradev/ALG-ORI-02.mp4',
-      'ALG-ORI-02',
-    )).toEqual({ kind: 'youtube', value: 'Yl-uS9s4xM0' });
-  });
-
-  it('falls back to the blob for topics not yet on YouTube', () => {
-    // Only 1-3 are uploaded so far.
-    expect(resolve(null, 'ALG-04')).toEqual({
-      kind: 'blob',
-      value: 'https://nablixmathvideos.blob.core.windows.net/numeradev/ALG-ORI-04.mp4',
-    });
-  });
-});

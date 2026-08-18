@@ -1,141 +1,166 @@
 'use client';
 
 /**
- * Key Notes at a Glance — the revision-notes page generated after the session.
- * Topic-wise cards of the summary, tips, tricks and formulas covered, so the
- * student can revise quickly before an exam. Each card can be read out loud.
+ * Key Notes at a Glance — the revision notes, as a notebook.
+ *
+ * Revision notes ARE a notebook, so the page is one: two facing sheets of ruled
+ * paper that a student turns through. Each topic runs from the front of its own
+ * spread and continues onto another if it needs the room.
+ *
+ * This route leaves PageShell deliberately. The shared shell puts a translucent
+ * glass panel over the app's ambient gradient, and paper seen through tinted
+ * glass stops being paper — the whole point here is a surface that reads as a
+ * physical sheet. Every other library route keeps the shell.
  */
 
-import { useCallback, useState } from 'react';
-import { Volume2, Square, Sparkles, Flag } from 'lucide-react';
-import PageShell, { Chip } from '@/components/PageShell';
+import { useCallback, useMemo, useState } from 'react';
+import dynamic from 'next/dynamic';
+import { Volume2, Square } from 'lucide-react';
 import { KEY_NOTES, noteToSpeech, type KeyNote } from '@/lib/keynotes';
 import { speakTutor, stopTutorSpeech } from '@/lib/tts';
+import { spreadsForAll, type Spread } from '@/lib/keynotes-paginate';
+import TopicRail from '@/components/keynotes/TopicRail';
+import { PAGE_HEIGHT } from '@/components/keynotes/Page';
+
+/**
+ * Browser-only: StPageFlip measures and mutates the DOM the moment it mounts,
+ * so it cannot run during the static export. The placeholder holds the book's
+ * exact footprint to stop the page reflowing when it arrives.
+ */
+const NotebookFlip = dynamic(() => import('@/components/keynotes/NotebookFlip'), {
+  ssr: false,
+  loading: () => (
+    <div
+      className="rounded-[28px] border-2 border-[#A9D3F2] bg-[#FDFBF7]"
+      style={{ width: 1092, height: PAGE_HEIGHT + 12 }}
+      aria-hidden="true"
+    />
+  ),
+});
 
 export default function KeyNotesPage() {
+  const spreads = useMemo(() => spreadsForAll(KEY_NOTES), []);
+  const [index, setIndex] = useState(0);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
+
+  const note = KEY_NOTES.find((n) => n.id === spreads[index]?.topicId) ?? KEY_NOTES[0];
 
   const stop = useCallback(() => {
     stopTutorSpeech();
     setSpeakingId(null);
   }, []);
 
-  const toggle = useCallback((n: KeyNote) => {
-    if (speakingId === n.id) { stop(); return; }
-    setSpeakingId(n.id);
-    // The tutor's own voice, not the browser's. This page used to call
-    // speechSynthesis directly, so revision notes were read out in a robotic
-    // voice while every other phase used the student's tier provider.
-    speakTutor(noteToSpeech(n), () => setSpeakingId(null));
-  }, [speakingId, stop]);
-
-  return (
-    <PageShell
-      title="Key Notes at a glance"
-      subtitle="Quick revision from today’s session — read before your exam."
-      action={<Chip tone="outline">{KEY_NOTES.length} topics</Chip>}
-    >
-      <div className="flex flex-col gap-5">
-        {KEY_NOTES.map((n) => (
-          <article key={n.id} className="rounded-xl border border-muted-gray bg-white overflow-hidden">
-            {/* header */}
-            <div className="flex items-start justify-between gap-4 px-6 pt-5 pb-4 border-b border-muted-gray">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <h2 className="text-[16px] font-semibold text-ink">{n.topic}</h2>
-                  {n.flagged && (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-reading-surface px-2 py-0.5 text-[10px] font-semibold tracking-[0.4px] uppercase text-slate-blue">
-                      <Flag size={10} strokeWidth={2} /> Your slip today
-                    </span>
-                  )}
-                </div>
-                <p className="text-[12.5px] text-[#5a5a5a] mt-1 leading-relaxed">{n.meaning}</p>
-              </div>
-              <button
-                onClick={() => toggle(n)}
-                aria-label={speakingId === n.id ? 'Stop reading' : 'Read out loud'}
-                className="flex-shrink-0 inline-flex items-center gap-1.5 rounded-md border border-focus-navy px-3 py-1.5 text-[12px] font-semibold text-ink hover:bg-focus-navy hover:text-white transition-colors"
-              >
-                {speakingId === n.id ? <><Square size={13} strokeWidth={2.2} /> Stop</> : <><Volume2 size={14} strokeWidth={1.9} /> Read</>}
-              </button>
-            </div>
-
-            {/* body */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5 px-6 py-5">
-              <Block label="How to start">
-                <p className="text-[13px] text-[#3a3a3a] leading-relaxed">{n.howToStart}</p>
-              </Block>
-
-              <Block label="Formula / rule">
-                <div className="rounded-md border border-muted-gray bg-reading-surface px-3 py-2 text-[14px] text-ink font-[Cambria_Math,Georgia,serif]">
-                  {n.formula}
-                </div>
-              </Block>
-
-              <Block label="Steps to follow">
-                <ol className="flex flex-col gap-1">
-                  {n.steps.map((s, idx) => (
-                    <li key={idx} className="flex gap-2 text-[13px] text-[#3a3a3a]">
-                      <span className="text-slate-blue font-semibold tabular-nums">{idx + 1}.</span>
-                      <span>{s}</span>
-                    </li>
-                  ))}
-                </ol>
-              </Block>
-
-              <div className="flex flex-col gap-5">
-                <Block label="Be careful with">
-                  <ul className="flex flex-col gap-1">
-                    {n.beCareful.map((b, idx) => (
-                      <li key={idx} className="flex gap-2 text-[13px] text-[#3a3a3a]">
-                        <span className="text-slate-blue">•</span><span>{b}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </Block>
-
-                <Block label="Tips & tricks">
-                  <ul className="flex flex-col gap-1">
-                    {n.tips.map((t, idx) => (
-                      <li key={idx} className="flex gap-2 text-[13px] text-[#3a3a3a]">
-                        <Sparkles size={13} strokeWidth={1.8} className="mt-0.5 flex-shrink-0 text-slate-blue" />
-                        <span>{t}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </Block>
-              </div>
-
-              <Block label="Mini example">
-                <div className="rounded-md border border-muted-gray bg-white px-3 py-2.5 flex flex-col gap-0.5">
-                  {n.example.map((e, idx) => (
-                    <span key={idx} className="text-[14px] text-ink font-[Cambria_Math,Georgia,serif]">{e}</span>
-                  ))}
-                </div>
-              </Block>
-
-              <Block label="Exam reminder">
-                <p className="text-[13px] text-[#3a3a3a] leading-relaxed">{n.examTip}</p>
-              </Block>
-            </div>
-          </article>
-        ))}
-
-        <p className="text-[12px] text-slate-blue leading-relaxed px-1">
-          Today you learned how to solve linear equations. Before the exam, remember to move terms
-          carefully, change signs correctly, expand brackets fully, and check your answer by
-          substituting it back into the original equation.
-        </p>
-      </div>
-    </PageShell>
+  const toggle = useCallback(
+    (n: KeyNote) => {
+      if (speakingId === n.id) {
+        stop();
+        return;
+      }
+      setSpeakingId(n.id);
+      // The tutor's own voice, not the browser's — every other phase reads in
+      // the student's tier provider and this page used to be the exception.
+      speakTutor(noteToSpeech(n), () => setSpeakingId(null));
+    },
+    [speakingId, stop],
   );
-}
 
-function Block({ label, children }: { label: string; children: React.ReactNode }) {
+  /** 1-based spread a topic opens on, for the contents page. */
+  const pageOf = useCallback(
+    (id: string) => spreads.findIndex((s) => s.topicId === id) + 1,
+    [spreads],
+  );
+
+  const selectTopic = useCallback(
+    (id: string) => {
+      // Land on the topic's FIRST spread, so a student three pages into one
+      // topic who picks another arrives at its beginning.
+      const first = spreads.findIndex((s) => s.topicId === id);
+      if (first >= 0 && first !== index) {
+        stop();
+        setIndex(first);
+      }
+    },
+    [spreads, index, stop],
+  );
+
+  const onSpreadChange = useCallback(
+    (next: number) => {
+      // A turn that leaves the topic should not leave it still reading aloud
+      // into a page that is no longer open.
+      if (spreads[next]?.topicId !== spreads[index]?.topicId) stop();
+      setIndex(next);
+    },
+    [spreads, index, stop],
+  );
+
+  const renderHeader = useCallback(
+    (spread: Spread) => {
+      const n = KEY_NOTES.find((k) => k.id === spread.topicId);
+      if (!n || spread.page > 1) return null; // continuation sheets carry no title
+      return (
+        <div className="mb-4 flex items-start justify-between gap-4">
+          <h2 className="min-w-0 text-[20px] font-semibold text-ink leading-tight tracking-[-0.01em]">
+            {n.topic}
+          </h2>
+          <button
+            onClick={() => toggle(n)}
+            aria-label={speakingId === n.id ? 'Stop reading' : 'Read out loud'}
+            className="flex-shrink-0 inline-flex items-center gap-1.5 rounded-full border border-focus-navy px-3 py-1.5 text-[11.5px] font-semibold text-ink hover:bg-focus-navy hover:text-white transition-colors"
+          >
+            {speakingId === n.id ? (
+              <>
+                <Square size={12} strokeWidth={2.2} /> Stop
+              </>
+            ) : (
+              <>
+                <Volume2 size={13} strokeWidth={1.9} /> Read
+              </>
+            )}
+          </button>
+        </div>
+      );
+    },
+    [speakingId, toggle],
+  );
+
   return (
-    <section>
-      <div className="text-[10px] font-semibold tracking-widest uppercase text-slate-blue mb-2">{label}</div>
-      {children}
-    </section>
+    <main
+      className="flex-1 min-w-0 overflow-y-auto bg-[#F2F4F8] px-6 py-10"
+      aria-label="Key Notes at a glance"
+    >
+      <div className="mx-auto w-full max-w-[1400px]">
+        <header className="mb-8">
+          <h1 className="text-[30px] font-semibold text-ink leading-[1.15] tracking-[-0.02em]">
+            Key Notes at a glance
+          </h1>
+          <p className="text-[14px] text-slate-blue mt-1.5">
+            Quick revision from today’s session — read before your exam.
+          </p>
+        </header>
+
+        <div className="flex gap-6 items-start">
+          <TopicRail
+            notes={KEY_NOTES}
+            activeId={note.id}
+            pageOf={pageOf}
+            onSelect={selectTopic}
+          />
+
+          <NotebookFlip
+            spreads={spreads}
+            spreadIndex={index}
+            onSpreadChange={onSpreadChange}
+            renderHeader={renderHeader}
+            // Verso carries the book, recto the topic — the convention a printed
+            // book uses, and it stops the same line appearing twice.
+            runningHead={(s, side) =>
+              side === 'left'
+                ? 'Key notes · today’s session'
+                : `Topic ${String(KEY_NOTES.findIndex((k) => k.id === s.topicId) + 1).padStart(2, '0')} of ${String(KEY_NOTES.length).padStart(2, '0')}`
+            }
+          />
+        </div>
+      </div>
+    </main>
   );
 }

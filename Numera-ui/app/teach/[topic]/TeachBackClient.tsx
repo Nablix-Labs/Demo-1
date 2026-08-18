@@ -71,7 +71,7 @@ export default function TeachBackClient({ topicId }: { topicId: string }) {
       setSending(true);
       const next = turnNumber + 1;
       setTurnNumber(next);
-      const snapshot = source === 'CANVAS' ? canvasExporter?.() ?? null : null;
+      const snapshot = source === 'CANVAS' ? canvasExporter?.()?.snapshotDataUrl ?? null : null;
       const res = await submitTeachTurn({
         session_id: null,
         student_id: studentId(),

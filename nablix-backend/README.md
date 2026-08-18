@@ -158,7 +158,7 @@ sequenceDiagram
 FastAPI exposes generated OpenAPI docs at:
 
 ```text
-http://127.0.0.1:8000/openapi.json
+http://127.0.0.1:8001/openapi.json
 ```
 
 That generated file only shows routes that are implemented in code. The product-level API specification also explains intended behavior, validation rules, errors, and examples.
@@ -167,6 +167,62 @@ API specification:
 
 - Google Doc: https://docs.google.com/document/d/1ldLwWdYZlFAlMHMlZa_yffyr5APPfF15_0Fql1VvPh8
 - Notion: https://app.notion.com/p/3808b00a832581b388ccc56ca5857226
+
+## Student Model JSON Contract
+
+Nablix runs on port `8001` and forwards learning-state events to Saravanan's
+Student Model at `https://nablix.ai:8080/session/event`. The frontend never
+calls that endpoint directly; the existing bearer token is forwarded by the
+Nablix adapter.
+
+The adapter is the single JSON boundary. It converts a validated Pydantic event
+to JSON-safe Python data, lets `httpx` encode that data through `json=payload`,
+then parses and validates the object returned by the Student Model. Do not add
+`json.dumps()` or a second serializer around this flow.
+
+```python
+payload = event.model_dump(mode="json", exclude_none=True)
+response = await post_json(
+    "student_model",
+    f"{settings.student_model_url.rstrip('/')}/session/event",
+    payload,
+    {"Authorization": f"Bearer {access_token}"},
+    settings.adapter_request_timeout_seconds,
+    settings.adapter_request_retry_count,
+)
+validated = StudentModelSessionEventResponse.model_validate(response)
+```
+
+For example, Nablix sends this JSON body for an assessed answer:
+
+```json
+{
+  "request_id": "REQ-001",
+  "event_type": "CORRECT_ATTEMPT",
+  "topic_id": "ALG_LINEAR_ONE_STEP",
+  "student_id": "ST001",
+  "timestamp": "2026-08-10T10:00:00Z",
+  "source_turn_id": "TURN-004",
+  "expected_journey_version": 7,
+  "question_id": "Q-13",
+  "micro_skill_ids": ["solve-one-step-equations"],
+  "student_response": "x=4"
+}
+```
+
+It accepts a complete Schema `3.0` response containing `schema_version`,
+`request_id`, `processed_at`, `journey_state`, `phase_payload`,
+`event_result`, `routing`, and `status`. The adapter rejects an incomplete or
+incorrectly typed response before it can affect session state. Public Nablix
+responses expose only the safe `student_view` projection; answer keys and
+other tutor-only fields remain on the server.
+
+For an outdated `expected_journey_version`, the Student Model must return HTTP
+`409` with this JSON body:
+
+```json
+{ "error_code": "JOURNEY_VERSION_CONFLICT" }
+```
 
 ## Mock Adapter Design
 
@@ -246,19 +302,19 @@ Install dependencies:
 Run the API:
 
 ```bash
-.venv/bin/uvicorn app.main:app --reload
+.venv/bin/uvicorn app.main:app --reload --port 8001
 ```
 
 Open the API docs:
 
 ```text
-http://127.0.0.1:8000/docs
+http://127.0.0.1:8001/docs
 ```
 
 Check health:
 
 ```bash
-curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8001/health
 ```
 
 Expected shape:

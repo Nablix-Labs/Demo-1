@@ -13,7 +13,6 @@ belongs in the concrete adapter modules.
 from dataclasses import dataclass
 
 from app.adapters.base import (
-    RAGServiceAdapter,
     SafetyServiceAdapter,
     StudentModelAdapter,
     TutorEngineAdapter,
@@ -22,7 +21,6 @@ from app.adapters.base import (
 )
 from app.adapters.mathpix_vision import MathpixVisionOCRAdapter
 from app.adapters.openai_vision import OpenAIVisionOCRAdapter
-from app.adapters.rag_service import RAGServiceAdapterClient
 from app.adapters.safety_service import MockSafetyServiceAdapter
 from app.adapters.student_model import StudentModelServiceAdapter
 from app.adapters.tutor_engine import TutorEngineServiceAdapter
@@ -36,7 +34,6 @@ class AdapterSet:
     """The active set of adapters, typed by interface rather than implementation."""
 
     tutor: TutorEngineAdapter
-    rag: RAGServiceAdapter
     student_model: StudentModelAdapter
     voice: VoiceServiceAdapter
     vision: VisionOCRAdapter
@@ -82,7 +79,6 @@ def get_adapters() -> AdapterSet:
     settings = get_settings()
     return AdapterSet(
         tutor=TutorEngineServiceAdapter(settings), # type: ignore
-        rag=RAGServiceAdapterClient(settings), # type: ignore
         student_model=StudentModelServiceAdapter(settings), # type: ignore
         voice=VoiceServiceAdapterClient(settings),
         vision=_build_vision_adapter(settings),

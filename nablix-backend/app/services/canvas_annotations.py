@@ -1,10 +1,12 @@
 from app.models.adapters import (
     AnnotationIntent,
     OCRTextRegion,
+    SpatialMathToken,
     TutorMistakeClassification,
     TutorResult,
 )
 from app.models.canvas import CanvasDrawPayload, TutorElement
+from app.services.canvas_spatial import canonical_math_token_text
 
 
 Box = tuple[float, float, float, float]
@@ -24,7 +26,11 @@ def assign_step_ids(regions: list[OCRTextRegion]) -> list[OCRTextRegion]:
     return numbered_regions
 
 
-def plan_canvas_draw(tutor: TutorResult, regions: list[OCRTextRegion]) -> list[CanvasDrawPayload]:
+def plan_canvas_draw(
+    tutor: TutorResult,
+    regions: list[OCRTextRegion],
+    spatial_tokens: list[SpatialMathToken] | None = None,
+) -> list[CanvasDrawPayload]:
     """Convert grounded tutor annotation intents into frontend draw commands."""
 
     classification = tutor.mistake_classification
@@ -35,11 +41,30 @@ def plan_canvas_draw(tutor: TutorResult, regions: list[OCRTextRegion]) -> list[C
     if target_region is None:
         return []
 
-    # ponytail: whole-line marks only. Model-estimated OCR boxes can't support
-    # glyph-level precision; reinstate span interpolation only with an OCR
-    # provider that returns native geometry (Mathpix / Google Vision).
-    # target_span stays in the DTO contract for that upgrade.
-    target_box = _line_box(target_region)
+    if len(classification.target_token_ids) == 0 or classification.error_token is None:
+        return _whole_region_draw(tutor, classification, target_region)
+
+    matching_tokens = [
+        tok
+        for tok in spatial_tokens or []
+        if tok.token_id in classification.target_token_ids
+    ]
+    if (
+        len(matching_tokens) != len(classification.target_token_ids)
+        or any(token.alignment_confidence < 0.9 for token in matching_tokens)
+        or _normalised_token_text(matching_tokens) != _normalised_text(classification.error_token)
+    ):
+        return []
+
+    boxes = [token.bounding_box for token in matching_tokens if token.bounding_box]
+    if len(boxes) != len(matching_tokens):
+        return []
+    min_x = min(box.get("x", target_region.x) for box in boxes)
+    min_y = min(box.get("y", target_region.y) for box in boxes)
+    max_x = max(box.get("x", target_region.x) + box.get("width", target_region.w) for box in boxes)
+    max_y = max(box.get("y", target_region.y) + box.get("height", target_region.h) for box in boxes)
+    target_box: Box = (min_x, min_y, max(0.01, max_x - min_x), max(0.01, max_y - min_y))
+
     elements = _elements_for(classification, tutor.annotation_intents, target_box)
     if not elements:
         return []
@@ -53,6 +78,37 @@ def plan_canvas_draw(tutor: TutorResult, regions: list[OCRTextRegion]) -> list[C
     ]
 
 
+def _whole_region_draw(
+    tutor: TutorResult,
+    classification: TutorMistakeClassification,
+    region: OCRTextRegion,
+) -> list[CanvasDrawPayload]:
+    intents = [
+        intent
+        for intent in tutor.annotation_intents
+        if intent.target_step_id == classification.mistake_step_id
+    ]
+    if (
+        classification.target_span is not None
+        or classification.replacement_text is not None
+        or _normalised_text(classification.target_text or "")
+        != _normalised_text(region.text)
+        or len(intents) != 1
+        or intents[0].kind != "circle_target"
+    ):
+        return []
+    return [
+        CanvasDrawPayload(
+            action_id=f"canvas-line-review-{region.step_id}",
+            mode="append",
+            elements=[
+                _ellipse_element((region.x, region.y, region.w, region.h), 1)
+            ],
+        )
+    ]
+
+
+
 def _region_for(step_id: str | None, regions: list[OCRTextRegion]) -> OCRTextRegion | None:
     if step_id is None:
         return None
@@ -62,8 +118,12 @@ def _region_for(step_id: str | None, regions: list[OCRTextRegion]) -> OCRTextReg
     return None
 
 
-def _line_box(region: OCRTextRegion) -> Box:
-    return (region.x, region.y, region.w, region.h)
+def _normalised_text(value: str) -> str:
+    return canonical_math_token_text(value)
+
+
+def _normalised_token_text(tokens: list[SpatialMathToken]) -> str:
+    return "".join(_normalised_text(token.text) for token in tokens)
 
 
 def _elements_for(

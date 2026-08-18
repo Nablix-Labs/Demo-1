@@ -1,17 +1,59 @@
 import asyncio
 
+import pytest
 from fastapi import WebSocket
 from fastapi.testclient import TestClient
 
+from app.adapters import provider
+from app.adapters.student_model import StudentModelServiceAdapter
+from app.core.config import Settings
 from app.main import app
-from app.services import interaction_service
+from app.models.student_model_session import (
+    StudentModelSessionEvent,
+    StudentModelSessionEventResponse,
+)
+from app.services import session_service
 from app.services.voice.streaming import streaming_server
+from tests.test_session_events import _event_response, _session_opened_response
 
 client = TestClient(app, headers={"Authorization": "Bearer test-token"})
 
 
+@pytest.fixture(autouse=True)
+def schema_student_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(
+        student_model_url="https://student-model.test",
+        student_model_topic_codes={"ALG_LINEAR_ONE_STEP": "ALG-ORI-02"},
+        use_mock_student_model=False,
+        use_mock_voice=True,
+        use_mock_vision=True,
+        use_openai_ai_engine=False,
+        qdrant_url="https://qdrant.test",
+        qdrant_api_key="test-key",
+    )
+
+    async def send_session_event(
+        adapter: StudentModelServiceAdapter,
+        event: StudentModelSessionEvent,
+        access_token: str,
+    ) -> StudentModelSessionEventResponse:
+        del adapter, access_token
+        body = (
+            _session_opened_response("PHASE_2_GUIDED_LEARNING")
+            if event.event_type == "SESSION_OPENED"
+            else _event_response(event.event_type, event.request_id)
+        )
+        body["request_id"] = event.request_id
+        return StudentModelSessionEventResponse.model_validate(body)
+
+    monkeypatch.setattr(provider, "get_settings", lambda: settings)
+    monkeypatch.setattr(session_service, "get_settings", lambda: settings)
+    monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", send_session_event)
+
+
 def test_streaming_tutor_call_forwards_bearer_token(monkeypatch) -> None:
     captured_headers: dict[str, str] = {}
+    captured_payload: dict[str, object] = {}
 
     class FakeResponse:
         status_code = 200
@@ -26,9 +68,14 @@ def test_streaming_tutor_call_forwards_bearer_token(monkeypatch) -> None:
             *,
             json: dict[str, object],
             headers: dict[str, str],
+            timeout: float | None = None,
         ) -> FakeResponse:
             assert path == "/voice/transcript"
+            # Voice turns get the same explicit budget as /canvas/submit —
+            # they inherited a 15s default while canvas got 40s.
+            assert timeout == 40.0
             captured_headers.update(headers)
+            captured_payload.update(json)
             return FakeResponse()
 
     monkeypatch.setattr(streaming_server, "get_backend_http_client", FakeClient)
@@ -41,10 +88,49 @@ def test_streaming_tutor_call_forwards_bearer_token(monkeypatch) -> None:
             0.94,
             1.0,
             "test-token",
+            "TURN-BROWSER-1",
+            "TURN-TUTOR-0",
+            True,
+            "canvas-1",
         )
     )
 
     assert captured_headers == {"Authorization": "Bearer test-token"}
+    assert captured_payload["turn_id"] == "TURN-BROWSER-1"
+    assert captured_payload["previous_tutor_turn_id"] == "TURN-TUTOR-0"
+    assert captured_payload["transcript_final"] is True
+    assert captured_payload["canvas_snapshot_id"] == "canvas-1"
+
+
+@pytest.mark.parametrize(
+    ("turn_id", "transcript_final"),
+    [(None, True), ("TURN-BROWSER-1", False), ("TURN-BROWSER-1", None)],
+)
+def test_streaming_rejects_non_final_or_unidentified_turns(
+    monkeypatch: pytest.MonkeyPatch,
+    turn_id: str | None,
+    transcript_final: bool | None,
+) -> None:
+    async def unexpected_client() -> None:
+        raise AssertionError("invalid voice turn reached the backend client")
+
+    monkeypatch.setattr(streaming_server, "get_backend_http_client", unexpected_client)
+
+    with pytest.raises(ValueError):
+        asyncio.run(
+            streaming_server.evaluate_voice_transcript(
+                "SESSION001",
+                "ST001",
+                "x equals five",
+                0.94,
+                1.0,
+                "test-token",
+                turn_id,
+                None,
+                transcript_final,
+                None,
+            )
+        )
 
 
 def _start_session(student_id: str) -> str:
@@ -54,7 +140,6 @@ def _start_session(student_id: str) -> str:
             "student_id": student_id,
             "concept_id": "ALG_LINEAR_ONE_STEP",
             "interaction_mode": "VOICE",
-            "initial_phase": "DIAGNOSTIC",
         },
     )
     assert response.status_code == 200
@@ -111,7 +196,7 @@ def test_voice_session_start_sets_stream_active_state() -> None:
     assert body["voice_session_token"] == f"mock_voice_token_{session_id}"
     assert body["fallback_active"] is False
 
-    session_response = client.get(f"/session/{session_id}")
+    session_response = client.get(f"/session/{session_id}", params={"student_id": "ST010"})
     assert session_response.status_code == 200
     assert session_response.json()["voice_state"]["stream_active"] is True
 
@@ -134,6 +219,8 @@ def test_voice_transcript_routes_through_interaction_flow() -> None:
             "audio_duration_seconds": 3.2,
             "turn": "STUDENT",
             "timestamp": "2026-06-10T10:00:00Z",
+            "turn_id": "TURN-BROWSER-1",
+            "transcript_final": True,
         },
     )
 
@@ -141,26 +228,22 @@ def test_voice_transcript_routes_through_interaction_flow() -> None:
     body = response.json()
     assert body["session_id"] == session_id
     assert body["student_id"] == "ST011"
-    assert body["message"] == "Let us review the equation and try the next step carefully."
-    assert body["message_voice"] == "Let us review the equation and try the next step carefully."
+    # The authored support hint is delivered alongside the tutor reply, not in
+    # place of it (see "fix: preserve guided tutor reply alongside support").
+    assert body["support_message"] == "Undo the addition first."
+    assert body["message"]
+    assert body["message"] != "Undo the addition first."
+    assert body["message_voice"] == body["message"]
     assert body["voice_state"]["stream_active"] is True
     assert body["voice_state"]["current_turn"] == "STUDENT"
     assert body["voice_state"]["last_transcript_confidence"] == 0.94
     assert body["interaction_mode"] == "VOICE"
+    assert body["accepted_turn_id"] == "TURN-BROWSER-1"
+    assert isinstance(body["tutor_turn_id"], str)
 
 
-def test_voice_transcript_normalizes_spoken_correct_answer(monkeypatch) -> None:
+def test_voice_transcript_normalizes_spoken_correct_answer() -> None:
     session_id = _start_session("ST013")
-
-    async def get_second_question(
-        concept_id: str,
-        phase: str,
-        served_question_ids: list[str] | None,
-    ) -> tuple[str, str, str]:
-        del concept_id, phase, served_question_ids
-        return ("Solve for x: x + 4 = 9", "x = 5", "ALG_EQ_DIAG_002")
-
-    monkeypatch.setattr(interaction_service, "get_next_question", get_second_question)
 
     response = client.post(
         "/voice/transcript",
@@ -172,15 +255,74 @@ def test_voice_transcript_normalizes_spoken_correct_answer(monkeypatch) -> None:
             "audio_duration_seconds": 3.2,
             "turn": "STUDENT",
             "timestamp": "2026-06-10T10:00:00Z",
+            "turn_id": "TURN-BROWSER-2",
+            "transcript_final": True,
         },
     )
 
     assert response.status_code == 200
     body = response.json()
-    assert body["message"] == "Your value is correct. How did you work it out?"
-    assert body["message_voice"] == "Your value is correct. How did you work it out?"
+    assert body["message"] == "Correct. Nice work explaining your answer."
+    assert body["message_voice"] == body["message"]
     assert body["answer_value_confirmed"] is True
-    assert body["question_completed"] is False
+    assert body["question_completed"] is True
+
+
+def test_low_confidence_voice_requires_written_input_without_penalty() -> None:
+    session_id = _start_session("ST014")
+
+    response = client.post(
+        "/voice/transcript",
+        json={
+            "session_id": session_id,
+            "student_id": "ST014",
+            "transcript": "x equals five",
+            "confidence": 0.2,
+            "audio_duration_seconds": 3.2,
+            "turn": "STUDENT",
+            "timestamp": "2026-06-10T10:00:00Z",
+            "turn_id": "TURN-BROWSER-LOW-CONFIDENCE",
+            "transcript_final": True,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "CLARIFICATION_REQUIRED"
+    assert body["next_expected_input"] == "WRITE"
+    assert body["attempt_increment"] == 0
+    assert body["attempt_count"] == 0
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("turn_id", None), ("transcript_final", False)],
+)
+def test_voice_transcript_requires_stable_final_turn(
+    field: str,
+    value: str | bool | None,
+) -> None:
+    session_id = _start_session("ST014")
+    payload: dict[str, object] = {
+        "session_id": session_id,
+        "student_id": "ST014",
+        "transcript": "x equals five",
+        "confidence": 0.94,
+        "audio_duration_seconds": 3.2,
+        "turn": "STUDENT",
+        "timestamp": "2026-06-10T10:00:00Z",
+        "turn_id": "TURN-BROWSER-3",
+        "transcript_final": True,
+    }
+    if value is None:
+        payload.pop(field)
+    else:
+        payload[field] = value
+
+    response = client.post("/voice/transcript", json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["field"] == field
 
 
 def test_voice_transcript_rejects_invalid_confidence() -> None:

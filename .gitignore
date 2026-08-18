@@ -23,6 +23,12 @@ dist/
 *.pem
 .vercel
 
+# Local agent workspaces
+.agents/
+.codex*/
+.local-testing/
+mathtutor-student/
+
 # graphify
 graphify-out/
 Numera_Azure_VM_Deployment_System_Design.docx
