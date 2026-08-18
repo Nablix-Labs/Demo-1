@@ -23,8 +23,12 @@ import { useDemoTutor, resetSessionStart } from '@/hooks/useDemoTutor';
 import { useFlowNav } from '@/lib/useFlowNav';
 import { demoFor, type DemoWorksheet } from '@/lib/demoContent';
 import { cn } from '@/lib/cn';
-import { sessionTopicTitle, type FiveCategorySummary, type QuestionOutcome } from '@/lib/api';
+import {
+  fetchPhase4Review, sessionTopicTitle,
+  type FiveCategorySummary, type QuestionOutcome, type Phase4Review as Phase4ReviewPayload,
+} from '@/lib/api';
 import { speakTutor, stopTutorSpeech } from '@/lib/tts';
+import Phase4Review from '@/components/Phase4/Phase4Review';
 
 /** Real session outcomes rendered through the same worksheet layout. */
 function outcomeWorksheets(outcomes: QuestionOutcome[]): DemoWorksheet[] {
@@ -93,6 +97,33 @@ export default function ReviewPage() {
     }
   }, [apiEnabled, sessionId, end]);
 
+  /**
+   * Phase 4 replaces this screen the moment the backend can produce it.
+   *
+   * Additive rather than a rewrite: /phase4/review does not exist yet (§6.10
+   * never specifies what Chiru sends, and his orchestration is unwritten), and
+   * ripping out the screen live students currently reach in favour of one with
+   * no data source would leave the review blank for everyone until his work
+   * lands. When the payload arrives the Phase 4 experience renders; until then
+   * this page behaves exactly as it did.
+   *
+   * `endedSessionId` rather than `sessionId`: end() clears the session id, so a
+   * fetch keyed on the live id would be cancelled by its own success.
+   */
+  const [phase4, setPhase4] = useState<Phase4ReviewPayload | null>(null);
+  const endedSessionId = sessionSummary?.session_id ?? null;
+  useEffect(() => {
+    if (!apiEnabled || !endedSessionId || !currentTopicId) return;
+    let alive = true;
+    void fetchPhase4Review(endedSessionId, currentTopicId)
+      .then((res) => { if (alive) setPhase4(res); })
+      // A review that cannot be fetched falls through to the screen below. The
+      // student has finished their work either way, and an error page in place
+      // of their results would be the worse of the two failures.
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [apiEnabled, endedSessionId, currentTopicId]);
+
   // Escape hatch for a session the backend refuses to end: drop it locally so
   // a fresh one can start, and go back to the lesson to produce reviewable work.
   const backToLesson = useCallback(() => {
@@ -145,6 +176,30 @@ export default function ReviewPage() {
   }, [speakingId, stop]);
 
   const goto = (next: number) => { stop(); setShowMarks(false); setI(next); };
+
+  // Phase 4 (§8). Takes precedence over everything below: when the backend has
+  // produced a real review, no fallback is relevant.
+  if (phase4) {
+    return (
+      <PhaseGate phase="review">
+        <PageShell title="Review &amp; feedback" subtitle={phase4.topic_title} wide>
+          <Phase4Review
+            review={phase4}
+            onEnd={() => {
+              completePhase('review');
+              // §6.9 makes routing the backend's decision, and
+              // `recommended_next_action` carries it — but the specification
+              // never enumerates its values (START_NEXT_TOPIC is the only one
+              // shown, in an example). Until Chiru confirms the vocabulary,
+              // this takes the existing pass route rather than branching on a
+              // string we would be guessing at.
+              decideReview('pass');
+            }}
+          />
+        </PageShell>
+      </PhaseGate>
+    );
+  }
 
   // The session couldn't be ended and nothing was graded — showing the demo
   // worksheets here would present fake results as the student's own.

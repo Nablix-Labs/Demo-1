@@ -828,7 +828,7 @@ export interface SessionReview {
 
 /** /session/end returns the ended record; the backend may also attach an explicit
  *  `summary` object and an `attempt_count` alongside the existing fields. */
-export interface SessionEndResponse extends SessionRecord {
+export interface SessionEndResponse extends SessionRecord, Phase4ReviewCarrier {
   attempt_count?: number;
   summary?: Partial<SessionSummary>;
   session_summary?: {
@@ -875,6 +875,123 @@ export function toSessionSummary(res: SessionEndResponse | null | undefined): Se
   };
 }
 
+// ── Phase 4 Review ────────────────────────────────────────────────────────────
+/**
+ * The tutor-review payload the frontend renders (Phase 4 spec §8).
+ *
+ * `tutor_replays` and `student_insights` are Sanya's engine output copied
+ * VERBATIM — the field names below are the ones already shipped in
+ * `app/models/phase4_review.py`, not a parallel invention. Chiru's orchestration
+ * (§6.10) validates that output, merges the authoritative backend evidence and
+ * sends the result here, so this type is deliberately her schema plus only what
+ * the screen cannot render without:
+ *
+ *   question_journey  the left rail (§8.4). Sanya never sees the CORRECT
+ *                     questions, and the rail has to show the whole Phase 3
+ *                     journey, so it cannot be derived from the replays.
+ *   question_text     shown above the tutor board. Present on Chiru's
+ *                     `ReplayItem` and dropped from her `TutorReplay`.
+ *   work_artifact     §8.4 asks for the student's original work and a page
+ *                     selector; her `TutorReplay` carries only `artifact_id`.
+ *
+ * Nothing here is computed client-side. §6.9 makes correctness, counts, mastery
+ * and routing authoritative backend data, and a screen that recomputes any of
+ * them is a second source of truth for the thing the spec says has one.
+ */
+export interface Phase4WorkArtifactPage {
+  page_no: number;
+  image_url: string;
+}
+
+export interface Phase4WorkArtifact {
+  artifact_id: string;
+  page_count: number;
+  /** Ordered page images (§5.4: Phase 4 uses these, not the combined PDF). */
+  pages: Phase4WorkArtifactPage[];
+  pdf_url?: string | null;
+}
+
+export interface Phase4FirstError {
+  summary: string;
+  /** Which page of the student's work the error is on. Null = not page-located. */
+  student_page_no?: number | null;
+}
+
+export interface Phase4ReplayStep {
+  sequence_no: number;
+  /** Spoken. */
+  narration: string;
+  /** Written onto the tutor board. */
+  tutor_write: string;
+}
+
+export interface Phase4Replay {
+  review_item_id: string;
+  question_id: string;
+  attempt_id: string;
+  artifact_id: string;
+  question_text: string;
+  first_error: Phase4FirstError;
+  replay_steps: Phase4ReplayStep[];
+  work_artifact: Phase4WorkArtifact;
+}
+
+/**
+ * §7.6. `learning_pattern_summary` and `recent_improvement_summary` are
+ * nullable BY DESIGN, not by omission: §7.6C says a single isolated occurrence
+ * must produce null rather than a claim, and §8.9 says the section is then
+ * hidden. Typing them as always-present would invite a screen that prints an
+ * empty heading where the spec asks for silence.
+ */
+export interface Phase4StudentInsights {
+  strength_summary: string;
+  development_summary: string;
+  learning_pattern_summary: string | null;
+  recent_improvement_summary: string | null;
+  next_practice_focus: string;
+  personalised_notes: string[];
+}
+
+export type Phase4Evaluation = 'CORRECT' | 'INCORRECT' | 'WRONG';
+
+/** One question from the Phase 3 journey, for the left rail. */
+export interface Phase4JourneyEntry {
+  question_id: string;
+  question_text: string;
+  evaluation: Phase4Evaluation;
+  /**
+   * The replay this question owns, or null when there is none.
+   *
+   * The link is explicit rather than matched on `question_id` because a single
+   * question can be answered wrong, repaired in Phase 2 and answered again
+   * (§3, Case C) — so question id alone does not identify an attempt, and
+   * matching on it would attach one replay to two rows.
+   */
+  review_item_id: string | null;
+}
+
+export interface Phase4Review {
+  student_id: string;
+  topic_id: string;
+  topic_title: string;
+  topic_outcome: { mastery_status: string; recommended_next_action: string };
+  question_journey: Phase4JourneyEntry[];
+  /** Wrong Phase 3 submissions only (§3). Empty is normal, not an error (§8.8). */
+  tutor_replays: Phase4Replay[];
+  student_insights: Phase4StudentInsights;
+  /** §5.8 `key_takeaways_json`. Falls back to `personalised_notes` — see keyTakeaways(). */
+  key_takeaways?: string[];
+}
+
+/**
+ * The review may also ride along on /session/end rather than needing its own
+ * round trip. Declared optional on both so whichever Chiru wires up first works
+ * with no second frontend release.
+ */
+export interface Phase4ReviewCarrier {
+  phase_4_review?: Phase4Review | null;
+}
+
 /** POST /session/end — student_id must own the session (else 404). */
 export async function endSession(sessionId: string, student: string = studentId()) {
   const res = await api.post<SessionEndResponse>('/session/end', {
@@ -882,6 +999,41 @@ export async function endSession(sessionId: string, student: string = studentId(
     student_id: student,
   });
   return res.data;
+}
+
+/**
+ * POST /phase4/review — the tutor review for a completed topic.
+ *
+ * NOT YET IMPLEMENTED BY THE BACKEND. §6.10 step 3 ends "Send the review
+ * response to Manav" and the 36-page specification never says what that
+ * response looks like, so this is the shape proposed to Chirudeva rather than
+ * one he has agreed. The engine half already exists —
+ * `POST /ai-engine/phase4/review/generate` — but it takes his
+ * `phase_4_review_context` as its INPUT, so it is not callable from here:
+ * §6.7 puts replay selection on his side and §12 makes him authoritative for
+ * evidence, and a frontend that assembled that context would be deciding both.
+ *
+ * Returns null on 404 so a backend that has not shipped the route yet reads as
+ * "no review available" and falls through to the pre-Phase-4 screen, rather
+ * than presenting an error to a student who did nothing wrong.
+ */
+export async function fetchPhase4Review(
+  sessionId: string,
+  topicId: string,
+  student: string = studentId(),
+): Promise<Phase4Review | null> {
+  try {
+    const res = await api.post<Phase4Review>('/phase4/review', {
+      session_id: sessionId,
+      student_id: student,
+      topic_id: topicId,
+    });
+    return res.data ?? null;
+  } catch (err) {
+    const status = (err as { response?: { status?: number } })?.response?.status;
+    if (status === 404) return null;
+    throw err;
+  }
 }
 
 // ── /interaction (text) ───────────────────────────────────────────────────────
