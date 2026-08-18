@@ -24,9 +24,10 @@ import { useFlowNav } from '@/lib/useFlowNav';
 import { demoFor, type DemoWorksheet } from '@/lib/demoContent';
 import { cn } from '@/lib/cn';
 import {
-  fetchPhase4Review, sessionTopicTitle,
-  type FiveCategorySummary, type QuestionOutcome, type Phase4Review as Phase4ReviewPayload,
+  sessionTopicTitle,
+  type FiveCategorySummary, type QuestionOutcome,
 } from '@/lib/api';
+import { phase4FromSession, type SessionForPhase4 } from '@/lib/phase4FromSession';
 import { speakTutor, stopTutorSpeech } from '@/lib/tts';
 import Phase4Review from '@/components/Phase4/Phase4Review';
 
@@ -97,32 +98,7 @@ export default function ReviewPage() {
     }
   }, [apiEnabled, sessionId, end]);
 
-  /**
-   * Phase 4 replaces this screen the moment the backend can produce it.
-   *
-   * Additive rather than a rewrite: /phase4/review does not exist yet (§6.10
-   * never specifies what Chiru sends, and his orchestration is unwritten), and
-   * ripping out the screen live students currently reach in favour of one with
-   * no data source would leave the review blank for everyone until his work
-   * lands. When the payload arrives the Phase 4 experience renders; until then
-   * this page behaves exactly as it did.
-   *
-   * `endedSessionId` rather than `sessionId`: end() clears the session id, so a
-   * fetch keyed on the live id would be cancelled by its own success.
-   */
-  const [phase4, setPhase4] = useState<Phase4ReviewPayload | null>(null);
-  const endedSessionId = sessionSummary?.session_id ?? null;
-  useEffect(() => {
-    if (!apiEnabled || !endedSessionId || !currentTopicId) return;
-    let alive = true;
-    void fetchPhase4Review(endedSessionId, currentTopicId)
-      .then((res) => { if (alive) setPhase4(res); })
-      // A review that cannot be fetched falls through to the screen below. The
-      // student has finished their work either way, and an error page in place
-      // of their results would be the worse of the two failures.
-      .catch(() => undefined);
-    return () => { alive = false; };
-  }, [apiEnabled, endedSessionId, currentTopicId]);
+
 
   // Escape hatch for a session the backend refuses to end: drop it locally so
   // a fresh one can start, and go back to the lesson to produce reviewable work.
@@ -145,6 +121,23 @@ export default function ReviewPage() {
   // when the session is real and unnamed, say only when it happened.
   const topicLabel = live ? sessionTopicTitle(backendSession) : demo.label;
   const subtitle = [topicLabel, 'today'].filter(Boolean).join(' · ');
+
+  /**
+   * Phase 4 replaces this screen the moment the backend produces one.
+   *
+   * There is no endpoint: Chiru's orchestration (PR #156) generates the review
+   * on entering Review and attaches it to the session record, so /session/end
+   * already carries it and no second request is needed. `phase4FromSession`
+   * owns reading it and says what is still missing from that payload.
+   *
+   * Additive rather than a rewrite — a session that produced no review (an
+   * older backend, a generation that failed, a topic that never reached
+   * Review) falls through to the screen below exactly as before.
+   */
+  const phase4 = phase4FromSession(
+    backendSession as SessionForPhase4 | null,
+    topicLabel || 'This topic',
+  );
 
   const total = WORKSHEETS.length;
   const done = i >= total;                 // past the last sheet → final summary

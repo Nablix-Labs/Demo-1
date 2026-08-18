@@ -828,7 +828,7 @@ export interface SessionReview {
 
 /** /session/end returns the ended record; the backend may also attach an explicit
  *  `summary` object and an `attempt_count` alongside the existing fields. */
-export interface SessionEndResponse extends SessionRecord, Phase4ReviewCarrier {
+export interface SessionEndResponse extends SessionRecord {
   attempt_count?: number;
   summary?: Partial<SessionSummary>;
   session_summary?: {
@@ -987,15 +987,6 @@ export interface Phase4Review {
   key_takeaways?: string[];
 }
 
-/**
- * The review may also ride along on /session/end rather than needing its own
- * round trip. Declared optional on both so whichever Chiru wires up first works
- * with no second frontend release.
- */
-export interface Phase4ReviewCarrier {
-  phase_4_review?: Phase4Review | null;
-}
-
 /** POST /session/end — student_id must own the session (else 404). */
 export async function endSession(sessionId: string, student: string = studentId()) {
   const res = await api.post<SessionEndResponse>('/session/end', {
@@ -1005,40 +996,6 @@ export async function endSession(sessionId: string, student: string = studentId(
   return res.data;
 }
 
-/**
- * POST /phase4/review — the tutor review for a completed topic.
- *
- * NOT YET IMPLEMENTED BY THE BACKEND. §6.10 step 3 ends "Send the review
- * response to Manav" and the 36-page specification never says what that
- * response looks like, so this is the shape proposed to Chirudeva rather than
- * one he has agreed. The engine half already exists —
- * `POST /ai-engine/phase4/review/generate` — but it takes his
- * `phase_4_review_context` as its INPUT, so it is not callable from here:
- * §6.7 puts replay selection on his side and §12 makes him authoritative for
- * evidence, and a frontend that assembled that context would be deciding both.
- *
- * Returns null on 404 so a backend that has not shipped the route yet reads as
- * "no review available" and falls through to the pre-Phase-4 screen, rather
- * than presenting an error to a student who did nothing wrong.
- */
-export async function fetchPhase4Review(
-  sessionId: string,
-  topicId: string,
-  student: string = studentId(),
-): Promise<Phase4Review | null> {
-  try {
-    const res = await api.post<Phase4Review>('/phase4/review', {
-      session_id: sessionId,
-      student_id: student,
-      topic_id: topicId,
-    });
-    return res.data ?? null;
-  } catch (err) {
-    const status = (err as { response?: { status?: number } })?.response?.status;
-    if (status === 404) return null;
-    throw err;
-  }
-}
 
 // ── /interaction (text) ───────────────────────────────────────────────────────
 export interface InteractionCanvasState {

@@ -19,7 +19,6 @@ import {
   submitCanvas,
   sendInteraction,
   endSession,
-  toSessionSummary,
   studentId,
   questionProgress,
   type SessionRecord,
@@ -37,6 +36,7 @@ import {
 } from '@/lib/api';
 import { selectedOptionText } from '@/lib/selectedOption';
 import { applyInteractionSupport, acceptResponse, authorisedHint } from '@/lib/interactionPresentation';
+import { sessionEndSummary } from '@/lib/sessionEnd';
 import { useNumeraStore, type TrailKind } from '@/store/useNumeraStore';
 import { tutorSay, setStudentWriting } from '@/lib/tutorSpeech';
 import { phaseAnnouncement, withTransitionVoice } from '@/lib/phaseTransition';
@@ -1161,25 +1161,37 @@ export function useDemoTutor() {
   }, [sessionId, addTranscriptMessage, addTrailEntry]);
 
   /**
-   * End the session and capture its summary + engine review for the Review
-   * screen.
+   * End the session and capture what the Review screen needs.
    *
-   * On success: saves the summary and the engine review to the store and clears
-   * sessionId (so the next topic starts a fresh session), and returns the
-   * summary. Returns null when there's no live session to end (mock mode).
-   * THROWS on request failure or when the response carries no usable summary or
-   * review — the caller keeps the student on the current screen and shows an
-   * error, and the backend leaves the session active.
+   * On success: saves the summary, the ended record and the engine review (if
+   * one came) to the store, clears sessionId so the next topic starts fresh,
+   * and returns the summary. Returns null when there's no live session to end
+   * (mock mode). THROWS on request failure or when the response carries no
+   * usable summary — the caller keeps the student on the current screen and
+   * shows an error, and the backend leaves the session active.
+   *
+   * A MISSING `session_review` is not one of those failures, though it used to
+   * be. `session_review` was deleted from the backend outright (Sanya PR #155,
+   * 18 Aug 2026 — "remove legacy session review flow"); Phase 4 replaces it.
+   * The throw meant every /session/end after that merge raised, the Review
+   * screen caught it as `endFailed` and every student reaching the end of a
+   * topic was shown "Your session review could not be loaded" instead of their
+   * results — for work that had completed perfectly well.
+   *
+   * The record is stored because the Phase 4 review rides on it
+   * (`phase4_review`, app/models/session.py:294) — it is generated on entering
+   * Review, so this response is the only place it appears.
    */
   const end = useCallback(async (): Promise<SessionSummary | null> => {
     if (!apiEnabled() || !sessionId) return null;
     const res = await endSession(sessionId); // propagates network/HTTP failures
-    const summary = toSessionSummary(res);
-    if (!summary) throw new Error('Session ended but no summary was returned.');
-    if (!res.session_review) throw new Error('Session ended but no review was returned.');
+    const summary = sessionEndSummary(res);
     const store = useNumeraStore.getState();
     store.setSessionSummary(summary);
-    store.setSessionReview(res.session_review);
+    // Merged, not replaced: the record built up over the session carries the
+    // question set and student-model state that the end response does not.
+    store.setBackendSession({ ...store.backendSession, ...res });
+    if (res.session_review) store.setSessionReview(res.session_review);
     store.clearSessionId();
     return summary;
   }, [sessionId]);
