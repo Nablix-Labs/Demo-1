@@ -35,7 +35,6 @@ from app.models.session import (
     SessionSummary,
     VoiceState,
 )
-from app.models.session_review import SessionReviewResponse
 from app.models.student_model_session import (
     DiagnosticResult,
     DiagnosticCompletedEvent,
@@ -1373,202 +1372,16 @@ def assemble_session_summary(session: SessionRecord, ended_at: datetime) -> Sess
     )
 
 
-def _empty_session_review() -> SessionReviewResponse:
-    """Return the safe review contract for a session with no attempts."""
-
-    return SessionReviewResponse(
-        five_category_summary={
-            "category_1_strength": "No questions were attempted in this session.",
-            "category_2_first_error": None,
-            "category_3_pattern": None,
-            "category_4_next_practice": "Start a new practice session when ready.",
-            "category_5_mastery": "There is not enough attempt evidence to assess mastery.",
-        },
-        student_facing_summary="This session ended without any recorded attempts.",
-        b6_hook=None,
-        call_to_action="NONE",
-        voice_delivery_order=[
-            "category_1_strength",
-            "category_4_next_practice",
-            "category_5_mastery",
-            "student_facing_summary",
-        ],
-        answer_reveal_allowed=False,
-        guardrail_passed=True,
-    )
-
-
-_PHASE_WORDS: dict[str, str] = {
-    "DIAGNOSTIC": "diagnostic",
-    "CONCEPT_ORIENTATION": "concept",
-    "GUIDED_PRACTICE": "guided practice",
-    "INDEPENDENT_PRACTICE": "independent practice",
-    "REVIEW": "review",
-}
-
-
-def _review_hint_level(hint_level: int) -> int | None:
-    return min(hint_level, 3) if hint_level > 0 else None
-
-
-def build_session_review_request(session: SessionRecord) -> "SessionReviewRequest":
-    """Map the stored session onto Chirudeva's strict session-review contract.
-
-    Evidence descriptions deliberately contain no digits or question text: the
-    review guardrail rejects any evidence that echoes a protected answer, and
-    algebra questions can contain their own answer as a coefficient.
-    """
-
-    from app.models.session_review import SessionReviewRequest
-
-    attempts: list[dict[str, object]] = []
-    attempt_numbers: dict[str, int] = {}
-    error_counts: dict[str, int] = {}
-    for record in session.per_question_history:
-        number = attempt_numbers.get(record.question_id, 0) + 1
-        attempt_numbers[record.question_id] = number
-        correct = record.evaluation == "CORRECT"
-        phase_word = _PHASE_WORDS.get(record.phase, "practice")
-        if not correct and record.error_type is not None:
-            error_counts[record.error_type] = error_counts.get(record.error_type, 0) + 1
-        attempts.append(
-            {
-                "question_id": record.question_id,
-                "phase": record.phase,
-                "attempt_number": number,
-                "evaluation": record.evaluation,
-                "error_type": record.error_type,
-                "hint_level_used": _review_hint_level(record.hint_level_used),
-                "independent_success": (
-                    correct
-                    and record.phase == "INDEPENDENT_PRACTICE"
-                    and record.hint_level_used == 0
-                ),
-                "canvas_submitted": record.input_source == "CANVAS",
-                "canvas_first_error_step": None,
-                "canvas_first_error_type": None,
-                "successful_step_descriptions": (
-                    [f"Reached the correct final answer on a {phase_word} question"]
-                    if correct
-                    else []
-                ),
-                "error_description": (
-                    None
-                    if correct
-                    else f"Did not reach the correct final answer on a {phase_word} question"
-                ),
-                "rescue_activated": False,
-            }
-        )
-    if not any(attempt["successful_step_descriptions"] for attempt in attempts) and attempts:
-        attempts[0]["successful_step_descriptions"] = [
-            "Kept attempting every question through the session"
-        ]
-
-    correct_attempts = sum(
-        record.evaluation == "CORRECT" for record in session.per_question_history
-    )
-    phases_completed: list[Phase] = []
-    for transition in session.phase_transitions:
-        if transition.previous_phase not in phases_completed:
-            phases_completed.append(transition.previous_phase)
-    if session.current_phase not in phases_completed:
-        phases_completed.append(session.current_phase)
-
-    student = session.last_student_model
-    dominant_error = max(error_counts, key=error_counts.get) if error_counts else None
-    recommended = session.recommended_entry_phase
-    if recommended not in _PHASE_WORDS:
-        recommended = session.current_phase
-
-    return SessionReviewRequest.model_validate(
-        {
-            "session_summary": {
-                "session_id": session.session_id,
-                "student_id": session.student_id,
-                "concept_id": session.concept_id,
-                "session_date": session.started_at.isoformat(),
-                "session_duration_seconds": max(
-                    0,
-                    int((datetime.now(timezone.utc) - session.started_at).total_seconds()),
-                ),
-                "interaction_mode": session.interaction_mode,
-                "phase_4_entry_reason": "normal_review",
-                "phases_completed": phases_completed,
-                "session_performance": {
-                    "total_attempts": len(attempts),
-                    "correct_attempts": correct_attempts,
-                    "incorrect_attempts": len(attempts) - correct_attempts,
-                    "hints_used": len(session.hint_levels_used),
-                    "hint_levels_used": [
-                        min(level, 3) for level in session.hint_levels_used
-                    ],
-                    "canvas_submissions": len(session.canvas_submissions),
-                    "rescue_mode_activations": int(session.rescue_mode_active),
-                    "long_pressure_events": 0,
-                    "voice_fallback_events": 0,
-                },
-                "per_question_history": attempts,
-                "canvas_feedback_history": [],
-                "phase_transitions": [
-                    {
-                        "from_phase": transition.previous_phase,
-                        "to_phase": transition.current_phase,
-                        "timestamp": transition.transitioned_at.isoformat(),
-                    }
-                    for transition in session.phase_transitions
-                ],
-            },
-            "student_model": {
-                "mastery_status": student.mastery_status if student else "DEVELOPING",
-                "error_counts": error_counts,
-                "dominant_error_type": dominant_error,
-                "hint_dependency_score": (
-                    student.hint_dependency_score if student else 0.0
-                ),
-                "error_confirmed_pattern": False,
-                "recommended_entry_phase": recommended,
-                "next_concept_recommendation": None,
-            },
-        }
-    )
-
-
 async def end_session(request: SessionEndRequest) -> SessionRecord:
-    """Generate the engine review, then mark a stored mock session as ended.
-
-    Review generation runs first; empty-attempt REVIEW sessions use the
-    deterministic zero-attempt review contract.
-    """
-
-    # Imported here: ai_engine.session_review imports this module for answers.
-    from pydantic import ValidationError
-
-    from app.ai_engine.session_review import (
-        SessionReviewValidationError,
-        generate_session_review,
-    )
+    """Mark a stored session as ended without generating a legacy review."""
 
     session: SessionRecord = _get_owned_session(request.session_id, request.student_id)
-    try:
-        review = (
-            _empty_session_review()
-            if not session.per_question_history
-            else generate_session_review(build_session_review_request(session))
-        )
-    except (SessionReviewValidationError, ValidationError, RuntimeError) as error:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Session review could not be generated; the session is still active. ({error})",
-        ) from error
-
     summary: SessionSummary = assemble_session_summary(session, datetime.now(timezone.utc))
     ended_session: SessionRecord = session.model_copy(
         update={
             "status": "ended",
             "message": "Session ended.",
             "session_summary": summary,
-            "session_review": review,
         }
     )
     _sessions[request.session_id] = ended_session
@@ -1837,5 +1650,3 @@ async def update_interaction_state(
     _sessions[session_id] = updated_session
     await save_session(updated_session)
     return updated_session
-    ReviewCompletedEvent,
-    SessionResumedEvent,
