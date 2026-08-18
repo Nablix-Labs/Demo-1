@@ -18,6 +18,18 @@ class DetectedErrorRecord(BaseModel):
     micro_skill_id: str
 
 
+class WorkArtifactRef(BaseModel):
+    """The stored work for one attempt, as returned with its history.
+
+    Per spec 5.7 the artifact reference travels with the Phase 3 submission
+    event, so Phase 4 reads it here rather than from live session state.
+    """
+
+    artifact_id: str
+    pdf_url: str
+    page_count: int
+
+
 class TopicAttemptRecord(BaseModel):
     attempt_id: str
     question_id: str
@@ -38,6 +50,8 @@ class TopicAttemptRecord(BaseModel):
     answer_steps: list[str] = Field(default_factory=list)
     detected_errors: list[DetectedErrorRecord] = Field(default_factory=list)
     linked_misconceptions: list[str] = Field(default_factory=list)
+    # Absent for attempts made before work artifacts existed.
+    work_artifact: WorkArtifactRef | None = None
 
     @property
     def is_wrong(self) -> bool:
