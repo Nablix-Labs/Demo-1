@@ -627,6 +627,20 @@ class OpenAIAIEngineClient:
             user_payload=context,
         )
 
+    def generate_phase4_review(
+        self,
+        context: dict[str, object],
+        schema: dict[str, object],
+    ) -> dict[str, object]:
+        return self._request_json(
+            name="phase4_review_generation",
+            schema=schema,
+            phase="REVIEW",
+            active_triggers=[],
+            conversation_history=[],
+            user_payload=context,
+        )
+
     def regenerate_session_review(
         self,
         context: dict[str, object],
