@@ -34,6 +34,17 @@ export default function SupportLane() {
       className={cn(
         // Below the "Explain it back" chrome, so it stacks under it, not over.
         'pointer-events-none fixed top-[84px] z-30 flex flex-col gap-3',
+        // Bounded and scrollable, because the lane can now hold four cards.
+        // With a write instruction, a hint, a cue and a worked example all up at
+        // once the column ran 918px on a 900px window and the bottom card's
+        // controls sat below the fold — "Back to the question" was on screen and
+        // could not be clicked (measured, 18 Aug).
+        //
+        // Scrolling still works despite `pointer-events-none`: that only stops
+        // the empty lane hit-testing, so a click with no card under it still
+        // reaches the canvas, while a wheel over a card (which sets
+        // `pointer-events-auto`) bubbles to this scroll container.
+        'max-h-[calc(100vh-104px)] overflow-y-auto',
         // Opposite the tutor panel: the canvas keeps the middle.
         panelSide === 'right' ? 'left-4' : 'right-4',
       )}
