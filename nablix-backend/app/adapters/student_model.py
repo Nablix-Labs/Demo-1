@@ -18,6 +18,7 @@ from app.models.student_model_session import (
 )
 from app.models.topic_event_history import TopicEventHistoryResponse
 from app.models.work_artifact import (
+    Phase4ReviewPersistRequest,
     WorkArtifactPersistRequest,
     WorkArtifactPersistResponse,
 )
@@ -146,6 +147,23 @@ class StudentModelServiceAdapter:
                 "student_model",
                 f"invalid work artifact response body={response}: {error}",
             ) from error
+
+    async def persist_phase4_review(
+        self,
+        request: Phase4ReviewPersistRequest,
+        access_token: str,
+    ) -> None:
+        """Store the finished review on the topic learning summary."""
+
+        url = self._require_student_model_url("Phase 4 review persistence")
+        await post_json(
+            "student_model",
+            f"{url}/phase4-review",
+            request.model_dump(mode="json"),
+            {"Authorization": f"Bearer {access_token}"},
+            self._settings.adapter_request_timeout_seconds,
+            self._settings.adapter_request_retry_count,
+        )
 
     async def fetch_topic_event_history(
         self,

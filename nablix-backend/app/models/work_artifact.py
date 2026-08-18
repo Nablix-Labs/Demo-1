@@ -28,3 +28,14 @@ class WorkArtifactPersistResponse(BaseModel):
     artifact_id: str
     pdf_url: str
     page_count: int
+
+
+class Phase4ReviewPersistRequest(BaseModel):
+    """The finished Phase 4 review, for the reusable topic learning summary."""
+
+    student_id: str
+    topic_id: str
+    # Replay detail belongs in phase_4_summary_json; the narrative fields and
+    # key takeaways are also shown to the student.
+    tutor_replays: list[dict[str, object]]
+    student_insights: dict[str, object]

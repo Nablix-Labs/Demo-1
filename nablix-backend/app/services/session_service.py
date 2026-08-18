@@ -16,6 +16,7 @@ from app.ai_engine.phase4_review import (
     generate_phase4_review,
 )
 from app.models.phase4_review import Phase4ReviewResponse
+from app.models.work_artifact import Phase4ReviewPersistRequest
 from app.services.phase4_context_builder import (
     Phase4ContextError,
     build_phase4_review_request,
@@ -802,6 +803,30 @@ async def generate_phase4_review_for(
             },
         )
         return None
+
+    try:
+        await get_adapters().student_model.persist_phase4_review(
+            Phase4ReviewPersistRequest(
+                student_id=session.student_id,
+                topic_id=event.journey_state.topic_id,
+                tutor_replays=[
+                    replay.model_dump(mode="json") for replay in review.tutor_replays
+                ],
+                student_insights=review.student_insights.model_dump(mode="json"),
+            ),
+            access_token,
+        )
+    except AdapterError as error:
+        # The review is already generated; the student should still see it
+        # even if it could not be stored for reuse.
+        logger.warning(
+            "phase4_review_not_persisted",
+            extra={
+                "session_id": session.session_id,
+                "topic_id": event.journey_state.topic_id,
+                "error": str(error),
+            },
+        )
     return review
 
 
