@@ -35,7 +35,8 @@ import {
   type QuestionType,
 } from '@/lib/api';
 import { resetSessionStart } from '@/hooks/useDemoTutor';
-import { applyInteractionSupport, acceptResponse, type SupportPresentation } from '@/lib/interactionPresentation';
+import { applyInteractionSupport, acceptResponse } from '@/lib/interactionPresentation';
+import { voiceSupportFrame } from '@/lib/voiceSupportFrame';
 import { TurnWatchdog } from '@/lib/turnWatchdog';
 import { SpeechSettleTimer } from '@/lib/speechSettle';
 import { turnContextFrame } from '@/lib/voiceTurnContext';
@@ -387,22 +388,7 @@ export function useWebSocket(sessionId: string | null) {
             // applyInteractionSupport returns the line the tutor should SAY —
             // the scaffold step's voice line when a panel is open, else the
             // message. Kept as the stream's fallback text below.
-            const spokenLine = applyInteractionSupport({
-              message: msg.text as string,
-              support_message: msg.support_message as string | null | undefined,
-              show_visual_cue: msg.show_visual_cue as boolean | undefined,
-              visual_cue: msg.visual_cue as SupportPresentation['visual_cue'],
-              show_scaffold_panel: msg.show_scaffold_panel as boolean | undefined,
-              scaffold_id: msg.scaffold_id as string | null | undefined,
-              current_scaffold_step_id:
-                msg.current_scaffold_step_id as string | null | undefined,
-              scaffold_step_number:
-                msg.scaffold_step_number as number | null | undefined,
-              scaffold_step_text: msg.scaffold_step_text as string | null | undefined,
-              scaffold_step_voice: msg.scaffold_step_voice as string | null | undefined,
-              total_scaffold_steps:
-                msg.total_scaffold_steps as number | null | undefined,
-            });
+            const spokenLine = applyInteractionSupport(voiceSupportFrame(msg));
             addTranscriptMessage({ role: 'ai', text: msg.text as string });
             if (Array.isArray(msg.canvas_draw) && msg.canvas_draw.length > 0)
               applyCanvasDraw(msg.canvas_draw as Parameters<typeof applyCanvasDraw>[0]);

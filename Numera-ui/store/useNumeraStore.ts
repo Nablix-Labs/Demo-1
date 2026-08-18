@@ -884,6 +884,15 @@ export const useNumeraStore = create<NumeraState>()(
         nextQuestionType === 'SINGLE_CHOICE' ||
         nextQuestionType === 'CHOICE_WITH_EXPLANATION' ||
         nextQuestionType === 'TRUE_FALSE_WITH_EXPLANATION';
+      // The de-duplication window is scoped to a question, like the marks it
+      // guards. It is a module-level Set that only `replace` and
+      // `clearTutorMarks` ever emptied, so an actionId reused on a later
+      // question was treated as a re-delivery and the drawing was silently
+      // dropped. Harmless while the tutor only drew over a submission; not
+      // harmless now that it draws confirmed learner ideas on ordinary turns
+      // (Sanya, 18 Aug 2026), where the same idea can legitimately be
+      // confirmed again on the next question.
+      if (questionChanged) seenDrawActionIds.clear();
       return {
         currentPhase: phase,
         activeQuestionId: nextQuestionId,
