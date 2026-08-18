@@ -344,6 +344,9 @@ class VisionOCRResult(BaseModel):
     detected_equation: str = ""
     detected_steps: list[str] = []
     detected_regions: list[OCRTextRegion] = Field(default_factory=list)
+    # Per-symbol boxes when the provider reports them. Distinct from
+    # detected_regions, which is one box per written line.
+    word_regions: list[OCRTextRegion] = Field(default_factory=list)
     final_answer: str | None = None
     confidence: float
     needs_clarification: bool = False

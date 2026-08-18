@@ -23,6 +23,12 @@ class _MathpixLineData(BaseModel):
     conversion_output: bool | None = None
 
 
+class _MathpixWordData(BaseModel):
+    text: str | None = None
+    cnt: list[list[float]] = Field(default_factory=list)
+    confidence: float | None = None
+
+
 class _MathpixOCRPayload(BaseModel):
     text: str = ""
     latex_styled: str | None = None
@@ -30,6 +36,7 @@ class _MathpixOCRPayload(BaseModel):
     confidence: float | None = None
     confidence_rate: float | None = None
     line_data: list[_MathpixLineData] = Field(default_factory=list)
+    word_data: list[_MathpixWordData] = Field(default_factory=list)
     data: list["_MathpixDataItem"] = Field(default_factory=list)
     image_width: int | None = None
     image_height: int | None = None
@@ -67,6 +74,9 @@ class MathpixVisionOCRAdapter:
                 "include_mathml": True,
             },
             "include_line_data": True,
+            # Per-symbol contours: without them the only source of symbol
+            # geometry is student ink, which cannot be counted on.
+            "include_word_data": True,
             "rm_spaces": True,
         }
 
@@ -98,6 +108,7 @@ class MathpixVisionOCRAdapter:
 
         steps = _steps_for(payload)
         regions = _regions_for(payload, steps)
+        word_regions = _word_regions_for(payload)
         detected_steps = [region.text for region in regions]
         raw_text = "\n".join(detected_steps) if detected_steps else payload.text
         confidence = _confidence_for(payload)
@@ -106,6 +117,7 @@ class MathpixVisionOCRAdapter:
             detected_equation=detected_steps[0] if detected_steps else payload.text,
             detected_steps=detected_steps,
             detected_regions=regions,
+            word_regions=word_regions,
             final_answer=detected_steps[-1] if detected_steps else None,
             confidence=confidence,
             needs_clarification=(
@@ -148,6 +160,24 @@ def _regions_for(payload: _MathpixOCRPayload, steps: list[str]) -> list[OCRTextR
     if len(regions) == len(steps):
         return [region.model_copy(update={"text": step}) for region, step in zip(regions, steps)]
     return regions
+
+
+def _word_regions_for(payload: _MathpixOCRPayload) -> list[OCRTextRegion]:
+    """Map Mathpix word contours into normalized per-symbol boxes."""
+
+    if not payload.image_width or not payload.image_height:
+        return []
+    if payload.image_width <= 0 or payload.image_height <= 0:
+        return []
+    return [
+        _region_for(
+            _MathpixLineData(text=word.text, cnt=word.cnt, confidence=word.confidence),
+            payload.image_width,
+            payload.image_height,
+        )
+        for word in payload.word_data
+        if word.text is not None and len(word.text.strip()) > 0 and len(word.cnt) > 0
+    ]
 
 
 def _has_text_and_contour(line: _MathpixLineData) -> bool:

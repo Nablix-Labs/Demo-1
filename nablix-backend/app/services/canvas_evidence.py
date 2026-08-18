@@ -98,6 +98,20 @@ def _with_confirmed_mathml_regions(ocr: VisionOCRResult) -> VisionOCRResult:
     return ocr.model_copy(update={"detected_regions": regions})
 
 
+def _word_regions_within(
+    word_regions: list[OCRTextRegion],
+    step_region: OCRTextRegion,
+) -> list[OCRTextRegion]:
+    """Return the word boxes whose vertical centre sits inside this step line."""
+
+    inside = [
+        word
+        for word in word_regions
+        if step_region.y <= word.y + word.h / 2 <= step_region.y + step_region.h
+    ]
+    return sorted(inside, key=lambda word: word.x)
+
+
 async def collect_canvas_evidence(
     snapshot_data_url: str,
     strokes: list[CanvasStroke],
@@ -134,6 +148,7 @@ async def collect_canvas_evidence(
                 region.text,
                 strokes_by_step.get(region.step_id, []),
                 region,
+                _word_regions_within(ocr.word_regions, region),
             )
         )
     # Pages 2..N: OCR each in order and keep the text only. Structural analysis
