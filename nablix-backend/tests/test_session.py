@@ -110,13 +110,8 @@ def test_session_start_get_and_end_flow() -> None:
     assert ended["session_id"] == session_id
     assert ended["status"] == "ended"
     assert ended["message"] == "Session ended."
-    review = ended["session_review"]
-    assert review["student_facing_summary"]
-    assert review["five_category_summary"]["category_1_strength"]
-    assert review["guardrail_passed"] is True
-    # Null categories are excluded from the spoken order.
-    assert "category_2_first_error" not in review["voice_delivery_order"]
-    assert "category_1_strength" in review["voice_delivery_order"]
+    assert ended["session_summary"]["session_performance"]["total_attempts"] == 1
+    assert "session_review" not in ended
 
 
 def test_session_start_rejects_invalid_interaction_mode() -> None:

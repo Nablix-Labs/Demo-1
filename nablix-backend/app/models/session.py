@@ -23,7 +23,6 @@ from app.models.fields import (
     TurnId,
 )
 from app.models.guided_learning import ActiveTeachingObjective, GeneratedQuestionRubric
-from app.models.session_review import SessionReviewResponse
 from app.models.student_model_session import (
     PublicStudentModelEvent,
     QuestionType,
@@ -207,7 +206,6 @@ class SessionRecord(BaseModel):
     student_model_event: StudentModelSessionEventResponse | None = None
     student_model_state: StudentModelCoreState | None = None
     session_summary: SessionSummary | None = None
-    session_review: SessionReviewResponse | None = None
 
 
 class SessionResponse(SessionRecord):

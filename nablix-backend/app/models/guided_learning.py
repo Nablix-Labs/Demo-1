@@ -206,7 +206,7 @@ class HybridTutorTurnContext(GuidedLearningModel):
     resolved_student_meaning: str | None
     input_reliability: HybridInputReliability
     decision: HybridPedagogyDecision
-    canvas_actions: list[CanvasPedagogyAction]
+    canvas_actions: list["CanvasPedagogyAction"]
     active_support_content: HybridAuthoredSupportContent | None
     approved_answer_reveal: StrictBool
 
@@ -235,7 +235,7 @@ class HybridTutorRequest(GuidedLearningModel):
     pedagogical_state: HybridPedagogicalState
 
     @model_validator(mode="after")
-    def validate_authored_answer_progression(self) -> HybridTutorRequest:
+    def validate_authored_answer_progression(self) -> "HybridTutorRequest":
         authored_steps = authored_hybrid_answer_steps(self.answer_spec)
         _validate_hybrid_progression_state(
             authored_steps,
