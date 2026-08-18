@@ -1,3 +1,5 @@
+import re
+
 from app.models.adapters import (
     AnnotationIntent,
     OCRTextRegion,
@@ -14,6 +16,18 @@ Point = tuple[float, float]
 
 _TARGET_COLOR = "#E05A47"
 _CORRECTION_COLOR = "#175CD3"
+
+_MATH_EXPRESSION_RE = re.compile(
+    r"\b([A-Za-z]\s*[+\-−×*/]\s*(?:[A-Za-z]|\d+))\b"
+)
+_CHANGING_VALUE_RE = re.compile(
+    r"\b([A-Za-z])\s+(?:changes?|varies|can\s+change)\b",
+    re.IGNORECASE,
+)
+_FIXED_VALUE_RE = re.compile(
+    r"(?<![A-Za-z0-9])([+\-−]?\s*\d+)\s+(?:stays?|is|remains?)\s+(?:fixed|constant)\b",
+    re.IGNORECASE,
+)
 
 
 def assign_step_ids(regions: list[OCRTextRegion]) -> list[OCRTextRegion]:
@@ -78,6 +92,88 @@ def plan_canvas_draw(
     return [
         CanvasDrawPayload(
             action_id=f"canvas-correction-{target_region.step_id}",
+            mode="append",
+            elements=elements,
+        )
+    ]
+
+
+def plan_confirmed_tutor_draw(
+    tutor: TutorResult,
+    student_response: str,
+    turn_id: str,
+) -> list[CanvasDrawPayload]:
+    """Write only learner-confirmed ideas in the separate tutor canvas layer.
+
+    Tutor-created maths and labels do not alter learner ink, so they do not
+    require OCR token grounding. Exact corrections to learner ink still use
+    ``plan_canvas_draw`` and its token-grounding checks.
+    """
+
+    if tutor.guided_student_state not in {"CORRECT", "PARTIAL"}:
+        return []
+
+    elements: list[TutorElement] = []
+    expression_match = _MATH_EXPRESSION_RE.search(student_response)
+    if tutor.answer_value_confirmed and expression_match is not None:
+        expression = expression_match.group(1).replace("−", "-").replace(" ", "")
+        elements.extend(
+            [
+                TutorElement(
+                    id=f"{turn_id}:confirmed-expression",
+                    kind="math",
+                    x=0.62,
+                    y=0.68,
+                    tex=expression,
+                    color=_CORRECTION_COLOR,
+                    size=26.0,
+                ),
+                TutorElement(
+                    id=f"{turn_id}:confirmed-expression-label",
+                    kind="text",
+                    x=0.62,
+                    y=0.74,
+                    text="your general rule",
+                    color=_CORRECTION_COLOR,
+                    size=16.0,
+                ),
+            ]
+        )
+
+    changing_match = _CHANGING_VALUE_RE.search(student_response)
+    if changing_match is not None:
+        elements.append(
+            TutorElement(
+                id=f"{turn_id}:changing-label",
+                kind="text",
+                x=0.62,
+                y=0.80,
+                text=f"{changing_match.group(1)} → changes",
+                color=_CORRECTION_COLOR,
+                size=18.0,
+            )
+        )
+
+    fixed_match = _FIXED_VALUE_RE.search(student_response)
+    if fixed_match is not None:
+        fixed_value = fixed_match.group(1).replace(" ", "").replace("−", "-")
+        elements.append(
+            TutorElement(
+                id=f"{turn_id}:fixed-label",
+                kind="text",
+                x=0.62,
+                y=0.86,
+                text=f"{fixed_value} → stays fixed",
+                color=_CORRECTION_COLOR,
+                size=18.0,
+            )
+        )
+
+    if not elements:
+        return []
+    return [
+        CanvasDrawPayload(
+            action_id=f"{turn_id}:confirmed-tutor-work",
             mode="append",
             elements=elements,
         )

@@ -854,7 +854,10 @@ def requires_written_symbolic_rule_evidence(
 
     if student_state != "CORRECT":
         return False
-    if request.question_type != "SHORT_RESPONSE" or request.input_source != "VOICE":
+    if (
+        request.question_type not in {"SHORT_RESPONSE", "MULTI_PART_SHORT_RESPONSE"}
+        or request.input_source != "VOICE"
+    ):
         return False
     if request.answer_spec is None:
         return False

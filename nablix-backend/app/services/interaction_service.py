@@ -85,7 +85,7 @@ from app.models.student_model_session import (
     SupportUsed,
 )
 from app.services.guided_question_opening import guided_question_opening
-from app.services.canvas_annotations import plan_canvas_draw
+from app.services.canvas_annotations import plan_canvas_draw, plan_confirmed_tutor_draw
 from app.services.canvas_evidence import (
     CanvasEvidence,
     canvas_events_are_stale,
@@ -3757,15 +3757,22 @@ async def _process_interaction(
                 if canvas_evidence is not None
                 else None
             ),
-            "canvas_draw": (
-                plan_canvas_draw(
+            "canvas_draw": [
+                *(
+                    plan_canvas_draw(
+                        tutor,
+                        ocr.detected_regions,
+                        canvas_evidence.spatial_tokens if canvas_evidence is not None else None,
+                    )
+                    if ocr is not None
+                    else []
+                ),
+                *plan_confirmed_tutor_draw(
                     tutor,
-                    ocr.detected_regions,
-                    canvas_evidence.spatial_tokens if canvas_evidence is not None else None,
-                )
-                if ocr is not None
-                else []
-            ),
+                    student_message,
+                    request.turn_id or "TURN-0000",
+                ),
+            ],
             "localization_status": (
                 "grounded"
                 if canvas_evidence is not None and canvas_evidence.spatial_tokens
