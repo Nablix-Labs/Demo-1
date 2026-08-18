@@ -1423,6 +1423,7 @@ async def record_canvas_submission(
     last_student_model: StudentModelResult | None,
     strokes: list[CanvasStroke],
     canvas_events: list[CanvasEvent],
+    work_artifact_id: str | None = None,
 ) -> SessionRecord:
     """Append a reviewed canvas submission without replacing Schema 3.0 state."""
 
@@ -1461,6 +1462,7 @@ async def record_canvas_submission(
                 input_source="CANVAS",
                 hint_level_used=record.tutor.hint_level,
                 attempted_at=record.submitted_at,
+                work_artifact_id=work_artifact_id,
             ),
         ]
     updated_session: SessionRecord = session.model_copy(

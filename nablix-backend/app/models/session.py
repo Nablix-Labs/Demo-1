@@ -159,6 +159,10 @@ class QuestionAttemptRecord(BaseModel):
     input_source: Literal["TEXT", "VOICE", "CANVAS"]
     hint_level_used: int
     attempted_at: datetime
+    # Links this attempt to its stored Phase 3 canvas work, so Phase 4 can
+    # replay it. None when the work could not be stored, and for every attempt
+    # made before work artifacts existed.
+    work_artifact_id: str | None = None
 
 
 class PhaseTransitionRecord(BaseModel):
