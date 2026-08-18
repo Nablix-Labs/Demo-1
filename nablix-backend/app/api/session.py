@@ -1,11 +1,5 @@
 from fastapi import APIRouter
-from fastapi import HTTPException
 
-from app.ai_engine.session_review import (
-    QuestionAnswerNotFoundError,
-    SessionReviewValidationError,
-    generate_session_review,
-)
 from app.api.auth import AccessToken
 from app.models.fields import SessionId, StudentId
 from app.models.session import (
@@ -19,7 +13,6 @@ from app.models.session import (
     SessionResponse,
     SessionStartRequest,
 )
-from app.models.session_review import SessionReviewRequest, SessionReviewResponse
 from app.services.session_service import (
     complete_diagnostic,
     complete_orientation,
@@ -100,14 +93,3 @@ async def complete_review_endpoint(
 async def end_session_endpoint(request: SessionEndRequest) -> SessionRecord:
     return await end_session(request)
 
-
-@router.post("/review/generate", response_model=SessionReviewResponse)
-async def generate_session_review_endpoint(
-    request: SessionReviewRequest,
-) -> SessionReviewResponse:
-    try:
-        return generate_session_review(request)
-    except QuestionAnswerNotFoundError as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
-    except SessionReviewValidationError as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error

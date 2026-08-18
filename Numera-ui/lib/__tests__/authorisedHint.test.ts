@@ -41,10 +41,24 @@ describe('authorisedHint', () => {
     } as Turn)).toBeNull();
   });
 
-  it('only fires on GIVE_HINT — the backend decides when a hint is earned', () => {
-    // A partial answer advances no rung, so nothing may be shown.
+  it('fires on any action that carried authored support', () => {
+    // This used to require GIVE_HINT. Driving the live VM on 18 Aug found the
+    // backend serving real support under REQUEST_EXPLANATION — "Look at 12 + 4.
+    // Does it show one starting value or any possible starting value?" — with
+    // `hint_count` incremented to 2. The student was charged for a hint and
+    // shown nothing, which is the failure this whole module exists to prevent.
+    //
+    // The presence of `support_message` IS the authorisation; which action
+    // carried it is the backend's business and has changed without notice
+    // before.
     expect(authorisedHint({
-      message: 'Keep going.', support_message: HINT, conversation_action: 'ASK_QUESTION',
+      message: 'Keep going.', support_message: HINT, conversation_action: 'REQUEST_EXPLANATION',
+    } as Turn)).toBe(HINT);
+  });
+
+  it('still shows nothing when the turn carried no support at all', () => {
+    expect(authorisedHint({
+      message: 'Keep going.', conversation_action: 'ASK_QUESTION',
     } as Turn)).toBeNull();
   });
 });

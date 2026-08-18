@@ -129,10 +129,6 @@ class AdapterContext(BaseModel):
     phase3_submission_kind: Literal["CANVAS", "CHOICE"] | None = None
     phase3_allowed_error_definitions: list[dict[str, object]] = Field(default_factory=list)
 
-    # Explicit choice evidence used by Guided Learning option evaluation.
-    selected_option_id: str | None = None
-    selected_option_text: str | None = None
-
 
 class RetrievedDocument(BaseModel):
     """One piece of learning material returned by the RAG service."""

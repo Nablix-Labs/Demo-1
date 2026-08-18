@@ -61,6 +61,16 @@ def _intents() -> list[AnnotationIntent]:
     ]
 
 
+def _token() -> SpatialMathToken:
+    return SpatialMathToken(
+        token_id="step-1:token-1",
+        step_id="step-1",
+        text="x",
+        bounding_box={"x": 0.12, "y": 0.30, "width": 0.05, "height": 0.08},
+        alignment_confidence=0.95,
+    )
+
+
 def _ellipse_from(elements: list[TutorElement]) -> TutorElement:
     ellipse = next(element for element in elements if element.kind == "ellipse")
     assert ellipse.x is not None
@@ -116,54 +126,11 @@ def test_canvas_planner_circles_explicit_whole_line_mistake() -> None:
         [AnnotationIntent(kind="circle_target", target_step_id="step-1")],
     )
 
-    draw = plan_canvas_draw(tutor, regions)
+    draw = plan_canvas_draw(tutor, regions, [_token()])
 
     assert len(draw) == 1
     assert draw[0].action_id == "canvas-line-review-step-1"
     assert [element.kind for element in draw[0].elements] == ["ellipse"]
-
-
-def test_confirmed_legacy_response_creates_tutor_owned_math_and_label() -> None:
-    tutor = _tutor_result(
-        TutorMistakeClassification(status="no_mistake", confidence=0.9),
-        [],
-    ).model_copy(
-        update={
-            "evaluation": "PARTIALLY_CORRECT",
-            "guided_student_state": "PARTIAL",
-            "answer_value_confirmed": True,
-        }
-    )
-
-    draw = plan_confirmed_tutor_draw(tutor, "c + 4; c changes", "TURN-1")
-
-    assert len(draw) == 1
-    assert draw[0].action_id == "TURN-1:confirmed-tutor-work"
-    assert [(element.kind, element.text, element.tex) for element in draw[0].elements] == [
-        ("math", None, "c+4"),
-        ("text", "your general rule", None),
-        ("text", "c → changes", None),
-    ]
-
-
-def test_confirmed_fixed_increment_keeps_its_sign_in_tutor_work() -> None:
-    tutor = _tutor_result(
-        TutorMistakeClassification(status="no_mistake", confidence=0.9),
-        [],
-    ).model_copy(update={"guided_student_state": "PARTIAL"})
-
-    draw = plan_confirmed_tutor_draw(tutor, "+4 stays fixed", "TURN-1")
-
-    assert draw[0].elements[0].text == "+4 → stays fixed"
-
-
-def test_wrong_response_never_creates_tutor_owned_work() -> None:
-    tutor = _tutor_result(
-        TutorMistakeClassification(status="mistake_found", confidence=0.9),
-        [],
-    ).model_copy(update={"guided_student_state": "WRONG"})
-
-    assert plan_confirmed_tutor_draw(tutor, "c - 4", "TURN-1") == []
 
 
 def test_canvas_planner_uses_target_token_geometry() -> None:

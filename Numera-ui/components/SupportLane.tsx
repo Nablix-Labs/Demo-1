@@ -21,6 +21,8 @@
 
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { cn } from '@/lib/cn';
+import WriteNote from '@/components/WriteNote';
+import RescueNote from '@/components/RescueNote';
 import HintNote from '@/components/HintNote';
 import VisualCue from '@/components/VisualCue';
 
@@ -32,12 +34,38 @@ export default function SupportLane() {
       className={cn(
         // Below the "Explain it back" chrome, so it stacks under it, not over.
         'pointer-events-none fixed top-[84px] z-30 flex flex-col gap-3',
+        // Bounded and scrollable, because the lane can now hold four cards.
+        // With a write instruction, a hint, a cue and a worked example all up at
+        // once the column ran 918px on a 900px window and the bottom card's
+        // controls sat below the fold — "Back to the question" was on screen and
+        // could not be clicked (measured, 18 Aug).
+        //
+        // Scrolling still works despite `pointer-events-none`: that only stops
+        // the empty lane hit-testing, so a click with no card under it still
+        // reaches the canvas, while a wheel over a card (which sets
+        // `pointer-events-auto`) bubbles to this scroll container.
+        //
+        // `pr-2` and `overflow-x-hidden` together because setting overflow on
+        // one axis forces the other to `auto` rather than leaving it visible.
+        // The note's shadow overhangs its box by 4px, which was enough to put a
+        // horizontal scrollbar under every card — 16px of grey, visible in the
+        // live app. The padding gives the shadow room; the hidden axis stops
+        // anything wider bringing the bar back.
+        'max-h-[calc(100vh-104px)] overflow-y-auto overflow-x-hidden pr-2',
         // Opposite the tutor panel: the canvas keeps the middle.
         panelSide === 'right' ? 'left-4' : 'right-4',
       )}
     >
+      {/* Above the ladder, not part of it: a WRITE instruction is the tutor
+          saying it could not read the student, and it names the action that
+          moves the turn on. Below a hint it would read as the least urgent
+          thing on screen when it is the only one that unblocks them. */}
+      <div className="pointer-events-auto"><WriteNote /></div>
       <div className="pointer-events-auto"><HintNote /></div>
       <div className="pointer-events-auto"><VisualCue /></div>
+      {/* Last in the lane because it is last on the ladder — a student who has
+          reached a worked example has already been past the rungs above it. */}
+      <div className="pointer-events-auto"><RescueNote /></div>
     </div>
   );
 }

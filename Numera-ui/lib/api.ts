@@ -916,6 +916,15 @@ export interface InteractionPayload {
   text_input?: string;
   /** Authoritative option identifier selected on a choice question. */
   selected_option_id?: string;
+  /**
+   * The exact authored wording of that option (revised handoff, frontend §1).
+   *
+   * Sent alongside the id, not instead of it: the id stays authoritative, and
+   * this is what lets a wrong choice get a focused explanation rather than
+   * generic fallback wording. Omitted when the option cannot be resolved — see
+   * lib/selectedOption.
+   */
+  selected_option_text?: string;
   /** Use for VOICE input instead of text_input. */
   voice_transcript?: string;
   transcript_confidence?: number;

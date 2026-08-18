@@ -241,6 +241,54 @@ def test_text_duplicate_and_stale_turns_do_not_mutate_state() -> None:
     assert stored.json()["attempt_count"] == first_body["attempt_count"]
 
 
+def test_duplicate_turn_repeats_the_response_without_new_openai_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class _CountingClient:
+        def build_tutor_message(self, **kwargs: object) -> OpenAITutorMessage:
+            del kwargs
+            calls.append("build_tutor_message")
+            return OpenAITutorMessage(
+                tutor_message="Look at the support shown and try the next step.",
+                tutor_message_voice_optimised=(
+                    "Look at the support shown and try the next step."
+                ),
+                confidence=0.9,
+            )
+
+    monkeypatch.setattr(
+        interaction_service,
+        "build_openai_ai_engine_client",
+        lambda settings: _CountingClient(),
+    )
+
+    student_id = "ST152"
+    session = _start(student_id)
+    request = _interaction(
+        session,
+        student_id,
+        "TURN-DUPLICATE-OPENAI",
+        "ANSWER_SUBMISSION",
+        None,
+    )
+
+    first = client.post("/interaction", json=request)
+    assert first.status_code == 200, first.text
+    calls_after_first = len(calls)
+    # Keeps the comparison below honest: the first turn really does call OpenAI.
+    assert calls_after_first > 0
+
+    duplicate = client.post("/interaction", json=request)
+
+    assert duplicate.status_code == 200
+    assert duplicate.json()["status"] == "DUPLICATE_TURN"
+    assert duplicate.json()["message"] == first.json()["message"]
+    assert duplicate.json()["support_message"] == first.json()["support_message"]
+    assert len(calls) == calls_after_first
+
+
 def test_explain_again_is_cached_and_does_not_grade(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

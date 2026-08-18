@@ -81,8 +81,6 @@ def test_review_session_with_no_attempts_can_end() -> None:
         assert ended.status == "ended"
         assert ended.session_summary is not None
         assert ended.session_summary.session_performance.total_attempts == 0
-        assert ended.session_review is not None
-        assert ended.session_review.call_to_action == "NONE"
     finally:
         session_service._sessions.pop(session_id, None)
 

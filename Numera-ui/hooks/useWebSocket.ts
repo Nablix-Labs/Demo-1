@@ -41,6 +41,8 @@ import { SpeechSettleTimer } from '@/lib/speechSettle';
 import { turnContextFrame } from '@/lib/voiceTurnContext';
 import { reopensStudentTurn, type TutorAudioCancelFrame } from '@/lib/tutorAudioCancel';
 import { committedLineage, type TutorTurnCommittedFrame } from '@/lib/tutorTurnCommitted';
+import { interruptsTutor } from '@/lib/bargeIn';
+import { useMicLevel } from '@/store/useMicLevel';
 import { reportFailure } from '@/lib/failureReport';
 
 
@@ -229,6 +231,27 @@ export function useWebSocket(sessionId: string | null) {
 
         switch (msg.type) {
           case 'transcript_partial':
+            // Talking over the tutor. This partial arriving WHILE audio is
+            // playing is the only evidence either side has that it is an
+            // interruption rather than an answer: the server cannot see our
+            // playback, and we cannot see the student's speech. See lib/bargeIn.
+            if (interruptsTutor({
+              audioPlaying: useMicLevel.getState().aiSpeaking,
+              text: msg.text as string,
+            })) {
+              console.log('[WS] student spoke over the tutor — stopping playback');
+              // Chunks already delivered are still buffered; hardStop inside
+              // this clears them, which is the tail the student would otherwise
+              // hear after they started talking.
+              discardAudioRef.current = true;
+              stopTutorSpeech();
+              // Stopping does not run the audio-idle path, so nothing else
+              // opens the student's next turn — and without a fresh turn_id the
+              // interruption reaches the backend under the previous turn's
+              // identity. Same reasoning as the tutor_audio_cancel handler.
+              useNumeraStore.getState().beginListeningTurn();
+              sendTurnContext();
+            }
             updatePartialTranscript(msg.text as string);
             // Still talking — anything pending belongs to an unfinished turn.
             processingTimerRef.current?.noteSpeech();
