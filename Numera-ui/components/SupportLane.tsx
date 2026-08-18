@@ -21,6 +21,8 @@
 
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { cn } from '@/lib/cn';
+import WriteNote from '@/components/WriteNote';
+import RescueNote from '@/components/RescueNote';
 import HintNote from '@/components/HintNote';
 import VisualCue from '@/components/VisualCue';
 
@@ -36,8 +38,16 @@ export default function SupportLane() {
         panelSide === 'right' ? 'left-4' : 'right-4',
       )}
     >
+      {/* Above the ladder, not part of it: a WRITE instruction is the tutor
+          saying it could not read the student, and it names the action that
+          moves the turn on. Below a hint it would read as the least urgent
+          thing on screen when it is the only one that unblocks them. */}
+      <div className="pointer-events-auto"><WriteNote /></div>
       <div className="pointer-events-auto"><HintNote /></div>
       <div className="pointer-events-auto"><VisualCue /></div>
+      {/* Last in the lane because it is last on the ladder — a student who has
+          reached a worked example has already been past the rungs above it. */}
+      <div className="pointer-events-auto"><RescueNote /></div>
     </div>
   );
 }

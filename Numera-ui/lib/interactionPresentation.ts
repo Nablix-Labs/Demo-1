@@ -1,5 +1,6 @@
 import { activeScaffold, type InteractionResponse } from '@/lib/api';
 import { cueAssetUrl } from '@/lib/cueAsset';
+import { writePrompt } from '@/lib/writtenEvidence';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import {
   shouldApply,
@@ -21,7 +22,14 @@ export type SupportPresentation = Pick<
   | 'scaffold_step_text'
   | 'scaffold_step_voice'
   | 'total_scaffold_steps'
-> & { conversation_action?: string | null };
+> & {
+  conversation_action?: string | null;
+  // Reliability gate (revised handoff, Chirudeva §3). Optional: the backend does
+  // not send them yet, and `requiresWriting` reads absent as "not a WRITE turn".
+  next_expected_input?: string | null;
+  requires_written_math_evidence?: boolean | null;
+  write_instruction?: string | null;
+};
 
 /**
  * Should this response be rendered at all?
@@ -81,6 +89,22 @@ export function applyInteractionSupport(response: SupportPresentation): string {
   // sentence on the screen twice.
   const hint = authorisedHint(response);
   if (hint) useNumeraStore.getState().setVisibleHint(hint);
+
+  // The reliability gate fired: the tutor could not read the student and is
+  // asking for the answer in writing. Set unconditionally — clearing it on an
+  // ordinary turn is the point, because the moment the tutor DOES read them the
+  // instruction is stale, and an instruction to rewrite something already
+  // accepted is worse than none (see lib/writtenEvidence).
+  useNumeraStore.getState().setWriteInstruction(writePrompt(response));
+
+  // The bottom two rungs. Set only when the backend serves one, and left alone
+  // otherwise: a rescue stays on screen while the student works through it, and
+  // the ordinary turns they take in the middle of reading it carry no
+  // `guided_rescue` at all. Clearing on those would close the walkthrough
+  // between one step and the next — the same mistake the scaffold panel made
+  // when it rendered from the per-turn event instead of persisted state.
+  const rescue = (response as InteractionResponse).guided_rescue;
+  if (rescue) useNumeraStore.getState().setGuidedRescue(rescue);
 
   const cue = response.visual_cue;
   const showCue = cue?.show ?? response.show_visual_cue;

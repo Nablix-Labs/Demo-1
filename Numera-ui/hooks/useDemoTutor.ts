@@ -35,6 +35,7 @@ import {
   isStaleTurnResponse,
   isStaleSessionError,
 } from '@/lib/api';
+import { selectedOptionText } from '@/lib/selectedOption';
 import { applyInteractionSupport, acceptResponse, authorisedHint } from '@/lib/interactionPresentation';
 import { useNumeraStore, type TrailKind } from '@/store/useNumeraStore';
 import { tutorSay, setStudentWriting } from '@/lib/tutorSpeech';
@@ -540,6 +541,10 @@ export function useDemoTutor() {
           input_source: 'TEXT',
           text_input: text,
           selected_option_id: state.selectedOptionId ?? undefined,
+          // A typed answer on a choice question still carries the selection, so
+          // it carries the wording too (revised handoff, frontend §1).
+          selected_option_text:
+            selectedOptionText(state.questionOptions, state.selectedOptionId) ?? undefined,
           current_phase: state.currentPhase,
           concept_id: ctx.concept_id,
           question_id: questionId,
@@ -1094,6 +1099,10 @@ export function useDemoTutor() {
         interaction_type: 'OPTION_SELECTED',
         input_source: 'CHOICE',
         selected_option_id: optionId,
+        // The caller already holds the authored wording, so it goes as sent
+        // rather than being looked up again — this is the one path where the
+        // exact text is beyond doubt.
+        selected_option_text: optionText.trim() || undefined,
         current_phase: state.currentPhase,
         concept_id: state.activeConceptId,
         question_id: state.activeQuestionId,
