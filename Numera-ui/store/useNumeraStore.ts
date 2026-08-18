@@ -11,6 +11,7 @@ import type { LearningPhase } from '@/lib/phases';
 import type { FlowStage } from '@/lib/flow';
 import { TOPICS } from '@/lib/topics';
 import { isPhase3 } from '@/lib/phase3';
+import type { GuidedRescuePayload } from '@/lib/guidedRescue';
 import {
   DEMO_CONCEPT_ID,
   studentViewFor,
@@ -362,6 +363,24 @@ export interface NumeraState {
    * restored on reload would contradict the Student Model.
    */
   visibleHint: string | null;
+  /**
+   * The instruction shown when the tutor could not read the student and needs
+   * the answer in writing (revised handoff, frontend §5).
+   *
+   * Not persisted, for the same reason `visibleHint` is not: it describes one
+   * turn's reliability gate, and coming back after a reload would tell a student
+   * to rewrite something the tutor has since accepted.
+   */
+  writeInstruction: string | null;
+  /**
+   * The parallel example or tutor-solved walkthrough the backend has served
+   * (`guided_rescue`), held whole so RescueNote can pace it step by step.
+   *
+   * Not persisted: it is the bottom of the ladder for one question, and coming
+   * back after a reload to a solved answer the student never worked through
+   * would hand them the answer for free.
+   */
+  guidedRescue: GuidedRescuePayload | null;
   visualCueVisible: boolean;
   /**
    * The backend's `cue_id` (e.g. 'VC-T01-ADD-NOT-MULTIPLY'), when it sent one.
@@ -580,6 +599,8 @@ export interface NumeraState {
   /** The tutor turn failed; the student is owed a reply, not a nudge. */
   markTutorTurnFailed: () => void;
   setVisibleHint: (hint: string | null) => void;
+  setWriteInstruction: (instruction: string | null) => void;
+  setGuidedRescue: (rescue: GuidedRescuePayload | null) => void;
   setVisualCueVisible: (v: boolean) => void;
   setActiveScaffold: (s: ActiveScaffold | null) => void;
 
@@ -674,7 +695,7 @@ const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
   | 'setQuestionText' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'noteTutorLineage' | 'markTutorTurnFailed'
-  | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue' | 'setVisibleHint'
+  | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue' | 'setVisibleHint' | 'setWriteInstruction' | 'setGuidedRescue'
   | 'setSupportShown' | 'setLastHintText' | 'lockPhase3Attempt'
   | 'setPendingTutorSpeech' | 'claimPendingTutorSpeech' | 'setQuestionProgress' | 'setAppliedResponse' | 'setInactivityPolicy'
   | 'addTranscriptMessage' | 'removeTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript' | 'commitPartialTranscript'
@@ -734,6 +755,8 @@ const initial: Omit<
   tutorTurnFailed: false,
   activeScaffold: null as ActiveScaffold | null,
   visibleHint: null as string | null,
+  writeInstruction: null as string | null,
+  guidedRescue: null as GuidedRescuePayload | null,
   visualCueVisible: false,
   visualCueId: null as string | null,
   visualCueType: null,
@@ -886,6 +909,11 @@ export const useNumeraStore = create<NumeraState>()(
               // A hint is about the question it was given on. Left up, it would
               // sit beside the next question nudging the wrong step.
               visibleHint: null,
+              // So does an instruction to write: it was about evidence for the
+              // step the student was on, not for this one.
+              writeInstruction: null,
+              // And the rescue: it modelled the question being left behind.
+              guidedRescue: null,
               // A pick belongs to the question it was made on. Carrying it over
               // would show the next question opening with an answer already
               // chosen.
@@ -997,6 +1025,10 @@ export const useNumeraStore = create<NumeraState>()(
   markTutorTurnFailed: () => set({ tutorTurnFailed: true }),
 
   setVisibleHint: (visibleHint) => set({ visibleHint }),
+
+  setWriteInstruction: (writeInstruction) => set({ writeInstruction }),
+
+  setGuidedRescue: (guidedRescue) => set({ guidedRescue }),
 
   setVisualCueVisible: (visualCueVisible) => set({ visualCueVisible }),
 

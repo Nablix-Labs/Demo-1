@@ -129,12 +129,19 @@ export default function StickyNote({
               {lines && lines.length > 0 && (
                 <div className="mt-4 h-px w-10" style={{ background: t.rule }} aria-hidden="true" />
               )}
-              <p
+              {/* A div, not a <p>: the annotation slot holds whatever the note
+                  is about, and the rescue note's content is a numbered list of
+                  worked steps with a control under it. An <ol> or a <div> inside
+                  a <p> is invalid HTML — the browser closes the paragraph early,
+                  which React reports as a hydration error and which reorders the
+                  card on screen. Identical visually: Tailwind's preflight zeroes
+                  the paragraph margin this was relying on not having. */}
+              <div
                 className={`${lines && lines.length ? 'mt-3' : 'mt-3.5'} text-[17px] leading-[1.4]`}
                 style={{ color: t.ink, fontFamily: 'var(--font-tutor-hand), cursive' }}
               >
                 {children}
-              </p>
+              </div>
             </>
           )}
         </div>
