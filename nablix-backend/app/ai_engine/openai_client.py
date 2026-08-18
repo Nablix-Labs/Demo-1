@@ -613,20 +613,6 @@ class OpenAIAIEngineClient:
                 f"invalid Explain Again response: {error}",
             ) from error
 
-    def generate_session_review(
-        self,
-        context: dict[str, object],
-        schema: dict[str, object],
-    ) -> dict[str, object]:
-        return self._request_json(
-            name="session_review_generation",
-            schema=schema,
-            phase="REVIEW",
-            active_triggers=[],
-            conversation_history=[],
-            user_payload=context,
-        )
-
     def generate_phase4_review(
         self,
         context: dict[str, object],
@@ -639,25 +625,6 @@ class OpenAIAIEngineClient:
             active_triggers=[],
             conversation_history=[],
             user_payload=context,
-        )
-
-    def regenerate_session_review(
-        self,
-        context: dict[str, object],
-        schema: dict[str, object],
-        stricter_instruction: str,
-    ) -> dict[str, object]:
-        retry_context: dict[str, object] = {
-            **context,
-            "guardrail_retry_instruction": stricter_instruction,
-        }
-        return self._request_json(
-            name="session_review_guardrail_retry",
-            schema=schema,
-            phase="REVIEW",
-            active_triggers=[],
-            conversation_history=[],
-            user_payload=retry_context,
         )
 
     def _request_json(
