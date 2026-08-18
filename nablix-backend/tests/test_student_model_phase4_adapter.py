@@ -83,3 +83,75 @@ def test_persist_work_artifact_requires_configured_url() -> None:
 
     with pytest.raises(AdapterError):
         asyncio.run(adapter.persist_work_artifact(_request(), "test-token"))
+
+
+def test_fetch_topic_event_history_parses_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def post_json(
+        name: str,
+        url: str,
+        body: dict[str, object],
+        headers: dict[str, str],
+        timeout: int,
+        retries: int,
+    ) -> dict[str, object]:
+        captured["url"] = url
+        captured["body"] = body
+        return {
+            "topic_id": "ALG-KS3-01",
+            "student_id": "ST003",
+            "topic_info": {"title": "General rules"},
+            "whole_topic_evidence": {"hint_count": 2},
+            "attempts": [
+                {
+                    "attempt_id": "ATTEMPT-021",
+                    "question_id": "Q-T01-005",
+                    "question_usage_id": "QU-T01-005-P3",
+                    "phase": "PHASE_3_INDEPENDENT_PRACTICE",
+                    "evaluation": "INCORRECT",
+                    "attempted_at": "2026-08-17T10:15:23Z",
+                    "question_text": "A temperature starts at t and falls by 3.",
+                    "canonical_answer": "t - 3",
+                    "answer_steps": ["Identify t.", "Subtract 3."],
+                    "detected_errors": [
+                        {
+                            "error_code": "ERR-DIRECTION-REVERSED",
+                            "micro_skill_id": "T01.M3",
+                        }
+                    ],
+                }
+            ],
+        }
+
+    monkeypatch.setattr(student_model, "post_json", post_json)
+    adapter = student_model.StudentModelServiceAdapter(_settings())
+
+    history = asyncio.run(
+        adapter.fetch_topic_event_history("ST003", "ALG-KS3-01", "test-token")
+    )
+
+    assert captured["url"] == "https://student-model.example/topic/event-history"
+    assert captured["body"] == {"student_id": "ST003", "topic_id": "ALG-KS3-01"}
+    assert len(history.attempts) == 1
+    attempt = history.attempts[0]
+    assert attempt.is_wrong is True
+    assert attempt.detected_errors[0].error_code == "ERR-DIRECTION-REVERSED"
+    assert attempt.answer_steps == ["Identify t.", "Subtract 3."]
+
+
+def test_fetch_topic_event_history_rejects_malformed_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def post_json(*args: object, **kwargs: object) -> dict[str, object]:
+        return {"student_id": "ST003"}
+
+    monkeypatch.setattr(student_model, "post_json", post_json)
+    adapter = student_model.StudentModelServiceAdapter(_settings())
+
+    with pytest.raises(AdapterError):
+        asyncio.run(
+            adapter.fetch_topic_event_history("ST003", "ALG-KS3-01", "test-token")
+        )

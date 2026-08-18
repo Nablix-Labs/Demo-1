@@ -16,6 +16,7 @@ from app.models.student_model_session import (
     StudentModelSessionEvent,
     StudentModelSessionEventResponse,
 )
+from app.models.topic_event_history import TopicEventHistoryResponse
 from app.models.work_artifact import (
     WorkArtifactPersistRequest,
     WorkArtifactPersistResponse,
@@ -144,6 +145,31 @@ class StudentModelServiceAdapter:
             raise AdapterError(
                 "student_model",
                 f"invalid work artifact response body={response}: {error}",
+            ) from error
+
+    async def fetch_topic_event_history(
+        self,
+        student_id: str,
+        topic_id: str,
+        access_token: str,
+    ) -> TopicEventHistoryResponse:
+        """Read the student's whole journey through one topic, for Phase 4."""
+
+        url = self._require_student_model_url("topic event history")
+        response = await post_json(
+            "student_model",
+            f"{url}/topic/event-history",
+            {"student_id": student_id, "topic_id": topic_id},
+            {"Authorization": f"Bearer {access_token}"},
+            self._settings.adapter_request_timeout_seconds,
+            self._settings.adapter_request_retry_count,
+        )
+        try:
+            return TopicEventHistoryResponse.model_validate(response)
+        except ValidationError as error:
+            raise AdapterError(
+                "student_model",
+                f"invalid topic event history body={response}: {error}",
             ) from error
 
     def _require_student_model_url(self, purpose: str) -> str:
