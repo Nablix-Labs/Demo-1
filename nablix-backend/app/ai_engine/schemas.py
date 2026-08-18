@@ -8,19 +8,8 @@ from app.models.adapters import ConversationAction
 from app.models.guided_learning import (
     ActiveScaffold,
     ActiveTeachingObjective,
-    AuthoredAnswerStep,
-    CanvasPedagogyAction,
     GeneratedQuestionRubric,
     GuidedStudentState,
-    HybridEvidenceResolution,
-    HybridCanvasPlannerRequest,
-    HybridPedagogyDecision,
-    HybridSemanticEvaluation,
-    HybridTutorWording,
-    HybridTutorWordingRequest,
-    HybridTutorRequest,
-    HybridTutorResponse,
-    validate_hybrid_tutor_progression,
     GuidedTeachingState,
 )
 
@@ -334,6 +323,7 @@ class TutorResponse(StrictSchema):
     independent_attempt_terminal: StrictBool = False
     first_error_step: str | None = None
     phase3_review_evidence: Phase3ReviewEvidence | None = None
+    requires_written_math_evidence: StrictBool = False
 
 
 class ExplainAgainResult(StrictSchema):

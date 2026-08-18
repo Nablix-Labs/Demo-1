@@ -64,14 +64,6 @@ class Settings(BaseSettings):
     adapter_request_timeout_seconds: int = 20
     adapter_request_retry_count: int = 2
 
-    # Hybrid Tutor Engine orchestration gate. Closed by default alongside Sanya's
-    # configs/classifier_rules.yaml `v1_hybrid_enabled` — both must be open for a
-    # request to ever reach HybridTutorEngineAdapter. Allowlists are fail-closed:
-    # empty means nobody, even with both flags on.
-    hybrid_orchestration_enabled: bool = False
-    hybrid_allowed_student_ids: list[str] = Field(default_factory=list)
-    hybrid_allowed_topic_ids: list[str] = Field(default_factory=list)
-
     # Server-authoritative inactivity policy. Client idle duration is telemetry only.
     inactivity_initial_idle_threshold_ms: int = Field(default=20_000, ge=1)
     inactivity_cooldown_ms: int = Field(default=30_000, ge=1)

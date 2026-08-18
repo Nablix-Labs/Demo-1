@@ -800,6 +800,7 @@ def test_canvas_submit_stops_before_tutor_below_legacy_reliability_threshold(
     body = response.json()
     assert body["status"] == "CLARIFICATION_REQUIRED"
     assert body["message"] == "Please write out that step so I can check it."
+    assert body["next_expected_input"] == "WRITE"
     assert body["canvas_draw"] == []
     assert body["localization_status"] == "uncertain"
     stored_session = client.get(f"/session/{session_id}", params={"student_id": "ST012"}).json()
