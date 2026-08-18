@@ -1252,6 +1252,59 @@ def test_session_start_restores_guided_support_presentation(
     assert body["hint_count"] == 1
 
 
+def test_active_support_survives_a_blank_canvas_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Support is served from Student Model state, never from canvas evidence."""
+
+    async def fake_post_json(
+        adapter_name: str,
+        url: str,
+        payload: dict[str, object],
+        headers: dict[str, str],
+        timeout_seconds: int,
+        retry_count: int,
+    ) -> dict[str, object]:
+        del adapter_name, url, headers, timeout_seconds, retry_count
+        return _event_response("INCORRECT_ATTEMPT", str(payload["request_id"]))
+
+    _use_live_student_model(monkeypatch, fake_post_json)
+
+    started = client.post(
+        "/session/start",
+        json={
+            "student_id": "ST001",
+            "concept_id": "ALG_LINEAR_ONE_STEP",
+            "interaction_mode": "TEXT",
+        },
+    )
+    assert started.status_code == 200
+    assert started.json()["show_visual_cue"] is True
+
+    blank_canvas_turn = client.post(
+        "/interaction",
+        json={
+            "session_id": started.json()["session_id"],
+            "student_id": "ST001",
+            "interaction_type": "ANSWER_SUBMISSION",
+            "input_source": "CANVAS",
+            "turn_id": "TURN-BLANK-CANVAS-1",
+            "text_input": "I am not sure yet",
+            "current_phase": "GUIDED_PRACTICE",
+            "concept_id": "ALG_LINEAR_ONE_STEP",
+            "question_id": "Q-T02-004",
+            "hint_count": 0,
+        },
+    )
+
+    assert blank_canvas_turn.status_code == 200, blank_canvas_turn.text
+    body = blank_canvas_turn.json()
+    assert body["support_message"] == "Undo the addition first."
+    assert body["show_visual_cue"] is True
+    assert body["visual_cue"]["cue_id"] == "VC-T02-COEFFICIENT-COUNT"
+    assert body["canvas_draw"] == []
+
+
 def test_session_start_restores_independent_rescue_presentation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
