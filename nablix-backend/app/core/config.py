@@ -1,5 +1,4 @@
 from functools import lru_cache
-from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -51,9 +50,7 @@ class Settings(BaseSettings):
     # Wrong-4 and repeated-STUCK events. The legacy event path remains active.
     student_model_atomic_guided_events_enabled: bool = False
 
-    #Vision OCR (used when use_mock_vision is False)
-    ocr_provider: Literal["openai", "mathpix"] = "openai"
-    openai_vision_model: str = "gpt-5.4-mini"
+    #Vision OCR (Mathpix only; used when use_mock_vision is False)
     mathpix_app_id: str = ""
     mathpix_app_key: str = ""
     use_openai_ai_engine: bool = False

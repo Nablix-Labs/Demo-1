@@ -20,7 +20,6 @@ from app.adapters.base import (
     VoiceServiceAdapter,
 )
 from app.adapters.mathpix_vision import MathpixVisionOCRAdapter
-from app.adapters.openai_vision import OpenAIVisionOCRAdapter
 from app.adapters.safety_service import MockSafetyServiceAdapter
 from app.adapters.student_model import StudentModelServiceAdapter
 from app.adapters.tutor_engine import TutorEngineServiceAdapter
@@ -41,34 +40,24 @@ class AdapterSet:
 
 
 def _build_vision_adapter(settings: Settings) -> VisionOCRAdapter:
-    """Build the configured OCR adapter."""
+    """Build the OCR adapter.
+
+    Mathpix is the only live provider: token-grounded canvas marks need the
+    per-symbol geometry that a general vision model does not return.
+    """
 
     if settings.use_mock_vision:
         return MockVisionOCRAdapter()
 
-    if settings.ocr_provider == "mathpix":
-        if not settings.mathpix_app_id or not settings.mathpix_app_key:
-            raise RuntimeError(
-                "Vision OCR is live with Mathpix but "
-                "NABLIX_MATHPIX_APP_ID and NABLIX_MATHPIX_APP_KEY are not set."
-            )
-        return MathpixVisionOCRAdapter(
-            app_id=settings.mathpix_app_id,
-            app_key=settings.mathpix_app_key,
-            timeout_seconds=settings.adapter_request_timeout_seconds,
-            min_confidence=settings.min_ocr_confidence_threshold,
-        )
-
-    if not settings.openai_api_key:
+    if not settings.mathpix_app_id or not settings.mathpix_app_key:
         raise RuntimeError(
-            "Vision OCR is live (NABLIX_USE_MOCK_VISION=false) but "
-            "NABLIX_OPENAI_API_KEY is not set."
+            "Vision OCR is live but "
+            "NABLIX_MATHPIX_APP_ID and NABLIX_MATHPIX_APP_KEY are not set."
         )
-
-    return OpenAIVisionOCRAdapter(
-        api_key=settings.openai_api_key,
-        model=settings.openai_vision_model,
-        timeout_seconds=settings.openai_request_timeout_seconds,
+    return MathpixVisionOCRAdapter(
+        app_id=settings.mathpix_app_id,
+        app_key=settings.mathpix_app_key,
+        timeout_seconds=settings.adapter_request_timeout_seconds,
         min_confidence=settings.min_ocr_confidence_threshold,
     )
 
