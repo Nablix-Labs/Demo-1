@@ -59,6 +59,7 @@ from app.models.guided_learning import (
     WrongEscalationCode,
 )
 
+from app.models.question_anchor import QuestionTextAnchor
 from app.models.interaction import (
     InteractionRequest,
     InteractionResponse,
@@ -86,6 +87,7 @@ from app.models.student_model_session import (
 )
 from app.services.guided_question_opening import guided_question_opening
 from app.services.canvas_annotations import plan_canvas_draw, plan_confirmed_tutor_draw
+from app.services.question_anchors import plan_question_anchors
 from app.services.canvas_evidence import (
     CanvasEvidence,
     canvas_events_are_stale,
@@ -970,6 +972,20 @@ def _active_answer_spec(session: SessionRecord) -> AnswerSpec | None:
     if session.student_model_event is None:
         return None
     return _schema_question(session).tutor_view.answer_spec
+
+
+def _question_anchors(session: SessionRecord) -> list[QuestionTextAnchor]:
+    """Anchor the active teaching step into the question the learner is reading."""
+
+    if session.current_phase != "GUIDED_PRACTICE":
+        return []
+    teaching_state = session.guided_teaching_state
+    return plan_question_anchors(
+        session.question_id,
+        session.current_question,
+        _active_answer_spec(session),
+        teaching_state.active_step_id if teaching_state is not None else None,
+    )
 
 
 def _phase_2_prompt_context(
@@ -1947,6 +1963,7 @@ def _response_from(
         active_support_level="NONE" if phase3_silent else active_support_level,
         highest_support_used="NONE" if phase3_silent else highest_support_used,
         consecutive_stuck_count=session.stuck_count,
+        question_anchors=[] if phase3_silent else _question_anchors(session),
         wrong_attempt_count=session.wrong_attempt_count,
         intervention_triggered=session.wrong_attempt_count >= 4,
         routing_reason_code=(

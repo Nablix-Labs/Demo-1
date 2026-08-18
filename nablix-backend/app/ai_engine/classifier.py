@@ -42,6 +42,7 @@ from app.ai_engine.schemas import (
     VisualCue,
 )
 from app.core.config import Settings, get_settings
+from app.services.question_anchors import plan_question_anchors
 from app.core.exceptions import AdapterError
 from app.core.logger import logger
 from app.models.adapters import (
@@ -1370,6 +1371,12 @@ def guided_tutor_context_for(
         selected_option_id=selected_option_id,
         selected_option_text=selected_option_text,
         active_canvas_events=request.canvas_events,
+        active_question_anchors=plan_question_anchors(
+            request.question_id,
+            request.question,
+            request.answer_spec,
+            active_step.step_id if active_step is not None else None,
+        ),
         current_scaffold_step_number=current_scaffold_step_number,
         consecutive_stuck_count=consecutive_stuck_count,
         conversation_state_summary=conversation_state_summary,

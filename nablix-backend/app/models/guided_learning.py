@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from app.models.canvas_memory import CanvasEvent
+from app.models.question_anchor import QuestionTextAnchor
 
 
 GuidedStudentState = Literal["CORRECT", "PARTIAL", "WRONG", "STUCK", "UNCLEAR"]
@@ -121,6 +122,7 @@ class GuidedTutorContext(GuidedLearningModel):
     selected_option_id: str | None
     selected_option_text: str | None
     active_canvas_events: list[CanvasEvent]
+    active_question_anchors: list[QuestionTextAnchor]
     current_scaffold_step_number: int
     consecutive_stuck_count: int
     conversation_state_summary: str
