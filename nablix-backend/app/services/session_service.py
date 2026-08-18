@@ -9,8 +9,18 @@ from typing_extensions import NotRequired
 
 from app.adapters.provider import get_adapters
 from app.core.config import get_settings
-from app.core.exceptions import JourneyVersionConflict
+from app.core.exceptions import AdapterError, JourneyVersionConflict
 from app.core.logger import logger
+from app.ai_engine.phase4_review import (
+    Phase4ReviewValidationError,
+    generate_phase4_review,
+)
+from app.models.phase4_review import Phase4ReviewResponse
+from app.services.phase4_context_builder import (
+    Phase4ContextError,
+    build_phase4_review_request,
+)
+from app.services.phase4_replay_filter import filter_replay_attempts
 from app.models.adapters import ConversationMessage, StudentModelResult, VisualCue, VisionOCRResult
 from app.models.canvas import CanvasQuestionMemory, CanvasStroke, CanvasSubmissionRecord
 from app.models.canvas_memory import CanvasEvent
@@ -752,9 +762,53 @@ def _require_schema_phase(
         )
 
 
+async def generate_phase4_review_for(
+    session: SessionRecord,
+    event: StudentModelSessionEventResponse,
+    access_token: str,
+) -> Phase4ReviewResponse | None:
+    """Review the finished topic as the student enters Phase 4.
+
+    A failure here must not strand the student outside Review, so the phase
+    transition still happens and the review is simply absent; the frontend
+    shows the topic outcome without a tutor replay.
+    """
+
+    try:
+        history = await get_adapters().student_model.fetch_topic_event_history(
+            session.student_id,
+            event.journey_state.topic_id,
+            access_token,
+        )
+        review = generate_phase4_review(
+            build_phase4_review_request(
+                history,
+                filter_replay_attempts(history.attempts),
+                event.journey_state.mastery_status,
+                event.routing.next_action,
+            )
+        )
+    except (
+        AdapterError,
+        Phase4ContextError,
+        Phase4ReviewValidationError,
+    ) as error:
+        logger.warning(
+            "phase4_review_not_generated",
+            extra={
+                "session_id": session.session_id,
+                "topic_id": event.journey_state.topic_id,
+                "error": str(error),
+            },
+        )
+        return None
+    return review
+
+
 async def _apply_schema_event(
     session: SessionRecord,
     event: StudentModelSessionEventResponse,
+    access_token: str | None = None,
 ) -> SessionRecord:
     payload = event.phase_payload
     has_questions = (
@@ -893,6 +947,12 @@ async def _apply_schema_event(
                 ],
             }
         )
+        if next_phase == "REVIEW" and access_token is not None:
+            updates["phase4_review"] = await generate_phase4_review_for(
+                session,
+                event,
+                access_token,
+            )
         phase0_config = load_phase0_tutor_config()
         transition_message = (
             _orientation_entry_message(event)

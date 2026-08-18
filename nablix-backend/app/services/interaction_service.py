@@ -798,7 +798,7 @@ async def process_answer_with_session_event(
             ),
             access_token,
         )
-    updated_session = await _apply_schema_event(session, response)
+    updated_session = await _apply_schema_event(session, response, access_token)
     if prerequisite_repair_event is not None:
         updated_session = await store_prerequisite_repair_event(
             updated_session,

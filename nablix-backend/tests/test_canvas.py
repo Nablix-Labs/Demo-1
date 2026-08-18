@@ -1279,6 +1279,66 @@ def test_canvas_final_independent_attempt_is_recorded_before_review(
     assert terminal_events.count("CORRECT_ATTEMPT") == 1
 
 
+def _review_transition_session(monkeypatch: pytest.MonkeyPatch) -> str:
+    """Start a Phase 3 session whose next correct answer completes the topic."""
+
+    async def send_session_event(
+        adapter: StudentModelServiceAdapter,
+        event: StudentModelSessionEvent,
+        access_token: str,
+    ) -> StudentModelSessionEventResponse:
+        del adapter, access_token
+        body = (
+            _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+            if event.event_type == "SESSION_OPENED"
+            else _session_opened_response("REVIEW")
+        )
+        body["request_id"] = event.request_id
+        return StudentModelSessionEventResponse.model_validate(body)
+
+    async def correct_pipeline(
+        context: AdapterContext,
+    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
+        del context
+        student = StudentModelResult(
+            mastery_status="MASTERED",
+            continuity_status="on_track",
+            recommended_entry_phase="REVIEW",
+            hint_dependency_score=0.0,
+            intervention_required=False,
+        )
+        return RAGResult(documents=[], retrieval_confidence=0.0), student, _correct_canvas_tutor()
+
+    monkeypatch.setattr(
+        StudentModelServiceAdapter,
+        "send_session_event",
+        send_session_event,
+    )
+    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", correct_pipeline)
+    return _start_session("ST042")
+
+
+def _correct_canvas_tutor() -> TutorResult:
+    return TutorResult(
+        evaluation="CORRECT",
+        error_type="NONE",
+        intent="SUBMITTING_ANSWER",
+        response_strategy="CONFIRM_CORRECT",
+        tutor_message="Correct.",
+        tutor_message_voice="Correct.",
+        voice_optimised=True,
+        hint_level=0,
+        answer_reveal_allowed=False,
+        confidence=0.95,
+        input_source="CANVAS",
+        attempt_increment=1,
+        recommended_conversation_action="ADVANCE_TO_NEXT_QUESTION",
+        question_completed=True,
+        answer_value_confirmed=True,
+        reasoning_complete=True,
+    )
+
+
 def _independent_practice_session(monkeypatch: pytest.MonkeyPatch) -> str:
     """Start a session sitting in Phase 3 with a correct-answer pipeline."""
 

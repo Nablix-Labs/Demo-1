@@ -13,6 +13,7 @@ from app.models.adapters import (
     VisionOCRResult,
 )
 from app.models.canvas import CanvasQuestionMemory, CanvasSubmissionRecord
+from app.models.phase4_review import Phase4ReviewResponse
 from app.models.fields import (
     ConceptId,
     InteractionMode,
@@ -288,6 +289,9 @@ class SessionRecord(BaseModel):
     # end-of-session review reflects his data rather than a reconstruction.
     last_student_model: StudentModelResult | None = None
     student_model_event: StudentModelSessionEventResponse | None = None
+    # Tutor replay and learning summary, generated once on entering Review.
+    # None when the topic has not reached Review, or generation failed.
+    phase4_review: Phase4ReviewResponse | None = None
     prerequisite_repair_event: StudentModelSessionEventResponse | None = None
     student_model_state: StudentModelCoreState | None = None
     active_student_model_question: StudentModelQuestion | None = None
