@@ -6,6 +6,7 @@
  * This store holds only UI-relevant state derived from backend events.
  */
 import { create } from 'zustand';
+import type { QuestionAnchor } from '@/lib/questionAnchors';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { LearningPhase } from '@/lib/phases';
 import type { FlowStage } from '@/lib/flow';
@@ -256,6 +257,16 @@ export interface NumeraState {
 
   // Question displayed on canvas (backend-controlled)
   questionText: string;
+  /**
+   * Spans of `questionText` the tutor is pointing at, as sent.
+   *
+   * Held as the backend's own character offsets rather than anything resolved:
+   * they index `current_question`, and the renderer is what knows which part of
+   * that string it is drawing. Cleared on a question change with the text they
+   * refer to — an offset into the previous question highlights an arbitrary
+   * word in the next one.
+   */
+  questionAnchors: QuestionAnchor[];
   questionNumber: number;
 
   // Active question the tutor session runs on. Sent as concept_id/question_id;
@@ -545,6 +556,7 @@ export interface NumeraState {
   setActiveSlide: (n: number) => void;
   setTotalSlides: (n: number) => void;
   setQuestionText: (q: string) => void;
+  setQuestionAnchors: (anchors: QuestionAnchor[]) => void;
   applyBackendPhase: (p: {
     phase: string;
     questionId: string | null;
@@ -694,7 +706,7 @@ export interface NumeraState {
 const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
-  | 'setQuestionText' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'noteTutorLineage' | 'markTutorTurnFailed'
+  | 'setQuestionText' | 'setQuestionAnchors' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'noteTutorLineage' | 'markTutorTurnFailed'
   | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue' | 'setVisibleHint' | 'setWriteInstruction' | 'setGuidedRescue'
   | 'setSupportShown' | 'setLastHintText' | 'lockPhase3Attempt'
   | 'setPendingTutorSpeech' | 'claimPendingTutorSpeech' | 'setQuestionProgress' | 'setAppliedResponse' | 'setInactivityPolicy'
@@ -726,6 +738,7 @@ const initial: Omit<
   // No hardcoded equation: the backend session drives the question. Empty until
   // it loads so a stale demo equation never flashes on the live build.
   questionText: '',
+  questionAnchors: [] as QuestionAnchor[],
   questionNumber: 0,
   // The concept to open a session on. Still a constant because the frontend has
   // no other source for it — the concept_id -> topic_code mapping lives in the
@@ -842,6 +855,7 @@ export const useNumeraStore = create<NumeraState>()(
   setActiveSlide: (activeSlide) => set({ activeSlide }),
   setTotalSlides: (totalSlides) => set({ totalSlides }),
   setQuestionText: (questionText) => set({ questionText }),
+  setQuestionAnchors: (questionAnchors) => set({ questionAnchors }),
 
   /**
    * Apply the phase/question the backend just reported.
@@ -935,6 +949,11 @@ export const useNumeraStore = create<NumeraState>()(
               undone: [],
               // The tutor's marks belong to the question they annotated.
               tutorElements: [],
+              // So do the anchors, and more sharply: they are raw character
+              // offsets into the PREVIOUS question's text, so carrying them
+              // over highlights whatever happens to sit at those positions in
+              // the next one.
+              questionAnchors: [] as QuestionAnchor[],
               // Ordered memory is scoped to one question (§8: it exists so the
               // tutor can resume at the first unresolved step of the CURRENT
               // problem). Carrying it over would offer the tutor a completed

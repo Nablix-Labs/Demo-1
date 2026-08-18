@@ -82,6 +82,7 @@ export default function PracticePage() {
   // from /session/start and every /interaction response); the demo table is the
   // mock-mode fallback. Empty while the session is still loading.
   const QUESTION = tutor.apiEnabled ? questionText : demo.practiceQuestion;
+  const questionAnchors = useNumeraStore((s) => s.questionAnchors);
 
   // Backend context — fixed demo identifiers, matching the API documentation.
   const PHASE = DEMO_PHASE;
@@ -322,6 +323,10 @@ export default function PracticePage() {
                locked (§3.3, "lock student ink and choice controls"). */
             <QuestionDisplay
               question={QUESTION}
+              // Only when the question on screen IS the backend's — the demo
+              // question is a different string and the offsets would point into
+              // arbitrary words in it.
+              anchors={tutor.apiEnabled ? questionAnchors : undefined}
               size="compact"
               questionType={questionType}
               options={questionOptions}

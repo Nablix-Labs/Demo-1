@@ -48,6 +48,7 @@ export default function CanvasStage() {
       setCanvasExporter: s.setCanvasExporter, canvasGrid: s.canvasGrid, setCanvasGrid: s.setCanvasGrid,
     })),
   );
+  const questionAnchors = useNumeraStore((s) => s.questionAnchors);
   const activeScaffold = useNumeraStore((s) => s.activeScaffold);
   // Phase 3 spec §3.2: no scaffold panels during an independent attempt. Read
   // from the phase rather than the route — the phase is what decides whether
@@ -171,6 +172,7 @@ export default function CanvasStage() {
         </div>
         <QuestionDisplay
           question={questionText}
+          anchors={questionAnchors}
           size="lesson"
           questionType={questionType}
           options={questionOptions}

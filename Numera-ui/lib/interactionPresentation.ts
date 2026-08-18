@@ -1,4 +1,5 @@
 import { activeScaffold, type InteractionResponse } from '@/lib/api';
+import type { QuestionAnchor } from '@/lib/questionAnchors';
 import { cueAssetUrl } from '@/lib/cueAsset';
 import { writePrompt } from '@/lib/writtenEvidence';
 import { useNumeraStore } from '@/store/useNumeraStore';
@@ -24,6 +25,8 @@ export type SupportPresentation = Pick<
   | 'total_scaffold_steps'
 > & {
   conversation_action?: string | null;
+  /** Spans of the question the tutor is pointing at (Chirudeva §1). */
+  question_anchors?: QuestionAnchor[];
   // Reliability gate (revised handoff, Chirudeva §3). Optional: the backend does
   // not send them yet, and `requiresWriting` reads absent as "not a WRITE turn".
   next_expected_input?: string | null;
@@ -102,6 +105,17 @@ export function applyInteractionSupport(response: SupportPresentation): string {
   // sentence on the screen twice.
   const hint = authorisedHint(response);
   if (hint) useNumeraStore.getState().setVisibleHint(hint);
+
+  // What the tutor is pointing at in the question text (Chirudeva §1).
+  //
+  // Set unconditionally, including to the empty array. "Nothing to point at
+  // this turn" is the ordinary case and it must CLEAR what the last turn was
+  // pointing at — anchors left standing would keep a highlight on a token the
+  // tutor has moved on from, which reads as "this is still the thing to look
+  // at" for the rest of the question.
+  useNumeraStore.getState().setQuestionAnchors(
+    (response as InteractionResponse).question_anchors ?? [],
+  );
 
   // The reliability gate fired: the tutor could not read the student and is
   // asking for the answer in writing. Set unconditionally — clearing it on an

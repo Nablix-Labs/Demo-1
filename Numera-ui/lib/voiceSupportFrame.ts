@@ -32,6 +32,11 @@ export function voiceSupportFrame(msg: VoiceTutorFrame): SupportPresentation {
     support_message: str(msg.support_message),
     conversation_action: str(msg.conversation_action),
 
+    // Pointing at the question text (Chirudeva §1). Defaulted to an empty
+    // array rather than left undefined, so a voice turn that points at nothing
+    // clears the previous turn's highlight instead of leaving it standing.
+    question_anchors: (msg.question_anchors as SupportPresentation['question_anchors']) ?? [],
+
     // Reliability gate — see the header.
     next_expected_input: str(msg.next_expected_input),
     requires_written_math_evidence:

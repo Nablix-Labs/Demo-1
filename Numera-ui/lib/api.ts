@@ -12,6 +12,7 @@
  *    `session_id` from /session/start and reuse it for the whole run.
  */
 import axios from 'axios';
+import type { QuestionAnchor } from '@/lib/questionAnchors';
 import type { CanvasDrawPayload, CanvasStrokeSnapshot } from '@/store/useNumeraStore';
 import type { CanvasEvent } from '@/lib/canvasMemory';
 import { useAuthStore } from '@/store/useAuthStore';
@@ -1170,6 +1171,29 @@ export interface InteractionResponse extends GuidedStateFields, Phase3ResponseFi
   current_question: string | null;
   question_type?: QuestionType | null;
   question_id: string | null;
+  /**
+   * Spans inside `current_question` the tutor is pointing at (Chirudeva
+   * handoff, 18 Aug 2026 §1). Optional and often empty — "nothing to point at
+   * this turn" is the ordinary case, not a missing feature.
+   *
+   * The backend deliberately sends no coordinates and never will: we lay the
+   * question out, so resolving a span to a position is ours. See
+   * lib/questionAnchors.
+   */
+  question_anchors?: QuestionAnchor[];
+  /**
+   * How confident the backend is about WHERE on the canvas a symbol is
+   * (Chirudeva handoff §2).
+   *
+   *   grounded   — the marks in `canvas_draw` are precise; render them.
+   *   uncertain  — `canvas_draw` is empty ON PURPOSE. The tutor guides in text
+   *                and voice instead. NOT an error: show no failure, and never
+   *                fall back to marking something ourselves. The previous
+   *                behaviour could circle the wrong symbol confidently, which
+   *                is worse than not marking at all.
+   *   null       — no canvas evidence in this turn.
+   */
+  localization_status?: 'grounded' | 'uncertain' | null;
   interaction_mode: InteractionMode;
   message: string;
   message_voice: string;
