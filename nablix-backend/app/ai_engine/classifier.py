@@ -10,7 +10,10 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import Field
 
-from app.ai_engine.canvas_math_review import review_canvas_math
+from app.ai_engine.canvas_math_review import (
+    normalize_canvas_math_text,
+    review_canvas_math,
+)
 from app.ai_engine.classifier_config import ClassifierRulesConfig, load_classifier_rules
 from app.ai_engine.prompt_registry import Trigger
 from app.ai_engine.schemas import (
@@ -71,6 +74,19 @@ if TYPE_CHECKING:
         OpenAITutorMessage,
         OpenAITutorTurn,
     )
+
+
+_CANVAS_EXPRESSION = re.compile(
+    r"^(?:(?:[A-Za-z]|\d|\s|[+\-−×*/÷=().]|\\(?:times|cdot|div)))+$"
+)
+_CANVAS_LATEX_COMMAND = re.compile(r"\\(?:times|cdot|div)")
+_CANVAS_EXPRESSION_FRAGMENT = re.compile(
+    r"(?<![A-Za-z0-9])(?:"
+    r"[A-Za-z](?:\s*(?:[+\-−×*/÷=]|\\(?:times|cdot|div))\s*"
+    r"(?:[A-Za-z]|\d+(?:\.\d+)?))+"
+    r"|[+\-−×÷]\s*\d+(?:\.\d+)?"
+    r")(?![A-Za-z0-9])"
+)
 
 
 class ClassificationRequest(StrictSchema):
@@ -880,6 +896,18 @@ def teaching_steps_for(request: ClassificationRequest) -> list[TeachingStep]:
     return []
 
 
+def answer_step_ids_for(request: ClassificationRequest) -> list[str]:
+    """Derive stable learner-step IDs from the authored answer contract."""
+
+    answer_spec = request.answer_spec
+    if answer_spec is None:
+        return []
+    return [
+        f"{answer_spec.answer_spec_id}:STEP:{index}"
+        for index, _step in enumerate(answer_spec.answer_steps, start=1)
+    ]
+
+
 def teaching_step_from_message(message: str, steps: list[TeachingStep]) -> str | None:
     """Recover the exact pending step from a controller-owned prompt."""
 
@@ -1242,6 +1270,7 @@ def teaching_state_for(
         awaiting_response=objective is not None,
         active_step_id=active_step_id,
         teaching_step_ids=[step.step_id for step in teaching_steps],
+        answer_step_ids=answer_step_ids_for(request),
         completed_step_ids=completed_step_ids,
         current_step_index=current_step_index,
     )
@@ -1314,6 +1343,7 @@ def guided_tutor_context_for(
         "The backend owns progression and support selection; do not advance "
         "or request a support rung."
     )
+    authored_step_ids = answer_step_ids_for(request)
     return GuidedTutorContext(
         active_tutor_question=active_question,
         active_step_id=active_step.step_id if active_step is not None else None,
@@ -1321,8 +1351,13 @@ def guided_tutor_context_for(
             GuidedTeachingPlanStep(
                 step_id=teaching_step.step_id,
                 tutor_question=teaching_step.prompt,
+                answer_step_id=(
+                    authored_step_ids[index]
+                    if index < len(authored_step_ids)
+                    else None
+                ),
             )
-            for teaching_step in teaching_steps
+            for index, teaching_step in enumerate(teaching_steps)
         ],
         confirmed_concept_ids=objective.confirmed_concept_ids,
         missing_concept_ids=objective.missing_concept_ids,
@@ -3306,8 +3341,14 @@ def build_guided_tutor_response(
     objective: ActiveTeachingObjective | None,
 ) -> TutorResponse:
     state = evaluation.student_state
+    review_request = request.model_copy(
+        update={
+            "generated_question_rubric": rubric,
+            "active_teaching_objective": objective,
+        }
+    )
     canvas_review: CanvasMathReview | None = _canvas_review_for(
-        request,
+        review_request,
         rules,
         evaluation.confidence,
     )
@@ -4467,13 +4508,91 @@ def _canvas_review_for(
         return None
     return review_canvas_math(
         question=request.question,
-        correct_answer=request.correct_answer,
+        correct_answer=canvas_expected_answer(request),
         current_phase=request.current_phase,
         canvas_regions=request.canvas_regions,
         spatial_tokens=request.spatial_tokens,
         config=rules.canvas_review,
         confidence=confidence,
     )
+
+
+def canvas_expected_answer(request: ClassificationRequest) -> str:
+    """Select the authored component that the current Canvas turn answers."""
+
+    rubric = request.generated_question_rubric
+    if rubric is None:
+        return request.correct_answer
+
+    component_id = (
+        request.guided_teaching_state.active_component_id
+        if request.guided_teaching_state is not None
+        else active_component_id(rubric, request.active_teaching_objective)
+    )
+    if component_id is None:
+        return request.correct_answer
+
+    component_index: int | None = next(
+        (
+            index
+            for index, component in enumerate(rubric.required_concepts)
+            if component.concept_id == component_id
+        ),
+        None,
+    )
+    if component_index is None:
+        return request.correct_answer
+
+    component_description: str = next(
+        component.description.strip()
+        for component in rubric.required_concepts
+        if component.concept_id == component_id
+    )
+    answer_parts: list[str] = [
+        part.strip() for part in request.correct_answer.split(";")
+    ]
+    if component_index < len(answer_parts) and _looks_like_canvas_expression(
+        answer_parts[component_index]
+    ):
+        return answer_parts[component_index]
+
+    component_expression: str | None = _canvas_expression_from_description(
+        component_description
+    )
+    canonical_text: str = normalize_canvas_math_text(request.correct_answer).replace(
+        " ", ""
+    )
+    component_text: str = normalize_canvas_math_text(component_expression or "").replace(
+        " ", ""
+    )
+    if (
+        component_expression is not None
+        and re.search(
+            rf"{re.escape(component_text)}(?![A-Za-z0-9.])",
+            canonical_text,
+        )
+        is not None
+    ):
+        return component_expression
+
+    if component_index < len(answer_parts):
+        return answer_parts[component_index]
+    return request.correct_answer
+
+
+def _looks_like_canvas_expression(text: str) -> bool:
+    expression: str = _CANVAS_LATEX_COMMAND.sub("", text)
+    return (
+        _CANVAS_EXPRESSION.fullmatch(expression) is not None
+        and re.search(r"[A-Za-z]{2,}", expression) is None
+    )
+
+
+def _canvas_expression_from_description(text: str) -> str | None:
+    if _looks_like_canvas_expression(text):
+        return text
+    match = _CANVAS_EXPRESSION_FRAGMENT.search(text)
+    return match.group(0) if match is not None else None
 
 
 def build_canvas_wording_context(

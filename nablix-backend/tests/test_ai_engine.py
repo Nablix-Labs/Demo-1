@@ -1511,6 +1511,89 @@ def _multipart_guided_rubric() -> GeneratedQuestionRubric:
     )
 
 
+def test_canvas_expected_answer_uses_active_math_component_from_rubric() -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-006",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="REQUIRED_COMPONENT_1",
+                description="States the general rule c + 4.",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="REQUIRED_COMPONENT_2",
+                description="c changes",
+                required=True,
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="canvas-component",
+        prompt_version="1.0.0",
+    )
+    request = ClassificationRequest(
+        question_id="Q-T01-006",
+        question_type="MULTI_PART_SHORT_RESPONSE",
+        question="Write the rule and state what changes.",
+        correct_answer="The rule is c + 4, and c changes.",
+        student_input="c - 4",
+        current_phase="GUIDED_PRACTICE",
+        input_source="CANVAS",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+        generated_question_rubric=rubric,
+        active_teaching_objective=ActiveTeachingObjective(
+            objective_type="ANSWER_QUESTION",
+            target_concept_ids=["REQUIRED_COMPONENT_1", "REQUIRED_COMPONENT_2"],
+            confirmed_concept_ids=[],
+            missing_concept_ids=["REQUIRED_COMPONENT_1", "REQUIRED_COMPONENT_2"],
+        ),
+    )
+
+    assert classifier.canvas_expected_answer(request) == "c + 4"
+    request_with_active_state = request.model_copy(
+        update={
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-T01-006",
+                objective_component_ids=[
+                    "REQUIRED_COMPONENT_1",
+                    "REQUIRED_COMPONENT_2",
+                ],
+                confirmed_component_ids=[],
+                missing_component_ids=[
+                    "REQUIRED_COMPONENT_1",
+                    "REQUIRED_COMPONENT_2",
+                ],
+                active_component_id="REQUIRED_COMPONENT_2",
+                last_tutor_question_type="COMPONENT",
+                selected_option_id=None,
+                awaiting_response=True,
+            )
+        }
+    )
+    assert classifier.canvas_expected_answer(request_with_active_state) == request.correct_answer
+
+    stale_rubric = rubric.model_copy(
+        update={
+            "required_concepts": [
+                GeneratedConcept(
+                    concept_id="REQUIRED_COMPONENT_1",
+                    description="c + 5",
+                    required=True,
+                ),
+                rubric.required_concepts[1],
+            ]
+        }
+    )
+    canonical_components = request.model_copy(
+        update={
+            "correct_answer": "c + 4; c changes.",
+            "generated_question_rubric": stale_rubric,
+        }
+    )
+    assert classifier.canvas_expected_answer(canonical_components) == "c + 4"
+
+
 def _explain_again_request() -> ExplainAgainRequest:
     return ExplainAgainRequest(
         question_id="Q-T01-006",
@@ -1943,6 +2026,60 @@ def test_answer_spec_defaults_missing_answer_steps_for_legacy_payloads() -> None
     answer_spec = _answer_spec("n + 5", ["n+5"], "EXACT_NOTATION_MATCH")
 
     assert answer_spec.answer_steps == []
+
+
+def test_authored_answer_steps_get_stable_guided_ids() -> None:
+    request = _guided_context(0)
+    classification_request = ClassificationRequest(
+        question_id="Q-T01-STEPS",
+        question_type="MULTI_PART_SHORT_RESPONSE",
+        question="Write the general rule and explain what changes and what stays fixed.",
+        correct_answer="c + 4; c changes; +4 stays fixed",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-STEPS",
+            canonical_answer="c + 4; c changes; +4 stays fixed",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=True,
+            answer_steps=[
+                "Write the rule.",
+                "Explain what changes.",
+                "Explain what stays fixed.",
+            ],
+        ),
+        phase_2_prompt_context=request,
+        student_input="c + 4",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+    )
+
+    rubric = _guided_rubric().model_copy(update={"question_id": "Q-T01-STEPS"})
+    objective = classifier.initial_guided_objective(rubric)
+    state = classifier.teaching_state_for(
+        classification_request,
+        rubric,
+        objective,
+        "What general rule represents this situation?",
+    )
+    context = classifier.guided_tutor_context_for(
+        classification_request,
+        rubric,
+        objective,
+    )
+
+    assert state.answer_step_ids == [
+        "ANS-T01-STEPS:STEP:1",
+        "ANS-T01-STEPS:STEP:2",
+        "ANS-T01-STEPS:STEP:3",
+    ]
+    assert [step.answer_step_id for step in context.ordered_teaching_steps] == [
+        "ANS-T01-STEPS:STEP:1",
+        "ANS-T01-STEPS:STEP:2",
+        "ANS-T01-STEPS:STEP:3",
+    ]
 
 
 def test_answer_spec_rejects_non_string_answer_steps() -> None:
@@ -3660,10 +3797,13 @@ def test_canvas_math_review_writes_grounded_direct_expression_correction(
                 tutor_message_voice="Check the fixed amount in your rule.",
             )
 
+    def build_guided_client(settings: Settings) -> GuidedClient:
+        return GuidedClient()
+
     monkeypatch.setattr(
         classifier,
         "build_openai_ai_engine_client",
-        lambda settings: GuidedClient(),
+        build_guided_client,
     )
     rubric = GeneratedQuestionRubric(
         question_id="Q-T01-001",
@@ -3734,6 +3874,119 @@ def test_canvas_math_review_writes_grounded_direct_expression_correction(
     assert response.mistake_classification.status == "mistake_found"
     assert response.mistake_classification.target_token_ids == ["step-1:token-2"]
     assert response.mistake_classification.error_token == "×"
+    assert response.mistake_classification.expected_token == "+"
+    assert [intent.kind for intent in response.annotation_intents] == [
+        "circle_target",
+        "write_correction",
+        "draw_arrow",
+    ]
+    assert response.annotation_intents[1].text == "+"
+
+
+def test_canvas_math_review_scopes_multipart_sentence_to_active_rule_component(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class GuidedClient:
+        def evaluate_guided_turn(self, **kwargs: object) -> GuidedEvaluation:
+            objective = cast(ActiveTeachingObjective, kwargs["active_objective"])
+            return GuidedEvaluation(
+                student_state="WRONG",
+                newly_confirmed_concept_ids=[],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=objective.missing_concept_ids,
+                selected_error_code=None,
+                confidence=0.95,
+                next_objective=objective,
+                tutor_message="What general rule represents this situation?",
+                tutor_message_voice="What general rule represents this situation?",
+            )
+
+    def build_guided_client(settings: Settings) -> GuidedClient:
+        return GuidedClient()
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        build_guided_client,
+    )
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-006",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="REQUIRED_COMPONENT_1",
+                description="States the general rule c + 4.",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="REQUIRED_COMPONENT_2",
+                description="c changes",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="REQUIRED_COMPONENT_3",
+                description="+4 stays fixed",
+                required=True,
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="counter-rule-canvas",
+        prompt_version="1.0.0",
+    )
+    def resolve_rubric(**kwargs: object) -> GeneratedQuestionRubric:
+        return rubric
+
+    monkeypatch.setattr(classifier, "resolve_guided_rubric", resolve_rubric)
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T01-006",
+            question_type="MULTI_PART_SHORT_RESPONSE",
+            question=(
+                "A counter starts at any value c and increases by 4. Write the "
+                "general rule and state what changes and what stays fixed."
+            ),
+            correct_answer=(
+                "The general rule is c + 4, c changes, and +4 stays fixed."
+            ),
+            answer_spec=AnswerSpec(
+                answer_spec_id="ANS-T01-006",
+                canonical_answer=(
+                    "The general rule is c + 4, c changes, and +4 stays fixed."
+                ),
+                accepted_answers=[],
+                verification_method="STRUCTURED_TEXT_AND_SYMBOLIC_MATCH",
+                explanation_required=True,
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            student_input="c - 4",
+            current_phase="GUIDED_PRACTICE",
+            input_source="CANVAS",
+            transcript_confidence=None,
+            attempt_count=3,
+            current_hint_level=None,
+            has_canvas_evidence=True,
+            canvas_regions=[_canvas_region("step-1", "c - 4", 1.0)],
+            spatial_tokens=[
+                SpatialMathToken(
+                    token_id=f"step-1:token-{index}",
+                    step_id="step-1",
+                    text=text,
+                    bounding_box={
+                        "x": index / 10,
+                        "y": 0.1,
+                        "width": 0.05,
+                        "height": 0.1,
+                    },
+                    alignment_confidence=0.95,
+                )
+                for index, text in enumerate(["c", "-", "4"], start=1)
+            ],
+        )
+    )
+
+    assert response.mistake_classification is not None
+    assert response.mistake_classification.target_token_ids == ["step-1:token-2"]
+    assert response.mistake_classification.error_token == "-"
     assert response.mistake_classification.expected_token == "+"
     assert [intent.kind for intent in response.annotation_intents] == [
         "circle_target",

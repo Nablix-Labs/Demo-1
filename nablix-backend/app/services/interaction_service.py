@@ -2969,6 +2969,7 @@ async def _process_interaction(
                 retry_safe=None,
             ).model_copy(
                 update={
+                    "next_expected_input": "WRITE",
                     "ocr": canvas_evidence.ocr if canvas_evidence is not None else None,
                     "snapshot_reference": (
                         canvas_evidence.snapshot_reference
@@ -3713,6 +3714,9 @@ async def _process_interaction(
                 else response.active_support_level
             ),
             "guided_student_state": tutor.guided_student_state,
+            "next_expected_input": (
+                "WRITE" if tutor.requires_written_math_evidence else None
+            ),
             "selected_error_code": tutor.selected_error_code,
             "evaluation_reason_code": (
                 _evaluation_reason(tutor)
