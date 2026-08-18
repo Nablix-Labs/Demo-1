@@ -44,7 +44,14 @@ export default function SupportLane() {
         // the empty lane hit-testing, so a click with no card under it still
         // reaches the canvas, while a wheel over a card (which sets
         // `pointer-events-auto`) bubbles to this scroll container.
-        'max-h-[calc(100vh-104px)] overflow-y-auto',
+        //
+        // `pr-2` and `overflow-x-hidden` together because setting overflow on
+        // one axis forces the other to `auto` rather than leaving it visible.
+        // The note's shadow overhangs its box by 4px, which was enough to put a
+        // horizontal scrollbar under every card — 16px of grey, visible in the
+        // live app. The padding gives the shadow room; the hidden axis stops
+        // anything wider bringing the bar back.
+        'max-h-[calc(100vh-104px)] overflow-y-auto overflow-x-hidden pr-2',
         // Opposite the tutor panel: the canvas keeps the middle.
         panelSide === 'right' ? 'left-4' : 'right-4',
       )}

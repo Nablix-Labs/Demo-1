@@ -59,9 +59,22 @@ export function acceptResponse(response: VersionedResponse): boolean {
  * Null when there is nothing extra to present: no hint was served, or the
  * support text IS the tutor's line, in which case showing both would say the
  * same thing twice.
+ *
+ * ── Why this no longer checks `conversation_action` (18 Aug 2026) ───────────
+ * It required GIVE_HINT, because that is the action Sanya described on 12 Aug.
+ * Driving the live VM through a guided question found the backend serving real
+ * authored support under REQUEST_EXPLANATION instead — "Look at 12 + 4. Does it
+ * show one starting value or any possible starting value?" — while
+ * `hint_count` went to 2. So the student was charged for a hint and shown
+ * nothing: the 13 August bug again, now caused by the client filtering on an
+ * action rather than by having no UI at all.
+ *
+ * `support_message` is by definition the authored support held apart from the
+ * conversational reply, so its PRESENCE is the authorisation. Which action
+ * carried it is the backend's business and changes without notice; the dedupe
+ * against `message` below is what stops anything being said twice.
  */
 export function authorisedHint(response: SupportPresentation): string | null {
-  if (response.conversation_action !== 'GIVE_HINT') return null;
   const hint = response.support_message?.trim();
   if (!hint) return null;
   return hint === response.message?.trim() ? null : hint;
