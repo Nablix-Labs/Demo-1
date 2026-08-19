@@ -83,6 +83,18 @@ def focused_component_evidence_schema(
     return schema
 
 
+def guided_evaluation_schema() -> dict[str, object]:
+    """Keep optional Python defaults compatible with OpenAI strict schemas."""
+
+    schema: dict[str, object] = GuidedEvaluation.model_json_schema()
+    properties = schema.get("properties")
+    required = schema.get("required")
+    if not isinstance(properties, dict) or not isinstance(required, list):
+        raise AdapterError("openai_ai_engine", "Guided evaluation schema is malformed.")
+    schema["required"] = [*required, "canvas_intentions"]
+    return schema
+
+
 def build_explain_again_initial_payload(
     request: ExplainAgainRequest,
     prompt_version: str,
@@ -336,7 +348,7 @@ class OpenAIAIEngineClient:
     ) -> GuidedEvaluation:
         content = self._request_guided_json(
             name="guided_turn_evaluation",
-            schema=GuidedEvaluation.model_json_schema(),
+            schema=guided_evaluation_schema(),
             system_prompt=system_prompt,
             user_payload={
                 "question_type": question_type,
