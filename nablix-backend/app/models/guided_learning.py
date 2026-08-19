@@ -43,6 +43,7 @@ TutorCanvasActionType = Literal[
 ]
 TutorCanvasTargetKind = Literal[
     "QUESTION_ANCHOR",
+    "QUESTION_OPTION",
     "CANVAS_OBJECT",
     "STUDENT_ATTEMPT",
     "TUTOR_ANCHOR",

@@ -256,6 +256,39 @@ def test_wrong_turn_targets_only_reliable_student_written_work() -> None:
     ]
 
 
+def test_partial_choice_selection_gets_a_stable_option_action() -> None:
+    tutor = _tutor_result(
+        TutorMistakeClassification(status="no_mistake", confidence=0.9),
+        [],
+    ).model_copy(
+        update={
+            "guided_student_state": "PARTIAL",
+            "active_teaching_objective": ActiveTeachingObjective(
+                objective_type="ANSWER_QUESTION",
+                target_concept_ids=["ANSWER_EXPLANATION"],
+                confirmed_concept_ids=["ANSWER_SELECTION"],
+                missing_concept_ids=["ANSWER_EXPLANATION"],
+            ),
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-T01-004",
+                objective_component_ids=["ANSWER_SELECTION", "ANSWER_EXPLANATION"],
+                confirmed_component_ids=["ANSWER_SELECTION"],
+                missing_component_ids=["ANSWER_EXPLANATION"],
+                active_component_id="ANSWER_EXPLANATION",
+                last_tutor_question_type="COMPONENT",
+                selected_option_id="B",
+                awaiting_response=True,
+            ),
+        }
+    )
+
+    actions = plan_tutor_canvas_actions(tutor, [], [], "TURN-1", "n + 4")
+
+    assert [(action.type, action.target_kind, action.target_object_id) for action in actions] == [
+        ("HIGHLIGHT", "QUESTION_OPTION", "Q-T01-004:OPTION:B")
+    ]
+
+
 def test_semantic_canvas_action_contract_rejects_unknown_type() -> None:
     with pytest.raises(ValidationError):
         CanvasPedagogyIntent.model_validate(

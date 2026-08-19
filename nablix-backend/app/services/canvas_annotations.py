@@ -243,7 +243,33 @@ def plan_tutor_canvas_actions(
             )
         ]
 
+    selected_option_id = (
+        tutor.guided_teaching_state.selected_option_id
+        if tutor.guided_teaching_state is not None
+        else None
+    )
+    selected_option_action = (
+        TutorCanvasAction(
+            action_id=f"{turn_id}:1:HIGHLIGHT:QUESTION_OPTION:{selected_option_id}",
+            type="HIGHLIGHT",
+            target_kind="QUESTION_OPTION",
+            target_object_id=(
+                f"{tutor.guided_teaching_state.question_id}:OPTION:{selected_option_id}"
+                if tutor.guided_teaching_state is not None
+                else None
+            ),
+            confirmed_component_id=next(iter(sorted(confirmed)), None),
+            text=None,
+            source_id=None,
+            answer_reveal_allowed=False,
+        )
+        if selected_option_id is not None and tutor.guided_teaching_state is not None
+        else None
+    )
+
     if tutor.guided_student_state == "WRONG":
+        if selected_option_action is not None:
+            return [selected_option_action]
         student_attempt = next(
             (
                 event.target_object_id
@@ -340,6 +366,8 @@ def plan_tutor_canvas_actions(
                 answer_reveal_allowed=False,
             )
         )
+    if not actions and selected_option_action is not None:
+        actions.append(selected_option_action)
     return actions
 
 

@@ -166,7 +166,7 @@ export type TutorCanvasActionType =
   | 'FOCUS' | 'SHOW_CUE' | 'OPEN_SCAFFOLD_STEP' | 'SHOW_PARALLEL' | 'TUTOR_SOLVED_STEP';
 
 export type TutorCanvasTargetKind =
-  | 'QUESTION_ANCHOR' | 'CANVAS_OBJECT' | 'STUDENT_ATTEMPT' | 'TUTOR_ANCHOR' | 'WRITE_AREA';
+  | 'QUESTION_ANCHOR' | 'QUESTION_OPTION' | 'CANVAS_OBJECT' | 'STUDENT_ATTEMPT' | 'TUTOR_ANCHOR' | 'WRITE_AREA';
 
 /** Semantic, coordinate-free Phase 2 instruction from the tutor engine. */
 export interface TutorCanvasAction {
@@ -287,6 +287,7 @@ export interface NumeraState {
    * word in the next one.
    */
   questionAnchors: QuestionAnchor[];
+  tutorOptionActionIds: string[];
   questionNumber: number;
 
   // Active question the tutor session runs on. Sent as concept_id/question_id;
@@ -760,6 +761,7 @@ const initial: Omit<
   // it loads so a stale demo equation never flashes on the live build.
   questionText: '',
   questionAnchors: [] as QuestionAnchor[],
+  tutorOptionActionIds: [] as string[],
   questionNumber: 0,
   // The concept to open a session on. Still a constant because the frontend has
   // no other source for it — the concept_id -> topic_code mapping lives in the
@@ -975,6 +977,7 @@ export const useNumeraStore = create<NumeraState>()(
               // over highlights whatever happens to sit at those positions in
               // the next one.
               questionAnchors: [] as QuestionAnchor[],
+              tutorOptionActionIds: [] as string[],
               // Ordered memory is scoped to one question (§8: it exists so the
               // tutor can resume at the first unresolved step of the CURRENT
               // problem). Carrying it over would offer the tutor a completed
@@ -1402,6 +1405,7 @@ export const useNumeraStore = create<NumeraState>()(
     set((s) => {
       let canvasEvents = s.canvasEvents;
       let questionAnchors = s.questionAnchors;
+      let tutorOptionActionIds = s.tutorOptionActionIds;
       const context = eventContext(s);
       for (const action of actions) {
         if (seenTutorCanvasActionIds.has(action.action_id)) continue;
@@ -1423,6 +1427,9 @@ export const useNumeraStore = create<NumeraState>()(
               : anchor,
           );
         }
+        if (action.target_kind === 'QUESTION_OPTION' && action.target_object_id) {
+          tutorOptionActionIds = [...tutorOptionActionIds, action.target_object_id];
+        }
         canvasEvents = appendCanvasEvent(canvasEvents, {
           actor: action.type === 'SHOW_CUE' || action.type === 'OPEN_SCAFFOLD_STEP'
             ? 'SYSTEM_SUPPORT'
@@ -1434,7 +1441,7 @@ export const useNumeraStore = create<NumeraState>()(
           semantic_tag: action.confirmed_component_id,
         }, context);
       }
-      return { canvasEvents, questionAnchors };
+      return { canvasEvents, questionAnchors, tutorOptionActionIds };
     }),
 
   clearTutorMarks: () => {

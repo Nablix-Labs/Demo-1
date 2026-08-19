@@ -41,6 +41,8 @@ function Options({
   onSelect,
   requiresExplanation,
   readOnly = false,
+  questionId,
+  highlightedOptionIds,
 }: {
   options: SchemaQuestionOption[];
   selectedId: string | null;
@@ -48,11 +50,15 @@ function Options({
   requiresExplanation: boolean;
   /** Shown but not changeable — a Phase 3 answer that has been accepted. */
   readOnly?: boolean;
+  questionId: string | null;
+  highlightedOptionIds: string[];
 }) {
   return (
     <div className="flex flex-col gap-1.5" role="radiogroup" aria-label="Answer options">
       {options.map((option, i) => {
         const selected = option.option_id === selectedId;
+        const tutorHighlighted = questionId !== null
+          && highlightedOptionIds.includes(`${questionId}:OPTION:${option.option_id}`);
         return (
           <button
             key={option.option_id}
@@ -66,6 +72,7 @@ function Options({
               selected
                 ? 'border-focus-navy bg-focus-navy/5 text-ink font-medium'
                 : 'border-muted-gray bg-white text-ink',
+              tutorHighlighted && 'ring-2 ring-highlight-amber bg-highlight-amber/15',
               // A locked choice still SHOWS what was picked — hiding it would
               // erase the student's own answer from the screen — but it must
               // not look pressable.
@@ -119,6 +126,8 @@ export default function QuestionDisplay({
   onSelectOption,
   optionsReadOnly = false,
   anchors,
+  questionId = null,
+  highlightedOptionIds = [],
 }: {
   question: string;
   /** `lesson` is the full canvas header; `compact` is the practice header. */
@@ -140,6 +149,8 @@ export default function QuestionDisplay({
    * cursor, in render order.
    */
   anchors?: QuestionAnchor[];
+  questionId?: string | null;
+  highlightedOptionIds?: string[];
 }) {
   const layout = questionLayout(question);
   const equationSize = size === 'lesson' ? 'text-[22px]' : 'text-[16px]';
@@ -160,6 +171,8 @@ export default function QuestionDisplay({
       onSelect={onSelectOption!}
       requiresExplanation={requiresExplanation}
       readOnly={optionsReadOnly}
+      questionId={questionId}
+      highlightedOptionIds={highlightedOptionIds}
     />
   ) : null;
 
