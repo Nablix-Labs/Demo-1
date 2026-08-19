@@ -16,6 +16,7 @@ Point = tuple[float, float]
 
 _TARGET_COLOR = "#E05A47"
 _CORRECTION_COLOR = "#175CD3"
+_AFFIRMATION_COLOR = "#FFF3A3"
 
 _MATH_EXPRESSION_RE = re.compile(
     r"\b([A-Za-z]\s*[+\-−×*/]\s*(?:[A-Za-z]|\d+))\b"
@@ -113,7 +114,24 @@ def plan_confirmed_tutor_draw(
     if tutor.guided_student_state not in {"CORRECT", "PARTIAL"}:
         return []
 
-    elements: list[TutorElement] = []
+    elements: list[TutorElement] = [
+        TutorElement(
+            id=f"{turn_id}:affirmation-highlight",
+            kind="highlight",
+            points=[0.58, 0.62, 0.92, 0.62, 0.92, 0.70, 0.58, 0.70],
+            color=_AFFIRMATION_COLOR,
+            size=18.0,
+        ),
+        TutorElement(
+            id=f"{turn_id}:affirmation",
+            kind="text",
+            x=0.62,
+            y=0.66,
+            text="Good thinking — keep this idea.",
+            color=_CORRECTION_COLOR,
+            size=18.0,
+        ),
+    ]
     expression_match = _MATH_EXPRESSION_RE.search(student_response)
     if tutor.answer_value_confirmed and expression_match is not None:
         expression = expression_match.group(1).replace("−", "-").replace(" ", "")
@@ -176,6 +194,43 @@ def plan_confirmed_tutor_draw(
             action_id=f"{turn_id}:confirmed-tutor-work",
             mode="append",
             elements=elements,
+        )
+    ]
+
+
+def plan_write_request_tutor_draw(turn_id: str) -> list[CanvasDrawPayload]:
+    """Point to a tutor-layer writing area without supplying the answer."""
+
+    return [
+        CanvasDrawPayload(
+            action_id=f"{turn_id}:write-request",
+            mode="append",
+            elements=[
+                TutorElement(
+                    id=f"{turn_id}:write-highlight",
+                    kind="highlight",
+                    points=[0.58, 0.62, 0.92, 0.62, 0.92, 0.74, 0.58, 0.74],
+                    color=_AFFIRMATION_COLOR,
+                    size=18.0,
+                ),
+                TutorElement(
+                    id=f"{turn_id}:write-prompt",
+                    kind="text",
+                    x=0.62,
+                    y=0.66,
+                    text="Write your rule here.",
+                    color=_CORRECTION_COLOR,
+                    size=18.0,
+                ),
+                TutorElement(
+                    id=f"{turn_id}:write-arrow",
+                    kind="arrow",
+                    from_=[0.75, 0.56],
+                    to=[0.75, 0.62],
+                    color=_CORRECTION_COLOR,
+                    stroke_width=2.0,
+                ),
+            ],
         )
     ]
 

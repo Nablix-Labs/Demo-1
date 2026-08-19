@@ -851,18 +851,17 @@ def requires_written_symbolic_rule_evidence(
     request: ClassificationRequest,
     student_state: GuidedStudentState,
 ) -> bool:
-    """Keep a voice-only algebra rule from completing a written response."""
+    """Keep an algebra rule open until reliable canvas maths confirms it."""
 
     if student_state != "CORRECT":
         return False
-    if (
-        request.question_type not in {"SHORT_RESPONSE", "MULTI_PART_SHORT_RESPONSE"}
-        or request.input_source != "VOICE"
-    ):
+    if request.question_type != "SHORT_RESPONSE":
         return False
     if request.answer_spec is None:
         return False
-    return _expression_parts(request.answer_spec.canonical_answer) is not None
+    if _expression_parts(request.answer_spec.canonical_answer) is None:
+        return False
+    return request.canvas_solution_complete_candidate is False
 
 
 def teaching_steps_for(request: ClassificationRequest) -> list[TeachingStep]:

@@ -10,6 +10,7 @@ from app.services.canvas_annotations import (
     assign_step_ids,
     plan_canvas_draw,
     plan_confirmed_tutor_draw,
+    plan_write_request_tutor_draw,
 )
 
 
@@ -131,6 +132,30 @@ def test_canvas_planner_circles_explicit_whole_line_mistake() -> None:
     assert len(draw) == 1
     assert draw[0].action_id == "canvas-line-review-step-1"
     assert [element.kind for element in draw[0].elements] == ["ellipse"]
+
+
+def test_confirmed_guided_idea_always_gets_a_tutor_layer_affirmation() -> None:
+    tutor = _tutor_result(
+        TutorMistakeClassification(status="no_mistake", confidence=0.9),
+        [],
+    ).model_copy(
+        update={
+            "guided_student_state": "PARTIAL",
+            "answer_value_confirmed": False,
+        }
+    )
+
+    draw = plan_confirmed_tutor_draw(tutor, "The letter changes", "TURN-1")
+
+    assert [element.kind for element in draw[0].elements[:2]] == ["highlight", "text"]
+    assert draw[0].elements[1].text == "Good thinking — keep this idea."
+
+
+def test_write_request_marks_a_tutor_owned_area_without_revealing_the_rule() -> None:
+    draw = plan_write_request_tutor_draw("TURN-1")
+
+    assert [element.kind for element in draw[0].elements] == ["highlight", "text", "arrow"]
+    assert all("s + 6" not in (element.text or "") for element in draw[0].elements)
 
 
 def test_canvas_planner_uses_target_token_geometry() -> None:
