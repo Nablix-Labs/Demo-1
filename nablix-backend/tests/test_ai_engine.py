@@ -2019,6 +2019,13 @@ def test_guided_evaluation_schema_rejects_blank_tutor_messages() -> None:
     assert schema["properties"]["tutor_message_voice"]["minLength"] == 1
 
 
+def test_guided_evaluation_openai_schema_requires_canvas_intentions() -> None:
+    schema = openai_client.guided_evaluation_schema()
+
+    assert "canvas_intentions" in schema["required"]
+    assert "text" in schema["$defs"]["CanvasPedagogyIntent"]["required"]
+
+
 def _answer_spec(
     canonical_answer: str,
     accepted_answers: list[str],

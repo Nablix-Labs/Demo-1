@@ -201,7 +201,7 @@ class CanvasPedagogyIntent(GuidedLearningModel):
     target_kind: TutorCanvasTargetKind
     target_object_id: str | None
     confirmed_component_id: str | None
-    text: str | None = Field(default=None, max_length=80)
+    text: str | None = Field(max_length=80)
     source_id: str | None
 
 
