@@ -57,6 +57,7 @@ from app.models.guided_learning import (
     PrerequisiteRepair,
     ScaffoldEvaluationContext,
     WrongEscalationCode,
+    TutorCanvasAction,
 )
 
 from app.models.question_anchor import QuestionTextAnchor
@@ -88,7 +89,7 @@ from app.models.student_model_session import (
 from app.services.guided_question_opening import guided_question_opening
 from app.services.canvas_annotations import (
     plan_canvas_draw,
-    plan_confirmed_tutor_draw,
+    plan_tutor_canvas_actions,
     plan_write_request_tutor_draw,
 )
 from app.services.question_anchors import plan_question_anchors
@@ -1793,6 +1794,67 @@ def _canvas_events_for_context(
         return []
     memory = session.canvas_memory_by_question.get(session.question_id)
     return memory.canvas_events if memory is not None else []
+
+
+def _canvas_memory_update_with_tutor_actions(
+    request: InteractionRequest,
+    session: SessionRecord,
+    actions: list[TutorCanvasAction],
+) -> dict[str, object]:
+    """Append accepted tutor actions to the question-scoped ordered memory."""
+
+    if session.question_id is None or not actions:
+        return _canvas_memory_update_from_request(request, session)
+    previous_events = _canvas_events_for_context(request, session)
+    existing_action_ids = {
+        event.source_id
+        for event in previous_events
+        if event.source_id is not None and event.active_state == "ACTIVE"
+    }
+    appended_events = [
+        CanvasEvent(
+            order_index=len(previous_events) + offset,
+            turn_id=request.turn_id,
+            question_id=session.question_id,
+            actor=(
+                "SYSTEM_SUPPORT"
+                if action.type in {"SHOW_CUE", "OPEN_SCAFFOLD_STEP", "SHOW_PARALLEL"}
+                else "TUTOR"
+            ),
+            action_type=(
+                "SCAFFOLD_STEP"
+                if action.type == "OPEN_SCAFFOLD_STEP"
+                else action.type
+            ),
+            content=action.text,
+            math_text=action.text if action.type == "INSERT_MATH" else None,
+            target_object_id=action.target_object_id,
+            bbox=None,
+            semantic_tag=action.confirmed_component_id,
+            source_id=action.action_id,
+            active_state="ACTIVE",
+        )
+        for offset, action in enumerate(
+            action for action in actions if action.action_id not in existing_action_ids
+        )
+    ]
+    if not appended_events:
+        return _canvas_memory_update_from_request(request, session)
+    memory = session.canvas_memory_by_question.get(session.question_id)
+    strokes = (
+        request.canvas_state.strokes
+        if request.canvas_state is not None
+        else memory.strokes
+        if memory is not None
+        else []
+    )
+    return build_canvas_memory_update(
+        session,
+        session.question_id,
+        request.turn_id,
+        strokes,
+        [*previous_events, *appended_events],
+    )
 
 
 def _guided_support_levels(session: SessionRecord) -> tuple[SupportUsed, SupportUsed]:
@@ -3674,6 +3736,48 @@ async def _process_interaction(
     if visual_cue is not None:
         state_updates["active_visual_cue"] = visual_cue
 
+    answer_spec = _active_answer_spec(turn_session)
+    active_step_id = (
+        tutor.guided_teaching_state.active_step_id
+        if tutor.guided_teaching_state is not None
+        else None
+    )
+    tutor_action_anchors = plan_question_anchors(
+        turn_session.question_id,
+        turn_session.current_question,
+        answer_spec,
+        active_step_id,
+    )
+    tutor_canvas_actions = plan_tutor_canvas_actions(
+        tutor=tutor,
+        question_anchors=tutor_action_anchors,
+        canvas_events=_canvas_events_for_context(request, turn_session),
+        turn_id=request.turn_id or "TURN-0000",
+        canonical_answer=answer_spec.canonical_answer if answer_spec is not None else "",
+    )
+    logger.info(
+        "guided_canvas_actions_planned",
+        extra={
+            "question_id": turn_session.question_id,
+            "turn_id": request.turn_id,
+            "action_count": len(tutor_canvas_actions),
+            "action_ids": [action.action_id for action in tutor_canvas_actions],
+            "action_types": [action.type for action in tutor_canvas_actions],
+            "validation_rejections": max(
+                0,
+                len(tutor.canvas_intentions) - len(tutor_canvas_actions),
+            ),
+        },
+    )
+    tutor = tutor.model_copy(update={"tutor_canvas_actions": tutor_canvas_actions})
+    state_updates.update(
+        _canvas_memory_update_with_tutor_actions(
+            request,
+            turn_session,
+            tutor_canvas_actions,
+        )
+    )
+
     next_phase = session.current_phase
     canvas_is_for_active_question = session.question_id == turn_session.question_id
     updated_session = await update_interaction_state(
@@ -3788,16 +3892,27 @@ async def _process_interaction(
                     if ocr is not None
                     else []
                 ),
-                *plan_confirmed_tutor_draw(
-                    tutor,
-                    student_message,
-                    request.turn_id or "TURN-0000",
-                ),
                 *(
                     plan_write_request_tutor_draw(request.turn_id or "TURN-0000")
                     if tutor.requires_written_math_evidence
                     else []
                 ),
+            ],
+            "tutor_canvas_actions": tutor.tutor_canvas_actions,
+            "question_anchors": [
+                *response.question_anchors,
+                *[
+                    anchor
+                    for anchor in tutor_action_anchors
+                    if anchor.token_id in {
+                        action.target_object_id
+                        for action in tutor.tutor_canvas_actions
+                        if action.target_kind == "QUESTION_ANCHOR"
+                    }
+                    and anchor.token_id not in {
+                        existing.token_id for existing in response.question_anchors
+                    }
+                ],
             ],
             "localization_status": (
                 "grounded"

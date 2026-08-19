@@ -8,6 +8,9 @@ from app.models.adapters import (
     TutorResult,
 )
 from app.models.canvas import CanvasDrawPayload, TutorElement
+from app.models.canvas_memory import CanvasEvent
+from app.models.guided_learning import TutorCanvasAction
+from app.models.question_anchor import QuestionTextAnchor
 from app.services.canvas_spatial import canonical_math_token_text
 
 
@@ -196,6 +199,148 @@ def plan_confirmed_tutor_draw(
             elements=elements,
         )
     ]
+
+
+def plan_tutor_canvas_actions(
+    tutor: TutorResult,
+    question_anchors: list[QuestionTextAnchor],
+    canvas_events: list[CanvasEvent],
+    turn_id: str,
+    canonical_answer: str,
+) -> list[TutorCanvasAction]:
+    """Validate evaluator intentions against the active Guided Practice state.
+
+    This returns semantic actions only. Coordinates and tutor-layer rendering
+    deliberately remain with the frontend. A rejected evaluator intention does
+    not affect scoring, progression, or the student canvas.
+    """
+
+    active_anchors = {anchor.token_id for anchor in question_anchors}
+    active_canvas_objects = {
+        event.target_object_id
+        for event in canvas_events
+        if event.target_object_id is not None and event.active_state == "ACTIVE"
+    }
+    confirmed = set(
+        tutor.active_teaching_objective.confirmed_concept_ids
+        if tutor.active_teaching_objective is not None
+        else []
+    )
+    if tutor.guided_teaching_state is not None:
+        confirmed.update(tutor.guided_teaching_state.confirmed_component_ids)
+
+    if tutor.requires_written_math_evidence:
+        return [
+            TutorCanvasAction(
+                action_id=f"{turn_id}:1:FOCUS:WRITE_AREA",
+                type="FOCUS",
+                target_kind="WRITE_AREA",
+                target_object_id=None,
+                confirmed_component_id=None,
+                text="Write your rule on the canvas.",
+                source_id=None,
+                answer_reveal_allowed=False,
+            )
+        ]
+
+    if tutor.guided_student_state == "WRONG":
+        student_attempt = next(
+            (
+                event.target_object_id
+                for event in reversed(canvas_events)
+                if event.actor == "STUDENT"
+                and event.action_type == "WRITE"
+                and event.active_state == "ACTIVE"
+                and event.target_object_id is not None
+            ),
+            None,
+        )
+        if student_attempt is None:
+            return []
+        return [
+            TutorCanvasAction(
+                action_id=f"{turn_id}:1:HIGHLIGHT:{student_attempt}",
+                type="HIGHLIGHT",
+                target_kind="STUDENT_ATTEMPT",
+                target_object_id=student_attempt,
+                confirmed_component_id=None,
+                text=None,
+                source_id=None,
+                answer_reveal_allowed=False,
+            )
+        ]
+
+    if tutor.guided_student_state == "STUCK":
+        target = question_anchors[0].token_id if question_anchors else None
+        return [
+            TutorCanvasAction(
+                action_id=f"{turn_id}:1:FOCUS:{target or 'NONE'}",
+                type="FOCUS",
+                target_kind="QUESTION_ANCHOR" if target is not None else "TUTOR_ANCHOR",
+                target_object_id=target,
+                confirmed_component_id=None,
+                text="Start with this part.",
+                source_id=None,
+                answer_reveal_allowed=False,
+            )
+        ]
+
+    if tutor.guided_student_state not in {"CORRECT", "PARTIAL"}:
+        return []
+
+    actions: list[TutorCanvasAction] = []
+    seen: set[tuple[str, str | None, str | None]] = set()
+    for position, intention in enumerate(tutor.canvas_intentions, start=1):
+        if intention.action_type in {"TUTOR_SOLVED_STEP", "SHOW_CUE", "OPEN_SCAFFOLD_STEP", "SHOW_PARALLEL"}:
+            continue
+        if intention.confirmed_component_id is not None and intention.confirmed_component_id not in confirmed:
+            continue
+        if intention.target_kind == "QUESTION_ANCHOR":
+            target_is_valid = intention.target_object_id in active_anchors
+        elif intention.target_kind in {"CANVAS_OBJECT", "STUDENT_ATTEMPT"}:
+            target_is_valid = intention.target_object_id in active_canvas_objects
+        else:
+            target_is_valid = intention.target_kind == "TUTOR_ANCHOR" and intention.target_object_id is None
+        if not target_is_valid:
+            continue
+        text = intention.text.strip() if intention.text is not None else None
+        if text is not None and canonical_answer.casefold() in text.casefold():
+            continue
+        key = (intention.action_type, intention.target_object_id, text)
+        if key in seen:
+            continue
+        seen.add(key)
+        action_id = f"{turn_id}:{position}:{intention.action_type}:{intention.target_object_id or 'NONE'}"
+        if any(event.source_id == action_id and event.active_state == "ACTIVE" for event in canvas_events):
+            continue
+        actions.append(
+            TutorCanvasAction(
+                action_id=action_id,
+                type=intention.action_type,
+                target_kind=intention.target_kind,
+                target_object_id=intention.target_object_id,
+                confirmed_component_id=intention.confirmed_component_id,
+                text=text,
+                source_id=intention.source_id,
+                answer_reveal_allowed=False,
+            )
+        )
+    if not actions and question_anchors:
+        target = question_anchors[0].token_id
+        component_id = next(iter(sorted(confirmed)), None)
+        actions.append(
+            TutorCanvasAction(
+                action_id=f"{turn_id}:1:HIGHLIGHT:{target}",
+                type="HIGHLIGHT",
+                target_kind="QUESTION_ANCHOR",
+                target_object_id=target,
+                confirmed_component_id=component_id,
+                text=None,
+                source_id=None,
+                answer_reveal_allowed=False,
+            )
+        )
+    return actions
 
 
 def plan_write_request_tutor_draw(turn_id: str) -> list[CanvasDrawPayload]:

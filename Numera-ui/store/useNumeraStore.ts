@@ -161,10 +161,30 @@ export interface CanvasDrawPayload {
   elements: Array<Omit<TutorElement, 'id'> & { id?: string }>;
 }
 
+export type TutorCanvasActionType =
+  | 'HIGHLIGHT' | 'GROUP' | 'ARROW' | 'INSERT_MATH' | 'INSERT_LABEL'
+  | 'FOCUS' | 'SHOW_CUE' | 'OPEN_SCAFFOLD_STEP' | 'SHOW_PARALLEL' | 'TUTOR_SOLVED_STEP';
+
+export type TutorCanvasTargetKind =
+  | 'QUESTION_ANCHOR' | 'CANVAS_OBJECT' | 'STUDENT_ATTEMPT' | 'TUTOR_ANCHOR' | 'WRITE_AREA';
+
+/** Semantic, coordinate-free Phase 2 instruction from the tutor engine. */
+export interface TutorCanvasAction {
+  action_id: string;
+  type: TutorCanvasActionType;
+  target_kind: TutorCanvasTargetKind;
+  target_object_id: string | null;
+  confirmed_component_id: string | null;
+  text: string | null;
+  source_id: string | null;
+  answer_reveal_allowed: boolean;
+}
+
 // Idempotency for tutor draw commands: a command may be re-delivered (e.g. on a
 // WebSocket reconnect). We drop any actionId we've already applied. Module-level
 // (not React state) since it's plumbing, not UI.
 const seenDrawActionIds = new Set<string>();
+const seenTutorCanvasActionIds = new Set<string>();
 
 /**
  * Which turn and question a canvas event belongs to (§8: "links canvas activity
@@ -655,6 +675,7 @@ export interface NumeraState {
   redo: () => void;
   clearCanvas: () => void;
   applyCanvasDraw: (payload: CanvasDrawPayload | CanvasDrawPayload[]) => void;
+  applyTutorCanvasActions: (actions: TutorCanvasAction[]) => void;
   clearTutorMarks: () => void;
   setCanvasSize: (size: CanvasSize) => void;
   /** Record a support action (cue shown, scaffold step opened) in canvas memory. */
@@ -1375,6 +1396,45 @@ export const useNumeraStore = create<NumeraState>()(
         tutorElements = [...tutorElements, ...incoming];
       }
       return { tutorElements, canvasEvents };
+    }),
+
+  applyTutorCanvasActions: (actions) =>
+    set((s) => {
+      let canvasEvents = s.canvasEvents;
+      let questionAnchors = s.questionAnchors;
+      const context = eventContext(s);
+      for (const action of actions) {
+        if (seenTutorCanvasActionIds.has(action.action_id)) continue;
+        seenTutorCanvasActionIds.add(action.action_id);
+        console.info('[canvas] rendered semantic tutor action', {
+          actionId: action.action_id,
+          type: action.type,
+          target: action.target_object_id,
+        });
+        if (
+          action.target_kind === 'QUESTION_ANCHOR'
+          && action.target_object_id
+          && action.type === 'INSERT_LABEL'
+          && action.text
+        ) {
+          questionAnchors = questionAnchors.map((anchor) =>
+            anchor.token_id === action.target_object_id
+              ? { ...anchor, label: action.text }
+              : anchor,
+          );
+        }
+        canvasEvents = appendCanvasEvent(canvasEvents, {
+          actor: action.type === 'SHOW_CUE' || action.type === 'OPEN_SCAFFOLD_STEP'
+            ? 'SYSTEM_SUPPORT'
+            : 'TUTOR',
+          action_type: action.type === 'OPEN_SCAFFOLD_STEP' ? 'SCAFFOLD_STEP' : action.type,
+          target_object_id: action.target_object_id,
+          content: action.text,
+          source_id: action.action_id,
+          semantic_tag: action.confirmed_component_id,
+        }, context);
+      }
+      return { canvasEvents, questionAnchors };
     }),
 
   clearTutorMarks: () => {

@@ -33,6 +33,7 @@ from app.models.guided_learning import (
     ActiveTeachingObjective,
     GuidedStudentState,
     EvaluationReasonCode,
+    TutorCanvasAction,
     PrerequisiteRepair,
     WrongEscalationCode,
 )
@@ -207,6 +208,7 @@ class InteractionResponse(BaseModel):
     inactivity_policy: InactivityPolicy | None = None
     nudge_delivery: NudgeDeliveryRecord | None = None
     canvas_draw: list[CanvasDrawPayload] = Field(default_factory=list)
+    tutor_canvas_actions: list[TutorCanvasAction] = Field(default_factory=list)
     # Spans into `current_question` for the frontend to highlight and label.
     question_anchors: list[QuestionTextAnchor] = Field(default_factory=list)
     localization_status: Literal["grounded", "uncertain"] | None = None
