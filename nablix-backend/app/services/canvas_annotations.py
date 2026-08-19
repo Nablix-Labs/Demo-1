@@ -118,10 +118,7 @@ def plan_confirmed_tutor_draw(
         TutorElement(
             id=f"{turn_id}:affirmation-highlight",
             kind="highlight",
-            x=0.58,
-            y=0.62,
-            w=0.34,
-            h=0.08,
+            points=[0.58, 0.62, 0.92, 0.62, 0.92, 0.70, 0.58, 0.70],
             color=_AFFIRMATION_COLOR,
             size=18.0,
         ),
@@ -212,10 +209,7 @@ def plan_write_request_tutor_draw(turn_id: str) -> list[CanvasDrawPayload]:
                 TutorElement(
                     id=f"{turn_id}:write-highlight",
                     kind="highlight",
-                    x=0.58,
-                    y=0.62,
-                    w=0.34,
-                    h=0.12,
+                    points=[0.58, 0.62, 0.92, 0.62, 0.92, 0.74, 0.58, 0.74],
                     color=_AFFIRMATION_COLOR,
                     size=18.0,
                 ),
