@@ -49,6 +49,12 @@ export function voiceSupportFrame(msg: VoiceTutorFrame): SupportPresentation {
     // read here, and a voice-led student got no rescue at all.
     guided_rescue: msg.guided_rescue as SupportPresentation['guided_rescue'],
 
+    // Persisted scaffold state. Without it the voice path always fell through
+    // to the pre-contract per-turn booleans, so a scaffold still open closed
+    // itself on the next reply that served no new support — the exact
+    // regression `active_scaffold` was introduced to end.
+    active_scaffold: msg.active_scaffold as SupportPresentation['active_scaffold'],
+
     show_visual_cue: msg.show_visual_cue as boolean | undefined,
     visual_cue: msg.visual_cue as SupportPresentation['visual_cue'],
 

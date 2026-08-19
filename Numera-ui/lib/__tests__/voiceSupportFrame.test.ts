@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest';
 import { voiceSupportFrame } from '@/lib/voiceSupportFrame';
 import { requiresWriting, writePrompt } from '@/lib/writtenEvidence';
+import { scaffoldVisible } from '@/lib/responseGate';
 
 /** A frame with every field the backend can send, all distinguishable. */
 const FULL = {
@@ -29,6 +30,14 @@ const FULL = {
   scaffold_step_text: 'Find what changes.',
   scaffold_step_voice: 'Now find what changes.',
   total_scaffold_steps: 4,
+  active_scaffold: {
+    scaffold_id: 'SC-1',
+    current_step_id: 'STEP-2',
+    step_number: 2,
+    step_text: 'Find what changes.',
+    step_voice: 'Now find what changes.',
+    total_steps: 4,
+  },
   guided_rescue: {
     rescue_type: 'PARALLEL_EXAMPLE',
     parallel_example: {
@@ -98,5 +107,32 @@ describe('a rescue served on a voice turn', () => {
     // turn taken midway through reading one carries no `guided_rescue`, and
     // inventing an empty value here would close the walkthrough between steps.
     expect(voiceSupportFrame({ text: 'Keep going.' }).guided_rescue).toBeUndefined();
+  });
+});
+
+describe('a scaffold left open across voice turns', () => {
+  it('carries the persisted state, which outranks the per-turn booleans', () => {
+    // Without this the voice path always fell through to the pre-contract
+    // branch, where visibility is decided by `show_scaffold_panel` alone. A
+    // reply that served no new support then closed a scaffold the student was
+    // still working through — one step to the next, mid-walkthrough.
+    expect(voiceSupportFrame(FULL).active_scaffold).toEqual(FULL.active_scaffold);
+  });
+
+  it('keeps the scaffold open when the turn serves no new support', () => {
+    // The regression itself: persisted state present and non-null, per-turn
+    // boolean false. Persisted must win.
+    const frame = voiceSupportFrame({
+      text: 'Keep going.',
+      show_scaffold_panel: false,
+      active_scaffold: FULL.active_scaffold,
+    });
+    expect(scaffoldVisible(frame)).toBe(true);
+  });
+
+  it('closes it when the backend explicitly says the scaffold is gone', () => {
+    // Null is a statement, not an absence: the scaffold is closed.
+    const frame = voiceSupportFrame({ text: 'Done.', active_scaffold: null });
+    expect(scaffoldVisible(frame)).toBe(false);
   });
 });

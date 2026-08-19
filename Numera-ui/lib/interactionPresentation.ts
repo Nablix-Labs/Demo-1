@@ -40,6 +40,13 @@ export type SupportPresentation = Pick<
    * by an allow-list, which is exactly how the WRITE prompt went missing.
    */
   guided_rescue?: GuidedRescuePayload | null;
+  /**
+   * Persisted scaffold state, which OUTRANKS the per-turn booleans (handoff
+   * item 3). Carried here for the same reason as `guided_rescue`: absent on a
+   * transport, the code silently drops to the pre-contract path and closes a
+   * scaffold that is still open.
+   */
+  active_scaffold?: InteractionResponse['active_scaffold'];
 };
 
 /**
@@ -122,7 +129,7 @@ export function applyInteractionSupport(response: SupportPresentation): string {
   // tutor has moved on from, which reads as "this is still the thing to look
   // at" for the rest of the question.
   useNumeraStore.getState().setQuestionAnchors(
-    (response as InteractionResponse).question_anchors ?? [],
+    response.question_anchors ?? (response as InteractionResponse).question_anchors ?? [],
   );
 
   // The reliability gate fired: the tutor could not read the student and is
@@ -166,10 +173,10 @@ export function applyInteractionSupport(response: SupportPresentation): string {
   // per-turn event — handoff item 3. Rendering from the event made the panel
   // vanish on the next reply, because that reply served no new support even
   // though the scaffold was still open.
-  const persisted = (response as InteractionResponse).active_scaffold;
+  const persisted = response.active_scaffold ?? (response as InteractionResponse).active_scaffold;
   if (persisted !== undefined) {
     const store = useNumeraStore.getState();
-    if (!scaffoldVisible(response as InteractionResponse)) {
+    if (!scaffoldVisible({ ...response, active_scaffold: persisted })) {
       store.setActiveScaffold(null);
       return response.message;
     }
