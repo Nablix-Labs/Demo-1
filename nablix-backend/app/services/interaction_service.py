@@ -86,7 +86,11 @@ from app.models.student_model_session import (
     SupportUsed,
 )
 from app.services.guided_question_opening import guided_question_opening
-from app.services.canvas_annotations import plan_canvas_draw, plan_confirmed_tutor_draw
+from app.services.canvas_annotations import (
+    plan_canvas_draw,
+    plan_confirmed_tutor_draw,
+    plan_write_request_tutor_draw,
+)
 from app.services.question_anchors import plan_question_anchors
 from app.services.canvas_evidence import (
     CanvasEvidence,
@@ -3788,6 +3792,11 @@ async def _process_interaction(
                     tutor,
                     student_message,
                     request.turn_id or "TURN-0000",
+                ),
+                *(
+                    plan_write_request_tutor_draw(request.turn_id or "TURN-0000")
+                    if tutor.requires_written_math_evidence
+                    else []
                 ),
             ],
             "localization_status": (

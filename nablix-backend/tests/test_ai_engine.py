@@ -432,6 +432,34 @@ def test_voice_only_symbolic_rule_requires_written_evidence(
     assert "write the rule" in response.tutor_message
 
 
+def test_typed_symbolic_rule_requires_canvas_evidence() -> None:
+    request = ClassificationRequest(
+        question_id="Q-T01-SCORE",
+        question_type="SHORT_RESPONSE",
+        question="Write the new-score rule.",
+        correct_answer="s + 6",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-SCORE",
+            canonical_answer="s + 6",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=False,
+        ),
+        student_input="s + 6",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+    )
+
+    assert classifier.requires_written_symbolic_rule_evidence(request, "CORRECT") is True
+    assert classifier.requires_written_symbolic_rule_evidence(
+        request.model_copy(update={"canvas_solution_complete_candidate": True}),
+        "CORRECT",
+    ) is False
+
+
 def test_guided_follow_up_replaces_an_unrelated_llm_question() -> None:
     rubric = GeneratedQuestionRubric(
         question_id="Q-T01-SCORE",
