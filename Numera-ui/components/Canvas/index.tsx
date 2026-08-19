@@ -49,6 +49,8 @@ export default function CanvasStage() {
     })),
   );
   const questionAnchors = useNumeraStore((s) => s.questionAnchors);
+  const tutorOptionActionIds = useNumeraStore((s) => s.tutorOptionActionIds);
+  const activeQuestionId = useNumeraStore((s) => s.activeQuestionId);
   const activeScaffold = useNumeraStore((s) => s.activeScaffold);
   // Phase 3 spec §3.2: no scaffold panels during an independent attempt. Read
   // from the phase rather than the route — the phase is what decides whether
@@ -173,6 +175,8 @@ export default function CanvasStage() {
         <QuestionDisplay
           question={questionText}
           anchors={questionAnchors}
+          questionId={activeQuestionId}
+          highlightedOptionIds={tutorOptionActionIds}
           size="lesson"
           questionType={questionType}
           options={questionOptions}

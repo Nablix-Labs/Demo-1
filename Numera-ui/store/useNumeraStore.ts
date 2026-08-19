@@ -167,7 +167,7 @@ export type TutorCanvasActionType =
   | 'FOCUS' | 'SHOW_CUE' | 'OPEN_SCAFFOLD_STEP' | 'SHOW_PARALLEL' | 'TUTOR_SOLVED_STEP';
 
 export type TutorCanvasTargetKind =
-  | 'QUESTION_ANCHOR' | 'CANVAS_OBJECT' | 'STUDENT_ATTEMPT' | 'TUTOR_ANCHOR' | 'WRITE_AREA';
+  | 'QUESTION_ANCHOR' | 'QUESTION_OPTION' | 'CANVAS_OBJECT' | 'STUDENT_ATTEMPT' | 'TUTOR_ANCHOR' | 'WRITE_AREA';
 
 /** Semantic, coordinate-free Phase 2 instruction from the tutor engine. */
 export interface TutorCanvasAction {
@@ -288,6 +288,7 @@ export interface NumeraState {
    * word in the next one.
    */
   questionAnchors: QuestionAnchor[];
+  tutorOptionActionIds: string[];
   questionNumber: number;
 
   // Active question the tutor session runs on. Sent as concept_id/question_id;
@@ -765,6 +766,7 @@ const initial: Omit<
   // it loads so a stale demo equation never flashes on the live build.
   questionText: '',
   questionAnchors: [] as QuestionAnchor[],
+  tutorOptionActionIds: [] as string[],
   questionNumber: 0,
   // The concept to open a session on. Still a constant because the frontend has
   // no other source for it — the concept_id -> topic_code mapping lives in the
@@ -990,6 +992,7 @@ export const useNumeraStore = create<NumeraState>()(
               // over highlights whatever happens to sit at those positions in
               // the next one.
               questionAnchors: [] as QuestionAnchor[],
+              tutorOptionActionIds: [] as string[],
               // Ordered memory is scoped to one question (§8: it exists so the
               // tutor can resume at the first unresolved step of the CURRENT
               // problem). Carrying it over would offer the tutor a completed
@@ -1423,6 +1426,7 @@ export const useNumeraStore = create<NumeraState>()(
 
       let canvasEvents = s.canvasEvents;
       let questionAnchors = s.questionAnchors;
+      let tutorOptionActionIds = s.tutorOptionActionIds;
       let tutorElements = s.tutorElements;
       let writeAffordance = s.writeAffordance;
       const context = eventContext(s);
@@ -1431,6 +1435,29 @@ export const useNumeraStore = create<NumeraState>()(
         // Idempotency: a reconnect or replay must not render the same
         // intervention twice.
         if (seenTutorCanvasActionIds.has(action.action_id)) continue;
+
+        if (action.target_kind === 'QUESTION_OPTION' && action.target_object_id) {
+          const expectedPrefix = `${s.activeQuestionId}:OPTION:`;
+          const optionId = action.target_object_id.startsWith(expectedPrefix)
+            ? action.target_object_id.slice(expectedPrefix.length)
+            : null;
+          if (optionId === null || !s.questionOptions.some((option) => option.option_id === optionId)) {
+            console.warn(`[canvas] tutor option action ${action.action_id} targets an unavailable option.`);
+            continue;
+          }
+          seenTutorCanvasActionIds.add(action.action_id);
+          tutorOptionActionIds = [...tutorOptionActionIds, action.target_object_id];
+          canvasEvents = appendCanvasEvent(canvasEvents, {
+            actor: 'TUTOR',
+            action_type: action.type,
+            target_object_id: action.target_object_id,
+            bbox: null,
+            content: action.text,
+            source_id: action.action_id,
+            semantic_tag: action.confirmed_component_id,
+          }, context);
+          continue;
+        }
 
         const target = resolveTarget(action, {
           anchors: questionAnchors,
@@ -1481,7 +1508,7 @@ export const useNumeraStore = create<NumeraState>()(
           semantic_tag: action.confirmed_component_id,
         }, context);
       }
-      return { canvasEvents, questionAnchors, tutorElements, writeAffordance };
+      return { canvasEvents, questionAnchors, tutorOptionActionIds, tutorElements, writeAffordance };
     }),
 
   clearWriteAffordance: () => set({ writeAffordance: false }),
