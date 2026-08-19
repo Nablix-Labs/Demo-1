@@ -29,6 +29,14 @@ const FULL = {
   scaffold_step_text: 'Find what changes.',
   scaffold_step_voice: 'Now find what changes.',
   total_scaffold_steps: 4,
+  guided_rescue: {
+    rescue_type: 'PARALLEL_EXAMPLE',
+    parallel_example: {
+      problem: 'Find a rule for 2 + 6, 5 + 6, 9 + 6.',
+      worked_steps: ['The start changes.', 'The six stays.'],
+      final_answer: 'n + 6',
+    },
+  },
 };
 
 describe('a voice turn asking the student to write', () => {
@@ -71,5 +79,24 @@ describe('the allow-list', () => {
     // never authorised.
     expect(frame.show_visual_cue).toBeUndefined();
     expect(frame.next_expected_input).toBeUndefined();
+  });
+});
+
+describe('a rescue served on a voice turn', () => {
+  it('reaches the presentation payload', () => {
+    // The bottom two support rungs are what a stuck student gets. The streaming
+    // server spreads the whole tutor_response onto the frame, so `guided_rescue`
+    // was on the wire the entire time — the allow-list simply never read it, and
+    // a voice-led student who got stuck was shown no rescue at all while the
+    // same turn over REST showed one.
+    const frame = voiceSupportFrame(FULL);
+    expect(frame.guided_rescue).toEqual(FULL.guided_rescue);
+  });
+
+  it('is absent on a turn that serves none, so an open rescue is not disturbed', () => {
+    // applyInteractionSupport only writes when a rescue is present: an ordinary
+    // turn taken midway through reading one carries no `guided_rescue`, and
+    // inventing an empty value here would close the walkthrough between steps.
+    expect(voiceSupportFrame({ text: 'Keep going.' }).guided_rescue).toBeUndefined();
   });
 });

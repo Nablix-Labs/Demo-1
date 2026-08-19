@@ -43,6 +43,12 @@ export function voiceSupportFrame(msg: VoiceTutorFrame): SupportPresentation {
       msg.requires_written_math_evidence as boolean | null | undefined,
     write_instruction: str(msg.write_instruction),
 
+    // The bottom two rungs (parallel example / tutor-solved). The streaming
+    // server spreads the whole tutor_response onto the frame, so a rescue
+    // served on a voice turn is already on the wire — it was simply never
+    // read here, and a voice-led student got no rescue at all.
+    guided_rescue: msg.guided_rescue as SupportPresentation['guided_rescue'],
+
     show_visual_cue: msg.show_visual_cue as boolean | undefined,
     visual_cue: msg.visual_cue as SupportPresentation['visual_cue'],
 

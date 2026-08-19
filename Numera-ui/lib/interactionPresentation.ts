@@ -1,6 +1,7 @@
 import { activeScaffold, type InteractionResponse } from '@/lib/api';
 import type { QuestionAnchor } from '@/lib/questionAnchors';
 import { cueAssetUrl } from '@/lib/cueAsset';
+import type { GuidedRescuePayload } from '@/lib/guidedRescue';
 import { writePrompt } from '@/lib/writtenEvidence';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import {
@@ -32,6 +33,13 @@ export type SupportPresentation = Pick<
   next_expected_input?: string | null;
   requires_written_math_evidence?: boolean | null;
   write_instruction?: string | null;
+  /**
+   * The bottom two support rungs. Carried on the payload rather than read off
+   * `InteractionResponse` by a cast, so the voice transport can supply it too —
+   * a cast silently yields `undefined` for any transport whose frame is built
+   * by an allow-list, which is exactly how the WRITE prompt went missing.
+   */
+  guided_rescue?: GuidedRescuePayload | null;
 };
 
 /**
@@ -130,7 +138,7 @@ export function applyInteractionSupport(response: SupportPresentation): string {
   // `guided_rescue` at all. Clearing on those would close the walkthrough
   // between one step and the next — the same mistake the scaffold panel made
   // when it rendered from the per-turn event instead of persisted state.
-  const rescue = (response as InteractionResponse).guided_rescue;
+  const rescue = response.guided_rescue ?? (response as InteractionResponse).guided_rescue;
   if (rescue) useNumeraStore.getState().setGuidedRescue(rescue);
 
   const cue = response.visual_cue;
