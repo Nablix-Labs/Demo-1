@@ -30,6 +30,16 @@ const FULL = {
   scaffold_step_text: 'Find what changes.',
   scaffold_step_voice: 'Now find what changes.',
   total_scaffold_steps: 4,
+  tutor_canvas_actions: [{
+    action_id: 'ACT-9',
+    type: 'HIGHLIGHT',
+    target_kind: 'QUESTION_ANCHOR',
+    target_object_id: 'TOK-1',
+    confirmed_component_id: null,
+    text: null,
+    source_id: null,
+    answer_reveal_allowed: false,
+  }],
   active_scaffold: {
     scaffold_id: 'SC-1',
     current_step_id: 'STEP-2',
@@ -134,5 +144,14 @@ describe('a scaffold left open across voice turns', () => {
     // Null is a statement, not an absence: the scaffold is closed.
     const frame = voiceSupportFrame({ text: 'Done.', active_scaffold: null });
     expect(scaffoldVisible(frame)).toBe(false);
+  });
+});
+
+describe('semantic canvas actions on a voice turn', () => {
+  it('carries them, because Guided Practice is mostly voice-led', () => {
+    // Fourth field to need this. The frame is built by an allow-list and REST
+    // forwards the whole response, so a field missing here is invisible: the
+    // feature simply does not exist on voice and works perfectly on text.
+    expect(voiceSupportFrame(FULL).tutor_canvas_actions).toEqual(FULL.tutor_canvas_actions);
   });
 });
