@@ -36,8 +36,9 @@ import {
 } from '@/lib/api';
 import { selectedOptionText } from '@/lib/selectedOption';
 import { applyInteractionSupport, acceptResponse, authorisedHint } from '@/lib/interactionPresentation';
+import { revealDecision } from '@/lib/revealBeforeClear';
 import { sessionEndSummary } from '@/lib/sessionEnd';
-import { useNumeraStore, type TrailKind } from '@/store/useNumeraStore';
+import { useNumeraStore, type TrailKind, type TutorCanvasAction } from '@/store/useNumeraStore';
 import { tutorSay, setStudentWriting } from '@/lib/tutorSpeech';
 import { phaseAnnouncement, withTransitionVoice } from '@/lib/phaseTransition';
 import { speakBrowser } from '@/lib/tts';
@@ -291,6 +292,8 @@ export function syncBackendSession(response: {
     cooldown_ms: number;
     max_nudges_per_tutor_turn: number;
   };
+  /** Semantic tutor canvas actions, applied before any phase change clears them. */
+  tutor_canvas_actions?: TutorCanvasAction[];
 }): void {
   // Text is kept verbatim. This used to strip a leading "solve for x:" because
   // the screens re-added it themselves — which silently mangled any question
@@ -310,12 +313,29 @@ export function syncBackendSession(response: {
   if (event?.phase_payload?.question_set && store.backendSession) {
     store.setBackendSession({ ...store.backendSession, student_model_event: event });
   }
-  store.applyBackendPhase({
+  // Semantic tutor actions are applied HERE, before the phase change, because
+  // they describe the question being left — not the one being arrived at. Doing
+  // it after meant they resolved against the next question's anchors, which is
+  // the case Sanya's handoff names explicitly. Idempotent: applyInteractionSupport
+  // applies the same list moments later and the action_id window drops it.
+  const tutorActions = response.tutor_canvas_actions ?? [];
+  if (tutorActions.length > 0) store.applyTutorCanvasActions(tutorActions);
+
+  const applyPhase = () => useNumeraStore.getState().applyBackendPhase({
     phase: response.current_phase,
     questionId: response.question_id,
     questionText: response.current_question,
     questionType: response.question_type ?? null,
   });
+
+  // When this reply both annotates the finished work and moves the student on,
+  // hold the board briefly so the annotation is actually seen. Without it the
+  // marks are added and cleared in the same tick.
+  const { reveal, holdMs } = revealDecision(
+    tutorActions.length, store.activeQuestionId, response.question_id,
+  );
+  if (reveal) window.setTimeout(applyPhase, holdMs);
+  else applyPhase();
   if (response.question_number !== undefined) {
     store.setQuestionNumber(response.question_number);
   }

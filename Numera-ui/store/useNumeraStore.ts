@@ -25,6 +25,7 @@ import {
   type SessionSummary,
 } from '@/lib/api';
 import { uid } from '@/lib/uid';
+import { resolveTarget, actionMarks, showsWriteAffordance } from '@/lib/tutorCanvasActions';
 import type { SupportRung } from '@/lib/supportLadder';
 import { EMPTY_APPLIED, type AppliedState } from '@/lib/responseGate';
 import type { InactivityPolicy } from '@/lib/inactivity';
@@ -507,6 +508,8 @@ export interface NumeraState {
    * `itemBBox` treats as "no box yet" rather than inventing one.
    */
   canvasSize: CanvasSize;
+  /** A WRITE_AREA action is asking the student to commit the answer in writing. */
+  writeAffordance: boolean;
 
   // Input mode (voice | text | canvas)
   inputMode: InputMode;
@@ -677,6 +680,8 @@ export interface NumeraState {
   clearCanvas: () => void;
   applyCanvasDraw: (payload: CanvasDrawPayload | CanvasDrawPayload[]) => void;
   applyTutorCanvasActions: (actions: TutorCanvasAction[]) => void;
+  /** Tutor asked the student to write here. Never carries the answer itself. */
+  clearWriteAffordance: () => void;
   clearTutorMarks: () => void;
   setCanvasSize: (size: CanvasSize) => void;
   /** Record a support action (cue shown, scaffold step opened) in canvas memory. */
@@ -736,7 +741,7 @@ const initial: Omit<
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
   | 'setShapeKind' | 'setEraserMode'
   | 'setStrokeColor' | 'setStrokeWidth' | 'addItem' | 'removeItem' | 'undo' | 'redo'
-  | 'clearCanvas' | 'applyCanvasDraw' | 'clearTutorMarks' | 'setCanvasSize' | 'recordSupportEvent'
+  | 'clearCanvas' | 'applyCanvasDraw' | 'applyTutorCanvasActions' | 'clearWriteAffordance' | 'clearTutorMarks' | 'setCanvasSize' | 'recordSupportEvent'
   | 'setInputMode' | 'setTextInput' | 'setPanelSide' | 'setPanelWidth' | 'resetPanelWidth' | 'togglePanelSide' | 'togglePanelCollapsed'
   | 'toggleTranscript' | 'setToolbarPos' | 'toggleToolbarCollapsed' | 'setToolbarOrientation' | 'setMicButtonPos' | 'setCanvasGrid' | 'setTtsVoice' | 'setActiveScaffold'
   | 'setCanvasExporter' | 'startGroupSession' | 'endGroupSession'
@@ -822,6 +827,7 @@ const initial: Omit<
   tutorElements: [],
   canvasEvents: [] as CanvasEvent[],
   canvasSize: { width: 0, height: 0 } as CanvasSize,
+  writeAffordance: false,
   inputMode: 'voice',
   textInput: '',
   panelSide: 'left',
@@ -929,7 +935,12 @@ export const useNumeraStore = create<NumeraState>()(
       // harmless now that it draws confirmed learner ideas on ordinary turns
       // (Sanya, 18 Aug 2026), where the same idea can legitimately be
       // confirmed again on the next question.
-      if (questionChanged) seenDrawActionIds.clear();
+      // Semantic actions are scoped the same way, and for a sharper reason:
+      // their targets are question-scoped ids. An action_id retained across a
+      // question boundary would be swallowed as a duplicate, and Sanya's own
+      // instruction is that an old action must never be applied to the next
+      // question's anchors.
+      if (questionChanged) { seenDrawActionIds.clear(); seenTutorCanvasActionIds.clear(); }
       return {
         currentPhase: phase,
         activeQuestionId: nextQuestionId,
@@ -972,6 +983,10 @@ export const useNumeraStore = create<NumeraState>()(
               undone: [],
               // The tutor's marks belong to the question they annotated.
               tutorElements: [],
+              // And so does a request to write: an affordance left standing
+              // would ask the student to commit an answer to a question that
+              // is no longer on screen.
+              writeAffordance: false,
               // So do the anchors, and more sharply: they are raw character
               // offsets into the PREVIOUS question's text, so carrying them
               // over highlights whatever happens to sit at those positions in
@@ -1403,49 +1418,104 @@ export const useNumeraStore = create<NumeraState>()(
 
   applyTutorCanvasActions: (actions) =>
     set((s) => {
+      // Phase 3 is an independent attempt: no tutor ink, no correction
+      // overlays. Refused here rather than hidden at the render, for the same
+      // reason applyCanvasDraw refuses — a mark that is merely hidden is still
+      // waiting to appear the moment the phase changes.
+      if (isPhase3(s.currentPhase)) return {};
+
       let canvasEvents = s.canvasEvents;
       let questionAnchors = s.questionAnchors;
       let tutorOptionActionIds = s.tutorOptionActionIds;
+      let tutorElements = s.tutorElements;
+      let writeAffordance = s.writeAffordance;
       const context = eventContext(s);
+
       for (const action of actions) {
+        // Idempotency: a reconnect or replay must not render the same
+        // intervention twice.
         if (seenTutorCanvasActionIds.has(action.action_id)) continue;
-        seenTutorCanvasActionIds.add(action.action_id);
-        console.info('[canvas] rendered semantic tutor action', {
-          actionId: action.action_id,
-          type: action.type,
-          target: action.target_object_id,
+
+        if (action.target_kind === 'QUESTION_OPTION' && action.target_object_id) {
+          const expectedPrefix = `${s.activeQuestionId}:OPTION:`;
+          const optionId = action.target_object_id.startsWith(expectedPrefix)
+            ? action.target_object_id.slice(expectedPrefix.length)
+            : null;
+          if (optionId === null || !s.questionOptions.some((option) => option.option_id === optionId)) {
+            console.warn(`[canvas] tutor option action ${action.action_id} targets an unavailable option.`);
+            continue;
+          }
+          seenTutorCanvasActionIds.add(action.action_id);
+          tutorOptionActionIds = [...tutorOptionActionIds, action.target_object_id];
+          canvasEvents = appendCanvasEvent(canvasEvents, {
+            actor: 'TUTOR',
+            action_type: action.type,
+            target_object_id: action.target_object_id,
+            bbox: null,
+            content: action.text,
+            source_id: action.action_id,
+            semantic_tag: action.confirmed_component_id,
+          }, context);
+          continue;
+        }
+
+        const target = resolveTarget(action, {
+          anchors: questionAnchors,
+          items: s.items,
+          tutorElements,
+          canvasSize: s.canvasSize,
         });
-        if (
-          action.target_kind === 'QUESTION_ANCHOR'
-          && action.target_object_id
-          && action.type === 'INSERT_LABEL'
-          && action.text
-        ) {
+
+        // The target is not on screen — the student erased it, or it belongs to
+        // a question that has moved on. Drop it, and do NOT mark it seen: if the
+        // same action is re-sent once the object exists, it should render then.
+        // No acknowledgement either; an ack means "this is on screen".
+        if (!target) {
+          console.warn(
+            `[canvas] tutor action ${action.action_id} (${action.type}) targets `
+            + `${action.target_kind} "${action.target_object_id}", which is not on screen. Dropped.`,
+          );
+          continue;
+        }
+
+        seenTutorCanvasActionIds.add(action.action_id);
+
+        // A label on a question token rides on the text, which is the only
+        // thing that knows where the token wrapped to.
+        if (target.kind === 'anchor' && action.type === 'INSERT_LABEL' && action.text) {
           questionAnchors = questionAnchors.map((anchor) =>
-            anchor.token_id === action.target_object_id
-              ? { ...anchor, label: action.text }
-              : anchor,
+            anchor.token_id === target.tokenId ? { ...anchor, label: action.text } : anchor,
           );
         }
-        if (action.target_kind === 'QUESTION_OPTION' && action.target_object_id) {
-          tutorOptionActionIds = [...tutorOptionActionIds, action.target_object_id];
-        }
+
+        if (showsWriteAffordance(action)) writeAffordance = true;
+
+        // Tutor layer only. Student ink is never read from, edited or removed.
+        const marks = actionMarks(action, target);
+        if (marks.length > 0) tutorElements = [...tutorElements, ...marks];
+
+        // The renderer acknowledgement (Sanya, 19 Aug): recorded only for an
+        // action that actually reached the screen.
         canvasEvents = appendCanvasEvent(canvasEvents, {
           actor: action.type === 'SHOW_CUE' || action.type === 'OPEN_SCAFFOLD_STEP'
             ? 'SYSTEM_SUPPORT'
             : 'TUTOR',
           action_type: action.type === 'OPEN_SCAFFOLD_STEP' ? 'SCAFFOLD_STEP' : action.type,
           target_object_id: action.target_object_id,
+          bbox: target.kind === 'box' ? target.box : null,
           content: action.text,
           source_id: action.action_id,
           semantic_tag: action.confirmed_component_id,
         }, context);
       }
-      return { canvasEvents, questionAnchors, tutorOptionActionIds };
+      return { canvasEvents, questionAnchors, tutorOptionActionIds, tutorElements, writeAffordance };
     }),
+
+  clearWriteAffordance: () => set({ writeAffordance: false }),
 
   clearTutorMarks: () => {
     seenDrawActionIds.clear();
+    seenTutorCanvasActionIds.clear();
     set({ tutorElements: [] });
   },
 

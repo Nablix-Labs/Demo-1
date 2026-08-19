@@ -1,0 +1,157 @@
+/**
+ * The tutor points at things by id. These tests are about what happens when the
+ * id resolves to nothing, and about the two things the tutor must never do.
+ */
+
+import { describe, expect, it } from 'vitest';
+import {
+  resolveTarget, actionMarks, revealsAnswer, showsWriteAffordance,
+  type ResolveContext,
+} from '@/lib/tutorCanvasActions';
+import type { TutorCanvasAction, DrawnItem } from '@/store/useNumeraStore';
+
+const action = (over: Partial<TutorCanvasAction> = {}): TutorCanvasAction => ({
+  action_id: 'ACT-1',
+  type: 'HIGHLIGHT',
+  target_kind: 'CANVAS_OBJECT',
+  target_object_id: 'item-1',
+  confirmed_component_id: null,
+  text: null,
+  source_id: null,
+  answer_reveal_allowed: false,
+  ...over,
+});
+
+const ITEM: DrawnItem = {
+  id: 'item-1', kind: 'rect', x: 100, y: 50, w: 200, h: 100, color: '#000', size: 2,
+};
+
+const CTX: ResolveContext = {
+  anchors: [{ token_id: 'TOK-1', text: 'm', char_start: 0, char_end: 1 }],
+  items: [ITEM],
+  tutorElements: [{ id: 'tut-1', kind: 'text', x: 0.1, y: 0.2, text: 'n + 4' }],
+  canvasSize: { width: 1000, height: 500 },
+};
+
+describe('resolving a target the client cannot see', () => {
+  it('drops a canvas object the student has since erased', () => {
+    // The alternative is placing the mark somewhere plausible, which puts the
+    // tutor confidently pointing at the wrong thing — worse than not pointing.
+    expect(resolveTarget(action({ target_object_id: 'gone' }), CTX)).toBeNull();
+  });
+
+  it('drops an anchor that is not on the current question', () => {
+    expect(resolveTarget(
+      action({ target_kind: 'QUESTION_ANCHOR', target_object_id: 'TOK-NOPE' }), CTX,
+    )).toBeNull();
+  });
+
+  it('drops an action carrying no target id at all', () => {
+    expect(resolveTarget(action({ target_object_id: null }), CTX)).toBeNull();
+  });
+
+  it('drops a canvas object when the canvas has not been measured yet', () => {
+    // itemBBox refuses to divide by a zero size; a box built against a
+    // placeholder would be a plausible-looking lie.
+    expect(resolveTarget(action(), { ...CTX, canvasSize: { width: 0, height: 0 } })).toBeNull();
+  });
+});
+
+describe('resolving a target that is there', () => {
+  it('finds a student item and normalises it against the live canvas', () => {
+    const target = resolveTarget(action(), CTX);
+    expect(target).toEqual({ kind: 'box', box: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 } });
+  });
+
+  it('finds a question anchor by token id', () => {
+    expect(resolveTarget(
+      action({ target_kind: 'QUESTION_ANCHOR', target_object_id: 'TOK-1' }), CTX,
+    )).toEqual({ kind: 'anchor', tokenId: 'TOK-1' });
+  });
+
+  it('treats STUDENT_ATTEMPT the same as CANVAS_OBJECT — both name drawn work', () => {
+    expect(resolveTarget(action({ target_kind: 'STUDENT_ATTEMPT' }), CTX))
+      .toEqual(resolveTarget(action({ target_kind: 'CANVAS_OBJECT' }), CTX));
+  });
+
+  it('resolves a WRITE_AREA without needing an id', () => {
+    expect(resolveTarget(action({ target_kind: 'WRITE_AREA', target_object_id: null }), CTX))
+      .toEqual({ kind: 'write-area' });
+  });
+});
+
+describe('what must never be rendered', () => {
+  it('never writes into the write area, even when text is supplied', () => {
+    // The rule with teeth. WRITE_AREA is where the student is being asked to
+    // commit the answer; writing it there hands over the thing being asked for,
+    // while looking like ordinary tutor support.
+    const write = action({
+      target_kind: 'WRITE_AREA', type: 'INSERT_MATH', text: 'n + 4', target_object_id: null,
+    });
+    const target = resolveTarget(write, CTX)!;
+    expect(actionMarks(write, target)).toEqual([]);
+    expect(showsWriteAffordance(write)).toBe(true);
+  });
+
+  it('grants no answer reveal however the payload is flagged', () => {
+    // The flag is the backend's own record, never our permission slip.
+    expect(revealsAnswer()).toBe(false);
+  });
+
+  it('renders a flagged action exactly as it renders an unflagged one', () => {
+    const target = resolveTarget(action(), CTX)!;
+    expect(actionMarks(action({ answer_reveal_allowed: true }), target))
+      .toEqual(actionMarks(action({ answer_reveal_allowed: false }), target));
+  });
+
+  it('puts no canvas mark on a question-text anchor', () => {
+    // The label rides on the text, which is the only thing that knows where the
+    // token wrapped to. A box on the board would mark something not on the board.
+    const a = action({ target_kind: 'QUESTION_ANCHOR', target_object_id: 'TOK-1', type: 'INSERT_LABEL', text: 'changes' });
+    expect(actionMarks(a, resolveTarget(a, CTX)!)).toEqual([]);
+  });
+});
+
+describe('the marks themselves', () => {
+  const boxTarget = { kind: 'box' as const, box: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 } };
+
+  it('highlights on the tutor layer, leaving the student item untouched', () => {
+    const marks = actionMarks(action({ type: 'HIGHLIGHT' }), boxTarget);
+    expect(marks).toHaveLength(1);
+    expect(marks[0].kind).toBe('highlight');
+    // Student ink is never in the output — marks are additive, never edits.
+    expect(CTX.items).toEqual([ITEM]);
+  });
+
+  it('draws GROUP as an outline, not a fill, so it stays legible over a highlight', () => {
+    expect(actionMarks(action({ type: 'GROUP' }), boxTarget)[0].kind).toBe('rect');
+  });
+
+  it('points an ARROW at the target from clear of it', () => {
+    const arrow = actionMarks(action({ type: 'ARROW' }), boxTarget)[0];
+    expect(arrow.kind).toBe('arrow');
+    expect(arrow.to).toEqual([boxTarget.box.x - 0.012, boxTarget.box.y - 0.012]);
+    // Approaches from above-left, so it never crosses the work it points at.
+    expect(arrow.from![0]).toBeLessThan(arrow.to![0]);
+    expect(arrow.from![1]).toBeLessThan(arrow.to![1]);
+  });
+
+  it('writes INSERT_MATH below the work it comments on', () => {
+    const mark = actionMarks(action({ type: 'INSERT_MATH', text: 'n + 4' }), boxTarget)[0];
+    expect(mark.kind).toBe('math');
+    expect(mark.text).toBe('n + 4');
+    expect(mark.y!).toBeGreaterThan(boxTarget.box.y + boxTarget.box.h);
+  });
+
+  it('draws nothing for an INSERT with no text rather than an empty box', () => {
+    expect(actionMarks(action({ type: 'INSERT_MATH', text: '   ' }), boxTarget)).toEqual([]);
+  });
+
+  it('draws nothing for FOCUS — it moves attention without leaving a mark', () => {
+    expect(actionMarks(action({ type: 'FOCUS' }), boxTarget)).toEqual([]);
+  });
+
+  it('gives every mark an id derived from the action, so a replay overwrites', () => {
+    expect(actionMarks(action({ type: 'HIGHLIGHT' }), boxTarget)[0].id).toContain('ACT-1');
+  });
+});

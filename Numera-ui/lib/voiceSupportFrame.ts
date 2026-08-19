@@ -55,6 +55,11 @@ export function voiceSupportFrame(msg: VoiceTutorFrame): SupportPresentation {
     // regression `active_scaffold` was introduced to end.
     active_scaffold: msg.active_scaffold as SupportPresentation['active_scaffold'],
 
+    // Semantic tutor canvas actions (Sanya, 19 Aug). Guided Practice is voice-led
+    // more often than not, so this is the transport that needs them most.
+    tutor_canvas_actions:
+      msg.tutor_canvas_actions as SupportPresentation['tutor_canvas_actions'],
+
     show_visual_cue: msg.show_visual_cue as boolean | undefined,
     visual_cue: msg.visual_cue as SupportPresentation['visual_cue'],
 
