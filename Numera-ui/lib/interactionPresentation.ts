@@ -4,6 +4,7 @@ import { cueAssetUrl } from '@/lib/cueAsset';
 import type { GuidedRescuePayload } from '@/lib/guidedRescue';
 import { writePrompt } from '@/lib/writtenEvidence';
 import { useNumeraStore } from '@/store/useNumeraStore';
+import type { TutorCanvasAction } from '@/store/useNumeraStore';
 import {
   shouldApply,
   noteApplied,
@@ -28,6 +29,7 @@ export type SupportPresentation = Pick<
   conversation_action?: string | null;
   /** Spans of the question the tutor is pointing at (Chirudeva §1). */
   question_anchors?: QuestionAnchor[];
+  tutor_canvas_actions?: TutorCanvasAction[];
   // Reliability gate (revised handoff, Chirudeva §3). Optional: the backend does
   // not send them yet, and `requiresWriting` reads absent as "not a WRITE turn".
   next_expected_input?: string | null;
@@ -131,6 +133,10 @@ export function applyInteractionSupport(response: SupportPresentation): string {
   useNumeraStore.getState().setQuestionAnchors(
     response.question_anchors ?? (response as InteractionResponse).question_anchors ?? [],
   );
+  const tutorCanvasActions = response.tutor_canvas_actions
+    ?? (response as InteractionResponse).tutor_canvas_actions
+    ?? [];
+  useNumeraStore.getState().applyTutorCanvasActions(tutorCanvasActions);
 
   // The reliability gate fired: the tutor could not read the student and is
   // asking for the answer in writing. Set unconditionally — clearing it on an

@@ -90,6 +90,12 @@ guided_learning:
     Always return a non-empty tutor_message and tutor_message_voice. The text
     message must be suitable for display. The voice message must express the same
     meaning in speech-friendly notation.
+    canvas_intentions are optional semantic suggestions for the frontend tutor
+    layer. Use them only when a current/confirmed component and an available
+    active_question_anchor or canvas object justify the mark. Keep text under
+    80 characters, for example "n → changes" or "+5 → stays fixed". Do not
+    provide coordinates, a final unresolved answer, a support escalation, or a
+    tutor-solved action. The backend validates and may discard every intention.
     Return only the requested JSON schema.
   component_adjudicator_confidence_threshold: 0.85
   component_adjudicator_system_prompt: |

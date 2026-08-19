@@ -14,6 +14,7 @@
 import axios from 'axios';
 import type { QuestionAnchor } from '@/lib/questionAnchors';
 import type { CanvasDrawPayload, CanvasStrokeSnapshot } from '@/store/useNumeraStore';
+import type { TutorCanvasAction } from '@/store/useNumeraStore';
 import type { CanvasEvent } from '@/lib/canvasMemory';
 import { useAuthStore } from '@/store/useAuthStore';
 import { allowAnonTutorCalls } from '@/lib/runtimeConfig';
@@ -1203,6 +1204,8 @@ export interface InteractionResponse extends GuidedStateFields, Phase3ResponseFi
   phase_indicator: string;
   /** Optional tutor drawing to render on the canvas alongside this reply. */
   canvas_draw?: CanvasDrawPayload[];
+  /** Coordinate-free Guided Practice tutor-layer actions. */
+  tutor_canvas_actions?: TutorCanvasAction[];
   /** OCR from the frozen voice-turn canvas. */
   ocr?: OcrResult | null;
   /** Whether to show the supporting visual cue after this turn. The backend also

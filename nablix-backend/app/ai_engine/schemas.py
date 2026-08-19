@@ -8,9 +8,11 @@ from app.models.adapters import ConversationAction
 from app.models.guided_learning import (
     ActiveScaffold,
     ActiveTeachingObjective,
+    CanvasPedagogyIntent,
     GeneratedQuestionRubric,
     GuidedStudentState,
     GuidedTeachingState,
+    TutorCanvasAction,
 )
 
 
@@ -324,6 +326,8 @@ class TutorResponse(StrictSchema):
     first_error_step: str | None = None
     phase3_review_evidence: Phase3ReviewEvidence | None = None
     requires_written_math_evidence: StrictBool = False
+    canvas_intentions: list[CanvasPedagogyIntent] = Field(default_factory=list)
+    tutor_canvas_actions: list[TutorCanvasAction] = Field(default_factory=list)
 
 
 class ExplainAgainResult(StrictSchema):

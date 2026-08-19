@@ -1,3 +1,5 @@
+import pytest
+
 from app.models.adapters import (
     AnnotationIntent,
     OCRTextRegion,
@@ -6,10 +8,18 @@ from app.models.adapters import (
     TutorResult,
 )
 from app.models.canvas import TutorElement
+from app.models.canvas_memory import CanvasEvent
+from app.models.guided_learning import (
+    ActiveTeachingObjective,
+    CanvasPedagogyIntent,
+    GuidedTeachingState,
+)
+from app.models.question_anchor import QuestionTextAnchor
+from pydantic import ValidationError
 from app.services.canvas_annotations import (
     assign_step_ids,
     plan_canvas_draw,
-    plan_confirmed_tutor_draw,
+    plan_tutor_canvas_actions,
     plan_write_request_tutor_draw,
 )
 
@@ -134,7 +144,7 @@ def test_canvas_planner_circles_explicit_whole_line_mistake() -> None:
     assert [element.kind for element in draw[0].elements] == ["ellipse"]
 
 
-def test_confirmed_guided_idea_always_gets_a_tutor_layer_affirmation() -> None:
+def test_confirmed_guided_idea_emits_a_component_scoped_semantic_action() -> None:
     tutor = _tutor_result(
         TutorMistakeClassification(status="no_mistake", confidence=0.9),
         [],
@@ -142,13 +152,122 @@ def test_confirmed_guided_idea_always_gets_a_tutor_layer_affirmation() -> None:
         update={
             "guided_student_state": "PARTIAL",
             "answer_value_confirmed": False,
+            "active_teaching_objective": ActiveTeachingObjective(
+                objective_type="EXPLAIN_CONCEPT",
+                target_concept_ids=["CHANGING_VALUE"],
+                confirmed_concept_ids=["CHANGING_VALUE"],
+                missing_concept_ids=["FIXED_VALUE"],
+            ),
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-T01-002",
+                objective_component_ids=["CHANGING_VALUE", "FIXED_VALUE"],
+                confirmed_component_ids=["CHANGING_VALUE"],
+                missing_component_ids=["FIXED_VALUE"],
+                active_component_id="FIXED_VALUE",
+                last_tutor_question_type="COMPONENT",
+                selected_option_id=None,
+                awaiting_response=True,
+            ),
+            "canvas_intentions": [
+                CanvasPedagogyIntent(
+                    action_type="INSERT_LABEL",
+                    target_kind="QUESTION_ANCHOR",
+                    target_object_id="Q-T01-002:QTOKEN:1",
+                    confirmed_component_id="CHANGING_VALUE",
+                    text="m → changes",
+                    source_id=None,
+                )
+            ],
         }
     )
 
-    draw = plan_confirmed_tutor_draw(tutor, "The letter changes", "TURN-1")
+    actions = plan_tutor_canvas_actions(
+        tutor,
+        [QuestionTextAnchor(token_id="Q-T01-002:QTOKEN:1", text="m", char_start=0, char_end=1)],
+        [],
+        "TURN-1",
+        "m + 7",
+    )
 
-    assert [element.kind for element in draw[0].elements[:2]] == ["highlight", "text"]
-    assert draw[0].elements[1].text == "Good thinking — keep this idea."
+    assert actions[0].type == "INSERT_LABEL"
+    assert actions[0].text == "m → changes"
+    assert actions[0].answer_reveal_allowed is False
+
+
+def test_canvas_action_rejects_unconfirmed_target_and_answer_reveal_text() -> None:
+    tutor = _tutor_result(
+        TutorMistakeClassification(status="no_mistake", confidence=0.9),
+        [],
+    ).model_copy(
+        update={
+            "guided_student_state": "PARTIAL",
+            "active_teaching_objective": ActiveTeachingObjective(
+                objective_type="EXPLAIN_CONCEPT",
+                target_concept_ids=["CHANGING_VALUE"],
+                confirmed_concept_ids=[],
+                missing_concept_ids=["CHANGING_VALUE"],
+            ),
+            "canvas_intentions": [
+                CanvasPedagogyIntent(
+                    action_type="INSERT_MATH",
+                    target_kind="QUESTION_ANCHOR",
+                    target_object_id="unknown",
+                    confirmed_component_id="CHANGING_VALUE",
+                    text="n + 5",
+                    source_id=None,
+                )
+            ],
+        }
+    )
+
+    assert plan_tutor_canvas_actions(tutor, [], [], "TURN-1", "n + 5") == []
+
+
+def test_wrong_turn_targets_only_reliable_student_written_work() -> None:
+    tutor = _tutor_result(
+        TutorMistakeClassification(status="no_mistake", confidence=0.9),
+        [],
+    ).model_copy(update={"guided_student_state": "WRONG"})
+    actions = plan_tutor_canvas_actions(
+        tutor,
+        [],
+        [
+            CanvasEvent(
+                order_index=0,
+                turn_id="TURN-1",
+                question_id="Q-T01-001",
+                actor="STUDENT",
+                action_type="WRITE",
+                content="5n",
+                math_text="5n",
+                target_object_id="student-5n",
+                bbox=None,
+                semantic_tag="student_attempt",
+                source_id=None,
+                active_state="ACTIVE",
+            )
+        ],
+        "TURN-1",
+        "n + 5",
+    )
+
+    assert [(action.type, action.target_object_id) for action in actions] == [
+        ("HIGHLIGHT", "student-5n")
+    ]
+
+
+def test_semantic_canvas_action_contract_rejects_unknown_type() -> None:
+    with pytest.raises(ValidationError):
+        CanvasPedagogyIntent.model_validate(
+            {
+                "action_type": "DRAW_RECTANGLE",
+                "target_kind": "QUESTION_ANCHOR",
+                "target_object_id": "Q-T01-001:QTOKEN:1",
+                "confirmed_component_id": "FIXED_VALUE",
+                "text": "+5 → stays fixed",
+                "source_id": None,
+            }
+        )
 
 
 def test_write_request_marks_a_tutor_owned_area_without_revealing_the_rule() -> None:

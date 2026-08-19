@@ -3456,6 +3456,7 @@ def build_guided_tutor_response(
             objective,
             evaluation.tutor_message,
         ),
+        canvas_intentions=evaluation.canvas_intentions,
     )
     guarded_response = apply_answer_reveal_guardrail(
         response,

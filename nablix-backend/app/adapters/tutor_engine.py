@@ -291,6 +291,8 @@ def _tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:
             else None
         ),
         requires_written_math_evidence=response.requires_written_math_evidence,
+        canvas_intentions=response.canvas_intentions,
+        tutor_canvas_actions=response.tutor_canvas_actions,
     )
 
 

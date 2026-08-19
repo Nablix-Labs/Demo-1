@@ -14,11 +14,13 @@ from app.models.canvas_memory import CanvasEvent
 from app.models.student_model_session import AnswerSpec, QuestionType
 from app.models.guided_learning import (
     ActiveTeachingObjective,
+    CanvasPedagogyIntent,
     ConversationMessage,
     GuidedTeachingState,
     GeneratedQuestionRubric,
     GuidedStudentState,
     ScaffoldEvaluationContext,
+    TutorCanvasAction,
 )
 
 MasteryStatus = Literal[
@@ -287,6 +289,8 @@ class TutorResult(BaseModel):
     phase3_review_evidence: dict[str, object] | None = None
 
     requires_written_math_evidence: bool = False
+    canvas_intentions: list[CanvasPedagogyIntent] = Field(default_factory=list)
+    tutor_canvas_actions: list[TutorCanvasAction] = Field(default_factory=list)
 
 
 class VoiceResult(BaseModel):

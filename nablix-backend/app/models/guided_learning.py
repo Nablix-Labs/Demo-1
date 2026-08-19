@@ -29,6 +29,25 @@ GuidedRoutingReasonCode = Literal[
     "GUIDED_PHASE_COMPLETED",
     "PARALLEL_EXAMPLE_REQUIRED",
 ]
+TutorCanvasActionType = Literal[
+    "HIGHLIGHT",
+    "GROUP",
+    "ARROW",
+    "INSERT_MATH",
+    "INSERT_LABEL",
+    "FOCUS",
+    "SHOW_CUE",
+    "OPEN_SCAFFOLD_STEP",
+    "SHOW_PARALLEL",
+    "TUTOR_SOLVED_STEP",
+]
+TutorCanvasTargetKind = Literal[
+    "QUESTION_ANCHOR",
+    "CANVAS_OBJECT",
+    "STUDENT_ATTEMPT",
+    "TUTOR_ANCHOR",
+    "WRITE_AREA",
+]
 
 
 class EvaluationReasonCode(str, Enum):
@@ -175,6 +194,30 @@ class NudgeDelivery(GuidedLearningModel):
     message: str = Field(min_length=1)
 
 
+class CanvasPedagogyIntent(GuidedLearningModel):
+    """A semantic evaluator suggestion, not a browser drawing command."""
+
+    action_type: TutorCanvasActionType
+    target_kind: TutorCanvasTargetKind
+    target_object_id: str | None
+    confirmed_component_id: str | None
+    text: str | None = Field(default=None, max_length=80)
+    source_id: str | None
+
+
+class TutorCanvasAction(GuidedLearningModel):
+    """Validated Phase 2 action owned visually by the frontend."""
+
+    action_id: str
+    type: TutorCanvasActionType
+    target_kind: TutorCanvasTargetKind
+    target_object_id: str | None
+    confirmed_component_id: str | None
+    text: str | None = Field(default=None, max_length=80)
+    source_id: str | None
+    answer_reveal_allowed: StrictBool = False
+
+
 def inactivity_policy() -> InactivityPolicy:
     return InactivityPolicy(
         initial_idle_threshold_ms=20_000,
@@ -195,6 +238,7 @@ class GuidedEvaluation(GuidedLearningModel):
     next_objective: ActiveTeachingObjective | None
     tutor_message: str = Field(min_length=1)
     tutor_message_voice: str = Field(min_length=1)
+    canvas_intentions: list[CanvasPedagogyIntent] = Field(default_factory=list)
 
 
 class FocusedComponentEvidence(GuidedLearningModel):
