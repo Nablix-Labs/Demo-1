@@ -77,10 +77,13 @@ export default function Phase4Review({
     // the live route, and a second one directly beneath it reads as two pages.
     <div className="flex flex-col h-full min-h-0">
       <div className="flex-1 min-h-0 flex gap-4 items-start">
-        {/* Left — the Phase 3 journey */}
-        <div className="w-[210px] flex-shrink-0 overflow-y-auto max-h-full">
-          <ReviewRail rows={rows} activeReplayIndex={replayIndex} onSelect={goTo} />
-        </div>
+        {/* Left — the Phase 3 journey. Omitted entirely when there is nothing
+            to correct, so the summary is not sitting beside an empty column. */}
+        {rows.length > 0 && (
+          <div className="w-[210px] flex-shrink-0 overflow-y-auto max-h-full">
+            <ReviewRail rows={rows} activeReplayIndex={replayIndex} onSelect={goTo} />
+          </div>
+        )}
 
         {/* Centre — dominant */}
         <div className="flex-1 min-w-0 h-full min-h-[520px] flex">

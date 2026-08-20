@@ -31,6 +31,12 @@ export default function ReviewRail({
   activeReplayIndex: number | null;
   onSelect: (replayIndex: number) => void;
 }) {
+  // A topic answered correctly throughout has no journey rows — Phase 4 only
+  // lists the questions that produced a replay. Rendering the heading over an
+  // empty bordered box announces a section and then shows nothing, which reads
+  // as a failure to load rather than as "there was nothing to correct".
+  if (rows.length === 0) return null;
+
   return (
     <nav aria-label="Questions in independent practice">
       <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-2.5">
