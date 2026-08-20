@@ -206,13 +206,13 @@ describe('the WRITE_RULE reference labels', () => {
     }
   });
 
-  it('stacks upwards, so more parts move away from the writing area', () => {
-    const y = [1, 2, 3].map((p) => {
+  it('reads top to bottom, in the order the backend listed the parts', () => {
+    // Stacking upward put "Gain: +5" above "Start: n" — the rule read backwards.
+    const y = [1, 2].map((p) => {
       const a = anchor(p, 'x');
       return actionMarks(a, resolveTarget(a, CTX)!)[0].y!;
     });
-    expect(y[1]).toBeLessThan(y[0]);
-    expect(y[2]).toBeLessThan(y[1]);
+    expect(y[0]).toBeLessThan(y[1]);
   });
 
   it('never walks off the top of the canvas, however many parts arrive', () => {
@@ -236,5 +236,24 @@ describe('the WRITE_RULE reference labels', () => {
   it('renders nothing for a slot with no text', () => {
     const a = anchor(1, '   ');
     expect(actionMarks(a, resolveTarget(a, CTX)!)).toEqual([]);
+  });
+});
+
+describe('a HIGHLIGHT mark', () => {
+  it('carries points, because that is the only thing the layer draws it from', () => {
+    // TutorLayer's `highlight` case reads `el.points` and returns null without
+    // them. Emitting x/y/w/h meant every highlight rendered nothing at all —
+    // and highlighting is the most common action the tutor sends.
+    const a = action({ type: 'HIGHLIGHT' });
+    const mark = actionMarks(a, resolveTarget(a, CTX)!)[0];
+    expect(mark.points?.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('draws a level band across the target, like a highlighter pen', () => {
+    const a = action({ type: 'HIGHLIGHT' });
+    const pts = actionMarks(a, resolveTarget(a, CTX)!)[0].points!;
+    expect(pts[1]).toBe(pts[3]);      // same y at both ends
+    expect(pts[2]).toBeGreaterThan(pts[0]);
+    expect(actionMarks(a, resolveTarget(a, CTX)!)[0].strokeWidth).toBeGreaterThan(0);
   });
 });

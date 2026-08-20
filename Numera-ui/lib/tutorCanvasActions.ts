@@ -114,12 +114,16 @@ const WRITE_ARROW_TOP = 0.56;
  * top of the canvas.
  */
 const SLOT_GAP = 0.075;
-const SLOT_TOP_LIMIT = 0.06;
+const SLOT_FIRST_Y = 0.35;
+/** Never below this: the arrow into the writing area starts at 0.56. */
+const SLOT_LAST_Y = 0.50;
 
 export function writeRuleSlot(position: number): ResolvedTarget {
   const index = Math.max(1, position) - 1;
-  const y = WRITE_ARROW_TOP - 0.06 - index * SLOT_GAP;
-  return { kind: 'slot', at: { x: WRITE_AREA.x + 0.04, y: Math.max(SLOT_TOP_LIMIT, y) } };
+  // Downward, so slot 1 sits highest and the parts read in the order the
+  // backend listed them. Stacking upward put "Gain: +5" above "Start: n".
+  const y = Math.min(SLOT_LAST_Y, SLOT_FIRST_Y + index * SLOT_GAP);
+  return { kind: 'slot', at: { x: WRITE_AREA.x + 0.04, y } };
 }
 
 /** Does this box overlap the writing area? Used by the tests, and by nothing else. */
@@ -135,6 +139,8 @@ export function overlapsWriteArea(box: CanvasBBox): boolean {
 /** Breathing room around a box so a highlight frames the work, not clips it. */
 const PAD = 0.012;
 const INK = '#1B2A4A';
+/** Highlighter thickness in px, matching the backend's own write-area band. */
+const HIGHLIGHT_WEIGHT = 16;
 const EMPHASIS = '#C9A227';
 
 function padded(box: CanvasBBox): CanvasBBox {
@@ -204,8 +210,20 @@ export function actionMarks(
   const id = (suffix: string) => `${action.action_id}:${suffix}`;
 
   switch (action.type) {
-    case 'HIGHLIGHT':
-      return [{ id: id('hl'), kind: 'highlight', ...padded(box), color: EMPHASIS }];
+    case 'HIGHLIGHT': {
+      // A highlight is drawn as a stroke through `points`, like a highlighter
+      // pen — TutorLayer's `highlight` case reads ONLY `points` and returns null
+      // without them, so the x/y/w/h this used to emit rendered nothing at all.
+      const p = padded(box);
+      const midY = p.y + p.h / 2;
+      return [{
+        id: id('hl'),
+        kind: 'highlight',
+        points: [p.x, midY, p.x + p.w, midY],
+        color: EMPHASIS,
+        strokeWidth: HIGHLIGHT_WEIGHT,
+      }];
+    }
 
     // A group says "these belong together". Drawn as an outline rather than a
     // fill so it reads as enclosure, and so it stays legible over ink already
