@@ -449,8 +449,8 @@ def test_fallback_turn_handles_non_expression_canonical_answers() -> None:
     )
 
     assert [(action.target_object_id, action.text) for action in actions] == [
-        ("Q-T01-002:QTOKEN:1", "m → confirmed"),
-        ("TUTOR_ANCHOR:CONFIRMED:Q-T01-002:1", "m → confirmed"),
+        ("Q-T01-002:QTOKEN:1", "m → changes"),
+        ("TUTOR_ANCHOR:CONFIRMED:Q-T01-002:1", "m → changes"),
     ]
 
 

@@ -1190,6 +1190,152 @@ def test_short_reason_turn_becomes_partial_instead_of_repeating_a_wrong_prompt()
     assert merged.missing_concept_ids == ["GENERAL_RULE_SELECTION"]
 
 
+def test_general_rule_choice_guides_from_changing_value_to_fixed_value() -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-004",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="ANSWER_SELECTION",
+                description="Selects the correct option.",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="ANSWER_EXPLANATION",
+                description="Explains why the selected option works.",
+                required=True,
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="general-rule-choice",
+        prompt_version="1.0.0",
+    )
+    objective = ActiveTeachingObjective(
+        objective_type="EXPLAIN_REASONING",
+        target_concept_ids=["ANSWER_EXPLANATION"],
+        confirmed_concept_ids=["ANSWER_SELECTION"],
+        missing_concept_ids=["ANSWER_EXPLANATION"],
+    )
+    request = ClassificationRequest(
+        question_id="Q-T01-004",
+        question_type="CHOICE_WITH_EXPLANATION",
+        question="Which is the general rule? A: 12 + 4. B: n + 4. Explain briefly.",
+        correct_answer="B",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-004",
+            canonical_answer="B",
+            accepted_answers=["B"],
+            verification_method="CHOICE_AND_CONCEPT_MATCH",
+            explanation_required=True,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        active_teaching_objective=objective,
+        student_input="n changes",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+    )
+    evaluation = GuidedEvaluation(
+        student_state="CORRECT",
+        newly_confirmed_concept_ids=["ANSWER_EXPLANATION"],
+        preserved_concept_ids=["ANSWER_SELECTION"],
+        contradicted_concept_ids=[],
+        missing_concept_ids=[],
+        selected_error_code=None,
+        confidence=0.9,
+        next_objective=objective,
+        tutor_message="That is correct.",
+        tutor_message_voice="That is correct.",
+    )
+
+    progressed = classifier.apply_general_rule_explanation_progress(
+        evaluation,
+        request,
+        rubric,
+        objective,
+    )
+
+    assert progressed.student_state == "PARTIAL"
+    assert progressed.newly_confirmed_concept_ids == []
+    assert progressed.missing_concept_ids == ["ANSWER_EXPLANATION"]
+    assert classifier.controller_prompt_for_objective(request, rubric, objective) == (
+        "Good — n can change. What stays fixed in the rule?"
+    )
+
+
+def test_general_rule_choice_completes_after_fixed_value_follows_changing_value() -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-004",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="ANSWER_SELECTION",
+                description="Selects the correct option.",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="ANSWER_EXPLANATION",
+                description="Explains why the selected option works.",
+                required=True,
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="general-rule-choice",
+        prompt_version="1.0.0",
+    )
+    objective = ActiveTeachingObjective(
+        objective_type="EXPLAIN_REASONING",
+        target_concept_ids=["ANSWER_EXPLANATION"],
+        confirmed_concept_ids=["ANSWER_SELECTION"],
+        missing_concept_ids=["ANSWER_EXPLANATION"],
+    )
+    request = ClassificationRequest(
+        question_id="Q-T01-004",
+        question_type="CHOICE_WITH_EXPLANATION",
+        question="Which is the general rule? A: 12 + 4. B: n + 4. Explain briefly.",
+        correct_answer="B",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-004",
+            canonical_answer="B",
+            accepted_answers=["B"],
+            verification_method="CHOICE_AND_CONCEPT_MATCH",
+            explanation_required=True,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        active_teaching_objective=objective,
+        student_input="+4 is constant",
+        conversation_history=[ConversationMessage(role="user", content="n changes")],
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+    )
+    evaluation = GuidedEvaluation(
+        student_state="PARTIAL",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=["ANSWER_SELECTION"],
+        contradicted_concept_ids=[],
+        missing_concept_ids=["ANSWER_EXPLANATION"],
+        selected_error_code=None,
+        confidence=0.9,
+        next_objective=objective,
+        tutor_message="Why does it work?",
+        tutor_message_voice="Why does it work?",
+    )
+
+    progressed = classifier.apply_general_rule_explanation_progress(
+        evaluation,
+        request,
+        rubric,
+        objective,
+    )
+
+    assert progressed.student_state == "CORRECT"
+    assert progressed.newly_confirmed_concept_ids == ["ANSWER_EXPLANATION"]
+    assert progressed.missing_concept_ids == []
+
+
 def test_compact_expression_component_gets_a_general_rule_prompt() -> None:
     rubric = GeneratedQuestionRubric(
         question_id="Q-T01-001",
@@ -5751,7 +5897,7 @@ def test_choice_explanation_controller_prompt_is_specific() -> None:
 
     prompt = classifier.controller_prompt_for_objective(request, rubric, objective)
 
-    assert prompt == "Why does the option you chose work for every case in the question?"
+    assert prompt == "Good — n can change. What stays fixed in the rule?"
 
 
 def test_guided_llm_repeated_stuck_requests_one_scaffold_escalation(

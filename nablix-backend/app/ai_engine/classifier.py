@@ -1679,6 +1679,12 @@ def classify_guided_learning_response(
                 rubric,
                 request.student_input,
             )
+            candidate = apply_general_rule_explanation_progress(
+                candidate,
+                request,
+                rubric,
+                objective,
+            )
             raw_student_state = candidate.student_state
             raw_confidence = candidate.confidence
             evaluation = validate_guided_evaluation(
@@ -1829,6 +1835,12 @@ def classify_guided_learning_response(
             allowed_errors,
             rules,
         )
+    evaluation = apply_general_rule_explanation_progress(
+        evaluation,
+        request,
+        rubric,
+        objective,
+    )
     if is_authoritative_guided_completion(request):
         evaluation = authoritative_guided_completion(evaluation, rules)
     next_objective = normalized_guided_objective(evaluation, objective)
@@ -1885,12 +1897,22 @@ def controller_prompt_for_objective(
 ) -> str:
     """Return the one controller-owned question for the remaining objective."""
 
+    rules = load_classifier_rules()
     missing_ids = set(objective.missing_concept_ids)
     if (
         request.question_type == "CHOICE_WITH_EXPLANATION"
         and "ANSWER_SELECTION" not in missing_ids
         and "ANSWER_EXPLANATION" in missing_ids
     ):
+        general_rule_evidence = general_rule_explanation_evidence(request)
+        if general_rule_evidence == (True, False):
+            expression = _GENERAL_RULE_EXPRESSION_RE.search(request.question.casefold())
+            if expression is not None:
+                return rules.guided_learning.general_rule_fixed_value_prompt.format(
+                    variable=expression.group(1)
+                )
+        if general_rule_evidence == (False, True):
+            return rules.guided_learning.general_rule_changing_value_prompt
         return (
             "Why does the option you chose work for every case in the question?"
         )
@@ -2766,6 +2788,10 @@ _COMPONENT_LINKING_TOKENS = {
     "stay",
 }
 _NEGATION_PATTERN = re.compile(r"\b(?:not|isn't|isnt|doesn't|doesnt|never)\b")
+_GENERAL_RULE_EXPRESSION_RE = re.compile(
+    r"\b([a-z])\s*([+\-−])\s*(\d+)\b",
+    re.IGNORECASE,
+)
 
 
 def component_evidence_tokens(value: str) -> set[str]:
@@ -2804,6 +2830,89 @@ def concise_explanation_is_demonstrated(
         return False
     justification_tokens = {"variable", "change", "different", "any", "represent"}
     return bool(response_tokens.intersection(justification_tokens))
+
+
+def general_rule_explanation_evidence(
+    request: ClassificationRequest,
+) -> tuple[bool, bool] | None:
+    """Return the two ideas needed to justify a variable-plus-constant choice."""
+
+    if request.question_type != "CHOICE_WITH_EXPLANATION":
+        return None
+    expression = _GENERAL_RULE_EXPRESSION_RE.search(request.question.casefold())
+    if expression is None:
+        return None
+    variable, _operator, fixed_value = expression.groups()
+    learner_text = " ".join(
+        [
+            *(message.content for message in request.conversation_history if message.role == "user"),
+            request.student_input,
+        ]
+    ).casefold()
+    variable_pattern = re.compile(
+        rf"\b{re.escape(variable)}\b.*\b(?:change|changes|changing|variable|any|different)\b"
+        rf"|\b(?:change|changes|changing|variable|any|different)\b.*\b{re.escape(variable)}\b"
+    )
+    fixed_pattern = re.compile(
+        rf"(?<!\d)[+\-−]?\s*{re.escape(fixed_value)}(?!\d).*"
+        r"\b(?:fixed|constant|stay|stays|same)\b"
+        rf"|\b(?:fixed|constant|stay|stays|same)\b.*(?<!\d)[+\-−]?\s*{re.escape(fixed_value)}(?!\d)"
+    )
+    return (
+        variable_pattern.search(learner_text) is not None,
+        fixed_pattern.search(learner_text) is not None,
+    )
+
+
+def apply_general_rule_explanation_progress(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+) -> GuidedEvaluation:
+    """Keep a general-rule explanation on the changing-then-fixed teaching path."""
+
+    evidence = general_rule_explanation_evidence(request)
+    if evidence is None:
+        return evaluation
+    changing_identified, fixed_identified = evidence
+    explanation_ids = {
+        component.concept_id
+        for component in rubric.required_concepts
+        if component.required and "explanation" in component.concept_id.casefold()
+    }
+    selection_confirmed = "ANSWER_SELECTION" in {
+        *objective.confirmed_concept_ids,
+        *evaluation.newly_confirmed_concept_ids,
+        *evaluation.preserved_concept_ids,
+    }
+    if not explanation_ids or not selection_confirmed:
+        return evaluation
+
+    newly_confirmed_ids = set(evaluation.newly_confirmed_concept_ids)
+    missing_ids = set(evaluation.missing_concept_ids)
+    if changing_identified and fixed_identified:
+        newly_confirmed_ids.update(explanation_ids)
+        missing_ids.difference_update(explanation_ids)
+        return evaluation.model_copy(
+            update={
+                "student_state": "CORRECT",
+                "newly_confirmed_concept_ids": sorted(newly_confirmed_ids),
+                "missing_concept_ids": sorted(missing_ids),
+            }
+        )
+
+    # Naming only one part is useful evidence, but not the full explanation.
+    # Do not let a broad LLM interpretation skip the remaining fixed/changing cue.
+    newly_confirmed_ids.difference_update(explanation_ids)
+    missing_ids.update(explanation_ids)
+    return evaluation.model_copy(
+        update={
+            "student_state": "PARTIAL",
+            "newly_confirmed_concept_ids": sorted(newly_confirmed_ids),
+            "missing_concept_ids": sorted(missing_ids),
+        }
+    )
 
 
 def contradicted_authored_component_ids(
