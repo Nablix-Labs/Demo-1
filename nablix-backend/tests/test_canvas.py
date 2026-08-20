@@ -166,13 +166,31 @@ def _unified_voice_payload(
         "hint_count": session.hint_count,
         "canvas_state": {
             "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+            # Spans all three of MockVisionOCRAdapter's regions (y 0.18-0.50),
+            # matching a student who wrote the whole worked solution — not just
+            # the first line. A single stroke over one region only would make
+            # the tutor-ink OCR filter (canvas_evidence.collect_canvas_evidence)
+            # drop the other two as unwritten, which is not what this fixture
+            # means to represent.
             "strokes": [
                 {
                     "stroke_id": "stroke-1",
                     "tool": "pen",
                     "points": [{"x": 0.12, "y": 0.18}, {"x": 0.48, "y": 0.26}],
                     "width": 0.01,
-                }
+                },
+                {
+                    "stroke_id": "stroke-2",
+                    "tool": "pen",
+                    "points": [{"x": 0.12, "y": 0.30}, {"x": 0.46, "y": 0.38}],
+                    "width": 0.01,
+                },
+                {
+                    "stroke_id": "stroke-3",
+                    "tool": "pen",
+                    "points": [{"x": 0.12, "y": 0.42}, {"x": 0.30, "y": 0.50}],
+                    "width": 0.01,
+                },
             ],
             "captured_at": "2026-08-10T10:00:00Z",
         },
@@ -1846,7 +1864,11 @@ def test_unified_voice_canvas_unclear_ocr_does_not_grade(
     assert stored.question_id is not None
     memory = stored.canvas_memory_by_question[stored.question_id]
     assert memory.updated_turn_id == "TURN-UNIFIED-UNCLEAR"
-    assert [stroke.stroke_id for stroke in memory.strokes] == ["stroke-1"]
+    assert [stroke.stroke_id for stroke in memory.strokes] == [
+        "stroke-1",
+        "stroke-2",
+        "stroke-3",
+    ]
 
 
 def test_unified_voice_canvas_keeps_mathml_in_tutor_context(
@@ -2306,3 +2328,131 @@ def test_canvas_submit_uses_shared_spatial_tokens_for_grounded_draw(
     assert len(context.spatial_tokens) == 3
     assert context.canvas_events[0].question_id == question_id
     assert response.json()["canvas_draw"]
+
+
+def test_collect_canvas_evidence_drops_regions_with_no_student_ink() -> None:
+    """A region no student stroke touches wasn't written by the student — most
+    often it's the tutor's own layer, captured into the same snapshot (#2 of
+    the frontend handoff). It must not reach evaluation."""
+
+    regions = [
+        {"text": "x + 4 = 9", "x": 0.12, "y": 0.18, "w": 0.36, "h": 0.08, "confidence": 0.96},
+        {"text": "TUTOR MARK", "x": 0.12, "y": 0.70, "w": 0.30, "h": 0.08, "confidence": 0.9},
+    ]
+
+    class TwoRegionVision:
+        async def recognize(self, snapshot_data_url: str) -> VisionOCRResult:
+            del snapshot_data_url
+            return VisionOCRResult(
+                raw_ocr_text="x + 4 = 9\nTUTOR MARK",
+                detected_equation="x + 4 = 9",
+                detected_steps=["x + 4 = 9", "TUTOR MARK"],
+                detected_regions=list(regions),
+                final_answer="TUTOR MARK",
+                confidence=0.95,
+                provider="mock",
+            )
+
+    student_only_stroke = [
+        {
+            "stroke_id": "stroke-1",
+            "tool": "pen",
+            "points": [{"x": 0.12, "y": 0.18}, {"x": 0.48, "y": 0.26}],
+            "width": 0.01,
+        }
+    ]
+    from app.models.canvas import CanvasStroke
+
+    strokes = [CanvasStroke.model_validate(stroke) for stroke in student_only_stroke]
+
+    evidence = asyncio.run(
+        canvas_evidence.collect_canvas_evidence(
+            VALID_SNAPSHOT_DATA_URL, strokes, "SUB-1", TwoRegionVision()
+        )
+    )
+
+    assert evidence.ocr.detected_steps == ["x + 4 = 9"]
+    assert evidence.ocr.raw_ocr_text == "x + 4 = 9"
+    assert evidence.ocr.detected_equation == "x + 4 = 9"
+    assert evidence.ocr.final_answer == "x + 4 = 9"
+    assert [region.text for region in evidence.ocr.detected_regions] == ["x + 4 = 9"]
+
+
+def test_collect_canvas_evidence_empties_text_when_every_region_is_dropped() -> None:
+    """When strokes exist but produce no usable geometry, the text fields must
+    go empty too -- not silently fall back to the unfiltered (tutor-ink
+    included) originals, which would reopen the exact bug this filter closes.
+
+    associate_strokes_with_steps assigns every stroke with a real bounding box
+    to its nearest region (never leaves one fully unassigned), so the only way
+    every region ends up with zero strokes is a stroke with no points -- valid
+    per CanvasStroke (no min_length), and stroke_to_box returns None for it.
+    """
+
+    regions = [
+        {"text": "TUTOR MARK", "x": 0.12, "y": 0.70, "w": 0.30, "h": 0.08, "confidence": 0.9},
+    ]
+
+    class OneRegionVision:
+        async def recognize(self, snapshot_data_url: str) -> VisionOCRResult:
+            del snapshot_data_url
+            return VisionOCRResult(
+                raw_ocr_text="TUTOR MARK",
+                detected_equation="TUTOR MARK",
+                detected_steps=["TUTOR MARK"],
+                detected_regions=list(regions),
+                final_answer="TUTOR MARK",
+                confidence=0.95,
+                provider="mock",
+            )
+
+    from app.models.canvas import CanvasStroke
+
+    strokes = [
+        CanvasStroke.model_validate(
+            {"stroke_id": "stroke-1", "tool": "pen", "points": [], "width": 0.01}
+        )
+    ]
+
+    evidence = asyncio.run(
+        canvas_evidence.collect_canvas_evidence(
+            VALID_SNAPSHOT_DATA_URL, strokes, "SUB-3", OneRegionVision()
+        )
+    )
+
+    assert evidence.ocr.detected_regions == []
+    assert evidence.ocr.detected_steps == []
+    assert evidence.ocr.raw_ocr_text == ""
+    assert evidence.ocr.detected_equation == ""
+    assert evidence.ocr.final_answer is None
+
+
+def test_collect_canvas_evidence_keeps_all_regions_when_no_strokes_sent() -> None:
+    """Voice attachments and pages 2..N legitimately carry no live-canvas ink —
+    the filter must not wipe evidence there."""
+
+    regions = [
+        {"text": "x + 4 = 9", "x": 0.12, "y": 0.18, "w": 0.36, "h": 0.08, "confidence": 0.96},
+        {"text": "x = 5", "x": 0.12, "y": 0.42, "w": 0.18, "h": 0.08, "confidence": 0.95},
+    ]
+
+    class TwoRegionVision:
+        async def recognize(self, snapshot_data_url: str) -> VisionOCRResult:
+            del snapshot_data_url
+            return VisionOCRResult(
+                raw_ocr_text="x + 4 = 9\nx = 5",
+                detected_equation="x + 4 = 9",
+                detected_steps=["x + 4 = 9", "x = 5"],
+                detected_regions=list(regions),
+                final_answer="x = 5",
+                confidence=0.95,
+                provider="mock",
+            )
+
+    evidence = asyncio.run(
+        canvas_evidence.collect_canvas_evidence(
+            VALID_SNAPSHOT_DATA_URL, [], "SUB-2", TwoRegionVision()
+        )
+    )
+
+    assert evidence.ocr.detected_steps == ["x + 4 = 9", "x = 5"]
