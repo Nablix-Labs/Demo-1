@@ -13,6 +13,8 @@ from app.models.canvas_memory import CanvasEvent
 from app.models.guided_learning import (
     ActiveTeachingObjective,
     CanvasPedagogyIntent,
+    GeneratedConcept,
+    GeneratedQuestionRubric,
     GuidedTeachingState,
 )
 from app.models.question_anchor import QuestionTextAnchor
@@ -397,6 +399,55 @@ def test_fallback_turn_does_not_repeat_an_active_confirmation_label() -> None:
     )
 
     assert actions == []
+
+
+def test_fallback_turn_handles_non_expression_canonical_answers() -> None:
+    tutor = _tutor_result(
+        TutorMistakeClassification(status="no_mistake", confidence=0.9),
+        [],
+    ).model_copy(
+        update={
+            "guided_student_state": "PARTIAL",
+            "active_teaching_objective": ActiveTeachingObjective(
+                objective_type="EXPLAIN_CONCEPT",
+                target_concept_ids=["RCO2"],
+                confirmed_concept_ids=["RCO1"],
+                missing_concept_ids=["RCO2"],
+            ),
+            "generated_question_rubric": GeneratedQuestionRubric(
+                question_id="Q-T01-002",
+                required_concepts=[
+                    GeneratedConcept(
+                        concept_id="RCO1",
+                        description="m changes",
+                        required=True,
+                    )
+                ],
+                completion_rule="ALL_REQUIRED_CONCEPTS",
+                cache_key="m-plus-seven",
+                prompt_version="1.0.0",
+            ),
+        }
+    )
+    anchor = QuestionTextAnchor(
+        token_id="Q-T01-002:QTOKEN:1",
+        text="m",
+        char_start=3,
+        char_end=4,
+    )
+
+    actions = plan_tutor_canvas_actions(
+        tutor,
+        [anchor],
+        [],
+        "TURN-1",
+        "changing quantity, fixed value, and operation",
+        _fallback_labels(),
+    )
+
+    assert [(action.target_object_id, action.text) for action in actions] == [
+        ("Q-T01-002:QTOKEN:1", "m → confirmed")
+    ]
 
 
 def test_semantic_canvas_action_contract_rejects_unknown_type() -> None:
