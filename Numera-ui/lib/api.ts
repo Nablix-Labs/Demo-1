@@ -1495,6 +1495,35 @@ function base64ByteSize(dataUrl: string): number {
   return Math.floor((base64.length * 3) / 4) - padding;
 }
 
+function isUnitCoordinate(value: number): boolean {
+  return Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
+function canvasStrokesForSubmission(strokes: CanvasStrokeSnapshot[]): CanvasStrokeSnapshot[] {
+  return strokes.flatMap((stroke) => {
+    const points = stroke.points.filter(
+      (point) => isUnitCoordinate(point.x) && isUnitCoordinate(point.y),
+    );
+    return points.length > 0 ? [{ ...stroke, points }] : [];
+  });
+}
+
+function canvasEventsForSubmission(canvasEvents: CanvasEvent[]): CanvasEvent[] {
+  return canvasEvents.map((event) => {
+    const bbox = event.bbox;
+    if (
+      bbox === null
+      || (isUnitCoordinate(bbox.x)
+        && isUnitCoordinate(bbox.y)
+        && isUnitCoordinate(bbox.w)
+        && isUnitCoordinate(bbox.h))
+    ) {
+      return event;
+    }
+    return { ...event, bbox: null };
+  });
+}
+
 /**
  * POST /canvas/submit — the only endpoint hitting a live AI provider (OCR).
  * Requires a started, owned, non-ended session. Guards the snapshot client-side
@@ -1560,12 +1589,16 @@ export async function submitCanvas(
     snapshot_data_url: snapshotDataUrl,
     // Field name and shape match `CanvasSubmitRequest.strokes` (canvas.py:108)
     // and are the same objects the voice turn already sends.
-    strokes,
+    // Canvas coordinates are stored in screen pixels. A viewport resize can
+    // leave historical off-screen points outside the current normalised stage;
+    // they are not visible in this snapshot and must not invalidate the whole
+    // submission. The remaining visible points still provide spatial evidence.
+    strokes: canvasStrokesForSubmission(strokes),
     // Not yet on `CanvasSubmitRequest`, and safe to send: the model does not
     // forbid extra fields, so it is ignored until Chirudeva adds it (§12
     // stage 2). Sending it now means the day the field lands, the data is
     // already arriving — no second frontend release in the middle of his work.
-    canvas_events: canvasEvents,
+    canvas_events: canvasEventsForSubmission(canvasEvents),
     submission_role: submissionRole,
   });
   return res.data;
