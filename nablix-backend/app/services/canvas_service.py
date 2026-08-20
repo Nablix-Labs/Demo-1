@@ -472,6 +472,9 @@ async def submit_canvas(
     response.next_expected_input = (
         "WRITE" if tutor.requires_written_math_evidence else None
     )
+    response.write_instruction = (
+        tutor.write_instruction if tutor.requires_written_math_evidence else None
+    )
     response.canvas_draw = canvas_draw
     response.localization_status = (
         "grounded" if canvas_evidence.spatial_tokens else "uncertain"

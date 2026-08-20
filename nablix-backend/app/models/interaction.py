@@ -140,6 +140,7 @@ class InteractionResponse(BaseModel):
     expects_student_response: bool
     expected_student_response: ExpectedStudentResponse
     next_expected_input: Literal["WRITE"] | None = None
+    write_instruction: str | None = Field(default=None, max_length=160)
     retry_safe: bool | None = None
     expected_previous_tutor_turn_id: TurnId | None = None
     attempt_increment: int = Field(ge=0, le=1)

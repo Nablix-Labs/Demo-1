@@ -326,6 +326,7 @@ class TutorResponse(StrictSchema):
     first_error_step: str | None = None
     phase3_review_evidence: Phase3ReviewEvidence | None = None
     requires_written_math_evidence: StrictBool = False
+    write_instruction: str | None = Field(default=None, max_length=160)
     canvas_intentions: list[CanvasPedagogyIntent] = Field(default_factory=list)
     tutor_canvas_actions: list[TutorCanvasAction] = Field(default_factory=list)
 
