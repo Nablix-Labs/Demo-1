@@ -1468,6 +1468,7 @@ export const useNumeraStore = create<NumeraState>()(
 
         const target = resolveTarget(action, {
           anchors: questionAnchors,
+          questionId: s.activeQuestionId,
           items: s.items,
           tutorElements,
           canvasSize: s.canvasSize,

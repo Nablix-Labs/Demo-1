@@ -380,7 +380,41 @@ def plan_tutor_canvas_actions(
             canonical_answer,
             fallback_labels,
         )
-    return actions
+    return add_confirmation_canvas_slots(actions, turn_id)
+
+
+def add_confirmation_canvas_slots(
+    actions: list[TutorCanvasAction],
+    turn_id: str,
+) -> list[TutorCanvasAction]:
+    """Pair confirmed question labels with persistent tutor-layer canvas notes."""
+
+    slot_actions = [
+        TutorCanvasAction(
+            action_id=f"{turn_id}:CONFIRMED_SLOT:{index}",
+            type="INSERT_LABEL",
+            target_kind="TUTOR_ANCHOR",
+            target_object_id=(
+                f"TUTOR_ANCHOR:CONFIRMED:{question_id_for_anchor(action.target_object_id)}:{index}"
+            ),
+            confirmed_component_id=action.confirmed_component_id,
+            text=action.text,
+            source_id=None,
+            answer_reveal_allowed=False,
+        )
+        for index, action in enumerate(actions, start=1)
+        if action.type == "INSERT_LABEL"
+        and action.target_kind == "QUESTION_ANCHOR"
+        and action.confirmed_component_id is not None
+        and action.text is not None
+    ]
+    return [*actions, *slot_actions]
+
+
+def question_id_for_anchor(target_object_id: str | None) -> str:
+    if target_object_id is None or ":QTOKEN:" not in target_object_id:
+        raise ValueError("Confirmed canvas labels must target a question anchor.")
+    return target_object_id.split(":QTOKEN:", maxsplit=1)[0]
 
 
 def fallback_confirmation_actions(

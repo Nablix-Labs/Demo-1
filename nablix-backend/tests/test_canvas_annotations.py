@@ -350,6 +350,9 @@ def test_fallback_turn_labels_every_confirmed_expression_component() -> None:
         ("Q-T01-002:QTOKEN:1", "m → changes"),
         ("Q-T01-002:QTOKEN:3", "7 → stays fixed"),
         ("Q-T01-002:QTOKEN:2", "+ → addition"),
+        ("TUTOR_ANCHOR:CONFIRMED:Q-T01-002:1", "m → changes"),
+        ("TUTOR_ANCHOR:CONFIRMED:Q-T01-002:2", "7 → stays fixed"),
+        ("TUTOR_ANCHOR:CONFIRMED:Q-T01-002:3", "+ → addition"),
     ]
 
 
@@ -446,7 +449,8 @@ def test_fallback_turn_handles_non_expression_canonical_answers() -> None:
     )
 
     assert [(action.target_object_id, action.text) for action in actions] == [
-        ("Q-T01-002:QTOKEN:1", "m → confirmed")
+        ("Q-T01-002:QTOKEN:1", "m → confirmed"),
+        ("TUTOR_ANCHOR:CONFIRMED:Q-T01-002:1", "m → confirmed"),
     ]
 
 

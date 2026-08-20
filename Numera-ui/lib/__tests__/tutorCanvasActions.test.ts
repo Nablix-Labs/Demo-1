@@ -29,6 +29,7 @@ const ITEM: DrawnItem = {
 
 const CTX: ResolveContext = {
   anchors: [{ token_id: 'TOK-1', text: 'm', char_start: 0, char_end: 1 }],
+  questionId: 'Q1',
   items: [ITEM],
   tutorElements: [{ id: 'tut-1', kind: 'text', x: 0.1, y: 0.2, text: 'n + 4' }],
   canvasSize: { width: 1000, height: 500 },
