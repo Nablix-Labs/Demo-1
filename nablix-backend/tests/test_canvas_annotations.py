@@ -310,6 +310,27 @@ def test_write_request_marks_a_tutor_owned_area_without_revealing_the_rule() -> 
     assert all("s + 6" not in (element.text or "") for element in draw[0].elements)
 
 
+def test_written_rule_request_adds_safe_tutor_anchors_not_the_final_rule() -> None:
+    tutor = _tutor_result(
+        TutorMistakeClassification(status="no_mistake", confidence=0.9),
+        [],
+    ).model_copy(
+        update={
+            "guided_student_state": "PARTIAL",
+            "requires_written_math_evidence": True,
+        }
+    )
+
+    actions = plan_tutor_canvas_actions(tutor, [], [], "TURN-1", "s + 6")
+
+    assert [(action.type, action.text) for action in actions] == [
+        ("INSERT_LABEL", "Start: s"),
+        ("INSERT_LABEL", "Gain: +6"),
+        ("FOCUS", "Write your rule on the canvas."),
+    ]
+    assert all(action.text != "s + 6" for action in actions)
+
+
 def test_canvas_planner_uses_target_token_geometry() -> None:
     regions = assign_step_ids(
         [

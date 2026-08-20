@@ -69,6 +69,19 @@ export function resolveTarget(
   }
 
   if (action.target_kind === 'TUTOR_ANCHOR') {
+    const writeRuleMatch = id.match(/^TUTOR_ANCHOR:WRITE_RULE:(\d+)$/);
+    if (writeRuleMatch) {
+      const position = Number(writeRuleMatch[1]);
+      return {
+        kind: 'box',
+        box: {
+          x: 0.62,
+          y: 0.58 + (position - 1) * 0.07,
+          w: 0.30,
+          h: 0.04,
+        },
+      };
+    }
     const element = ctx.tutorElements.find((el) => el.id === id);
     const box = element ? tutorElementBBox(element) : null;
     return box ? { kind: 'box', box } : null;

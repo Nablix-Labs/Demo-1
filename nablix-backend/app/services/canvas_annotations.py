@@ -32,6 +32,7 @@ _FIXED_VALUE_RE = re.compile(
     r"(?<![A-Za-z0-9])([+\-−]?\s*\d+)\s+(?:stays?|is|remains?)\s+(?:fixed|constant)\b",
     re.IGNORECASE,
 )
+_SYMBOLIC_RULE_RE = re.compile(r"\b([a-z])\s*([+\-−])\s*(\d+)\b", re.IGNORECASE)
 
 
 def assign_step_ids(regions: list[OCRTextRegion]) -> list[OCRTextRegion]:
@@ -230,9 +231,24 @@ def plan_tutor_canvas_actions(
         confirmed.update(tutor.guided_teaching_state.confirmed_component_ids)
 
     if tutor.requires_written_math_evidence:
-        return [
+        anchor_texts = safe_written_rule_anchors(canonical_answer)
+        anchor_actions = [
             TutorCanvasAction(
-                action_id=f"{turn_id}:1:FOCUS:WRITE_AREA",
+                action_id=f"{turn_id}:{index}:INSERT_LABEL:TUTOR_ANCHOR",
+                type="INSERT_LABEL",
+                target_kind="TUTOR_ANCHOR",
+                target_object_id=f"TUTOR_ANCHOR:WRITE_RULE:{index}",
+                confirmed_component_id=None,
+                text=text,
+                source_id=None,
+                answer_reveal_allowed=False,
+            )
+            for index, text in enumerate(anchor_texts, start=1)
+        ]
+        return [
+            *anchor_actions,
+            TutorCanvasAction(
+                action_id=f"{turn_id}:{len(anchor_actions) + 1}:FOCUS:WRITE_AREA",
                 type="FOCUS",
                 target_kind="WRITE_AREA",
                 target_object_id=None,
@@ -369,6 +385,18 @@ def plan_tutor_canvas_actions(
     if not actions and selected_option_action is not None:
         actions.append(selected_option_action)
     return actions
+
+
+def safe_written_rule_anchors(canonical_answer: str) -> list[str]:
+    """Expose separate authored rule parts, never the unresolved expression."""
+
+    match = _SYMBOLIC_RULE_RE.search(canonical_answer)
+    if match is None:
+        return []
+    variable, operator, value = match.groups()
+    normalised_operator = "+" if operator == "+" else "-"
+    operation_label = "Gain" if normalised_operator == "+" else "Change"
+    return [f"Start: {variable}", f"{operation_label}: {normalised_operator}{value}"]
 
 
 def plan_write_request_tutor_draw(turn_id: str) -> list[CanvasDrawPayload]:
