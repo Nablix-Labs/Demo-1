@@ -45,6 +45,7 @@ export type ResolvedTarget =
 
 export interface ResolveContext {
   anchors: QuestionAnchor[];
+  questionId: string | null;
   items: DrawnItem[];
   tutorElements: TutorElement[];
   canvasSize: CanvasSize;
@@ -73,6 +74,10 @@ export function resolveTarget(
   if (action.target_kind === 'TUTOR_ANCHOR') {
     const writeRuleMatch = id.match(/^TUTOR_ANCHOR:WRITE_RULE:(\d+)$/);
     if (writeRuleMatch) return writeRuleSlot(Number(writeRuleMatch[1]));
+    const confirmedMatch = id.match(/^TUTOR_ANCHOR:CONFIRMED:(.+):(\d+)$/);
+    if (confirmedMatch) {
+      return confirmedMatch[1] === ctx.questionId ? confirmedSlot(Number(confirmedMatch[2])) : null;
+    }
     const element = ctx.tutorElements.find((el) => el.id === id);
     const box = element ? tutorElementBBox(element) : null;
     return box ? { kind: 'box', box } : null;
@@ -143,6 +148,15 @@ export function writeRuleSlot(position: number): ResolvedTarget {
   // backend listed them. Stacking upward put "Gain: +5" above "Start: n".
   const y = Math.min(SLOT_LAST_Y, SLOT_FIRST_Y + index * SLOT_GAP);
   return { kind: 'slot', at: { x: WRITE_AREA.x + 0.04, y } };
+}
+
+/** Persistent tutor confirmations stay above the student writing affordance. */
+export function confirmedSlot(position: number): ResolvedTarget {
+  const index = Math.max(1, position) - 1;
+  return {
+    kind: 'slot',
+    at: { x: 0.06, y: Math.min(0.52, 0.16 + index * 0.07) },
+  };
 }
 
 /** Does this box overlap the writing area? Used by the tests, and by nothing else. */
