@@ -80,6 +80,45 @@ describe('interaction turn contract', () => {
     expect(state.allowVoiceInput).toBe(true);
   });
 
+  it('registers same-question anchors before resolving tutor canvas actions', () => {
+    useNumeraStore.setState({
+      currentPhase: 'GUIDED_PRACTICE',
+      activeQuestionId: 'Q-T01-002',
+      questionAnchors: [],
+      tutorElements: [],
+    });
+
+    syncBackendSession({
+      current_phase: 'GUIDED_PRACTICE',
+      current_question: 'In m + 7, identify the changing quantity.',
+      question_id: 'Q-T01-002',
+      question_anchors: [{
+        token_id: 'Q-T01-002:QTOKEN:2',
+        text: 'm',
+        char_start: 3,
+        char_end: 4,
+      }],
+      tutor_canvas_actions: [{
+        action_id: 'TURN-1:INSERT_LABEL:m',
+        type: 'INSERT_LABEL',
+        target_kind: 'QUESTION_ANCHOR',
+        target_object_id: 'Q-T01-002:QTOKEN:2',
+        confirmed_component_id: 'CHANGING_VALUE',
+        text: 'm → changes',
+        source_id: null,
+        answer_reveal_allowed: false,
+      }],
+    });
+
+    expect(useNumeraStore.getState().questionAnchors).toEqual([{
+      token_id: 'Q-T01-002:QTOKEN:2',
+      text: 'm',
+      char_start: 3,
+      char_end: 4,
+      label: 'm → changes',
+    }]);
+  });
+
   it('retries one unevaluated stale student turn with the same idempotency key', async () => {
     const post = vi.spyOn(api, 'post')
       .mockRejectedValueOnce({
