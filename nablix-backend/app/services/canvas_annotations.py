@@ -34,6 +34,18 @@ _FIXED_VALUE_RE = re.compile(
     re.IGNORECASE,
 )
 _SYMBOLIC_RULE_RE = re.compile(r"\b([a-z])\s*([+\-−])\s*(\d+)\b", re.IGNORECASE)
+_STUDENT_CHANGING_RE = re.compile(
+    r"\b([a-z])\s+(?:changes?|varies|is\s+(?:a\s+)?variable)\b",
+    re.IGNORECASE,
+)
+_STUDENT_FIXED_RE = re.compile(
+    r"(?<![A-Za-z0-9])([+\-−]?\s*\d+)\s+(?:is|stays?|remains?)\s+(?:fixed|constant)\b",
+    re.IGNORECASE,
+)
+_STUDENT_OPERATION_RE = re.compile(
+    r"\b(?:the\s+)?(?:plus\s+sign|plus|addition)\b",
+    re.IGNORECASE,
+)
 
 
 def assign_step_ids(regions: list[OCRTextRegion]) -> list[OCRTextRegion]:
@@ -210,7 +222,8 @@ def plan_tutor_canvas_actions(
     turn_id: str,
     canonical_answer: str,
     fallback_labels: FallbackCanvasLabelsConfig,
-    wrong_attempt_count: int = 0,
+    wrong_attempt_count: int,
+    student_response: str,
 ) -> list[TutorCanvasAction]:
     """Validate evaluator intentions against the active Guided Practice state.
 
@@ -380,6 +393,15 @@ def plan_tutor_canvas_actions(
     if not actions and selected_option_action is not None:
         actions.append(selected_option_action)
     if not actions:
+        actions = explicit_student_confirmation_actions(
+            tutor,
+            question_anchors,
+            canvas_events,
+            turn_id,
+            student_response,
+            fallback_labels,
+        )
+    if not actions:
         actions = fallback_confirmation_actions(
             tutor,
             question_anchors,
@@ -413,10 +435,80 @@ def add_confirmation_canvas_slots(
         for index, action in enumerate(actions, start=1)
         if action.type == "INSERT_LABEL"
         and action.target_kind == "QUESTION_ANCHOR"
-        and action.confirmed_component_id is not None
         and action.text is not None
     ]
     return [*actions, *slot_actions]
+
+
+def explicit_student_confirmation_actions(
+    tutor: TutorResult,
+    question_anchors: list[QuestionTextAnchor],
+    canvas_events: list[CanvasEvent],
+    turn_id: str,
+    student_response: str,
+    labels: FallbackCanvasLabelsConfig,
+) -> list[TutorCanvasAction]:
+    """Make an accepted learner statement visible when evaluator actions are absent."""
+
+    if tutor.guided_student_state not in {"PARTIAL", "CORRECT"}:
+        return []
+    response = student_response.strip()
+    if not response:
+        return []
+    matches: list[tuple[str, str, str]] = []
+    changing_match = _STUDENT_CHANGING_RE.search(response)
+    if changing_match is not None:
+        matches.append((changing_match.group(1), "changing_value", labels.changing_value))
+    fixed_match = _STUDENT_FIXED_RE.search(response)
+    if fixed_match is not None:
+        matches.append((fixed_match.group(1), "fixed_value", labels.fixed_value))
+    operation_match = _STUDENT_OPERATION_RE.search(response)
+    if operation_match is not None:
+        matches.append(("+", "operation", labels.operation))
+
+    actions: list[TutorCanvasAction] = []
+    for matched_value, semantic_tag, text_template in matches:
+        value = matched_value.replace(" ", "").replace("−", "-")
+        target_value = value.lstrip("+-") if semantic_tag == "fixed_value" else value
+        if semantic_tag == "operation":
+            value = "+"
+            target_value = "+"
+        target = next(
+            (
+                anchor
+                for anchor in question_anchors
+                if anchor.text.replace("−", "-") == target_value
+            ),
+            None,
+        )
+        if target is None:
+            continue
+        text = text_template.format(
+            value=value,
+            operation=labels.operation_names["+"],
+        )
+        if any(
+            event.actor == "TUTOR"
+            and event.action_type == "INSERT_LABEL"
+            and event.target_object_id == target.token_id
+            and event.content == text
+            and event.active_state == "ACTIVE"
+            for event in canvas_events
+        ):
+            continue
+        actions.append(
+            TutorCanvasAction(
+                action_id=f"{turn_id}:{len(actions) + 1}:INSERT_LABEL:{target.token_id}",
+                type="INSERT_LABEL",
+                target_kind="QUESTION_ANCHOR",
+                target_object_id=target.token_id,
+                confirmed_component_id=semantic_tag,
+                text=text,
+                source_id=None,
+                answer_reveal_allowed=False,
+            )
+        )
+    return actions
 
 
 def question_id_for_anchor(target_object_id: str | None) -> str:
