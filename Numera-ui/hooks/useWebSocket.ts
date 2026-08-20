@@ -25,6 +25,8 @@
 
 import { useEffect, useRef, useCallback } from 'react';
 import { phaseAnnouncement, withTransitionVoice } from '@/lib/phaseTransition';
+import { refreshedRecord } from '@/lib/sessionRecordRefresh';
+import { revealDecision } from '@/lib/revealBeforeClear';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { tutorAudioStream, effectiveVoice, stopTutorSpeech } from '@/lib/tts';
@@ -400,8 +402,35 @@ export function useWebSocket(sessionId: string | null) {
             // store and the routing never followed it. What a null question then
             // means depends on whether the phase moved — applyBackendPhase owns
             // that rule, and both transports go through it.
+            // Refresh the cached record BEFORE the phase applies, exactly as the
+            // REST path does. Options do not travel on a reply — they are looked
+            // up out of this record by question id — so a phase change that
+            // issues a new question set leaves the lookup searching the previous
+            // phase's questions and the student gets a choice question with no
+            // choices. This path never did it, and Guided Practice is mostly
+            // voice-led, so it is the transport it matters on.
+            {
+              const store = useNumeraStore.getState();
+              const refreshed = refreshedRecord(store.backendSession, msg as never);
+              if (refreshed) store.setBackendSession(refreshed);
+            }
+            // The question counter is part of the same sync and was likewise
+            // only ever written on REST.
+            if (typeof msg.question_number === 'number') {
+              useNumeraStore.getState().setQuestionNumber(msg.question_number);
+            }
+            // A reply that both annotates the finished work and moves the
+            // student on holds the board briefly, so the annotation is seen
+            // rather than added and cleared in the same tick. Same rule as the
+            // REST path; the marks themselves already applied above, via
+            // applyInteractionSupport.
+            const voiceReveal = revealDecision(
+              Array.isArray(msg.tutor_canvas_actions) ? msg.tutor_canvas_actions.length : 0,
+              useNumeraStore.getState().activeQuestionId,
+              (msg.question_id as string | null) ?? null,
+            );
             if (typeof msg.current_phase === 'string') {
-              useNumeraStore.getState().applyBackendPhase({
+              const applyVoicePhase = () => useNumeraStore.getState().applyBackendPhase({
                 phase: msg.current_phase as string,
                 questionId: (msg.question_id as string | null) ?? null,
                 questionText:
@@ -415,6 +444,8 @@ export function useWebSocket(sessionId: string | null) {
                     ? (msg.question_type as QuestionType)
                     : undefined,
               });
+              if (voiceReveal.reveal) window.setTimeout(applyVoicePhase, voiceReveal.holdMs);
+              else applyVoicePhase();
             }
             // Record the tutor turn, exactly as the REST path does (contract
             // §11, useDemoTutor). This was missing entirely, and setTutorTurn

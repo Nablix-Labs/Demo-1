@@ -37,6 +37,7 @@ import {
 import { selectedOptionText } from '@/lib/selectedOption';
 import { applyInteractionSupport, acceptResponse, authorisedHint } from '@/lib/interactionPresentation';
 import { revealDecision } from '@/lib/revealBeforeClear';
+import { refreshedRecord } from '@/lib/sessionRecordRefresh';
 import { sessionEndSummary } from '@/lib/sessionEnd';
 import { useNumeraStore, type TrailKind, type TutorCanvasAction } from '@/store/useNumeraStore';
 import { tutorSay, setStudentWriting } from '@/lib/tutorSpeech';
@@ -309,10 +310,8 @@ export function syncBackendSession(response: {
   // a new set (which is what a phase change does) the lookup was searching the
   // PREVIOUS phase's questions and finding nothing. Doing it before
   // applyBackendPhase means the new question can find its own options.
-  const event = response.student_model_event;
-  if (event?.phase_payload?.question_set && store.backendSession) {
-    store.setBackendSession({ ...store.backendSession, student_model_event: event });
-  }
+  const refreshed = refreshedRecord(store.backendSession, response);
+  if (refreshed) store.setBackendSession(refreshed);
   // Semantic tutor actions are applied HERE, before the phase change, because
   // they describe the question being left — not the one being arrived at. Doing
   // it after meant they resolved against the next question's anchors, which is

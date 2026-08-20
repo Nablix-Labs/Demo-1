@@ -629,7 +629,11 @@ export function hasSelectableOptions(
   view: Pick<SchemaStudentQuestionView, 'question_type' | 'options'> | null | undefined,
 ): boolean {
   if (!view) return false;
-  return CHOICE_TYPES.includes(view.question_type) && view.options.length > 0;
+  // `options` is required by the backend model, so the optional read is not for
+  // today's contract — it is because a field disappearing from a response has
+  // twice become a live outage here, and a chooser is not worth throwing the
+  // whole screen for. Absent reads the same as empty: fall back to free response.
+  return CHOICE_TYPES.includes(view.question_type) && (view.options?.length ?? 0) > 0;
 }
 
 /** The orientation bundle for this session, or null when there isn't one. */
