@@ -233,6 +233,35 @@ def test_accepted_student_statement_gets_a_tutor_layer_label_without_llm_intenti
     ]
 
 
+def test_legacy_partial_evaluation_keeps_an_accepted_component_visible() -> None:
+    tutor = _tutor_result(
+        TutorMistakeClassification(status="no_mistake", confidence=0.9),
+        [],
+    ).model_copy(update={"evaluation": "PARTIALLY_CORRECT"})
+    anchor = QuestionTextAnchor(
+        token_id="Q-T01-002:QTOKEN:2",
+        text="m",
+        char_start=3,
+        char_end=4,
+    )
+
+    actions = plan_tutor_canvas_actions(
+        tutor=tutor,
+        question_anchors=[anchor],
+        canvas_events=[],
+        turn_id="TURN-legacy-partial",
+        canonical_answer="m; 7; addition",
+        fallback_labels=_fallback_labels(),
+        wrong_attempt_count=0,
+        student_response="m changes",
+    )
+
+    assert [(action.target_kind, action.text) for action in actions] == [
+        ("QUESTION_ANCHOR", "m → changes"),
+        ("TUTOR_ANCHOR", "m → changes"),
+    ]
+
+
 def test_accepted_fixed_value_and_operation_get_tutor_layer_labels() -> None:
     tutor = _tutor_result(
         TutorMistakeClassification(status="no_mistake", confidence=0.9),
