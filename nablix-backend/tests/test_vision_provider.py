@@ -326,7 +326,7 @@ def test_mathpix_adapter_requests_and_maps_per_symbol_word_boxes(monkeypatch) ->
 
     result = asyncio.run(_mathpix_adapter().recognize(DATA_URL))
 
-    assert sent[0]["include_word_data"] is True
+    assert "include_word_data" not in sent[0]
     assert [region.text for region in result.word_regions] == ["c", "-", "4"]
     minus = result.word_regions[1]
     assert minus.x == 0.2

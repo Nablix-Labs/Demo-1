@@ -74,9 +74,6 @@ class MathpixVisionOCRAdapter:
                 "include_mathml": True,
             },
             "include_line_data": True,
-            # Per-symbol contours: without them the only source of symbol
-            # geometry is student ink, which cannot be counted on.
-            "include_word_data": True,
             "rm_spaces": True,
         }
 
