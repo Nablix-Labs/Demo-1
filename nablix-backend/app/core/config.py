@@ -67,6 +67,11 @@ class Settings(BaseSettings):
     inactivity_max_nudges_per_tutor_turn: int = Field(default=2, ge=1)
     inactivity_generated_nudge_rate_limit: int = Field(default=4, ge=1)
 
+    # Server-authoritative continuity policy for SESSION_RESUMED. A client
+    # cannot honestly know this number, so it is never asked to supply one.
+    # ponytail: placeholder pending Saravanan confirming the real threshold.
+    resume_continuity_threshold_days: int = Field(default=7, ge=1)
+
     #Validation
     max_text_input_length: int = 500
     min_voice_confidence_threshold: float = 0.7

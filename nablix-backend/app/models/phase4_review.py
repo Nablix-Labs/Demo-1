@@ -110,6 +110,11 @@ class TutorReplay(StrictSchema):
     artifact_id: str = Field(min_length=1)
     first_error: FirstError
     replay_steps: list[TutorReplayStep] = Field(min_length=1)
+    # Forwarded from the request after generation, never asked of the model:
+    # both are already known deterministically (ReplayItem.question_text /
+    # .work_artifact), so there is nothing for the LLM to get wrong here.
+    question_text: str | None = None
+    work_artifact: WorkArtifact | None = None
 
     @model_validator(mode="after")
     def validate_step_order(self) -> "TutorReplay":
@@ -134,6 +139,21 @@ class StudentInsights(StrictSchema):
         return self
 
 
+class QuestionJourneyItem(StrictSchema):
+    """One Phase 3 attempt, for the review rail's full journey (not just corrections)."""
+
+    question_id: str = Field(min_length=1)
+    evaluation: str = Field(min_length=1)
+    hint_used: bool
+    independent_success: bool | None = None
+    attempted_at: str = Field(min_length=1)
+
+
 class Phase4ReviewResponse(StrictSchema):
     tutor_replays: list[TutorReplay]
     student_insights: StudentInsights
+    # Forwarded from the request after generation, never asked of the model —
+    # both come straight from data the session already holds (see
+    # generate_phase4_review_for in session_service.py).
+    topic_outcome: TopicOutcome | None = None
+    question_journey: list[QuestionJourneyItem] | None = None

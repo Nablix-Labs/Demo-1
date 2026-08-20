@@ -12,10 +12,10 @@ from app.core.config import get_settings
 from app.core.exceptions import DOWNSTREAM_FAILURE, JourneyVersionConflict
 from app.core.logger import logger
 from app.ai_engine.phase4_review import generate_phase4_review
-from app.models.phase4_review import Phase4ReviewResponse
+from app.models.phase4_review import Phase4ReviewResponse, QuestionJourneyItem
 from app.models.work_artifact import Phase4ReviewPersistRequest
 from app.services.phase4_context_builder import build_phase4_review_request
-from app.services.phase4_replay_filter import filter_replay_attempts
+from app.services.phase4_replay_filter import PHASE_3, filter_replay_attempts
 from app.models.adapters import ConversationMessage, StudentModelResult, VisualCue, VisionOCRResult
 from app.models.canvas import CanvasQuestionMemory, CanvasStroke, CanvasSubmissionRecord
 from app.models.canvas_memory import CanvasEvent
@@ -775,14 +775,13 @@ async def generate_phase4_review_for(
             event.journey_state.topic_id,
             access_token,
         )
-        review = generate_phase4_review(
-            build_phase4_review_request(
-                history,
-                filter_replay_attempts(history.attempts),
-                event.journey_state.mastery_status,
-                event.routing.next_action,
-            )
+        request = build_phase4_review_request(
+            history,
+            filter_replay_attempts(history.attempts),
+            event.journey_state.mastery_status,
+            event.routing.next_action,
         )
+        review = generate_phase4_review(request)
     # ValueError covers Phase4ContextError, Phase4ReviewValidationError and
     # pydantic's ValidationError, so malformed evidence degrades to no review
     # rather than stranding the student outside Review.
@@ -796,6 +795,37 @@ async def generate_phase4_review_for(
             },
         )
         return None
+
+    # Deterministic fields the model was never asked for: forwarded straight
+    # from the request that was just built, not generated.
+    replay_context_by_id = {item.review_item_id: item for item in request.replay_items}
+    review = review.model_copy(
+        update={
+            "tutor_replays": [
+                replay.model_copy(
+                    update={
+                        "question_text": replay_context_by_id[replay.review_item_id].question_text,
+                        "work_artifact": replay_context_by_id[replay.review_item_id].work_artifact,
+                    }
+                )
+                if replay.review_item_id in replay_context_by_id
+                else replay
+                for replay in review.tutor_replays
+            ],
+            "topic_outcome": request.topic_outcome,
+            "question_journey": [
+                QuestionJourneyItem(
+                    question_id=attempt.question_id,
+                    evaluation=attempt.evaluation,
+                    hint_used=attempt.hint_used,
+                    independent_success=attempt.independent_success,
+                    attempted_at=attempt.attempted_at,
+                )
+                for attempt in history.attempts
+                if attempt.phase == PHASE_3
+            ],
+        }
+    )
 
     try:
         await get_adapters().student_model.persist_phase4_review(
@@ -930,11 +960,6 @@ async def _apply_schema_event(
     if next_question_id != session.question_id:
         updates.update(
             {
-                "question_number": (
-                    session.question_number + 1
-                    if next_question_id is not None
-                    else session.question_number
-                ),
                 "attempt_count": 0,
                 "question_completed": next_question_id is None,
                 "generated_question_rubric": None,
@@ -1353,6 +1378,7 @@ async def resume_session(
     request_id = _schema_request_id(session, request.turn_id, "SESSION_RESUMED")
     if stored_event.request_id == request_id:
         return session
+    last_activity_at = request.last_activity_at or session.last_tutor_response_at
     event = SessionResumedEvent(
         request_id=request_id,
         event_type="SESSION_RESUMED",
@@ -1361,9 +1387,16 @@ async def resume_session(
         topic_id=stored_event.journey_state.topic_id,
         student_id=session.student_id,
         timestamp=_schema_timestamp(),
-        last_activity_at=request.last_activity_at.isoformat().replace("+00:00", "Z"),
-        continuity_threshold_days=request.continuity_threshold_days,
-        saved_journey=request.saved_journey,
+        last_activity_at=last_activity_at.isoformat().replace("+00:00", "Z"),
+        continuity_threshold_days=(
+            request.continuity_threshold_days
+            or get_settings().resume_continuity_threshold_days
+        ),
+        saved_journey=(
+            request.saved_journey
+            if request.saved_journey is not None
+            else stored_event.journey_state.model_dump(mode="json")
+        ),
     )
     response = await get_adapters().student_model.send_session_event(event, access_token)
     return await _apply_schema_event(session, response)

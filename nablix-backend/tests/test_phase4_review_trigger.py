@@ -78,6 +78,58 @@ def _review_ready_session() -> SessionRecord:
     )
 
 
+def test_deterministic_fields_are_forwarded_not_generated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """question_text, work_artifact, topic_outcome, question_journey are known
+    before the model is ever called — forwarded from the request that was
+    built, not asked of the model (see #4 of the frontend handoff)."""
+
+    async def fetch(
+        adapter: StudentModelServiceAdapter,
+        student_id: str,
+        topic_id: str,
+        access_token: str,
+    ) -> TopicEventHistoryResponse:
+        del adapter, student_id, topic_id, access_token
+        return _history()
+
+    monkeypatch.setattr(
+        StudentModelServiceAdapter, "fetch_topic_event_history", fetch
+    )
+    # The model's own output never sets these — proving the forwarding, not a
+    # value the generation step happened to produce.
+    monkeypatch.setattr(
+        session_service, "generate_phase4_review", lambda request: _review()
+    )
+    session = _review_ready_session()
+
+    result = asyncio.run(
+        session_service.generate_phase4_review_for(
+            session,
+            _event("REVIEW"),
+            "test-token",
+        )
+    )
+
+    assert result is not None
+    replay = result.tutor_replays[0]
+    assert replay.question_text == "A temperature starts at t and falls by 3 degrees."
+    assert replay.work_artifact is not None
+    assert replay.work_artifact.pdf_url == "https://blob.example/submission.pdf"
+    assert replay.work_artifact.page_count == 2
+
+    assert result.topic_outcome is not None
+    assert result.topic_outcome.mastery_status
+    assert result.topic_outcome.recommended_next_action
+
+    assert result.question_journey is not None
+    assert len(result.question_journey) == 1
+    assert result.question_journey[0].question_id == "Q-T01-005"
+    assert result.question_journey[0].evaluation == "INCORRECT"
+    assert result.question_journey[0].attempted_at == "2026-08-17T10:15:23Z"
+
+
 def test_entering_review_generates_the_tutor_review(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -110,9 +110,13 @@ class SessionResumeRequest(BaseModel):
 
     student_id: StudentId
     turn_id: TurnId
-    last_activity_at: datetime
-    continuity_threshold_days: int = Field(ge=1)
-    saved_journey: dict[str, object]
+    # All three below are server-authoritative: the client only honestly knows
+    # student_id and turn_id. If sent anyway (an older client), they're used as
+    # given; otherwise resume_session fills them from stored session state and
+    # policy (see Settings.resume_continuity_threshold_days).
+    last_activity_at: datetime | None = None
+    continuity_threshold_days: int | None = Field(default=None, ge=1)
+    saved_journey: dict[str, object] | None = None
 
 
 class ReviewCompleteRequest(BaseModel):
