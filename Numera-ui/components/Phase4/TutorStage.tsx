@@ -27,6 +27,7 @@ import { useNumeraStore } from '@/store/useNumeraStore';
 import { useWorkedExamplePlayer } from '@/hooks/useWorkedExamplePlayer';
 import { setTutorSpeechRate } from '@/lib/tts';
 import { boardDraw } from '@/lib/phase4Board';
+import { fetchWorkArtifactPdfUrl } from '@/lib/workArtifactPdf';
 import { openingPageNo } from '@/lib/phase4Review';
 import { cn } from '@/lib/cn';
 import type { Phase4Replay, SchemaWorkedExampleStep } from '@/lib/api';
@@ -126,6 +127,42 @@ export default function TutorStage({
   const { pdf_url: pdfUrl, page_count: pageCount } = replay.work_artifact;
   const stepPosition = Math.min(Math.max(index, 0) + 1, steps.length);
 
+  // Keyed on pdfUrl, not pageNo: the page selector only moves the #page=N
+  // fragment on an already-loaded blob (see the iframe below) — refetching per
+  // page would thrash the blob and leak object URLs.
+  const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
+  const [pdfLoadFailed, setPdfLoadFailed] = useState(false);
+
+  useEffect(() => {
+    if (!pdfUrl) {
+      setPdfBlobUrl(null);
+      setPdfLoadFailed(false);
+      return;
+    }
+    let cancelled = false;
+    setPdfLoadFailed(false);
+    fetchWorkArtifactPdfUrl(pdfUrl)
+      .then((url) => {
+        if (cancelled) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        setPdfBlobUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setPdfLoadFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pdfUrl]);
+
+  // Revoke whenever the blob is replaced or this stage unmounts — never held
+  // past the render that uses it.
+  useEffect(() => () => {
+    if (pdfBlobUrl) URL.revokeObjectURL(pdfBlobUrl);
+  }, [pdfBlobUrl]);
+
   return (
     <section
       aria-label="Tutor live review"
@@ -183,18 +220,22 @@ export default function TutorStage({
                 fragment is how every browser's built-in viewer takes a page;
                 `toolbar=0` hides its chrome, which would otherwise put a second
                 set of page controls inside a 210px column. */}
-            {pdfUrl ? (
-              <iframe
-                key={pageNo}
-                src={`${pdfUrl}#page=${pageNo}&view=FitH&toolbar=0&navpanes=0`}
-                title={`Your submitted work, page ${pageNo} of ${pageCount}`}
-                className="w-full h-full rounded border border-muted-gray bg-white"
-              />
-            ) : (
+            {!pdfUrl ? (
               <p className="text-[11.5px] text-slate-blue leading-relaxed">
                 Your original work is not available for this question.
               </p>
-            )}
+            ) : pdfLoadFailed ? (
+              <p className="text-[11.5px] text-slate-blue leading-relaxed">
+                Your original work could not be loaded.
+              </p>
+            ) : pdfBlobUrl ? (
+              <iframe
+                key={pageNo}
+                src={`${pdfBlobUrl}#page=${pageNo}&view=FitH&toolbar=0&navpanes=0`}
+                title={`Your submitted work, page ${pageNo} of ${pageCount}`}
+                className="w-full h-full rounded border border-muted-gray bg-white"
+              />
+            ) : null}
           </div>
           {/* Only when there is more than one page — a selector over a single
               page is a control that cannot do anything. */}

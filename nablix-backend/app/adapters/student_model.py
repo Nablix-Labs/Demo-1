@@ -4,7 +4,7 @@ import json
 
 from pydantic import ValidationError
 
-from app.adapters.http_utils import post_json
+from app.adapters.http_utils import get_bytes, post_json
 from app.core.config import Settings
 from app.core.exceptions import (
     AdapterError,
@@ -160,6 +160,24 @@ class StudentModelServiceAdapter:
             "student_model",
             f"{url}/phase4-review",
             request.model_dump(mode="json"),
+            {"Authorization": f"Bearer {access_token}"},
+            self._settings.adapter_request_timeout_seconds,
+            self._settings.adapter_request_retry_count,
+        )
+
+    async def fetch_work_artifact_pdf(
+        self,
+        artifact_id: str,
+        access_token: str,
+    ) -> tuple[bytes, str]:
+        """Fetch one stored work artifact's PDF bytes, forwarding the caller's
+        own token -- never a service token, since Student Model enforces
+        per-student ownership on this read."""
+
+        url = self._require_student_model_url("work artifact PDF")
+        return await get_bytes(
+            "student_model",
+            f"{url}/work-artifacts/{artifact_id}/pdf",
             {"Authorization": f"Bearer {access_token}"},
             self._settings.adapter_request_timeout_seconds,
             self._settings.adapter_request_retry_count,
