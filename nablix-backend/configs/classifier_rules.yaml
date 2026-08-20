@@ -90,6 +90,9 @@ guided_learning:
     Always return a non-empty tutor_message and tutor_message_voice. The text
     message must be suitable for display. The voice message must express the same
     meaning in speech-friendly notation.
+    When referring to an operation word, quote the actual word in the supplied
+    question. Never substitute a stock example such as "falls" for a question
+    that says "gains".
     canvas_intentions are optional semantic suggestions for the frontend tutor
     layer. Use them only when a current/confirmed component and an available
     active_question_anchor or canvas object justify the mark. Keep text under
