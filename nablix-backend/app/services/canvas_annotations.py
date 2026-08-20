@@ -478,6 +478,45 @@ def confirmed_component_ids(tutor: TutorResult) -> set[str]:
     return confirmed
 
 
+def generic_confirmation_actions(
+    tutor: TutorResult,
+    question_anchors: list[QuestionTextAnchor],
+    canvas_events: list[CanvasEvent],
+    turn_id: str,
+    confirmed: set[str],
+    labels: FallbackCanvasLabelsConfig,
+) -> list[TutorCanvasAction]:
+    """Label confirmed concepts when the authored answer is not an expression."""
+
+    actions: list[TutorCanvasAction] = []
+    for component_id in sorted(confirmed):
+        for target in generic_component_targets(component_id, tutor, question_anchors):
+            text = labels.generic.format(value=target.text)
+            if active_confirmation_exists(
+                canvas_events,
+                component_id,
+                target.token_id,
+                text,
+            ):
+                continue
+            position = len(actions) + 1
+            actions.append(
+                TutorCanvasAction(
+                    action_id=(
+                        f"{turn_id}:{position}:INSERT_LABEL:{target.token_id}"
+                    ),
+                    type="INSERT_LABEL",
+                    target_kind="QUESTION_ANCHOR",
+                    target_object_id=target.token_id,
+                    confirmed_component_id=component_id,
+                    text=text,
+                    source_id=None,
+                    answer_reveal_allowed=False,
+                )
+            )
+    return actions
+
+
 def confirmation_role(component_id: str, tutor: TutorResult) -> str:
     description = next(
         (
