@@ -145,6 +145,48 @@ def test_fetch_topic_event_history_parses_attempts(
     assert attempt.answer_steps == ["Identify t.", "Subtract 3."]
 
 
+def test_fetch_topic_event_history_accepts_missing_micro_skill_and_usage_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The service omits these for real, ordinary reasons — not malformed data.
+
+    An error that isn't tied to a specific skill has no micro_skill_id; some
+    attempts have no question_usage_id. Previously this failed the WHOLE
+    response parse (one bad attempt took down every attempt in the topic).
+    """
+
+    async def post_json(*args: object, **kwargs: object) -> dict[str, object]:
+        return {
+            "topic_id": "ALG-KS3-01",
+            "student_id": "ST003",
+            "topic_info": {"title": "General rules"},
+            "attempts": [
+                {
+                    "attempt_id": "ATTEMPT-022",
+                    "question_id": "Q-T01-006",
+                    # question_usage_id omitted entirely
+                    "phase": "PHASE_3_INDEPENDENT_PRACTICE",
+                    "evaluation": "INCORRECT",
+                    "attempted_at": "2026-08-17T10:16:00Z",
+                    "detected_errors": [
+                        {"error_code": "ERR-UNMAPPED"}  # micro_skill_id omitted
+                    ],
+                }
+            ],
+        }
+
+    monkeypatch.setattr(student_model, "post_json", post_json)
+    adapter = student_model.StudentModelServiceAdapter(_settings())
+
+    history = asyncio.run(
+        adapter.fetch_topic_event_history("ST003", "ALG-KS3-01", "test-token")
+    )
+
+    attempt = history.attempts[0]
+    assert attempt.question_usage_id is None
+    assert attempt.detected_errors[0].micro_skill_id is None
+
+
 def test_fetch_topic_event_history_rejects_malformed_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

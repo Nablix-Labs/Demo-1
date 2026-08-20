@@ -15,7 +15,10 @@ from pydantic import BaseModel, Field
 
 class DetectedErrorRecord(BaseModel):
     error_code: str
-    micro_skill_id: str
+    # The service omits this when an error isn't tied to a specific skill —
+    # not missing data, a real case. See phase4_context_builder for how a
+    # null value is handled when building a replay item.
+    micro_skill_id: str | None = None
 
 
 class WorkArtifactRef(BaseModel):
@@ -33,7 +36,9 @@ class WorkArtifactRef(BaseModel):
 class TopicAttemptRecord(BaseModel):
     attempt_id: str
     question_id: str
-    question_usage_id: str
+    # The service omits this for some attempts (see phase4_context_builder
+    # for how a null value is handled when building a replay item).
+    question_usage_id: str | None = None
     phase: str
     evaluation: Literal["CORRECT", "INCORRECT", "WRONG"]
     # True once the student answers this unaided; drives improvement evidence.

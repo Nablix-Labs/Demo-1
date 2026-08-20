@@ -32,10 +32,12 @@ class Phase4ContextError(ValueError):
 def _replay_item(index: int, attempt: TopicAttemptRecord) -> ReplayItem | None:
     """Build one replay item, or None when it cannot be replayed.
 
-    Two kinds of wrong attempt cannot be shown to the student: one whose work
-    was never stored (it predates work artifacts, or storage failed), and one
-    with no recorded error to explain. Both still count as evidence for the
-    topic summary; they just have nothing to replay.
+    Several kinds of wrong attempt cannot be shown to the student: one whose
+    work was never stored (it predates work artifacts, or storage failed),
+    one with no usage id, and one with no error mapped to a specific skill
+    (an error can arrive with no micro_skill_id -- that's routine upstream
+    data, not corruption). All still count as evidence for the topic
+    summary; they just have nothing to replay.
     """
 
     if attempt.work_artifact is None:
@@ -44,7 +46,18 @@ def _replay_item(index: int, attempt: TopicAttemptRecord) -> ReplayItem | None:
             extra={"attempt_id": attempt.attempt_id, "reason": "no_work_artifact"},
         )
         return None
-    if not attempt.detected_errors:
+    if attempt.question_usage_id is None:
+        logger.debug(
+            "phase4_replay_item_skipped",
+            extra={"attempt_id": attempt.attempt_id, "reason": "no_question_usage_id"},
+        )
+        return None
+    detected_errors = [
+        DetectedError(error_code=error.error_code, micro_skill_id=error.micro_skill_id)
+        for error in attempt.detected_errors
+        if error.micro_skill_id is not None
+    ]
+    if not detected_errors:
         logger.debug(
             "phase4_replay_item_skipped",
             extra={"attempt_id": attempt.attempt_id, "reason": "no_detected_errors"},
@@ -64,13 +77,7 @@ def _replay_item(index: int, attempt: TopicAttemptRecord) -> ReplayItem | None:
             pdf_url=attempt.work_artifact.pdf_url,
             page_count=attempt.work_artifact.page_count,
         ),
-        detected_errors=[
-            DetectedError(
-                error_code=error.error_code,
-                micro_skill_id=error.micro_skill_id,
-            )
-            for error in attempt.detected_errors
-        ],
+        detected_errors=detected_errors,
         linked_misconceptions=attempt.linked_misconceptions,
         canonical_answer=attempt.canonical_answer,
         answer_steps=attempt.answer_steps,
