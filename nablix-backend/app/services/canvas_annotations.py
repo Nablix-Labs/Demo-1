@@ -42,6 +42,10 @@ _STUDENT_FIXED_RE = re.compile(
     r"(?<![A-Za-z0-9])([+\-−]?\s*\d+)\s+(?:is|stays?|remains?)\s+(?:fixed|constant)\b",
     re.IGNORECASE,
 )
+_STUDENT_OPERATION_RE = re.compile(
+    r"\b(?:the\s+)?(?:plus\s+sign|plus|addition)\b",
+    re.IGNORECASE,
+)
 
 
 def assign_step_ids(regions: list[OCRTextRegion]) -> list[OCRTextRegion]:
@@ -451,28 +455,38 @@ def explicit_student_confirmation_actions(
     response = student_response.strip()
     if not response:
         return []
-    matches: list[tuple[re.Match[str], str, str]] = []
+    matches: list[tuple[str, str, str]] = []
     changing_match = _STUDENT_CHANGING_RE.search(response)
     if changing_match is not None:
-        matches.append((changing_match, "changing_value", labels.changing_value))
+        matches.append((changing_match.group(1), "changing_value", labels.changing_value))
     fixed_match = _STUDENT_FIXED_RE.search(response)
     if fixed_match is not None:
-        matches.append((fixed_match, "fixed_value", labels.fixed_value))
+        matches.append((fixed_match.group(1), "fixed_value", labels.fixed_value))
+    operation_match = _STUDENT_OPERATION_RE.search(response)
+    if operation_match is not None:
+        matches.append(("+", "operation", labels.operation))
 
     actions: list[TutorCanvasAction] = []
-    for match, semantic_tag, text_template in matches:
-        value = match.group(1).replace(" ", "").replace("−", "-")
+    for matched_value, semantic_tag, text_template in matches:
+        value = matched_value.replace(" ", "").replace("−", "-")
+        target_value = value.lstrip("+-") if semantic_tag == "fixed_value" else value
+        if semantic_tag == "operation":
+            value = "+"
+            target_value = "+"
         target = next(
             (
                 anchor
                 for anchor in question_anchors
-                if anchor.text.replace("−", "-") == value
+                if anchor.text.replace("−", "-") == target_value
             ),
             None,
         )
         if target is None:
             continue
-        text = text_template.format(value=value)
+        text = text_template.format(
+            value=value,
+            operation=labels.operation_names["+"],
+        )
         if any(
             event.actor == "TUTOR"
             and event.action_type == "INSERT_LABEL"

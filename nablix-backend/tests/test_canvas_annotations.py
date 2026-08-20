@@ -233,6 +233,45 @@ def test_accepted_student_statement_gets_a_tutor_layer_label_without_llm_intenti
     ]
 
 
+def test_accepted_fixed_value_and_operation_get_tutor_layer_labels() -> None:
+    tutor = _tutor_result(
+        TutorMistakeClassification(status="no_mistake", confidence=0.9),
+        [],
+    ).model_copy(update={"guided_student_state": "PARTIAL"})
+    anchors = [
+        QuestionTextAnchor(
+            token_id="Q-T01-002:QTOKEN:2",
+            text="+",
+            char_start=4,
+            char_end=5,
+        ),
+        QuestionTextAnchor(
+            token_id="Q-T01-002:QTOKEN:3",
+            text="7",
+            char_start=6,
+            char_end=7,
+        ),
+    ]
+
+    actions = plan_tutor_canvas_actions(
+        tutor=tutor,
+        question_anchors=anchors,
+        canvas_events=[],
+        turn_id="TURN-fixed-operation",
+        canonical_answer="m; 7; addition",
+        fallback_labels=_fallback_labels(),
+        wrong_attempt_count=0,
+        student_response="7 is fixed and the plus sign means addition",
+    )
+
+    assert [(action.target_object_id, action.text) for action in actions] == [
+        ("Q-T01-002:QTOKEN:3", "7 → stays fixed"),
+        ("Q-T01-002:QTOKEN:2", "+ → addition"),
+        ("TUTOR_ANCHOR:CONFIRMED:Q-T01-002:1", "7 → stays fixed"),
+        ("TUTOR_ANCHOR:CONFIRMED:Q-T01-002:2", "+ → addition"),
+    ]
+
+
 def test_canvas_action_rejects_unconfirmed_target_and_answer_reveal_text() -> None:
     tutor = _tutor_result(
         TutorMistakeClassification(status="no_mistake", confidence=0.9),
