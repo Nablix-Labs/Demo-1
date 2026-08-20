@@ -27,6 +27,7 @@ import {
 import { uid } from '@/lib/uid';
 import {
   resolveTarget, actionMarks, showsWriteAffordance, memoryActionType, memoryActor,
+  relocateWriteRequest,
 } from '@/lib/tutorCanvasActions';
 import type { SupportRung } from '@/lib/supportLadder';
 import { EMPTY_APPLIED, type AppliedState } from '@/lib/responseGate';
@@ -153,6 +154,7 @@ export interface TutorElement {
   from?: [number, number]; to?: [number, number];     // normalised endpoints
   points?: number[];                                  // normalised x,y pairs
   text?: string; tex?: string;                        // text / KaTeX content
+  fontStyle?: string;                                 // e.g. 'bold' — text only
   color?: string; strokeWidth?: number; size?: number;
 }
 
@@ -1398,10 +1400,13 @@ export const useNumeraStore = create<NumeraState>()(
           if (seenDrawActionIds.has(action.actionId)) continue;
           seenDrawActionIds.add(action.actionId);
         }
-        const incoming: TutorElement[] = (action.elements ?? []).map((el) => ({
-          ...el,
-          id: el.id ?? uid(),
-        }));
+        // The backend positions its write-request block by hand, on the right,
+        // where the cue and hint cards live. Layout is the client's job — see
+        // relocateWriteRequest — so it is moved onto the same geometry the
+        // reference labels use before anything is rendered or logged.
+        const incoming: TutorElement[] = relocateWriteRequest(
+          (action.elements ?? []).map((el) => ({ ...el, id: el.id ?? uid() })),
+        );
         for (const element of incoming) {
           canvasEvents = appendCanvasEvent(canvasEvents, {
             actor: 'TUTOR',

@@ -95,6 +95,7 @@ export default function TutorLayer({ width, height }: { width: number; height: n
               text={content}
               fontSize={fontSize}
               fontFamily={tutorFontFamily()}
+              fontStyle={el.fontStyle}
               fill={color}
               offsetY={fontSize / 2}
             />

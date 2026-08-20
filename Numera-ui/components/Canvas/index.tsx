@@ -24,6 +24,7 @@ import QuestionDisplay from '@/components/QuestionDisplay';
 import ScaffoldPanel from '@/components/ScaffoldPanel';
 import Toolbar from './Toolbar';
 import TeachBack from './TeachBack';
+import { displayedQuestionNumber } from '@/lib/questionNumber';
 
 // react-konva requires client-only rendering (no SSR)
 const DrawingCanvas = dynamic(() => import('./DrawingCanvas'), { ssr: false });
@@ -51,6 +52,14 @@ export default function CanvasStage() {
   const questionAnchors = useNumeraStore((s) => s.questionAnchors);
   const tutorOptionActionIds = useNumeraStore((s) => s.tutorOptionActionIds);
   const activeQuestionId = useNumeraStore((s) => s.activeQuestionId);
+  const backendSession = useNumeraStore((s) => s.backendSession);
+  // The badge counts the question's position in the served set rather than the
+  // backend's running `question_number`, which is one high on the first question
+  // of a phase — see lib/questionNumber.
+  const shownQuestionNumber = displayedQuestionNumber(
+    backendSession, activeQuestionId, questionNumber,
+  );
+
   const activeScaffold = useNumeraStore((s) => s.activeScaffold);
   // Phase 3 spec §3.2: no scaffold panels during an independent attempt. Read
   // from the phase rather than the route — the phase is what decides whether
@@ -169,9 +178,11 @@ export default function CanvasStage() {
           the rest is the gap. If its label changes, re-measure. */}
       <div className="absolute top-[26px] left-[34px] right-[34px] z-10">
       <div className="flex items-start gap-3 pr-[150px]">
-        <div className="w-[30px] h-[30px] rounded-md border border-muted-gray bg-reading-surface flex items-center justify-center text-xs font-semibold text-slate-blue flex-shrink-0">
-          {questionNumber}
-        </div>
+        {shownQuestionNumber !== null && (
+          <div className="w-[30px] h-[30px] rounded-md border border-muted-gray bg-reading-surface flex items-center justify-center text-xs font-semibold text-slate-blue flex-shrink-0">
+            {shownQuestionNumber}
+          </div>
+        )}
         <QuestionDisplay
           question={questionText}
           anchors={questionAnchors}

@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   resolveTarget, actionMarks, revealsAnswer, showsWriteAffordance, memoryActionType, memoryActor,
-  overlapsWriteArea,
+  overlapsWriteArea, relocateWriteRequest, WRITE_AREA,
   type ResolveContext,
 } from '@/lib/tutorCanvasActions';
 import type { TutorCanvasAction, DrawnItem } from '@/store/useNumeraStore';
@@ -255,5 +255,76 @@ describe('a HIGHLIGHT mark', () => {
     expect(pts[1]).toBe(pts[3]);      // same y at both ends
     expect(pts[2]).toBeGreaterThan(pts[0]);
     expect(actionMarks(a, resolveTarget(a, CTX)!)[0].strokeWidth).toBeGreaterThan(0);
+  });
+});
+
+describe('the writing block on the left', () => {
+  const backendWriteRequest = (turnId: string) => ([
+    { id: `${turnId}:write-highlight`, kind: 'highlight' as const,
+      points: [0.58, 0.62, 0.92, 0.62, 0.92, 0.74, 0.58, 0.74] },
+    { id: `${turnId}:write-prompt`, kind: 'text' as const,
+      x: 0.62, y: 0.66, text: 'Write your rule here.' },
+    { id: `${turnId}:write-arrow`, kind: 'arrow' as const,
+      from: [0.75, 0.56] as [number, number], to: [0.75, 0.62] as [number, number] },
+  ]);
+
+  it('moves the whole block off the right-hand column', () => {
+    // The right column holds the cue card, the hint note and the "write it
+    // down" note. The backend hardcodes the block at x 0.58-0.92, which put it
+    // underneath them — the student had nowhere to write.
+    for (const el of relocateWriteRequest(backendWriteRequest('T1'))) {
+      const xs = [
+        ...(el.points ?? []).filter((_, i) => i % 2 === 0),
+        ...(el.from ? [el.from[0]] : []),
+        ...(el.to ? [el.to[0]] : []),
+        ...(el.x !== undefined ? [el.x] : []),
+      ];
+      for (const x of xs) expect(x, `${el.id} still at x=${x}`).toBeLessThan(0.5);
+    }
+  });
+
+  it('keeps the arrow pointing into the band, not past it', () => {
+    const arrow = relocateWriteRequest(backendWriteRequest('T1'))
+      .find((e) => e.id.endsWith(':write-arrow'))!;
+    expect(arrow.from![1]).toBeLessThan(arrow.to![1]);
+    expect(arrow.to![1]).toBe(WRITE_AREA.y);
+  });
+
+  it('puts the prompt inside the band it labels', () => {
+    const prompt = relocateWriteRequest(backendWriteRequest('T1'))
+      .find((e) => e.id.endsWith(':write-prompt'))!;
+    expect(prompt.x!).toBeGreaterThanOrEqual(WRITE_AREA.x);
+    expect(prompt.x!).toBeLessThan(WRITE_AREA.x + WRITE_AREA.w);
+    expect(prompt.y!).toBeGreaterThanOrEqual(WRITE_AREA.y);
+    expect(prompt.y!).toBeLessThan(WRITE_AREA.y + WRITE_AREA.h);
+  });
+
+  it('leaves every other tutor element exactly as sent', () => {
+    // Only the three hand-positioned elements are the client's business.
+    const other = { id: 'T1:something-else', kind: 'text' as const, x: 0.8, y: 0.9, text: 'hi' };
+    expect(relocateWriteRequest([other])).toEqual([other]);
+  });
+
+  it('keeps the reference labels clear of the relocated band', () => {
+    for (const position of [1, 2, 3]) {
+      const a: TutorCanvasAction = {
+        action_id: `T:${position}`, type: 'INSERT_LABEL', target_kind: 'TUTOR_ANCHOR',
+        target_object_id: `TUTOR_ANCHOR:WRITE_RULE:${position}`,
+        confirmed_component_id: null, text: 'Start: n', source_id: null,
+        answer_reveal_allowed: false,
+      };
+      const mark = actionMarks(a, resolveTarget(a, CTX)!)[0];
+      expect(overlapsWriteArea({ x: mark.x!, y: mark.y! - 0.03, w: 0.30, h: 0.06 })).toBe(false);
+    }
+  });
+
+  it('renders the labels bolder than an ordinary mark', () => {
+    const a: TutorCanvasAction = {
+      action_id: 'T:1', type: 'INSERT_LABEL', target_kind: 'TUTOR_ANCHOR',
+      target_object_id: 'TUTOR_ANCHOR:WRITE_RULE:1',
+      confirmed_component_id: null, text: 'Start: n', source_id: null,
+      answer_reveal_allowed: false,
+    };
+    expect(actionMarks(a, resolveTarget(a, CTX)!)[0].fontStyle).toBe('bold');
   });
 });

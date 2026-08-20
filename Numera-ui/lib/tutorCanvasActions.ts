@@ -97,8 +97,27 @@ export function resolveTarget(
  * the other inside the band. Two sets of magic numbers chosen apart from each
  * other will always eventually land on each other.
  */
-const WRITE_AREA = { x: 0.58, y: 0.62, w: 0.34, h: 0.12 };
-const WRITE_ARROW_TOP = 0.56;
+export const WRITE_AREA = { x: 0.06, y: 0.58, w: 0.34, h: 0.12 };
+const WRITE_ARROW_TOP = 0.52;
+
+/**
+ * Where the writing block sits, and why it is on the LEFT.
+ *
+ * The backend hardcodes this block on the right (x 0.58-0.92) — the one place
+ * it does send coordinates, which the semantic-action contract otherwise
+ * forbids ("never sends pixels, dimensions, coordinates"). The right-hand
+ * column is where the cue card, the hint note and the "write it down" note
+ * live, so the writing block landed underneath them and the student had, in
+ * Sanya's words, nowhere to write.
+ *
+ * Layout is the client's job — it is the only side that knows what else is on
+ * screen — so the block is relocated here rather than left where the payload
+ * put it. `relocateWriteRequest` moves the backend's own three elements onto
+ * the same geometry the reference slots are positioned against, so the labels,
+ * the arrow, the band and the prompt always travel together.
+ */
+export const WRITE_PROMPT_AT = { x: WRITE_AREA.x + 0.04, y: WRITE_AREA.y + 0.04 };
+const WRITE_ARROW_X = WRITE_AREA.x + 0.10;
 
 /**
  * Where a WRITE_RULE reference label goes.
@@ -114,9 +133,9 @@ const WRITE_ARROW_TOP = 0.56;
  * top of the canvas.
  */
 const SLOT_GAP = 0.075;
-const SLOT_FIRST_Y = 0.35;
-/** Never below this: the arrow into the writing area starts at 0.56. */
-const SLOT_LAST_Y = 0.50;
+const SLOT_FIRST_Y = 0.32;
+/** Never below this: the arrow into the writing area starts at WRITE_ARROW_TOP. */
+const SLOT_LAST_Y = 0.46;
 
 export function writeRuleSlot(position: number): ResolvedTarget {
   const index = Math.max(1, position) - 1;
@@ -202,7 +221,10 @@ export function actionMarks(
       y: target.at.y,
       text: slotText,
       color: INK,
-      size: 24,
+      // Bolder than an ordinary tutor mark: these are the reference the student
+      // is meant to read while writing, not a passing annotation (Sanya).
+      size: 26,
+      fontStyle: 'bold',
     }];
   }
 
@@ -290,4 +312,41 @@ export function memoryActionType(type: TutorCanvasAction['type']): CanvasActionT
 /** Support rungs are the system's doing, not a tutor mark on the board. */
 export function memoryActor(type: TutorCanvasAction['type']): 'TUTOR' | 'SYSTEM_SUPPORT' {
   return type === 'SHOW_CUE' || type === 'OPEN_SCAFFOLD_STEP' ? 'SYSTEM_SUPPORT' : 'TUTOR';
+}
+
+
+/** Suffixes the backend gives the three elements of its write request. */
+const WRITE_HIGHLIGHT = ':write-highlight';
+const WRITE_PROMPT = ':write-prompt';
+const WRITE_ARROW = ':write-arrow';
+
+/**
+ * Move the backend's write-request block onto the client's layout.
+ *
+ * Returns the elements unchanged except for the three the backend positions by
+ * hand. Matched on the id suffix, which the backend builds from the turn id
+ * (`f"{turn_id}:write-highlight"` and friends) and so is stable.
+ *
+ * An element the backend stops sending simply never matches; one it renames
+ * passes through at its original coordinates, which is visibly wrong rather
+ * than silently wrong, and is the failure we want of the two.
+ */
+export function relocateWriteRequest(elements: TutorElement[]): TutorElement[] {
+  return elements.map((el) => {
+    if (el.id.endsWith(WRITE_HIGHLIGHT)) {
+      const { x, y, w, h } = WRITE_AREA;
+      return { ...el, x: undefined, y: undefined, w: undefined, h: undefined,
+        points: [x, y, x + w, y, x + w, y + h, x, y + h] };
+    }
+    if (el.id.endsWith(WRITE_PROMPT)) {
+      return { ...el, x: WRITE_PROMPT_AT.x, y: WRITE_PROMPT_AT.y, points: undefined };
+    }
+    if (el.id.endsWith(WRITE_ARROW)) {
+      return { ...el,
+        from: [WRITE_ARROW_X, WRITE_ARROW_TOP],
+        to: [WRITE_ARROW_X, WRITE_AREA.y],
+        points: undefined };
+    }
+    return el;
+  });
 }
