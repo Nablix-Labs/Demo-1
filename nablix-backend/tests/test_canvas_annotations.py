@@ -195,11 +195,42 @@ def test_confirmed_guided_idea_emits_a_component_scoped_semantic_action() -> Non
         "TURN-1",
         "m + 7",
         _fallback_labels(),
+        wrong_attempt_count=0,
+        student_response="",
     )
 
     assert actions[0].type == "INSERT_LABEL"
     assert actions[0].text == "m → changes"
     assert actions[0].answer_reveal_allowed is False
+
+
+def test_accepted_student_statement_gets_a_tutor_layer_label_without_llm_intention() -> None:
+    tutor = _tutor_result(
+        TutorMistakeClassification(status="no_mistake", confidence=0.9),
+        [],
+    ).model_copy(update={"guided_student_state": "PARTIAL"})
+    anchor = QuestionTextAnchor(
+        token_id="Q-T01-002:QTOKEN:2",
+        text="m",
+        char_start=3,
+        char_end=4,
+    )
+
+    actions = plan_tutor_canvas_actions(
+        tutor=tutor,
+        question_anchors=[anchor],
+        canvas_events=[],
+        turn_id="TURN-accepted",
+        canonical_answer="m; 7; addition",
+        fallback_labels=_fallback_labels(),
+        wrong_attempt_count=0,
+        student_response="m changes",
+    )
+
+    assert [(action.target_kind, action.target_object_id, action.text) for action in actions] == [
+        ("QUESTION_ANCHOR", "Q-T01-002:QTOKEN:2", "m → changes"),
+        ("TUTOR_ANCHOR", "TUTOR_ANCHOR:CONFIRMED:Q-T01-002:1", "m → changes"),
+    ]
 
 
 def test_canvas_action_rejects_unconfirmed_target_and_answer_reveal_text() -> None:
@@ -235,6 +266,8 @@ def test_canvas_action_rejects_unconfirmed_target_and_answer_reveal_text() -> No
         "TURN-1",
         "n + 5",
         _fallback_labels(),
+        wrong_attempt_count=0,
+        student_response="",
     ) == []
 
 
@@ -265,6 +298,8 @@ def test_wrong_turn_targets_only_reliable_student_written_work() -> None:
         "TURN-1",
         "n + 5",
         _fallback_labels(),
+        wrong_attempt_count=0,
+        student_response="",
     )
 
     assert [(action.type, action.target_object_id) for action in actions] == [
@@ -305,6 +340,8 @@ def test_partial_choice_selection_gets_a_stable_option_action() -> None:
         "TURN-1",
         "n + 4",
         _fallback_labels(),
+        wrong_attempt_count=0,
+        student_response="",
     )
 
     assert [(action.type, action.target_kind, action.target_object_id) for action in actions] == [
@@ -344,6 +381,8 @@ def test_fallback_turn_labels_every_confirmed_expression_component() -> None:
         "TURN-1",
         "m + 7",
         _fallback_labels(),
+        wrong_attempt_count=0,
+        student_response="",
     )
 
     assert [(action.target_object_id, action.text) for action in actions] == [
@@ -399,6 +438,8 @@ def test_fallback_turn_does_not_repeat_an_active_confirmation_label() -> None:
         "TURN-2",
         "m + 7",
         _fallback_labels(),
+        wrong_attempt_count=0,
+        student_response="",
     )
 
     assert actions == []
@@ -446,6 +487,8 @@ def test_fallback_turn_handles_non_expression_canonical_answers() -> None:
         "TURN-1",
         "changing quantity, fixed value, and operation",
         _fallback_labels(),
+        wrong_attempt_count=0,
+        student_response="",
     )
 
     assert [(action.target_object_id, action.text) for action in actions] == [
@@ -489,7 +532,7 @@ def test_write_request_on_first_attempt_has_no_rule_anchors() -> None:
     )
 
     actions = plan_tutor_canvas_actions(
-        tutor, [], [], "TURN-1", "s + 6", _fallback_labels(), wrong_attempt_count=0
+        tutor, [], [], "TURN-1", "s + 6", _fallback_labels(), wrong_attempt_count=0, student_response=""
     )
 
     assert [(action.type, action.text) for action in actions] == [
@@ -511,7 +554,7 @@ def test_written_rule_request_adds_safe_tutor_anchors_not_the_final_rule() -> No
     )
 
     actions = plan_tutor_canvas_actions(
-        tutor, [], [], "TURN-1", "s + 6", _fallback_labels(), wrong_attempt_count=1
+        tutor, [], [], "TURN-1", "s + 6", _fallback_labels(), wrong_attempt_count=1, student_response=""
     )
 
     assert [(action.type, action.text) for action in actions] == [

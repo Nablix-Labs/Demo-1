@@ -3749,6 +3749,7 @@ async def _process_interaction(
         canonical_answer=answer_spec.canonical_answer if answer_spec is not None else "",
         fallback_labels=rules.guided_learning.fallback_canvas_labels,
         wrong_attempt_count=turn_session.wrong_attempt_count,
+        student_response=request.text_input or request.voice_transcript or "",
     )
     logger.info(
         "guided_canvas_actions_planned",
