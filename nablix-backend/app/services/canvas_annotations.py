@@ -524,8 +524,25 @@ def generic_confirmation_actions(
 
     actions: list[TutorCanvasAction] = []
     for component_id in sorted(confirmed):
+        role = confirmation_role(component_id, tutor)
+        if role == "generic":
+            # A generic component description often shares words with the
+            # question prose (for example, "changes"). Labeling that prose as
+            # "confirmed" is not a mathematical intervention and can replace a
+            # more useful existing label on the same anchor.
+            continue
+        text_template = (
+            labels.changing_value
+            if role == "changing_value"
+            else labels.fixed_value
+            if role == "fixed_value"
+            else labels.operation
+        )
         for target in generic_component_targets(component_id, tutor, question_anchors):
-            text = labels.generic.format(value=target.text)
+            text = text_template.format(
+                value=target.text,
+                operation=labels.operation_names.get(target.text, "the operation"),
+            )
             if active_confirmation_exists(
                 canvas_events,
                 component_id,
@@ -565,7 +582,7 @@ def confirmation_role(component_id: str, tutor: TutorResult) -> str:
         "",
     )
     source = f"{component_id} {description}".casefold()
-    if any(term in source for term in ("changing", "variable", "varies")):
+    if any(term in source for term in ("changing", "changes", "variable", "varies")):
         return "changing_value"
     if any(term in source for term in ("fixed", "constant", "stays")):
         return "fixed_value"
