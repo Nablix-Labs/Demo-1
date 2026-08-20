@@ -12,19 +12,20 @@
  * A final spoken summary closes the session.
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   Check, X, ChevronLeft, ChevronRight, Volume2, Square, Eye, EyeOff,
 } from 'lucide-react';
 import PageShell, { Chip } from '@/components/PageShell';
 import PhaseGate from '@/components/PhaseGate';
+import { planReviewCompletion } from '@/lib/reviewCompletion';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useDemoTutor, resetSessionStart } from '@/hooks/useDemoTutor';
 import { useFlowNav } from '@/lib/useFlowNav';
 import { demoFor, type DemoWorksheet } from '@/lib/demoContent';
 import { cn } from '@/lib/cn';
 import {
-  sessionTopicTitle,
+  sessionTopicTitle, completeReview, studentId,
   type FiveCategorySummary, type QuestionOutcome,
 } from '@/lib/api';
 import { phase4FromSession, type SessionForPhase4 } from '@/lib/phase4FromSession';
@@ -89,6 +90,11 @@ export default function ReviewPage() {
   // worksheets as if they were the student's real results, with no way out.
   // Now it renders the empty state below instead.
   const { apiEnabled, sessionId, end } = tutor;
+  // Hold the id before end() clears it. The completion event belongs to the
+  // moment the student FINISHES the review, not the moment they arrive — but by
+  // then `sessionId` is null, so the id has to be captured on the way in.
+  const reviewSessionId = useRef<string | null>(null);
+  if (sessionId && !reviewSessionId.current) reviewSessionId.current = sessionId;
   useEffect(() => {
     if (apiEnabled && sessionId) {
       void end().catch((err: unknown) => {
@@ -102,11 +108,35 @@ export default function ReviewPage() {
 
   // Escape hatch for a session the backend refuses to end: drop it locally so
   // a fresh one can start, and go back to the lesson to produce reviewable work.
+  /**
+   * Report the review as finished, once, on the way out.
+   *
+   * `REVIEW_COMPLETED` is what advances the Student Model past Review;
+   * `/session/end` does not emit it, so without this a student who works all the
+   * way through Phase 4 is never recorded as having done so.
+   *
+   * Deliberately not awaited. This is bookkeeping the student cannot act on, and
+   * a slow or failing call must never hold them on the review screen — the whole
+   * point of the button they just pressed is to leave.
+   */
+  const reportReviewFinished = useCallback(() => {
+    if (!apiEnabled) return;
+    const plan = planReviewCompletion(reviewSessionId.current, () => `REVIEW-COMPLETE-${Date.now()}`);
+    if (!plan.send) return;
+    void completeReview(reviewSessionId.current!, studentId(), plan.turnId);
+  }, [apiEnabled]);
+
+  const finishReview = useCallback((outcome: Parameters<typeof decideReview>[0]) => {
+    reportReviewFinished();
+    decideReview(outcome);
+  }, [reportReviewFinished, decideReview]);
+
   const backToLesson = useCallback(() => {
+    reportReviewFinished();
     resetSessionStart();
     useNumeraStore.getState().clearSessionId();
     goStage('guided', currentTopicId);
-  }, [goStage, currentTopicId]);
+  }, [reportReviewFinished, goStage, currentTopicId]);
 
   // Real session outcomes when the backend sent them; demo worksheets otherwise.
   const demo = demoFor(currentTopicId);
@@ -186,7 +216,7 @@ export default function ReviewPage() {
               // shown, in an example). Until Chiru confirms the vocabulary,
               // this takes the existing pass route rather than branching on a
               // string we would be guessing at.
-              decideReview('pass');
+              finishReview('pass');
             }}
           />
         </PageShell>
@@ -449,7 +479,7 @@ export default function ReviewPage() {
                     </button>
                   ) : (
                     <button
-                      onClick={() => decideReview('pass')}
+                      onClick={() => finishReview('pass')}
                       className="rounded-md border border-focus-navy bg-focus-navy px-4 py-3 text-left text-white hover:opacity-80 transition-opacity"
                     >
                       <div className="text-[13px] font-semibold">Next topic</div>
@@ -463,21 +493,21 @@ export default function ReviewPage() {
               <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-3">What happens next</div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                 <button
-                  onClick={() => decideReview('foundation_weak')}
+                  onClick={() => finishReview('foundation_weak')}
                   className="rounded-md border border-muted-gray bg-white px-3 py-3 text-left hover:border-focus-navy transition-colors"
                 >
                   <div className="text-[13px] font-semibold text-ink">Foundation weak</div>
                   <div className="text-[11.5px] text-slate-blue mt-0.5">Recap the concept — back to orientation.</div>
                 </button>
                 <button
-                  onClick={() => decideReview('cant_solve')}
+                  onClick={() => finishReview('cant_solve')}
                   className="rounded-md border border-muted-gray bg-white px-3 py-3 text-left hover:border-focus-navy transition-colors"
                 >
                   <div className="text-[13px] font-semibold text-ink">Can&apos;t solve yet</div>
                   <div className="text-[11.5px] text-slate-blue mt-0.5">Knows it, needs help applying — back to guided.</div>
                 </button>
                 <button
-                  onClick={() => decideReview('pass')}
+                  onClick={() => finishReview('pass')}
                   className="rounded-md border border-focus-navy bg-focus-navy px-3 py-3 text-left text-white hover:opacity-80 transition-opacity"
                 >
                   <div className="text-[13px] font-semibold">Mastered</div>

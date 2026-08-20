@@ -636,6 +636,41 @@ export function hasSelectableOptions(
   return CHOICE_TYPES.includes(view.question_type) && (view.options?.length ?? 0) > 0;
 }
 
+/**
+ * POST /session/{id}/review/complete — tells the Student Model the topic review
+ * is finished.
+ *
+ * This is the event that advances the journey past Review
+ * (`REVIEW_COMPLETED`, session_service.py:1389). `/session/end` does NOT emit it
+ * — it only sets `status: "ended"` — so without this call a student who works
+ * all the way through Phase 4 is never recorded as having done so.
+ *
+ * Safe to send after `/session/end`: ending a session leaves `current_phase`
+ * alone, so the endpoint's "must be in REVIEW" guard still passes.
+ *
+ * Returns the updated record, or null on any failure. Null rather than a throw
+ * because this is bookkeeping the student cannot act on: a 409 means the backend
+ * does not consider us in Review, and neither that nor a network failure is a
+ * reason to trap someone on the review screen.
+ */
+export async function completeReview(
+  sessionId: string,
+  studentId: string,
+  turnId: string,
+): Promise<SessionRecord | null> {
+  try {
+    const res = await api.post<SessionRecord>(`/session/${sessionId}/review/complete`, {
+      student_id: studentId,
+      turn_id: turnId,
+    });
+    return res.data;
+  } catch (err) {
+    const status = (err as { response?: { status?: number } })?.response?.status;
+    console.warn(`[review] review/complete did not land (status ${status ?? 'none'}).`);
+    return null;
+  }
+}
+
 /** The orientation bundle for this session, or null when there isn't one. */
 export function orientationBundle(
   record: SessionRecord | null | undefined,
