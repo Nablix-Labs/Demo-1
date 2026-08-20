@@ -96,3 +96,67 @@ async def post_json(
         return cast(JsonObject, body)
 
     raise AdapterError(adapter_name, f"request exhausted retries url={url} payload={payload}")
+
+
+async def get_bytes(
+    adapter_name: str,
+    url: str,
+    headers: dict[str, str],
+    timeout_seconds: int,
+    retry_count: int,
+) -> tuple[bytes, str]:
+    """GET with the same bounded-retry/error conventions as `post_json`, for a
+    binary response instead of a JSON one. Returns (body, content_type)."""
+
+    max_attempts: int = retry_count + 1
+    for attempt in range(1, max_attempts + 1):
+        try:
+            async with httpx.AsyncClient(timeout=timeout_seconds) as http_client:
+                response = await http_client.get(url, headers=headers)
+        except httpx.HTTPError as error:
+            if attempt < max_attempts:
+                logger.warning(
+                    "adapter_request_retry",
+                    extra={
+                        "adapter_name": adapter_name,
+                        "url": url,
+                        "attempt": attempt,
+                        "max_attempts": max_attempts,
+                    },
+                )
+                continue
+            raise AdapterError(
+                adapter_name,
+                f"request failed url={url}: {error}",
+            ) from error
+
+        if response.status_code >= 400:
+            if response.status_code >= 500 and attempt < max_attempts:
+                logger.warning(
+                    "adapter_response_retry",
+                    extra={
+                        "adapter_name": adapter_name,
+                        "url": url,
+                        "attempt": attempt,
+                        "max_attempts": max_attempts,
+                        "status_code": response.status_code,
+                        "response_body": response.text,
+                    },
+                )
+                continue
+            if response.status_code < 500:
+                raise AdapterRequestRejected(
+                    adapter_name,
+                    url,
+                    response.status_code,
+                    response.text,
+                    {},
+                )
+            raise AdapterError(
+                adapter_name,
+                f"url={url} status={response.status_code} body={response.text}",
+            )
+
+        return response.content, response.headers.get("content-type", "application/octet-stream")
+
+    raise AdapterError(adapter_name, f"request exhausted retries url={url}")
