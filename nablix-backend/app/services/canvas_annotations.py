@@ -48,6 +48,20 @@ _STUDENT_OPERATION_RE = re.compile(
 )
 
 
+def canvas_student_state(tutor: TutorResult) -> str | None:
+    """Use the guided state when present, otherwise the legacy evaluation."""
+
+    if tutor.guided_student_state is not None:
+        return tutor.guided_student_state
+    if tutor.evaluation == "CORRECT":
+        return "CORRECT"
+    if tutor.evaluation == "PARTIALLY_CORRECT":
+        return "PARTIAL"
+    if tutor.evaluation == "INCORRECT":
+        return "WRONG"
+    return None
+
+
 def assign_step_ids(regions: list[OCRTextRegion]) -> list[OCRTextRegion]:
     """Return OCR regions with stable step IDs without mutating OCR output."""
 
@@ -306,7 +320,9 @@ def plan_tutor_canvas_actions(
         else None
     )
 
-    if tutor.guided_student_state == "WRONG":
+    student_state = canvas_student_state(tutor)
+
+    if student_state == "WRONG":
         if selected_option_action is not None:
             return [selected_option_action]
         student_attempt = next(
@@ -335,7 +351,7 @@ def plan_tutor_canvas_actions(
             )
         ]
 
-    if tutor.guided_student_state == "STUCK":
+    if student_state == "STUCK":
         target = question_anchors[0].token_id if question_anchors else None
         return [
             TutorCanvasAction(
@@ -350,7 +366,7 @@ def plan_tutor_canvas_actions(
             )
         ]
 
-    if tutor.guided_student_state not in {"CORRECT", "PARTIAL"}:
+    if student_state not in {"CORRECT", "PARTIAL"}:
         return []
 
     actions: list[TutorCanvasAction] = []
@@ -450,7 +466,7 @@ def explicit_student_confirmation_actions(
 ) -> list[TutorCanvasAction]:
     """Make an accepted learner statement visible when evaluator actions are absent."""
 
-    if tutor.guided_student_state not in {"PARTIAL", "CORRECT"}:
+    if canvas_student_state(tutor) not in {"PARTIAL", "CORRECT"}:
         return []
     response = student_response.strip()
     if not response:
