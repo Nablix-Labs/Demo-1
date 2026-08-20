@@ -83,3 +83,14 @@ def plan_question_anchors(
         ]
 
     return []
+
+
+def plan_canvas_action_anchors(
+    question_id: str | None,
+    question_text: str | None,
+) -> list[QuestionTextAnchor]:
+    """Expose stable question tokens for post-evaluation tutor annotations."""
+
+    if question_id is None or not question_text:
+        return []
+    return question_text_tokens(question_id, question_text)

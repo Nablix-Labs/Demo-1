@@ -208,6 +208,16 @@ guided_learning:
     UNCLEAR:
       student_model_event: null
       strategy: REQUEST_CLARIFICATION
+  fallback_canvas_labels:
+    changing_value: "{value} → changes"
+    fixed_value: "{value} → stays fixed"
+    operation: "{value} → {operation}"
+    generic: "{value} → confirmed"
+    operation_names:
+      "+": "addition"
+      "-": "subtraction"
+      "×": "multiplication"
+      "÷": "division"
 safety:
   unsafe_terms:
     - hurt myself
