@@ -26,6 +26,7 @@ import { Layer, Text, Line, Arrow, Rect, Ellipse, Group } from 'react-konva';
 import { useNumeraStore, type TutorElement } from '@/store/useNumeraStore';
 import { useTutorReveal } from '@/store/useTutorReveal';
 import { measureTutorTextBounds, clearTutorTextCache, tutorFontFamily } from '@/lib/tutorTip';
+import { TUTOR_LAYER_NAME } from '@/lib/studentSnapshot';
 
 const INK = '#1B2A4A'; // focus-navy — readable AI-tutor ink default
 
@@ -166,5 +167,10 @@ export default function TutorLayer({ width, height }: { width: number; height: n
     }
   };
 
-  return <Layer listening={false}>{tutorElements.map(render)}</Layer>;
+  // Named so the snapshot exporter can hide it: the canvas image goes to OCR,
+  // and tutor marks captured in it come back evaluated as the student's answer
+  // (see lib/studentSnapshot).
+  return (
+    <Layer name={TUTOR_LAYER_NAME} listening={false}>{tutorElements.map(render)}</Layer>
+  );
 }

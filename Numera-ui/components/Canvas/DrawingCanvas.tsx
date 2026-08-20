@@ -25,6 +25,7 @@ import TutorLayer from './TutorLayer';
 import TutorMathOverlay from './TutorMathOverlay';
 import TutorHandOverlay from './TutorHandOverlay';
 import { useTutorRevealSync } from '@/store/useTutorReveal';
+import { captureStudentLayers } from '@/lib/studentSnapshot';
 
 interface DrawingCanvasProps {
   onExportReady?: (exportFn: CanvasExporter) => void;
@@ -132,7 +133,9 @@ export default function DrawingCanvas({ onExportReady, tutorOnly = false, readOn
         }];
       });
       return {
-        snapshotDataUrl: stage.toDataURL({ mimeType: 'image/png', pixelRatio: 2 }),
+        // Student layers only — the tutor's own marks must not be OCR'd back
+        // as the student's work (see lib/studentSnapshot).
+        snapshotDataUrl: captureStudentLayers(stage),
         strokes,
         capturedAt: new Date().toISOString(),
       };
