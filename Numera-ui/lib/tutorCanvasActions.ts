@@ -39,7 +39,9 @@ export type ResolvedTarget =
   /** A box on the canvas, normalised 0–1 against the live canvas size. */
   | { kind: 'box'; box: CanvasBBox }
   /** The area the student is being asked to write in. Carries no content. */
-  | { kind: 'write-area' };
+  | { kind: 'write-area' }
+  /** A reserved reference slot, clear of the writing area. Text sits AT the point. */
+  | { kind: 'slot'; at: { x: number; y: number } };
 
 export interface ResolveContext {
   anchors: QuestionAnchor[];
@@ -70,18 +72,7 @@ export function resolveTarget(
 
   if (action.target_kind === 'TUTOR_ANCHOR') {
     const writeRuleMatch = id.match(/^TUTOR_ANCHOR:WRITE_RULE:(\d+)$/);
-    if (writeRuleMatch) {
-      const position = Number(writeRuleMatch[1]);
-      return {
-        kind: 'box',
-        box: {
-          x: 0.62,
-          y: 0.58 + (position - 1) * 0.07,
-          w: 0.30,
-          h: 0.04,
-        },
-      };
-    }
+    if (writeRuleMatch) return writeRuleSlot(Number(writeRuleMatch[1]));
     const element = ctx.tutorElements.find((el) => el.id === id);
     const box = element ? tutorElementBBox(element) : null;
     return box ? { kind: 'box', box } : null;
@@ -92,6 +83,53 @@ export function resolveTarget(
   const item = ctx.items.find((it) => it.id === id);
   const box = item ? itemBBox(item, ctx.canvasSize) : null;
   return box ? { kind: 'box', box } : null;
+}
+
+/**
+ * The writing area, mirrored from the backend's own write-request draw
+ * (canvas_annotations.plan_write_request_tutor_draw): a highlight band across
+ * x 0.58–0.92 / y 0.62–0.74, the prompt "Write your rule here." at (0.62, 0.66),
+ * and an arrow dropping into it at x 0.75 from y 0.56.
+ *
+ * Kept here so the reference slots below are positioned AGAINST it rather than
+ * by independent guesswork. The first attempt put the slots at y 0.58 and 0.65,
+ * which rendered their labels at y 0.652 and 0.722 — one on top of the prompt,
+ * the other inside the band. Two sets of magic numbers chosen apart from each
+ * other will always eventually land on each other.
+ */
+const WRITE_AREA = { x: 0.58, y: 0.62, w: 0.34, h: 0.12 };
+const WRITE_ARROW_TOP = 0.56;
+
+/**
+ * Where a WRITE_RULE reference label goes.
+ *
+ * Above the writing area, not in it. These are the parts the tutor is willing to
+ * show while asking for the rule; the band below is where the student answers.
+ * Keeping them visually separate is the difference between a reference and a
+ * pre-filled answer — and the renderer refuses outright to put content in the
+ * write area itself (see `actionMarks`).
+ *
+ * Stacked upwards from the arrow's top so slot 1 is nearest the writing area and
+ * later slots move away from it, and clamped so a long list cannot walk off the
+ * top of the canvas.
+ */
+const SLOT_GAP = 0.075;
+const SLOT_TOP_LIMIT = 0.06;
+
+export function writeRuleSlot(position: number): ResolvedTarget {
+  const index = Math.max(1, position) - 1;
+  const y = WRITE_ARROW_TOP - 0.06 - index * SLOT_GAP;
+  return { kind: 'slot', at: { x: WRITE_AREA.x + 0.04, y: Math.max(SLOT_TOP_LIMIT, y) } };
+}
+
+/** Does this box overlap the writing area? Used by the tests, and by nothing else. */
+export function overlapsWriteArea(box: CanvasBBox): boolean {
+  return (
+    box.x < WRITE_AREA.x + WRITE_AREA.w
+    && box.x + box.w > WRITE_AREA.x
+    && box.y < WRITE_AREA.y + WRITE_AREA.h
+    && box.y + box.h > WRITE_AREA.y
+  );
 }
 
 /** Breathing room around a box so a highlight frames the work, not clips it. */
@@ -144,6 +182,23 @@ export function actionMarks(
   // knows where the token actually wrapped to. Drawing a box on the canvas for
   // it would put a mark on the board for something that is not on the board.
   if (target.kind === 'anchor') return [];
+
+  // A reserved slot takes its text exactly where the slot is — no offset. The
+  // offset below applies to marks that COMMENT on something, which sit under the
+  // thing they comment on; a slot is the position itself.
+  if (target.kind === 'slot') {
+    const slotText = action.text?.trim();
+    if (!slotText) return [];
+    return [{
+      id: `${action.action_id}:slot`,
+      kind: action.type === 'INSERT_MATH' ? 'math' : 'text',
+      x: target.at.x,
+      y: target.at.y,
+      text: slotText,
+      color: INK,
+      size: 24,
+    }];
+  }
 
   const box = target.box;
   const id = (suffix: string) => `${action.action_id}:${suffix}`;

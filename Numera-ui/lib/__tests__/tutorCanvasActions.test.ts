@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   resolveTarget, actionMarks, revealsAnswer, showsWriteAffordance, memoryActionType, memoryActor,
+  overlapsWriteArea,
   type ResolveContext,
 } from '@/lib/tutorCanvasActions';
 import type { TutorCanvasAction, DrawnItem } from '@/store/useNumeraStore';
@@ -174,5 +175,66 @@ describe('the canvas-memory vocabulary', () => {
     expect(memoryActor('SHOW_CUE')).toBe('SYSTEM_SUPPORT');
     expect(memoryActor('OPEN_SCAFFOLD_STEP')).toBe('SYSTEM_SUPPORT');
     expect(memoryActor('HIGHLIGHT')).toBe('TUTOR');
+  });
+});
+
+describe('the WRITE_RULE reference labels', () => {
+  const anchor = (position: number, text: string): TutorCanvasAction => ({
+    action_id: `T:${position}:INSERT_LABEL:TUTOR_ANCHOR`,
+    type: 'INSERT_LABEL',
+    target_kind: 'TUTOR_ANCHOR',
+    target_object_id: `TUTOR_ANCHOR:WRITE_RULE:${position}`,
+    confirmed_component_id: null,
+    text,
+    source_id: null,
+    answer_reveal_allowed: false,
+  });
+
+  /** The label's own footprint, generously sized so near-misses still count. */
+  const footprint = (mark: { x?: number; y?: number }) => ({
+    x: mark.x!, y: mark.y! - 0.03, w: 0.30, h: 0.06,
+  });
+
+  it('never lands on the writing area or its prompt', () => {
+    // The bug Sanya screenshotted: "Start: n" rendered on top of "Write your
+    // rule here." and "Gain: +5" inside the highlight band. The labels are a
+    // reference; the band is where the student answers. They cannot share space.
+    for (const position of [1, 2, 3]) {
+      const a = anchor(position, 'Start: n');
+      const mark = actionMarks(a, resolveTarget(a, CTX)!)[0];
+      expect(overlapsWriteArea(footprint(mark)), `slot ${position} overlaps the write area`).toBe(false);
+    }
+  });
+
+  it('stacks upwards, so more parts move away from the writing area', () => {
+    const y = [1, 2, 3].map((p) => {
+      const a = anchor(p, 'x');
+      return actionMarks(a, resolveTarget(a, CTX)!)[0].y!;
+    });
+    expect(y[1]).toBeLessThan(y[0]);
+    expect(y[2]).toBeLessThan(y[1]);
+  });
+
+  it('never walks off the top of the canvas, however many parts arrive', () => {
+    // The previous placement had no bound at all: position 7 ran off the board.
+    for (const position of [7, 20, 500]) {
+      const a = anchor(position, 'x');
+      const mark = actionMarks(a, resolveTarget(a, CTX)!)[0];
+      expect(mark.y!).toBeGreaterThanOrEqual(0);
+      expect(mark.y!).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('places the text at the slot itself, not offset beneath it', () => {
+    const a = anchor(1, 'Start: n');
+    const target = resolveTarget(a, CTX)!;
+    const mark = actionMarks(a, target)[0];
+    expect(target.kind).toBe('slot');
+    expect(mark.y).toBe((target as { at: { y: number } }).at.y);
+  });
+
+  it('renders nothing for a slot with no text', () => {
+    const a = anchor(1, '   ');
+    expect(actionMarks(a, resolveTarget(a, CTX)!)).toEqual([]);
   });
 });
