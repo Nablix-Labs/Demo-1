@@ -92,7 +92,7 @@ from app.services.canvas_annotations import (
     plan_tutor_canvas_actions,
     plan_write_request_tutor_draw,
 )
-from app.services.question_anchors import plan_question_anchors
+from app.services.question_anchors import plan_canvas_action_anchors, plan_question_anchors
 from app.services.canvas_evidence import (
     CanvasEvidence,
     canvas_events_are_stale,
@@ -3737,16 +3737,9 @@ async def _process_interaction(
         state_updates["active_visual_cue"] = visual_cue
 
     answer_spec = _active_answer_spec(turn_session)
-    active_step_id = (
-        tutor.guided_teaching_state.active_step_id
-        if tutor.guided_teaching_state is not None
-        else None
-    )
-    tutor_action_anchors = plan_question_anchors(
+    tutor_action_anchors = plan_canvas_action_anchors(
         turn_session.question_id,
         turn_session.current_question,
-        answer_spec,
-        active_step_id,
     )
     tutor_canvas_actions = plan_tutor_canvas_actions(
         tutor=tutor,
@@ -3754,6 +3747,7 @@ async def _process_interaction(
         canvas_events=_canvas_events_for_context(request, turn_session),
         turn_id=request.turn_id or "TURN-0000",
         canonical_answer=answer_spec.canonical_answer if answer_spec is not None else "",
+        fallback_labels=rules.guided_learning.fallback_canvas_labels,
     )
     logger.info(
         "guided_canvas_actions_planned",

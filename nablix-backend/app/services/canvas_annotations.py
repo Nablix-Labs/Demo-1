@@ -1,5 +1,6 @@
 import re
 
+from app.ai_engine.classifier_config import FallbackCanvasLabelsConfig
 from app.models.adapters import (
     AnnotationIntent,
     OCRTextRegion,
@@ -208,6 +209,7 @@ def plan_tutor_canvas_actions(
     canvas_events: list[CanvasEvent],
     turn_id: str,
     canonical_answer: str,
+    fallback_labels: FallbackCanvasLabelsConfig,
 ) -> list[TutorCanvasAction]:
     """Validate evaluator intentions against the active Guided Practice state.
 
@@ -367,24 +369,174 @@ def plan_tutor_canvas_actions(
                 answer_reveal_allowed=False,
             )
         )
-    if not actions and question_anchors:
-        target = question_anchors[0].token_id
-        component_id = next(iter(sorted(confirmed)), None)
-        actions.append(
-            TutorCanvasAction(
-                action_id=f"{turn_id}:1:HIGHLIGHT:{target}",
-                type="HIGHLIGHT",
-                target_kind="QUESTION_ANCHOR",
-                target_object_id=target,
-                confirmed_component_id=component_id,
-                text=None,
-                source_id=None,
-                answer_reveal_allowed=False,
-            )
-        )
     if not actions and selected_option_action is not None:
         actions.append(selected_option_action)
+    if not actions:
+        actions = fallback_confirmation_actions(
+            tutor,
+            question_anchors,
+            canvas_events,
+            turn_id,
+            canonical_answer,
+            fallback_labels,
+        )
     return actions
+
+
+def fallback_confirmation_actions(
+    tutor: TutorResult,
+    question_anchors: list[QuestionTextAnchor],
+    canvas_events: list[CanvasEvent],
+    turn_id: str,
+    canonical_answer: str,
+    labels: FallbackCanvasLabelsConfig,
+) -> list[TutorCanvasAction]:
+    """Render already-confirmed meanings when evaluator actions are absent."""
+
+    confirmed = confirmed_component_ids(tutor)
+    if not confirmed:
+        return []
+    parts = _SYMBOLIC_RULE_RE.search(canonical_answer)
+    if parts is None:
+        return generic_confirmation_actions(
+            tutor,
+            question_anchors,
+            canvas_events,
+            turn_id,
+            confirmed,
+            labels,
+        )
+    variable, operator, fixed_value = parts.groups()
+    normalised_operator = "+" if operator == "+" else "-"
+    actions: list[TutorCanvasAction] = []
+    for component_id in sorted(confirmed):
+        role = confirmation_role(component_id, tutor)
+        targets: list[QuestionTextAnchor] = []
+        text_template = labels.generic
+        text_values: dict[str, str] = {}
+        if role == "changing_value":
+            targets = [anchor for anchor in question_anchors if anchor.text == variable]
+            if not targets:
+                targets = [
+                    anchor
+                    for anchor in question_anchors
+                    if anchor.text.isdigit() and anchor.text != fixed_value
+                ]
+            text_template = labels.changing_value
+        elif role == "fixed_value":
+            targets = [anchor for anchor in question_anchors if anchor.text == fixed_value]
+            text_template = labels.fixed_value
+        elif role == "operation":
+            targets = [
+                anchor
+                for anchor in question_anchors
+                if anchor.text.replace("−", "-") == normalised_operator
+            ]
+            text_template = labels.operation
+            text_values["operation"] = labels.operation_names.get(
+                normalised_operator,
+                "the operation",
+            )
+        else:
+            targets = generic_component_targets(component_id, tutor, question_anchors)
+        for target in targets:
+            text = text_template.format(value=target.text, **text_values)
+            if active_confirmation_exists(
+                canvas_events,
+                component_id,
+                target.token_id,
+                text,
+            ):
+                continue
+            position = len(actions) + 1
+            actions.append(
+                TutorCanvasAction(
+                    action_id=(
+                        f"{turn_id}:{position}:INSERT_LABEL:{target.token_id}"
+                    ),
+                    type="INSERT_LABEL",
+                    target_kind="QUESTION_ANCHOR",
+                    target_object_id=target.token_id,
+                    confirmed_component_id=component_id,
+                    text=text,
+                    source_id=None,
+                    answer_reveal_allowed=False,
+                )
+            )
+    return actions
+
+
+def confirmed_component_ids(tutor: TutorResult) -> set[str]:
+    confirmed = set(
+        tutor.active_teaching_objective.confirmed_concept_ids
+        if tutor.active_teaching_objective is not None
+        else []
+    )
+    if tutor.guided_teaching_state is not None:
+        confirmed.update(tutor.guided_teaching_state.confirmed_component_ids)
+        confirmed.update(tutor.guided_teaching_state.completed_step_ids)
+    return confirmed
+
+
+def confirmation_role(component_id: str, tutor: TutorResult) -> str:
+    description = next(
+        (
+            concept.description
+            for concept in (
+                tutor.generated_question_rubric.required_concepts
+                if tutor.generated_question_rubric is not None
+                else []
+            )
+            if concept.concept_id == component_id
+        ),
+        "",
+    )
+    source = f"{component_id} {description}".casefold()
+    if any(term in source for term in ("changing", "variable", "varies")):
+        return "changing_value"
+    if any(term in source for term in ("fixed", "constant", "stays")):
+        return "fixed_value"
+    if any(term in source for term in ("operation", "addition", "subtract", "multiply", "divide")):
+        return "operation"
+    return "generic"
+
+
+def generic_component_targets(
+    component_id: str,
+    tutor: TutorResult,
+    question_anchors: list[QuestionTextAnchor],
+) -> list[QuestionTextAnchor]:
+    description = next(
+        (
+            concept.description
+            for concept in (
+                tutor.generated_question_rubric.required_concepts
+                if tutor.generated_question_rubric is not None
+                else []
+            )
+            if concept.concept_id == component_id
+        ),
+        "",
+    )
+    words = {word.casefold() for word in re.findall(r"[A-Za-z0-9]+", description)}
+    return [anchor for anchor in question_anchors if anchor.text.casefold() in words]
+
+
+def active_confirmation_exists(
+    canvas_events: list[CanvasEvent],
+    component_id: str,
+    target_object_id: str,
+    text: str,
+) -> bool:
+    return any(
+        event.actor == "TUTOR"
+        and event.action_type == "INSERT_LABEL"
+        and event.semantic_tag == component_id
+        and event.target_object_id == target_object_id
+        and event.content == text
+        and event.active_state == "ACTIVE"
+        for event in canvas_events
+    )
 
 
 def safe_written_rule_anchors(canonical_answer: str) -> list[str]:

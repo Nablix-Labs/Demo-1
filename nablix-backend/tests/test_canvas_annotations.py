@@ -1,5 +1,6 @@
 import pytest
 
+from app.ai_engine.classifier_config import FallbackCanvasLabelsConfig, load_classifier_rules
 from app.models.adapters import (
     AnnotationIntent,
     OCRTextRegion,
@@ -22,6 +23,10 @@ from app.services.canvas_annotations import (
     plan_tutor_canvas_actions,
     plan_write_request_tutor_draw,
 )
+
+
+def _fallback_labels() -> FallbackCanvasLabelsConfig:
+    return load_classifier_rules().guided_learning.fallback_canvas_labels
 
 
 def _tutor_result(
@@ -187,6 +192,7 @@ def test_confirmed_guided_idea_emits_a_component_scoped_semantic_action() -> Non
         [],
         "TURN-1",
         "m + 7",
+        _fallback_labels(),
     )
 
     assert actions[0].type == "INSERT_LABEL"
@@ -220,7 +226,14 @@ def test_canvas_action_rejects_unconfirmed_target_and_answer_reveal_text() -> No
         }
     )
 
-    assert plan_tutor_canvas_actions(tutor, [], [], "TURN-1", "n + 5") == []
+    assert plan_tutor_canvas_actions(
+        tutor,
+        [],
+        [],
+        "TURN-1",
+        "n + 5",
+        _fallback_labels(),
+    ) == []
 
 
 def test_wrong_turn_targets_only_reliable_student_written_work() -> None:
@@ -249,6 +262,7 @@ def test_wrong_turn_targets_only_reliable_student_written_work() -> None:
         ],
         "TURN-1",
         "n + 5",
+        _fallback_labels(),
     )
 
     assert [(action.type, action.target_object_id) for action in actions] == [
@@ -282,11 +296,107 @@ def test_partial_choice_selection_gets_a_stable_option_action() -> None:
         }
     )
 
-    actions = plan_tutor_canvas_actions(tutor, [], [], "TURN-1", "n + 4")
+    actions = plan_tutor_canvas_actions(
+        tutor,
+        [],
+        [],
+        "TURN-1",
+        "n + 4",
+        _fallback_labels(),
+    )
 
     assert [(action.type, action.target_kind, action.target_object_id) for action in actions] == [
         ("HIGHLIGHT", "QUESTION_OPTION", "Q-T01-004:OPTION:B")
     ]
+
+
+def test_fallback_turn_labels_every_confirmed_expression_component() -> None:
+    tutor = _tutor_result(
+        TutorMistakeClassification(status="no_mistake", confidence=0.9),
+        [],
+    ).model_copy(
+        update={
+            "guided_student_state": "PARTIAL",
+            "active_teaching_objective": ActiveTeachingObjective(
+                objective_type="EXPLAIN_CONCEPT",
+                target_concept_ids=["OPERATION"],
+                confirmed_concept_ids=[
+                    "CHANGING_VALUE",
+                    "FIXED_VALUE",
+                    "OPERATION",
+                ],
+                missing_concept_ids=["OPERATION"],
+            ),
+        }
+    )
+    anchors = [
+        QuestionTextAnchor(token_id="Q-T01-002:QTOKEN:1", text="m", char_start=3, char_end=4),
+        QuestionTextAnchor(token_id="Q-T01-002:QTOKEN:2", text="+", char_start=5, char_end=6),
+        QuestionTextAnchor(token_id="Q-T01-002:QTOKEN:3", text="7", char_start=7, char_end=8),
+    ]
+
+    actions = plan_tutor_canvas_actions(
+        tutor,
+        anchors,
+        [],
+        "TURN-1",
+        "m + 7",
+        _fallback_labels(),
+    )
+
+    assert [(action.target_object_id, action.text) for action in actions] == [
+        ("Q-T01-002:QTOKEN:1", "m → changes"),
+        ("Q-T01-002:QTOKEN:3", "7 → stays fixed"),
+        ("Q-T01-002:QTOKEN:2", "+ → addition"),
+    ]
+
+
+def test_fallback_turn_does_not_repeat_an_active_confirmation_label() -> None:
+    tutor = _tutor_result(
+        TutorMistakeClassification(status="no_mistake", confidence=0.9),
+        [],
+    ).model_copy(
+        update={
+            "guided_student_state": "PARTIAL",
+            "active_teaching_objective": ActiveTeachingObjective(
+                objective_type="EXPLAIN_CONCEPT",
+                target_concept_ids=["FIXED_VALUE"],
+                confirmed_concept_ids=["CHANGING_VALUE"],
+                missing_concept_ids=["FIXED_VALUE"],
+            ),
+        }
+    )
+    anchor = QuestionTextAnchor(
+        token_id="Q-T01-002:QTOKEN:1",
+        text="m",
+        char_start=3,
+        char_end=4,
+    )
+    active_label = CanvasEvent(
+        order_index=0,
+        turn_id="TURN-1",
+        question_id="Q-T01-002",
+        actor="TUTOR",
+        action_type="INSERT_LABEL",
+        content="m → changes",
+        math_text=None,
+        target_object_id=anchor.token_id,
+        bbox=None,
+        semantic_tag="CHANGING_VALUE",
+        source_id="TURN-1:1:INSERT_LABEL:Q-T01-002:QTOKEN:1",
+        active_state="ACTIVE",
+    )
+
+    actions = plan_tutor_canvas_actions(
+        tutor,
+        [anchor],
+        [active_label],
+        "TURN-2",
+        "m + 7",
+        _fallback_labels(),
+    )
+
+    assert actions == []
 
 
 def test_semantic_canvas_action_contract_rejects_unknown_type() -> None:
@@ -321,7 +431,14 @@ def test_written_rule_request_adds_safe_tutor_anchors_not_the_final_rule() -> No
         }
     )
 
-    actions = plan_tutor_canvas_actions(tutor, [], [], "TURN-1", "s + 6")
+    actions = plan_tutor_canvas_actions(
+        tutor,
+        [],
+        [],
+        "TURN-1",
+        "s + 6",
+        _fallback_labels(),
+    )
 
     assert [(action.type, action.text) for action in actions] == [
         ("INSERT_LABEL", "Start: s"),

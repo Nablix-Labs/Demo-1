@@ -172,6 +172,14 @@ class GuidedStateMappingConfig(StrictSchema):
     strategy: str | None
 
 
+class FallbackCanvasLabelsConfig(StrictSchema):
+    changing_value: str
+    fixed_value: str
+    operation: str
+    generic: str
+    operation_names: dict[str, str]
+
+
 class GuidedLearningConfig(StrictSchema):
     minimum_voice_transcript_confidence: float = Field(ge=0.0, le=1.0)
     minimum_ocr_confidence: float = Field(ge=0.0, le=1.0)
@@ -200,6 +208,7 @@ class GuidedLearningConfig(StrictSchema):
     supported_verification_methods: list[str]
     multi_component_question_types: list[QuestionType]
     llm_state_mapping: dict[GuidedStudentState, GuidedStateMappingConfig]
+    fallback_canvas_labels: FallbackCanvasLabelsConfig
 
     @model_validator(mode="after")
     def require_state_confidence_thresholds(self) -> "GuidedLearningConfig":
