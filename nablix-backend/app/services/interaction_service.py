@@ -3748,6 +3748,7 @@ async def _process_interaction(
         turn_id=request.turn_id or "TURN-0000",
         canonical_answer=answer_spec.canonical_answer if answer_spec is not None else "",
         fallback_labels=rules.guided_learning.fallback_canvas_labels,
+        wrong_attempt_count=turn_session.wrong_attempt_count,
     )
     logger.info(
         "guided_canvas_actions_planned",

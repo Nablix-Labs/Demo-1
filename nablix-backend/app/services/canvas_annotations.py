@@ -210,6 +210,7 @@ def plan_tutor_canvas_actions(
     turn_id: str,
     canonical_answer: str,
     fallback_labels: FallbackCanvasLabelsConfig,
+    wrong_attempt_count: int = 0,
 ) -> list[TutorCanvasAction]:
     """Validate evaluator intentions against the active Guided Practice state.
 
@@ -233,7 +234,14 @@ def plan_tutor_canvas_actions(
         confirmed.update(tutor.guided_teaching_state.confirmed_component_ids)
 
     if tutor.requires_written_math_evidence:
-        anchor_texts = safe_written_rule_anchors(canonical_answer)
+        # First attempt stays clean evidence of what the student knows unaided;
+        # the rule parts are scaffolding for a student who has already tried
+        # and failed, not a crib sheet handed out before the first attempt.
+        anchor_texts = (
+            safe_written_rule_anchors(canonical_answer)
+            if wrong_attempt_count > 0
+            else []
+        )
         anchor_actions = [
             TutorCanvasAction(
                 action_id=f"{turn_id}:{index}:INSERT_LABEL:TUTOR_ANCHOR",
