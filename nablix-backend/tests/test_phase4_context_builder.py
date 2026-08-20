@@ -114,6 +114,47 @@ def test_attempt_without_detected_errors_is_not_replayed() -> None:
     assert _build(history).replay_items == []
 
 
+def test_attempt_without_question_usage_id_is_not_replayed() -> None:
+    attempt = _attempt("A1", "INCORRECT").model_copy(update={"question_usage_id": None})
+    history = _history([attempt])
+
+    # Still evidence for the topic summary, just nothing to replay.
+    assert _build(history).replay_items == []
+    assert len(_build(history).whole_topic_evidence.final_independent_results) == 1
+
+
+def test_attempt_with_only_unmapped_errors_is_not_replayed() -> None:
+    attempt = _attempt("A1", "INCORRECT").model_copy(
+        update={
+            "detected_errors": [
+                DetectedErrorRecord(error_code="ERR-UNMAPPED", micro_skill_id=None)
+            ]
+        }
+    )
+    history = _history([attempt])
+
+    assert _build(history).replay_items == []
+
+
+def test_attempt_keeps_only_the_mapped_errors() -> None:
+    attempt = _attempt("A1", "INCORRECT").model_copy(
+        update={
+            "detected_errors": [
+                DetectedErrorRecord(error_code="ERR-MAPPED", micro_skill_id="T01.M3"),
+                DetectedErrorRecord(error_code="ERR-UNMAPPED", micro_skill_id=None),
+            ]
+        }
+    )
+    history = _history([attempt])
+
+    replay_items = _build(history).replay_items
+
+    assert len(replay_items) == 1
+    assert [error.error_code for error in replay_items[0].detected_errors] == [
+        "ERR-MAPPED"
+    ]
+
+
 def test_correct_topic_produces_no_replays_but_keeps_evidence() -> None:
     history = _history([_attempt("A1", "CORRECT")])
 
