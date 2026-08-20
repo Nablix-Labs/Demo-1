@@ -20,6 +20,8 @@ guided_learning:
   evaluator_prompt_version: "1.2.0"
   component_adjudicator_prompt_version: "1.0.0"
   explain_again_prompt_version: "1.0.1"
+  general_rule_fixed_value_prompt: "Good — {variable} can change. What stays fixed in the rule?"
+  general_rule_changing_value_prompt: "Good — the fixed part is there. Which part can change?"
   rubric_system_prompt: |
     You create a compact assessment rubric for one mathematics question.
     Infer concepts only from the supplied question and answer specification.
