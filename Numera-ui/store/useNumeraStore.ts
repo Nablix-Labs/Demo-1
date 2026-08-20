@@ -25,7 +25,9 @@ import {
   type SessionSummary,
 } from '@/lib/api';
 import { uid } from '@/lib/uid';
-import { resolveTarget, actionMarks, showsWriteAffordance } from '@/lib/tutorCanvasActions';
+import {
+  resolveTarget, actionMarks, showsWriteAffordance, memoryActionType, memoryActor,
+} from '@/lib/tutorCanvasActions';
 import type { SupportRung } from '@/lib/supportLadder';
 import { EMPTY_APPLIED, type AppliedState } from '@/lib/responseGate';
 import type { InactivityPolicy } from '@/lib/inactivity';
@@ -1448,8 +1450,8 @@ export const useNumeraStore = create<NumeraState>()(
           seenTutorCanvasActionIds.add(action.action_id);
           tutorOptionActionIds = [...tutorOptionActionIds, action.target_object_id];
           canvasEvents = appendCanvasEvent(canvasEvents, {
-            actor: 'TUTOR',
-            action_type: action.type,
+            actor: memoryActor(action.type),
+            action_type: memoryActionType(action.type),
             target_object_id: action.target_object_id,
             bbox: null,
             content: action.text,
@@ -1497,10 +1499,8 @@ export const useNumeraStore = create<NumeraState>()(
         // The renderer acknowledgement (Sanya, 19 Aug): recorded only for an
         // action that actually reached the screen.
         canvasEvents = appendCanvasEvent(canvasEvents, {
-          actor: action.type === 'SHOW_CUE' || action.type === 'OPEN_SCAFFOLD_STEP'
-            ? 'SYSTEM_SUPPORT'
-            : 'TUTOR',
-          action_type: action.type === 'OPEN_SCAFFOLD_STEP' ? 'SCAFFOLD_STEP' : action.type,
+          actor: memoryActor(action.type),
+          action_type: memoryActionType(action.type),
           target_object_id: action.target_object_id,
           bbox: target.kind === 'box' ? target.box : null,
           content: action.text,

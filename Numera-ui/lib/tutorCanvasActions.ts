@@ -26,7 +26,10 @@
  */
 
 import type { QuestionAnchor } from '@/lib/questionAnchors';
-import { itemBBox, tutorElementBBox, type CanvasBBox, type CanvasSize } from '@/lib/canvasMemory';
+import {
+  itemBBox, tutorElementBBox,
+  type CanvasBBox, type CanvasSize, type CanvasActionType,
+} from '@/lib/canvasMemory';
 import type { DrawnItem, TutorCanvasAction, TutorElement } from '@/store/useNumeraStore';
 
 /** Where an action's target turned out to be, once resolved locally. */
@@ -184,4 +187,21 @@ export function actionMarks(
 /** Does this action ask for the tutor-owned write affordance (and nothing else)? */
 export function showsWriteAffordance(action: TutorCanvasAction): boolean {
   return action.target_kind === 'WRITE_AREA';
+}
+
+/**
+ * The canvas-memory action type for a semantic action.
+ *
+ * `OPEN_SCAFFOLD_STEP` is the one name that differs between the two
+ * vocabularies — ordered memory has always called it `SCAFFOLD_STEP`. Kept in
+ * one place because it was already written out twice and a third caller
+ * assigned the raw value, which does not compile.
+ */
+export function memoryActionType(type: TutorCanvasAction['type']): CanvasActionType {
+  return type === 'OPEN_SCAFFOLD_STEP' ? 'SCAFFOLD_STEP' : type;
+}
+
+/** Support rungs are the system's doing, not a tutor mark on the board. */
+export function memoryActor(type: TutorCanvasAction['type']): 'TUTOR' | 'SYSTEM_SUPPORT' {
+  return type === 'SHOW_CUE' || type === 'OPEN_SCAFFOLD_STEP' ? 'SYSTEM_SUPPORT' : 'TUTOR';
 }

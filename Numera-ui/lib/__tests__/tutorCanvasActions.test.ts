@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  resolveTarget, actionMarks, revealsAnswer, showsWriteAffordance,
+  resolveTarget, actionMarks, revealsAnswer, showsWriteAffordance, memoryActionType, memoryActor,
   type ResolveContext,
 } from '@/lib/tutorCanvasActions';
 import type { TutorCanvasAction, DrawnItem } from '@/store/useNumeraStore';
@@ -153,5 +153,26 @@ describe('the marks themselves', () => {
 
   it('gives every mark an id derived from the action, so a replay overwrites', () => {
     expect(actionMarks(action({ type: 'HIGHLIGHT' }), boxTarget)[0].id).toContain('ACT-1');
+  });
+});
+
+describe('the canvas-memory vocabulary', () => {
+  it('renames OPEN_SCAFFOLD_STEP to the name ordered memory uses', () => {
+    // The one name that differs between the two vocabularies. A caller that
+    // assigned the raw value did not compile, which is how this was found.
+    expect(memoryActionType('OPEN_SCAFFOLD_STEP')).toBe('SCAFFOLD_STEP');
+  });
+
+  it('passes every other type through unchanged', () => {
+    for (const t of ['HIGHLIGHT', 'GROUP', 'ARROW', 'INSERT_MATH', 'INSERT_LABEL', 'FOCUS'] as const) {
+      expect(memoryActionType(t)).toBe(t);
+    }
+  });
+
+  it('files the support rungs against the system, not the tutor', () => {
+    // A cue is the system serving support; it is not the tutor drawing.
+    expect(memoryActor('SHOW_CUE')).toBe('SYSTEM_SUPPORT');
+    expect(memoryActor('OPEN_SCAFFOLD_STEP')).toBe('SYSTEM_SUPPORT');
+    expect(memoryActor('HIGHLIGHT')).toBe('TUTOR');
   });
 });
