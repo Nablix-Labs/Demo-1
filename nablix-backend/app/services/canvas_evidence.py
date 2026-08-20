@@ -137,6 +137,33 @@ async def collect_canvas_evidence(
     )
     ocr = _with_confirmed_mathml_regions(ocr)
     strokes_by_step = associate_strokes_with_steps(strokes, ocr.detected_regions)
+    if strokes:
+        # A region with no associated student stroke wasn't written by the
+        # student — most often it's the tutor's own layer, captured into the
+        # same snapshot. Drop it before it can be graded as an answer.
+        # ponytail: filters region-derived text only. `latex` and
+        # `mathml_blocks` stay whole-image; they don't reach `written_work`.
+        # Filter them too if a tutor element ever shows up in a
+        # MathML-grounded correction.
+        kept_regions = [
+            region
+            for region in ocr.detected_regions
+            if strokes_by_step.get(region.step_id or "", [])
+        ]
+        if len(kept_regions) != len(ocr.detected_regions):
+            detected_steps = [region.text for region in kept_regions]
+            ocr = ocr.model_copy(
+                update={
+                    "detected_regions": kept_regions,
+                    "detected_steps": detected_steps,
+                    # No stale fallback: when every region is dropped, the
+                    # text fields must go empty too, not silently revert to
+                    # the unfiltered (tutor-ink-included) originals.
+                    "raw_ocr_text": "\n".join(detected_steps),
+                    "detected_equation": detected_steps[0] if detected_steps else "",
+                    "final_answer": detected_steps[-1] if detected_steps else None,
+                }
+            )
     spatial_tokens: list[SpatialMathToken] = []
     for region in ocr.detected_regions:
         if region.step_id is None or region.mathml is None:

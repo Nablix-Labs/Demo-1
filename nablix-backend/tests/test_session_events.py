@@ -2679,3 +2679,115 @@ def test_tc25_review_complete_forwards_correlated_event_and_persists_next_topic(
     stored = session_service._sessions[session_id]
     assert stored.student_model_event is not None
     assert stored.student_model_event.routing.next_topic_id == "ALG-ORI-02"
+
+
+def test_first_question_of_a_phase_is_question_number_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for the off-by-one: entering a phase is a question-id change,
+    so the old increment-on-id-change branch clobbered the correct position-in-
+    set value on exactly the first question of every phase."""
+
+    async def fake_post_json(
+        adapter_name: str,
+        url: str,
+        payload: dict[str, object],
+        headers: dict[str, str],
+        timeout_seconds: int,
+        retry_count: int,
+    ) -> dict[str, object]:
+        del adapter_name, url, headers, timeout_seconds, retry_count
+        response = _diagnostic_started_response()
+        response["request_id"] = payload["request_id"]
+        return response
+
+    _use_live_student_model(monkeypatch, fake_post_json)
+    started = client.post(
+        "/session/start",
+        json={"student_id": "ST001", "concept_id": "ALG_LINEAR_ONE_STEP", "interaction_mode": "TEXT"},
+    )
+    session = session_service._sessions[started.json()["session_id"]]
+    assert session.question_id != "Q-T02-004"
+
+    body = _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+    event = session_service.StudentModelSessionEventResponse.model_validate(body)
+    entered_phase = asyncio.run(session_service._apply_schema_event(session, event))
+
+    assert entered_phase.question_id == "Q-T02-004"
+    assert entered_phase.question_number == 1
+
+    # A second question served within the same phase still increments normally.
+    second_body = deepcopy(body)
+    journey = second_body["journey_state"]
+    payload = second_body["phase_payload"]
+    assert isinstance(journey, dict)
+    assert isinstance(payload, dict)
+    question_set = payload["question_set"]
+    assert isinstance(question_set, dict)
+    second_question = deepcopy(question_set["questions"][0])
+    second_question["question_id"] = "Q-T02-005"
+    second_question["question_usage_id"] = "QU-T02-005-P3"
+    question_set["questions"].append(second_question)
+    journey["phase_3_independent_practice"]["current_question_id"] = "Q-T02-005"
+    second_event = session_service.StudentModelSessionEventResponse.model_validate(second_body)
+    advanced = asyncio.run(session_service._apply_schema_event(entered_phase, second_event))
+
+    assert advanced.question_id == "Q-T02-005"
+    assert advanced.question_number == 2
+
+
+def test_resume_with_only_student_id_and_turn_id_uses_server_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A client can only honestly know student_id and turn_id (see #6). The
+    other three fields must come from stored session state / policy, not be
+    demanded of the client."""
+
+    events: list[object] = []
+
+    async def send_session_event(adapter: object, event: object, access_token: str):
+        del adapter, access_token
+        events.append(event)
+        event_type = getattr(event, "event_type")
+        body = _session_opened_response(
+            "PHASE_2_GUIDED_LEARNING"
+            if event_type == "SESSION_OPENED"
+            else "PHASE_2_GUIDED_LEARNING"
+        )
+        body["request_id"] = getattr(event, "request_id")
+        return session_service.StudentModelSessionEventResponse.model_validate(body)
+
+    monkeypatch.setattr(
+        student_model.StudentModelServiceAdapter,
+        "send_session_event",
+        send_session_event,
+    )
+    settings = Settings(
+        student_model_url="https://student-model.example",
+        student_model_topic_codes={"ALG_LINEAR_ONE_STEP": "ALG-ORI-02"},
+        use_mock_student_model=False,
+        resume_continuity_threshold_days=9,
+    )
+    monkeypatch.setattr(provider, "get_settings", lambda: settings)
+    monkeypatch.setattr(session_service, "get_settings", lambda: settings)
+    started = client.post(
+        "/session/start",
+        json={"student_id": "ST001", "concept_id": "ALG_LINEAR_ONE_STEP", "interaction_mode": "TEXT"},
+    )
+    session_id = started.json()["session_id"]
+    stored_before = session_service._sessions[session_id]
+    stored_journey = stored_before.student_model_event.journey_state
+
+    resumed = client.post(
+        f"/session/{session_id}/resume",
+        json={"student_id": "ST001", "turn_id": "TURN-MINIMAL-RESUME"},
+    )
+
+    assert resumed.status_code == 200, resumed.text
+    resume_event = events[-1]
+    assert getattr(resume_event, "event_type") == "SESSION_RESUMED"
+    assert getattr(resume_event, "continuity_threshold_days") == 9
+    assert getattr(resume_event, "saved_journey") == stored_journey.model_dump(mode="json")
+    assert getattr(resume_event, "last_activity_at") == (
+        stored_before.last_tutor_response_at.isoformat().replace("+00:00", "Z")
+    )

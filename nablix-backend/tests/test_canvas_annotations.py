@@ -475,7 +475,9 @@ def test_write_request_marks_a_tutor_owned_area_without_revealing_the_rule() -> 
     assert all("s + 6" not in (element.text or "") for element in draw[0].elements)
 
 
-def test_written_rule_request_adds_safe_tutor_anchors_not_the_final_rule() -> None:
+def test_write_request_on_first_attempt_has_no_rule_anchors() -> None:
+    """First attempt is clean evidence: no Start/Gain scaffolding to copy from."""
+
     tutor = _tutor_result(
         TutorMistakeClassification(status="no_mistake", confidence=0.9),
         [],
@@ -487,12 +489,29 @@ def test_written_rule_request_adds_safe_tutor_anchors_not_the_final_rule() -> No
     )
 
     actions = plan_tutor_canvas_actions(
-        tutor,
+        tutor, [], [], "TURN-1", "s + 6", _fallback_labels(), wrong_attempt_count=0
+    )
+
+    assert [(action.type, action.text) for action in actions] == [
+        ("FOCUS", "Write your rule on the canvas."),
+    ]
+
+
+def test_written_rule_request_adds_safe_tutor_anchors_not_the_final_rule() -> None:
+    """After a failed attempt, the rule parts appear as scaffolding."""
+
+    tutor = _tutor_result(
+        TutorMistakeClassification(status="no_mistake", confidence=0.9),
         [],
-        [],
-        "TURN-1",
-        "s + 6",
-        _fallback_labels(),
+    ).model_copy(
+        update={
+            "guided_student_state": "PARTIAL",
+            "requires_written_math_evidence": True,
+        }
+    )
+
+    actions = plan_tutor_canvas_actions(
+        tutor, [], [], "TURN-1", "s + 6", _fallback_labels(), wrong_attempt_count=1
     )
 
     assert [(action.type, action.text) for action in actions] == [
