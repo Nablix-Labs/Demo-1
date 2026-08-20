@@ -47,6 +47,7 @@ import type { SupportRung } from '@/lib/supportLadder';
 import type { NudgeClaimResult } from '@/hooks/useInactivityNudge';
 import { reportFailure } from '@/lib/failureReport';
 import { canvasSubmissionView } from '@/lib/canvasSubmission';
+import type { QuestionAnchor } from '@/lib/questionAnchors';
 
 const apiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
@@ -295,6 +296,8 @@ export function syncBackendSession(response: {
   };
   /** Semantic tutor canvas actions, applied before any phase change clears them. */
   tutor_canvas_actions?: TutorCanvasAction[];
+  /** Active-question anchors required to resolve semantic tutor actions. */
+  question_anchors?: QuestionAnchor[];
 }): void {
   // Text is kept verbatim. This used to strip a leading "solve for x:" because
   // the screens re-added it themselves — which silently mangled any question
@@ -312,6 +315,14 @@ export function syncBackendSession(response: {
   // applyBackendPhase means the new question can find its own options.
   const refreshed = refreshedRecord(store.backendSession, response);
   if (refreshed) store.setBackendSession(refreshed);
+  // For a same-question reply, register its target anchors before resolving
+  // semantic actions. Otherwise an accepted label such as `m → changes` is
+  // dropped simply because this path has not yet received the anchor list.
+  const isSameQuestion = response.question_id !== null
+    && response.question_id === store.activeQuestionId;
+  if (isSameQuestion && response.question_anchors !== undefined) {
+    store.setQuestionAnchors(response.question_anchors);
+  }
   // Semantic tutor actions are applied HERE, before the phase change, because
   // they describe the question being left — not the one being arrived at. Doing
   // it after meant they resolved against the next question's anchors, which is
