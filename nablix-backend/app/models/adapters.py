@@ -289,6 +289,7 @@ class TutorResult(BaseModel):
     phase3_review_evidence: dict[str, object] | None = None
 
     requires_written_math_evidence: bool = False
+    write_instruction: str | None = Field(default=None, max_length=160)
     canvas_intentions: list[CanvasPedagogyIntent] = Field(default_factory=list)
     tutor_canvas_actions: list[TutorCanvasAction] = Field(default_factory=list)
 

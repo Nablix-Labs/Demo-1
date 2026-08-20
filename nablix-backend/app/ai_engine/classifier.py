@@ -3465,7 +3465,12 @@ def build_guided_tutor_response(
     )
     if not requires_written_symbolic_rule_evidence(request, state):
         return guarded_response
-    message = (
+    write_instruction = safe_guided_write_instruction(
+        evaluation,
+        request,
+        rules,
+    )
+    message = write_instruction or (
         "You have explained the idea clearly. Now write the rule on the canvas "
         "so I can check the mathematical form."
     )
@@ -3484,8 +3489,30 @@ def build_guided_tutor_response(
             "active_teaching_objective": request.active_teaching_objective,
             "guided_teaching_state": request.guided_teaching_state,
             "requires_written_math_evidence": True,
+            "write_instruction": write_instruction,
         }
     )
+
+
+def safe_guided_write_instruction(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
+) -> str | None:
+    """Keep an evaluator-authored writing prompt from disclosing the rule."""
+
+    if evaluation.write_instruction is None:
+        return None
+    instruction = evaluation.write_instruction.strip()
+    if instruction == "":
+        return None
+    if contains_answer_reveal(instruction, request.correct_answer, rules):
+        logger.warning(
+            "guided_write_instruction_rejected",
+            extra={"question_id": request.question_id, "reason": "answer_reveal"},
+        )
+        return None
+    return instruction
 
 
 def build_openai_ai_engine_client(settings: Settings) -> OpenAIAIEngineClient | None:

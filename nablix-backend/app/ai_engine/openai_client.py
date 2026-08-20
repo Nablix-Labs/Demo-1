@@ -91,7 +91,7 @@ def guided_evaluation_schema() -> dict[str, object]:
     required = schema.get("required")
     if not isinstance(properties, dict) or not isinstance(required, list):
         raise AdapterError("openai_ai_engine", "Guided evaluation schema is malformed.")
-    schema["required"] = [*required, "canvas_intentions"]
+    schema["required"] = [*required, "write_instruction", "canvas_intentions"]
     return schema
 
 

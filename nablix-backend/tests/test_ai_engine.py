@@ -412,6 +412,10 @@ def test_voice_only_symbolic_rule_requires_written_evidence() -> None:
         next_objective=None,
         tutor_message="That is the right new-score rule.",
         tutor_message_voice="That is the right new-score rule.",
+        write_instruction=(
+            "Write the general rule using the starting score and the change "
+            "you identified."
+        ),
     )
 
     response = classifier.build_guided_tutor_response(
@@ -426,7 +430,73 @@ def test_voice_only_symbolic_rule_requires_written_evidence() -> None:
     assert response.requires_written_math_evidence is True
     assert response.question_completed is False
     assert response.attempt_increment == 0
-    assert "write the rule" in response.tutor_message
+    assert response.write_instruction == (
+        "Write the general rule using the starting score and the change "
+        "you identified."
+    )
+    assert response.tutor_message == response.write_instruction
+
+
+def test_written_rule_instruction_cannot_reveal_the_unwritten_rule() -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-SCORE",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="GENERAL_RULE",
+                description="new score rule",
+                required=True,
+            )
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="score-rule",
+        prompt_version="1.0.0",
+    )
+    request = ClassificationRequest(
+        question_id="Q-T01-SCORE",
+        question_type="SHORT_RESPONSE",
+        question="A player starts with score s and gains 6 bonus points. Write the new-score rule.",
+        correct_answer="s + 6",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-SCORE",
+            canonical_answer="s + 6",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=False,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        student_input="s plus 6",
+        current_phase="GUIDED_PRACTICE",
+        input_source="VOICE",
+        transcript_confidence=0.96,
+        attempt_count=0,
+        current_hint_level=None,
+    )
+    evaluation = GuidedEvaluation(
+        student_state="CORRECT",
+        newly_confirmed_concept_ids=["GENERAL_RULE"],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=[],
+        selected_error_code=None,
+        confidence=0.96,
+        next_objective=None,
+        tutor_message="That is the right new-score rule.",
+        tutor_message_voice="That is the right new-score rule.",
+        write_instruction="Write s + 6 on the canvas.",
+    )
+
+    response = classifier.build_guided_tutor_response(
+        request,
+        classifier.load_classifier_rules(),
+        classifier.SafetyCheck(passed=True, flag_type=None, action_taken=None),
+        rubric,
+        evaluation,
+        classifier.initial_guided_objective(rubric),
+    )
+
+    assert response.requires_written_math_evidence is True
+    assert response.write_instruction is None
+    assert response.tutor_message != "Write s + 6 on the canvas."
 
 
 def test_typed_symbolic_rule_requires_canvas_evidence() -> None:
@@ -2019,10 +2089,11 @@ def test_guided_evaluation_schema_rejects_blank_tutor_messages() -> None:
     assert schema["properties"]["tutor_message_voice"]["minLength"] == 1
 
 
-def test_guided_evaluation_openai_schema_requires_canvas_intentions() -> None:
+def test_guided_evaluation_openai_schema_requires_semantic_fields() -> None:
     schema = openai_client.guided_evaluation_schema()
 
     assert "canvas_intentions" in schema["required"]
+    assert "write_instruction" in schema["required"]
     assert "text" in schema["$defs"]["CanvasPedagogyIntent"]["required"]
 
 

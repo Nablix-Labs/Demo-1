@@ -3842,6 +3842,11 @@ async def _process_interaction(
             "next_expected_input": (
                 "WRITE" if tutor.requires_written_math_evidence else None
             ),
+            "write_instruction": (
+                tutor.write_instruction
+                if tutor.requires_written_math_evidence
+                else None
+            ),
             "selected_error_code": tutor.selected_error_code,
             "evaluation_reason_code": (
                 _evaluation_reason(tutor)
