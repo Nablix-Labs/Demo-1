@@ -29,6 +29,9 @@ from app.services.student_model_debug import record_request, record_response
 # Minted per call rather than cached: HMAC signing is microseconds, and a short
 # life means a leaked token is worth almost nothing.
 _SERVICE_TOKEN_TTL_SECONDS = 300
+# Identifies the caller in Student Model's logs. Not a user id and not looked
+# up anywhere -- internal_service never resolves a student row.
+_SERVICE_TOKEN_SUBJECT = "nablix-backend"
 
 
 class StudentModelServiceAdapter:
@@ -243,7 +246,7 @@ class StudentModelServiceAdapter:
         now = datetime.now(timezone.utc)
         return jwt.encode(
             {
-                "sub": self._settings.student_model_service_subject,
+                "sub": _SERVICE_TOKEN_SUBJECT,
                 "role": "internal_service",
                 # Not checked for this role, but CurrentUser reads the claim
                 # unconditionally and would KeyError without it.

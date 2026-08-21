@@ -22,7 +22,6 @@ class Settings(BaseSettings):
     # the student's token, because ownership there is per-student.
     student_model_jwt_secret: str = ""
     student_model_jwt_algorithm: str = "HS256"
-    student_model_service_subject: str = "nablix-backend"
     cors_allowed_origins: list[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
