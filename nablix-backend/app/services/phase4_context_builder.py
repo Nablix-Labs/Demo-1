@@ -41,13 +41,13 @@ def _replay_item(index: int, attempt: TopicAttemptRecord) -> ReplayItem | None:
     """
 
     if attempt.work_artifact is None:
-        logger.debug(
+        logger.info(
             "phase4_replay_item_skipped",
             extra={"attempt_id": attempt.attempt_id, "reason": "no_work_artifact"},
         )
         return None
     if attempt.question_usage_id is None:
-        logger.debug(
+        logger.info(
             "phase4_replay_item_skipped",
             extra={"attempt_id": attempt.attempt_id, "reason": "no_question_usage_id"},
         )
@@ -58,7 +58,7 @@ def _replay_item(index: int, attempt: TopicAttemptRecord) -> ReplayItem | None:
         if error.micro_skill_id is not None
     ]
     if not detected_errors:
-        logger.debug(
+        logger.info(
             "phase4_replay_item_skipped",
             extra={"attempt_id": attempt.attempt_id, "reason": "no_detected_errors"},
         )
@@ -92,15 +92,20 @@ def _whole_topic_evidence(
 
     evidence = history.whole_topic_evidence
     phase_3 = [a for a in history.attempts if a.phase == PHASE_3]
+    # `or []` rather than a .get default: the service SENDS these keys with a
+    # null value when the student has no topic learning summary row yet, so the
+    # default never applied and list(None) raised a TypeError -- which is not a
+    # ValueError, so it escaped generate_phase4_review_for's handler and 500'd
+    # the student's Phase 3 submit instead of degrading to no review.
     return WholeTopicEvidence(
-        strong_micro_skill_ids=list(evidence.get("strong_micro_skill_ids", [])),
+        strong_micro_skill_ids=list(evidence.get("strong_micro_skill_ids") or []),
         developing_micro_skill_ids=list(
-            evidence.get("developing_micro_skill_ids", [])
+            evidence.get("developing_micro_skill_ids") or []
         ),
-        root_gap_micro_skill_ids=list(evidence.get("root_gap_micro_skill_ids", [])),
-        error_cluster_counts=dict(evidence.get("error_cluster_counts", {})),
+        root_gap_micro_skill_ids=list(evidence.get("root_gap_micro_skill_ids") or []),
+        error_cluster_counts=dict(evidence.get("error_cluster_counts") or {}),
         misconception_recurrence_counts=dict(
-            evidence.get("misconception_recurrence_counts", {})
+            evidence.get("misconception_recurrence_counts") or {}
         ),
         hint_count=sum(1 for attempt in phase_3 if attempt.hint_used),
         fresh_question_required=any(

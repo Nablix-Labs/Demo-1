@@ -38,7 +38,7 @@ import { selectedOptionText } from '@/lib/selectedOption';
 import { applyInteractionSupport, acceptResponse, authorisedHint } from '@/lib/interactionPresentation';
 import { revealDecision } from '@/lib/revealBeforeClear';
 import { refreshedRecord } from '@/lib/sessionRecordRefresh';
-import { sessionEndSummary } from '@/lib/sessionEnd';
+import { sessionEndSummary, storeEndedSession } from '@/lib/sessionEnd';
 import { useNumeraStore, type TrailKind, type TutorCanvasAction } from '@/store/useNumeraStore';
 import { tutorSay, setStudentWriting } from '@/lib/tutorSpeech';
 import { phaseAnnouncement, withTransitionVoice } from '@/lib/phaseTransition';
@@ -1216,13 +1216,7 @@ export function useDemoTutor() {
     if (!apiEnabled() || !sessionId) return null;
     const res = await endSession(sessionId); // propagates network/HTTP failures
     const summary = sessionEndSummary(res);
-    const store = useNumeraStore.getState();
-    store.setSessionSummary(summary);
-    // Merged, not replaced: the record built up over the session carries the
-    // question set and student-model state that the end response does not.
-    store.setBackendSession({ ...store.backendSession, ...res });
-    if (res.session_review) store.setSessionReview(res.session_review);
-    store.clearSessionId();
+    storeEndedSession(res, summary);
     return summary;
   }, [sessionId]);
 

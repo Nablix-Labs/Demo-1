@@ -8,7 +8,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { sessionEndSummary } from '@/lib/sessionEnd';
+import { sessionEndSummary, storeEndedSession } from '@/lib/sessionEnd';
+import { useNumeraStore } from '@/store/useNumeraStore';
 import type { SessionEndResponse } from '@/lib/api';
 
 const ended = (over: Partial<SessionEndResponse> = {}) => ({
@@ -42,5 +43,36 @@ describe('ending a session', () => {
     // and the backend has left the session open.
     expect(() => sessionEndSummary(null)).toThrow(/no summary/i);
     expect(() => sessionEndSummary({} as SessionEndResponse)).toThrow(/no summary/i);
+  });
+});
+
+describe('the completed record survives into Review', () => {
+  it('keeps phase4_review after the live session is cleared', () => {
+    // The bug this guards: `clearSessionId` also nulls `backendSession`, so the
+    // review the backend had just generated was destroyed between arriving and
+    // being rendered. It painted on one frame and vanished on the next.
+    const phase4_review = { student_insights: { strength_summary: 'Good start.' } };
+    const res = ended({ phase4_review } as Partial<SessionEndResponse>);
+
+    useNumeraStore.getState().setSessionId('SESSION1');
+    storeEndedSession(res, sessionEndSummary(res));
+
+    const state = useNumeraStore.getState();
+    expect(state.sessionId).toBeNull();
+    expect(state.backendSession).not.toBeNull();
+    expect(state.backendSession).toMatchObject({ phase4_review });
+  });
+
+  it('still carries forward what only the in-session record held', () => {
+    // Merged, not replaced: /session/end does not resend the question set.
+    useNumeraStore.getState().setSessionId('SESSION1');
+    useNumeraStore.getState().setBackendSession(
+      { session_id: 'SESSION1', current_question: 'Find a rule.' } as never,
+    );
+
+    const res = ended({ current_question: null } as Partial<SessionEndResponse>);
+    storeEndedSession(res, sessionEndSummary(res));
+
+    expect(useNumeraStore.getState().backendSession).toMatchObject({ status: 'ended' });
   });
 });

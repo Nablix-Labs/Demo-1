@@ -760,7 +760,6 @@ def _require_schema_phase(
 async def generate_phase4_review_for(
     session: SessionRecord,
     event: StudentModelSessionEventResponse,
-    access_token: str,
 ) -> Phase4ReviewResponse | None:
     """Review the finished topic as the student enters Phase 4.
 
@@ -773,7 +772,6 @@ async def generate_phase4_review_for(
         history = await get_adapters().student_model.fetch_topic_event_history(
             session.student_id,
             event.journey_state.topic_id,
-            access_token,
         )
         request = build_phase4_review_request(
             history,
@@ -791,6 +789,7 @@ async def generate_phase4_review_for(
             extra={
                 "session_id": session.session_id,
                 "topic_id": event.journey_state.topic_id,
+                "status_code": getattr(error, "status_code", None),
                 "error": str(error),
             },
         )
@@ -837,7 +836,6 @@ async def generate_phase4_review_for(
                 ],
                 student_insights=review.student_insights.model_dump(mode="json"),
             ),
-            access_token,
         )
     except DOWNSTREAM_FAILURE as error:
         # The review is already generated; the student should still see it
@@ -847,6 +845,7 @@ async def generate_phase4_review_for(
             extra={
                 "session_id": session.session_id,
                 "topic_id": event.journey_state.topic_id,
+                "status_code": getattr(error, "status_code", None),
                 "error": str(error),
             },
         )
@@ -856,7 +855,6 @@ async def generate_phase4_review_for(
 async def _apply_schema_event(
     session: SessionRecord,
     event: StudentModelSessionEventResponse,
-    access_token: str | None = None,
 ) -> SessionRecord:
     payload = event.phase_payload
     has_questions = (
@@ -990,11 +988,10 @@ async def _apply_schema_event(
                 ],
             }
         )
-        if next_phase == "REVIEW" and access_token is not None:
+        if next_phase == "REVIEW":
             updates["phase4_review"] = await generate_phase4_review_for(
                 session,
                 event,
-                access_token,
             )
         phase0_config = load_phase0_tutor_config()
         transition_message = (

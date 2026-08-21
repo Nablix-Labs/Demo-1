@@ -1,11 +1,17 @@
 import asyncio
 
+import jwt
 import pytest
 
 from app.adapters import student_model
 from app.core.config import Settings
 from app.core.exceptions import AdapterError
-from app.models.work_artifact import WorkArtifactPersistRequest
+from app.models.work_artifact import (
+    Phase4ReviewPersistRequest,
+    WorkArtifactPersistRequest,
+)
+
+JWT_SECRET = "shared-with-student-model-at-least-32-bytes"
 
 
 def _settings() -> Settings:
@@ -13,7 +19,16 @@ def _settings() -> Settings:
         student_model_url="https://student-model.example/",
         student_model_topic_ids={},
         use_mock_student_model=False,
+        student_model_jwt_secret=JWT_SECRET,
     )
+
+
+def _claims(headers: dict[str, str]) -> dict[str, object]:
+    """Decode the bearer the adapter actually sent."""
+
+    scheme, _, token = headers["Authorization"].partition(" ")
+    assert scheme == "Bearer"
+    return jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
 
 
 def _request() -> WorkArtifactPersistRequest:
@@ -103,6 +118,7 @@ def test_fetch_topic_event_history_parses_attempts(
     ) -> dict[str, object]:
         captured["url"] = url
         captured["body"] = body
+        captured["headers"] = headers
         return {
             "topic_id": "ALG-KS3-01",
             "student_id": "ST003",
@@ -133,11 +149,17 @@ def test_fetch_topic_event_history_parses_attempts(
     adapter = student_model.StudentModelServiceAdapter(_settings())
 
     history = asyncio.run(
-        adapter.fetch_topic_event_history("ST003", "ALG-KS3-01", "test-token")
+        adapter.fetch_topic_event_history("ST003", "ALG-KS3-01")
     )
 
     assert captured["url"] == "https://student-model.example/topic/event-history"
     assert captured["body"] == {"student_id": "ST003", "topic_id": "ALG-KS3-01"}
+    # The regression this file exists to hold: Student Model gates this route on
+    # require_role("internal_service"), so a forwarded student bearer is a 403 —
+    # which generate_phase4_review_for swallows into a missing review.
+    headers = captured["headers"]
+    assert isinstance(headers, dict)
+    assert _claims(headers)["role"] == "internal_service"
     assert len(history.attempts) == 1
     attempt = history.attempts[0]
     assert attempt.is_wrong is True
@@ -179,7 +201,7 @@ def test_fetch_topic_event_history_accepts_missing_micro_skill_and_usage_id(
     adapter = student_model.StudentModelServiceAdapter(_settings())
 
     history = asyncio.run(
-        adapter.fetch_topic_event_history("ST003", "ALG-KS3-01", "test-token")
+        adapter.fetch_topic_event_history("ST003", "ALG-KS3-01")
     )
 
     attempt = history.attempts[0]
@@ -198,5 +220,86 @@ def test_fetch_topic_event_history_rejects_malformed_response(
 
     with pytest.raises(AdapterError):
         asyncio.run(
-            adapter.fetch_topic_event_history("ST003", "ALG-KS3-01", "test-token")
+            adapter.fetch_topic_event_history("ST003", "ALG-KS3-01")
         )
+
+
+def test_fetch_topic_event_history_requires_a_signing_secret() -> None:
+    """Without the shared secret there is no service identity to present, and a
+    silently-unauthenticated call would 403 downstream instead of failing here."""
+
+    adapter = student_model.StudentModelServiceAdapter(
+        Settings(
+            student_model_url="https://student-model.example/",
+            student_model_topic_ids={},
+            use_mock_student_model=False,
+        )
+    )
+
+    with pytest.raises(AdapterError):
+        asyncio.run(adapter.fetch_topic_event_history("ST003", "ALG-KS3-01"))
+
+
+def test_persist_phase4_review_authenticates_as_the_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """This WRITES the topic learning summary — never on a student's credential."""
+
+    captured: dict[str, object] = {}
+
+    async def post_json(
+        name: str,
+        url: str,
+        body: dict[str, object],
+        headers: dict[str, str],
+        timeout: int,
+        retries: int,
+    ) -> dict[str, object]:
+        captured["url"] = url
+        captured["headers"] = headers
+        return {"status": "ok"}
+
+    monkeypatch.setattr(student_model, "post_json", post_json)
+    adapter = student_model.StudentModelServiceAdapter(_settings())
+
+    asyncio.run(
+        adapter.persist_phase4_review(
+            Phase4ReviewPersistRequest(
+                student_id="ST003",
+                topic_id="ALG-KS3-01",
+                tutor_replays=[],
+                student_insights={},
+            )
+        )
+    )
+
+    assert captured["url"] == "https://student-model.example/phase4-review"
+    headers = captured["headers"]
+    assert isinstance(headers, dict)
+    assert _claims(headers)["role"] == "internal_service"
+
+
+def test_work_artifact_pdf_still_uses_the_students_own_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The counterpart to the two tests above: ownership on this read is
+    per-student, so a service token here would defeat the check entirely."""
+
+    captured: dict[str, object] = {}
+
+    async def get_bytes(
+        name: str,
+        url: str,
+        headers: dict[str, str],
+        timeout: int,
+        retries: int,
+    ) -> tuple[bytes, str]:
+        captured["headers"] = headers
+        return b"%PDF-1.4", "application/pdf"
+
+    monkeypatch.setattr(student_model, "get_bytes", get_bytes)
+    adapter = student_model.StudentModelServiceAdapter(_settings())
+
+    asyncio.run(adapter.fetch_work_artifact_pdf("ART-12", "student-token"))
+
+    assert captured["headers"] == {"Authorization": "Bearer student-token"}
