@@ -208,3 +208,31 @@ def test_missing_topic_info_is_an_error_not_invented_content() -> None:
 
     with pytest.raises(Phase4ContextError):
         _build(history)
+
+
+def test_null_whole_topic_evidence_does_not_raise() -> None:
+    """The service sends these keys with a null value when the student has no
+    topic learning summary row yet — exactly what a first pass through a topic
+    looks like. `list(None)` raised a TypeError, which is not a ValueError, so
+    it escaped generate_phase4_review_for's handler and 500'd the student's
+    Phase 3 submit rather than degrading to no review."""
+
+    history = TopicEventHistoryResponse(
+        topic_id="ALG-KS3-01",
+        student_id="ST003",
+        topic_info=TOPIC_INFO,
+        whole_topic_evidence={
+            "strong_micro_skill_ids": None,
+            "developing_micro_skill_ids": None,
+            "root_gap_micro_skill_ids": None,
+            "error_cluster_counts": None,
+            "misconception_recurrence_counts": None,
+            "phase_2_repair_required": False,
+        },
+        attempts=[],
+    )
+
+    request = build_phase4_review_request(history, [], "DEVELOPING", "START_NEXT_TOPIC")
+
+    assert request.whole_topic_evidence.strong_micro_skill_ids == []
+    assert request.whole_topic_evidence.error_cluster_counts == {}

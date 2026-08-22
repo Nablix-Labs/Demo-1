@@ -89,9 +89,8 @@ def test_deterministic_fields_are_forwarded_not_generated(
         adapter: StudentModelServiceAdapter,
         student_id: str,
         topic_id: str,
-        access_token: str,
     ) -> TopicEventHistoryResponse:
-        del adapter, student_id, topic_id, access_token
+        del adapter, student_id, topic_id
         return _history()
 
     monkeypatch.setattr(
@@ -108,7 +107,6 @@ def test_deterministic_fields_are_forwarded_not_generated(
         session_service.generate_phase4_review_for(
             session,
             _event("REVIEW"),
-            "test-token",
         )
     )
 
@@ -137,9 +135,8 @@ def test_entering_review_generates_the_tutor_review(
         adapter: StudentModelServiceAdapter,
         student_id: str,
         topic_id: str,
-        access_token: str,
     ) -> TopicEventHistoryResponse:
-        del adapter, student_id, topic_id, access_token
+        del adapter, student_id, topic_id
         return _history()
 
     monkeypatch.setattr(
@@ -154,7 +151,6 @@ def test_entering_review_generates_the_tutor_review(
         session_service.generate_phase4_review_for(
             session,
             _event("REVIEW"),
-            "test-token",
         )
     )
 
@@ -172,17 +168,15 @@ def test_generated_review_is_persisted_for_reuse(
         adapter: StudentModelServiceAdapter,
         student_id: str,
         topic_id: str,
-        access_token: str,
     ) -> TopicEventHistoryResponse:
-        del adapter, student_id, topic_id, access_token
+        del adapter, student_id, topic_id
         return _history()
 
     async def persist(
         adapter: StudentModelServiceAdapter,
         request: Phase4ReviewPersistRequest,
-        access_token: str,
     ) -> None:
-        del adapter, access_token
+        del adapter
         persisted.append(request)
 
     monkeypatch.setattr(
@@ -199,7 +193,6 @@ def test_generated_review_is_persisted_for_reuse(
         session_service.generate_phase4_review_for(
             _review_ready_session(),
             _event("REVIEW"),
-            "test-token",
         )
     )
 
@@ -216,17 +209,15 @@ def test_review_survives_a_persistence_failure(
         adapter: StudentModelServiceAdapter,
         student_id: str,
         topic_id: str,
-        access_token: str,
     ) -> TopicEventHistoryResponse:
-        del adapter, student_id, topic_id, access_token
+        del adapter, student_id, topic_id
         return _history()
 
     async def failing_persist(
         adapter: StudentModelServiceAdapter,
         request: Phase4ReviewPersistRequest,
-        access_token: str,
     ) -> None:
-        del adapter, request, access_token
+        del adapter, request
         raise AdapterError("student_model", "summary store unavailable")
 
     monkeypatch.setattr(
@@ -243,7 +234,6 @@ def test_review_survives_a_persistence_failure(
         session_service.generate_phase4_review_for(
             _review_ready_session(),
             _event("REVIEW"),
-            "test-token",
         )
     )
 
@@ -260,17 +250,15 @@ def test_review_is_not_persisted_when_generation_failed(
         adapter: StudentModelServiceAdapter,
         student_id: str,
         topic_id: str,
-        access_token: str,
     ) -> TopicEventHistoryResponse:
-        del adapter, student_id, topic_id, access_token
+        del adapter, student_id, topic_id
         raise AdapterError("student_model", "history unavailable")
 
     async def persist(
         adapter: StudentModelServiceAdapter,
         request: Phase4ReviewPersistRequest,
-        access_token: str,
     ) -> None:
-        del adapter, access_token
+        del adapter
         persisted.append(request)
 
     monkeypatch.setattr(
@@ -284,7 +272,6 @@ def test_review_is_not_persisted_when_generation_failed(
         session_service.generate_phase4_review_for(
             _review_ready_session(),
             _event("REVIEW"),
-            "test-token",
         )
     )
 
@@ -303,9 +290,8 @@ def test_rejected_history_request_does_not_block_review(
         adapter: StudentModelServiceAdapter,
         student_id: str,
         topic_id: str,
-        access_token: str,
     ) -> TopicEventHistoryResponse:
-        del adapter, student_id, topic_id, access_token
+        del adapter, student_id, topic_id
         raise AdapterRequestRejected(
             "student_model",
             "https://student-model.example/topic/event-history",
@@ -322,7 +308,6 @@ def test_rejected_history_request_does_not_block_review(
         session_service.generate_phase4_review_for(
             _review_ready_session(),
             _event("REVIEW"),
-            "test-token",
         )
     )
 
@@ -338,9 +323,8 @@ def test_malformed_evidence_does_not_block_review(
         adapter: StudentModelServiceAdapter,
         student_id: str,
         topic_id: str,
-        access_token: str,
     ) -> TopicEventHistoryResponse:
-        del adapter, student_id, topic_id, access_token
+        del adapter, student_id, topic_id
         return TopicEventHistoryResponse(
             topic_id="ALG-KS3-01",
             student_id="ST003",
@@ -357,7 +341,6 @@ def test_malformed_evidence_does_not_block_review(
         session_service.generate_phase4_review_for(
             _review_ready_session(),
             _event("REVIEW"),
-            "test-token",
         )
     )
 
@@ -371,17 +354,15 @@ def test_rejected_persistence_keeps_the_generated_review(
         adapter: StudentModelServiceAdapter,
         student_id: str,
         topic_id: str,
-        access_token: str,
     ) -> TopicEventHistoryResponse:
-        del adapter, student_id, topic_id, access_token
+        del adapter, student_id, topic_id
         return _history()
 
     async def rejected(
         adapter: StudentModelServiceAdapter,
         request: Phase4ReviewPersistRequest,
-        access_token: str,
     ) -> None:
-        del adapter, request, access_token
+        del adapter, request
         raise AdapterRequestRejected(
             "student_model",
             "https://student-model.example/phase4-review",
@@ -404,7 +385,6 @@ def test_rejected_persistence_keeps_the_generated_review(
         session_service.generate_phase4_review_for(
             _review_ready_session(),
             _event("REVIEW"),
-            "test-token",
         )
     )
 
@@ -418,9 +398,8 @@ def test_review_generation_failure_does_not_raise(
         adapter: StudentModelServiceAdapter,
         student_id: str,
         topic_id: str,
-        access_token: str,
     ) -> TopicEventHistoryResponse:
-        del adapter, student_id, topic_id, access_token
+        del adapter, student_id, topic_id
         raise AdapterError("student_model", "history unavailable")
 
     monkeypatch.setattr(
@@ -433,7 +412,6 @@ def test_review_generation_failure_does_not_raise(
         session_service.generate_phase4_review_for(
             session,
             _event("REVIEW"),
-            "test-token",
         )
     )
 
@@ -451,9 +429,8 @@ def test_review_lands_on_the_session_when_the_student_enters_review(
         adapter: StudentModelServiceAdapter,
         student_id: str,
         topic_id: str,
-        access_token: str,
     ) -> TopicEventHistoryResponse:
-        del adapter, student_id, topic_id, access_token
+        del adapter, student_id, topic_id
         return _history()
 
     monkeypatch.setattr(

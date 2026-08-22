@@ -14,6 +14,14 @@ class Settings(BaseSettings):
     database_url: str = Field(default="", validation_alias="DATABASE_URL")
     student_model_topic_ids: dict[str, int] = Field(default_factory=dict)
     student_model_topic_codes: dict[str, str] = Field(default_factory=dict)
+    # Student Model's Phase 4 orchestration endpoints (/topic/event-history,
+    # /phase4-review) are require_role("internal_service") with no student
+    # branch, so the student's own bearer 403s there. Nablix signs its own with
+    # the shared secret; same claims mathtutor-student's create_access_token
+    # emits. Only these two calls use it -- the work-artifact PDF read stays on
+    # the student's token, because ownership there is per-student.
+    student_model_jwt_secret: str = ""
+    student_model_jwt_algorithm: str = "HS256"
     cors_allowed_origins: list[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
