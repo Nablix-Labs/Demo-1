@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import pytest
 
 from app.models.topic_event_history import (
@@ -8,6 +11,7 @@ from app.models.topic_event_history import (
 )
 from app.services.phase4_context_builder import (
     Phase4ContextError,
+    _whole_topic_evidence,
     build_phase4_review_request,
 )
 from app.services.phase4_replay_filter import filter_replay_attempts
@@ -236,3 +240,90 @@ def test_null_whole_topic_evidence_does_not_raise() -> None:
 
     assert request.whole_topic_evidence.strong_micro_skill_ids == []
     assert request.whole_topic_evidence.error_cluster_counts == {}
+
+
+def _live_capture() -> TopicEventHistoryResponse:
+    """The real POST /topic/event-history body for ST010 on ALG-KS3-01.
+
+    Captured from the deployed Student Model on 22 Aug 2026, the first time a
+    service token got past the auth gate. Unmodified.
+
+    It exists because every shape this repo got wrong about that endpoint came
+    from guessing at its output rather than reading it. A synthetic fixture
+    would have agreed with the guess.
+    """
+
+    path = Path(__file__).parent / "fixtures" / "topic_event_history_ST010.json"
+    return TopicEventHistoryResponse.model_validate(json.loads(path.read_text()))
+
+
+def test_live_capture_builds_two_replays() -> None:
+    """ST010 answered two Independent Practice questions wrong, on purpose, and
+    both stored work. That is the only shape that produces a work panel."""
+
+    history = _live_capture()
+    # topic_info is empty in the captured response because learning.topics has
+    # no content for this topic yet. That is a data gap on the Student Model
+    # side, not a shape problem, so it is supplied here to exercise the rest.
+    history = history.model_copy(
+        update={
+            "topic_info": {
+                "title": "One-step linear equations",
+                "concept": "A letter can stand for any starting number.",
+                "learning_goals": ["Translate words into an expression."],
+            }
+        }
+    )
+
+    request = build_phase4_review_request(
+        history,
+        filter_replay_attempts(history.attempts),
+        "MASTERED",
+        "START_REVIEW",
+    )
+
+    assert [item.work_artifact.artifact_id for item in request.replay_items] == [
+        "ART-18",
+        "ART-19",
+    ]
+    assert [item.question_id for item in request.replay_items] == [
+        "Q-T01-007",
+        "Q-T01-005",
+    ]
+
+
+def test_error_cluster_counts_are_nested_by_micro_skill() -> None:
+    """Student Model's merge_error_counts builds {micro_skill: {code: count}}.
+    This repo declared dict[str, int], which is the shape of its OTHER counter
+    (top_error_codes), and every review died on the mismatch."""
+
+    history = _live_capture()
+    evidence = _whole_topic_evidence(history)
+
+    assert evidence.error_cluster_counts == {"T01.M3": {"ERR-DIRECTION-REVERSED": 2}}
+
+
+def test_repeated_attempt_ids_across_questions_are_not_a_collision() -> None:
+    """attempt_id is f"ATTEMPT-{attempt_sequence:03d}" and the sequence restarts
+    per question, so every attempt in this real capture is ATTEMPT-001. Rejecting
+    that as a duplicate blocked the review outright."""
+
+    history = _live_capture()
+    replays = filter_replay_attempts(history.attempts)
+
+    assert len({a.attempt_id for a in replays}) == 1, "precondition: ids collide"
+    assert len(replays) == 2
+    # Distinct questions, so the (question_usage_id, attempt_id) pair separates them.
+    assert len({(a.question_usage_id, a.attempt_id) for a in replays}) == 2
+
+
+def test_topic_info_gap_degrades_to_no_review() -> None:
+    """Unpatched, the live capture still cannot produce a review: learning.topics
+    carries no title/concept/learning_goals for this topic. Naming the wrong
+    concept to a student is worse than showing no review, so this raises rather
+    than inventing one."""
+
+    with pytest.raises(Phase4ContextError):
+        build_phase4_review_request(
+            _live_capture(), [], "MASTERED", "START_REVIEW"
+        )

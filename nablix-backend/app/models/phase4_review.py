@@ -59,7 +59,14 @@ class WholeTopicEvidence(StrictSchema):
     strong_micro_skill_ids: list[str]
     developing_micro_skill_ids: list[str]
     root_gap_micro_skill_ids: list[str]
-    error_cluster_counts: dict[str, int]
+    # Nested by micro-skill, which is what "cluster" means here and what Student
+    # Model actually emits (merge_error_counts in app/services/topic_summary.py
+    # builds {micro_skill_id: {error_code: count}}). Its flat {error_code: count}
+    # counter is a different field, top_error_codes, which the event-history
+    # response does not carry.
+    error_cluster_counts: dict[str, dict[str, int]]
+    # Flat, unlike error_cluster_counts above. Verified against
+    # merge_misconception_counts, which keys straight off misconception_id.
     misconception_recurrence_counts: dict[str, int]
     hint_count: int = Field(ge=0)
     fresh_question_required: bool
@@ -68,7 +75,11 @@ class WholeTopicEvidence(StrictSchema):
 
     @model_validator(mode="after")
     def validate_non_negative_counts(self) -> "WholeTopicEvidence":
-        if any(count < 0 for count in self.error_cluster_counts.values()):
+        if any(
+            count < 0
+            for cluster in self.error_cluster_counts.values()
+            for count in cluster.values()
+        ):
             raise ValueError("error_cluster_counts cannot contain negative values")
         if any(count < 0 for count in self.misconception_recurrence_counts.values()):
             raise ValueError("misconception_recurrence_counts cannot contain negative values")
@@ -86,9 +97,17 @@ class Phase4ReviewRequest(StrictSchema):
         review_item_ids = [item.review_item_id for item in self.replay_items]
         if len(set(review_item_ids)) != len(review_item_ids):
             raise ValueError("replay_items must have unique review_item_id values")
-        attempt_ids = [item.attempt_id for item in self.replay_items]
-        if len(set(attempt_ids)) != len(attempt_ids):
-            raise ValueError("replay_items must have unique attempt_id values")
+        # (question_usage_id, attempt_id), not attempt_id alone. Student Model
+        # builds attempt_id as f"ATTEMPT-{attempt_sequence:03d}" and the sequence
+        # restarts on each question, so two different attempts on two different
+        # questions legitimately share one. The pair is what identifies an
+        # attempt, and keeping the check on the pair still stops two attempts on
+        # the SAME question from being conflated in a replay.
+        attempts = [(item.question_usage_id, item.attempt_id) for item in self.replay_items]
+        if len(set(attempts)) != len(attempts):
+            raise ValueError(
+                "replay_items must have unique (question_usage_id, attempt_id) pairs"
+            )
         return self
 
 
