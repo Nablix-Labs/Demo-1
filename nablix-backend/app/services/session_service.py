@@ -541,6 +541,16 @@ async def start_session(
             else None
         ),
     )
+    # A session can OPEN in Review: the student finished Independent Practice,
+    # left, and came back. That path never ran through _apply_schema_event, and
+    # generate_phase4_review_for is only reachable from there, so a resumed
+    # Review rendered the screen with no review on it, permanently. The message
+    # two fields up ("Session Review -- practice questions complete.") shows the
+    # path was always intended; only the review was missing.
+    if session.current_phase == "REVIEW":
+        session = session.model_copy(
+            update={"phase4_review": await generate_phase4_review_for(session, event)}
+        )
     _sessions[session_id] = session
     await save_session(session)
     return session
@@ -757,6 +767,15 @@ def _require_schema_phase(
         )
 
 
+# Shown when Student Model reports it has no question left to serve. Deliberately
+# vague about the cause: a missing question is our problem to fix, not something
+# to explain to a child mid-lesson.
+CONTENT_GAP_MESSAGE = (
+    "That is everything I have ready for this topic right now. "
+    "Your work so far is saved."
+)
+
+
 async def generate_phase4_review_for(
     session: SessionRecord,
     event: StudentModelSessionEventResponse,
@@ -857,6 +876,25 @@ async def _apply_schema_event(
     event: StudentModelSessionEventResponse,
 ) -> SessionRecord:
     payload = event.phase_payload
+    # Student Model raises these when it cannot serve content and a human has to
+    # act -- a fresh Phase 3 question that does not exist, for instance. Nothing
+    # here consumed them, so the student was left on a screen with no question
+    # and no explanation, and nothing in the logs said why. Surfaced rather than
+    # raised: the session is still valid, and failing the turn would strand the
+    # student instead of the content.
+    if event.routing.content_gap_detected or event.status.intervention_required:
+        logger.warning(
+            "student_model_content_gap",
+            extra={
+                "session_id": session.session_id,
+                "reason_code": event.routing.reason_code,
+                "next_action": event.routing.next_action,
+                "status_code": event.status.status_code,
+                "missing_micro_skill_ids": event.routing.missing_micro_skill_ids,
+                "intervention_reason": event.status.intervention_reason,
+            },
+        )
+
     has_questions = (
         payload is not None
         and payload.question_set is not None
@@ -950,6 +988,16 @@ async def _apply_schema_event(
         updates["orientation_messages"] = phase1_messages
         if next_phase == session.current_phase:
             updates["message"] = phase1_messages.before_video_message
+    # A content gap that leaves no question to answer is the one case where the
+    # student cannot act and cannot be told why by the tutor: the last thing they
+    # heard was a promise of a fresh question that Student Model has just said it
+    # cannot serve. Saying nothing leaves that promise standing.
+    if (
+        event.routing.content_gap_detected
+        and not has_questions
+        and updates.get("question_id", session.question_id) is None
+    ):
+        updates["message"] = CONTENT_GAP_MESSAGE
     next_question_id = (
         session.question_id
         if question_updates is None

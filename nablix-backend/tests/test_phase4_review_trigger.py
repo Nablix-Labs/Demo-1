@@ -13,12 +13,13 @@ from app.models.phase4_review import (
     TutorReplay,
     TutorReplayStep,
 )
-from app.models.session import SessionRecord
+from app.models.session import SessionRecord, SessionStartRequest
 from app.models.student_model_session import StudentModelSessionEventResponse
 from app.models.topic_event_history import TopicEventHistoryResponse
 from app.models.work_artifact import Phase4ReviewPersistRequest
 from app.services import session_service
 from tests.test_phase4_context_builder import TOPIC_INFO, _attempt
+from tests.test_session_events import _session_opened_response
 
 
 def _history() -> TopicEventHistoryResponse:
@@ -456,3 +457,65 @@ def test_review_lands_on_the_session_when_the_student_enters_review(
     stored = session_service._get_owned_session(session_id, "ST042")
     assert stored.phase4_review is not None
     assert stored.phase4_review.tutor_replays[0].attempt_id == "A1"
+
+
+def test_session_opening_in_review_generates_the_review(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A student who finishes Independent Practice, leaves, and comes back opens
+    a session already in Review. That path builds the SessionRecord directly and
+    never runs _apply_schema_event, which is the only other place the review is
+    generated, so the screen rendered permanently empty for them.
+
+    Observed on ST020, 22 Aug 2026: SESSION_OPENED returned a REVIEW payload,
+    the session came back current_phase=REVIEW with phase_transitions=[] and
+    phase4_review=null.
+    """
+
+    async def fetch(
+        adapter: StudentModelServiceAdapter,
+        student_id: str,
+        topic_id: str,
+    ) -> TopicEventHistoryResponse:
+        del adapter, student_id, topic_id
+        return _history()
+
+    async def persist(
+        adapter: StudentModelServiceAdapter,
+        request: Phase4ReviewPersistRequest,
+    ) -> None:
+        del adapter, request
+
+    async def send_session_event(
+        adapter: StudentModelServiceAdapter,
+        event: object,
+        access_token: str,
+    ) -> StudentModelSessionEventResponse:
+        del adapter, access_token
+        body = _session_opened_response("REVIEW")
+        body["request_id"] = event.request_id
+        return StudentModelSessionEventResponse.model_validate(body)
+
+    monkeypatch.setattr(StudentModelServiceAdapter, "fetch_topic_event_history", fetch)
+    monkeypatch.setattr(StudentModelServiceAdapter, "persist_phase4_review", persist)
+    monkeypatch.setattr(
+        StudentModelServiceAdapter, "send_session_event", send_session_event
+    )
+    monkeypatch.setattr(
+        session_service, "generate_phase4_review", lambda request: _review()
+    )
+
+    session = asyncio.run(
+        session_service.start_session(
+            SessionStartRequest(
+                student_id="ST020",
+                concept_id="ALG_LINEAR_ONE_STEP",
+                interaction_mode="TEXT",
+            ),
+            "student-token",
+        )
+    )
+
+    assert session.current_phase == "REVIEW"
+    assert session.phase4_review is not None, "a session opening in Review has no review"
+    assert session.phase4_review.tutor_replays[0].review_item_id == "REV-001"
