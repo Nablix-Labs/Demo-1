@@ -54,7 +54,11 @@ def _request_body() -> dict[str, object]:
             "strong_micro_skill_ids": ["T01.M1"],
             "developing_micro_skill_ids": ["T01.M3"],
             "root_gap_micro_skill_ids": [],
-            "error_cluster_counts": {"ERR-DIRECTION-REVERSED": 2},
+            # Nested by micro-skill, matching what Student Model emits. This
+            # fixture said {"ERR-DIRECTION-REVERSED": 2} until 22 Aug 2026, the
+            # same wrong shape the model declared, so the pair agreed with each
+            # other and disagreed with the service.
+            "error_cluster_counts": {"T01.M3": {"ERR-DIRECTION-REVERSED": 2}},
             "misconception_recurrence_counts": {"MIS-T01-DIRECTION-LANGUAGE": 2},
             "hint_count": 0,
             "fresh_question_required": True,

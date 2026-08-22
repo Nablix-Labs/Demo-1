@@ -1,0 +1,191 @@
+{
+  "topic_id": "ALG-KS3-01",
+  "student_id": "ST010",
+  "topic_info": {
+    "title": null,
+    "concept": null,
+    "learning_goals": null
+  },
+  "whole_topic_evidence": {
+    "strong_micro_skill_ids": [
+      "T01.M3",
+      "T01.M4",
+      "T01.M5"
+    ],
+    "developing_micro_skill_ids": [],
+    "root_gap_micro_skill_ids": [],
+    "error_cluster_counts": {
+      "T01.M3": {
+        "ERR-DIRECTION-REVERSED": 2
+      }
+    },
+    "misconception_recurrence_counts": {},
+    "phase_2_repair_required": true
+  },
+  "attempts": [
+    {
+      "attempt_id": "ATTEMPT-001",
+      "question_id": "Q-T01-001",
+      "question_usage_id": "QU-T01-001-P2",
+      "phase": "PHASE_2_GUIDED_LEARNING",
+      "evaluation": "CORRECT",
+      "hint_used": false,
+      "fresh_question_replacement": false,
+      "independent_success": false,
+      "student_response": "n+5",
+      "attempted_at": "2026-08-21T12:10:52.645635+00:00",
+      "question_text": "3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number. Write the general rule.",
+      "canonical_answer": "n + 5",
+      "answer_steps": [
+        "Compare the three cases.",
+        "Identify the starting number as the changing part.",
+        "Identify +5 as the fixed operation and value.",
+        "Replace the changing starting number with n and write n + 5."
+      ],
+      "detected_errors": [],
+      "linked_misconceptions": [],
+      "work_artifact": null
+    },
+    {
+      "attempt_id": "ATTEMPT-001",
+      "question_id": "Q-T01-004",
+      "question_usage_id": "QU-T01-004-P2",
+      "phase": "PHASE_2_GUIDED_LEARNING",
+      "evaluation": "CORRECT",
+      "hint_used": false,
+      "fresh_question_replacement": false,
+      "independent_success": false,
+      "student_response": "because n can take any value",
+      "attempted_at": "2026-08-21T12:11:17.844953+00:00",
+      "question_text": "Which is the general rule: A) 12 + 4 or B) n + 4? Explain briefly.",
+      "canonical_answer": "B",
+      "answer_steps": [
+        "Compare the two options.",
+        "Notice that 12 + 4 is one numerical case.",
+        "Notice that n + 4 uses a letter for all possible starting values.",
+        "Select B."
+      ],
+      "detected_errors": [],
+      "linked_misconceptions": [],
+      "work_artifact": null
+    },
+    {
+      "attempt_id": "ATTEMPT-001",
+      "question_id": "Q-T01-007",
+      "question_usage_id": "QU-T01-007-P3",
+      "phase": "PHASE_3_INDEPENDENT_PRACTICE",
+      "evaluation": "INCORRECT",
+      "hint_used": false,
+      "fresh_question_replacement": false,
+      "independent_success": false,
+      "student_response": "n-2",
+      "attempted_at": "2026-08-21T12:11:30.315996+00:00",
+      "question_text": "5 + 2, 11 + 2, 18 + 2. Use n for the changing starting number. Write the general rule.",
+      "canonical_answer": "n + 2",
+      "answer_steps": [
+        "Compare 5 + 2, 11 + 2 and 18 + 2.",
+        "Identify the starting number as the changing part.",
+        "Identify +2 as fixed.",
+        "Replace the starting number with n and write n + 2."
+      ],
+      "detected_errors": [
+        {
+          "error_code": "ERR-DIRECTION-REVERSED",
+          "micro_skill_id": "T01.M3"
+        }
+      ],
+      "linked_misconceptions": [
+        "MIS-T01-DIRECTION-LANGUAGE"
+      ],
+      "work_artifact": {
+        "artifact_id": "ART-18",
+        "pdf_url": "/work-artifacts/ART-18/pdf",
+        "page_count": 1
+      }
+    },
+    {
+      "attempt_id": "ATTEMPT-001",
+      "question_id": "Q-T01-005",
+      "question_usage_id": "QU-T01-005-P3",
+      "phase": "PHASE_3_INDEPENDENT_PRACTICE",
+      "evaluation": "INCORRECT",
+      "hint_used": false,
+      "fresh_question_replacement": true,
+      "independent_success": false,
+      "student_response": "t+3",
+      "attempted_at": "2026-08-21T12:11:42.698214+00:00",
+      "question_text": "A temperature starts at t and falls by 3 degrees. Write the general rule.",
+      "canonical_answer": "t - 3",
+      "answer_steps": [
+        "Identify t as the starting temperature.",
+        "Translate falls by 3 as subtract 3.",
+        "Keep t first because the subtraction starts from t.",
+        "Write t - 3."
+      ],
+      "detected_errors": [
+        {
+          "error_code": "ERR-DIRECTION-REVERSED",
+          "micro_skill_id": "T01.M3"
+        }
+      ],
+      "linked_misconceptions": [
+        "MIS-T01-DIRECTION-LANGUAGE"
+      ],
+      "work_artifact": {
+        "artifact_id": "ART-19",
+        "pdf_url": "/work-artifacts/ART-19/pdf",
+        "page_count": 1
+      }
+    },
+    {
+      "attempt_id": "ATTEMPT-001",
+      "question_id": "Q-T01-002",
+      "question_usage_id": "QU-T01-002-P2",
+      "phase": "PHASE_2_GUIDED_LEARNING",
+      "evaluation": "CORRECT",
+      "hint_used": false,
+      "fresh_question_replacement": false,
+      "independent_success": false,
+      "student_response": "addition",
+      "attempted_at": "2026-08-21T12:12:22.306026+00:00",
+      "question_text": "In m + 7, identify the changing quantity, the fixed value and the operation.",
+      "canonical_answer": "m; 7; addition",
+      "answer_steps": [
+        "Read the expression m + 7.",
+        "Identify m as the letter that can take different values.",
+        "Identify 7 as the fixed value.",
+        "Identify + as the addition operation."
+      ],
+      "detected_errors": [],
+      "linked_misconceptions": [],
+      "work_artifact": null
+    },
+    {
+      "attempt_id": "ATTEMPT-001",
+      "question_id": "Q-T01-005",
+      "question_usage_id": "QU-T01-005-P3",
+      "phase": "PHASE_3_INDEPENDENT_PRACTICE",
+      "evaluation": "CORRECT",
+      "hint_used": false,
+      "fresh_question_replacement": false,
+      "independent_success": true,
+      "student_response": "t-3",
+      "attempted_at": "2026-08-21T12:12:36.822199+00:00",
+      "question_text": "A temperature starts at t and falls by 3 degrees. Write the general rule.",
+      "canonical_answer": "t - 3",
+      "answer_steps": [
+        "Identify t as the starting temperature.",
+        "Translate falls by 3 as subtract 3.",
+        "Keep t first because the subtraction starts from t.",
+        "Write t - 3."
+      ],
+      "detected_errors": [],
+      "linked_misconceptions": [],
+      "work_artifact": {
+        "artifact_id": "ART-20",
+        "pdf_url": "/work-artifacts/ART-20/pdf",
+        "page_count": 1
+      }
+    }
+  ]
+}

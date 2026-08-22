@@ -103,7 +103,10 @@ def _whole_topic_evidence(
             evidence.get("developing_micro_skill_ids") or []
         ),
         root_gap_micro_skill_ids=list(evidence.get("root_gap_micro_skill_ids") or []),
-        error_cluster_counts=dict(evidence.get("error_cluster_counts") or {}),
+        error_cluster_counts={
+            skill: dict(counts)
+            for skill, counts in (evidence.get("error_cluster_counts") or {}).items()
+        },
         misconception_recurrence_counts=dict(
             evidence.get("misconception_recurrence_counts") or {}
         ),
