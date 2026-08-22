@@ -314,6 +314,65 @@ def _flux_confidence(turn_info: dict) -> float:
     return sum(scores) / len(scores)
 
 
+def _turn_timing(
+    audio_window_start: object,
+    audio_window_end: object,
+    wall_seconds: float,
+) -> tuple[float | None, float | None]:
+    """Split a turn's wall-clock time into speaking time and detection time.
+
+    Wall-clock StartOfTurn to EndOfTurn is not a measure of turn detection.
+    Most of it is however long the student chose to speak, so a student who
+    talks for eight seconds and one who pauses for eight look identical.
+
+    Flux stamps every TurnInfo with the audio window it covers. That window is
+    how much audio the turn contains, which is speaking time; whatever is left
+    on the wall clock is what we spent waiting to be told the turn had ended.
+
+    Returns (spoken_seconds, detection_seconds), or (None, None) when Flux did
+    not give a usable window. Returning None rather than guessing matters: a
+    zero here would read as "detection is free", which is the conclusion this
+    measurement exists to test.
+    """
+    if not isinstance(audio_window_start, (int, float)):
+        return None, None
+    if not isinstance(audio_window_end, (int, float)):
+        return None, None
+    if isinstance(audio_window_start, bool) or isinstance(audio_window_end, bool):
+        return None, None
+
+    spoken = float(audio_window_end) - float(audio_window_start)
+    if spoken < 0:
+        # Windows should advance. If they do not, something has changed at
+        # their end and the arithmetic below would be meaningless.
+        return None, None
+    return spoken, wall_seconds - spoken
+
+
+# The backend rejects audio_duration_seconds <= 0 outright
+# (app/models/voice.py validate_audio_duration_seconds), which would fail the
+# whole turn. A zero-length audio window is possible, so the value is floored.
+MIN_REPORTED_DURATION_SECONDS = 0.001
+
+
+def _reported_audio_duration(
+    spoken_seconds: float | None,
+    wall_seconds: float,
+) -> float:
+    """How long the student actually spoke, for the backend.
+
+    Prefers Flux's audio window over the wall clock. The wall clock measures
+    StartOfTurn to the moment we get round to dispatching, which also contains
+    turn-detection lag and the time spent cancelling a superseded turn. Neither
+    is speech, so neither belongs in a field called audio duration.
+
+    Falls back to the wall clock when Flux gave no usable window, since an
+    approximate duration is better than a failed turn: the field is required.
+    """
+    duration = spoken_seconds if spoken_seconds is not None else wall_seconds
+    return max(duration, MIN_REPORTED_DURATION_SECONDS)
+
+
 def _stt_connection_config(language: str = "en") -> tuple[str, str]:
     """Return (websocket_url, human_readable_label) for the active STT model.
 
@@ -997,6 +1056,12 @@ async def voice_stream(
         nonlocal turn_state, active_turn_task, audio_started_at
         nonlocal voice_turn_sequence
 
+        # Where in the audio stream the current turn began, per Flux.
+        #
+        # A plain local rather than nonlocal state: the whole turn loop lives
+        # in this coroutine, so nothing else needs to see it.
+        turn_audio_window_start: float | None = None
+
         try:
             async for msg in dg_ws:
                 data = json.loads(msg)
@@ -1080,8 +1145,10 @@ async def voice_stream(
                     # the next turn itself.
                     turn_state = TurnState.LISTENING
                     audio_started_at = time.time()
+                    turn_audio_window_start = data.get("audio_window_start")
                     logger.info(
-                        f"[{session_id}] Flux StartOfTurn (turn {turn_index})"
+                        f"[{session_id}] Flux StartOfTurn (turn {turn_index}, "
+                        f"audio_window_start={turn_audio_window_start})"
                     )
 
                 elif event == "Update":
@@ -1154,10 +1221,50 @@ async def voice_stream(
                         f"word_conf={confidence:.4f}): '{transcript}'"
                     )
 
+                    # What turn detection actually cost us. See _turn_timing.
+                    #
+                    # This is the number missing from the "feels slower"
+                    # investigation, and it is the one to watch against
+                    # VOICE_FLUX_EOT_THRESHOLD: raising the threshold buys
+                    # accuracy and should show up here as a longer wait.
+                    audio_window_end = data.get("audio_window_end")
+                    wall_seconds = time.time() - audio_started_at
+                    spoken_seconds, detection_seconds = _turn_timing(
+                        turn_audio_window_start, audio_window_end, wall_seconds
+                    )
+                    if spoken_seconds is None:
+                        # Say so rather than logging nothing, or a change at
+                        # Flux's end would read as "detection is free".
+                        logger.info(
+                            f"[{session_id}] Turn timing (turn {turn_index}): "
+                            f"wall={wall_seconds:.3f}s, detection unknown "
+                            f"(audio_window_start={turn_audio_window_start!r}, "
+                            f"audio_window_end={audio_window_end!r})"
+                        )
+                    else:
+                        logger.info(
+                            f"[{session_id}] Turn timing (turn {turn_index}): "
+                            f"spoken={spoken_seconds:.3f}s "
+                            f"detection={detection_seconds:.3f}s "
+                            f"wall={wall_seconds:.3f}s "
+                            f"(audio_window {turn_audio_window_start}-"
+                            f"{audio_window_end})"
+                        )
+                    turn_audio_window_start = None
+
+                    # How much of this turn was actually speech.
+                    #
+                    # Taken before the cancel below, not after. The wall clock
+                    # kept running through _cancel_active_turn, so the old
+                    # reading included however long it took to tear down a
+                    # superseded turn on top of the detection lag.
+                    duration = _reported_audio_duration(
+                        spoken_seconds, wall_seconds
+                    )
+
                     # Anything still running belongs to an older turn.
                     await _cancel_active_turn("superseded", notify_frontend=False)
 
-                    duration = max(time.time() - audio_started_at, 0.001)
                     active_turn_task = asyncio.create_task(
                         _run_turn(
                             transcript, confidence, duration, minted_turn_id

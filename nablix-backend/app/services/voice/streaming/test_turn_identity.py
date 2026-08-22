@@ -37,8 +37,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import streaming_server  # noqa: E402
 from streaming_server import (  # noqa: E402
+    MIN_REPORTED_DURATION_SECONDS,
     VOICE_TURN_ID_PREFIX,
     _mint_voice_turn_id,
+    _reported_audio_duration,
+    _turn_timing,
     evaluate_voice_transcript,
 )
 
@@ -240,6 +243,145 @@ def test_the_turn_is_minted_before_it_is_run():
     run = SOURCE.find("_run_turn(\n", mint)
     assert run != -1, "no _run_turn call follows the minting"
     assert mint < run
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Turn timing: separating speaking time from detection time
+# ──────────────────────────────────────────────────────────────────────
+
+def test_detection_is_wall_clock_minus_speaking_time():
+    """A student who spoke for 4s on a 4.6s turn cost 0.6s of detection."""
+    spoken, detection = _turn_timing(10.0, 14.0, 4.6)
+    assert spoken == pytest.approx(4.0)
+    assert detection == pytest.approx(0.6)
+
+
+def test_a_long_utterance_is_not_mistaken_for_slow_detection():
+    """The whole point. Wall clock alone cannot tell these two apart."""
+    talkative = _turn_timing(0.0, 8.0, 8.5)
+    hesitant = _turn_timing(0.0, 1.0, 8.5)
+
+    assert talkative[1] == pytest.approx(0.5)
+    assert hesitant[1] == pytest.approx(7.5)
+    assert talkative[1] < hesitant[1], (
+        "the talkative student must not look like slow detection"
+    )
+
+
+def test_a_window_starting_mid_stream_is_handled():
+    """audio_window_start is a position in the stream, not zero per turn."""
+    spoken, detection = _turn_timing(123.4, 125.4, 2.3)
+    assert spoken == pytest.approx(2.0)
+    assert detection == pytest.approx(0.3)
+
+
+def test_integer_windows_are_accepted():
+    assert _turn_timing(1, 3, 2.5) == (pytest.approx(2.0), pytest.approx(0.5))
+
+
+@pytest.mark.parametrize("start,end", [
+    (None, 4.0),
+    (4.0, None),
+    (None, None),
+    ("0.0", 4.0),
+    (4.0, "8.0"),
+])
+def test_a_missing_or_unusable_window_reports_unknown(start, end):
+    """None, not zero. Zero would read as 'detection is free'."""
+    assert _turn_timing(start, end, 5.0) == (None, None)
+
+
+def test_booleans_are_not_treated_as_numbers():
+    """bool is an int in Python, so True would otherwise arrive as 1.0."""
+    assert _turn_timing(True, 4.0, 5.0) == (None, None)
+    assert _turn_timing(0.0, True, 5.0) == (None, None)
+
+
+def test_a_window_that_goes_backwards_is_refused():
+    """Windows should advance; if they stop, the arithmetic is meaningless."""
+    assert _turn_timing(10.0, 4.0, 5.0) == (None, None)
+
+
+def test_a_zero_length_window_is_still_a_real_answer():
+    """An empty turn is not the same as a missing measurement."""
+    spoken, detection = _turn_timing(5.0, 5.0, 0.8)
+    assert spoken == 0.0
+    assert detection == pytest.approx(0.8)
+
+
+def test_detection_can_be_negative_and_is_not_hidden():
+    """If it goes negative our clock assumption is wrong, and we want to see it."""
+    _, detection = _turn_timing(0.0, 10.0, 4.0)
+    assert detection == pytest.approx(-6.0)
+
+
+def test_both_window_fields_are_read_from_flux():
+    assert 'data.get("audio_window_start")' in SOURCE
+    assert 'data.get("audio_window_end")' in SOURCE
+
+
+# ──────────────────────────────────────────────────────────────────────
+# What we report to the backend as audio duration
+# ──────────────────────────────────────────────────────────────────────
+
+def test_speaking_time_is_reported_not_wall_clock():
+    """Detection lag and teardown are not speech."""
+    assert _reported_audio_duration(4.0, 6.5) == pytest.approx(4.0)
+
+
+def test_it_falls_back_to_the_wall_clock_when_flux_gave_no_window():
+    """The field is required, so an approximate value beats a failed turn."""
+    assert _reported_audio_duration(None, 6.5) == pytest.approx(6.5)
+
+
+def test_zero_is_floored_because_the_backend_rejects_it():
+    """validate_audio_duration_seconds refuses <= 0, failing the whole turn."""
+    assert _reported_audio_duration(0.0, 5.0) == MIN_REPORTED_DURATION_SECONDS
+    assert _reported_audio_duration(0.0, 5.0) > 0
+
+
+def test_the_floor_also_applies_to_the_fallback():
+    assert _reported_audio_duration(None, 0.0) == MIN_REPORTED_DURATION_SECONDS
+
+
+def test_a_negative_value_can_never_be_sent():
+    """Whatever goes wrong upstream, the request must stay valid."""
+    assert _reported_audio_duration(-3.0, 5.0) > 0
+    assert _reported_audio_duration(None, -3.0) > 0
+
+
+def test_a_short_utterance_is_preserved_not_floored():
+    """The floor is a backstop, not a rounding rule."""
+    assert _reported_audio_duration(0.4, 2.0) == pytest.approx(0.4)
+
+
+def _end_of_turn_block() -> str:
+    """The Flux EndOfTurn handler, up to the next event branch."""
+    start = SOURCE.index('elif event == "EndOfTurn":')
+    end = SOURCE.index('elif event in ("EagerEndOfTurn"', start)
+    return SOURCE[start:end]
+
+
+def test_duration_is_taken_before_the_supersede_cancel():
+    """The old reading ran the clock through _cancel_active_turn too."""
+    block = _end_of_turn_block()
+    dur = block.index("duration = _reported_audio_duration(")
+    cancel = block.index('_cancel_active_turn("superseded"')
+    assert dur < cancel, "duration is still measured after the cancel"
+
+
+def test_the_flux_dispatch_no_longer_reads_the_wall_clock_for_duration():
+    """Scoped to the Flux path.
+
+    Nova-3 still computes its duration from the wall clock and is left alone,
+    so asserting against the whole file would fail for the wrong reason.
+    """
+    assert "duration = max(time.time() - audio_started_at" not in _end_of_turn_block()
+
+
+def test_the_nova3_path_still_has_its_own_duration():
+    """Guards the change from spreading into the legacy path."""
+    assert "duration = max(time.time() - audio_started_at" in SOURCE
 
 
 # ──────────────────────────────────────────────────────────────────────
