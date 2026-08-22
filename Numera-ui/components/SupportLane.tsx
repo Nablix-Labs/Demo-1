@@ -23,6 +23,7 @@ import { useNumeraStore } from '@/store/useNumeraStore';
 import { cn } from '@/lib/cn';
 import WriteNote from '@/components/WriteNote';
 import RescueNote from '@/components/RescueNote';
+import RescueSteps from '@/components/RescueSteps';
 import HintNote from '@/components/HintNote';
 import VisualCue from '@/components/VisualCue';
 
@@ -66,6 +67,11 @@ export default function SupportLane() {
       {/* Last in the lane because it is last on the ladder — a student who has
           reached a worked example has already been past the rungs above it. */}
       <div className="pointer-events-auto"><RescueNote /></div>
+      {/* The same rung, on the step-at-a-time contract. Only one of the two can
+          have content at a time: the backend serves either `guided_rescue` or
+          rescue actions, never both, and each renders nothing when it is empty
+          — so they sit side by side rather than being switched between. */}
+      <div className="pointer-events-auto"><RescueSteps /></div>
     </div>
   );
 }

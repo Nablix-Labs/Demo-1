@@ -29,6 +29,11 @@ import {
   resolveTarget, actionMarks, showsWriteAffordance, memoryActionType, memoryActor,
   relocateWriteRequest,
 } from '@/lib/tutorCanvasActions';
+import {
+  isRescueAction, rescueStep, mergeStep, type RescueStep,
+} from '@/lib/rescueActions';
+import { emitRenderAck } from '@/lib/rescueEvents';
+import { canvasRescuePresentationEnabled } from '@/lib/runtimeConfig';
 import type { SupportRung } from '@/lib/supportLadder';
 import { EMPTY_APPLIED, type AppliedState } from '@/lib/responseGate';
 import type { InactivityPolicy } from '@/lib/inactivity';
@@ -183,6 +188,16 @@ export interface TutorCanvasAction {
   text: string | null;
   source_id: string | null;
   answer_reveal_allowed: boolean;
+  // Canvas rescue presentation (handoff, 22 Aug 2026 §2). Present only on
+  // SHOW_PARALLEL / TUTOR_SOLVED_STEP, and optional even there: the flag is
+  // off by default, so every existing action arrives without them. Read
+  // through lib/rescueActions, which refuses an unusable set rather than
+  // rendering a step nothing can later refer to.
+  rescue_id?: string | null;
+  step_index?: number | null;
+  total_steps?: number | null;
+  presentation_mode?: 'PARALLEL' | 'TUTOR_SOLVED' | null;
+  return_target_object_id?: string | null;
 }
 
 // Idempotency for tutor draw commands: a command may be re-delivered (e.g. on a
@@ -190,6 +205,15 @@ export interface TutorCanvasAction {
 // (not React state) since it's plumbing, not UI.
 const seenDrawActionIds = new Set<string>();
 const seenTutorCanvasActionIds = new Set<string>();
+
+/**
+ * How many unresolvable rescue actions may wait at once.
+ *
+ * A rescue is a handful of authored steps, so this is generous for the real
+ * case and still a ceiling: a target that never appears would otherwise queue
+ * forever and replay on every subsequent turn.
+ */
+const MAX_PENDING_RESCUE_ACTIONS = 12;
 
 /**
  * Which turn and question a canvas event belongs to (§8: "links canvas activity
@@ -418,6 +442,30 @@ export interface NumeraState {
    * would hand them the answer for free.
    */
   guidedRescue: GuidedRescuePayload | null;
+  /**
+   * The step-at-a-time rescue presentation (handoff, 22 Aug 2026).
+   *
+   * Separate from `guidedRescue` because it is a different contract, not a
+   * different shape of the same one: there, the whole walkthrough arrives and
+   * the client paces it; here, Chirudeva owns the pacing and one authored step
+   * arrives per turn. Both are live — this one only when the presentation flag
+   * is on — so they are held apart rather than merged into a field whose
+   * meaning depends on a flag.
+   */
+  rescueSteps: RescueStep[];
+  /** Where "Return to original" should send focus, from the active rescue. */
+  rescueReturnTarget: string | null;
+  /**
+   * Rescue actions whose target was not resolvable yet.
+   *
+   * Queued, not dropped (handoff §4). The ordinary rule for a semantic action
+   * is that an unresolvable target means "the student erased it, or the
+   * question moved on" — drop it. That rule is wrong for a rescue: the student
+   * is at the bottom of the support ladder, and the step being dropped is the
+   * help they were about to be given. So these wait for the board to catch up
+   * and are retried on the next batch.
+   */
+  pendingRescueActions: TutorCanvasAction[];
   visualCueVisible: boolean;
   /**
    * The backend's `cue_id` (e.g. 'VC-T01-ADD-NOT-MULTIPLY'), when it sent one.
@@ -641,6 +689,8 @@ export interface NumeraState {
   setVisibleHint: (hint: string | null) => void;
   setWriteInstruction: (instruction: string | null) => void;
   setGuidedRescue: (rescue: GuidedRescuePayload | null) => void;
+  /** Drop the step-at-a-time rescue (the student returned, or it was replaced). */
+  clearRescueSteps: () => void;
   setVisualCueVisible: (v: boolean) => void;
   setActiveScaffold: (s: ActiveScaffold | null) => void;
 
@@ -738,7 +788,7 @@ const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
   | 'setQuestionText' | 'setQuestionAnchors' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'noteTutorLineage' | 'markTutorTurnFailed'
-  | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue' | 'setVisibleHint' | 'setWriteInstruction' | 'setGuidedRescue'
+  | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue' | 'setVisibleHint' | 'setWriteInstruction' | 'setGuidedRescue' | 'clearRescueSteps'
   | 'setSupportShown' | 'setLastHintText' | 'lockPhase3Attempt'
   | 'setPendingTutorSpeech' | 'claimPendingTutorSpeech' | 'setQuestionProgress' | 'setAppliedResponse' | 'setInactivityPolicy'
   | 'addTranscriptMessage' | 'removeTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript' | 'commitPartialTranscript'
@@ -802,6 +852,9 @@ const initial: Omit<
   visibleHint: null as string | null,
   writeInstruction: null as string | null,
   guidedRescue: null as GuidedRescuePayload | null,
+  rescueSteps: [] as RescueStep[],
+  rescueReturnTarget: null as string | null,
+  pendingRescueActions: [] as TutorCanvasAction[],
   visualCueVisible: false,
   visualCueId: null as string | null,
   visualCueType: null,
@@ -1100,6 +1153,22 @@ export const useNumeraStore = create<NumeraState>()(
   setWriteInstruction: (writeInstruction) => set({ writeInstruction }),
 
   setGuidedRescue: (guidedRescue) => set({ guidedRescue }),
+
+  // The steps leave the screen; their marks go with them, and the ids are
+  // released so the same rescue can be served again later without every action
+  // being swallowed as a duplicate.
+  clearRescueSteps: () =>
+    set((s) => {
+      for (const step of s.rescueSteps) seenTutorCanvasActionIds.delete(step.actionId);
+      return {
+        rescueSteps: [],
+        rescueReturnTarget: null,
+        pendingRescueActions: [],
+        tutorElements: s.tutorElements.filter(
+          (el) => !s.rescueSteps.some((step) => el.id.startsWith(step.actionId)),
+        ),
+      };
+    }),
 
   setVisualCueVisible: (visualCueVisible) => set({ visualCueVisible }),
 
@@ -1436,12 +1505,27 @@ export const useNumeraStore = create<NumeraState>()(
       let tutorOptionActionIds = s.tutorOptionActionIds;
       let tutorElements = s.tutorElements;
       let writeAffordance = s.writeAffordance;
+      let rescueSteps = s.rescueSteps;
+      let rescueReturnTarget = s.rescueReturnTarget;
       const context = eventContext(s);
 
-      for (const action of actions) {
+      // Retry whatever was waiting for the board to catch up, oldest first, so
+      // a queued step still renders before the step that follows it.
+      const pending = s.pendingRescueActions;
+      const stillPending: TutorCanvasAction[] = [];
+      // Acks are sent after the state settles, never from inside the reducer:
+      // an ack means "this is on screen", and inside `set` it is not yet.
+      const acks: Array<{ actionId: string; targetObjectId: string }> = [];
+
+      for (const action of [...pending, ...actions]) {
         // Idempotency: a reconnect or replay must not render the same
         // intervention twice.
         if (seenTutorCanvasActionIds.has(action.action_id)) continue;
+
+        // The presentation is off: leave the two bottom rungs to `guided_rescue`
+        // and RescueNote. Ignored rather than queued — nothing later in this
+        // session will turn the flag on, so queueing would only accumulate.
+        if (!canvasRescuePresentationEnabled && isRescueAction(action)) continue;
 
         if (action.target_kind === 'QUESTION_OPTION' && action.target_object_id) {
           const expectedPrefix = `${s.activeQuestionId}:OPTION:`;
@@ -1479,6 +1563,22 @@ export const useNumeraStore = create<NumeraState>()(
         // same action is re-sent once the object exists, it should render then.
         // No acknowledgement either; an ack means "this is on screen".
         if (!target) {
+          // A rescue is the bottom of the support ladder — the step being
+          // discarded is the help the student was about to get — so it waits
+          // instead. Bounded, because a target that never appears must not grow
+          // an unbounded queue that replays on every later turn.
+          if (isRescueAction(action) || action.return_target_object_id) {
+            if (stillPending.length < MAX_PENDING_RESCUE_ACTIONS) {
+              stillPending.push(action);
+              console.warn(
+                `[rescue] ${action.action_id} (${action.type}) targets `
+                + `"${action.target_object_id}", not on screen yet. Queued.`,
+              );
+            } else {
+              console.warn(`[rescue] queue full — ${action.action_id} dropped`);
+            }
+            continue;
+          }
           console.warn(
             `[canvas] tutor action ${action.action_id} (${action.type}) targets `
             + `${action.target_kind} "${action.target_object_id}", which is not on screen. Dropped.`,
@@ -1502,6 +1602,23 @@ export const useNumeraStore = create<NumeraState>()(
         const marks = actionMarks(action, target);
         if (marks.length > 0) tutorElements = [...tutorElements, ...marks];
 
+        // A rescue step that reached the screen is recorded and acknowledged.
+        // Recorded only on the render, so the panel and the acknowledgement
+        // always agree with what the tutor layer actually shows.
+        const step = rescueStep(action);
+        if (step) {
+          rescueSteps = mergeStep(rescueSteps, step);
+          if (step.returnTargetObjectId) rescueReturnTarget = step.returnTargetObjectId;
+          acks.push({ actionId: step.actionId, targetObjectId: step.anchorId });
+        } else if (isRescueAction(action)) {
+          // Rendered nothing usable — no rescue_id, no step index, or a mode
+          // that contradicts its type. Say so loudly: from the backend's side
+          // this is indistinguishable from a renderer that never ran.
+          console.warn(
+            `[rescue] ${action.action_id} is not a usable rescue step; not recorded.`,
+          );
+        }
+
         // The renderer acknowledgement (Sanya, 19 Aug): recorded only for an
         // action that actually reached the screen.
         canvasEvents = appendCanvasEvent(canvasEvents, {
@@ -1514,7 +1631,25 @@ export const useNumeraStore = create<NumeraState>()(
           semantic_tag: action.confirmed_component_id,
         }, context);
       }
-      return { canvasEvents, questionAnchors, tutorOptionActionIds, tutorElements, writeAffordance };
+      // Outside the state update, but after it is computed: the acks describe
+      // the state being returned here, and firing them in a microtask keeps a
+      // transport failure from ever taking a render down with it.
+      if (acks.length > 0) {
+        queueMicrotask(() => {
+          for (const ack of acks) {
+            emitRenderAck({
+              action_id: ack.actionId,
+              status: 'RENDERED',
+              target_object_id: ack.targetObjectId,
+            });
+          }
+        });
+      }
+
+      return {
+        canvasEvents, questionAnchors, tutorOptionActionIds, tutorElements, writeAffordance,
+        rescueSteps, rescueReturnTarget, pendingRescueActions: stillPending,
+      };
     }),
 
   clearWriteAffordance: () => set({ writeAffordance: false }),

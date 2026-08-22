@@ -31,6 +31,7 @@ import {
   type CanvasBBox, type CanvasSize, type CanvasActionType,
 } from '@/lib/canvasMemory';
 import type { DrawnItem, TutorCanvasAction, TutorElement } from '@/store/useNumeraStore';
+import { parseRescueAnchor, answerRevealPermitted } from '@/lib/rescueActions';
 
 /** Where an action's target turned out to be, once resolved locally. */
 export type ResolvedTarget =
@@ -41,7 +42,9 @@ export type ResolvedTarget =
   /** The area the student is being asked to write in. Carries no content. */
   | { kind: 'write-area' }
   /** A reserved reference slot, clear of the writing area. Text sits AT the point. */
-  | { kind: 'slot'; at: { x: number; y: number } };
+  | { kind: 'slot'; at: { x: number; y: number } }
+  /** A rescue step's row. Its own ladder — see RESCUE_X. */
+  | { kind: 'rescue-slot'; at: { x: number; y: number } };
 
 export interface ResolveContext {
   anchors: QuestionAnchor[];
@@ -72,6 +75,13 @@ export function resolveTarget(
   }
 
   if (action.target_kind === 'TUTOR_ANCHOR') {
+    // A rescue step's anchor is registered by the renderer itself, from the
+    // action, so it resolves without anything having to be on the board first.
+    // That is what stops a rescue arriving before its anchor exists — the case
+    // the ordinary "target not on screen" drop was written for, and which for
+    // a rescue would drop the only step the student was going to be shown.
+    const rescue = parseRescueAnchor(id);
+    if (rescue) return rescueSlot(rescue.stepIndex);
     const writeRuleMatch = id.match(/^TUTOR_ANCHOR:WRITE_RULE:(\d+)$/);
     if (writeRuleMatch) return nextSlot(ctx.tutorElements, WRITE_RULE_X);
     const confirmedMatch = id.match(/^TUTOR_ANCHOR:CONFIRMED:(.+):(\d+)$/);
@@ -170,6 +180,52 @@ const WRITE_RULE_X = WRITE_AREA.x + 0.04;
 /** Persistent tutor confirmations sit at the left margin. */
 const CONFIRMED_X = 0.06;
 
+/**
+ * Where a tutor-solved rescue step goes, and why it has its own ladder.
+ *
+ * The handoff (§4) requires rescue geometry to stay separate from confirmation
+ * labels, highlights and write-rule anchors. Separate COLUMN, so a walkthrough
+ * never lands on a reference the student is reading while they write; and
+ * separate OCCUPANCY, so a three-step walkthrough does not push the next
+ * confirmation three rows down a ladder it has nothing to do with.
+ *
+ * x 0.44 is the gap between the two columns already spoken for: the references
+ * and the writing band run to x 0.40, and the cue card, hint note and scaffold
+ * panel start at 0.58. Placement is the client's call for the same reason the
+ * write block is relocated — this side is the only one that knows what else is
+ * on screen. It is a genuinely tight column, and long authored steps will run
+ * toward the cards; that is worth watching in the Topic 1 verification.
+ *
+ * The row comes from `step_index`, NOT from occupancy — the opposite of the
+ * confirmation ladder, and deliberately so. Confirmations are numbered per
+ * turn by a backend with no memory of the board, so their numbers collide and
+ * occupancy is the only reliable order. A rescue step index is authored,
+ * persistent and owned by Chirudeva, so step 3 belongs on row 3 — even if it
+ * arrives after a reconnect that lost rows 1 and 2, where occupancy would
+ * silently promote it to the top and misrepresent where the student is.
+ */
+const RESCUE_X = 0.44;
+const RESCUE_FIRST_Y = 0.14;
+const RESCUE_GAP = 0.09;
+const RESCUE_LAST_Y = 0.68;
+
+/** A rescue mark, identified by the suffix `actionMarks` gives it. */
+const RESCUE_SUFFIX = ':rescue';
+
+/** The row a rescue step occupies, from its authored index (1-based). */
+export function rescueSlot(stepIndex: number): ResolvedTarget {
+  const row = Math.max(1, stepIndex) - 1;
+  return {
+    kind: 'rescue-slot',
+    at: { x: RESCUE_X, y: Math.min(RESCUE_LAST_Y, RESCUE_FIRST_Y + row * RESCUE_GAP) },
+  };
+}
+
+/** How many rescue rows are on the board. Counted apart from `occupiedSlots`. */
+export function occupiedRescueRows(tutorElements: TutorElement[]): number {
+  return tutorElements.filter((el) => el.id.endsWith(RESCUE_SUFFIX)).length;
+}
+
 /** Does this box overlap the writing area? Used by the tests, and by nothing else. */
 export function overlapsWriteArea(box: CanvasBBox): boolean {
   return (
@@ -232,6 +288,42 @@ export function actionMarks(
   // knows where the token actually wrapped to. Drawing a box on the canvas for
   // it would put a mark on the board for something that is not on the board.
   if (target.kind === 'anchor') return [];
+
+  // A rescue step is written at its own row, in its own column.
+  //
+  // Only the text that arrived. No step is derived, no later step is drawn
+  // ahead of time, and nothing is appended when the text is empty — the client
+  // has never been told what step 3 says, which is exactly what makes it unable
+  // to leak it.
+  if (target.kind === 'rescue-slot') {
+    const stepText = action.text?.trim();
+    if (!stepText) return [];
+    // The flag is a REQUEST to present this as the answer, re-checked here.
+    // When it is set but the action does not satisfy the checkable conditions,
+    // the step still renders — it is authored content the student is meant to
+    // see — but it renders as an ordinary step rather than as the reveal. That
+    // is contract drift, and it is loud, because the alternative is a reveal
+    // happening on a rung or a step where none was authorised.
+    const reveal = answerRevealPermitted(action);
+    if (action.answer_reveal_allowed === true && !reveal) {
+      console.warn(
+        `[rescue] ${action.action_id} asked for an answer reveal but does not satisfy `
+        + 'the final-tutor-solved-step conditions. Rendered as an ordinary step.',
+      );
+    }
+    return [{
+      id: `${action.action_id}${RESCUE_SUFFIX}`,
+      kind: 'text',
+      x: target.at.x,
+      y: target.at.y,
+      text: stepText,
+      color: INK,
+      size: 24,
+      // The reveal is the one line in a walkthrough the student is meant to
+      // land on, so it is the one line set apart.
+      fontStyle: reveal ? 'bold' : undefined,
+    }];
+  }
 
   // A reserved slot takes its text exactly where the slot is — no offset. The
   // offset below applies to marks that COMMENT on something, which sit under the
