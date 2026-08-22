@@ -20,7 +20,7 @@ import type Konva from 'konva';
 import { useShallow } from 'zustand/react/shallow';
 import { useNumeraStore, type CanvasExporter, type CanvasStrokeSnapshot, type DrawnItem } from '@/store/useNumeraStore';
 import { uid } from '@/lib/uid';
-import { setStudentWriting } from '@/lib/tutorSpeech';
+import { setStudentWriting, setPenDown } from '@/lib/tutorSpeech';
 import TutorLayer from './TutorLayer';
 import TutorMathOverlay from './TutorMathOverlay';
 import TutorHandOverlay from './TutorHandOverlay';
@@ -156,6 +156,7 @@ export default function DrawingCanvas({ onExportReady, tutorOnly = false, readOn
       // the tutor mid-sentence rather than at the end of it. The floor goes back
       // when the work is submitted (see useDemoTutor.submitCanvasWork).
       setStudentWriting(true);
+      setPenDown(true);
       startPos.current = { x: pos.x, y: pos.y };
       const id = uid();
 
@@ -222,6 +223,10 @@ export default function DrawingCanvas({ onExportReady, tutorOnly = false, readOn
   const handleUp = useCallback(() => {
     if (!isDrawing.current) return;
     isDrawing.current = false;
+    // The stroke is over. The floor is NOT handed back here — unsubmitted work
+    // still holds it (see isStudentWriting) — but a student transcript may now
+    // hand it back, which it must not do mid-stroke.
+    setPenDown(false);
     startPos.current = null;
     const item = draftRef.current;
     if (item) {

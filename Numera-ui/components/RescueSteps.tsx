@@ -45,9 +45,14 @@ export default function RescueSteps() {
   const sessionId = useNumeraStore((s) => s.sessionId);
   const activeQuestionId = useNumeraStore((s) => s.activeQuestionId);
 
-  // Whether an advance is outstanding. Local, because it is about this
-  // button's last press and nothing else in the app has an opinion on it.
-  const [awaitingStep, setAwaitingStep] = useState<number | null>(null);
+  // Whether an advance is outstanding, and for WHICH rescue.
+  //
+  // The rescue id has to be part of it. This component never unmounts —
+  // SupportLane renders it unconditionally — so a bare step number survived
+  // into the next rescue: press Next on step 3 of rescue A, A is superseded by
+  // B starting at step 1, and B opened with its button already disabled and no
+  // way to re-enable it.
+  const [awaiting, setAwaiting] = useState<{ rescueId: string; step: number } | null>(null);
 
   if (steps.length === 0) return null;
   // Phase 3 is answered alone (spec §3.2). Support does not appear during an
@@ -56,8 +61,12 @@ export default function RescueSteps() {
 
   const current = steps[steps.length - 1];
   const final = isFinalStep(current);
-  // A press is only outstanding until the step it asked for arrives.
-  const pending = awaitingStep !== null && awaitingStep > current.stepIndex;
+  // Outstanding only for this rescue, and only until the step it asked for
+  // arrives. Anything else — a new rescue, a step that went backwards — clears
+  // it rather than leaving the student holding a dead button.
+  const pending = awaiting !== null
+    && awaiting.rescueId === current.rescueId
+    && awaiting.step > current.stepIndex;
 
   const onNext = () => {
     if (!sessionId || !activeQuestionId) return;
@@ -72,7 +81,10 @@ export default function RescueSteps() {
       current_step_index: current.stepIndex,
       trigger: 'UI_NEXT_STEP',
     });
-    if (sent) setAwaitingStep(current.stepIndex + 1);
+    // Only latch on a send that actually left. A closed socket, or a backend
+    // that does not know this frame yet, must not leave the button reading
+    // "Waiting for the next step…" for the rest of the question.
+    if (sent) setAwaiting({ rescueId: current.rescueId, step: current.stepIndex + 1 });
   };
 
   const onReturn = () => {
@@ -80,6 +92,7 @@ export default function RescueSteps() {
     // own working are all still underneath it, untouched — nothing here erases
     // or replaces student work, which the handoff states twice.
     clearRescueSteps();
+    setAwaiting(null);
     if (returnTarget) {
       // Focus is the backend's stated return target. We record the intent; the
       // canvas owns where that id actually is.
@@ -107,7 +120,9 @@ export default function RescueSteps() {
         </ol>
 
         <p className="mt-2 text-xs text-slate-500">
-          Step {current.stepIndex} of {current.totalSteps}
+          {current.totalSteps === null
+            ? `Step ${current.stepIndex}`
+            : `Step ${current.stepIndex} of ${current.totalSteps}`}
         </p>
 
         <div className="mt-3 flex items-center gap-2">

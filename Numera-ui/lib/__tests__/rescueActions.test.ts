@@ -133,9 +133,21 @@ describe('rescueStep', () => {
     expect(step?.mode).toBe('PARALLEL');
   });
 
-  it('falls back to the step index when the total is unusable', () => {
-    const step = rescueStep({ ...PARALLEL_STEP1, step_index: 2, total_steps: 0 });
-    expect(step?.totalSteps).toBe(2);
+  it('reports an unusable total as unknown, and unknown is NOT final', () => {
+    // This used to default to the step index, which made "I don't know how many
+    // steps there are" render as "this is the last one": the panel showed
+    // "Step 2 of 2" and offered Return instead of Next, cutting the student off
+    // from the rest of a walkthrough while claiming it had finished. Sanya nulls
+    // fields without notice, so this is the likely real-world shape.
+    for (const total of [0, null, undefined]) {
+      const step = rescueStep({ ...PARALLEL_STEP1, step_index: 2, total_steps: total });
+      expect(step?.totalSteps).toBeNull();
+      expect(isFinalStep(step!)).toBe(false);
+    }
+  });
+
+  it('is still final when the backend does say so', () => {
+    const step = rescueStep({ ...PARALLEL_STEP1, step_index: 3, total_steps: 3 });
     expect(isFinalStep(step!)).toBe(true);
   });
 });

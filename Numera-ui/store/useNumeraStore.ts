@@ -27,7 +27,7 @@ import {
 import { uid } from '@/lib/uid';
 import {
   resolveTarget, actionMarks, showsWriteAffordance, memoryActionType, memoryActor,
-  relocateWriteRequest,
+  relocateWriteRequest, RESCUE_SUFFIX,
 } from '@/lib/tutorCanvasActions';
 import {
   isRescueAction, rescueStep, mergeStep, type RescueStep,
@@ -1023,6 +1023,13 @@ export const useNumeraStore = create<NumeraState>()(
               // A hint is about the question it was given on. Left up, it would
               // sit beside the next question nudging the wrong step.
               visibleHint: null,
+              // So is a rescue. Left standing, Q1's solved answer sat in bold
+              // beside Q2 — and its queued actions would be retried against a
+              // board they were never resolved for, with the dedupe window just
+              // cleared. The marks go with tutorElements below.
+              rescueSteps: [],
+              rescueReturnTarget: null,
+              pendingRescueActions: [],
               // So does an instruction to write: it was about evidence for the
               // step the student was on, not for this one.
               writeInstruction: null,
@@ -1164,8 +1171,11 @@ export const useNumeraStore = create<NumeraState>()(
         rescueSteps: [],
         rescueReturnTarget: null,
         pendingRescueActions: [],
+        // Exact mark id, not a prefix: `startsWith` made action ids `a1` and
+        // `a10` collide, and it also stripped non-rescue marks belonging to the
+        // same action.
         tutorElements: s.tutorElements.filter(
-          (el) => !s.rescueSteps.some((step) => el.id.startsWith(step.actionId)),
+          (el) => !s.rescueSteps.some((step) => el.id === `${step.actionId}${RESCUE_SUFFIX}`),
         ),
       };
     }),
@@ -1607,6 +1617,22 @@ export const useNumeraStore = create<NumeraState>()(
         // always agree with what the tutor layer actually shows.
         const step = rescueStep(action);
         if (step) {
+          // A different rescue REPLACES this one — it superseded it upstream,
+          // and interleaving two walkthroughs reads as one incoherent
+          // explanation. mergeStep drops the old steps from the panel, but the
+          // old MARKS have to be taken off the canvas here: rescue rows are
+          // deterministic on step_index, so A's step 1 and B's step 1 occupy
+          // exactly the same point and would render on top of each other.
+          const superseded = rescueSteps.filter((prev) => prev.rescueId !== step.rescueId);
+          if (superseded.length > 0) {
+            const staleIds = new Set(superseded.map((prev) => `${prev.actionId}${RESCUE_SUFFIX}`));
+            tutorElements = tutorElements.filter((el) => !staleIds.has(el.id));
+            for (const prev of superseded) seenTutorCanvasActionIds.delete(prev.actionId);
+            // The old rescue's return target goes with it. It is only ever
+            // overwritten on a truthy value, so B omitting the (optional) field
+            // would otherwise carry A's target into B's "Return to original".
+            rescueReturnTarget = null;
+          }
           rescueSteps = mergeStep(rescueSteps, step);
           if (step.returnTargetObjectId) rescueReturnTarget = step.returnTargetObjectId;
           acks.push({ actionId: step.actionId, targetObjectId: step.anchorId });

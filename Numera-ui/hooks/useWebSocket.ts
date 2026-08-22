@@ -30,7 +30,7 @@ import { applyVoiceSessionFrame } from '@/lib/voiceSessionSync';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { tutorAudioStream, effectiveVoice, stopTutorSpeech } from '@/lib/tts';
-import { tutorSay, setStudentWriting } from '@/lib/tutorSpeech';
+import { tutorSay, setStudentWriting, isPenDown } from '@/lib/tutorSpeech';
 import { buildVoiceStreamUrl, voiceStreamingEnabled, allowAnonTutorCalls } from '@/lib/runtimeConfig';
 import {
   ANON_ACCESS_TOKEN, studentId, voiceTurnFailedMessage, transcriptUnclearMessage,
@@ -124,10 +124,15 @@ export function useWebSocket(sessionId: string | null) {
       const frame = { type, ...extra };
       logFrame('out', frame);
       wsRef.current.send(JSON.stringify(frame));
+      return true;
     } else {
       // Dropping silently made rescues invisible: the watchdog's `stop` and
       // every turn_context could vanish with no trace in the console.
       console.warn(`[WS] dropped '${type}' — socket not open`);
+      // Reported, not thrown. Callers that latch UI state on a send (the rescue
+      // "Next step" button) need to know it went nowhere; everyone else ignores
+      // it exactly as before.
+      return false;
     }
   }, []);
 
@@ -160,10 +165,35 @@ export function useWebSocket(sessionId: string | null) {
   useEffect(() => {
     registerRescueTransport((event) => {
       const type = 'event_type' in event ? 'rescue_step_advance' : 'rescue_render_ack';
-      sendControl(type, event as unknown as Record<string, unknown>);
+      return sendControl(type, event as unknown as Record<string, unknown>);
     });
     return () => registerRescueTransport(null);
   }, [sendControl]);
+
+  /**
+   * Send turn context for a turn that was minted somewhere else.
+   *
+   * Every `beginListeningTurn()` inside this hook is paired with an explicit
+   * `sendTurnContext()`. The ones OUTSIDE it are not, and cannot be: app/page.tsx
+   * mints turns from tutorSay's onEnd (the opening line, and every entry into
+   * guided practice) but only destructures `{ sendAudioChunk, sendControl }` —
+   * it has no access to this. lib/tutorSpeech now mints one too, when the pen
+   * silences the tutor.
+   *
+   * The server clears its latched turn fields after each turn, so a turn minted
+   * with no context is evaluated against the PREVIOUS turn's id: the reply comes
+   * back with an accepted_turn_id that fails the ordering gate and is dropped as
+   * stale. Self-healing, but it costs a turn every time — "the first thing I say
+   * after the intro doesn't register".
+   *
+   * Subscribing to the id rather than patching each call site means a turn
+   * minted anywhere is covered, including any added later. Re-sending context
+   * the paired sites already sent is harmless: the server latches the most
+   * recent frame, and the values are identical.
+   */
+  useEffect(() => useNumeraStore.subscribe((state, prev) => {
+    if (state.currentTurnId && state.currentTurnId !== prev.currentTurnId) sendTurnContext();
+  }), [sendTurnContext]);
 
   const connect = useCallback(() => {
     if (!sessionId || !voiceStreamingEnabled) return;
@@ -317,7 +347,11 @@ export function useWebSocket(sessionId: string | null) {
               // while the student WRITES, and a student who is talking to the
               // tutor is no longer mid-stroke. Same reasoning Explain Again
               // already uses for its explicit handoff.
-              setStudentWriting(false);
+              // ...but not while the pen is physically down: a transcript is not
+              // proof the STUDENT spoke, and the tutor must not talk over a hand
+              // that is still moving. Once it lifts, this is the ordinary
+              // "I've written it, check the canvas" handoff.
+              if (!isPenDown()) setStudentWriting(false);
               watchdogRef.current?.noteStudentSpeech(useNumeraStore.getState().currentTurnId);
               processingTimerRef.current?.noteSpeech();
             }
@@ -522,7 +556,13 @@ export function useWebSocket(sessionId: string | null) {
             tutorAudioStream.begin(
               withTransitionVoice(
                 enteringPhase,
-                (typeof msg.voice_text === 'string' && msg.voice_text) || spokenLine,
+                // Coerced, because withTransitionVoice calls .trim() on this and
+                // the argument is evaluated BEFORE begin() runs. A null `text`
+                // on a phase-change turn therefore threw here — after
+                // setVoiceStatus('speaking') and after the watchdog stood down —
+                // so begin() never ran, onIdle never fired, and the mic stayed
+                // shut for the rest of the session behind a "Speaking…" panel.
+                (typeof msg.voice_text === 'string' && msg.voice_text) || spokenLine || '',
               ),
             );
             break;
@@ -642,7 +682,13 @@ export function useWebSocket(sessionId: string | null) {
             }
             addTranscriptMessage({
               role: 'ai',
-              text: voiceTurnFailedMessage(msg.message as string | undefined),
+              // String()d like the sibling read a few lines up: an error frame
+              // shaped {code, detail} rather than {message} threw inside
+              // voiceTurnFailedMessage's .toLowerCase(), which skipped the
+              // beginListeningTurn() below and froze the turn on "Processing…".
+              text: voiceTurnFailedMessage(
+                typeof msg.message === 'string' ? msg.message : undefined,
+              ),
             });
             // Same as the REST path: the tutor owes them a reply, so the idle
             // clock must not read the silence that follows as being stuck and

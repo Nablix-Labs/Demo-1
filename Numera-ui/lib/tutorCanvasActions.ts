@@ -210,7 +210,7 @@ const RESCUE_GAP = 0.09;
 const RESCUE_LAST_Y = 0.68;
 
 /** A rescue mark, identified by the suffix `actionMarks` gives it. */
-const RESCUE_SUFFIX = ':rescue';
+export const RESCUE_SUFFIX = ':rescue';
 
 /** The row a rescue step occupies, from its authored index (1-based). */
 export function rescueSlot(stepIndex: number): ResolvedTarget {
@@ -219,11 +219,6 @@ export function rescueSlot(stepIndex: number): ResolvedTarget {
     kind: 'rescue-slot',
     at: { x: RESCUE_X, y: Math.min(RESCUE_LAST_Y, RESCUE_FIRST_Y + row * RESCUE_GAP) },
   };
-}
-
-/** How many rescue rows are on the board. Counted apart from `occupiedSlots`. */
-export function occupiedRescueRows(tutorElements: TutorElement[]): number {
-  return tutorElements.filter((el) => el.id.endsWith(RESCUE_SUFFIX)).length;
 }
 
 /** Does this box overlap the writing area? Used by the tests, and by nothing else. */

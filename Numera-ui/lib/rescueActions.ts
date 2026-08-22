@@ -36,7 +36,15 @@ export interface RescueStep {
   rescueId: string;
   mode: RescuePresentationMode;
   stepIndex: number;
-  totalSteps: number;
+  /**
+   * Display-only, and NULLABLE. Null means the backend did not say.
+   *
+   * It must never be defaulted to the current index. Doing that made an
+   * unknown total read as "this is the last step": the panel swapped Next
+   * for "Return to original" and captioned it "Step 2 of 2", cutting the
+   * student off from the rest of a walkthrough while asserting it finished.
+   */
+  totalSteps: number | null;
   text: string;
   /** The local anchor this step's mark hangs off. */
   anchorId: string;
@@ -136,11 +144,11 @@ export function rescueStep(action: TutorCanvasAction): RescueStep | null {
   if (action.presentation_mode && action.presentation_mode !== expected) return null;
 
   // Unknown total: show the step, hide the counter. "Step 2" alone is honest;
-  // "step 2 of 0" is not.
+  // "step 2 of 0" is not — and neither is silently calling it the last one.
   const rawTotal = action.total_steps;
   const totalSteps = Number.isInteger(rawTotal) && (rawTotal as number) >= (stepIndex as number)
     ? (rawTotal as number)
-    : (stepIndex as number);
+    : null;
 
   return {
     actionId: action.action_id,
@@ -158,7 +166,10 @@ export function rescueStep(action: TutorCanvasAction): RescueStep | null {
 
 /** Is this the last authored step of its rescue? */
 export function isFinalStep(step: RescueStep): boolean {
-  return step.stepIndex >= step.totalSteps;
+  // Unknown total is NOT final. A walkthrough whose length the backend did not
+  // state stays open, because the alternative — ending it early — takes the
+  // remaining steps away from a student who is already stuck.
+  return step.totalSteps !== null && step.stepIndex >= step.totalSteps;
 }
 
 /**

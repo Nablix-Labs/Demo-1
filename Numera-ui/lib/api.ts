@@ -563,8 +563,11 @@ export async function startSession(payload: StartSessionPayload) {
  */
 export function diagnosticQuestions(record: SessionRecord | null | undefined): SchemaQuestion[] {
   const payload = record?.student_model_event?.phase_payload;
-  if (!payload?.question_set) return [];
-  return payload.question_set.questions.filter((q) => q.student_view?.question_text);
+  // `questions` is required by the contract, but a field vanishing from a
+  // response has been a live outage here twice — and this one is read during
+  // render, so an absent array replaces the whole check screen with the error
+  // boundary mid-attempt. The two siblings below already read it defensively.
+  return (payload?.question_set?.questions ?? []).filter((q) => q.student_view?.question_text);
 }
 
 /**
@@ -684,7 +687,10 @@ export function orientationSequence(
 ): SchemaOrientationItem[] {
   const bundle = orientationBundle(record);
   if (!bundle) return [];
-  return [...bundle.delivery_sequence].sort((a, b) => a.sequence_no - b.sequence_no);
+  // Spread-of-undefined throws "not iterable", and this runs in the render
+  // body of BackendOrientation rather than inside its load() try — so the
+  // screen renders nothing and its retry button looks broken.
+  return [...(bundle.delivery_sequence ?? [])].sort((a, b) => a.sequence_no - b.sequence_no);
 }
 
 /** Workbook topic code for this session (e.g. 'ALG-ORI-02'), or null. */
@@ -704,8 +710,11 @@ export function sessionTopicCode(record: SessionRecord | null | undefined): stri
  * nothing.
  */
 export function sessionTopicTitle(record: SessionRecord | null | undefined): string | null {
+  // The optional chain used to stop one link early. By review time this record
+  // carries a Phase 4 payload, where a bundle without a delivery_sequence is
+  // ordinary — and the throw landed on the final screen of the lesson.
   const video = orientationBundle(record)?.delivery_sequence
-    .find((item) => item.video?.title)?.video;
+    ?.find((item) => item.video?.title)?.video;
   return video?.title?.trim() || null;
 }
 

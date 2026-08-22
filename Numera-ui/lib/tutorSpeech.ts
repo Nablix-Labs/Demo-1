@@ -24,6 +24,7 @@
  */
 
 import { speakTutor, stopTutorSpeech } from '@/lib/tts';
+import { useNumeraStore } from '@/store/useNumeraStore';
 
 /**
  * How long a mark sits before it is narrated.
@@ -36,6 +37,7 @@ import { speakTutor, stopTutorSpeech } from '@/lib/tts';
 export const MARK_SETTLE_MS = 700;
 
 let studentWriting = false;
+let penDown = false;
 let pendingSpeech: ReturnType<typeof setTimeout> | null = null;
 let pendingOnEnd: (() => void) | null = null;
 
@@ -64,6 +66,31 @@ export function isStudentWriting(): boolean {
 }
 
 /**
+ * Is the pen physically down right now?
+ *
+ * `studentWriting` conflates two things — "mid-stroke" and "has unsubmitted
+ * fresh work" — and they need separating for exactly one decision: whether a
+ * student transcript may hand the floor back.
+ *
+ * A transcript is not proof the STUDENT spoke. The mic is open through the whole
+ * listening turn, so a sibling, a teacher or a television in the room produces a
+ * student-role final just as readily. Handing the floor back on that while the
+ * student's hand is still moving would let the tutor talk over the pen, which is
+ * the precise thing §1 exists to prevent — so the pen wins while it is down.
+ *
+ * Once it lifts, a transcript is the ordinary "I've written it, look at this"
+ * handoff and clearing is right.
+ */
+export function isPenDown(): boolean {
+  return penDown;
+}
+
+/** Called by the canvas on pointer down/up. Not a floor decision by itself. */
+export function setPenDown(down: boolean): void {
+  penDown = down;
+}
+
+/**
  * Hand the floor to the student, or take it back.
  *
  * Taking it (`true`) silences the tutor immediately — including an utterance
@@ -76,7 +103,42 @@ export function setStudentWriting(writing: boolean): void {
   if (writing) {
     cancelPending('silenced');
     stopTutorSpeech();
+    reopenTurnAfterSilencing();
   }
+}
+
+/**
+ * Give the student's turn back after the pen silenced the tutor.
+ *
+ * This is the other half of `stopTutorSpeech`, and it was missing.
+ *
+ * On the server transport `stopTutorSpeech` calls `tutorAudioStream.hardStop()`,
+ * which by explicit design tears the stream down WITHOUT firing `onIdle` —
+ * "callers own what happens next" (lib/tts.ts). The caller here owned nothing.
+ * Every other hardStop site in useWebSocket follows it with `beginListeningTurn()`;
+ * pen-down was the one that did not.
+ *
+ * That left `voiceStatus` at 'speaking' with no audio playing and no onIdle
+ * still to come — and because app/page.tsx gates `setTransmitting` on
+ * `voiceStatus === 'listening'`, the student's microphone frames stopped being
+ * SENT for the rest of the session. Not a muted mic: an open one whose audio
+ * went nowhere. Tapping "Check my work" does not recover it either, because
+ * submitCanvasWork never touches voiceStatus.
+ *
+ * So: student writes while the tutor is talking — which §1 actively invites —
+ * and is never heard again. That is Manjusha's "after tutor writing something
+ * breaks from frontend, it's not listening", and it is a better fit for the
+ * report than the transcript_final fix, which cannot even fire once the frames
+ * have stopped being transmitted.
+ *
+ * Only from 'speaking': that is the state this function just caused. Reopening
+ * from 'processing' would abandon a turn the server is still working on, and
+ * reopening from 'listening' would mint a fresh turn id on every pen stroke.
+ */
+function reopenTurnAfterSilencing(): void {
+  const store = useNumeraStore.getState();
+  if (store.voiceStatus !== 'speaking') return;
+  store.beginListeningTurn();
 }
 
 export interface TutorSayOptions {
@@ -142,4 +204,5 @@ export function tutorSay(text: string, options: TutorSayOptions = {}): boolean {
 export function resetTutorSpeech(): void {
   cancelPending('superseded');
   studentWriting = false;
+  penDown = false;
 }

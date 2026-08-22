@@ -36,7 +36,7 @@ export interface RescueRenderAck {
 
 export type RescueTransport = (
   event: RescueAdvanceEvent | RescueRenderAck,
-) => void;
+) => boolean | void;
 
 let transport: RescueTransport | null = null;
 
@@ -59,8 +59,10 @@ function emit(event: RescueAdvanceEvent | RescueRenderAck, label: string): boole
     return false;
   }
   try {
-    transport(event);
-    return true;
+    // A transport that reports false delivered nothing — a closed socket warns
+    // rather than throwing, so the try/catch alone would report success for a
+    // frame that went nowhere, and the caller would latch its UI on that.
+    return transport(event) !== false;
   } catch (error) {
     console.warn(`[rescue] ${label} failed to send`, error);
     return false;

@@ -35,7 +35,12 @@ export function voiceSupportFrame(msg: VoiceTutorFrame): SupportPresentation {
     // Pointing at the question text (Chirudeva §1). Defaulted to an empty
     // array rather than left undefined, so a voice turn that points at nothing
     // clears the previous turn's highlight instead of leaving it standing.
-    question_anchors: (msg.question_anchors as SupportPresentation['question_anchors']) ?? [],
+    // Array.isArray, not a bare cast. A non-array here is stored raw and then
+    // throws inside usableAnchors during React render — a genuine blank
+    // screen. voiceSessionSync already doubts this exact field's shape.
+    question_anchors: Array.isArray(msg.question_anchors)
+      ? (msg.question_anchors as SupportPresentation['question_anchors'])
+      : [],
 
     // Reliability gate — see the header.
     next_expected_input: str(msg.next_expected_input),
@@ -57,8 +62,11 @@ export function voiceSupportFrame(msg: VoiceTutorFrame): SupportPresentation {
 
     // Semantic tutor canvas actions (Sanya, 19 Aug). Guided Practice is voice-led
     // more often than not, so this is the transport that needs them most.
-    tutor_canvas_actions:
-      msg.tutor_canvas_actions as SupportPresentation['tutor_canvas_actions'],
+    // Same guard, sharper consequence: applyTutorCanvasActions spreads this
+    // into an array, so a non-array throws before the reply renders at all.
+    tutor_canvas_actions: Array.isArray(msg.tutor_canvas_actions)
+      ? (msg.tutor_canvas_actions as SupportPresentation['tutor_canvas_actions'])
+      : undefined,
 
     show_visual_cue: msg.show_visual_cue as boolean | undefined,
     visual_cue: msg.visual_cue as SupportPresentation['visual_cue'],
