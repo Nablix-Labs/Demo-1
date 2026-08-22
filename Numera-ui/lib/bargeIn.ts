@@ -38,6 +38,21 @@ export interface BargeInSignal {
   audioPlaying: boolean;
   /** The partial transcript that just arrived. */
   text: string | null | undefined;
+  /**
+   * The server reported the turn starting, rather than us inferring it from a
+   * partial (`student_speaking`, Aditya 22 Aug 2026).
+   *
+   * Set only on that frame. It stands in for the text test, which exists to
+   * reject empty partials from the recogniser twitching — a fact Flux has
+   * already established by the time it declares StartOfTurn, so requiring text
+   * on top of it would throw away the earliness that is the frame's entire
+   * value.
+   *
+   * The decision itself is unchanged, and deliberately: it is still "is audio
+   * genuinely playing", still decided here, and still ours to make because the
+   * audio element is ours. Only the trigger moved earlier.
+   */
+  serverReportedTurnStart?: boolean;
 }
 
 /**
@@ -52,7 +67,10 @@ export interface BargeInSignal {
  * back through the microphone is suppressed before it ever reaches a transcript.
  * Without that, this rule would let the tutor interrupt itself.
  */
-export function interruptsTutor({ audioPlaying, text }: BargeInSignal): boolean {
+export function interruptsTutor(
+  { audioPlaying, text, serverReportedTurnStart }: BargeInSignal,
+): boolean {
   if (!audioPlaying) return false;
+  if (serverReportedTurnStart) return true;
   return Boolean(text?.trim());
 }

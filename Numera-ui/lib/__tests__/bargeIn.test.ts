@@ -44,3 +44,28 @@ describe('what must not stop the tutor', () => {
     expect(interruptsTutor({ audioPlaying: false, text: 'HELLO HELLO' })).toBe(false);
   });
 });
+
+describe('student_speaking (Flux StartOfTurn, Aditya 22 Aug 2026)', () => {
+  it('stops the tutor when the server reports a turn starting during playback', () => {
+    // The frame carries no text — Flux has already established that speech
+    // began, which is what the text test exists to establish from a partial.
+    expect(interruptsTutor({
+      audioPlaying: true, text: null, serverReportedTurnStart: true,
+    })).toBe(true);
+  });
+
+  it('does nothing on the ordinary turn, which is most of them', () => {
+    // The frame fires on EVERY StartOfTurn, unfiltered and by design. A student
+    // answering after the tutor finished is the common case, and the only thing
+    // separating it from an interruption is that nothing is playing.
+    expect(interruptsTutor({
+      audioPlaying: false, text: null, serverReportedTurnStart: true,
+    })).toBe(false);
+  });
+
+  it('leaves the partial path exactly as it was', () => {
+    // The flag is absent on every existing call site.
+    expect(interruptsTutor({ audioPlaying: true, text: 'wait' })).toBe(true);
+    expect(interruptsTutor({ audioPlaying: true, text: '' })).toBe(false);
+  });
+});

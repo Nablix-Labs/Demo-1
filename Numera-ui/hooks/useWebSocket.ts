@@ -15,6 +15,7 @@
  *   { type: 'tutor_audio_end',    total_chunks: number, tts_latency_ms: number, error?: string }
  *   { type: 'tutor_audio_cancel', reason: string, expect_new_turn: boolean }    // Flux barge-in
  *   { type: 'tutor_turn_committed', tutor_turn_id: string, accepted_turn_id: string, ... } // lineage only
+ *   { type: 'student_speaking',   turn_index: number }   // Flux StartOfTurn, every turn
  *
  * Message schema (out):
  *   { type: 'audio_chunk', data: string }  // base64 PCM 16kHz mono
@@ -29,7 +30,7 @@ import { applyVoiceSessionFrame } from '@/lib/voiceSessionSync';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { tutorAudioStream, effectiveVoice, stopTutorSpeech } from '@/lib/tts';
-import { tutorSay } from '@/lib/tutorSpeech';
+import { tutorSay, setStudentWriting } from '@/lib/tutorSpeech';
 import { buildVoiceStreamUrl, voiceStreamingEnabled, allowAnonTutorCalls } from '@/lib/runtimeConfig';
 import {
   ANON_ACCESS_TOKEN, studentId, voiceTurnFailedMessage, transcriptUnclearMessage,
@@ -44,6 +45,7 @@ import { turnContextFrame } from '@/lib/voiceTurnContext';
 import { reopensStudentTurn, type TutorAudioCancelFrame } from '@/lib/tutorAudioCancel';
 import { committedLineage, type TutorTurnCommittedFrame } from '@/lib/tutorTurnCommitted';
 import { interruptsTutor } from '@/lib/bargeIn';
+import { registerRescueTransport } from '@/lib/rescueEvents';
 import { useMicLevel } from '@/store/useMicLevel';
 import { reportFailure } from '@/lib/failureReport';
 
@@ -142,6 +144,25 @@ export function useWebSocket(sessionId: string | null) {
     if (!frame) return;
     const { type, ...fields } = frame;
     sendControl(type, fields);
+  }, [sendControl]);
+
+  /**
+   * Carry rescue events out over the voice socket.
+   *
+   * PROVISIONAL. The handoff fixes the event bodies but not their transport —
+   * there is no `/rescue/advance` endpoint and no agreed frame name — so these
+   * go out under `rescue_step_advance` / `rescue_render_ack` and will be
+   * ignored by a server that does not know them yet. Nothing depends on a
+   * reply: the panel advances only when a new step actually arrives, so an
+   * unrouted event costs the student nothing beyond the step not advancing,
+   * which is the correct behaviour when the backend has not agreed to it.
+   */
+  useEffect(() => {
+    registerRescueTransport((event) => {
+      const type = 'event_type' in event ? 'rescue_step_advance' : 'rescue_render_ack';
+      sendControl(type, event as unknown as Record<string, unknown>);
+    });
+    return () => registerRescueTransport(null);
   }, [sendControl]);
 
   const connect = useCallback(() => {
@@ -280,9 +301,54 @@ export function useWebSocket(sessionId: string | null) {
             // final while the student is still saying "…5". So this restarts
             // the settle clock like a partial does; it does not end the turn.
             if (msg.role === 'student') {
+              // Speaking hands the floor back, exactly as submitting the canvas
+              // does (Manjusha, 22 Aug: wrote "n + 5", said "check the Canvas",
+              // and the tutor went silent for the rest of the question).
+              //
+              // `setStudentWriting(true)` fires on pen-down, and until now the
+              // ONLY things that cleared it were the "Check" button, Explain
+              // Again, and loading a fresh question. A student who wrote and
+              // then talked — rather than tapping Check — left it stuck true,
+              // and `tutorSay` drops every utterance while it is, so the tutor
+              // rendered text it never spoke. Half the reports of "it stopped
+              // talking to me" after writing are this.
+              //
+              // Safe against the rule it relaxes: §1 keeps the tutor quiet
+              // while the student WRITES, and a student who is talking to the
+              // tutor is no longer mid-stroke. Same reasoning Explain Again
+              // already uses for its explicit handoff.
+              setStudentWriting(false);
               watchdogRef.current?.noteStudentSpeech(useNumeraStore.getState().currentTurnId);
               processingTimerRef.current?.noteSpeech();
             }
+            break;
+
+          // Flux reported StartOfTurn (Aditya, 22 Aug 2026). Sent on EVERY turn,
+          // unfiltered and by design — the server cannot see whether audio is
+          // coming out of the speaker, so it reports the fact and leaves the
+          // judgement here, where `aiSpeaking` is known.
+          //
+          // Same decision as a partial arriving during playback, just earlier:
+          // it lands at the start of the turn rather than after the recogniser
+          // has produced text, which is the whole point of the frame. The
+          // partial path below still stands, unchanged — if this frame never
+          // arrives, nothing is lost but the head start.
+          case 'student_speaking':
+            if (interruptsTutor({
+              audioPlaying: useMicLevel.getState().aiSpeaking,
+              text: null,
+              serverReportedTurnStart: true,
+            })) {
+              console.log('[WS] student_speaking during playback — stopping');
+              discardAudioRef.current = true;
+              stopTutorSpeech();
+              // Identical to the partial path: stopping does not run the
+              // audio-idle path, so without this the interruption reaches the
+              // backend under the previous turn's id.
+              useNumeraStore.getState().beginListeningTurn();
+              sendTurnContext();
+            }
+            processingTimerRef.current?.noteSpeech();
             break;
 
           case 'session_state':
