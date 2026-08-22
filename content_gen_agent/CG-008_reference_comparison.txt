@@ -1,0 +1,141 @@
+CG-008 reference comparison
+==============================================================
+topics covered by the reference: T01, T02, T03
+validation issues across all six documents: 0
+
+counts by status
+--------------------------------------------------------------
+  MATCH                  99
+  PREAMBLE_STRIPPED      1
+  KNOWN_DIVERGENCE       4
+  MISSING_IN_REFERENCE   1
+
+detail
+--------------------------------------------------------------
+  T01 Topics.topic_id: KNOWN_DIVERGENCE
+      reference: ALG-KS3-01
+      generated: ALG-ORI-01
+      note: Reference says ALG-KS3-01; the document, and all six documents, use the ALG-ORI-NN form. The documents agree with each other and the reference covers only three topics, so the document wins.
+  T01 Topics.topic_code: MATCH
+  T01 Topics.topic_title: MATCH
+  T01 Topics.ks_stage: MATCH
+  T01 Topics.sequence_no: MATCH
+  T01 Topics.learning_goal: KNOWN_DIVERGENCE
+      reference: Understand that a letter can represent a changing number so one rule can describe man...
+      generated: The student should understand that algebra is a mathematical language used to represe...
+      note: Reference is different prose, not a rewrite of the document's Learning Goal. Topic 1's reference rows predate the convention.
+  T01 Topics.core_message: KNOWN_DIVERGENCE
+      reference: A letter can represent a changing quantity in a general rule.
+      generated: Arithmetic finds one particular answer. Algebra expresses a rule that can work for ma...
+      note: Reference is different prose, not a rewrite of the document's Core Message.
+  T02 Topics.topic_id: MATCH
+  T02 Topics.topic_code: MATCH
+  T02 Topics.topic_title: MATCH
+  T02 Topics.ks_stage: MATCH
+  T02 Topics.sequence_no: MATCH
+  T02 Topics.learning_goal: PREAMBLE_STRIPPED
+      reference: Understand that algebraic notation is an agreed, shorter way of writing familiar math...
+      generated: Students should understand that algebraic notation is an agreed, shorter way of writi...
+      note: reference is the parsed text with its leading clause removed
+  T02 Topics.core_message: MATCH
+  T03 Topics.topic_id: MATCH
+  T03 Topics.topic_code: MATCH
+  T03 Topics.topic_title: MATCH
+  T03 Topics.ks_stage: MATCH
+  T03 Topics.sequence_no: MATCH
+  T03 Topics.learning_goal: KNOWN_DIVERGENCE
+      reference: Understand that a variable can represent different possible values while a constant r...
+      generated: Students should understand that: a variable can represent different possible values; ...
+      note: Reference condenses the document's bulleted goal into one sentence. Editorial, and not reproducible deterministically.
+  T03 Topics.core_message: MATCH
+  T01 Topic_Scope.rows: MISSING_IN_REFERENCE
+      reference: (absent)
+      generated: 11
+      note: the reference has no scope rows for this topic
+  T02 Topic_Scope.row_count: MATCH
+  T02 Topic_Scope.SCOPE-T02-I01.scope_item_id: MATCH
+  T02 Topic_Scope.SCOPE-T02-I01.item_text: MATCH
+  T02 Topic_Scope.SCOPE-T02-I01.scope_type: MATCH
+  T02 Topic_Scope.SCOPE-T02-I02.scope_item_id: MATCH
+  T02 Topic_Scope.SCOPE-T02-I02.item_text: MATCH
+  T02 Topic_Scope.SCOPE-T02-I02.scope_type: MATCH
+  T02 Topic_Scope.SCOPE-T02-I03.scope_item_id: MATCH
+  T02 Topic_Scope.SCOPE-T02-I03.item_text: MATCH
+  T02 Topic_Scope.SCOPE-T02-I03.scope_type: MATCH
+  T02 Topic_Scope.SCOPE-T02-I04.scope_item_id: MATCH
+  T02 Topic_Scope.SCOPE-T02-I04.item_text: MATCH
+  T02 Topic_Scope.SCOPE-T02-I04.scope_type: MATCH
+  T02 Topic_Scope.SCOPE-T02-I05.scope_item_id: MATCH
+  T02 Topic_Scope.SCOPE-T02-I05.item_text: MATCH
+  T02 Topic_Scope.SCOPE-T02-I05.scope_type: MATCH
+  T02 Topic_Scope.SCOPE-T02-I06.scope_item_id: MATCH
+  T02 Topic_Scope.SCOPE-T02-I06.item_text: MATCH
+  T02 Topic_Scope.SCOPE-T02-I06.scope_type: MATCH
+  T02 Topic_Scope.SCOPE-T02-E01.scope_item_id: MATCH
+  T02 Topic_Scope.SCOPE-T02-E01.item_text: MATCH
+  T02 Topic_Scope.SCOPE-T02-E01.scope_type: MATCH
+  T02 Topic_Scope.SCOPE-T02-E02.scope_item_id: MATCH
+  T02 Topic_Scope.SCOPE-T02-E02.item_text: MATCH
+  T02 Topic_Scope.SCOPE-T02-E02.scope_type: MATCH
+  T02 Topic_Scope.SCOPE-T02-E03.scope_item_id: MATCH
+  T02 Topic_Scope.SCOPE-T02-E03.item_text: MATCH
+  T02 Topic_Scope.SCOPE-T02-E03.scope_type: MATCH
+  T02 Topic_Scope.SCOPE-T02-E04.scope_item_id: MATCH
+  T02 Topic_Scope.SCOPE-T02-E04.item_text: MATCH
+  T02 Topic_Scope.SCOPE-T02-E04.scope_type: MATCH
+  T02 Topic_Scope.SCOPE-T02-E05.scope_item_id: MATCH
+  T02 Topic_Scope.SCOPE-T02-E05.item_text: MATCH
+  T02 Topic_Scope.SCOPE-T02-E05.scope_type: MATCH
+  T02 Topic_Scope.SCOPE-T02-E06.scope_item_id: MATCH
+  T02 Topic_Scope.SCOPE-T02-E06.item_text: MATCH
+  T02 Topic_Scope.SCOPE-T02-E06.scope_type: MATCH
+  T02 Topic_Scope.SCOPE-T02-E07.scope_item_id: MATCH
+  T02 Topic_Scope.SCOPE-T02-E07.item_text: MATCH
+  T02 Topic_Scope.SCOPE-T02-E07.scope_type: MATCH
+  T03 Topic_Scope.row_count: MATCH
+  T03 Topic_Scope.SCOPE-T03-I01.scope_item_id: MATCH
+  T03 Topic_Scope.SCOPE-T03-I01.item_text: MATCH
+  T03 Topic_Scope.SCOPE-T03-I01.scope_type: MATCH
+  T03 Topic_Scope.SCOPE-T03-I02.scope_item_id: MATCH
+  T03 Topic_Scope.SCOPE-T03-I02.item_text: MATCH
+  T03 Topic_Scope.SCOPE-T03-I02.scope_type: MATCH
+  T03 Topic_Scope.SCOPE-T03-I03.scope_item_id: MATCH
+  T03 Topic_Scope.SCOPE-T03-I03.item_text: MATCH
+  T03 Topic_Scope.SCOPE-T03-I03.scope_type: MATCH
+  T03 Topic_Scope.SCOPE-T03-I04.scope_item_id: MATCH
+  T03 Topic_Scope.SCOPE-T03-I04.item_text: MATCH
+  T03 Topic_Scope.SCOPE-T03-I04.scope_type: MATCH
+  T03 Topic_Scope.SCOPE-T03-I05.scope_item_id: MATCH
+  T03 Topic_Scope.SCOPE-T03-I05.item_text: MATCH
+  T03 Topic_Scope.SCOPE-T03-I05.scope_type: MATCH
+  T03 Topic_Scope.SCOPE-T03-I06.scope_item_id: MATCH
+  T03 Topic_Scope.SCOPE-T03-I06.item_text: MATCH
+  T03 Topic_Scope.SCOPE-T03-I06.scope_type: MATCH
+  T03 Topic_Scope.SCOPE-T03-E01.scope_item_id: MATCH
+  T03 Topic_Scope.SCOPE-T03-E01.item_text: MATCH
+  T03 Topic_Scope.SCOPE-T03-E01.scope_type: MATCH
+  T03 Topic_Scope.SCOPE-T03-E02.scope_item_id: MATCH
+  T03 Topic_Scope.SCOPE-T03-E02.item_text: MATCH
+  T03 Topic_Scope.SCOPE-T03-E02.scope_type: MATCH
+  T03 Topic_Scope.SCOPE-T03-E03.scope_item_id: MATCH
+  T03 Topic_Scope.SCOPE-T03-E03.item_text: MATCH
+  T03 Topic_Scope.SCOPE-T03-E03.scope_type: MATCH
+  T03 Topic_Scope.SCOPE-T03-E04.scope_item_id: MATCH
+  T03 Topic_Scope.SCOPE-T03-E04.item_text: MATCH
+  T03 Topic_Scope.SCOPE-T03-E04.scope_type: MATCH
+  T03 Topic_Scope.SCOPE-T03-E05.scope_item_id: MATCH
+  T03 Topic_Scope.SCOPE-T03-E05.item_text: MATCH
+  T03 Topic_Scope.SCOPE-T03-E05.scope_type: MATCH
+  T03 Topic_Scope.SCOPE-T03-E06.scope_item_id: MATCH
+  T03 Topic_Scope.SCOPE-T03-E06.item_text: MATCH
+  T03 Topic_Scope.SCOPE-T03-E06.scope_type: MATCH
+  T03 Topic_Scope.SCOPE-T03-E07.scope_item_id: MATCH
+  T03 Topic_Scope.SCOPE-T03-E07.item_text: MATCH
+  T03 Topic_Scope.SCOPE-T03-E07.scope_type: MATCH
+  T03 Topic_Scope.SCOPE-T03-E08.scope_item_id: MATCH
+  T03 Topic_Scope.SCOPE-T03-E08.item_text: MATCH
+  T03 Topic_Scope.SCOPE-T03-E08.scope_type: MATCH
+
+--------------------------------------------------------------
+unexpected differences: 0
+RESULT: PASS

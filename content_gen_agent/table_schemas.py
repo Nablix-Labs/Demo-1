@@ -28,7 +28,7 @@ WHY THIS STRUCTURE?
 """
 
 # ──────────────────────────────────────────────────────────────────────
-# DEPENDENCY ORDER
+# DEPENDENCY ORDER 
 # This is the order tables must be GENERATED in, because later tables
 # reference earlier ones via foreign keys.
 #

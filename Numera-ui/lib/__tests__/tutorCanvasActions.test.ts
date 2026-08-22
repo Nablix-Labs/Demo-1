@@ -9,7 +9,7 @@ import {
   overlapsWriteArea, relocateWriteRequest, WRITE_AREA,
   type ResolveContext,
 } from '@/lib/tutorCanvasActions';
-import type { TutorCanvasAction, DrawnItem } from '@/store/useNumeraStore';
+import type { TutorCanvasAction, DrawnItem, TutorElement } from '@/store/useNumeraStore';
 
 const action = (over: Partial<TutorCanvasAction> = {}): TutorCanvasAction => ({
   action_id: 'ACT-1',
@@ -179,9 +179,9 @@ describe('the canvas-memory vocabulary', () => {
   });
 });
 
-describe('the WRITE_RULE reference labels', () => {
+describe('the reference label ladder', () => {
   const anchor = (position: number, text: string): TutorCanvasAction => ({
-    action_id: `T:${position}:INSERT_LABEL:TUTOR_ANCHOR`,
+    action_id: `T${position}:CONFIRMED_SLOT:${position}:INSERT_LABEL`,
     type: 'INSERT_LABEL',
     target_kind: 'TUTOR_ANCHOR',
     target_object_id: `TUTOR_ANCHOR:WRITE_RULE:${position}`,
@@ -191,36 +191,79 @@ describe('the WRITE_RULE reference labels', () => {
     answer_reveal_allowed: false,
   });
 
+  const confirmed = (turn: number, text: string): TutorCanvasAction => ({
+    ...anchor(turn, text),
+    action_id: `T${turn}:CONFIRMED_SLOT:1`,
+    // Every turn numbers itself from 1 — that is the backend's actual output.
+    target_object_id: `TUTOR_ANCHOR:CONFIRMED:${CTX.questionId}:1`,
+  });
+
+  /** Place a run of actions the way the store does: elements accumulate. */
+  const place = (actions: TutorCanvasAction[]): TutorElement[] => {
+    let tutorElements: TutorElement[] = [];
+    for (const a of actions) {
+      const target = resolveTarget(a, { ...CTX, tutorElements });
+      if (target) tutorElements = [...tutorElements, ...actionMarks(a, target)];
+    }
+    return tutorElements;
+  };
+
   /** The label's own footprint, generously sized so near-misses still count. */
   const footprint = (mark: { x?: number; y?: number }) => ({
     x: mark.x!, y: mark.y! - 0.03, w: 0.30, h: 0.06,
+  });
+
+  it('gives each confirmation its own row, however the backend numbers them', () => {
+    // Sanya's m + 7 report: "m → changes", "7 → fixed" and "+ → addition"
+    // arrive on three separate turns, each numbered position 1, and all three
+    // were written on top of each other. Position is the backend's per-turn
+    // counter; only the client knows what is already on the board.
+    const marks = place([
+      confirmed(1, 'm → changes'),
+      confirmed(2, '7 → stays fixed'),
+      confirmed(3, '+ → addition'),
+    ]);
+    expect(marks).toHaveLength(3);
+    const ys = marks.map((m) => m.y!);
+    expect(new Set(ys).size).toBe(3);
+    expect(ys[0]).toBeLessThan(ys[1]);
+    expect(ys[1]).toBeLessThan(ys[2]);
+  });
+
+  it('keeps confirmations and WRITE_RULE parts off each other', () => {
+    // They share one ladder precisely so they cannot collide: confirmations
+    // persist across turns, so a question with three of them that then reaches
+    // a WRITE turn used to stack the rule parts straight through them.
+    const marks = place([
+      confirmed(1, 'm → changes'),
+      confirmed(2, '7 → stays fixed'),
+      confirmed(3, '+ → addition'),
+      anchor(1, 'Start: m'),
+      anchor(2, 'Gain: +7'),
+    ]);
+    const ys = marks.map((m) => m.y!).sort((a, b) => a - b);
+    for (let i = 1; i < ys.length; i += 1) {
+      expect(ys[i] - ys[i - 1], `rows ${i - 1} and ${i} overlap`).toBeGreaterThanOrEqual(0.06);
+    }
   });
 
   it('never lands on the writing area or its prompt', () => {
     // The bug Sanya screenshotted: "Start: n" rendered on top of "Write your
     // rule here." and "Gain: +5" inside the highlight band. The labels are a
     // reference; the band is where the student answers. They cannot share space.
-    for (const position of [1, 2, 3]) {
-      const a = anchor(position, 'Start: n');
-      const mark = actionMarks(a, resolveTarget(a, CTX)!)[0];
-      expect(overlapsWriteArea(footprint(mark)), `slot ${position} overlaps the write area`).toBe(false);
+    for (const mark of place([1, 2, 3, 4, 5, 6, 7, 8].map((p) => anchor(p, 'Start: n')))) {
+      expect(overlapsWriteArea(footprint(mark)), 'a slot overlaps the write area').toBe(false);
     }
   });
 
   it('reads top to bottom, in the order the backend listed the parts', () => {
     // Stacking upward put "Gain: +5" above "Start: n" — the rule read backwards.
-    const y = [1, 2].map((p) => {
-      const a = anchor(p, 'x');
-      return actionMarks(a, resolveTarget(a, CTX)!)[0].y!;
-    });
-    expect(y[0]).toBeLessThan(y[1]);
+    const ys = place([anchor(1, 'a'), anchor(2, 'b')]).map((m) => m.y!);
+    expect(ys[0]).toBeLessThan(ys[1]);
   });
 
-  it('never walks off the top of the canvas, however many parts arrive', () => {
-    // The previous placement had no bound at all: position 7 ran off the board.
-    for (const position of [7, 20, 500]) {
-      const a = anchor(position, 'x');
-      const mark = actionMarks(a, resolveTarget(a, CTX)!)[0];
+  it('never walks off the canvas, however many parts arrive', () => {
+    for (const mark of place(Array.from({ length: 40 }, (_, i) => anchor(i + 1, 'x')))) {
       expect(mark.y!).toBeGreaterThanOrEqual(0);
       expect(mark.y!).toBeLessThanOrEqual(1);
     }
@@ -235,8 +278,16 @@ describe('the WRITE_RULE reference labels', () => {
   });
 
   it('renders nothing for a slot with no text', () => {
-    const a = anchor(1, '   ');
-    expect(actionMarks(a, resolveTarget(a, CTX)!)).toEqual([]);
+    expect(actionMarks(anchor(1, '   '), resolveTarget(anchor(1, '   '), CTX)!)).toEqual([]);
+  });
+
+  it('does not count ordinary tutor marks as occupied rows', () => {
+    // Only slot marks take a row. A highlight on the student's ink is not a
+    // reference label and must not push the ladder down the canvas.
+    const highlight: TutorElement = { id: 'X:hl', kind: 'highlight', points: [0, 0, 1, 1] };
+    const first = resolveTarget(anchor(1, 'x'), CTX) as { at: { y: number } };
+    const after = resolveTarget(anchor(1, 'x'), { ...CTX, tutorElements: [highlight] }) as { at: { y: number } };
+    expect(after.at.y).toBe(first.at.y);
   });
 });
 

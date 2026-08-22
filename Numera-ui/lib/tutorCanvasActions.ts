@@ -73,10 +73,10 @@ export function resolveTarget(
 
   if (action.target_kind === 'TUTOR_ANCHOR') {
     const writeRuleMatch = id.match(/^TUTOR_ANCHOR:WRITE_RULE:(\d+)$/);
-    if (writeRuleMatch) return writeRuleSlot(Number(writeRuleMatch[1]));
+    if (writeRuleMatch) return nextSlot(ctx.tutorElements, WRITE_RULE_X);
     const confirmedMatch = id.match(/^TUTOR_ANCHOR:CONFIRMED:(.+):(\d+)$/);
     if (confirmedMatch) {
-      return confirmedMatch[1] === ctx.questionId ? confirmedSlot(Number(confirmedMatch[2])) : null;
+      return confirmedMatch[1] === ctx.questionId ? nextSlot(ctx.tutorElements, CONFIRMED_X) : null;
     }
     const element = ctx.tutorElements.find((el) => el.id === id);
     const box = element ? tutorElementBBox(element) : null;
@@ -125,39 +125,50 @@ export const WRITE_PROMPT_AT = { x: WRITE_AREA.x + 0.04, y: WRITE_AREA.y + 0.04 
 const WRITE_ARROW_X = WRITE_AREA.x + 0.10;
 
 /**
- * Where a WRITE_RULE reference label goes.
+ * Where a reference label goes.
  *
- * Above the writing area, not in it. These are the parts the tutor is willing to
- * show while asking for the rule; the band below is where the student answers.
- * Keeping them visually separate is the difference between a reference and a
- * pre-filled answer — and the renderer refuses outright to put content in the
- * write area itself (see `actionMarks`).
+ * Two kinds of label share this column: the persistent CONFIRMED notes ("m →
+ * changes") and the WRITE_RULE parts the tutor shows while asking for the rule.
+ * They are allocated from ONE ladder, by occupancy — the next label goes on the
+ * first free row, whatever kind it is.
  *
- * Stacked upwards from the arrow's top so slot 1 is nearest the writing area and
- * later slots move away from it, and clamped so a long list cannot walk off the
- * top of the canvas.
+ * Occupancy rather than the position the backend sends, because the backend
+ * numbers each turn from 1 and has no memory of what is already on the canvas
+ * (`add_confirmation_canvas_slots` enumerates that turn's actions). Three
+ * confirmations arriving on three separate turns are therefore all "position 1",
+ * and every one of them landed on the same row: Sanya's m + 7 screenshot, where
+ * "7 → fixed" and "+ → addition" were written on top of "m → changes". The
+ * client is the only side that knows what is already on the board, which is the
+ * same reason every other target here resolves locally.
+ *
+ * Downward, so the first label sits highest and the parts read in the order they
+ * were confirmed. Bounded above the writing area: the arrow into it starts at
+ * WRITE_ARROW_TOP, and a reference that drifts into the band the student answers
+ * in stops being a reference.
  */
-const SLOT_GAP = 0.075;
-const SLOT_FIRST_Y = 0.32;
+const SLOT_FIRST_Y = 0.14;
+const SLOT_GAP = 0.07;
 /** Never below this: the arrow into the writing area starts at WRITE_ARROW_TOP. */
 const SLOT_LAST_Y = 0.46;
 
-export function writeRuleSlot(position: number): ResolvedTarget {
-  const index = Math.max(1, position) - 1;
-  // Downward, so slot 1 sits highest and the parts read in the order the
-  // backend listed them. Stacking upward put "Gain: +5" above "Start: n".
-  const y = Math.min(SLOT_LAST_Y, SLOT_FIRST_Y + index * SLOT_GAP);
-  return { kind: 'slot', at: { x: WRITE_AREA.x + 0.04, y } };
+/** A slot mark, identified by the suffix `actionMarks` gives it. */
+const SLOT_SUFFIX = ':slot';
+
+/** How many reference rows are already occupied. */
+export function occupiedSlots(tutorElements: TutorElement[]): number {
+  return tutorElements.filter((el) => el.id.endsWith(SLOT_SUFFIX)).length;
 }
 
-/** Persistent tutor confirmations stay above the student writing affordance. */
-export function confirmedSlot(position: number): ResolvedTarget {
-  const index = Math.max(1, position) - 1;
-  return {
-    kind: 'slot',
-    at: { x: 0.06, y: Math.min(0.52, 0.16 + index * 0.07) },
-  };
+/** The first free row, at the given column. */
+export function nextSlot(tutorElements: TutorElement[], x: number): ResolvedTarget {
+  const index = occupiedSlots(tutorElements);
+  return { kind: 'slot', at: { x, y: Math.min(SLOT_LAST_Y, SLOT_FIRST_Y + index * SLOT_GAP) } };
 }
+
+/** WRITE_RULE parts are indented, so a reference still reads apart from a note. */
+const WRITE_RULE_X = WRITE_AREA.x + 0.04;
+/** Persistent tutor confirmations sit at the left margin. */
+const CONFIRMED_X = 0.06;
 
 /** Does this box overlap the writing area? Used by the tests, and by nothing else. */
 export function overlapsWriteArea(box: CanvasBBox): boolean {
