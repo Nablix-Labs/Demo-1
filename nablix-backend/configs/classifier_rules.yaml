@@ -5,6 +5,13 @@ confidence:
 guided_learning:
   minimum_voice_transcript_confidence: 0.85
   minimum_ocr_confidence: 0.80
+  canvas_rescue_presentation_enabled: false
+  canvas_rescue_wording:
+    parallel_step_suffix: " Look at this similar example."
+    parallel_final_suffix: " Now return to the original question and try it."
+    tutor_solved_step_suffix: " When you are ready, continue to the next step."
+    tutor_solved_final_suffix: " Now try the original question with this idea."
+    tutor_solved_return_focus_text: "Try the original question with this idea."
   evaluation_mode: LLM_STATE_MACHINE
   confidence_threshold: 0.75
   state_confidence_thresholds:
@@ -174,6 +181,10 @@ guided_learning:
     both tutor messages with one focused question that helps the student supply
     the missing idea. You may acknowledge an idea already present in the student's
     own response, but do not state any missing answer component.
+  deterministic_follow_up_wording_feedback: >-
+    Keep the supplied component evidence and teaching state. Write only a short,
+    natural tutor response that acknowledges the learner's exact idea and asks
+    this one next question: {controller_prompt}
   reconciliation_message: "I want to make sure I understood that. Please explain the part that is still unresolved."
   allowed_student_states:
     - CORRECT

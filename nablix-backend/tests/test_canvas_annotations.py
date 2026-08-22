@@ -1,6 +1,10 @@
 import pytest
 
-from app.ai_engine.classifier_config import FallbackCanvasLabelsConfig, load_classifier_rules
+from app.ai_engine.classifier_config import (
+    CanvasRescueWordingConfig,
+    FallbackCanvasLabelsConfig,
+    load_classifier_rules,
+)
 from app.models.adapters import (
     AnnotationIntent,
     OCRTextRegion,
@@ -15,20 +19,32 @@ from app.models.guided_learning import (
     CanvasPedagogyIntent,
     GeneratedConcept,
     GeneratedQuestionRubric,
+    GuidedRescueContext,
     GuidedTeachingState,
+    TutorCanvasAction,
 )
 from app.models.question_anchor import QuestionTextAnchor
 from pydantic import ValidationError
 from app.services.canvas_annotations import (
     assign_step_ids,
     plan_canvas_draw,
+    plan_rescue_canvas_actions,
     plan_tutor_canvas_actions,
     plan_write_request_tutor_draw,
+    rescue_tutor_wording,
 )
 
 
 def _fallback_labels() -> FallbackCanvasLabelsConfig:
     return load_classifier_rules().guided_learning.fallback_canvas_labels
+
+
+def _rescue_wording() -> CanvasRescueWordingConfig:
+    return load_classifier_rules().guided_learning.canvas_rescue_wording
+
+
+def test_canvas_rescue_presentation_is_disabled_by_default() -> None:
+    assert load_classifier_rules().guided_learning.canvas_rescue_presentation_enabled is False
 
 
 def _tutor_result(
@@ -576,6 +592,113 @@ def test_semantic_canvas_action_contract_rejects_unknown_type() -> None:
                 "text": "+5 → stays fixed",
                 "source_id": None,
             }
+        )
+
+
+def _rescue_context(
+    rescue_type: str,
+    step_index: int,
+    total_steps: int,
+    step_text: str,
+    approved_answer_reveal: bool,
+) -> GuidedRescueContext:
+    return GuidedRescueContext(
+        rescue_id="RESCUE-T01-003",
+        rescue_type=rescue_type,
+        source_id="SUPPORT-T01-003",
+        current_step_index=step_index,
+        total_steps=total_steps,
+        current_step_text=step_text,
+        is_final_step=step_index == total_steps,
+        approved_answer_reveal=approved_answer_reveal,
+        return_target_object_id="TUTOR_ANCHOR:WRITE_RULE:1",
+        active_support=rescue_type,
+        active_action_ids=[],
+    )
+
+
+def test_parallel_rescue_emits_one_authored_step_and_safe_wording() -> None:
+    context = _rescue_context(
+        "PARALLEL_EXAMPLE",
+        1,
+        2,
+        "Start with p, then add 3.",
+        False,
+    )
+
+    actions = plan_rescue_canvas_actions(context, "TURN-1", "s + 6", _rescue_wording())
+
+    assert len(actions) == 1
+    assert actions[0].type == "SHOW_PARALLEL"
+    assert actions[0].text == "Start with p, then add 3."
+    assert actions[0].answer_reveal_allowed is False
+    wording = rescue_tutor_wording(context, "s + 6", _rescue_wording())
+    assert wording is not None
+    assert "s + 6" not in wording
+
+
+def test_tutor_solved_final_step_needs_explicit_approved_reveal() -> None:
+    blocked = _rescue_context("TUTOR_SOLVED", 2, 2, "s + 6", False)
+    allowed = _rescue_context("TUTOR_SOLVED", 2, 2, "s + 6", True)
+
+    assert plan_rescue_canvas_actions(blocked, "TURN-2", "s + 6", _rescue_wording()) == []
+    assert rescue_tutor_wording(blocked, "s + 6", _rescue_wording()) is None
+
+    actions = plan_rescue_canvas_actions(allowed, "TURN-2", "s + 6", _rescue_wording())
+
+    assert [(action.type, action.answer_reveal_allowed) for action in actions] == [
+        ("TUTOR_SOLVED_STEP", True),
+        ("FOCUS", False),
+    ]
+    assert actions[0].text == "s + 6"
+    wording = rescue_tutor_wording(allowed, "s + 6", _rescue_wording())
+    assert wording is not None
+    assert "next step" not in wording
+
+
+def test_tutor_solved_intermediate_step_cannot_reveal_original_answer() -> None:
+    context = _rescue_context("TUTOR_SOLVED", 1, 2, "s + 6", False)
+
+    assert plan_rescue_canvas_actions(context, "TURN-3", "s + 6", _rescue_wording()) == []
+    assert rescue_tutor_wording(context, "s + 6", _rescue_wording()) is None
+
+
+def test_rescue_context_rejects_mismatched_support_and_early_reveal() -> None:
+    with pytest.raises(ValidationError):
+        _rescue_context("PARALLEL_EXAMPLE", 2, 2, "Example result", True)
+
+    with pytest.raises(ValidationError):
+        GuidedRescueContext(
+            rescue_id="RESCUE-T01-003",
+            rescue_type="TUTOR_SOLVED",
+            source_id="SUPPORT-T01-003",
+            current_step_index=1,
+            total_steps=2,
+            current_step_text="Start with s.",
+            is_final_step=False,
+            approved_answer_reveal=False,
+            return_target_object_id="TUTOR_ANCHOR:WRITE_RULE:1",
+            active_support="PARALLEL_EXAMPLE",
+            active_action_ids=[],
+        )
+
+
+def test_non_rescue_action_rejects_rescue_metadata_and_reveal() -> None:
+    with pytest.raises(ValidationError):
+        TutorCanvasAction(
+            action_id="TURN-4:FOCUS",
+            type="FOCUS",
+            target_kind="WRITE_AREA",
+            target_object_id=None,
+            confirmed_component_id=None,
+            text="Write your rule.",
+            source_id=None,
+            answer_reveal_allowed=False,
+            rescue_id="RESCUE-T01-003",
+            step_index=1,
+            total_steps=1,
+            presentation_mode="TUTOR_SOLVED",
+            return_target_object_id="TUTOR_ANCHOR:WRITE_RULE:1",
         )
 
 

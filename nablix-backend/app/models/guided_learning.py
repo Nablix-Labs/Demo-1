@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 from app.models.canvas_memory import CanvasEvent
 from app.models.question_anchor import QuestionTextAnchor
@@ -128,6 +128,38 @@ class GuidedTeachingPlanStep(GuidedLearningModel):
     answer_step_id: str | None = None
 
 
+class GuidedRescueContext(GuidedLearningModel):
+    """Authored rescue step selected by orchestration for this tutor turn."""
+
+    rescue_id: str = Field(min_length=1)
+    rescue_type: Literal["PARALLEL_EXAMPLE", "TUTOR_SOLVED"]
+    source_id: str = Field(min_length=1)
+    current_step_index: int = Field(ge=1)
+    total_steps: int = Field(ge=1)
+    current_step_text: str = Field(min_length=1, max_length=80)
+    is_final_step: StrictBool
+    approved_answer_reveal: StrictBool
+    return_target_object_id: str = Field(min_length=1)
+    active_support: Literal["PARALLEL_EXAMPLE", "TUTOR_SOLVED"]
+    active_action_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_rescue_step(self) -> "GuidedRescueContext":
+        if self.rescue_type != self.active_support:
+            raise ValueError("rescue_type must match active_support.")
+        if self.current_step_index > self.total_steps:
+            raise ValueError("current_step_index must not exceed total_steps.")
+        if self.is_final_step != (self.current_step_index == self.total_steps):
+            raise ValueError("is_final_step must match current_step_index.")
+        if self.approved_answer_reveal and (
+            self.rescue_type != "TUTOR_SOLVED" or not self.is_final_step
+        ):
+            raise ValueError(
+                "approved_answer_reveal is allowed only for the final Tutor-Solved step."
+            )
+        return self
+
+
 class GuidedTutorContext(GuidedLearningModel):
     """Authoritative lesson state supplied to the guided-turn evaluator."""
 
@@ -146,6 +178,7 @@ class GuidedTutorContext(GuidedLearningModel):
     current_scaffold_step_number: int
     consecutive_stuck_count: int
     conversation_state_summary: str
+    rescue_context: GuidedRescueContext | None = None
 
 
 class ActiveScaffold(GuidedLearningModel):
@@ -175,6 +208,7 @@ class GuidedRescue(GuidedLearningModel):
     micro_skill_id: str
     parallel_example: ParallelExample | None
     tutor_solved: TutorSolved | None
+    tutor_engine_context: GuidedRescueContext | None = None
 
 
 class PrerequisiteRepair(GuidedLearningModel):
@@ -217,6 +251,50 @@ class TutorCanvasAction(GuidedLearningModel):
     text: str | None = Field(default=None, max_length=80)
     source_id: str | None
     answer_reveal_allowed: StrictBool = False
+    rescue_id: str | None = None
+    step_index: int | None = Field(default=None, ge=1)
+    total_steps: int | None = Field(default=None, ge=1)
+    presentation_mode: Literal["PARALLEL", "TUTOR_SOLVED"] | None = None
+    return_target_object_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_rescue_action(self) -> "TutorCanvasAction":
+        rescue_types = {"SHOW_PARALLEL", "TUTOR_SOLVED_STEP"}
+        rescue_fields_present = any(
+            value is not None
+            for value in (
+                self.rescue_id,
+                self.step_index,
+                self.total_steps,
+                self.presentation_mode,
+                self.return_target_object_id,
+            )
+        )
+        if self.type not in rescue_types:
+            if rescue_fields_present:
+                raise ValueError("rescue fields are allowed only on rescue actions.")
+            if self.answer_reveal_allowed:
+                raise ValueError("only an approved Tutor-Solved step may reveal an answer.")
+            return self
+        if (
+            self.rescue_id is None
+            or self.step_index is None
+            or self.total_steps is None
+            or self.presentation_mode is None
+            or self.return_target_object_id is None
+            or self.source_id is None
+        ):
+            raise ValueError("rescue actions require rescue metadata and source_id.")
+        if self.step_index > self.total_steps:
+            raise ValueError("rescue action step_index must not exceed total_steps.")
+        expected_mode = "PARALLEL" if self.type == "SHOW_PARALLEL" else "TUTOR_SOLVED"
+        if self.presentation_mode != expected_mode:
+            raise ValueError("rescue action presentation_mode does not match type.")
+        if self.answer_reveal_allowed and (
+            self.type != "TUTOR_SOLVED_STEP" or self.step_index != self.total_steps
+        ):
+            raise ValueError("only the final Tutor-Solved step may reveal an answer.")
+        return self
 
 
 def inactivity_policy() -> InactivityPolicy:

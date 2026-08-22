@@ -1,6 +1,6 @@
 import re
 
-from app.ai_engine.classifier_config import FallbackCanvasLabelsConfig
+from app.ai_engine.classifier_config import CanvasRescueWordingConfig, FallbackCanvasLabelsConfig
 from app.models.adapters import (
     AnnotationIntent,
     OCRTextRegion,
@@ -10,7 +10,7 @@ from app.models.adapters import (
 )
 from app.models.canvas import CanvasDrawPayload, TutorElement
 from app.models.canvas_memory import CanvasEvent
-from app.models.guided_learning import TutorCanvasAction
+from app.models.guided_learning import GuidedRescueContext, TutorCanvasAction
 from app.models.question_anchor import QuestionTextAnchor
 from app.services.canvas_spatial import canonical_math_token_text
 
@@ -427,6 +427,116 @@ def plan_tutor_canvas_actions(
             fallback_labels,
         )
     return add_confirmation_canvas_slots(actions, turn_id)
+
+
+def plan_rescue_canvas_actions(
+    rescue_context: GuidedRescueContext,
+    turn_id: str,
+    canonical_answer: str,
+    rescue_wording: CanvasRescueWordingConfig,
+) -> list[TutorCanvasAction]:
+    """Return one authored rescue step without choosing rescue progression."""
+
+    action_type = (
+        "SHOW_PARALLEL"
+        if rescue_context.rescue_type == "PARALLEL_EXAMPLE"
+        else "TUTOR_SOLVED_STEP"
+    )
+    action_id = (
+        f"{turn_id}:1:{action_type}:{rescue_context.rescue_id}:"
+        f"{rescue_context.current_step_index}"
+    )
+    if action_id in rescue_context.active_action_ids:
+        return []
+    step_text = rescue_context.current_step_text.strip()
+    reveals_original_answer = (
+        canonical_answer.strip() != ""
+        and canonical_answer.casefold() in step_text.casefold()
+    )
+    reveal_allowed = (
+        action_type == "TUTOR_SOLVED_STEP"
+        and rescue_context.active_support == "TUTOR_SOLVED"
+        and rescue_context.is_final_step
+        and rescue_context.approved_answer_reveal
+    )
+    if reveals_original_answer and not reveal_allowed:
+        return []
+    step_action = TutorCanvasAction(
+        action_id=action_id,
+        type=action_type,
+        target_kind="TUTOR_ANCHOR",
+        target_object_id=(
+            f"TUTOR_ANCHOR:RESCUE:{rescue_context.rescue_id}:"
+            f"STEP:{rescue_context.current_step_index}"
+        ),
+        confirmed_component_id=None,
+        text=step_text,
+        source_id=rescue_context.source_id,
+        answer_reveal_allowed=reveal_allowed,
+        rescue_id=rescue_context.rescue_id,
+        step_index=rescue_context.current_step_index,
+        total_steps=rescue_context.total_steps,
+        presentation_mode=(
+            "PARALLEL"
+            if rescue_context.rescue_type == "PARALLEL_EXAMPLE"
+            else "TUTOR_SOLVED"
+        ),
+        return_target_object_id=rescue_context.return_target_object_id,
+    )
+    if not (
+        rescue_context.rescue_type == "TUTOR_SOLVED"
+        and rescue_context.is_final_step
+    ):
+        return [step_action]
+    return [
+        step_action,
+        TutorCanvasAction(
+            action_id=f"{turn_id}:2:FOCUS:{rescue_context.return_target_object_id}",
+            type="FOCUS",
+            target_kind="TUTOR_ANCHOR",
+            target_object_id=rescue_context.return_target_object_id,
+            confirmed_component_id=None,
+            text=rescue_wording.tutor_solved_return_focus_text,
+            source_id=None,
+            answer_reveal_allowed=False,
+        ),
+    ]
+
+
+def rescue_tutor_wording(
+    rescue_context: GuidedRescueContext,
+    canonical_answer: str,
+    rescue_wording: CanvasRescueWordingConfig,
+) -> str | None:
+    """Narrate only the rescue step selected by orchestration."""
+
+    reveals_original_answer = (
+        canonical_answer.strip() != ""
+        and canonical_answer.casefold()
+        in rescue_context.current_step_text.casefold()
+    )
+    reveal_allowed = (
+        rescue_context.rescue_type == "TUTOR_SOLVED"
+        and rescue_context.active_support == "TUTOR_SOLVED"
+        and rescue_context.is_final_step
+        and rescue_context.approved_answer_reveal
+    )
+    if reveals_original_answer and not reveal_allowed:
+        return None
+
+    if rescue_context.rescue_type == "PARALLEL_EXAMPLE":
+        ending = (
+            rescue_wording.parallel_final_suffix
+            if rescue_context.is_final_step
+            else rescue_wording.parallel_step_suffix
+        )
+        return f"{rescue_context.current_step_text}{ending}"
+    ending = (
+        rescue_wording.tutor_solved_final_suffix
+        if rescue_context.is_final_step
+        else rescue_wording.tutor_solved_step_suffix
+    )
+    return f"{rescue_context.current_step_text}{ending}"
 
 
 def add_confirmation_canvas_slots(

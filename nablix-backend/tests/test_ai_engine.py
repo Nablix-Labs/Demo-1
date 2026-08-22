@@ -7,6 +7,7 @@ import pytest
 
 from app.adapters.tutor_engine import TutorEngineServiceAdapter, apply_retrieved_content
 from app.ai_engine import classifier, openai_client
+from app.ai_engine.classifier_config import load_classifier_rules
 from app.ai_engine.canvas_math_review import review_canvas_math
 from app.ai_engine.classifier import ClassificationRequest, classify_student_response
 from app.ai_engine.prompt_registry import (
@@ -5898,6 +5899,126 @@ def test_choice_explanation_controller_prompt_is_specific() -> None:
     prompt = classifier.controller_prompt_for_objective(request, rubric, objective)
 
     assert prompt == "Good — n can change. What stays fixed in the rule?"
+
+
+def test_choice_explanation_preserves_selected_option_and_asks_for_fixed_value() -> None:
+    request = ClassificationRequest(
+        question_id="Q-T01-004",
+        question_type="CHOICE_WITH_EXPLANATION",
+        question="Which is the general rule: A: 12 + 4. B: n + 4. Explain briefly.",
+        correct_answer="B",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-004",
+            canonical_answer="B",
+            accepted_answers=["B"],
+            verification_method="CHOICE_AND_CONCEPT_MATCH",
+            explanation_required=True,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        guided_teaching_state=GuidedTeachingState(
+            question_id="Q-T01-004",
+            objective_component_ids=["ANSWER_SELECTION", "ANSWER_EXPLANATION"],
+            confirmed_component_ids=[],
+            missing_component_ids=["ANSWER_SELECTION", "ANSWER_EXPLANATION"],
+            active_component_id="ANSWER_SELECTION",
+            last_tutor_question_type="OPTION_COMPARISON",
+            selected_option_id="B",
+            selected_option_text="n + 4",
+            awaiting_response=True,
+        ),
+        student_input="n can take any vlaue",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+    )
+    rubric = classifier.rubric_from_authored_answer_parts(
+        question_id="Q-T01-004",
+        question_type="CHOICE_WITH_EXPLANATION",
+        answer_spec=request.answer_spec,
+        prompt_version="1.1.0",
+    )
+    assert rubric is not None
+    objective = classifier.objective_with_persisted_choice_selection(
+        request,
+        rubric,
+        classifier.initial_guided_objective(rubric),
+    )
+
+    evaluation = classifier.deterministic_choice_explanation_evaluation(
+        request,
+        rubric,
+        objective,
+        load_classifier_rules(),
+    )
+
+    assert objective.confirmed_concept_ids == ["ANSWER_SELECTION"]
+    assert objective.missing_concept_ids == ["ANSWER_EXPLANATION"]
+    assert evaluation is not None
+    assert evaluation.student_state == "PARTIAL"
+    assert evaluation.tutor_message == "Good — n can change. What stays fixed in the rule?"
+
+
+def test_choice_explanation_completes_only_after_changing_and_fixed_evidence() -> None:
+    request = ClassificationRequest(
+        question_id="Q-T01-004",
+        question_type="CHOICE_WITH_EXPLANATION",
+        question="Which is the general rule: A: 12 + 4. B: n + 4. Explain briefly.",
+        correct_answer="B",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-004",
+            canonical_answer="B",
+            accepted_answers=["B"],
+            verification_method="CHOICE_AND_CONCEPT_MATCH",
+            explanation_required=True,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        guided_teaching_state=GuidedTeachingState(
+            question_id="Q-T01-004",
+            objective_component_ids=["ANSWER_SELECTION", "ANSWER_EXPLANATION"],
+            confirmed_component_ids=["ANSWER_SELECTION"],
+            missing_component_ids=["ANSWER_EXPLANATION"],
+            active_component_id="ANSWER_EXPLANATION",
+            last_tutor_question_type="COMPONENT",
+            selected_option_id="B",
+            selected_option_text="n + 4",
+            awaiting_response=True,
+        ),
+        conversation_history=[
+            ConversationMessage(role="user", content="n changes"),
+        ],
+        student_input="+4 stays fixed",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+    )
+    rubric = classifier.rubric_from_authored_answer_parts(
+        question_id="Q-T01-004",
+        question_type="CHOICE_WITH_EXPLANATION",
+        answer_spec=request.answer_spec,
+        prompt_version="1.1.0",
+    )
+    assert rubric is not None
+    objective = ActiveTeachingObjective(
+        objective_type="EXPLAIN_REASONING",
+        target_concept_ids=["ANSWER_EXPLANATION"],
+        confirmed_concept_ids=["ANSWER_SELECTION"],
+        missing_concept_ids=["ANSWER_EXPLANATION"],
+    )
+
+    evaluation = classifier.deterministic_choice_explanation_evaluation(
+        request,
+        rubric,
+        objective,
+        load_classifier_rules(),
+    )
+
+    assert evaluation is not None
+    assert evaluation.student_state == "CORRECT"
+    assert evaluation.newly_confirmed_concept_ids == ["ANSWER_EXPLANATION"]
 
 
 def test_guided_llm_repeated_stuck_requests_one_scaffold_escalation(
