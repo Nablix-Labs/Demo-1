@@ -180,9 +180,19 @@ class FallbackCanvasLabelsConfig(StrictSchema):
     operation_names: dict[str, str]
 
 
+class CanvasRescueWordingConfig(StrictSchema):
+    parallel_step_suffix: str
+    parallel_final_suffix: str
+    tutor_solved_step_suffix: str
+    tutor_solved_final_suffix: str
+    tutor_solved_return_focus_text: str
+
+
 class GuidedLearningConfig(StrictSchema):
     minimum_voice_transcript_confidence: float = Field(ge=0.0, le=1.0)
     minimum_ocr_confidence: float = Field(ge=0.0, le=1.0)
+    canvas_rescue_presentation_enabled: StrictBool
+    canvas_rescue_wording: CanvasRescueWordingConfig
     evaluation_mode: str
     confidence_threshold: float = Field(ge=0.0, le=1.0)
     state_confidence_thresholds: dict[
@@ -203,6 +213,7 @@ class GuidedLearningConfig(StrictSchema):
     explain_again_system_prompt: str
     scaffold_evaluator_system_prompt: str
     answer_reveal_retry_feedback: str
+    deterministic_follow_up_wording_feedback: str
     reconciliation_message: str
     general_rule_fixed_value_prompt: str
     general_rule_changing_value_prompt: str

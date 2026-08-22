@@ -23,7 +23,11 @@ from app.ai_engine.classifier import (
     resolve_guided_rubric,
 )
 
-from app.ai_engine.classifier_config import ClassifierRulesConfig, load_classifier_rules
+from app.ai_engine.classifier_config import (
+    CanvasRescueWordingConfig,
+    ClassifierRulesConfig,
+    load_classifier_rules,
+)
 from app.ai_engine.schemas import (
     ActiveScaffoldState,
     ExplainAgainRequest,
@@ -89,8 +93,10 @@ from app.models.student_model_session import (
 from app.services.guided_question_opening import guided_question_opening
 from app.services.canvas_annotations import (
     plan_canvas_draw,
+    plan_rescue_canvas_actions,
     plan_tutor_canvas_actions,
     plan_write_request_tutor_draw,
+    rescue_tutor_wording,
 )
 from app.services.question_anchors import plan_canvas_action_anchors, plan_question_anchors
 from app.services.canvas_evidence import (
@@ -380,11 +386,25 @@ def _guided_rescue_message(rescue: GuidedRescue) -> str | None:
 def _tutor_with_guided_rescue(
     tutor: TutorResult,
     event: StudentModelSessionEventResponse,
+    canvas_rescue_presentation_enabled: bool,
+    canonical_answer: str,
+    rescue_wording: CanvasRescueWordingConfig,
 ) -> TutorResult:
     rescue = _guided_rescue(event)
     if rescue is None:
         return tutor
-    message = _guided_rescue_message(rescue)
+    rescue_context = rescue.tutor_engine_context
+    if canvas_rescue_presentation_enabled and rescue_context is None:
+        logger.warning(
+            "guided_rescue_context_missing",
+            extra={"request_id": event.request_id, "rescue_type": rescue.rescue_type},
+        )
+        return tutor
+    message = (
+        rescue_tutor_wording(rescue_context, canonical_answer, rescue_wording)
+        if canvas_rescue_presentation_enabled and rescue_context is not None
+        else _guided_rescue_message(rescue)
+    )
     if message is None:
         logger.warning(
             "guided_rescue_content_missing",
@@ -395,6 +415,13 @@ def _tutor_with_guided_rescue(
         )
         return tutor
     parallel = rescue.rescue_type == "PARALLEL_EXAMPLE"
+    approved_reveal = (
+        rescue_context is not None
+        and rescue_context.rescue_type == "TUTOR_SOLVED"
+        and rescue_context.active_support == "TUTOR_SOLVED"
+        and rescue_context.is_final_step
+        and rescue_context.approved_answer_reveal
+    )
     return tutor.model_copy(
         update={
             "response_strategy": (
@@ -403,11 +430,19 @@ def _tutor_with_guided_rescue(
             "tutor_message": message,
             "tutor_message_voice": message,
             "voice_optimised": True,
-            "answer_reveal_allowed": rescue.rescue_type == "TUTOR_SOLVED",
+            "answer_reveal_allowed": (
+                approved_reveal
+                if canvas_rescue_presentation_enabled
+                else rescue.rescue_type == "TUTOR_SOLVED"
+            ),
             "recommended_conversation_action": (
                 "ASK_QUESTION" if parallel else "WAIT_FOR_STUDENT"
             ),
-            "question_completed": not parallel,
+            "question_completed": (
+                False
+                if canvas_rescue_presentation_enabled and rescue_context is not None
+                else not parallel
+            ),
         }
     )
 
@@ -674,7 +709,13 @@ async def process_answer_with_session_event(
         )
 
     content_response = response
-    tutor = _tutor_with_guided_rescue(tutor, content_response)
+    tutor = _tutor_with_guided_rescue(
+        tutor,
+        content_response,
+        rules.guided_learning.canvas_rescue_presentation_enabled,
+        context.correct_answer,
+        rules.guided_learning.canvas_rescue_wording,
+    )
     support_to_serve = (
         response.phase_payload.support_to_serve
         if response.phase_payload is not None
@@ -3741,15 +3782,34 @@ async def _process_interaction(
         turn_session.question_id,
         turn_session.current_question,
     )
-    tutor_canvas_actions = plan_tutor_canvas_actions(
-        tutor=tutor,
-        question_anchors=tutor_action_anchors,
-        canvas_events=_canvas_events_for_context(request, turn_session),
-        turn_id=request.turn_id or "TURN-0000",
-        canonical_answer=answer_spec.canonical_answer if answer_spec is not None else "",
-        fallback_labels=rules.guided_learning.fallback_canvas_labels,
-        wrong_attempt_count=turn_session.wrong_attempt_count,
-        student_response=request.text_input or request.voice_transcript or "",
+    canonical_answer = answer_spec.canonical_answer if answer_spec is not None else ""
+    guided_rescue = _guided_rescue(schema_content_response)
+    rescue_context = (
+        guided_rescue.tutor_engine_context
+        if (
+            rules.guided_learning.canvas_rescue_presentation_enabled
+            and guided_rescue is not None
+        )
+        else None
+    )
+    tutor_canvas_actions = (
+        plan_rescue_canvas_actions(
+            rescue_context,
+            request.turn_id or "TURN-0000",
+            canonical_answer,
+            rules.guided_learning.canvas_rescue_wording,
+        )
+        if rescue_context is not None
+        else plan_tutor_canvas_actions(
+            tutor=tutor,
+            question_anchors=tutor_action_anchors,
+            canvas_events=_canvas_events_for_context(request, turn_session),
+            turn_id=request.turn_id or "TURN-0000",
+            canonical_answer=canonical_answer,
+            fallback_labels=rules.guided_learning.fallback_canvas_labels,
+            wrong_attempt_count=turn_session.wrong_attempt_count,
+            student_response=request.text_input or request.voice_transcript or "",
+        )
     )
     logger.info(
         "guided_canvas_actions_planned",

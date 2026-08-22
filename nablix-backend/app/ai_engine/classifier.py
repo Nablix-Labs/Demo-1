@@ -60,6 +60,7 @@ from app.models.guided_learning import (
     GeneratedQuestionRubric,
     GuidedEvaluation,
     GuidedPromptType,
+    GuidedRescueContext,
     GuidedStudentState,
     GuidedTeachingState,
     GuidedTeachingPlanStep,
@@ -121,6 +122,7 @@ class ClassificationRequest(StrictSchema):
     generated_question_rubric: GeneratedQuestionRubric | None = None
     active_teaching_objective: ActiveTeachingObjective | None = None
     guided_teaching_state: GuidedTeachingState | None = None
+    rescue_context: GuidedRescueContext | None = None
     scaffold_evaluation_context: ScaffoldEvaluationContext | None = None
     phase3_submission_confirmed: bool | None = None
     phase3_submission_kind: str | None = None
@@ -759,6 +761,54 @@ def objective_for_rubric(
     return objective
 
 
+def objective_with_persisted_choice_selection(
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+) -> ActiveTeachingObjective:
+    """Preserve a valid selected choice while the learner explains it."""
+
+    if request.question_type not in {
+        "CHOICE_WITH_EXPLANATION",
+        "TRUE_FALSE_WITH_EXPLANATION",
+    }:
+        return objective
+    selected_option_id = (
+        typed_choice_selection(request)
+        or (
+            request.guided_teaching_state.selected_option_id
+            if request.guided_teaching_state is not None
+            and request.guided_teaching_state.question_id == request.question_id
+            else None
+        )
+    )
+    answer_spec = request.answer_spec
+    if selected_option_id is None or answer_spec is None:
+        return objective
+    accepted_choices = {
+        normalized_choice_response(answer)
+        for answer in [answer_spec.canonical_answer, *answer_spec.accepted_answers]
+    }
+    if normalized_choice_response(selected_option_id) not in accepted_choices:
+        return objective
+    required_ids = {
+        component.concept_id
+        for component in rubric.required_concepts
+        if component.required
+    }
+    if "ANSWER_SELECTION" not in required_ids:
+        return objective
+    confirmed_ids = set(objective.confirmed_concept_ids)
+    confirmed_ids.add("ANSWER_SELECTION")
+    missing_ids = required_ids - confirmed_ids
+    return ActiveTeachingObjective(
+        objective_type="EXPLAIN_REASONING",
+        target_concept_ids=sorted(missing_ids),
+        confirmed_concept_ids=sorted(confirmed_ids),
+        missing_concept_ids=sorted(missing_ids),
+    )
+
+
 def focused_unresolved_prompt(
     rubric: GeneratedQuestionRubric,
     objective: ActiveTeachingObjective,
@@ -1379,6 +1429,7 @@ def guided_tutor_context_for(
         current_scaffold_step_number=current_scaffold_step_number,
         consecutive_stuck_count=consecutive_stuck_count,
         conversation_state_summary=conversation_state_summary,
+        rescue_context=request.rescue_context,
     )
 
 
@@ -1585,6 +1636,7 @@ def classify_guided_learning_response(
         openai_client=openai_client,
     )
     objective = objective_for_rubric(request.active_teaching_objective, rubric)
+    objective = objective_with_persisted_choice_selection(request, rubric, objective)
     copied_example = copied_example_correction(
         request.question,
         request.student_input,
@@ -1627,6 +1679,33 @@ def classify_guided_learning_response(
             rubric,
             choice_follow_up,
             objective,
+        )
+    choice_explanation = deterministic_choice_explanation_evaluation(
+        request,
+        rubric,
+        objective,
+        rules,
+    )
+    if choice_explanation is not None:
+        next_objective = normalized_guided_objective(choice_explanation, objective)
+        if next_objective is not None:
+            choice_explanation = write_deterministic_guided_follow_up(
+                choice_explanation,
+                request,
+                rubric,
+                next_objective,
+                openai_client,
+                allowed_errors,
+                guided_tutor_context_for(request, rubric, next_objective),
+                rules,
+            )
+        return build_guided_tutor_response(
+            request,
+            rules,
+            safety_check,
+            rubric,
+            choice_explanation,
+            next_objective,
         )
     controller_evaluation = (
         None
@@ -1925,6 +2004,80 @@ def controller_prompt_for_objective(
         objective,
         "Which part should we look at first?",
     )
+
+
+def write_deterministic_guided_follow_up(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+    openai_client: OpenAIAIEngineClient,
+    allowed_errors: list[dict[str, object]],
+    guided_tutor_context: GuidedTutorContext,
+    rules: ClassifierRulesConfig,
+) -> GuidedEvaluation:
+    """Let OpenAI phrase a backend-selected next teaching target."""
+
+    controller_prompt = controller_prompt_for_objective(request, rubric, objective)
+    try:
+        candidate = openai_client.evaluate_guided_turn(
+            question_type=request.question_type,
+            question=request.question,
+            answer_spec=request.answer_spec,
+            deterministic_evaluation=evaluate_answer_contract(request),
+            generated_rubric=rubric,
+            active_objective=objective,
+            guided_tutor_context=guided_tutor_context,
+            student_response=request.student_input,
+            input_source=request.input_source,
+            allowed_error_codes=allowed_errors,
+            recent_conversation=request.conversation_history[
+                -rules.guided_learning.maximum_recent_history_turns:
+            ],
+            validation_feedback=(
+                rules.guided_learning.deterministic_follow_up_wording_feedback.format(
+                    controller_prompt=controller_prompt
+                )
+            ),
+            evaluator_prompt_version=rules.guided_learning.evaluator_prompt_version,
+            system_prompt=rules.guided_learning.evaluator_system_prompt,
+        )
+    except AdapterError as error:
+        logger.warning(
+            "guided_deterministic_wording_fallback",
+            extra={
+                "question_id": request.question_id,
+                "detail": error.detail,
+                "active_prompt": controller_prompt,
+            },
+        )
+        return evaluation
+
+    rewritten = evaluation.model_copy(
+        update={
+            "tutor_message": candidate.tutor_message,
+            "tutor_message_voice": candidate.tutor_message_voice,
+        }
+    )
+    rewritten = remove_unsupported_guided_praise(rewritten, request)
+    rejection_reason = guided_tutor_message_validation_reason(
+        rewritten,
+        request,
+        rubric,
+        objective,
+        controller_prompt,
+    )
+    if rejection_reason is None:
+        return rewritten
+    logger.warning(
+        "guided_deterministic_wording_rejected",
+        extra={
+            "question_id": request.question_id,
+            "rejection_reason": rejection_reason,
+            "active_prompt": controller_prompt,
+        },
+    )
+    return evaluation
 
 
 def rewrite_invalid_guided_message_once(
@@ -2861,6 +3014,62 @@ def general_rule_explanation_evidence(
     return (
         variable_pattern.search(learner_text) is not None,
         fixed_pattern.search(learner_text) is not None,
+    )
+
+
+def deterministic_choice_explanation_evaluation(
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+    rules: ClassifierRulesConfig,
+) -> GuidedEvaluation | None:
+    """Keep a selected general-rule choice on its changing-then-fixed path."""
+
+    if request.question_type != "CHOICE_WITH_EXPLANATION":
+        return None
+    if "ANSWER_SELECTION" not in objective.confirmed_concept_ids:
+        return None
+    if "ANSWER_EXPLANATION" not in objective.missing_concept_ids:
+        return None
+    evidence = general_rule_explanation_evidence(request)
+    if evidence is None:
+        return None
+    changing_identified, fixed_identified = evidence
+    if not changing_identified and not fixed_identified:
+        return None
+    if changing_identified and fixed_identified:
+        return GuidedEvaluation(
+            student_state="CORRECT",
+            newly_confirmed_concept_ids=["ANSWER_EXPLANATION"],
+            preserved_concept_ids=objective.confirmed_concept_ids,
+            contradicted_concept_ids=[],
+            missing_concept_ids=[],
+            selected_error_code=None,
+            confidence=1.0,
+            next_objective=None,
+            tutor_message=rules.messages.CORRECT,
+            tutor_message_voice=rules.messages.CORRECT,
+        )
+    expression = _GENERAL_RULE_EXPRESSION_RE.search(request.question.casefold())
+    if changing_identified and expression is not None:
+        message = rules.guided_learning.general_rule_fixed_value_prompt.format(
+            variable=expression.group(1)
+        )
+    elif fixed_identified:
+        message = rules.guided_learning.general_rule_changing_value_prompt
+    else:
+        return None
+    return GuidedEvaluation(
+        student_state="PARTIAL",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=objective.confirmed_concept_ids,
+        contradicted_concept_ids=[],
+        missing_concept_ids=objective.missing_concept_ids,
+        selected_error_code=None,
+        confidence=1.0,
+        next_objective=objective,
+        tutor_message=message,
+        tutor_message_voice=message,
     )
 
 
