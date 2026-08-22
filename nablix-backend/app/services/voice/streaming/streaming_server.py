@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import time
+import uuid
 import asyncio
 import ssl
 import certifi
@@ -146,6 +147,43 @@ class TurnState(str, Enum):
     LISTENING = "LISTENING"
     PROCESSING = "PROCESSING"
     SPEAKING = "SPEAKING"
+
+
+# Prefix for turn ids minted by this server.
+#
+# TurnId is NonEmptyText on the backend with no pattern constraint, so the
+# shape is ours to choose.  "TURN-" matches the convention used throughout the
+# backend's own tests, and the VOICE segment makes a server-minted turn
+# greppable in backend logs -- worth having when the question is whether a turn
+# arrived over voice or over the typed/canvas REST path.
+VOICE_TURN_ID_PREFIX = "TURN-VOICE"
+
+
+def _mint_voice_turn_id(connection_token: str, sequence: int) -> str:
+    """Identify one student voice turn.
+
+    Minted here rather than in the browser, which is the fix for the whole
+    turn-identity cluster.  Flux decides where a turn begins and ends, and
+    this server is the only component that sees that decision; the browser
+    was minting ids for boundaries it could not observe, so a turn could
+    start that the client never knew about and the resulting 409 killed the
+    session.
+
+    Minted at EndOfTurn, not StartOfTurn.  An id created at the start would
+    have to survive to submission across every path that can end a turn, and
+    each of those is somewhere it must be cleared exactly once -- see the
+    comment on the Nova-3 latch below for what that costs when it goes wrong.
+    A turn the student talks over is never submitted, so minting early would
+    also put ids in our logs that exist in no backend record.
+
+    The token is random per WebSocket connection, so ids stay unique even if
+    this process restarts mid-session and the counter resets.  The counter is
+    sequential within a connection, which gives ordering in the logs and
+    doubles as the per-session utterance counter used to correlate abandoned
+    turns that never reached the backend.
+    """
+    return f"{VOICE_TURN_ID_PREFIX}-{connection_token}-{sequence:03d}"
+
 
 # Adaptive silence timeout (seconds).
 # Instead of a single fixed timeout, we use different timeouts based on
@@ -505,9 +543,19 @@ async def voice_stream(
     pending_transcript = ""  # Speech that arrived during processing (Tier 2)
     pending_confidence = 0.0
     access_token: str | None = None
+    # Nova-3 only. On the Flux path these stay None for the life of the
+    # connection: identity is minted here (see _mint_voice_turn_id) and
+    # lineage is resolved by the backend, so nothing is latched off the
+    # client.
     turn_id: str | None = None
     previous_tutor_turn_id: str | None = None
     transcript_final: bool | None = None
+
+    # --- Voice-owned turn identity (Flux path) ---
+    # Random per connection so ids remain unique across a restart; the
+    # counter then orders turns within this connection.
+    voice_connection_token = uuid.uuid4().hex[:6]
+    voice_turn_sequence = 0
 
     # --- Flux path state (unused when STT_MODEL=nova-3) ---
     # One variable instead of the five booleans above, and exactly one
@@ -523,21 +571,20 @@ async def voice_stream(
     # next turn and silence a reply the student is waiting for.
     active_turn_suppress: dict | None = None
 
-    # True from the moment we finish SENDING audio until the next student turn
-    # is dispatched.
+    # There was a client_audio_playing flag here, tracking whether the browser
+    # was still playing buffered audio after we finished sending it.
     #
-    # TurnState.SPEAKING only covers transmission, which is under a second --
-    # "Audio streaming done: 5 chunks in 732ms" -- while the browser then plays
-    # that audio for five or ten. For most of the time the student can actually
-    # hear the tutor, the turn task has already finished and turn_state is back
-    # to LISTENING, so a StartOfTurn found nothing to cancel and no
-    # tutor_audio_cancel was sent at all. That is why talking over the tutor did
-    # nothing on 17 Aug: barge-in only worked during the one window where there
-    # was no audio to interrupt.
+    # It could not work. TurnState.SPEAKING only covers transmission, which is
+    # under a second, while the browser then plays that audio for five or ten.
+    # This process is never told when playback ends, so the flag stayed true
+    # through exactly the gap where a student normally answers, and every
+    # ordinary turn was reported as a barge-in.
     #
-    # There is no task to cancel in this window. Only the client can stop the
-    # sound, so all we do is tell it to.
-    client_audio_playing = False
+    # The lesson is the same one as turn identity: the decision belongs to
+    # whoever can observe the fact. Only the browser knows whether audio is
+    # coming out of the speaker, so it decides, using playback that is actually
+    # advancing rather than our intent to play. We report StartOfTurn via
+    # student_speaking and leave the judgement to it.
 
     # Latest canvas snapshot seen on ANY inbound message, awaiting a turn to
     # attach to.  On the Nova-3 path the snapshot rides in on `stop` and is
@@ -786,8 +833,19 @@ async def voice_stream(
         when a turn is merely superseded there was nothing audible yet.
 
         `expect_new_turn` is carried on that message and tells the frontend
-        whether it must open a NEW student turn (mint a turn_id and re-send
-        turn_context) before the next transcript arrives.
+        whether it must open a NEW student turn before the next transcript
+        arrives.
+
+        What "open a new turn" means depends on the path, and this is worth
+        being precise about now that they differ:
+
+          Flux    -> frontend UI state only. It puts the client back into
+                     listening and runs whatever the audio-idle path would
+                     normally have run. Identity is not involved: this server
+                     mints the turn_id at EndOfTurn, so there is nothing for
+                     the client to mint or re-send.
+          Nova-3  -> the original meaning, which also included minting a
+                     turn_id and re-sending turn_context.
 
         This has to be explicit rather than something the client infers from
         `reason`, because the two cases genuinely differ:
@@ -795,13 +853,11 @@ async def voice_stream(
           barge_in            -> True.  The student is speaking right now and
                                  the tutor audio never reaches idle, so the
                                  frontend's normal "audio finished, open next
-                                 turn" trigger never fires.  Without a new
-                                 turn_id the barged-in turn would arrive
-                                 carrying the previous turn's context and the
-                                 backend would reject it as stale.
+                                 turn" trigger never fires.
           superseded_by_text  -> False. The text path has already opened its
-                                 own turn; minting another would clobber the
-                                 id the answer was submitted under.
+                                 own turn, and on the Nova-3 path minting
+                                 another would clobber the id the answer was
+                                 submitted under.
 
         Encoding this server-side means adding a future reason does not
         require the frontend to learn its turn semantics.
@@ -828,18 +884,20 @@ async def voice_stream(
             await _emit_audio_cancel(reason, expect_new_turn)
 
     async def _run_turn(
-        transcript: str, confidence: float, duration: float
+        transcript: str, confidence: float, duration: float, turn_id: str
     ) -> None:
-        """Own the state transitions around one call to process_and_respond."""
+        """Own the state transitions around one call to process_and_respond.
+
+        `turn_id` is passed in rather than read from the enclosing scope.  It
+        is minted per turn at EndOfTurn, and a turn that is superseded keeps
+        running in the background for a moment, so reading a shared nonlocal
+        here would let a newer turn's id leak onto an older turn's submission.
+        """
         nonlocal turn_state, pending_canvas_snapshot, active_turn_suppress
-        nonlocal client_audio_playing
 
         def _mark_speaking() -> None:
-            nonlocal turn_state, client_audio_playing
+            nonlocal turn_state
             turn_state = TurnState.SPEAKING
-            # From here the client has audio it will keep playing after we
-            # stop sending, so barge-in stays relevant beyond this task.
-            client_audio_playing = True
 
         # One suppression cell per turn, published so barge-in can flip it.
         suppress = {"value": False}
@@ -859,28 +917,24 @@ async def voice_stream(
                 await ws.close(code=4401, reason="Authentication required")
                 return
 
-            # Validate turn context BEFORE calling the backend.
+            # This used to check that the frontend had supplied turn_id and
+            # transcript_final, and to warn when it reused an id.  Both were
+            # about the browser owning voice turn identity, which is exactly
+            # the design that produced the 409 cascade.  It no longer does:
+            # this server mints the id at EndOfTurn and knows the transcript
+            # is final because Flux said so.
             #
-            # evaluate_voice_transcript raises ValueError when turn_id is
-            # missing or transcript_final is not True.  Inside a background
-            # task that surfaces as a one-line "Turn failed" with no clue
-            # which field was wrong -- which is how voice-logs-15 line 77
-            # read.  Flux makes this far more likely than Nova-3 did: it
-            # detects several turns per connection with no `stop` between
-            # them, so a frontend that mints turn context once per *session*
-            # rather than once per *turn* will fail from turn two onward.
-            missing = []
-            if turn_id is None:
-                missing.append("turn_id")
-            if transcript_final is not True:
-                missing.append("transcript_final")
-            if missing:
+            # The check stays, aimed at ourselves instead.  A missing or
+            # repeated id can now only mean the minting above is broken, and
+            # a bug in our own code is worth failing loudly on rather than
+            # letting evaluate_voice_transcript raise ValueError inside a
+            # background task -- which is how voice-logs-15 line 77 read: a
+            # one-line "Turn failed" with no clue which field was wrong.
+            if not turn_id:
                 logger.error(
-                    f"[{session_id}] Skipping backend call for turn "
-                    f"'{transcript}': frontend did not supply "
-                    f"{' and '.join(missing)} over the WebSocket. "
-                    f"Flux needs these re-sent for EVERY turn, not once "
-                    f"per session."
+                    f"[{session_id}] BUG: no turn_id minted for turn "
+                    f"'{transcript}'. Skipping the backend call; this is a "
+                    f"fault in this server, not in the client."
                 )
                 await _send_json_if_connected(ws, {
                     "type": "error",
@@ -889,16 +943,14 @@ async def voice_stream(
                 })
                 return
 
-            # Reuse is not fatal -- the backend owns stale-turn dedupe via
-            # previous_tutor_turn_id -- but it is almost always the bug
-            # above, so say so loudly rather than silently letting the
-            # backend reject it.
             if turn_id == last_dispatched_turn_id:
+                # Not fatal, and no longer the frontend's doing. The counter
+                # is monotonic within a connection, so this means the same
+                # turn was dispatched twice.
                 logger.warning(
-                    f"[{session_id}] turn_id '{turn_id}' reused for a second "
-                    f"turn ('{transcript}'). The backend will likely reject "
-                    f"this as stale. Frontend should mint a new turn_id per "
-                    f"turn."
+                    f"[{session_id}] BUG: turn_id '{turn_id}' dispatched "
+                    f"twice ('{transcript}'). The per-connection counter "
+                    f"should make this impossible."
                 )
             _note_dispatched_turn(turn_id)
 
@@ -907,7 +959,22 @@ async def voice_stream(
                 transcript, confidence,
                 duration, access_token, canvas_snapshot,
                 tts_provider, tts_voice,
-                turn_id, previous_tutor_turn_id, transcript_final,
+                # No lineage. The backend resolves previous_tutor_turn_id from
+                # SessionRecord.last_tutor_turn_id, which it writes on the
+                # success path and which we cannot see from this process. A
+                # copy kept here could only go stale, and a stale copy is what
+                # the 409s were. _turn_is_stale treats None as not-stale, so
+                # this needs no backend change.
+                #
+                # Consequence worth knowing: the stale check no longer fires
+                # on the voice path at all. That is intended -- with the
+                # browser out of the loop and the backend's per-session lock
+                # ordering turns, there is no stale pointer left to catch.
+                #
+                # transcript_final is True by construction: Flux only raises
+                # EndOfTurn for a completed turn, so there is nothing to ask
+                # the client about.
+                turn_id, None, True,
                 on_audio_start=_mark_speaking,
                 should_suppress=lambda: suppress["value"],
             )
@@ -928,7 +995,7 @@ async def voice_stream(
         turn ends, and we act on that decision.
         """
         nonlocal turn_state, active_turn_task, audio_started_at
-        nonlocal client_audio_playing
+        nonlocal voice_turn_sequence
 
         try:
             async for msg in dg_ws:
@@ -945,6 +1012,32 @@ async def voice_stream(
                 turn_index = data.get("turn_index")
 
                 if event == "StartOfTurn":
+                    # Tell the client immediately, before deciding anything.
+                    #
+                    # This is the earliest moment anyone knows the student has
+                    # started speaking, and only this server sees it. It is
+                    # sent FIRST because its whole value is latency: the
+                    # frontend's fallback path waits for a transcript_partial,
+                    # which arrives roughly 250ms later, and that is 250ms of
+                    # the tutor still talking over the student.
+                    #
+                    # Deliberately unfiltered. It fires on EVERY StartOfTurn,
+                    # including the ordinary case where the student answers
+                    # after the tutor has finished. Deciding whether this is
+                    # an interruption needs to know whether audio is actually
+                    # playing, and this process cannot see that -- which is
+                    # exactly what made our own playback flag below fire on
+                    # every normal turn. The frontend owns the audio element,
+                    # so the frontend owns the decision.
+                    #
+                    # Not fatal if it fails to send: the frontend keeps the
+                    # transcript_partial rule as a fallback, so a dropped
+                    # frame degrades latency rather than breaking barge-in.
+                    await _send_json_if_connected(ws, {
+                        "type": "student_speaking",
+                        "turn_index": turn_index,
+                    })
+
                     # Student started speaking. If the tutor is mid-answer,
                     # that is a barge-in -- but what we do about it depends
                     # on how far the turn has got, because the two states
@@ -966,21 +1059,25 @@ async def voice_stream(
                         # let it finish and report the ids.
                         await _emit_audio_cancel("barge_in", expect_new_turn=True)
                         await _suppress_active_turn("barge_in")
-                    elif client_audio_playing:
-                        # The turn task is long finished but the browser is
-                        # still playing its buffered audio, which is where
-                        # most real interruptions land. Nothing to cancel
-                        # server-side; just tell the client to stop.
-                        #
-                        # expect_new_turn is True because stopping playback
-                        # does not fire the client's "audio went idle" path,
-                        # so it has not opened the next turn yet and must.
-                        logger.info(
-                            f"[{session_id}] Barge-in during playback - "
-                            f"telling client to stop audio"
-                        )
-                        await _emit_audio_cancel("barge_in", expect_new_turn=True)
-                        client_audio_playing = False
+                    # There used to be a third branch here for "the turn task
+                    # has finished but the browser is still playing buffered
+                    # audio". It was wrong, and it is gone.
+                    #
+                    # It keyed off a server-side client_audio_playing flag set
+                    # when we finished sending audio. Nothing could clear it
+                    # when playback actually ended, because this process never
+                    # learns that, so it stayed true through the gap where the
+                    # student would normally answer. Every ordinary turn was
+                    # therefore reported as a barge-in.
+                    #
+                    # The frontend handles this case properly now: its rule
+                    # reads whether playback is genuinely advancing, which is
+                    # the discriminator this side never had. student_speaking
+                    # above is what feeds it.
+                    #
+                    # Leaving it in would also have double-fired, since the
+                    # cancel carried expect_new_turn and the frontend now opens
+                    # the next turn itself.
                     turn_state = TurnState.LISTENING
                     audio_started_at = time.time()
                     logger.info(
@@ -1037,8 +1134,22 @@ async def voice_stream(
                         )
                         return
 
+                    # Mint the turn's identity here, at the boundary Flux just
+                    # reported and only this server can see. This is the fix
+                    # for the turn-identity cluster: the browser used to mint
+                    # ids for boundaries it could not observe, so a turn could
+                    # begin that the client never knew about.
+                    #
+                    # Minted after the empty-transcript check above, so a turn
+                    # that is never submitted does not consume an id.
+                    voice_turn_sequence += 1
+                    minted_turn_id = _mint_voice_turn_id(
+                        voice_connection_token, voice_turn_sequence
+                    )
+
                     logger.info(
                         f"[{session_id}] Flux EndOfTurn (turn {turn_index}, "
+                        f"turn_id={minted_turn_id}, "
                         f"eot_conf={eot_confidence:.3f}, "
                         f"word_conf={confidence:.4f}): '{transcript}'"
                     )
@@ -1046,13 +1157,11 @@ async def voice_stream(
                     # Anything still running belongs to an older turn.
                     await _cancel_active_turn("superseded", notify_frontend=False)
 
-                    # A new student turn supersedes any leftover playback, so
-                    # stop treating the previous reply as interruptible.
-                    client_audio_playing = False
-
                     duration = max(time.time() - audio_started_at, 0.001)
                     active_turn_task = asyncio.create_task(
-                        _run_turn(transcript, confidence, duration)
+                        _run_turn(
+                            transcript, confidence, duration, minted_turn_id
+                        )
                     )
                     _background_tasks.add(active_turn_task)
                     active_turn_task.add_done_callback(_background_tasks.discard)
@@ -1245,12 +1354,31 @@ async def voice_stream(
             if "text" in message:
                 data = json.loads(message["text"])
                 msg_type = data.get("type", "")
-                if "turn_id" in data:
-                    turn_id = data.get("turn_id")
-                if "previous_tutor_turn_id" in data:
-                    previous_tutor_turn_id = data.get("previous_tutor_turn_id")
-                if "transcript_final" in data:
-                    transcript_final = data.get("transcript_final")
+                # Turn identity off the client -- Nova-3 only.
+                #
+                # This latch is the mechanism behind the whole turn-identity
+                # cluster. The browser mints an id and a lineage pointer and
+                # sends them on a turn_context frame; the server latches
+                # whichever arrived most recently and submits with it. It goes
+                # wrong because the browser only learns the tutor's turn after
+                # the fact, so the pointer it sends is routinely one turn
+                # behind, and the backend rejects the turn with a 409.
+                #
+                # On the Flux path we no longer read any of it: the id is
+                # minted at EndOfTurn (see _mint_voice_turn_id) and the
+                # backend resolves the lineage itself. The frontend may still
+                # be sending these frames -- its handlers stay in place until
+                # this change is deployed -- so they are ignored rather than
+                # treated as an error.
+                #
+                # Nova-3 still depends on them, so the latch stays for it.
+                if not USE_FLUX:
+                    if "turn_id" in data:
+                        turn_id = data.get("turn_id")
+                    if "previous_tutor_turn_id" in data:
+                        previous_tutor_turn_id = data.get("previous_tutor_turn_id")
+                    if "transcript_final" in data:
+                        transcript_final = data.get("transcript_final")
 
                 # Latch a canvas snapshot from whichever message carries it.
                 #
