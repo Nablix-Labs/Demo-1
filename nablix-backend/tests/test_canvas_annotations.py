@@ -95,6 +95,36 @@ def _intents() -> list[AnnotationIntent]:
     ]
 
 
+def test_span_target_draws_only_the_incorrect_character() -> None:
+    region = OCRTextRegion(
+        step_id="step-1",
+        text="n + 6",
+        x=0.20,
+        y=0.30,
+        w=0.30,
+        h=0.08,
+        confidence=0.95,
+    )
+    draw = plan_canvas_draw(
+        _tutor_result(
+            TutorMistakeClassification(
+                status="mistake_found",
+                mistake_step_id="step-1",
+                error_token="6",
+                target_text="6",
+                target_span=(4, 5),
+                confidence=0.95,
+            ),
+            [AnnotationIntent(kind="circle_target", target_step_id="step-1")],
+        ),
+        [region],
+        [],
+    )
+
+    assert len(draw) == 1
+    assert draw[0].elements[0].w < region.w / 2
+
+
 def _token() -> SpatialMathToken:
     return SpatialMathToken(
         token_id="step-1:token-1",

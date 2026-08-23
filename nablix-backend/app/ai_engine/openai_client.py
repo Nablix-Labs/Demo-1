@@ -270,6 +270,11 @@ class OpenAIAIEngineClient:
                     else None
                 ),
                 "answer_reveal_allowed": False,
+                "evidence_bundle_instruction": (
+                    "Treat handwriting, OCR, voice, typed text, the active question, "
+                    "prior tutor response, and recent conversation as one connected "
+                    "evidence bundle. Evaluate the current attempt in that context."
+                ),
             },
         )
         return OpenAITutorTurn.model_validate(content)

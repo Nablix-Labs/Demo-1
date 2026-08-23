@@ -59,6 +59,7 @@ from app.models.guided_learning import (
     GeneratedConcept,
     GeneratedQuestionRubric,
     GuidedEvaluation,
+    GuidedCanvasEvidence,
     GuidedPromptType,
     GuidedRescueContext,
     GuidedStudentState,
@@ -115,6 +116,8 @@ class ClassificationRequest(StrictSchema):
     canvas_mathml_blocks: list[str] = Field(default_factory=list)
     spatial_tokens: list[SpatialMathToken] = Field(default_factory=list)
     canvas_events: list[CanvasEvent] = Field(default_factory=list)
+    canvas_snapshot_reference: str | None = None
+    canvas_strokes: list[dict[str, object]] = Field(default_factory=list)
     has_canvas_evidence: bool = False
     canvas_solution_complete_candidate: bool = False
     conversation_history: list[ConversationMessage] = Field(default_factory=list)
@@ -1420,6 +1423,21 @@ def guided_tutor_context_for(
         selected_option_id=selected_option_id,
         selected_option_text=selected_option_text,
         active_canvas_events=request.canvas_events,
+        canvas_evidence=GuidedCanvasEvidence(
+            snapshot_reference=request.canvas_snapshot_reference,
+            ocr_regions=[region.model_dump() for region in request.canvas_regions],
+            spatial_tokens=[token.model_dump() for token in request.spatial_tokens],
+            strokes=request.canvas_strokes,
+            ordered_events=request.canvas_events,
+        ),
+        prior_tutor_response=(
+            request.conversation_history[-1].content
+            if request.conversation_history
+            and request.conversation_history[-1].role == "assistant"
+            else None
+        ),
+        attempt_count=request.attempt_count,
+        learning_phase=request.current_phase,
         active_question_anchors=plan_question_anchors(
             request.question_id,
             request.question,
@@ -5223,8 +5241,13 @@ def contains_answer_reveal(message: str, correct_answer: str, rules: ClassifierR
     semantic_message = normalize_semantic_answer(message)
     semantic_correct_answer = normalize_semantic_answer(correct_answer)
 
+    correct_numbers: list[str] = re.findall(r"-?\d+(?:\.\d+)?", correct_answer)
+    is_bare_numeric_answer = (
+        len(correct_numbers) == 1
+        and re.fullmatch(r"-?\d+(?:\.\d+)?", normalized_correct_answer) is not None
+    )
     exact_answer_present = False
-    if len(normalized_correct_answer) == 1 and normalized_correct_answer.isalnum():
+    if not is_bare_numeric_answer and len(normalized_correct_answer) == 1 and normalized_correct_answer.isalnum():
         exact_answer_present = (
             re.search(
                 rf"(?<!\w){re.escape(normalized_correct_answer)}(?!\w)",
@@ -5232,7 +5255,7 @@ def contains_answer_reveal(message: str, correct_answer: str, rules: ClassifierR
             )
             is not None
         )
-    elif normalized_correct_answer != "":
+    elif not is_bare_numeric_answer and normalized_correct_answer != "":
         exact_answer_present = normalized_correct_answer in normalized_message
     if (
         len(semantic_correct_answer.split()) > 1
@@ -5243,7 +5266,6 @@ def contains_answer_reveal(message: str, correct_answer: str, rules: ClassifierR
         return True
     if contains_any(normalized_message, rules.answer_reveal_guardrail.reveal_phrases):
         return True
-    correct_numbers: list[str] = re.findall(r"-?\d+(?:\.\d+)?", correct_answer)
     is_single_numeric_answer = (
         len(correct_numbers) == 1
         and (
@@ -5256,10 +5278,14 @@ def contains_answer_reveal(message: str, correct_answer: str, rules: ClassifierR
         return False
 
     correct_value: float = float(correct_numbers[0])
-    message_numbers: list[str] = re.findall(
-        r"-?\d+(?:\.\d+)?",
+    explicit_numeric_reveal = re.search(
+        r"\b(?:the\s+)?(?:final\s+)?answer\s+(?:is|equals)\b|"
+        r"\btherefore\b|\bso\s+the\s+answer\b",
         normalized_message,
     )
+    if explicit_numeric_reveal is None:
+        return False
+    message_numbers: list[str] = re.findall(r"-?\d+(?:\.\d+)?", normalized_message)
     return any(float(value) == correct_value for value in message_numbers)
 
 

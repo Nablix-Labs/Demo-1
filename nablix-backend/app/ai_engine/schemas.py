@@ -65,7 +65,7 @@ ResponseStrategy = Literal[
     "CONTINUE",
 ]
 
-InputSource = Literal["TEXT", "VOICE", "CANVAS", "CHOICE"]
+InputSource = Literal["TEXT", "VOICE", "CANVAS", "CHOICE", "MIXED"]
 Phase3SubmissionKind = Literal["CANVAS", "CHOICE"]
 IndependentOutcome = Literal[
     "AWAITING_SUBMISSION",

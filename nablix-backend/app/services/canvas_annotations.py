@@ -87,13 +87,20 @@ def plan_canvas_draw(
     if target_region is None:
         return []
 
-    # Without verified token geometry the submission is a broad OCR region only,
-    # which localizes as "uncertain": guide in text rather than marking a target
-    # the tutor cannot actually point at.
-    if not spatial_tokens:
-        return []
+    if classification.error_token is None:
+        return _whole_region_draw(tutor, classification, target_region)
 
-    if len(classification.target_token_ids) == 0 or classification.error_token is None:
+    if not spatial_tokens or not classification.target_token_ids:
+        span_box = _span_target_box(classification, target_region)
+        if span_box is not None:
+            elements = _elements_for(classification, tutor.annotation_intents, span_box)
+            return [
+                CanvasDrawPayload(
+                    action_id=f"canvas-correction-{target_region.step_id}",
+                    mode="append",
+                    elements=elements,
+                )
+            ] if elements else []
         return _whole_region_draw(tutor, classification, target_region)
 
     matching_tokens = [
@@ -128,6 +135,30 @@ def plan_canvas_draw(
             elements=elements,
         )
     ]
+
+
+def _span_target_box(
+    classification: TutorMistakeClassification,
+    region: OCRTextRegion,
+) -> Box | None:
+    """Estimate a narrow target box from a validated OCR character span."""
+
+    span = classification.target_span
+    target_text = classification.target_text
+    if span is None or target_text is None:
+        return None
+    start, end = span
+    if start < 0 or end <= start or end > len(region.text):
+        return None
+    if canonical_math_token_text(region.text[start:end]) != canonical_math_token_text(target_text):
+        return None
+    text_length = max(1, len(region.text))
+    x = region.x + region.w * start / text_length
+    end_x = region.x + region.w * end / text_length
+    padding = min(region.w * 0.04, 0.02)
+    left = max(region.x, x - padding)
+    right = min(region.x + region.w, end_x + padding)
+    return (left, region.y, max(0.01, right - left), region.h)
 
 
 def plan_confirmed_tutor_draw(
