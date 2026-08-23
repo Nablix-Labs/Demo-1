@@ -160,6 +160,16 @@ class GuidedRescueContext(GuidedLearningModel):
         return self
 
 
+class GuidedCanvasEvidence(GuidedLearningModel):
+    """Canvas evidence paired with the learner's current turn."""
+
+    snapshot_reference: str | None = None
+    ocr_regions: list[dict[str, object]] = Field(default_factory=list)
+    spatial_tokens: list[dict[str, object]] = Field(default_factory=list)
+    strokes: list[dict[str, object]] = Field(default_factory=list)
+    ordered_events: list[CanvasEvent] = Field(default_factory=list)
+
+
 class GuidedTutorContext(GuidedLearningModel):
     """Authoritative lesson state supplied to the guided-turn evaluator."""
 
@@ -174,6 +184,10 @@ class GuidedTutorContext(GuidedLearningModel):
     selected_option_id: str | None
     selected_option_text: str | None
     active_canvas_events: list[CanvasEvent]
+    canvas_evidence: GuidedCanvasEvidence = Field(default_factory=GuidedCanvasEvidence)
+    prior_tutor_response: str | None = None
+    attempt_count: int = Field(default=0, ge=0)
+    learning_phase: str = "GUIDED_PRACTICE"
     active_question_anchors: list[QuestionTextAnchor]
     current_scaffold_step_number: int
     consecutive_stuck_count: int

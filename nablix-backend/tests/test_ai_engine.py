@@ -52,10 +52,33 @@ from app.models.guided_learning import (
     GuidedTeachingState,
     ScaffoldEvaluationContext,
     ScaffoldStepEvaluation,
+    GuidedCanvasEvidence,
 )
 
 
 client = TestClient(app)
+
+
+def test_guided_canvas_evidence_is_typed_and_keeps_prior_turn_context() -> None:
+    evidence = GuidedCanvasEvidence(
+        snapshot_reference="SNAP-1",
+        ocr_regions=[{"text": "n + 6", "confidence": 0.94}],
+        spatial_tokens=[{"token_id": "token-6", "text": "6"}],
+        strokes=[{"stroke_id": "stroke-1"}],
+        ordered_events=[],
+    )
+
+    assert evidence.snapshot_reference == "SNAP-1"
+    assert evidence.spatial_tokens[0]["token_id"] == "token-6"
+
+
+def test_contextual_numeric_teaching_does_not_trigger_answer_reveal() -> None:
+    rules = classifier.load_classifier_rules()
+
+    assert not classifier.contains_answer_reveal("5 is the fixed number.", "x = 5", rules)
+    assert not classifier.contains_answer_reveal("The operation adds 5.", "5", rules)
+    assert classifier.contains_answer_reveal("The final answer is 5.", "5", rules)
+    assert classifier.contains_answer_reveal("Therefore x = 5.", "x = 5", rules)
 
 
 def _guided_context(stuck_count: int) -> Phase2PromptContext:
