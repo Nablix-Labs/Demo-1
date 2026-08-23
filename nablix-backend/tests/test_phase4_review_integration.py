@@ -285,6 +285,12 @@ def test_canvas_submit_to_rendered_pdf(student_model_service: dict[str, object])
     assert replay["question_text"] == "A temperature starts at t and falls by 3."
     pdf_url = replay["work_artifact"]["pdf_url"]
     assert pdf_url == f"/work-artifacts/{ARTIFACT_ID}/pdf"
+    assert review["topic_outcome"] is not None
+    assert review["topic_outcome"]["mastery_status"]
+    assert review["topic_outcome"]["recommended_next_action"]
+    assert review["question_journey"] is not None
+    assert review["question_journey"][0]["question_id"] == "Q-T01-005"
+    assert review["question_journey"][0]["evaluation"] == "INCORRECT"
 
     pdf = client.get(pdf_url)
 
