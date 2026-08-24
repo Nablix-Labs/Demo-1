@@ -161,3 +161,59 @@ mid-stroke. Regression test in `lib/__tests__/tutorSpeech.test.ts`.
 **B. The canvas is never submitted on a voice turn.** Frontend half of §1 above.
 Not fixed pending the transport decision, because the two candidate wire formats
 would ship differently and only one of them works.
+
+---
+
+# Addendum — 24 August 2026
+
+From reading the connected-evidence work (`b99daa4`) against the frontend.
+
+## 7. `MIXED` is not on the wire, and the handoff reads as if it is
+
+**Owner: Sanya.** Not broken — a documentation trap, filed before someone hits it.
+
+The handoff introduces `MIXED` as an input source "used when the same accepted
+turn contains multiple evidence sources, such as voice plus canvas". `MIXED` was
+added to `ai_engine/schemas.py:68` only. The wire enum is still
+`TEXT|VOICE|CANVAS|CHOICE|SYSTEM` (`models/fields.py:94`), so a client that
+follows the handoff literally 422s every answer before the tutor sees it.
+
+The frontend therefore keeps sending `TEXT` / `VOICE` and lets `canvas_state`
+carry the evidence. If `MIXED` is meant to reach the wire, `models/fields.py`
+needs it too and orchestration needs to accept it; if it is meant to stay
+internal and be derived server-side, the handoff should say so.
+
+## 8. Every canvas-bearing turn now costs an OCR pass
+
+**Owner: Aditya to measure, Chirudeva if it needs a cache.** New, and caused by
+our fix — flagged rather than left to be discovered.
+
+Attaching `canvas_state` to typed answers and hint requests (§1's frontend half,
+now done) means `collect_canvas_evidence` runs the vision adapter on those turns
+too. `snapshot_store.build_reference` keys on `submission_id`, not on the image,
+so an unchanged board is re-OCR'd on every turn that mentions it.
+
+This matters because of §3: the tutor call is already p90 17.8s, and OCR is now
+in front of it on more turns than before. It is still the right trade — the
+alternative is the tutor being blind, which is the bug we started from — but if
+the p90 moves, this is the first place to look. A content hash on the snapshot
+would make repeat reads free.
+
+## 9. Where the frontend now stands on the connected-evidence handoff
+
+For the record, so nobody re-files these:
+
+- **Evidence attached to typed and voice turns** — done (`6e446b8`), with the
+  413 limits in `canvas_evidence.validate_canvas_payload` mirrored client-side
+  and trimmed events renumbered to satisfy `validate_canvas_event_order`.
+- **Token / span / whole-line target rendering** — no frontend change needed.
+  `plan_canvas_draw` resolves all three into one normalised box before the wire;
+  `TutorElement` is untouched by `b99daa4`. The existing renderer already draws
+  it and the box simply gets narrower.
+- **Separate tutor / support / student layers, student ink never mutated** —
+  already true and unchanged.
+- **Queue rather than drop an action whose target is missing** — already true
+  (`pendingRescueActions`, capped at 12).
+- **OCR regions, spatial tokens, token ids, character spans** — not ours to
+  send. Chirudeva owns these; the frontend supplies the snapshot, strokes and
+  ordered canvas memory, and the backend derives the rest.
