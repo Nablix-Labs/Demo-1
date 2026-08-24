@@ -59,6 +59,74 @@ from app.models.guided_learning import (
 client = TestClient(app)
 
 
+def _topic1_request(student_input: str) -> ClassificationRequest:
+    return ClassificationRequest(
+        question_id="Q-T01-002",
+        question_type="MULTI_PART_SHORT_RESPONSE",
+        question="In m + 7, identify the changing quantity and the fixed change.",
+        correct_answer="m; 7; addition",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-002",
+            canonical_answer="m; +7",
+            accepted_answers=["m; 7; addition"],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=False,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        student_input=student_input,
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+    )
+
+
+def test_topic1_role_evidence_preserves_values_and_challenges_operation() -> None:
+    request = _topic1_request("m changes, 7 stays fixed, and plus is the fixed value")
+    rubric = classifier.rubric_from_authored_answer_parts(
+        "Q-T01-002", request.question_type, request.answer_spec, "test"
+    )
+    assert rubric is not None
+    evaluation = classifier.deterministic_teaching_step_evaluation(
+        request, rubric, classifier.initial_guided_objective(rubric), load_classifier_rules()
+    )
+
+    assert evaluation is not None
+    assert evaluation.student_state == "PARTIAL"
+    assert set(evaluation.newly_confirmed_concept_ids) == {"CHANGING_VALUE", "FIXED_VALUE"}
+    assert "Is + a value" in evaluation.tutor_message
+
+
+def test_topic1_choice_is_detected_inside_an_explanation() -> None:
+    request = ClassificationRequest(
+        question_id="Q-T01-004",
+        question_type="CHOICE_WITH_EXPLANATION",
+        question="Which is the general rule? A: 12 + 4. B: n + 4.",
+        correct_answer="B",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-004", canonical_answer="B", accepted_answers=["B"],
+            verification_method="EXACT_CHOICE_MATCH", explanation_required=True,
+        ),
+        phase_2_prompt_context=_guided_context(0), student_input="A is general because 12 plus 4 gives an answer.",
+        current_phase="GUIDED_PRACTICE", input_source="TEXT", transcript_confidence=None,
+        attempt_count=0, current_hint_level=None,
+    )
+    rubric = classifier.rubric_from_authored_answer_parts("Q-T01-004", request.question_type, request.answer_spec, "test")
+    assert rubric is not None
+    evaluation = classifier.wrong_choice_evaluation(request, rubric, classifier.initial_guided_objective(rubric), load_classifier_rules())
+
+    assert classifier.typed_choice_selection(request) == "A"
+    assert evaluation is not None
+    assert evaluation.student_state == "WRONG"
+    assert "different starting number" in evaluation.tutor_message
+
+
+def test_topic1_spaced_symbol_number_is_an_ambiguity_not_a_misconception() -> None:
+    assert classifier.ambiguous_symbol_number_input("n 5")
+    assert not classifier.ambiguous_symbol_number_input("n + 5")
+
+
 def test_guided_canvas_evidence_is_typed_and_keeps_prior_turn_context() -> None:
     evidence = GuidedCanvasEvidence(
         snapshot_reference="SNAP-1",
@@ -383,6 +451,7 @@ def test_new_score_rule_uses_the_same_guided_rule_controller() -> None:
         request,
         rubric,
         objective,
+        load_classifier_rules(),
     )
 
     assert evaluation is not None
@@ -1003,7 +1072,9 @@ def test_guided_follow_up_blocks_an_unselected_choice_reveal() -> None:
 
     aligned = classifier.align_guided_follow_up(evaluation, request, rubric, objective)
 
-    assert aligned.tutor_message == "Let's check that carefully. Which option do you choose?"
+    assert aligned.tutor_message == (
+        "Let's check that carefully. Which option represents every possible starting value?"
+    )
 
 
 def test_guided_choice_repetition_keeps_the_llm_explanation_and_updates_selection(
@@ -4824,7 +4895,7 @@ def test_guided_answer_reveal_fallback_names_the_missing_explanation(
     assert evaluation_calls > 1
     assert response.guided_student_state == "PARTIAL"
     assert response.tutor_message == (
-        "You have given the answer. Now explain why it is true in this situation."
+        "What mathematical reason shows that this choice works for every starting value?"
     )
     assert response.active_teaching_objective is not None
     assert response.active_teaching_objective.missing_concept_ids == [

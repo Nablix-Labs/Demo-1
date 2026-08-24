@@ -71,6 +71,15 @@ guided_learning:
     matches the expression being decoded; do not confuse it with an extra variable.
     Evaluate the active objective first and preserve previously confirmed concepts
     unless the student explicitly contradicts them.
+    Before judging a generalisation, distinguish a copied-data or premise error,
+    an invalid inference, an unsupported one-case generalisation, a notation
+    problem, incomplete evidence, and genuinely ambiguous input. A correct rule
+    tested with only one number is PARTIAL: confirm that one check and request a
+    second starting value. A wrong choice is never correct merely because it
+    gives one numerical answer; use one Socratic counterexample question.
+    Treat a variable as a changing quantity, a numeral as a value, and an
+    operator such as + as an operation, not a value. If the learner has already
+    demonstrated a role, preserve it and do not ask for it again.
     guided_tutor_context is the authoritative persistent lesson state. Its
     active_tutor_question is the only learner question for this turn; its ordered
     teaching steps define the permitted focus order. recent_conversation is only
@@ -231,6 +240,25 @@ guided_learning:
       "-": "subtraction"
       "×": "multiplication"
       "÷": "division"
+  critical_thinking:
+    distress_phrases:
+      - "i am stupid"
+      - "i'm stupid"
+      - "im stupid"
+      - "i hate myself"
+      - "i can't do anything"
+      - "i cant do anything"
+    frustration_phrases:
+      - "this is hard"
+      - "i don't get it"
+      - "i dont get it"
+      - "confused"
+      - "frustrated"
+    distress_message: "I’m glad you told me. You are not stupid, and we can slow down. Would you like to look at one small part together?"
+    frustration_acknowledgement: "That can feel frustrating. Let’s take just one small step."
+    ambiguity_message: "I want to read your notation correctly. Did you mean a letter followed by a number, or an operation between them?"
+    wrong_choice_prompt: "Let’s test that choice with a different starting number. Would it still describe the new case?"
+    single_case_defence_prompt: "That works for that one starting value. Try a different starting value: what does the same rule predict?"
 safety:
   unsafe_terms:
     - hurt myself
