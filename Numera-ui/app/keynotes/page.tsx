@@ -123,9 +123,14 @@ export default function KeyNotesPage() {
     [speakingId, toggle],
   );
 
+  // pb-32 rather than the py-10 the top keeps. The dock is fixed 16px off the
+  // bottom and stands 74px tall, so the last ~90px of a scrollable route sits
+  // underneath it. Key Notes is where that bites: the page-turn control is the
+  // final element, and it was rendering 96px behind the dock AND past the fold,
+  // leaving no way to reach page 2 or 3. Measured on the live site, not guessed.
   return (
     <main
-      className="flex-1 min-w-0 overflow-y-auto bg-[#F2F4F8] px-6 py-10"
+      className="flex-1 min-w-0 overflow-y-auto bg-[#F2F4F8] px-6 pt-10 pb-32"
       aria-label="Key Notes at a glance"
     >
       <div className="mx-auto w-full max-w-[1400px]">
