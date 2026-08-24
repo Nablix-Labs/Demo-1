@@ -1508,7 +1508,7 @@ function isUnitCoordinate(value: number): boolean {
   return Number.isFinite(value) && value >= 0 && value <= 1;
 }
 
-function canvasStrokesForSubmission(strokes: CanvasStrokeSnapshot[]): CanvasStrokeSnapshot[] {
+export function canvasStrokesForSubmission(strokes: CanvasStrokeSnapshot[]): CanvasStrokeSnapshot[] {
   return strokes.flatMap((stroke) => {
     const points = stroke.points.filter(
       (point) => isUnitCoordinate(point.x) && isUnitCoordinate(point.y),
@@ -1517,7 +1517,7 @@ function canvasStrokesForSubmission(strokes: CanvasStrokeSnapshot[]): CanvasStro
   });
 }
 
-function canvasEventsForSubmission(canvasEvents: CanvasEvent[]): CanvasEvent[] {
+export function canvasEventsForSubmission(canvasEvents: CanvasEvent[]): CanvasEvent[] {
   return canvasEvents.map((event) => {
     const bbox = event.bbox;
     if (

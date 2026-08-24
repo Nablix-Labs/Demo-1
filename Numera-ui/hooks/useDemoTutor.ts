@@ -47,6 +47,7 @@ import type { SupportRung } from '@/lib/supportLadder';
 import type { NudgeClaimResult } from '@/hooks/useInactivityNudge';
 import { reportFailure } from '@/lib/failureReport';
 import { canvasSubmissionView } from '@/lib/canvasSubmission';
+import { canvasEvidenceFor } from '@/lib/canvasEvidence';
 import type { QuestionAnchor } from '@/lib/questionAnchors';
 
 const apiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
@@ -568,8 +569,20 @@ export function useDemoTutor() {
           session_id: sessionId,
           student_id: studentId(),
           interaction_type: 'ANSWER_SUBMISSION',
+          // Stays 'TEXT' even when the canvas rides along. The connected-evidence
+          // handoff introduces a 'MIXED' source for exactly this case, but MIXED
+          // was added to the tutor engine's enum only (ai_engine/schemas.py) —
+          // the wire enum is still TEXT|VOICE|CANVAS|CHOICE|SYSTEM
+          // (models/fields.py:94), so sending it 422s the answer before the
+          // tutor sees it. The evidence is carried by canvas_state either way.
           input_source: 'TEXT',
           text_input: text,
+          // A typed answer about working on the board used to arrive without the
+          // board. `has_canvas_evidence` is false without this field and
+          // `review_canvas_math` then returns None outright, so the tutor
+          // evaluated the sentence alone and re-asked what had just been
+          // answered — Manjusha's "please check the Canvas", on the keyboard.
+          canvas_state: canvasEvidenceFor(canvasExporter?.(), state.canvasEvents),
           selected_option_id: state.selectedOptionId ?? undefined,
           // A typed answer on a choice question still carries the selection, so
           // it carries the wording too (revised handoff, frontend §1).
@@ -620,7 +633,7 @@ export function useDemoTutor() {
         return null;
       }
     },
-    [sessionId, addTranscriptMessage, addTrailEntry]
+    [sessionId, canvasExporter, addTranscriptMessage, addTrailEntry]
   );
 
   /** Export the current canvas and submit it for live OCR + tutor feedback. */
@@ -921,6 +934,11 @@ export function useDemoTutor() {
       interaction_type: 'HELP_REQUEST',
       input_source: 'TEXT',
       text_input: 'Please give me the next hint.',
+      // A student asking for a hint has usually already started. Sending the
+      // board means the hint can pick up from the line they are stuck on
+      // instead of restarting the question; without it every hint is written
+      // for a blank canvas.
+      canvas_state: canvasEvidenceFor(canvasExporter?.(), s.canvasEvents),
       current_phase: s.currentPhase,
       concept_id: s.activeConceptId,
       question_id: s.activeQuestionId,
@@ -938,7 +956,7 @@ export function useDemoTutor() {
     const rung: SupportRung | null = served && served !== 'NONE' ? served : null;
     if (rung) useNumeraStore.getState().setSupportShown(rung);
     return rung;
-  }, [sessionId, addTranscriptMessage, addTrailEntry]);
+  }, [sessionId, canvasExporter, addTranscriptMessage, addTrailEntry]);
 
   /**
    * Fire one completed voice turn to the backend with one frozen canvas payload,
@@ -993,16 +1011,14 @@ export function useDemoTutor() {
           input_source: 'VOICE' as const,
           voice_transcript: transcript,
           transcript_confidence: confidence,
-          canvas_state: {
-            snapshot_data_url: canvasSnapshot.snapshotDataUrl,
-            strokes: canvasSnapshot.strokes,
-            captured_at: canvasSnapshot.capturedAt,
-            // §7: call the tutor engine "with compact current canvas memory,
-            // not just a flat screenshot". A voice turn needs it most — the
-            // student explained aloud, so the board alone under-reports what
-            // they did.
-            canvas_events: state.canvasEvents,
-          },
+          // §7: call the tutor engine "with compact current canvas memory, not
+          // just a flat screenshot". A voice turn needs it most — the student
+          // explained aloud, so the board alone under-reports what they did.
+          //
+          // Built here rather than inline since 24 Aug: this was the only site
+          // sending evidence, and it sent it untrimmed, so a long question was
+          // one busy canvas away from a 413 on every spoken answer.
+          canvas_state: canvasEvidenceFor(canvasSnapshot, state.canvasEvents),
           current_phase: state.currentPhase,
           concept_id: ctx.concept_id,
           question_id: questionId,
