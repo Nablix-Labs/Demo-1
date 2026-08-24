@@ -171,6 +171,52 @@ export function useWebSocket(sessionId: string | null) {
   }, [sendControl]);
 
   /**
+   * Put the student's working in front of the tutor on a voice turn.
+   *
+   * The gap this closes: `sendCanvasSubmission` existed, was returned from this
+   * hook, and was called by nothing. The canvas reached the backend by exactly
+   * one route — tapping "Check", over REST — so a student who wrote `n + 5` and
+   * then SAID "I fully written that in the Canvas, please check the Canvas" had
+   * submitted nothing, and the tutor re-asked the question they had just
+   * answered (Manjusha, 22 Aug).
+   *
+   * Sent at StartOfTurn rather than at the end. The voice server latches a
+   * snapshot from ANY inbound frame (Aditya, 22 Aug — `canvas_snapshot` or
+   * `png`, and `png` is what this frame already sends), so getting it there
+   * before the turn is processed is what matters. `stop` was the obvious hook
+   * and is a dead end: Flux ends turns itself, so on this path there is no
+   * ordinary `stop` frame to attach anything to.
+   *
+   * Once per turn, and only when the student has actually drawn: a PNG export
+   * is not free on a tablet, and a blank canvas is worth nothing to the tutor
+   * or to the OCR behind it.
+   */
+  const canvasSentForTurnRef = useRef<string | null>(null);
+  const sendCanvasForTurn = useCallback(() => {
+    const s = useNumeraStore.getState();
+    const turnId = s.currentTurnId;
+    if (!turnId || canvasSentForTurnRef.current === turnId) return;
+    if (s.items.length === 0) return;
+    const snapshot = s.canvasExporter?.();
+    if (!snapshot?.snapshotDataUrl) return;
+    canvasSentForTurnRef.current = turnId;
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      logFrame('out', {
+        type: 'canvas_submission',
+        png_bytes: snapshot.snapshotDataUrl.length,
+        strokes: snapshot.strokes.length,
+      });
+      wsRef.current.send(JSON.stringify({
+        type: 'canvas_submission',
+        png: snapshot.snapshotDataUrl,
+        strokes: snapshot.strokes,
+      }));
+    } else {
+      console.warn('[WS] dropped canvas_submission — socket not open');
+    }
+  }, []);
+
+  /**
    * Send turn context for a turn that was minted somewhere else.
    *
    * Every `beginListeningTurn()` inside this hook is paired with an explicit
@@ -352,6 +398,10 @@ export function useWebSocket(sessionId: string | null) {
               // that is still moving. Once it lifts, this is the ordinary
               // "I've written it, check the canvas" handoff.
               if (!isPenDown()) setStudentWriting(false);
+              // Fallback: if student_speaking never arrived, this is the last
+              // moment the working can still reach the tutor for this turn.
+              // Deduped per turn id, so the ordinary path sends once.
+              sendCanvasForTurn();
               watchdogRef.current?.noteStudentSpeech(useNumeraStore.getState().currentTurnId);
               processingTimerRef.current?.noteSpeech();
             }
@@ -382,6 +432,11 @@ export function useWebSocket(sessionId: string | null) {
               useNumeraStore.getState().beginListeningTurn();
               sendTurnContext();
             }
+            // The student is answering. Put whatever they have written in
+            // front of the tutor now, while the turn is still open — the
+            // server latches it from any frame and reads it when the turn is
+            // processed.
+            sendCanvasForTurn();
             processingTimerRef.current?.noteSpeech();
             break;
 
@@ -752,7 +807,7 @@ export function useWebSocket(sessionId: string | null) {
       }
     };
 
-  }, [sessionId, ttsProvider, ttsVoice, sendControl, sendTurnContext, addTranscriptMessage, updatePartialTranscript, commitPartialTranscript, setSessionState, setVoiceStatus, applyCanvasDraw]);
+  }, [sessionId, ttsProvider, ttsVoice, sendControl, sendTurnContext, sendCanvasForTurn, addTranscriptMessage, updatePartialTranscript, commitPartialTranscript, setSessionState, setVoiceStatus, applyCanvasDraw]);
 
   useEffect(() => {
     connect();
