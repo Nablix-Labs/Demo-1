@@ -40,6 +40,29 @@ const FOCUS_ROUTES = ['/onboard', '/diagnostic', '/orientation', '/teach', '/com
  */
 const TUTORING_ROUTES = ['/', '/practice'];
 
+/**
+ * Does this pathname sit on the given route?
+ *
+ * Shared because the export build sets `trailingSlash: true`, so every route
+ * but `/` arrives here with a trailing slash — `usePathname()` returns
+ * `/practice/`, never `/practice`. Two of the three checks below already
+ * allowed for that; `tutoring` compared with bare `===` and so was false on
+ * every deployed build.
+ *
+ * The cost was not cosmetic. `tutoring` is what auto-hides the dock, so on the
+ * live site the dock sat permanently across the bottom of Independent Practice,
+ * covering the canvas toolbar — pen, eraser, shapes, undo, colour and the Check
+ * button that submits the work. The student could see their canvas and not
+ * reach any of the controls for it.
+ *
+ * It never reproduced locally: `trailingSlash` is set only for the static
+ * export, so `npm run dev` matches `/practice` exactly and the dock behaves.
+ * One matcher now, so the three lists cannot drift apart again.
+ */
+function matchesRoute(pathname: string, route: string): boolean {
+  return pathname === route || pathname.startsWith(`${route}/`);
+}
+
 const Dock = dynamic(() => import('./Dock'), { ssr: false });
 const MediaPanel = dynamic(() => import('./MediaPanel'), { ssr: false });
 const VoicePicker = dynamic(() => import('./VoicePicker'), { ssr: false });
@@ -110,14 +133,12 @@ export default function AppFrame({ children }: { children: ReactNode }) {
 
   if (misconfigured) return <ConfigError />;
 
-  const focus = FOCUS_ROUTES.some(
-    (p) => pathname === p || pathname.startsWith(`${p}/`),
-  );
+  const focus = FOCUS_ROUTES.some((p) => matchesRoute(pathname, p));
 
   // Pre-auth screens: nobody is signed in, so a Log out button and a tutor
   // voice picker are nonsense there — the logout icon showed up on /login
   // itself after signing out.
-  const preAuth = PRE_AUTH_ROUTES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+  const preAuth = PRE_AUTH_ROUTES.some((p) => matchesRoute(pathname, p));
 
   if (focus) {
     // Full-bleed: just the routed page — plus the voice picker, which otherwise
@@ -150,7 +171,7 @@ export default function AppFrame({ children }: { children: ReactNode }) {
   // The AI tutor panel belongs to the live lesson only; every other in-app
   // route keeps the tool rail for navigation but renders content full-width.
   const isLesson = pathname === '/';
-  const tutoring = TUTORING_ROUTES.some((p) => pathname === p);
+  const tutoring = TUTORING_ROUTES.some((p) => matchesRoute(pathname, p));
 
   return (
     <AuthGate>
