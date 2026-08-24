@@ -14,6 +14,7 @@ GuidedPromptType = Literal[
     "COMPONENT",
     "OPTION_COMPARISON",
     "SOURCE_CORRECTION",
+    "DEFENCE",
 ]
 ComponentEvidenceStatus = Literal[
     "DEMONSTRATED",
@@ -118,6 +119,8 @@ class GuidedTeachingState(GuidedLearningModel):
     answer_step_ids: list[str] = Field(default_factory=list)
     completed_step_ids: list[str] = Field(default_factory=list)
     current_step_index: int | None = Field(default=None, ge=0)
+    affect_state: Literal["NORMAL", "DISTRESS", "FRUSTRATED", "GENTLE_RETURN"] = "NORMAL"
+    last_reasoning_probe: str | None = None
 
 
 class GuidedTeachingPlanStep(GuidedLearningModel):

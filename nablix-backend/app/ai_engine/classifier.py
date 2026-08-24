@@ -709,6 +709,37 @@ def rubric_from_authored_answer_parts(
 
     if question_type != "MULTI_PART_SHORT_RESPONSE":
         return None
+    # Older authored contracts sometimes store the operator together with the
+    # fixed value (for example, "m; +7").  The expression itself is reliable
+    # evidence that these are three distinct semantic roles.
+    raw_answer_parts = [part.strip() for part in answer_spec.canonical_answer.split(";")]
+    expression = _expression_parts(answer_spec.canonical_answer.replace(";", " "))
+    if (
+        expression is not None
+        and len(raw_answer_parts) == 2
+        and re.fullmatch(r"[+\-×x*]\s*\d+", raw_answer_parts[1]) is not None
+    ):
+        role_parts = (
+            ("CHANGING_VALUE", "The variable or starting value changes."),
+            ("FIXED_VALUE", "The numerical value that stays fixed."),
+            ("OPERATION", "The operation represented by the sign."),
+        )
+        cache_source = json.dumps(
+            {"question_id": question_id, "roles": role_parts, "prompt_version": prompt_version},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        return GeneratedQuestionRubric(
+            question_id=question_id,
+            required_concepts=[
+                GeneratedConcept(concept_id=concept_id, description=description, required=True)
+                for concept_id, description in role_parts
+            ],
+            completion_rule="ALL_REQUIRED_CONCEPTS",
+            cache_key=hashlib.sha256(cache_source.encode("utf-8")).hexdigest(),
+            prompt_version=prompt_version,
+        )
     answer_parts = [
         part.strip()
         for part in answer_spec.canonical_answer.split(";")
@@ -834,7 +865,7 @@ def focused_unresolved_prompt(
         f"{missing_component.concept_id} {missing_component.description}"
     ).casefold()
     if any(term in component_kind for term in ("explanation", "explain", "reason", "why")):
-        return "You have given the answer. Now explain why it is true in this situation."
+        return "What mathematical reason shows that this choice works for every starting value?"
     if any(term in component_kind for term in ("changing", "changes", "variable")):
         return "Which value can change from one example to another?"
     if any(term in component_kind for term in ("fixed", "increment", "constant")):
@@ -849,7 +880,7 @@ def focused_unresolved_prompt(
     if any(term in component_kind for term in ("expanded", "repeated", "adjacent")):
         return "What do the letters represent when the expression is expanded?"
     if any(term in component_kind for term in ("choice", "selection", "option")):
-        return "Which option do you choose?"
+        return "Which option represents every possible starting value?"
     return "State the remaining idea in your own words."
 
 
@@ -882,6 +913,8 @@ def prompt_type_for_message(message: str) -> GuidedPromptType:
         "check the last example"
     ):
         return "SOURCE_CORRECTION"
+    if "different starting value" in normalized or "same rule predict" in normalized:
+        return "DEFENCE"
     return "COMPONENT"
 
 
@@ -930,12 +963,6 @@ def teaching_steps_for(request: ClassificationRequest) -> list[TeachingStep]:
     fixed_prompt = "Which value stays fixed in this rule?"
     operation_prompt = "What operation does the sign tell us to use?"
     rule_prompt = "What general rule represents this situation?"
-    if all(term in question for term in ("changing", "fixed", "operation")):
-        return [
-            TeachingStep("CHANGING_VALUE", changing_prompt),
-            TeachingStep("FIXED_VALUE", fixed_prompt),
-            TeachingStep("OPERATION", operation_prompt),
-        ]
     if "general rule" in question and (
         "changing" in question or "changes" in question
     ):
@@ -943,6 +970,16 @@ def teaching_steps_for(request: ClassificationRequest) -> list[TeachingStep]:
             TeachingStep("GENERAL_RULE", rule_prompt),
             TeachingStep("CHANGING_VALUE", changing_prompt),
             TeachingStep("FIXED_VALUE", "What operation or amount stays fixed?"),
+        ]
+    if "general rule" in question:
+        return [
+            TeachingStep("GENERAL_RULE", rule_prompt), TeachingStep("DEFENCE", "Try a different starting value: what does the same rule predict?"),
+        ]
+    if all(term in question for term in ("changing", "fixed")):
+        return [
+            TeachingStep("CHANGING_VALUE", changing_prompt),
+            TeachingStep("FIXED_VALUE", fixed_prompt),
+            TeachingStep("OPERATION", operation_prompt),
         ]
     if any(
         phrase in question
@@ -1004,6 +1041,8 @@ def _component_for_step(
     rubric: GeneratedQuestionRubric,
     step_id: str,
 ) -> str | None:
+    if step_id == "DEFENCE":
+        return None
     terms = {
         "GENERAL_RULE": ("general", "rule", "expression"),
         "CHANGING_VALUE": ("changing", "changes", "variable", "starting"),
@@ -1118,6 +1157,7 @@ def deterministic_teaching_step_evaluation(
     request: ClassificationRequest,
     rubric: GeneratedQuestionRubric,
     objective: ActiveTeachingObjective,
+    rules: ClassifierRulesConfig,
 ) -> GuidedEvaluation | None:
     """Evaluate direct replies to the current algebra sub-question without an LLM."""
 
@@ -1148,6 +1188,50 @@ def deterministic_teaching_step_evaluation(
     steps = teaching_steps_for(request)
     step_index = next(index for index, item in enumerate(steps) if item.step_id == step.step_id)
     next_step = steps[step_index + 1] if step_index + 1 < len(steps) else None
+
+    # A learner can answer several roles in one sentence.  Preserve each
+    # demonstrated role, but do not accept an operation as if it were a value.
+    if step.step_id in {"CHANGING_VALUE", "FIXED_VALUE", "OPERATION"}:
+        changing_claimed = variable in normalized and any(
+            marker in normalized for marker in ("change", "changing", "varies", "variable")
+        )
+        fixed_claimed = number in normalized and any(
+            marker in normalized for marker in ("fixed", "stays", "constant", "same")
+        )
+        operation_called_value = (
+            any(token in normalized for token in ("+ is", "plus is", "the +", "the plus"))
+            and any(token in normalized for token in ("fixed value", "a value", "stays fixed"))
+        )
+        if changing_claimed and fixed_claimed and operation_called_value:
+            confirmed = set(objective.confirmed_concept_ids)
+            for role in ("CHANGING_VALUE", "FIXED_VALUE"):
+                component_id = _component_for_step(request, rubric, role)
+                if component_id is not None:
+                    confirmed.add(component_id)
+            operation_id = _component_for_step(request, rubric, "OPERATION")
+            missing = [item for item in rubric.required_concepts if item.required and item.concept_id not in confirmed]
+            next_objective = ActiveTeachingObjective(
+                objective_type="EXPLAIN_CONCEPT",
+                target_concept_ids=[item.concept_id for item in missing],
+                confirmed_concept_ids=sorted(confirmed),
+                missing_concept_ids=[item.concept_id for item in missing],
+            )
+            message = (
+                f"You correctly identified {variable} as changing and {number} as fixed. "
+                f"Is {operator} a value, or does it tell us what to do?"
+            )
+            return GuidedEvaluation(
+                student_state="PARTIAL",
+                newly_confirmed_concept_ids=sorted(confirmed - set(objective.confirmed_concept_ids)),
+                preserved_concept_ids=objective.confirmed_concept_ids,
+                contradicted_concept_ids=[operation_id] if operation_id is not None else [],
+                missing_concept_ids=next_objective.missing_concept_ids,
+                selected_error_code=None,
+                confidence=1.0,
+                next_objective=next_objective,
+                tutor_message=message,
+                tutor_message_voice=message,
+            )
 
     if operator == "+" and any(
         word in normalized for word in ("minus", "subtract", "subtraction")
@@ -1184,6 +1268,20 @@ def deterministic_teaching_step_evaluation(
             )
             return _controller_evaluation(request, "PARTIAL", objective, message, None, rubric)
         return None
+
+    if step.step_id == "DEFENCE":
+        examples = _numeric_expressions(request.student_input)
+        if examples:
+            return _controller_evaluation(
+                request,
+                "CORRECT",
+                objective,
+                "Good defence: you tested the rule with another starting value.",
+                None,
+                rubric,
+            )
+        message = rules.guided_learning.critical_thinking.single_case_defence_prompt
+        return _controller_evaluation(request, "PARTIAL", objective, message, None, rubric)
 
     if step.step_id == "CHANGING_VALUE":
         exact_aliases = {
@@ -1305,6 +1403,16 @@ def teaching_state_for(
         previous is not None
         and previous.question_id == (request.question_id or rubric.question_id)
     )
+    message_normalized = tutor_message.casefold()
+    affect_state: Literal["NORMAL", "DISTRESS", "FRUSTRATED", "GENTLE_RETURN"] = (
+        "DISTRESS"
+        if "you are not stupid" in message_normalized
+        else "FRUSTRATED"
+        if "feel frustrating" in message_normalized
+        else "GENTLE_RETURN"
+        if previous_matches_question and previous.affect_state == "DISTRESS"
+        else "NORMAL"
+    )
     return GuidedTeachingState(
         question_id=request.question_id or rubric.question_id,
         objective_component_ids=required_ids,
@@ -1329,16 +1437,71 @@ def teaching_state_for(
         answer_step_ids=answer_step_ids_for(request),
         completed_step_ids=completed_step_ids,
         current_step_index=current_step_index,
+        affect_state=affect_state,
+        last_reasoning_probe=(
+            tutor_message
+            if tutor_message.rstrip().endswith("?")
+            else (previous.last_reasoning_probe if previous_matches_question else None)
+        ),
     )
 
 
 def typed_choice_selection(request: ClassificationRequest) -> str | None:
-    """Return a typed choice ID for an explanation-choice question."""
+    """Return a choice ID from a short answer or an explained selection."""
 
     if request.question_type != "CHOICE_WITH_EXPLANATION":
         return None
     choice = normalized_choice_response(request.student_input)
-    return choice if len(choice) == 1 and choice.isalpha() else None
+    if len(choice) == 1 and choice.isalpha():
+        return choice
+    matches = re.findall(
+        r"(?:^\s*|\b(?:option|choose|chose)\s+)([a-d])\b",
+        request.student_input.casefold(),
+    )
+    return matches[0].upper() if len(set(matches)) == 1 else None
+
+
+def ambiguous_symbol_number_input(student_input: str) -> bool:
+    """Keep unclear spaced notation out of misconception tracking."""
+
+    normalized = student_input.casefold().strip()
+    if re.fullmatch(r"[a-z]\s+\d+", normalized) is None:
+        return False
+    return not any(symbol in normalized for symbol in ("+", "-", "×", "*", "/"))
+
+
+def wrong_choice_evaluation(
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+    rules: ClassifierRulesConfig,
+) -> GuidedEvaluation | None:
+    """Challenge a definite wrong option before asking for an explanation."""
+
+    if request.question_type != "CHOICE_WITH_EXPLANATION" or request.answer_spec is None:
+        return None
+    selected = typed_choice_selection(request)
+    if selected is None:
+        return None
+    accepted = {
+        normalized_choice_response(answer)
+        for answer in [request.answer_spec.canonical_answer, *request.answer_spec.accepted_answers]
+    }
+    if selected in accepted:
+        return None
+    message = rules.guided_learning.critical_thinking.wrong_choice_prompt
+    return GuidedEvaluation(
+        student_state="WRONG",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=objective.confirmed_concept_ids,
+        contradicted_concept_ids=["ANSWER_SELECTION"],
+        missing_concept_ids=objective.missing_concept_ids,
+        selected_error_code=None,
+        confidence=1.0,
+        next_objective=objective,
+        tutor_message=message,
+        tutor_message_voice=message,
+    )
 
 
 def guided_tutor_context_for(
@@ -1612,6 +1775,65 @@ def option_comparison_follow_up(
     )
 
 
+def affect_evaluation(
+    request: ClassificationRequest,
+    objective: ActiveTeachingObjective,
+    rules: ClassifierRulesConfig,
+) -> GuidedEvaluation | None:
+    """Put distress and frustration ahead of mathematical diagnosis."""
+
+    normalized = request.student_input.casefold()
+    policy = rules.guided_learning.critical_thinking
+    if any(phrase in normalized for phrase in policy.distress_phrases):
+        message = policy.distress_message
+        return GuidedEvaluation(
+            student_state="STUCK",
+            newly_confirmed_concept_ids=[],
+            preserved_concept_ids=objective.confirmed_concept_ids,
+            contradicted_concept_ids=[],
+            missing_concept_ids=objective.missing_concept_ids,
+            selected_error_code=None,
+            confidence=1.0,
+            next_objective=objective,
+            tutor_message=message,
+            tutor_message_voice=message,
+        )
+    prior_state = request.guided_teaching_state
+    if prior_state is not None and prior_state.affect_state == "DISTRESS":
+        prompt = active_teaching_step(request)
+        question = prompt.prompt if prompt is not None else "Which small part would you like to try first?"
+        message = f"We can take this gently. {question}"
+        return GuidedEvaluation(
+            student_state="PARTIAL",
+            newly_confirmed_concept_ids=[],
+            preserved_concept_ids=objective.confirmed_concept_ids,
+            contradicted_concept_ids=[],
+            missing_concept_ids=objective.missing_concept_ids,
+            selected_error_code=None,
+            confidence=1.0,
+            next_objective=objective,
+            tutor_message=message,
+            tutor_message_voice=message,
+        )
+    if any(phrase in normalized for phrase in policy.frustration_phrases):
+        prompt = active_teaching_step(request)
+        question = prompt.prompt if prompt is not None else "Which part changes from one example to another?"
+        message = f"{policy.frustration_acknowledgement} {question}"
+        return GuidedEvaluation(
+            student_state="STUCK",
+            newly_confirmed_concept_ids=[],
+            preserved_concept_ids=objective.confirmed_concept_ids,
+            contradicted_concept_ids=[],
+            missing_concept_ids=objective.missing_concept_ids,
+            selected_error_code=None,
+            confidence=1.0,
+            next_objective=objective,
+            tutor_message=message,
+            tutor_message_voice=message,
+        )
+    return None
+
+
 def classify_guided_learning_response(
     request: ClassificationRequest,
     rules: ClassifierRulesConfig,
@@ -1655,6 +1877,9 @@ def classify_guided_learning_response(
     )
     objective = objective_for_rubric(request.active_teaching_objective, rubric)
     objective = objective_with_persisted_choice_selection(request, rubric, objective)
+    affect = affect_evaluation(request, objective, rules)
+    if affect is not None:
+        return build_guided_tutor_response(request, rules, safety_check, rubric, affect, objective)
     copied_example = copied_example_correction(
         request.question,
         request.student_input,
@@ -1669,6 +1894,22 @@ def classify_guided_learning_response(
             copied_example,
             objective,
         )
+    if ambiguous_symbol_number_input(request.student_input):
+        ambiguity = GuidedEvaluation(
+            student_state="UNCLEAR",
+            newly_confirmed_concept_ids=[],
+            preserved_concept_ids=objective.confirmed_concept_ids,
+            contradicted_concept_ids=[],
+            missing_concept_ids=objective.missing_concept_ids,
+            selected_error_code=None,
+            confidence=1.0,
+            next_objective=objective,
+            tutor_message=rules.guided_learning.critical_thinking.ambiguity_message,
+            tutor_message_voice=rules.guided_learning.critical_thinking.ambiguity_message,
+        )
+        return build_guided_tutor_response(
+            request, rules, safety_check, rubric, ambiguity, objective
+        )
     corrected_source_follow_up = source_correction_follow_up(
         request,
         rubric,
@@ -1682,6 +1923,11 @@ def classify_guided_learning_response(
             rubric,
             corrected_source_follow_up,
             objective,
+        )
+    wrong_choice = wrong_choice_evaluation(request, rubric, objective, rules)
+    if wrong_choice is not None:
+        return build_guided_tutor_response(
+            request, rules, safety_check, rubric, wrong_choice, objective
         )
     choice_follow_up = option_comparison_follow_up(
         request.conversation_history,
@@ -1732,6 +1978,7 @@ def classify_guided_learning_response(
             request,
             rubric,
             objective,
+            rules,
         )
     )
     if controller_evaluation is not None:
@@ -3686,6 +3933,37 @@ def build_guided_tutor_response(
     objective: ActiveTeachingObjective | None,
 ) -> TutorResponse:
     state = evaluation.student_state
+    diagnostic_focus = (
+        "SOURCE_CORRECTION"
+        if prompt_type_for_message(evaluation.tutor_message) == "SOURCE_CORRECTION"
+        else "INPUT_AMBIGUITY"
+        if state == "UNCLEAR"
+        else "AFFECT"
+        if "you are not stupid" in evaluation.tutor_message.casefold()
+        else "UNSUPPORTED_GENERALISATION"
+        if prompt_type_for_message(evaluation.tutor_message) == "DEFENCE"
+        else "ACTIVE_OBJECTIVE"
+    )
+    pedagogy_archetype = (
+        "SOCRATIC_COUNTEREXAMPLE"
+        if state == "WRONG"
+        else "PROGRESSIVE_LOAD_REDUCTION"
+        if state == "STUCK"
+        else "HYPATIA_DEFENCE"
+        if prompt_type_for_message(evaluation.tutor_message) == "DEFENCE"
+        else "AFFIRM_THEN_ISOLATE"
+    )
+    logger.info(
+        "guided_turn_diagnostics",
+        extra={
+            "question_id": request.question_id,
+            "message_source": "controller" if evaluation.confidence == 1.0 else "openai",
+            "diagnostic_focus": diagnostic_focus,
+            "pedagogy_archetype": pedagogy_archetype,
+            "confirmed_concept_ids": objective.confirmed_concept_ids if objective is not None else [],
+            "missing_concept_ids": objective.missing_concept_ids if objective is not None else [],
+        },
+    )
     review_request = request.model_copy(
         update={
             "generated_question_rubric": rubric,
@@ -3780,7 +4058,13 @@ def build_guided_tutor_response(
             else "ASK_QUESTION"
         ),
         question_completed=state == "CORRECT",
-        answer_value_confirmed=state == "CORRECT",
+        answer_value_confirmed=(
+            state == "CORRECT"
+            or (
+                objective is not None
+                and "GENERAL_RULE" in objective.confirmed_concept_ids
+            )
+        ),
         reasoning_complete=state == "CORRECT",
         guided_student_state=state,
         selected_error_code=evaluation.selected_error_code,
@@ -3807,8 +4091,8 @@ def build_guided_tutor_response(
         rules,
     )
     message = write_instruction or (
-        "You have explained the idea clearly. Now write the rule on the canvas "
-        "so I can check the mathematical form."
+        "Use a different starting value to test whether your rule still works. "
+        "What does it predict?"
     )
     return guarded_response.model_copy(
         update={
@@ -3819,7 +4103,7 @@ def build_guided_tutor_response(
             "attempt_increment": 0,
             "recommended_conversation_action": "REQUEST_CLARIFICATION",
             "question_completed": False,
-            "answer_value_confirmed": False,
+            "answer_value_confirmed": True,
             "reasoning_complete": False,
             "guided_student_state": "PARTIAL",
             "active_teaching_objective": request.active_teaching_objective,
@@ -5280,7 +5564,7 @@ def contains_answer_reveal(message: str, correct_answer: str, rules: ClassifierR
     correct_value: float = float(correct_numbers[0])
     explicit_numeric_reveal = re.search(
         r"\b(?:the\s+)?(?:final\s+)?answer\s+(?:is|equals)\b|"
-        r"\btherefore\b|\bso\s+the\s+answer\b",
+        r"\btherefore\b|\bso\s+the\s+answer\b|\b(?:gives|equals)\s+-?\d",
         normalized_message,
     )
     if explicit_numeric_reveal is None:

@@ -188,6 +188,18 @@ class CanvasRescueWordingConfig(StrictSchema):
     tutor_solved_return_focus_text: str
 
 
+class CriticalThinkingConfig(StrictSchema):
+    """Configuration for controller-owned critical-thinking moves."""
+
+    distress_phrases: list[str]
+    frustration_phrases: list[str]
+    distress_message: str
+    frustration_acknowledgement: str
+    ambiguity_message: str
+    wrong_choice_prompt: str
+    single_case_defence_prompt: str
+
+
 class GuidedLearningConfig(StrictSchema):
     minimum_voice_transcript_confidence: float = Field(ge=0.0, le=1.0)
     minimum_ocr_confidence: float = Field(ge=0.0, le=1.0)
@@ -222,6 +234,7 @@ class GuidedLearningConfig(StrictSchema):
     multi_component_question_types: list[QuestionType]
     llm_state_mapping: dict[GuidedStudentState, GuidedStateMappingConfig]
     fallback_canvas_labels: FallbackCanvasLabelsConfig
+    critical_thinking: CriticalThinkingConfig
 
     @model_validator(mode="after")
     def require_state_confidence_thresholds(self) -> "GuidedLearningConfig":
