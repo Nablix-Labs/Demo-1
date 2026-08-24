@@ -24,10 +24,18 @@ The guide calls this "critical parent/child behaviour" and devotes §9.2 plus a
 whole example file to it. The workbook does carry the mapping tables —
 `Misconception_Hints (misconception_id, hint_id, sequence_order)` and
 `Misconception_VisualCues (misconception_id, visual_cue_id, sequence_order)` —
-so this is implementable today. Flagging it only because it is the one relation
-the portal currently does **not** model (it renders a flat topic-level hint
-list), and it is the relation most likely to be dropped when a backend developer
-reads `Hints` as a standalone table.
+so this is implementable today. Flagging it because it is the relation most
+likely to be dropped when a backend developer reads `Hints` as a standalone
+table.
+
+**Correction, 24 Aug 2026:** this section previously said the portal "does not
+model" the relation and "renders a flat topic-level hint list". That was true
+when it was written on 10 Aug and stopped being true when the Hints page moved
+onto the v3 contract. The page now renders `hierarchy.misconception_groups`,
+opens on `default_selection`, filters children to the selected parent, shows
+`parent_context.sequence_order`, and warns on `shared_by_misconception_count`
+before an edit. The ask below is unchanged and is purely about what the **API**
+must return — the UI is ready for it.
 
 **Required:** `/authoring/topics/{id}/support-assets` must return hints grouped
 under their misconception, ordered by `Misconception_Hints.sequence_order`, and

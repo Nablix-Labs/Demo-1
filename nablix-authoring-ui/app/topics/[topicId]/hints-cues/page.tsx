@@ -224,7 +224,14 @@ export default function HintsCuesPage() {
                 )}
 
                 {detail && (
-                  <div className="grid gap-x-6 sm:grid-cols-2">
+                  // auto-fit + minmax, not sm:grid-cols-2: this panel is the
+                  // third column of a fixed [240px_1fr_320px] shell, so it is
+                  // ~180px wide at a 1440px viewport. `sm:` only asks whether
+                  // the WINDOW is past 640px — it always was — so it split 180px
+                  // into two 57px columns and the labels inside had nowhere to
+                  // go. auto-fit measures the actual box: one column until
+                  // there is room for two.
+                  <div className="grid gap-x-6 [grid-template-columns:repeat(auto-fit,minmax(200px,1fr))]">
                     <Meta
                       label="Micro-skills"
                       value={detail.impact_context.related_micro_skills.map((s) => s.skill_name).join(', ') || '—'}
