@@ -1232,6 +1232,41 @@ def deterministic_teaching_step_evaluation(
                 tutor_message=message,
                 tutor_message_voice=message,
             )
+        if changing_claimed and fixed_claimed:
+            confirmed = set(objective.confirmed_concept_ids)
+            for role in ("CHANGING_VALUE", "FIXED_VALUE"):
+                component_id = _component_for_step(request, rubric, role)
+                if component_id is not None:
+                    confirmed.add(component_id)
+            missing = [
+                item
+                for item in rubric.required_concepts
+                if item.required and item.concept_id not in confirmed
+            ]
+            next_objective = ActiveTeachingObjective(
+                objective_type="EXPLAIN_CONCEPT",
+                target_concept_ids=[item.concept_id for item in missing],
+                confirmed_concept_ids=sorted(confirmed),
+                missing_concept_ids=[item.concept_id for item in missing],
+            )
+            message = (
+                f"You correctly identified {variable} as changing and {number} as fixed. "
+                f"What operation does {operator} tell us to use?"
+            )
+            return GuidedEvaluation(
+                student_state="PARTIAL",
+                newly_confirmed_concept_ids=sorted(
+                    confirmed - set(objective.confirmed_concept_ids)
+                ),
+                preserved_concept_ids=objective.confirmed_concept_ids,
+                contradicted_concept_ids=[],
+                missing_concept_ids=next_objective.missing_concept_ids,
+                selected_error_code=None,
+                confidence=1.0,
+                next_objective=next_objective,
+                tutor_message=message,
+                tutor_message_voice=message,
+            )
 
     if operator == "+" and any(
         word in normalized for word in ("minus", "subtract", "subtraction")
@@ -1468,6 +1503,36 @@ def ambiguous_symbol_number_input(student_input: str) -> bool:
     if re.fullmatch(r"[a-z]\s+\d+", normalized) is None:
         return False
     return not any(symbol in normalized for symbol in ("+", "-", "×", "*", "/"))
+
+
+def request_with_reliable_canvas_evidence(
+    request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
+) -> ClassificationRequest:
+    """Make reliable current-turn OCR available to the guided evidence controller."""
+
+    reliable_text = [
+        region.text.strip()
+        for region in request.canvas_regions
+        if region.confidence >= rules.guided_learning.minimum_ocr_confidence
+        and region.text.strip()
+    ]
+    if not reliable_text:
+        return request
+    evidence_text = " ".join(reliable_text)
+    normalized_input = normalize_semantic_answer(request.student_input)
+    normalized_evidence = normalize_semantic_answer(evidence_text)
+    if normalized_evidence in normalized_input:
+        return request
+    merged_input = " ".join(part for part in (request.student_input.strip(), evidence_text) if part)
+    logger.info(
+        "guided_canvas_evidence_merged",
+        extra={
+            "question_id": request.question_id,
+            "region_count": len(reliable_text),
+        },
+    )
+    return request.model_copy(update={"student_input": merged_input})
 
 
 def wrong_choice_evaluation(
@@ -1845,6 +1910,7 @@ def classify_guided_learning_response(
             "openai_ai_engine",
             "Guided Learning requires question_id and answer_spec.",
         )
+    request = request_with_reliable_canvas_evidence(request, rules)
     context = request.phase_2_prompt_context
     if context is None:
         raise AdapterError(

@@ -127,6 +127,63 @@ def test_topic1_spaced_symbol_number_is_an_ambiguity_not_a_misconception() -> No
     assert not classifier.ambiguous_symbol_number_input("n + 5")
 
 
+def test_topic1_same_turn_reliable_ocr_confirms_changing_and_fixed_roles() -> None:
+    request = _topic1_request("7 stays fixed").model_copy(
+        update={
+            "canvas_regions": [
+                CanvasTextRegion(
+                    step_id="step-1",
+                    text="M Changes",
+                    x=0.2,
+                    y=0.4,
+                    w=0.2,
+                    h=0.1,
+                    confidence=0.96,
+                )
+            ]
+        }
+    )
+    rules = load_classifier_rules()
+    evidence_request = classifier.request_with_reliable_canvas_evidence(request, rules)
+    rubric = classifier.rubric_from_authored_answer_parts(
+        "Q-T01-002", evidence_request.question_type, evidence_request.answer_spec, "test"
+    )
+    assert rubric is not None
+    evaluation = classifier.deterministic_teaching_step_evaluation(
+        evidence_request, rubric, classifier.initial_guided_objective(rubric), rules
+    )
+
+    assert "m changes" in evidence_request.student_input.casefold()
+    assert evaluation is not None
+    assert evaluation.student_state == "PARTIAL"
+    assert set(evaluation.newly_confirmed_concept_ids) == {"CHANGING_VALUE", "FIXED_VALUE"}
+    assert evaluation.tutor_message.endswith("What operation does + tell us to use?")
+
+
+def test_topic1_low_confidence_ocr_is_not_confirmed_as_student_evidence() -> None:
+    request = _topic1_request("7 stays fixed").model_copy(
+        update={
+            "canvas_regions": [
+                CanvasTextRegion(
+                    step_id="step-1",
+                    text="M Changes",
+                    x=0.2,
+                    y=0.4,
+                    w=0.2,
+                    h=0.1,
+                    confidence=0.4,
+                )
+            ]
+        }
+    )
+
+    evidence_request = classifier.request_with_reliable_canvas_evidence(
+        request, load_classifier_rules()
+    )
+
+    assert evidence_request.student_input == "7 stays fixed"
+
+
 def test_guided_canvas_evidence_is_typed_and_keeps_prior_turn_context() -> None:
     evidence = GuidedCanvasEvidence(
         snapshot_reference="SNAP-1",
