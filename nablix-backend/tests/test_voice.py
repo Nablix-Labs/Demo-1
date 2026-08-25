@@ -228,9 +228,10 @@ def test_voice_transcript_routes_through_interaction_flow() -> None:
     body = response.json()
     assert body["session_id"] == session_id
     assert body["student_id"] == "ST011"
-    # The authored support hint is delivered alongside the tutor reply, not in
-    # place of it (see "fix: preserve guided tutor reply alongside support").
-    assert body["support_message"] == "Undo the addition first."
+    # The separate hint is not replayed in chat. This response delivers its
+    # own visual cue, which the frontend can render once from the turn field.
+    assert body["support_message"] is None
+    assert body["support_served_this_turn"] == "VISUAL_CUE"
     assert body["message"]
     assert body["message"] != "Undo the addition first."
     assert body["message_voice"] == body["message"]

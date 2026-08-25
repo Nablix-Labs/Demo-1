@@ -2006,7 +2006,6 @@ def _response_from(
         message_voice = ""
         visual_cue = None
         scaffold_steps = []
-    visible_visual_cue = visual_cue or session.active_visual_cue
     return InteractionResponse(
         session_id=session_id,
         student_id=student_id,
@@ -2034,11 +2033,13 @@ def _response_from(
         ui_state=session.ui_state,
         message=message,
         message_voice=message_voice,
-        support_message=None if phase3_silent else _active_support_message(session),
+        # Session support remains available to an explicit Help request, but an
+        # ordinary answer turn must not replay it as newly delivered support.
+        support_message=None,
         show_canvas=session.show_canvas,
         show_hint_button=False if phase3_silent else session.show_hint_button,
-        show_visual_cue=False if phase3_silent else visible_visual_cue is not None,
-        visual_cue=None if phase3_silent else visible_visual_cue,
+        show_visual_cue=False if phase3_silent else visual_cue is not None,
+        visual_cue=None if phase3_silent else visual_cue,
         show_scaffold_panel=False if phase3_silent else session.show_scaffold_panel,
         scaffold_id=session.scaffold_id,
         current_scaffold_step_id=session.current_scaffold_step_id,
@@ -2200,6 +2201,21 @@ def _active_support_message(session: SessionRecord) -> str | None:
     if steps:
         return steps[0]
     return _schema_hint(event)
+
+
+def _new_visual_cue(
+    candidate: VisualCue | None,
+    active: VisualCue | None,
+) -> VisualCue | None:
+    """Return a cue only when this turn introduces a different cue."""
+
+    if candidate is None:
+        return None
+    if active is None:
+        return candidate
+    if candidate.cue_id is not None and candidate.cue_id == active.cue_id:
+        return None
+    return candidate
 
 
 def _is_explicit_help_request(request: InteractionRequest) -> bool:
@@ -3452,6 +3468,10 @@ async def _process_interaction(
     visual_cue = schema_support_visual_cue or _schema_visual_cue(schema_content_response) or (
         tutor.visual_cue if tutor.visual_cue.show else None
     )
+    delivered_visual_cue = _new_visual_cue(
+        visual_cue,
+        turn_session.active_visual_cue,
+    )
     schema_steps = schema_support_steps or _schema_support_steps(schema_content_response)
     for scaffold_prompt in schema_steps:
         _validate_scaffold_prompt(scaffold_prompt, session.correct_answer, rules)
@@ -3867,7 +3887,7 @@ async def _process_interaction(
         session=updated_session,
         message=tutor_message,
         message_voice=tutor_message_voice,
-        visual_cue=visual_cue,
+        visual_cue=delivered_visual_cue,
         scaffold_steps=scaffold_steps,
         session_summary=None,
         conversation_action=conversation_action,
@@ -3878,12 +3898,12 @@ async def _process_interaction(
     )
     guided_rescue = _guided_rescue(schema_content_response)
     support_served: SupportUsed | None = (
-        schema_support_level or response.active_support_level
-        if schema_content_response is not None
-        and schema_content_response.phase_payload is not None
-        and schema_content_response.phase_payload.support_to_serve is not None
-        else guided_rescue.rescue_type
+        guided_rescue.rescue_type
         if guided_rescue is not None
+        else "VISUAL_CUE"
+        if delivered_visual_cue is not None
+        else schema_support_level
+        if schema_support_level in {"HINT", "SCAFFOLD"}
         else None
     )
     response = response.model_copy(
@@ -3929,6 +3949,11 @@ async def _process_interaction(
                 else None
             ),
             "support_served_this_turn": support_served,
+            "support_message": (
+                schema_support_message
+                if support_served == "HINT"
+                else None
+            ),
             "wrong_attempt_count": updated_session.wrong_attempt_count,
             "intervention_triggered": (
                 _is_support_failure(tutor)
