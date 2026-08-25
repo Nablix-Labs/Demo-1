@@ -122,6 +122,35 @@ def test_topic1_choice_is_detected_inside_an_explanation() -> None:
     assert "different starting number" in evaluation.tutor_message
 
 
+def test_topic1_numeric_option_inside_an_explanation_is_a_wrong_selection() -> None:
+    request = ClassificationRequest(
+        question_id="Q-T01-004",
+        question_type="CHOICE_WITH_EXPLANATION",
+        question="Which is the general rule? A: 12 + 4. B: n + 4.",
+        correct_answer="B",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-004", canonical_answer="B", accepted_answers=["B"],
+            verification_method="EXACT_CHOICE_MATCH", explanation_required=True,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        student_input="I think 12 + 4 is better because it gives an actual answer.",
+        current_phase="GUIDED_PRACTICE", input_source="TEXT", transcript_confidence=None,
+        attempt_count=0, current_hint_level=None,
+    )
+    rubric = classifier.rubric_from_authored_answer_parts(
+        "Q-T01-004", request.question_type, request.answer_spec, "test"
+    )
+    assert rubric is not None
+    evaluation = classifier.wrong_choice_evaluation(
+        request, rubric, classifier.initial_guided_objective(rubric), load_classifier_rules()
+    )
+
+    assert classifier.typed_choice_selection(request) == "A"
+    assert evaluation is not None
+    assert evaluation.student_state == "WRONG"
+    assert "Good" not in evaluation.tutor_message
+
+
 def test_topic1_spaced_symbol_number_is_an_ambiguity_not_a_misconception() -> None:
     assert classifier.ambiguous_symbol_number_input("n 5")
     assert not classifier.ambiguous_symbol_number_input("n + 5")

@@ -1458,7 +1458,20 @@ def typed_choice_selection(request: ClassificationRequest) -> str | None:
         r"(?:^\s*|\b(?:option|choose|chose)\s+)([a-d])\b",
         request.student_input.casefold(),
     )
-    return matches[0].upper() if len(set(matches)) == 1 else None
+    if len(set(matches)) == 1:
+        return matches[0].upper()
+    option_expressions = re.findall(
+        r"\b([A-D])\s*[\):.]\s*([a-z0-9]+\s*[+\-×x*/]\s*[a-z0-9]+)",
+        request.question,
+        flags=re.IGNORECASE,
+    )
+    normalized_input = re.sub(r"\s+", "", request.student_input.casefold())
+    selected_by_expression = {
+        option_id.upper()
+        for option_id, expression in option_expressions
+        if re.sub(r"\s+", "", expression.casefold()) in normalized_input
+    }
+    return next(iter(selected_by_expression)) if len(selected_by_expression) == 1 else None
 
 
 def ambiguous_symbol_number_input(student_input: str) -> bool:
