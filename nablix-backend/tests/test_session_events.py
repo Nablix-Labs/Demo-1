@@ -1252,10 +1252,10 @@ def test_session_start_restores_guided_support_presentation(
     assert body["hint_count"] == 1
 
 
-def test_active_support_survives_a_blank_canvas_turn(
+def test_active_support_is_not_replayed_on_a_blank_canvas_turn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Support is served from Student Model state, never from canvas evidence."""
+    """Persisted support remains replayable, but is not auto-delivered again."""
 
     async def fake_post_json(
         adapter_name: str,
@@ -1299,9 +1299,10 @@ def test_active_support_survives_a_blank_canvas_turn(
 
     assert blank_canvas_turn.status_code == 200, blank_canvas_turn.text
     body = blank_canvas_turn.json()
-    assert body["support_message"] == "Undo the addition first."
-    assert body["show_visual_cue"] is True
-    assert body["visual_cue"]["cue_id"] == "VC-T02-COEFFICIENT-COUNT"
+    assert body["support_message"] is None
+    assert body["support_served_this_turn"] is None
+    assert body["show_visual_cue"] is False
+    assert body["visual_cue"] is None
     assert body["canvas_draw"] == []
 
 
@@ -1794,7 +1795,8 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
         }
     assert guided_incorrect.json()["message"] != "Undo the addition first."
     assert guided_incorrect.json()["message"]
-    assert guided_incorrect.json()["support_message"] == "Undo the addition first."
+    assert guided_incorrect.json()["support_message"] is None
+    assert guided_incorrect.json()["support_served_this_turn"] == "VISUAL_CUE"
 
     for wrong_number in range(2, 5):
         guided_incorrect = client.post(
