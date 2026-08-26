@@ -1,5 +1,4 @@
 from functools import lru_cache
-from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -15,6 +14,14 @@ class Settings(BaseSettings):
     database_url: str = Field(default="", validation_alias="DATABASE_URL")
     student_model_topic_ids: dict[str, int] = Field(default_factory=dict)
     student_model_topic_codes: dict[str, str] = Field(default_factory=dict)
+    # Student Model's Phase 4 orchestration endpoints (/topic/event-history,
+    # /phase4-review) are require_role("internal_service") with no student
+    # branch, so the student's own bearer 403s there. Nablix signs its own with
+    # the shared secret; same claims mathtutor-student's create_access_token
+    # emits. Only these two calls use it -- the work-artifact PDF read stays on
+    # the student's token, because ownership there is per-student.
+    student_model_jwt_secret: str = ""
+    student_model_jwt_algorithm: str = "HS256"
     cors_allowed_origins: list[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
@@ -51,9 +58,7 @@ class Settings(BaseSettings):
     # Wrong-4 and repeated-STUCK events. The legacy event path remains active.
     student_model_atomic_guided_events_enabled: bool = False
 
-    #Vision OCR (used when use_mock_vision is False)
-    ocr_provider: Literal["openai", "mathpix"] = "openai"
-    openai_vision_model: str = "gpt-5.4-mini"
+    #Vision OCR (Mathpix only; used when use_mock_vision is False)
     mathpix_app_id: str = ""
     mathpix_app_key: str = ""
     use_openai_ai_engine: bool = False
@@ -69,6 +74,11 @@ class Settings(BaseSettings):
     inactivity_cooldown_ms: int = Field(default=30_000, ge=1)
     inactivity_max_nudges_per_tutor_turn: int = Field(default=2, ge=1)
     inactivity_generated_nudge_rate_limit: int = Field(default=4, ge=1)
+
+    # Server-authoritative continuity policy for SESSION_RESUMED. A client
+    # cannot honestly know this number, so it is never asked to supply one.
+    # ponytail: placeholder pending Saravanan confirming the real threshold.
+    resume_continuity_threshold_days: int = Field(default=7, ge=1)
 
     #Validation
     max_text_input_length: int = 500

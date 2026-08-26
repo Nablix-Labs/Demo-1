@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import perf_counter
 
 from fastapi import HTTPException
@@ -29,6 +29,11 @@ class CanvasEvidence:
     ocr: VisionOCRResult
     spatial_tokens: list[SpatialMathToken]
     ocr_latency_ms: float
+    # Ordered per-page data, page 1 first. Single-page submissions carry one
+    # entry each; both are consumed when building the work artifact (PDF +
+    # per-page OCR) for Phase 4 review.
+    page_ocr_texts: list[str] = field(default_factory=list)
+    page_data_urls: list[str] = field(default_factory=list)
 
 
 def validate_canvas_payload(
@@ -93,18 +98,35 @@ def _with_confirmed_mathml_regions(ocr: VisionOCRResult) -> VisionOCRResult:
     return ocr.model_copy(update={"detected_regions": regions})
 
 
+def _word_regions_within(
+    word_regions: list[OCRTextRegion],
+    step_region: OCRTextRegion,
+) -> list[OCRTextRegion]:
+    """Return the word boxes whose vertical centre sits inside this step line."""
+
+    inside = [
+        word
+        for word in word_regions
+        if step_region.y <= word.y + word.h / 2 <= step_region.y + step_region.h
+    ]
+    return sorted(inside, key=lambda word: word.x)
+
+
 async def collect_canvas_evidence(
     snapshot_data_url: str,
     strokes: list[CanvasStroke],
     submission_id: str,
     vision: VisionOCRAdapter,
+    additional_pages: list[str] | None = None,
 ) -> CanvasEvidence:
     settings = get_settings()
-    if len(snapshot_data_url) > settings.max_snapshot_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Canvas snapshot exceeds the {settings.max_snapshot_bytes} byte limit.",
-        )
+    pages = [snapshot_data_url, *(additional_pages or [])]
+    for page in pages:
+        if len(page) > settings.max_snapshot_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Canvas snapshot exceeds the {settings.max_snapshot_bytes} byte limit.",
+            )
 
     snapshot_reference = build_reference(submission_id)
     store_snapshot(snapshot_reference, snapshot_data_url)
@@ -115,6 +137,33 @@ async def collect_canvas_evidence(
     )
     ocr = _with_confirmed_mathml_regions(ocr)
     strokes_by_step = associate_strokes_with_steps(strokes, ocr.detected_regions)
+    if strokes:
+        # A region with no associated student stroke wasn't written by the
+        # student — most often it's the tutor's own layer, captured into the
+        # same snapshot. Drop it before it can be graded as an answer.
+        # ponytail: filters region-derived text only. `latex` and
+        # `mathml_blocks` stay whole-image; they don't reach `written_work`.
+        # Filter them too if a tutor element ever shows up in a
+        # MathML-grounded correction.
+        kept_regions = [
+            region
+            for region in ocr.detected_regions
+            if strokes_by_step.get(region.step_id or "", [])
+        ]
+        if len(kept_regions) != len(ocr.detected_regions):
+            detected_steps = [region.text for region in kept_regions]
+            ocr = ocr.model_copy(
+                update={
+                    "detected_regions": kept_regions,
+                    "detected_steps": detected_steps,
+                    # No stale fallback: when every region is dropped, the
+                    # text fields must go empty too, not silently revert to
+                    # the unfiltered (tutor-ink-included) originals.
+                    "raw_ocr_text": "\n".join(detected_steps),
+                    "detected_equation": detected_steps[0] if detected_steps else "",
+                    "final_answer": detected_steps[-1] if detected_steps else None,
+                }
+            )
     spatial_tokens: list[SpatialMathToken] = []
     for region in ocr.detected_regions:
         if region.step_id is None or region.mathml is None:
@@ -126,12 +175,27 @@ async def collect_canvas_evidence(
                 region.text,
                 strokes_by_step.get(region.step_id, []),
                 region,
+                _word_regions_within(ocr.word_regions, region),
             )
         )
+    # Pages 2..N: OCR each in order and keep the text only. Structural analysis
+    # (regions, spatial tokens) stays page-1-only because strokes belong to the
+    # live canvas. Never stitch pages into one tall image before OCR.
+    page_ocr_texts = [ocr.raw_ocr_text]
+    for page in pages[1:]:
+        page_ocr_texts.append((await vision.recognize(page)).raw_ocr_text)
+
+    if len(pages) > 1:
+        ocr = ocr.model_copy(
+            update={"raw_ocr_text": "\n".join(page_ocr_texts)}
+        )
+
     return CanvasEvidence(
         submission_id=submission_id,
         snapshot_reference=snapshot_reference,
         ocr=ocr,
         spatial_tokens=spatial_tokens,
         ocr_latency_ms=(perf_counter() - started) * 1000,
+        page_ocr_texts=page_ocr_texts,
+        page_data_urls=pages,
     )

@@ -23,7 +23,11 @@ from app.ai_engine.classifier import (
     resolve_guided_rubric,
 )
 
-from app.ai_engine.classifier_config import ClassifierRulesConfig, load_classifier_rules
+from app.ai_engine.classifier_config import (
+    CanvasRescueWordingConfig,
+    ClassifierRulesConfig,
+    load_classifier_rules,
+)
 from app.ai_engine.schemas import (
     ActiveScaffoldState,
     ExplainAgainRequest,
@@ -57,8 +61,10 @@ from app.models.guided_learning import (
     PrerequisiteRepair,
     ScaffoldEvaluationContext,
     WrongEscalationCode,
+    TutorCanvasAction,
 )
 
+from app.models.question_anchor import QuestionTextAnchor
 from app.models.interaction import (
     InteractionRequest,
     InteractionResponse,
@@ -85,7 +91,14 @@ from app.models.student_model_session import (
     SupportUsed,
 )
 from app.services.guided_question_opening import guided_question_opening
-from app.services.canvas_annotations import plan_canvas_draw
+from app.services.canvas_annotations import (
+    plan_canvas_draw,
+    plan_rescue_canvas_actions,
+    plan_tutor_canvas_actions,
+    plan_write_request_tutor_draw,
+    rescue_tutor_wording,
+)
+from app.services.question_anchors import plan_canvas_action_anchors, plan_question_anchors
 from app.services.canvas_evidence import (
     CanvasEvidence,
     canvas_events_are_stale,
@@ -167,7 +180,7 @@ _ADDITION_CHANGE_PATTERN: Final[re.Pattern[str]] = re.compile(
 
 
 _EMPTY_RAG = RAGResult(documents=[], retrieval_confidence=0.0)
-_LOW_CONFIDENCE_MESSAGE = "I’m not sure I heard that clearly. Could you say it again?"
+_UNRELIABLE_EVIDENCE_MESSAGE = "Please write out that step so I can check it."
 _STALE_TURN_MESSAGE = (
     "The conversation has moved forward. Please use the latest tutor response."
 )
@@ -373,11 +386,25 @@ def _guided_rescue_message(rescue: GuidedRescue) -> str | None:
 def _tutor_with_guided_rescue(
     tutor: TutorResult,
     event: StudentModelSessionEventResponse,
+    canvas_rescue_presentation_enabled: bool,
+    canonical_answer: str,
+    rescue_wording: CanvasRescueWordingConfig,
 ) -> TutorResult:
     rescue = _guided_rescue(event)
     if rescue is None:
         return tutor
-    message = _guided_rescue_message(rescue)
+    rescue_context = rescue.tutor_engine_context
+    if canvas_rescue_presentation_enabled and rescue_context is None:
+        logger.warning(
+            "guided_rescue_context_missing",
+            extra={"request_id": event.request_id, "rescue_type": rescue.rescue_type},
+        )
+        return tutor
+    message = (
+        rescue_tutor_wording(rescue_context, canonical_answer, rescue_wording)
+        if canvas_rescue_presentation_enabled and rescue_context is not None
+        else _guided_rescue_message(rescue)
+    )
     if message is None:
         logger.warning(
             "guided_rescue_content_missing",
@@ -388,6 +415,13 @@ def _tutor_with_guided_rescue(
         )
         return tutor
     parallel = rescue.rescue_type == "PARALLEL_EXAMPLE"
+    approved_reveal = (
+        rescue_context is not None
+        and rescue_context.rescue_type == "TUTOR_SOLVED"
+        and rescue_context.active_support == "TUTOR_SOLVED"
+        and rescue_context.is_final_step
+        and rescue_context.approved_answer_reveal
+    )
     return tutor.model_copy(
         update={
             "response_strategy": (
@@ -396,11 +430,19 @@ def _tutor_with_guided_rescue(
             "tutor_message": message,
             "tutor_message_voice": message,
             "voice_optimised": True,
-            "answer_reveal_allowed": not parallel,
+            "answer_reveal_allowed": (
+                approved_reveal
+                if canvas_rescue_presentation_enabled
+                else rescue.rescue_type == "TUTOR_SOLVED"
+            ),
             "recommended_conversation_action": (
                 "ASK_QUESTION" if parallel else "WAIT_FOR_STUDENT"
             ),
-            "question_completed": not parallel,
+            "question_completed": (
+                False
+                if canvas_rescue_presentation_enabled and rescue_context is not None
+                else not parallel
+            ),
         }
     )
 
@@ -465,6 +507,8 @@ async def process_answer_with_session_event(
         )
 
     _, student, tutor = await run_tutor_pipeline(context)
+    if tutor.requires_written_math_evidence:
+        return student, tutor, None, None, session
     if (
         context.has_canvas_evidence
         and tutor.mistake_classification is not None
@@ -665,7 +709,13 @@ async def process_answer_with_session_event(
         )
 
     content_response = response
-    tutor = _tutor_with_guided_rescue(tutor, content_response)
+    tutor = _tutor_with_guided_rescue(
+        tutor,
+        content_response,
+        rules.guided_learning.canvas_rescue_presentation_enabled,
+        context.correct_answer,
+        rules.guided_learning.canvas_rescue_wording,
+    )
     support_to_serve = (
         response.phase_payload.support_to_serve
         if response.phase_payload is not None
@@ -848,6 +898,15 @@ def _normalize_voice_transcript(transcript: str) -> str:
     return " ".join(normalized.split())
 
 
+def _legacy_ocr_needs_writing(
+    ocr: VisionOCRResult,
+    minimum_ocr_confidence: float,
+) -> bool:
+    """Reject uncertain canvas evidence before the legacy tutor records a turn."""
+
+    return ocr.needs_clarification or ocr.confidence < minimum_ocr_confidence
+
+
 _EXPLICIT_ASSIGNMENT = re.compile(
     r"\b([A-Za-z])\s*=\s*(-?(?:\d+(?:\.\d*)?|\.\d+))\b"
 )
@@ -959,6 +1018,20 @@ def _active_answer_spec(session: SessionRecord) -> AnswerSpec | None:
     if session.student_model_event is None:
         return None
     return _schema_question(session).tutor_view.answer_spec
+
+
+def _question_anchors(session: SessionRecord) -> list[QuestionTextAnchor]:
+    """Anchor the active teaching step into the question the learner is reading."""
+
+    if session.current_phase != "GUIDED_PRACTICE":
+        return []
+    teaching_state = session.guided_teaching_state
+    return plan_question_anchors(
+        session.question_id,
+        session.current_question,
+        _active_answer_spec(session),
+        teaching_state.active_step_id if teaching_state is not None else None,
+    )
 
 
 def _phase_2_prompt_context(
@@ -1764,6 +1837,67 @@ def _canvas_events_for_context(
     return memory.canvas_events if memory is not None else []
 
 
+def _canvas_memory_update_with_tutor_actions(
+    request: InteractionRequest,
+    session: SessionRecord,
+    actions: list[TutorCanvasAction],
+) -> dict[str, object]:
+    """Append accepted tutor actions to the question-scoped ordered memory."""
+
+    if session.question_id is None or not actions:
+        return _canvas_memory_update_from_request(request, session)
+    previous_events = _canvas_events_for_context(request, session)
+    existing_action_ids = {
+        event.source_id
+        for event in previous_events
+        if event.source_id is not None and event.active_state == "ACTIVE"
+    }
+    appended_events = [
+        CanvasEvent(
+            order_index=len(previous_events) + offset,
+            turn_id=request.turn_id,
+            question_id=session.question_id,
+            actor=(
+                "SYSTEM_SUPPORT"
+                if action.type in {"SHOW_CUE", "OPEN_SCAFFOLD_STEP", "SHOW_PARALLEL"}
+                else "TUTOR"
+            ),
+            action_type=(
+                "SCAFFOLD_STEP"
+                if action.type == "OPEN_SCAFFOLD_STEP"
+                else action.type
+            ),
+            content=action.text,
+            math_text=action.text if action.type == "INSERT_MATH" else None,
+            target_object_id=action.target_object_id,
+            bbox=None,
+            semantic_tag=action.confirmed_component_id,
+            source_id=action.action_id,
+            active_state="ACTIVE",
+        )
+        for offset, action in enumerate(
+            action for action in actions if action.action_id not in existing_action_ids
+        )
+    ]
+    if not appended_events:
+        return _canvas_memory_update_from_request(request, session)
+    memory = session.canvas_memory_by_question.get(session.question_id)
+    strokes = (
+        request.canvas_state.strokes
+        if request.canvas_state is not None
+        else memory.strokes
+        if memory is not None
+        else []
+    )
+    return build_canvas_memory_update(
+        session,
+        session.question_id,
+        request.turn_id,
+        strokes,
+        [*previous_events, *appended_events],
+    )
+
+
 def _guided_support_levels(session: SessionRecord) -> tuple[SupportUsed, SupportUsed]:
     stored_event = session.student_model_event
     guided = (
@@ -1872,7 +2006,6 @@ def _response_from(
         message_voice = ""
         visual_cue = None
         scaffold_steps = []
-    visible_visual_cue = visual_cue or session.active_visual_cue
     return InteractionResponse(
         session_id=session_id,
         student_id=student_id,
@@ -1900,11 +2033,13 @@ def _response_from(
         ui_state=session.ui_state,
         message=message,
         message_voice=message_voice,
-        support_message=None if phase3_silent else _active_support_message(session),
+        # Session support remains available to an explicit Help request, but an
+        # ordinary answer turn must not replay it as newly delivered support.
+        support_message=None,
         show_canvas=session.show_canvas,
         show_hint_button=False if phase3_silent else session.show_hint_button,
-        show_visual_cue=False if phase3_silent else visible_visual_cue is not None,
-        visual_cue=None if phase3_silent else visible_visual_cue,
+        show_visual_cue=False if phase3_silent else visual_cue is not None,
+        visual_cue=None if phase3_silent else visual_cue,
         show_scaffold_panel=False if phase3_silent else session.show_scaffold_panel,
         scaffold_id=session.scaffold_id,
         current_scaffold_step_id=session.current_scaffold_step_id,
@@ -1936,6 +2071,7 @@ def _response_from(
         active_support_level="NONE" if phase3_silent else active_support_level,
         highest_support_used="NONE" if phase3_silent else highest_support_used,
         consecutive_stuck_count=session.stuck_count,
+        question_anchors=[] if phase3_silent else _question_anchors(session),
         wrong_attempt_count=session.wrong_attempt_count,
         intervention_triggered=session.wrong_attempt_count >= 4,
         routing_reason_code=(
@@ -2065,6 +2201,21 @@ def _active_support_message(session: SessionRecord) -> str | None:
     if steps:
         return steps[0]
     return _schema_hint(event)
+
+
+def _new_visual_cue(
+    candidate: VisualCue | None,
+    active: VisualCue | None,
+) -> VisualCue | None:
+    """Return a cue only when this turn introduces a different cue."""
+
+    if candidate is None:
+        return None
+    if active is None:
+        return candidate
+    if candidate.cue_id is not None and candidate.cue_id == active.cue_id:
+        return None
+    return candidate
 
 
 def _is_explicit_help_request(request: InteractionRequest) -> bool:
@@ -2359,7 +2510,7 @@ def _contextual_nudge_message(session: SessionRecord) -> str:
     return "I'm still here with you. Tell me what you are thinking so far."
 
 
-def _selected_option_message(session: SessionRecord, option_id: str) -> tuple[str, str]:
+def _selected_option_message(session: SessionRecord, option_id: str) -> tuple[str, str, str]:
     """Build a focused response for a recorded choice without grading an attempt."""
 
     question = _schema_question(session)
@@ -2379,10 +2530,12 @@ def _selected_option_message(session: SessionRecord, option_id: str) -> tuple[st
         return (
             selection,
             "You chose that option. Now explain why it works for every possible starting value.",
+            option.text,
         )
     return (
         selection,
         "You chose that option. Compare it with the situation: can one fixed starting number describe every possible case?",
+        option.text,
     )
 
 
@@ -2394,7 +2547,7 @@ async def _option_selected_interaction_response(
         raise HTTPException(status_code=409, detail="OPTION_SELECTED is available only in Guided Practice.")
     if request.selected_option_id is None:
         raise HTTPException(status_code=422, detail="selected_option_id is required.")
-    selection, message = _selected_option_message(session, request.selected_option_id)
+    selection, message, option_text = _selected_option_message(session, request.selected_option_id)
     rules = load_classifier_rules()
     updated_session = await update_interaction_state(
         request.session_id,
@@ -2420,6 +2573,7 @@ async def _option_selected_interaction_response(
                 session.guided_teaching_state.model_copy(
                     update={
                         "selected_option_id": request.selected_option_id,
+                        "selected_option_text": option_text,
                         "last_tutor_question_type": "OPTION_COMPARISON",
                         "awaiting_response": True,
                     }
@@ -2900,13 +3054,14 @@ async def _process_interaction(
     if (
         request.input_source == "VOICE"
         and request.transcript_confidence is not None
-        and request.transcript_confidence < rules.low_transcript_confidence_threshold
+        and request.transcript_confidence
+        < rules.guided_learning.minimum_voice_transcript_confidence
         and not canvas_complete_correct
     ):
         clarification_history = _updated_conversation_history(
             session.conversation_history,
             student_message,
-            _LOW_CONFIDENCE_MESSAGE,
+            _UNRELIABLE_EVIDENCE_MESSAGE,
             rules.conversation_rules.max_recent_messages,
         )
         updated_session = await update_interaction_state(
@@ -2919,9 +3074,9 @@ async def _process_interaction(
             request.transcript_confidence,
             canvas_evidence.submission_id if canvas_evidence is not None else request.canvas_snapshot_id,
             canvas_evidence.ocr if canvas_evidence is not None else None,
-            False,
-            False,
-            [],
+            session.show_visual_cue,
+            session.show_scaffold_panel,
+            session.scaffold_steps,
             {
                 "attempt_count": session.attempt_count,
                 "question_completed": session.question_completed,
@@ -2943,10 +3098,10 @@ async def _process_interaction(
                 interaction_type=request.interaction_type,
                 nudge_id=request.nudge_id,
                 session=updated_session,
-                message=_LOW_CONFIDENCE_MESSAGE,
-                message_voice=_LOW_CONFIDENCE_MESSAGE,
+                message=_UNRELIABLE_EVIDENCE_MESSAGE,
+                message_voice=_UNRELIABLE_EVIDENCE_MESSAGE,
                 visual_cue=None,
-                scaffold_steps=[],
+                scaffold_steps=updated_session.scaffold_steps,
                 session_summary=None,
                 conversation_action="REQUEST_CLARIFICATION",
                 attempt_increment=0,
@@ -2954,6 +3109,7 @@ async def _process_interaction(
                 retry_safe=None,
             ).model_copy(
                 update={
+                    "next_expected_input": "WRITE",
                     "ocr": canvas_evidence.ocr if canvas_evidence is not None else None,
                     "snapshot_reference": (
                         canvas_evidence.snapshot_reference
@@ -3053,7 +3209,7 @@ async def _process_interaction(
                 message=message,
                 message_voice=message,
                 visual_cue=None,
-                scaffold_steps=[],
+                scaffold_steps=updated_session.scaffold_steps,
                 session_summary=None,
                 conversation_action="REQUEST_CLARIFICATION",
                 attempt_increment=0,
@@ -3135,6 +3291,7 @@ async def _process_interaction(
         detected_equation=ocr.detected_equation if ocr is not None else None,
         detected_steps=ocr.detected_steps if ocr is not None else [],
         ocr_confidence=ocr.confidence if ocr is not None else None,
+        canvas_ocr_text=ocr.raw_ocr_text if ocr is not None else None,
         canvas_regions=ocr.detected_regions if ocr is not None else [],
         canvas_mathml_blocks=ocr.mathml_blocks if ocr is not None else [],
         spatial_tokens=(canvas_evidence.spatial_tokens if canvas_evidence is not None else []),
@@ -3155,8 +3312,12 @@ async def _process_interaction(
         ),
         phase3_allowed_error_definitions=_schema_question(session).tutor_view.potential_errors,
     )
-    if ocr is not None and ocr.needs_clarification:
-        message = "I’m having trouble reading your working on the board. Please rewrite it clearly and try again."
+    minimum_ocr_confidence = max(
+        get_settings().min_ocr_confidence_threshold,
+        rules.guided_learning.minimum_ocr_confidence,
+    )
+    if ocr is not None and _legacy_ocr_needs_writing(ocr, minimum_ocr_confidence):
+        message = _UNRELIABLE_EVIDENCE_MESSAGE
         updated_session = await update_interaction_state(
             request.session_id,
             request.student_id,
@@ -3167,9 +3328,9 @@ async def _process_interaction(
             request.transcript_confidence,
             canvas_evidence.submission_id if canvas_evidence is not None else request.canvas_snapshot_id,
             ocr,
-            False,
-            False,
-            [],
+            session.show_visual_cue,
+            session.show_scaffold_panel,
+            session.scaffold_steps,
             {
                 "attempt_count": session.attempt_count,
                 "question_completed": session.question_completed,
@@ -3307,6 +3468,10 @@ async def _process_interaction(
         schema_support_steps = []
     visual_cue = schema_support_visual_cue or _schema_visual_cue(schema_content_response) or (
         tutor.visual_cue if tutor.visual_cue.show else None
+    )
+    delivered_visual_cue = _new_visual_cue(
+        visual_cue,
+        turn_session.active_visual_cue,
     )
     schema_steps = schema_support_steps or _schema_support_steps(schema_content_response)
     for scaffold_prompt in schema_steps:
@@ -3633,6 +3798,63 @@ async def _process_interaction(
     if visual_cue is not None:
         state_updates["active_visual_cue"] = visual_cue
 
+    answer_spec = _active_answer_spec(turn_session)
+    tutor_action_anchors = plan_canvas_action_anchors(
+        turn_session.question_id,
+        turn_session.current_question,
+    )
+    canonical_answer = answer_spec.canonical_answer if answer_spec is not None else ""
+    guided_rescue = _guided_rescue(schema_content_response)
+    rescue_context = (
+        guided_rescue.tutor_engine_context
+        if (
+            rules.guided_learning.canvas_rescue_presentation_enabled
+            and guided_rescue is not None
+        )
+        else None
+    )
+    tutor_canvas_actions = (
+        plan_rescue_canvas_actions(
+            rescue_context,
+            request.turn_id or "TURN-0000",
+            canonical_answer,
+            rules.guided_learning.canvas_rescue_wording,
+        )
+        if rescue_context is not None
+        else plan_tutor_canvas_actions(
+            tutor=tutor,
+            question_anchors=tutor_action_anchors,
+            canvas_events=_canvas_events_for_context(request, turn_session),
+            turn_id=request.turn_id or "TURN-0000",
+            canonical_answer=canonical_answer,
+            fallback_labels=rules.guided_learning.fallback_canvas_labels,
+            wrong_attempt_count=turn_session.wrong_attempt_count,
+            student_response=request.text_input or request.voice_transcript or "",
+        )
+    )
+    logger.info(
+        "guided_canvas_actions_planned",
+        extra={
+            "question_id": turn_session.question_id,
+            "turn_id": request.turn_id,
+            "action_count": len(tutor_canvas_actions),
+            "action_ids": [action.action_id for action in tutor_canvas_actions],
+            "action_types": [action.type for action in tutor_canvas_actions],
+            "validation_rejections": max(
+                0,
+                len(tutor.canvas_intentions) - len(tutor_canvas_actions),
+            ),
+        },
+    )
+    tutor = tutor.model_copy(update={"tutor_canvas_actions": tutor_canvas_actions})
+    state_updates.update(
+        _canvas_memory_update_with_tutor_actions(
+            request,
+            turn_session,
+            tutor_canvas_actions,
+        )
+    )
+
     next_phase = session.current_phase
     canvas_is_for_active_question = session.question_id == turn_session.question_id
     updated_session = await update_interaction_state(
@@ -3666,7 +3888,7 @@ async def _process_interaction(
         session=updated_session,
         message=tutor_message,
         message_voice=tutor_message_voice,
-        visual_cue=visual_cue,
+        visual_cue=delivered_visual_cue,
         scaffold_steps=scaffold_steps,
         session_summary=None,
         conversation_action=conversation_action,
@@ -3677,12 +3899,12 @@ async def _process_interaction(
     )
     guided_rescue = _guided_rescue(schema_content_response)
     support_served: SupportUsed | None = (
-        schema_support_level or response.active_support_level
-        if schema_content_response is not None
-        and schema_content_response.phase_payload is not None
-        and schema_content_response.phase_payload.support_to_serve is not None
-        else guided_rescue.rescue_type
+        guided_rescue.rescue_type
         if guided_rescue is not None
+        else "VISUAL_CUE"
+        if delivered_visual_cue is not None
+        else schema_support_level
+        if schema_support_level in {"HINT", "SCAFFOLD"}
         else None
     )
     response = response.model_copy(
@@ -3694,6 +3916,14 @@ async def _process_interaction(
                 else response.active_support_level
             ),
             "guided_student_state": tutor.guided_student_state,
+            "next_expected_input": (
+                "WRITE" if tutor.requires_written_math_evidence else None
+            ),
+            "write_instruction": (
+                tutor.write_instruction
+                if tutor.requires_written_math_evidence
+                else None
+            ),
             "selected_error_code": tutor.selected_error_code,
             "evaluation_reason_code": (
                 _evaluation_reason(tutor)
@@ -3720,6 +3950,11 @@ async def _process_interaction(
                 else None
             ),
             "support_served_this_turn": support_served,
+            "support_message": (
+                schema_support_message
+                if support_served == "HINT"
+                else None
+            ),
             "wrong_attempt_count": updated_session.wrong_attempt_count,
             "intervention_triggered": (
                 _is_support_failure(tutor)
@@ -3734,15 +3969,38 @@ async def _process_interaction(
                 if canvas_evidence is not None
                 else None
             ),
-            "canvas_draw": (
-                plan_canvas_draw(
-                    tutor,
-                    ocr.detected_regions,
-                    canvas_evidence.spatial_tokens if canvas_evidence is not None else None,
-                )
-                if ocr is not None
-                else []
-            ),
+            "canvas_draw": [
+                *(
+                    plan_canvas_draw(
+                        tutor,
+                        ocr.detected_regions,
+                        canvas_evidence.spatial_tokens if canvas_evidence is not None else None,
+                    )
+                    if ocr is not None
+                    else []
+                ),
+                *(
+                    plan_write_request_tutor_draw(request.turn_id or "TURN-0000")
+                    if tutor.requires_written_math_evidence
+                    else []
+                ),
+            ],
+            "tutor_canvas_actions": tutor.tutor_canvas_actions,
+            "question_anchors": [
+                *response.question_anchors,
+                *[
+                    anchor
+                    for anchor in tutor_action_anchors
+                    if anchor.token_id in {
+                        action.target_object_id
+                        for action in tutor.tutor_canvas_actions
+                        if action.target_kind == "QUESTION_ANCHOR"
+                    }
+                    and anchor.token_id not in {
+                        existing.token_id for existing in response.question_anchors
+                    }
+                ],
+            ],
             "localization_status": (
                 "grounded"
                 if canvas_evidence is not None and canvas_evidence.spatial_tokens

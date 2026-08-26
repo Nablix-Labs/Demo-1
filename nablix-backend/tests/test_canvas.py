@@ -1,8 +1,11 @@
 import asyncio
+import base64
 from copy import deepcopy
 from dataclasses import replace
+from io import BytesIO
 
 import pytest
+from PIL import Image
 from fastapi.testclient import TestClient
 
 from app.api import canvas as canvas_api
@@ -13,6 +16,11 @@ from app.adapters.vision_ocr import MockVisionOCRAdapter
 from app.ai_engine.classifier import ClassificationRequest
 from app.ai_engine.schemas import TutorResponse
 from app.core.config import Settings, get_settings
+from app.core.exceptions import AdapterError, AdapterRequestRejected
+from app.models.work_artifact import (
+    WorkArtifactPersistRequest,
+    WorkArtifactPersistResponse,
+)
 from app.main import app
 from app.models.adapters import (
     AdapterContext,
@@ -41,6 +49,18 @@ from tests.test_session_events import (
 client = TestClient(app, headers={"Authorization": "Bearer test-token"})
 
 VALID_SNAPSHOT_DATA_URL = "data:image/png;base64,aGVsbG8="
+
+
+def _real_png_data_url() -> str:
+    """A decodable PNG, for paths that actually render the page (PDF assembly).
+
+    VALID_SNAPSHOT_DATA_URL only satisfies the base64 field validator; it is
+    not real image bytes.
+    """
+
+    buffer = BytesIO()
+    Image.new("RGB", (8, 8), "white").save(buffer, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()
 
 
 @pytest.mark.parametrize(
@@ -146,13 +166,31 @@ def _unified_voice_payload(
         "hint_count": session.hint_count,
         "canvas_state": {
             "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+            # Spans all three of MockVisionOCRAdapter's regions (y 0.18-0.50),
+            # matching a student who wrote the whole worked solution — not just
+            # the first line. A single stroke over one region only would make
+            # the tutor-ink OCR filter (canvas_evidence.collect_canvas_evidence)
+            # drop the other two as unwritten, which is not what this fixture
+            # means to represent.
             "strokes": [
                 {
                     "stroke_id": "stroke-1",
                     "tool": "pen",
                     "points": [{"x": 0.12, "y": 0.18}, {"x": 0.48, "y": 0.26}],
                     "width": 0.01,
-                }
+                },
+                {
+                    "stroke_id": "stroke-2",
+                    "tool": "pen",
+                    "points": [{"x": 0.12, "y": 0.30}, {"x": 0.46, "y": 0.38}],
+                    "width": 0.01,
+                },
+                {
+                    "stroke_id": "stroke-3",
+                    "tool": "pen",
+                    "points": [{"x": 0.12, "y": 0.42}, {"x": 0.30, "y": 0.50}],
+                    "width": 0.01,
+                },
             ],
             "captured_at": "2026-08-10T10:00:00Z",
         },
@@ -348,6 +386,48 @@ def test_canvas_submit_returns_mock_ocr_result() -> None:
     assert summary["session_performance"]["total_attempts"] == 1
     assert summary["session_performance"]["canvas_submissions"] == 1
     assert len(summary["canvas_feedback_history"]) == 1
+
+
+def test_canvas_submit_ocrs_each_page_in_order() -> None:
+    session_id = _start_session("ST001")
+    single_page_text = "x + 4 = 9, x = 9 - 4, x = 5"
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST001",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+            "additional_pages": [
+                VALID_SNAPSHOT_DATA_URL,
+                VALID_SNAPSHOT_DATA_URL,
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    # One attempt, one submission — not one per page.
+    assert body["status"] == "processed"
+    # Every page was recognised separately and combined in page order.
+    assert body["ocr"]["raw_ocr_text"] == "\n".join([single_page_text] * 3)
+
+
+def test_canvas_submit_without_additional_pages_is_unchanged() -> None:
+    session_id = _start_session("ST001")
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST001",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+        },
+    )
+
+    assert response.status_code == 200
+    # Single-page submissions keep the unjoined single-page text.
+    assert response.json()["ocr"]["raw_ocr_text"] == "x + 4 = 9, x = 9 - 4, x = 5"
 
 
 def test_canvas_initializes_recommended_phase_before_answer(
@@ -759,7 +839,7 @@ def test_voice_canvas_attachment_does_not_record_a_second_attempt(
     assert len(stored_session["canvas_submissions"]) == 1
 
 
-def test_canvas_submit_stops_before_tutor_when_ocr_needs_clarification(
+def test_canvas_submit_stops_before_tutor_below_legacy_reliability_threshold(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def low_confidence_ocr(
@@ -770,8 +850,10 @@ def test_canvas_submit_stops_before_tutor_when_ocr_needs_clarification(
             raw_ocr_text="x + ? = 9",
             detected_equation="x + ? = 9",
             detected_steps=["x + ? = 9"],
-            confidence=0.5,
-            needs_clarification=True,
+            # The service setting is 0.75. This proves the legacy path also
+            # applies Guided Learning's stricter 0.80 reliability threshold.
+            confidence=0.78,
+            needs_clarification=False,
         )
 
     async def unexpected_tutor_call(*args: object) -> object:
@@ -797,6 +879,8 @@ def test_canvas_submit_stops_before_tutor_when_ocr_needs_clarification(
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "CLARIFICATION_REQUIRED"
+    assert body["message"] == "Please write out that step so I can check it."
+    assert body["next_expected_input"] == "WRITE"
     assert body["canvas_draw"] == []
     assert body["localization_status"] == "uncertain"
     stored_session = client.get(f"/session/{session_id}", params={"student_id": "ST012"}).json()
@@ -1213,6 +1297,218 @@ def test_canvas_final_independent_attempt_is_recorded_before_review(
     assert terminal_events.count("CORRECT_ATTEMPT") == 1
 
 
+def _review_transition_session(monkeypatch: pytest.MonkeyPatch) -> str:
+    """Start a Phase 3 session whose next correct answer completes the topic."""
+
+    async def send_session_event(
+        adapter: StudentModelServiceAdapter,
+        event: StudentModelSessionEvent,
+        access_token: str,
+    ) -> StudentModelSessionEventResponse:
+        del adapter, access_token
+        body = (
+            _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+            if event.event_type == "SESSION_OPENED"
+            else _session_opened_response("REVIEW")
+        )
+        body["request_id"] = event.request_id
+        return StudentModelSessionEventResponse.model_validate(body)
+
+    async def correct_pipeline(
+        context: AdapterContext,
+    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
+        del context
+        student = StudentModelResult(
+            mastery_status="MASTERED",
+            continuity_status="on_track",
+            recommended_entry_phase="REVIEW",
+            hint_dependency_score=0.0,
+            intervention_required=False,
+        )
+        return RAGResult(documents=[], retrieval_confidence=0.0), student, _correct_canvas_tutor()
+
+    monkeypatch.setattr(
+        StudentModelServiceAdapter,
+        "send_session_event",
+        send_session_event,
+    )
+    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", correct_pipeline)
+    return _start_session("ST042")
+
+
+def _correct_canvas_tutor() -> TutorResult:
+    return TutorResult(
+        evaluation="CORRECT",
+        error_type="NONE",
+        intent="SUBMITTING_ANSWER",
+        response_strategy="CONFIRM_CORRECT",
+        tutor_message="Correct.",
+        tutor_message_voice="Correct.",
+        voice_optimised=True,
+        hint_level=0,
+        answer_reveal_allowed=False,
+        confidence=0.95,
+        input_source="CANVAS",
+        attempt_increment=1,
+        recommended_conversation_action="ADVANCE_TO_NEXT_QUESTION",
+        question_completed=True,
+        answer_value_confirmed=True,
+        reasoning_complete=True,
+    )
+
+
+def _independent_practice_session(monkeypatch: pytest.MonkeyPatch) -> str:
+    """Start a session sitting in Phase 3 with a correct-answer pipeline."""
+
+    async def send_session_event(
+        adapter: StudentModelServiceAdapter,
+        event: StudentModelSessionEvent,
+        access_token: str,
+    ) -> StudentModelSessionEventResponse:
+        del adapter, access_token
+        body = _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+        body["request_id"] = event.request_id
+        return StudentModelSessionEventResponse.model_validate(body)
+
+    async def correct_pipeline(
+        context: AdapterContext,
+    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
+        del context
+        student = StudentModelResult(
+            mastery_status="DEVELOPING",
+            continuity_status="on_track",
+            recommended_entry_phase="INDEPENDENT_PRACTICE",
+            hint_dependency_score=0.0,
+            intervention_required=False,
+        )
+        tutor = TutorResult(
+            evaluation="CORRECT",
+            error_type="NONE",
+            intent="SUBMITTING_ANSWER",
+            response_strategy="CONFIRM_CORRECT",
+            tutor_message="Correct.",
+            tutor_message_voice="Correct.",
+            voice_optimised=True,
+            hint_level=0,
+            answer_reveal_allowed=False,
+            confidence=0.95,
+            input_source="CANVAS",
+            attempt_increment=1,
+            recommended_conversation_action="ADVANCE_TO_NEXT_QUESTION",
+            question_completed=True,
+            answer_value_confirmed=True,
+            reasoning_complete=True,
+        )
+        return RAGResult(documents=[], retrieval_confidence=0.0), student, tutor
+
+    monkeypatch.setattr(
+        StudentModelServiceAdapter,
+        "send_session_event",
+        send_session_event,
+    )
+    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", correct_pipeline)
+    return _start_session("ST031")
+
+
+def test_canvas_links_stored_work_artifact_to_the_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    persisted: list[WorkArtifactPersistRequest] = []
+
+    async def persist_work_artifact(
+        adapter: StudentModelServiceAdapter,
+        request: WorkArtifactPersistRequest,
+        access_token: str,
+    ) -> WorkArtifactPersistResponse:
+        del adapter, access_token
+        persisted.append(request)
+        return WorkArtifactPersistResponse(
+            artifact_id="ART-P3-000124",
+            pdf_url="https://blob.example/submission.pdf",
+            page_count=request.page_count,
+        )
+
+    session_id = _independent_practice_session(monkeypatch)
+    monkeypatch.setattr(
+        StudentModelServiceAdapter,
+        "persist_work_artifact",
+        persist_work_artifact,
+    )
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST031",
+            "turn_id": "TURN-ST031-CANVAS-1",
+            "snapshot_data_url": _real_png_data_url(),
+            "additional_pages": [_real_png_data_url()],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    stored = session_service._get_owned_session(session_id, "ST031")
+    assert stored.per_question_history[-1].work_artifact_id == "ART-P3-000124"
+    # One artifact per attempt, carrying both pages and their ordered OCR.
+    assert len(persisted) == 1
+    assert persisted[0].page_count == 2
+    assert len(persisted[0].per_page_ocr_text) == 2
+    assert persisted[0].combined_pdf_base64
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        AdapterError("student_model", "storage unavailable"),
+        # A 4xx is a sibling of AdapterError, not a subclass. The storage
+        # endpoint 404s until it is built, so this is the live path.
+        AdapterRequestRejected(
+            "student_model",
+            "https://student-model.example/work-artifacts",
+            404,
+            "not found",
+            {},
+        ),
+    ],
+    ids=["unavailable", "rejected"],
+)
+def test_canvas_submission_survives_work_artifact_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+) -> None:
+    async def failing_persist(
+        adapter: StudentModelServiceAdapter,
+        request: WorkArtifactPersistRequest,
+        access_token: str,
+    ) -> WorkArtifactPersistResponse:
+        del adapter, request, access_token
+        raise error
+
+    session_id = _independent_practice_session(monkeypatch)
+    monkeypatch.setattr(
+        StudentModelServiceAdapter,
+        "persist_work_artifact",
+        failing_persist,
+    )
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST031",
+            "turn_id": "TURN-ST031-CANVAS-2",
+            "snapshot_data_url": _real_png_data_url(),
+        },
+    )
+
+    # The student's turn is evaluated and routed as normal; only the Phase 4
+    # replay of this attempt is lost.
+    assert response.status_code == 200, response.text
+    stored = session_service._get_owned_session(session_id, "ST031")
+    assert stored.per_question_history[-1].work_artifact_id is None
+    assert stored.per_question_history[-1].evaluation == "CORRECT"
+
+
 def _incorrect_independent_tutor() -> TutorResult:
     return TutorResult(
         evaluation="INCORRECT",
@@ -1568,7 +1864,11 @@ def test_unified_voice_canvas_unclear_ocr_does_not_grade(
     assert stored.question_id is not None
     memory = stored.canvas_memory_by_question[stored.question_id]
     assert memory.updated_turn_id == "TURN-UNIFIED-UNCLEAR"
-    assert [stroke.stroke_id for stroke in memory.strokes] == ["stroke-1"]
+    assert [stroke.stroke_id for stroke in memory.strokes] == [
+        "stroke-1",
+        "stroke-2",
+        "stroke-3",
+    ]
 
 
 def test_unified_voice_canvas_keeps_mathml_in_tutor_context(
@@ -2028,3 +2328,131 @@ def test_canvas_submit_uses_shared_spatial_tokens_for_grounded_draw(
     assert len(context.spatial_tokens) == 3
     assert context.canvas_events[0].question_id == question_id
     assert response.json()["canvas_draw"]
+
+
+def test_collect_canvas_evidence_drops_regions_with_no_student_ink() -> None:
+    """A region no student stroke touches wasn't written by the student — most
+    often it's the tutor's own layer, captured into the same snapshot (#2 of
+    the frontend handoff). It must not reach evaluation."""
+
+    regions = [
+        {"text": "x + 4 = 9", "x": 0.12, "y": 0.18, "w": 0.36, "h": 0.08, "confidence": 0.96},
+        {"text": "TUTOR MARK", "x": 0.12, "y": 0.70, "w": 0.30, "h": 0.08, "confidence": 0.9},
+    ]
+
+    class TwoRegionVision:
+        async def recognize(self, snapshot_data_url: str) -> VisionOCRResult:
+            del snapshot_data_url
+            return VisionOCRResult(
+                raw_ocr_text="x + 4 = 9\nTUTOR MARK",
+                detected_equation="x + 4 = 9",
+                detected_steps=["x + 4 = 9", "TUTOR MARK"],
+                detected_regions=list(regions),
+                final_answer="TUTOR MARK",
+                confidence=0.95,
+                provider="mock",
+            )
+
+    student_only_stroke = [
+        {
+            "stroke_id": "stroke-1",
+            "tool": "pen",
+            "points": [{"x": 0.12, "y": 0.18}, {"x": 0.48, "y": 0.26}],
+            "width": 0.01,
+        }
+    ]
+    from app.models.canvas import CanvasStroke
+
+    strokes = [CanvasStroke.model_validate(stroke) for stroke in student_only_stroke]
+
+    evidence = asyncio.run(
+        canvas_evidence.collect_canvas_evidence(
+            VALID_SNAPSHOT_DATA_URL, strokes, "SUB-1", TwoRegionVision()
+        )
+    )
+
+    assert evidence.ocr.detected_steps == ["x + 4 = 9"]
+    assert evidence.ocr.raw_ocr_text == "x + 4 = 9"
+    assert evidence.ocr.detected_equation == "x + 4 = 9"
+    assert evidence.ocr.final_answer == "x + 4 = 9"
+    assert [region.text for region in evidence.ocr.detected_regions] == ["x + 4 = 9"]
+
+
+def test_collect_canvas_evidence_empties_text_when_every_region_is_dropped() -> None:
+    """When strokes exist but produce no usable geometry, the text fields must
+    go empty too -- not silently fall back to the unfiltered (tutor-ink
+    included) originals, which would reopen the exact bug this filter closes.
+
+    associate_strokes_with_steps assigns every stroke with a real bounding box
+    to its nearest region (never leaves one fully unassigned), so the only way
+    every region ends up with zero strokes is a stroke with no points -- valid
+    per CanvasStroke (no min_length), and stroke_to_box returns None for it.
+    """
+
+    regions = [
+        {"text": "TUTOR MARK", "x": 0.12, "y": 0.70, "w": 0.30, "h": 0.08, "confidence": 0.9},
+    ]
+
+    class OneRegionVision:
+        async def recognize(self, snapshot_data_url: str) -> VisionOCRResult:
+            del snapshot_data_url
+            return VisionOCRResult(
+                raw_ocr_text="TUTOR MARK",
+                detected_equation="TUTOR MARK",
+                detected_steps=["TUTOR MARK"],
+                detected_regions=list(regions),
+                final_answer="TUTOR MARK",
+                confidence=0.95,
+                provider="mock",
+            )
+
+    from app.models.canvas import CanvasStroke
+
+    strokes = [
+        CanvasStroke.model_validate(
+            {"stroke_id": "stroke-1", "tool": "pen", "points": [], "width": 0.01}
+        )
+    ]
+
+    evidence = asyncio.run(
+        canvas_evidence.collect_canvas_evidence(
+            VALID_SNAPSHOT_DATA_URL, strokes, "SUB-3", OneRegionVision()
+        )
+    )
+
+    assert evidence.ocr.detected_regions == []
+    assert evidence.ocr.detected_steps == []
+    assert evidence.ocr.raw_ocr_text == ""
+    assert evidence.ocr.detected_equation == ""
+    assert evidence.ocr.final_answer is None
+
+
+def test_collect_canvas_evidence_keeps_all_regions_when_no_strokes_sent() -> None:
+    """Voice attachments and pages 2..N legitimately carry no live-canvas ink —
+    the filter must not wipe evidence there."""
+
+    regions = [
+        {"text": "x + 4 = 9", "x": 0.12, "y": 0.18, "w": 0.36, "h": 0.08, "confidence": 0.96},
+        {"text": "x = 5", "x": 0.12, "y": 0.42, "w": 0.18, "h": 0.08, "confidence": 0.95},
+    ]
+
+    class TwoRegionVision:
+        async def recognize(self, snapshot_data_url: str) -> VisionOCRResult:
+            del snapshot_data_url
+            return VisionOCRResult(
+                raw_ocr_text="x + 4 = 9\nx = 5",
+                detected_equation="x + 4 = 9",
+                detected_steps=["x + 4 = 9", "x = 5"],
+                detected_regions=list(regions),
+                final_answer="x = 5",
+                confidence=0.95,
+                provider="mock",
+            )
+
+    evidence = asyncio.run(
+        canvas_evidence.collect_canvas_evidence(
+            VALID_SNAPSHOT_DATA_URL, [], "SUB-2", TwoRegionVision()
+        )
+    )
+
+    assert evidence.ocr.detected_steps == ["x + 4 = 9", "x = 5"]

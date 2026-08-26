@@ -10,6 +10,7 @@ from sympy.core.relational import Equality
 from sympy.polys.polyerrors import PolynomialError
 from sympy.sets.sets import Set
 
+from app.ai_engine.canvas_localization import MathLocalization, localize_math_difference
 from app.ai_engine.classifier_config import CanvasReviewConfig
 from app.ai_engine.schemas import (
     CanvasAnnotationIntent,
@@ -194,7 +195,12 @@ def _review_direct_expression(
 ) -> CanvasMathReview | None:
     """Correct one grounded token when it alone differs from the expected expression."""
 
-    if len(canvas_regions) != 1 or current_phase not in config.annotation_enabled_phases:
+    if len(canvas_regions) != 1:
+        return None
+    if (
+        not config.semantic_localization_enabled
+        and current_phase not in config.annotation_enabled_phases
+    ):
         return None
     region: CanvasTextRegion = canvas_regions[0]
     step_id: str = region.step_id or "step-1"
@@ -225,6 +231,18 @@ def _review_direct_expression(
                 confidence=confidence,
             ),
             annotation_intents=[],
+        )
+
+    if config.semantic_localization_enabled:
+        return _semantic_direct_review(
+            step_id=step_id,
+            region=region,
+            correct_answer=correct_answer,
+            tokens=tokens,
+            current_phase=current_phase,
+            canvas_regions=canvas_regions,
+            config=config,
+            confidence=confidence,
         )
 
     candidates: list[tuple[SpatialMathToken, str]] = []
@@ -316,6 +334,134 @@ def _review_direct_expression(
         ),
         mistake_classification=classification,
         annotation_intents=intents,
+    )
+
+
+def _semantic_direct_review(
+    step_id: str,
+    region: CanvasTextRegion,
+    correct_answer: str,
+    tokens: list[SpatialMathToken],
+    current_phase: LearningPhase,
+    canvas_regions: list[CanvasTextRegion],
+    config: CanvasReviewConfig,
+    confidence: float,
+) -> CanvasMathReview | None:
+    """Localize the one semantic difference against the expected expression."""
+
+    localization: MathLocalization | None = localize_math_difference(
+        expected_text=correct_answer,
+        actual_text=region.text,
+        actual_tokens=tokens,
+    )
+    if localization is None:
+        return CanvasMathReview(
+            error_type=None,
+            tutor_feedback=None,
+            canvas_feedback=CanvasFeedback(
+                has_feedback=False,
+                step_feedback=[],
+                highlight_instruction=None,
+            ),
+            mistake_classification=CanvasMistakeClassification(
+                status="no_mistake",
+                mistake_step_id=None,
+                target_text=None,
+                target_span=None,
+                replacement_text=None,
+                confidence=confidence,
+            ),
+            annotation_intents=[],
+        )
+
+    annotate: bool = current_phase in config.annotation_enabled_phases
+    if localization.localization_level == "STEP" or localization.fallback_reason is not None:
+        return CanvasMathReview(
+            error_type="CONCEPTUAL_MISUNDERSTANDING",
+            tutor_feedback=None,
+            canvas_feedback=CanvasFeedback(
+                has_feedback=False,
+                step_feedback=[],
+                highlight_instruction=None,
+            ),
+            mistake_classification=CanvasMistakeClassification(
+                status="mistake_found",
+                mistake_step_id=step_id,
+                target_token_ids=[],
+                error_token=None,
+                expected_token=None,
+                target_text=region.text,
+                target_span=None,
+                replacement_text=None,
+                confidence=confidence,
+                localization_level=localization.localization_level,
+                semantic_path=localization.semantic_path,
+                fallback_reason=localization.fallback_reason,
+            ),
+            annotation_intents=(
+                [
+                    CanvasAnnotationIntent(
+                        kind="circle_target",
+                        target_step_id=step_id,
+                        text=None,
+                        placement=None,
+                    )
+                ]
+                if annotate
+                else []
+            ),
+        )
+
+    classification = CanvasMistakeClassification(
+        status="mistake_found",
+        mistake_step_id=step_id,
+        target_token_ids=list(localization.target_token_ids),
+        error_token=localization.actual_text,
+        expected_token=localization.expected_text,
+        target_text=localization.actual_text,
+        target_span=(
+            list(localization.target_span) if localization.target_span is not None else None
+        ),
+        replacement_text=localization.expected_text,
+        confidence=confidence,
+        localization_level=localization.localization_level,
+        semantic_path=localization.semantic_path,
+        fallback_reason=localization.fallback_reason,
+    )
+    message: str = config.messages.CONCEPTUAL_MISUNDERSTANDING
+    return CanvasMathReview(
+        error_type="CONCEPTUAL_MISUNDERSTANDING",
+        tutor_feedback=(message if current_phase in config.feedback_enabled_phases else None),
+        canvas_feedback=(
+            _mistake_step_feedback(0, canvas_regions, "CONCEPTUAL_MISUNDERSTANDING", message, config)
+            if current_phase in config.feedback_enabled_phases
+            else CanvasFeedback(has_feedback=False, step_feedback=[], highlight_instruction=None)
+        ),
+        mistake_classification=classification,
+        annotation_intents=(
+            [
+                CanvasAnnotationIntent(
+                    kind="circle_target",
+                    target_step_id=step_id,
+                    text=None,
+                    placement=None,
+                ),
+                CanvasAnnotationIntent(
+                    kind="write_correction",
+                    target_step_id=step_id,
+                    text=localization.expected_text,
+                    placement="right",
+                ),
+                CanvasAnnotationIntent(
+                    kind="draw_arrow",
+                    target_step_id=step_id,
+                    text=None,
+                    placement=None,
+                ),
+            ]
+            if annotate
+            else []
+        ),
     )
 
 

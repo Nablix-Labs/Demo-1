@@ -19,7 +19,6 @@ import {
   submitCanvas,
   sendInteraction,
   endSession,
-  toSessionSummary,
   studentId,
   questionProgress,
   type SessionRecord,
@@ -35,8 +34,12 @@ import {
   isStaleTurnResponse,
   isStaleSessionError,
 } from '@/lib/api';
+import { selectedOptionText } from '@/lib/selectedOption';
 import { applyInteractionSupport, acceptResponse, authorisedHint } from '@/lib/interactionPresentation';
-import { useNumeraStore, type TrailKind } from '@/store/useNumeraStore';
+import { revealDecision } from '@/lib/revealBeforeClear';
+import { refreshedRecord } from '@/lib/sessionRecordRefresh';
+import { sessionEndSummary, storeEndedSession } from '@/lib/sessionEnd';
+import { useNumeraStore, type TrailKind, type TutorCanvasAction } from '@/store/useNumeraStore';
 import { tutorSay, setStudentWriting } from '@/lib/tutorSpeech';
 import { phaseAnnouncement, withTransitionVoice } from '@/lib/phaseTransition';
 import { speakBrowser } from '@/lib/tts';
@@ -44,6 +47,8 @@ import type { SupportRung } from '@/lib/supportLadder';
 import type { NudgeClaimResult } from '@/hooks/useInactivityNudge';
 import { reportFailure } from '@/lib/failureReport';
 import { canvasSubmissionView } from '@/lib/canvasSubmission';
+import { canvasEvidenceFor } from '@/lib/canvasEvidence';
+import type { QuestionAnchor } from '@/lib/questionAnchors';
 
 const apiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
@@ -290,6 +295,10 @@ export function syncBackendSession(response: {
     cooldown_ms: number;
     max_nudges_per_tutor_turn: number;
   };
+  /** Semantic tutor canvas actions, applied before any phase change clears them. */
+  tutor_canvas_actions?: TutorCanvasAction[];
+  /** Active-question anchors required to resolve semantic tutor actions. */
+  question_anchors?: QuestionAnchor[];
 }): void {
   // Text is kept verbatim. This used to strip a leading "solve for x:" because
   // the screens re-added it themselves — which silently mangled any question
@@ -305,16 +314,39 @@ export function syncBackendSession(response: {
   // a new set (which is what a phase change does) the lookup was searching the
   // PREVIOUS phase's questions and finding nothing. Doing it before
   // applyBackendPhase means the new question can find its own options.
-  const event = response.student_model_event;
-  if (event?.phase_payload?.question_set && store.backendSession) {
-    store.setBackendSession({ ...store.backendSession, student_model_event: event });
+  const refreshed = refreshedRecord(store.backendSession, response);
+  if (refreshed) store.setBackendSession(refreshed);
+  // For a same-question reply, register its target anchors before resolving
+  // semantic actions. Otherwise an accepted label such as `m → changes` is
+  // dropped simply because this path has not yet received the anchor list.
+  const isSameQuestion = response.question_id !== null
+    && response.question_id === store.activeQuestionId;
+  if (isSameQuestion && response.question_anchors !== undefined) {
+    store.setQuestionAnchors(response.question_anchors);
   }
-  store.applyBackendPhase({
+  // Semantic tutor actions are applied HERE, before the phase change, because
+  // they describe the question being left — not the one being arrived at. Doing
+  // it after meant they resolved against the next question's anchors, which is
+  // the case Sanya's handoff names explicitly. Idempotent: applyInteractionSupport
+  // applies the same list moments later and the action_id window drops it.
+  const tutorActions = response.tutor_canvas_actions ?? [];
+  if (tutorActions.length > 0) store.applyTutorCanvasActions(tutorActions);
+
+  const applyPhase = () => useNumeraStore.getState().applyBackendPhase({
     phase: response.current_phase,
     questionId: response.question_id,
     questionText: response.current_question,
     questionType: response.question_type ?? null,
   });
+
+  // When this reply both annotates the finished work and moves the student on,
+  // hold the board briefly so the annotation is actually seen. Without it the
+  // marks are added and cleared in the same tick.
+  const { reveal, holdMs } = revealDecision(
+    tutorActions.length, store.activeQuestionId, response.question_id,
+  );
+  if (reveal) window.setTimeout(applyPhase, holdMs);
+  else applyPhase();
   if (response.question_number !== undefined) {
     store.setQuestionNumber(response.question_number);
   }
@@ -537,9 +569,25 @@ export function useDemoTutor() {
           session_id: sessionId,
           student_id: studentId(),
           interaction_type: 'ANSWER_SUBMISSION',
+          // Stays 'TEXT' even when the canvas rides along. The connected-evidence
+          // handoff introduces a 'MIXED' source for exactly this case, but MIXED
+          // was added to the tutor engine's enum only (ai_engine/schemas.py) —
+          // the wire enum is still TEXT|VOICE|CANVAS|CHOICE|SYSTEM
+          // (models/fields.py:94), so sending it 422s the answer before the
+          // tutor sees it. The evidence is carried by canvas_state either way.
           input_source: 'TEXT',
           text_input: text,
+          // A typed answer about working on the board used to arrive without the
+          // board. `has_canvas_evidence` is false without this field and
+          // `review_canvas_math` then returns None outright, so the tutor
+          // evaluated the sentence alone and re-asked what had just been
+          // answered — Manjusha's "please check the Canvas", on the keyboard.
+          canvas_state: canvasEvidenceFor(canvasExporter?.(), state.canvasEvents),
           selected_option_id: state.selectedOptionId ?? undefined,
+          // A typed answer on a choice question still carries the selection, so
+          // it carries the wording too (revised handoff, frontend §1).
+          selected_option_text:
+            selectedOptionText(state.questionOptions, state.selectedOptionId) ?? undefined,
           current_phase: state.currentPhase,
           concept_id: ctx.concept_id,
           question_id: questionId,
@@ -585,7 +633,7 @@ export function useDemoTutor() {
         return null;
       }
     },
-    [sessionId, addTranscriptMessage, addTrailEntry]
+    [sessionId, canvasExporter, addTranscriptMessage, addTrailEntry]
   );
 
   /** Export the current canvas and submit it for live OCR + tutor feedback. */
@@ -886,6 +934,11 @@ export function useDemoTutor() {
       interaction_type: 'HELP_REQUEST',
       input_source: 'TEXT',
       text_input: 'Please give me the next hint.',
+      // A student asking for a hint has usually already started. Sending the
+      // board means the hint can pick up from the line they are stuck on
+      // instead of restarting the question; without it every hint is written
+      // for a blank canvas.
+      canvas_state: canvasEvidenceFor(canvasExporter?.(), s.canvasEvents),
       current_phase: s.currentPhase,
       concept_id: s.activeConceptId,
       question_id: s.activeQuestionId,
@@ -903,7 +956,7 @@ export function useDemoTutor() {
     const rung: SupportRung | null = served && served !== 'NONE' ? served : null;
     if (rung) useNumeraStore.getState().setSupportShown(rung);
     return rung;
-  }, [sessionId, addTranscriptMessage, addTrailEntry]);
+  }, [sessionId, canvasExporter, addTranscriptMessage, addTrailEntry]);
 
   /**
    * Fire one completed voice turn to the backend with one frozen canvas payload,
@@ -958,16 +1011,14 @@ export function useDemoTutor() {
           input_source: 'VOICE' as const,
           voice_transcript: transcript,
           transcript_confidence: confidence,
-          canvas_state: {
-            snapshot_data_url: canvasSnapshot.snapshotDataUrl,
-            strokes: canvasSnapshot.strokes,
-            captured_at: canvasSnapshot.capturedAt,
-            // §7: call the tutor engine "with compact current canvas memory,
-            // not just a flat screenshot". A voice turn needs it most — the
-            // student explained aloud, so the board alone under-reports what
-            // they did.
-            canvas_events: state.canvasEvents,
-          },
+          // §7: call the tutor engine "with compact current canvas memory, not
+          // just a flat screenshot". A voice turn needs it most — the student
+          // explained aloud, so the board alone under-reports what they did.
+          //
+          // Built here rather than inline since 24 Aug: this was the only site
+          // sending evidence, and it sent it untrimmed, so a long question was
+          // one busy canvas away from a 413 on every spoken answer.
+          canvas_state: canvasEvidenceFor(canvasSnapshot, state.canvasEvents),
           current_phase: state.currentPhase,
           concept_id: ctx.concept_id,
           question_id: questionId,
@@ -1094,6 +1145,10 @@ export function useDemoTutor() {
         interaction_type: 'OPTION_SELECTED',
         input_source: 'CHOICE',
         selected_option_id: optionId,
+        // The caller already holds the authored wording, so it goes as sent
+        // rather than being looked up again — this is the one path where the
+        // exact text is beyond doubt.
+        selected_option_text: optionText.trim() || undefined,
         current_phase: state.currentPhase,
         concept_id: state.activeConceptId,
         question_id: state.activeQuestionId,
@@ -1152,26 +1207,32 @@ export function useDemoTutor() {
   }, [sessionId, addTranscriptMessage, addTrailEntry]);
 
   /**
-   * End the session and capture its summary + engine review for the Review
-   * screen.
+   * End the session and capture what the Review screen needs.
    *
-   * On success: saves the summary and the engine review to the store and clears
-   * sessionId (so the next topic starts a fresh session), and returns the
-   * summary. Returns null when there's no live session to end (mock mode).
-   * THROWS on request failure or when the response carries no usable summary or
-   * review — the caller keeps the student on the current screen and shows an
-   * error, and the backend leaves the session active.
+   * On success: saves the summary, the ended record and the engine review (if
+   * one came) to the store, clears sessionId so the next topic starts fresh,
+   * and returns the summary. Returns null when there's no live session to end
+   * (mock mode). THROWS on request failure or when the response carries no
+   * usable summary — the caller keeps the student on the current screen and
+   * shows an error, and the backend leaves the session active.
+   *
+   * A MISSING `session_review` is not one of those failures, though it used to
+   * be. `session_review` was deleted from the backend outright (Sanya PR #155,
+   * 18 Aug 2026 — "remove legacy session review flow"); Phase 4 replaces it.
+   * The throw meant every /session/end after that merge raised, the Review
+   * screen caught it as `endFailed` and every student reaching the end of a
+   * topic was shown "Your session review could not be loaded" instead of their
+   * results — for work that had completed perfectly well.
+   *
+   * The record is stored because the Phase 4 review rides on it
+   * (`phase4_review`, app/models/session.py:294) — it is generated on entering
+   * Review, so this response is the only place it appears.
    */
   const end = useCallback(async (): Promise<SessionSummary | null> => {
     if (!apiEnabled() || !sessionId) return null;
     const res = await endSession(sessionId); // propagates network/HTTP failures
-    const summary = toSessionSummary(res);
-    if (!summary) throw new Error('Session ended but no summary was returned.');
-    if (!res.session_review) throw new Error('Session ended but no review was returned.');
-    const store = useNumeraStore.getState();
-    store.setSessionSummary(summary);
-    store.setSessionReview(res.session_review);
-    store.clearSessionId();
+    const summary = sessionEndSummary(res);
+    storeEndedSession(res, summary);
     return summary;
   }, [sessionId]);
 

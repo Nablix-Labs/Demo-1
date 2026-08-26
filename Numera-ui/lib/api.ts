@@ -12,7 +12,9 @@
  *    `session_id` from /session/start and reuse it for the whole run.
  */
 import axios from 'axios';
+import type { QuestionAnchor } from '@/lib/questionAnchors';
 import type { CanvasDrawPayload, CanvasStrokeSnapshot } from '@/store/useNumeraStore';
+import type { TutorCanvasAction } from '@/store/useNumeraStore';
 import type { CanvasEvent } from '@/lib/canvasMemory';
 import { useAuthStore } from '@/store/useAuthStore';
 import { allowAnonTutorCalls } from '@/lib/runtimeConfig';
@@ -561,8 +563,11 @@ export async function startSession(payload: StartSessionPayload) {
  */
 export function diagnosticQuestions(record: SessionRecord | null | undefined): SchemaQuestion[] {
   const payload = record?.student_model_event?.phase_payload;
-  if (!payload?.question_set) return [];
-  return payload.question_set.questions.filter((q) => q.student_view?.question_text);
+  // `questions` is required by the contract, but a field vanishing from a
+  // response has been a live outage here twice — and this one is read during
+  // render, so an absent array replaces the whole check screen with the error
+  // boundary mid-attempt. The two siblings below already read it defensively.
+  return (payload?.question_set?.questions ?? []).filter((q) => q.student_view?.question_text);
 }
 
 /**
@@ -627,7 +632,46 @@ export function hasSelectableOptions(
   view: Pick<SchemaStudentQuestionView, 'question_type' | 'options'> | null | undefined,
 ): boolean {
   if (!view) return false;
-  return CHOICE_TYPES.includes(view.question_type) && view.options.length > 0;
+  // `options` is required by the backend model, so the optional read is not for
+  // today's contract — it is because a field disappearing from a response has
+  // twice become a live outage here, and a chooser is not worth throwing the
+  // whole screen for. Absent reads the same as empty: fall back to free response.
+  return CHOICE_TYPES.includes(view.question_type) && (view.options?.length ?? 0) > 0;
+}
+
+/**
+ * POST /session/{id}/review/complete — tells the Student Model the topic review
+ * is finished.
+ *
+ * This is the event that advances the journey past Review
+ * (`REVIEW_COMPLETED`, session_service.py:1389). `/session/end` does NOT emit it
+ * — it only sets `status: "ended"` — so without this call a student who works
+ * all the way through Phase 4 is never recorded as having done so.
+ *
+ * Safe to send after `/session/end`: ending a session leaves `current_phase`
+ * alone, so the endpoint's "must be in REVIEW" guard still passes.
+ *
+ * Returns the updated record, or null on any failure. Null rather than a throw
+ * because this is bookkeeping the student cannot act on: a 409 means the backend
+ * does not consider us in Review, and neither that nor a network failure is a
+ * reason to trap someone on the review screen.
+ */
+export async function completeReview(
+  sessionId: string,
+  studentId: string,
+  turnId: string,
+): Promise<SessionRecord | null> {
+  try {
+    const res = await api.post<SessionRecord>(`/session/${sessionId}/review/complete`, {
+      student_id: studentId,
+      turn_id: turnId,
+    });
+    return res.data;
+  } catch (err) {
+    const status = (err as { response?: { status?: number } })?.response?.status;
+    console.warn(`[review] review/complete did not land (status ${status ?? 'none'}).`);
+    return null;
+  }
 }
 
 /** The orientation bundle for this session, or null when there isn't one. */
@@ -643,7 +687,10 @@ export function orientationSequence(
 ): SchemaOrientationItem[] {
   const bundle = orientationBundle(record);
   if (!bundle) return [];
-  return [...bundle.delivery_sequence].sort((a, b) => a.sequence_no - b.sequence_no);
+  // Spread-of-undefined throws "not iterable", and this runs in the render
+  // body of BackendOrientation rather than inside its load() try — so the
+  // screen renders nothing and its retry button looks broken.
+  return [...(bundle.delivery_sequence ?? [])].sort((a, b) => a.sequence_no - b.sequence_no);
 }
 
 /** Workbook topic code for this session (e.g. 'ALG-ORI-02'), or null. */
@@ -663,8 +710,11 @@ export function sessionTopicCode(record: SessionRecord | null | undefined): stri
  * nothing.
  */
 export function sessionTopicTitle(record: SessionRecord | null | undefined): string | null {
+  // The optional chain used to stop one link early. By review time this record
+  // carries a Phase 4 payload, where a bundle without a delivery_sequence is
+  // ordinary — and the throw landed on the final screen of the lesson.
   const video = orientationBundle(record)?.delivery_sequence
-    .find((item) => item.video?.title)?.video;
+    ?.find((item) => item.video?.title)?.video;
   return video?.title?.trim() || null;
 }
 
@@ -875,6 +925,118 @@ export function toSessionSummary(res: SessionEndResponse | null | undefined): Se
   };
 }
 
+// ── Phase 4 Review ────────────────────────────────────────────────────────────
+/**
+ * The tutor-review payload the frontend renders (Phase 4 spec §8).
+ *
+ * `tutor_replays` and `student_insights` are Sanya's engine output copied
+ * VERBATIM — the field names below are the ones already shipped in
+ * `app/models/phase4_review.py`, not a parallel invention. Chiru's orchestration
+ * (§6.10) validates that output, merges the authoritative backend evidence and
+ * sends the result here, so this type is deliberately her schema plus only what
+ * the screen cannot render without:
+ *
+ *   question_journey  the left rail (§8.4). Sanya never sees the CORRECT
+ *                     questions, and the rail has to show the whole Phase 3
+ *                     journey, so it cannot be derived from the replays.
+ *   question_text     shown above the tutor board. Present on Chiru's
+ *                     `ReplayItem` and dropped from her `TutorReplay`.
+ *   work_artifact     §8.4 asks for the student's original work and a page
+ *                     selector; her `TutorReplay` carries only `artifact_id`.
+ *
+ * Nothing here is computed client-side. §6.9 makes correctness, counts, mastery
+ * and routing authoritative backend data, and a screen that recomputes any of
+ * them is a second source of truth for the thing the spec says has one.
+ */
+/**
+ * The student's submitted Phase 3 work.
+ *
+ * One PDF per attempt, not a list of page images. §5.4 of the specification
+ * suggests Phase 4 "should primarily use the ordered page images", but the
+ * shipped storage contract does not produce them: `WorkArtifactPersistResponse`
+ * (nablix-backend/app/models/work_artifact.py, Chiru PR #156) returns
+ * `artifact_id`, `pdf_url` and `page_count` only, and the binary is a single
+ * combined PDF. Page references work through PDF page numbers instead, which is
+ * what `first_error.student_page_no` indexes into.
+ */
+export interface Phase4WorkArtifact {
+  artifact_id: string;
+  page_count: number;
+  pdf_url: string;
+}
+
+export interface Phase4FirstError {
+  summary: string;
+  /** Which page of the student's work the error is on. Null = not page-located. */
+  student_page_no?: number | null;
+}
+
+export interface Phase4ReplayStep {
+  sequence_no: number;
+  /** Spoken. */
+  narration: string;
+  /** Written onto the tutor board. */
+  tutor_write: string;
+}
+
+export interface Phase4Replay {
+  review_item_id: string;
+  question_id: string;
+  attempt_id: string;
+  artifact_id: string;
+  question_text: string;
+  first_error: Phase4FirstError;
+  replay_steps: Phase4ReplayStep[];
+  work_artifact: Phase4WorkArtifact;
+}
+
+/**
+ * §7.6. `learning_pattern_summary` and `recent_improvement_summary` are
+ * nullable BY DESIGN, not by omission: §7.6C says a single isolated occurrence
+ * must produce null rather than a claim, and §8.9 says the section is then
+ * hidden. Typing them as always-present would invite a screen that prints an
+ * empty heading where the spec asks for silence.
+ */
+export interface Phase4StudentInsights {
+  strength_summary: string;
+  development_summary: string;
+  learning_pattern_summary: string | null;
+  recent_improvement_summary: string | null;
+  next_practice_focus: string;
+  personalised_notes: string[];
+}
+
+export type Phase4Evaluation = 'CORRECT' | 'INCORRECT' | 'WRONG';
+
+/** One question from the Phase 3 journey, for the left rail. */
+export interface Phase4JourneyEntry {
+  question_id: string;
+  question_text: string;
+  evaluation: Phase4Evaluation;
+  /**
+   * The replay this question owns, or null when there is none.
+   *
+   * The link is explicit rather than matched on `question_id` because a single
+   * question can be answered wrong, repaired in Phase 2 and answered again
+   * (§3, Case C) — so question id alone does not identify an attempt, and
+   * matching on it would attach one replay to two rows.
+   */
+  review_item_id: string | null;
+}
+
+export interface Phase4Review {
+  student_id: string;
+  topic_id: string;
+  topic_title: string;
+  topic_outcome: { mastery_status: string; recommended_next_action: string };
+  question_journey: Phase4JourneyEntry[];
+  /** Wrong Phase 3 submissions only (§3). Empty is normal, not an error (§8.8). */
+  tutor_replays: Phase4Replay[];
+  student_insights: Phase4StudentInsights;
+  /** §5.8 `key_takeaways_json`. Falls back to `personalised_notes` — see keyTakeaways(). */
+  key_takeaways?: string[];
+}
+
 /** POST /session/end — student_id must own the session (else 404). */
 export async function endSession(sessionId: string, student: string = studentId()) {
   const res = await api.post<SessionEndResponse>('/session/end', {
@@ -883,6 +1045,7 @@ export async function endSession(sessionId: string, student: string = studentId(
   });
   return res.data;
 }
+
 
 // ── /interaction (text) ───────────────────────────────────────────────────────
 export interface InteractionCanvasState {
@@ -916,6 +1079,15 @@ export interface InteractionPayload {
   text_input?: string;
   /** Authoritative option identifier selected on a choice question. */
   selected_option_id?: string;
+  /**
+   * The exact authored wording of that option (revised handoff, frontend §1).
+   *
+   * Sent alongside the id, not instead of it: the id stays authoritative, and
+   * this is what lets a wrong choice get a focused explanation rather than
+   * generic fallback wording. Omitted when the option cannot be resolved — see
+   * lib/selectedOption.
+   */
+  selected_option_text?: string;
   /** Use for VOICE input instead of text_input. */
   voice_transcript?: string;
   transcript_confidence?: number;
@@ -1048,6 +1220,29 @@ export interface InteractionResponse extends GuidedStateFields, Phase3ResponseFi
   current_question: string | null;
   question_type?: QuestionType | null;
   question_id: string | null;
+  /**
+   * Spans inside `current_question` the tutor is pointing at (Chirudeva
+   * handoff, 18 Aug 2026 §1). Optional and often empty — "nothing to point at
+   * this turn" is the ordinary case, not a missing feature.
+   *
+   * The backend deliberately sends no coordinates and never will: we lay the
+   * question out, so resolving a span to a position is ours. See
+   * lib/questionAnchors.
+   */
+  question_anchors?: QuestionAnchor[];
+  /**
+   * How confident the backend is about WHERE on the canvas a symbol is
+   * (Chirudeva handoff §2).
+   *
+   *   grounded   — the marks in `canvas_draw` are precise; render them.
+   *   uncertain  — `canvas_draw` is empty ON PURPOSE. The tutor guides in text
+   *                and voice instead. NOT an error: show no failure, and never
+   *                fall back to marking something ourselves. The previous
+   *                behaviour could circle the wrong symbol confidently, which
+   *                is worse than not marking at all.
+   *   null       — no canvas evidence in this turn.
+   */
+  localization_status?: 'grounded' | 'uncertain' | null;
   interaction_mode: InteractionMode;
   message: string;
   message_voice: string;
@@ -1057,6 +1252,8 @@ export interface InteractionResponse extends GuidedStateFields, Phase3ResponseFi
   phase_indicator: string;
   /** Optional tutor drawing to render on the canvas alongside this reply. */
   canvas_draw?: CanvasDrawPayload[];
+  /** Coordinate-free Guided Practice tutor-layer actions. */
+  tutor_canvas_actions?: TutorCanvasAction[];
   /** OCR from the frozen voice-turn canvas. */
   ocr?: OcrResult | null;
   /** Whether to show the supporting visual cue after this turn. The backend also
@@ -1307,6 +1504,35 @@ function base64ByteSize(dataUrl: string): number {
   return Math.floor((base64.length * 3) / 4) - padding;
 }
 
+function isUnitCoordinate(value: number): boolean {
+  return Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
+export function canvasStrokesForSubmission(strokes: CanvasStrokeSnapshot[]): CanvasStrokeSnapshot[] {
+  return strokes.flatMap((stroke) => {
+    const points = stroke.points.filter(
+      (point) => isUnitCoordinate(point.x) && isUnitCoordinate(point.y),
+    );
+    return points.length > 0 ? [{ ...stroke, points }] : [];
+  });
+}
+
+export function canvasEventsForSubmission(canvasEvents: CanvasEvent[]): CanvasEvent[] {
+  return canvasEvents.map((event) => {
+    const bbox = event.bbox;
+    if (
+      bbox === null
+      || (isUnitCoordinate(bbox.x)
+        && isUnitCoordinate(bbox.y)
+        && isUnitCoordinate(bbox.w)
+        && isUnitCoordinate(bbox.h))
+    ) {
+      return event;
+    }
+    return { ...event, bbox: null };
+  });
+}
+
 /**
  * POST /canvas/submit — the only endpoint hitting a live AI provider (OCR).
  * Requires a started, owned, non-ended session. Guards the snapshot client-side
@@ -1372,12 +1598,16 @@ export async function submitCanvas(
     snapshot_data_url: snapshotDataUrl,
     // Field name and shape match `CanvasSubmitRequest.strokes` (canvas.py:108)
     // and are the same objects the voice turn already sends.
-    strokes,
+    // Canvas coordinates are stored in screen pixels. A viewport resize can
+    // leave historical off-screen points outside the current normalised stage;
+    // they are not visible in this snapshot and must not invalidate the whole
+    // submission. The remaining visible points still provide spatial evidence.
+    strokes: canvasStrokesForSubmission(strokes),
     // Not yet on `CanvasSubmitRequest`, and safe to send: the model does not
     // forbid extra fields, so it is ignored until Chirudeva adds it (§12
     // stage 2). Sending it now means the day the field lands, the data is
     // already arriving — no second frontend release in the middle of his work.
-    canvas_events: canvasEvents,
+    canvas_events: canvasEventsForSubmission(canvasEvents),
     submission_role: submissionRole,
   });
   return res.data;

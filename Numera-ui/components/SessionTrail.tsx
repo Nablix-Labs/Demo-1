@@ -10,6 +10,7 @@
  */
 import { useNumeraStore } from '@/store/useNumeraStore';
 import type { TrailKind } from '@/store/useNumeraStore';
+import TutorProse from '@/components/TutorProse';
 
 const LABELS: Record<TrailKind, string> = {
   question: 'Question',
@@ -54,7 +55,9 @@ export default function SessionTrail() {
                 )}
               </div>
               <p className="text-[13.5px] text-ink leading-snug mt-0.5 break-words">
-                {e.text}
+                {/* Tutor and hint entries are the tutor's own prose, so they
+                    carry its emphasis markers; the student's answer never does. */}
+                {e.kind === 'tutor' || e.kind === 'hint' ? <TutorProse text={e.text} /> : e.text}
               </p>
             </div>
             <time className="flex-shrink-0 text-[11px] text-slate-blue/70 tabular-nums">

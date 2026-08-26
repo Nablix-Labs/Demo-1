@@ -9,7 +9,7 @@ from pydantic import Field, StrictBool, model_validator
 
 from app.ai_engine.schemas import ErrorType, IntentType, LearningPhase, ResponseStrategy, StrictSchema, VisualCueType
 from app.models.guided_learning import GuidedStudentState
-from app.models.student_model_session import QuestionType, SupportUsed
+from app.models.student_model_session import QuestionType
 
 
 CONFIG_PATH: Path = Path("configs/classifier_rules.yaml")
@@ -138,6 +138,7 @@ class CanvasReviewConfig(StrictSchema):
     max_expression_characters: int = Field(ge=1)
     feedback_enabled_phases: list[LearningPhase]
     annotation_enabled_phases: list[LearningPhase]
+    semantic_localization_enabled: StrictBool
     messages: CanvasReviewMessagesConfig
 
 
@@ -172,24 +173,40 @@ class GuidedStateMappingConfig(StrictSchema):
     strategy: str | None
 
 
-class CanvasPedagogyPlannerConfig(StrictSchema):
-    action_reference_phrases: dict[str, list[str]]
-    safe_action_free_question: str
+class FallbackCanvasLabelsConfig(StrictSchema):
+    changing_value: str
+    fixed_value: str
+    operation: str
+    generic: str
+    operation_names: dict[str, str]
 
 
-class HybridPromptConfig(StrictSchema):
-    semantic_prompt: str
-    wording_prompt: str
+class CanvasRescueWordingConfig(StrictSchema):
+    parallel_step_suffix: str
+    parallel_final_suffix: str
+    tutor_solved_step_suffix: str
+    tutor_solved_final_suffix: str
+    tutor_solved_return_focus_text: str
+
+
+class CriticalThinkingConfig(StrictSchema):
+    """Configuration for controller-owned critical-thinking moves."""
+
+    distress_phrases: list[str]
+    frustration_phrases: list[str]
+    distress_message: str
+    frustration_acknowledgement: str
+    ambiguity_message: str
+    wrong_choice_prompt: str
+    single_case_defence_prompt: str
+    written_rule_prompt: str
 
 
 class GuidedLearningConfig(StrictSchema):
-    v1_hybrid_enabled: StrictBool
     minimum_voice_transcript_confidence: float = Field(ge=0.0, le=1.0)
     minimum_ocr_confidence: float = Field(ge=0.0, le=1.0)
-    canvas_pedagogy_action_planner_enabled: StrictBool
-    hybrid_support_ladder: list[SupportUsed]
-    canvas_pedagogy_planner: CanvasPedagogyPlannerConfig
-    hybrid_prompts: HybridPromptConfig
+    canvas_rescue_presentation_enabled: StrictBool
+    canvas_rescue_wording: CanvasRescueWordingConfig
     evaluation_mode: str
     confidence_threshold: float = Field(ge=0.0, le=1.0)
     state_confidence_thresholds: dict[
@@ -210,11 +227,16 @@ class GuidedLearningConfig(StrictSchema):
     explain_again_system_prompt: str
     scaffold_evaluator_system_prompt: str
     answer_reveal_retry_feedback: str
+    deterministic_follow_up_wording_feedback: str
     reconciliation_message: str
+    general_rule_fixed_value_prompt: str
+    general_rule_changing_value_prompt: str
     allowed_student_states: list[GuidedStudentState]
     supported_verification_methods: list[str]
     multi_component_question_types: list[QuestionType]
     llm_state_mapping: dict[GuidedStudentState, GuidedStateMappingConfig]
+    fallback_canvas_labels: FallbackCanvasLabelsConfig
+    critical_thinking: CriticalThinkingConfig
 
     @model_validator(mode="after")
     def require_state_confidence_thresholds(self) -> "GuidedLearningConfig":

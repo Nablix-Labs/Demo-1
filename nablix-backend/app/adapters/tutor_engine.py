@@ -115,6 +115,8 @@ class TutorEngineServiceAdapter:
                     max_hint_results=3,
                     exclude_content_ids=[],
                     canvas_regions=_coerce_canvas_regions(context.canvas_regions),
+                    canvas_ocr_text=context.canvas_ocr_text,
+                    canvas_ocr_confidence=context.ocr_confidence,
                     canvas_mathml_blocks=context.canvas_mathml_blocks,
                     spatial_tokens=context.spatial_tokens,
                     canvas_events=context.canvas_events,
@@ -290,6 +292,10 @@ def _tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:
             if response.phase3_review_evidence is not None
             else None
         ),
+        requires_written_math_evidence=response.requires_written_math_evidence,
+        write_instruction=response.write_instruction,
+        canvas_intentions=response.canvas_intentions,
+        tutor_canvas_actions=response.tutor_canvas_actions,
     )
 
 

@@ -14,6 +14,8 @@
  *   { type: 'tutor_audio_chunk',  chunk: string, chunk_index: number }   // base64 MP3
  *   { type: 'tutor_audio_end',    total_chunks: number, tts_latency_ms: number, error?: string }
  *   { type: 'tutor_audio_cancel', reason: string, expect_new_turn: boolean }    // Flux barge-in
+ *   { type: 'tutor_turn_committed', tutor_turn_id: string, accepted_turn_id: string, ... } // lineage only
+ *   { type: 'student_speaking',   turn_index: number }   // Flux StartOfTurn, every turn
  *
  * Message schema (out):
  *   { type: 'audio_chunk', data: string }  // base64 PCM 16kHz mono
@@ -24,21 +26,27 @@
 
 import { useEffect, useRef, useCallback } from 'react';
 import { phaseAnnouncement, withTransitionVoice } from '@/lib/phaseTransition';
+import { applyVoiceSessionFrame } from '@/lib/voiceSessionSync';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { tutorAudioStream, effectiveVoice, stopTutorSpeech } from '@/lib/tts';
-import { tutorSay } from '@/lib/tutorSpeech';
+import { tutorSay, setStudentWriting, isPenDown } from '@/lib/tutorSpeech';
 import { buildVoiceStreamUrl, voiceStreamingEnabled, allowAnonTutorCalls } from '@/lib/runtimeConfig';
 import {
   ANON_ACCESS_TOKEN, studentId, voiceTurnFailedMessage, transcriptUnclearMessage,
   type QuestionType,
 } from '@/lib/api';
 import { resetSessionStart } from '@/hooks/useDemoTutor';
-import { applyInteractionSupport, acceptResponse, type SupportPresentation } from '@/lib/interactionPresentation';
+import { applyInteractionSupport, acceptResponse } from '@/lib/interactionPresentation';
+import { voiceSupportFrame } from '@/lib/voiceSupportFrame';
 import { TurnWatchdog } from '@/lib/turnWatchdog';
 import { SpeechSettleTimer } from '@/lib/speechSettle';
 import { turnContextFrame } from '@/lib/voiceTurnContext';
 import { reopensStudentTurn, type TutorAudioCancelFrame } from '@/lib/tutorAudioCancel';
+import { committedLineage, type TutorTurnCommittedFrame } from '@/lib/tutorTurnCommitted';
+import { interruptsTutor } from '@/lib/bargeIn';
+import { registerRescueTransport } from '@/lib/rescueEvents';
+import { useMicLevel } from '@/store/useMicLevel';
 import { reportFailure } from '@/lib/failureReport';
 
 
@@ -116,10 +124,15 @@ export function useWebSocket(sessionId: string | null) {
       const frame = { type, ...extra };
       logFrame('out', frame);
       wsRef.current.send(JSON.stringify(frame));
+      return true;
     } else {
       // Dropping silently made rescues invisible: the watchdog's `stop` and
       // every turn_context could vanish with no trace in the console.
       console.warn(`[WS] dropped '${type}' — socket not open`);
+      // Reported, not thrown. Callers that latch UI state on a send (the rescue
+      // "Next step" button) need to know it went nowhere; everyone else ignores
+      // it exactly as before.
+      return false;
     }
   }, []);
 
@@ -137,6 +150,96 @@ export function useWebSocket(sessionId: string | null) {
     const { type, ...fields } = frame;
     sendControl(type, fields);
   }, [sendControl]);
+
+  /**
+   * Carry rescue events out over the voice socket.
+   *
+   * PROVISIONAL. The handoff fixes the event bodies but not their transport —
+   * there is no `/rescue/advance` endpoint and no agreed frame name — so these
+   * go out under `rescue_step_advance` / `rescue_render_ack` and will be
+   * ignored by a server that does not know them yet. Nothing depends on a
+   * reply: the panel advances only when a new step actually arrives, so an
+   * unrouted event costs the student nothing beyond the step not advancing,
+   * which is the correct behaviour when the backend has not agreed to it.
+   */
+  useEffect(() => {
+    registerRescueTransport((event) => {
+      const type = 'event_type' in event ? 'rescue_step_advance' : 'rescue_render_ack';
+      return sendControl(type, event as unknown as Record<string, unknown>);
+    });
+    return () => registerRescueTransport(null);
+  }, [sendControl]);
+
+  /**
+   * Put the student's working in front of the tutor on a voice turn.
+   *
+   * The gap this closes: `sendCanvasSubmission` existed, was returned from this
+   * hook, and was called by nothing. The canvas reached the backend by exactly
+   * one route — tapping "Check", over REST — so a student who wrote `n + 5` and
+   * then SAID "I fully written that in the Canvas, please check the Canvas" had
+   * submitted nothing, and the tutor re-asked the question they had just
+   * answered (Manjusha, 22 Aug).
+   *
+   * Sent at StartOfTurn rather than at the end. The voice server latches a
+   * snapshot from ANY inbound frame (Aditya, 22 Aug — `canvas_snapshot` or
+   * `png`, and `png` is what this frame already sends), so getting it there
+   * before the turn is processed is what matters. `stop` was the obvious hook
+   * and is a dead end: Flux ends turns itself, so on this path there is no
+   * ordinary `stop` frame to attach anything to.
+   *
+   * Once per turn, and only when the student has actually drawn: a PNG export
+   * is not free on a tablet, and a blank canvas is worth nothing to the tutor
+   * or to the OCR behind it.
+   */
+  const canvasSentForTurnRef = useRef<string | null>(null);
+  const sendCanvasForTurn = useCallback(() => {
+    const s = useNumeraStore.getState();
+    const turnId = s.currentTurnId;
+    if (!turnId || canvasSentForTurnRef.current === turnId) return;
+    if (s.items.length === 0) return;
+    const snapshot = s.canvasExporter?.();
+    if (!snapshot?.snapshotDataUrl) return;
+    canvasSentForTurnRef.current = turnId;
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      logFrame('out', {
+        type: 'canvas_submission',
+        png_bytes: snapshot.snapshotDataUrl.length,
+        strokes: snapshot.strokes.length,
+      });
+      wsRef.current.send(JSON.stringify({
+        type: 'canvas_submission',
+        png: snapshot.snapshotDataUrl,
+        strokes: snapshot.strokes,
+      }));
+    } else {
+      console.warn('[WS] dropped canvas_submission — socket not open');
+    }
+  }, []);
+
+  /**
+   * Send turn context for a turn that was minted somewhere else.
+   *
+   * Every `beginListeningTurn()` inside this hook is paired with an explicit
+   * `sendTurnContext()`. The ones OUTSIDE it are not, and cannot be: app/page.tsx
+   * mints turns from tutorSay's onEnd (the opening line, and every entry into
+   * guided practice) but only destructures `{ sendAudioChunk, sendControl }` —
+   * it has no access to this. lib/tutorSpeech now mints one too, when the pen
+   * silences the tutor.
+   *
+   * The server clears its latched turn fields after each turn, so a turn minted
+   * with no context is evaluated against the PREVIOUS turn's id: the reply comes
+   * back with an accepted_turn_id that fails the ordering gate and is dropped as
+   * stale. Self-healing, but it costs a turn every time — "the first thing I say
+   * after the intro doesn't register".
+   *
+   * Subscribing to the id rather than patching each call site means a turn
+   * minted anywhere is covered, including any added later. Re-sending context
+   * the paired sites already sent is harmless: the server latches the most
+   * recent frame, and the values are identical.
+   */
+  useEffect(() => useNumeraStore.subscribe((state, prev) => {
+    if (state.currentTurnId && state.currentTurnId !== prev.currentTurnId) sendTurnContext();
+  }), [sendTurnContext]);
 
   const connect = useCallback(() => {
     if (!sessionId || !voiceStreamingEnabled) return;
@@ -227,6 +330,27 @@ export function useWebSocket(sessionId: string | null) {
 
         switch (msg.type) {
           case 'transcript_partial':
+            // Talking over the tutor. This partial arriving WHILE audio is
+            // playing is the only evidence either side has that it is an
+            // interruption rather than an answer: the server cannot see our
+            // playback, and we cannot see the student's speech. See lib/bargeIn.
+            if (interruptsTutor({
+              audioPlaying: useMicLevel.getState().aiSpeaking,
+              text: msg.text as string,
+            })) {
+              console.log('[WS] student spoke over the tutor — stopping playback');
+              // Chunks already delivered are still buffered; hardStop inside
+              // this clears them, which is the tail the student would otherwise
+              // hear after they started talking.
+              discardAudioRef.current = true;
+              stopTutorSpeech();
+              // Stopping does not run the audio-idle path, so nothing else
+              // opens the student's next turn — and without a fresh turn_id the
+              // interruption reaches the backend under the previous turn's
+              // identity. Same reasoning as the tutor_audio_cancel handler.
+              useNumeraStore.getState().beginListeningTurn();
+              sendTurnContext();
+            }
             updatePartialTranscript(msg.text as string);
             // Still talking — anything pending belongs to an unfinished turn.
             processingTimerRef.current?.noteSpeech();
@@ -253,9 +377,67 @@ export function useWebSocket(sessionId: string | null) {
             // final while the student is still saying "…5". So this restarts
             // the settle clock like a partial does; it does not end the turn.
             if (msg.role === 'student') {
+              // Speaking hands the floor back, exactly as submitting the canvas
+              // does (Manjusha, 22 Aug: wrote "n + 5", said "check the Canvas",
+              // and the tutor went silent for the rest of the question).
+              //
+              // `setStudentWriting(true)` fires on pen-down, and until now the
+              // ONLY things that cleared it were the "Check" button, Explain
+              // Again, and loading a fresh question. A student who wrote and
+              // then talked — rather than tapping Check — left it stuck true,
+              // and `tutorSay` drops every utterance while it is, so the tutor
+              // rendered text it never spoke. Half the reports of "it stopped
+              // talking to me" after writing are this.
+              //
+              // Safe against the rule it relaxes: §1 keeps the tutor quiet
+              // while the student WRITES, and a student who is talking to the
+              // tutor is no longer mid-stroke. Same reasoning Explain Again
+              // already uses for its explicit handoff.
+              // ...but not while the pen is physically down: a transcript is not
+              // proof the STUDENT spoke, and the tutor must not talk over a hand
+              // that is still moving. Once it lifts, this is the ordinary
+              // "I've written it, check the canvas" handoff.
+              if (!isPenDown()) setStudentWriting(false);
+              // Fallback: if student_speaking never arrived, this is the last
+              // moment the working can still reach the tutor for this turn.
+              // Deduped per turn id, so the ordinary path sends once.
+              sendCanvasForTurn();
               watchdogRef.current?.noteStudentSpeech(useNumeraStore.getState().currentTurnId);
               processingTimerRef.current?.noteSpeech();
             }
+            break;
+
+          // Flux reported StartOfTurn (Aditya, 22 Aug 2026). Sent on EVERY turn,
+          // unfiltered and by design — the server cannot see whether audio is
+          // coming out of the speaker, so it reports the fact and leaves the
+          // judgement here, where `aiSpeaking` is known.
+          //
+          // Same decision as a partial arriving during playback, just earlier:
+          // it lands at the start of the turn rather than after the recogniser
+          // has produced text, which is the whole point of the frame. The
+          // partial path below still stands, unchanged — if this frame never
+          // arrives, nothing is lost but the head start.
+          case 'student_speaking':
+            if (interruptsTutor({
+              audioPlaying: useMicLevel.getState().aiSpeaking,
+              text: null,
+              serverReportedTurnStart: true,
+            })) {
+              console.log('[WS] student_speaking during playback — stopping');
+              discardAudioRef.current = true;
+              stopTutorSpeech();
+              // Identical to the partial path: stopping does not run the
+              // audio-idle path, so without this the interruption reaches the
+              // backend under the previous turn's id.
+              useNumeraStore.getState().beginListeningTurn();
+              sendTurnContext();
+            }
+            // The student is answering. Put whatever they have written in
+            // front of the tutor now, while the turn is still open — the
+            // server latches it from any frame and reads it when the turn is
+            // processed.
+            sendCanvasForTurn();
+            processingTimerRef.current?.noteSpeech();
             break;
 
           case 'session_state':
@@ -362,22 +544,7 @@ export function useWebSocket(sessionId: string | null) {
             // applyInteractionSupport returns the line the tutor should SAY —
             // the scaffold step's voice line when a panel is open, else the
             // message. Kept as the stream's fallback text below.
-            const spokenLine = applyInteractionSupport({
-              message: msg.text as string,
-              support_message: msg.support_message as string | null | undefined,
-              show_visual_cue: msg.show_visual_cue as boolean | undefined,
-              visual_cue: msg.visual_cue as SupportPresentation['visual_cue'],
-              show_scaffold_panel: msg.show_scaffold_panel as boolean | undefined,
-              scaffold_id: msg.scaffold_id as string | null | undefined,
-              current_scaffold_step_id:
-                msg.current_scaffold_step_id as string | null | undefined,
-              scaffold_step_number:
-                msg.scaffold_step_number as number | null | undefined,
-              scaffold_step_text: msg.scaffold_step_text as string | null | undefined,
-              scaffold_step_voice: msg.scaffold_step_voice as string | null | undefined,
-              total_scaffold_steps:
-                msg.total_scaffold_steps as number | null | undefined,
-            });
+            const spokenLine = applyInteractionSupport(voiceSupportFrame(msg));
             addTranscriptMessage({ role: 'ai', text: msg.text as string });
             if (Array.isArray(msg.canvas_draw) && msg.canvas_draw.length > 0)
               applyCanvasDraw(msg.canvas_draw as Parameters<typeof applyCanvasDraw>[0]);
@@ -389,22 +556,10 @@ export function useWebSocket(sessionId: string | null) {
             // store and the routing never followed it. What a null question then
             // means depends on whether the phase moved — applyBackendPhase owns
             // that rule, and both transports go through it.
-            if (typeof msg.current_phase === 'string') {
-              useNumeraStore.getState().applyBackendPhase({
-                phase: msg.current_phase as string,
-                questionId: (msg.question_id as string | null) ?? null,
-                questionText:
-                  typeof msg.current_question === 'string' ? msg.current_question : null,
-                // The voice server does not always forward this. Passing
-                // undefined rather than null lets applyBackendPhase keep the
-                // type it already has instead of blanking a choice question
-                // into a free-response one mid-lesson.
-                questionType:
-                  typeof msg.question_type === 'string'
-                    ? (msg.question_type as QuestionType)
-                    : undefined,
-              });
-            }
+            // Session state for this frame — record refresh, question number,
+            // phase change and the reveal hold. Extracted so the wiring itself
+            // is testable; see lib/voiceSessionSync for why that matters.
+            applyVoiceSessionFrame(msg);
             // Record the tutor turn, exactly as the REST path does (contract
             // §11, useDemoTutor). This was missing entirely, and setTutorTurn
             // had only ever been called there — so on the server transport
@@ -456,7 +611,13 @@ export function useWebSocket(sessionId: string | null) {
             tutorAudioStream.begin(
               withTransitionVoice(
                 enteringPhase,
-                (typeof msg.voice_text === 'string' && msg.voice_text) || spokenLine,
+                // Coerced, because withTransitionVoice calls .trim() on this and
+                // the argument is evaluated BEFORE begin() runs. A null `text`
+                // on a phase-change turn therefore threw here — after
+                // setVoiceStatus('speaking') and after the watchdog stood down —
+                // so begin() never ran, onIdle never fired, and the mic stayed
+                // shut for the rest of the session behind a "Speaking…" panel.
+                (typeof msg.voice_text === 'string' && msg.voice_text) || spokenLine || '',
               ),
             );
             break;
@@ -495,6 +656,35 @@ export function useWebSocket(sessionId: string | null) {
               useNumeraStore.getState().beginListeningTurn();
               sendTurnContext();
             }
+            break;
+          }
+
+          // A turn the student barged in on, which the backend committed anyway.
+          // Lineage only — see lib/tutorTurnCommitted for why it renders nothing.
+          case 'tutor_turn_committed': {
+            const lineage = committedLineage(msg as TutorTurnCommittedFrame);
+            if (!lineage) break;
+            // Gate on version before adopting it. The frame is already two to
+            // four seconds old when it lands, so it is exactly the shape of
+            // message that can arrive after a newer turn has resolved — and
+            // moving the pointer BACKWARDS onto an abandoned turn would make
+            // every turn after it STALE_TURN, which is the failure this frame
+            // was added to fix.
+            if (!acceptResponse(msg as Parameters<typeof acceptResponse>[0])) break;
+            useNumeraStore.getState().noteTutorLineage(lineage);
+            // Re-send the context for the turn ALREADY in progress.
+            //
+            // Without this the fix does nothing. The server evaluates a turn
+            // against whichever context frame arrived most recently, and ours
+            // went out on `tutor_audio_cancel` seconds ago — carrying the
+            // pointer we had then, which is the stale one. Updating the store
+            // alone would leave the live turn to fail as STALE_TURN exactly as
+            // it did at 11:08; the corrected pointer has to reach the server
+            // before it dispatches, and this is the only frame that carries it.
+            //
+            // Same turn_id as the frame sent at cancel time, deliberately: this
+            // revises the turn in flight, it does not open another one.
+            sendTurnContext();
             break;
           }
 
@@ -547,7 +737,13 @@ export function useWebSocket(sessionId: string | null) {
             }
             addTranscriptMessage({
               role: 'ai',
-              text: voiceTurnFailedMessage(msg.message as string | undefined),
+              // String()d like the sibling read a few lines up: an error frame
+              // shaped {code, detail} rather than {message} threw inside
+              // voiceTurnFailedMessage's .toLowerCase(), which skipped the
+              // beginListeningTurn() below and froze the turn on "Processing…".
+              text: voiceTurnFailedMessage(
+                typeof msg.message === 'string' ? msg.message : undefined,
+              ),
             });
             // Same as the REST path: the tutor owes them a reply, so the idle
             // clock must not read the silence that follows as being stuck and
@@ -611,7 +807,7 @@ export function useWebSocket(sessionId: string | null) {
       }
     };
 
-  }, [sessionId, ttsProvider, ttsVoice, sendControl, sendTurnContext, addTranscriptMessage, updatePartialTranscript, commitPartialTranscript, setSessionState, setVoiceStatus, applyCanvasDraw]);
+  }, [sessionId, ttsProvider, ttsVoice, sendControl, sendTurnContext, sendCanvasForTurn, addTranscriptMessage, updatePartialTranscript, commitPartialTranscript, setSessionState, setVoiceStatus, applyCanvasDraw]);
 
   useEffect(() => {
     connect();

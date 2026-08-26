@@ -20,6 +20,7 @@
  * markBoundary), so the face animates the same way regardless of engine.
  */
 
+import { stripTutorMarkdown } from '@/lib/tutorMarkdown';
 import { useMicLevel } from '@/store/useMicLevel';
 import { useAuthStore } from '@/store/useAuthStore';
 import { defaultVoiceForTier, providersForTier } from '@/lib/voiceOptions';
@@ -34,13 +35,43 @@ const STALL_TICKS = 6;
 
 const MOUTH_PULSE_MS = 180;
 
+/**
+ * How fast the tutor speaks, as a multiplier. 1 is the natural pace.
+ *
+ * Module-level rather than a store value because it has to be readable from
+ * inside the audio callbacks below, which run outside React, and because it is
+ * a playback setting rather than lesson state — nothing about the session
+ * changes when a student slows the tutor down.
+ *
+ * Applied at both playback sites. Setting it on only the generated-audio path
+ * would mean a student who had slowed the tutor down heard it snap back to full
+ * speed the moment the provider failed over to browser speech, which is exactly
+ * when they would be least able to follow it.
+ */
+let tutorRate = 1;
+
+/** Clamped to what both engines can actually do — speechSynthesis ignores
+ *  anything outside 0.1–10 and generated audio distorts badly past 2×. */
+export function setTutorSpeechRate(rate: number): void {
+  tutorRate = Math.min(2, Math.max(0.5, rate));
+  // Take effect on the clip already playing, not only the next one: a student
+  // reaches for the speed control because THIS sentence is going too fast.
+  if (currentAudio) currentAudio.playbackRate = tutorRate;
+}
+
+export function tutorSpeechRate(): number {
+  return tutorRate;
+}
+
 // ── Browser engine (Web Speech API) ──────────────────────────────────────────
 export function speakBrowser(text: string, onEnd?: () => void): void {
   if (typeof window === 'undefined' || !('speechSynthesis' in window) || !text) {
     onEnd?.();
     return;
   }
-  const utterance = new SpeechSynthesisUtterance(text);
+  // The tutor emphasises with **…**; an engine must never be handed the markers.
+  const utterance = new SpeechSynthesisUtterance(stripTutorMarkdown(text));
+  utterance.rate = tutorRate;
   utterance.onstart = () => useMicLevel.getState().setAiSpeaking(true);
   utterance.onboundary = () => useMicLevel.getState().markBoundary();
   utterance.onend = () => { useMicLevel.getState().setAiSpeaking(false); onEnd?.(); };
@@ -179,6 +210,7 @@ function playBase64Mp3(
   onEnd?: () => void,
 ): void {
   const audio = new Audio(`data:${AUDIO_MIME};base64,${base64}`);
+  audio.playbackRate = tutorRate;
   currentAudio = audio;
   let mouthTimer: ReturnType<typeof setInterval> | null = null;
   let settled = false;
@@ -263,6 +295,9 @@ const coolingOff = (provider: string | null): boolean => {
  */
 export function speakTutor(text: string, onEnd?: () => void): void {
   if (!text) { onEnd?.(); return; }
+  // Speak the words, not the markdown the tutor wrote them in. The chat bubble
+  // renders the same string with the emphasis applied (lib/tutorMarkdown).
+  text = stripTutorMarkdown(text);
   stopTutorSpeech();
   if (!ttsApiEnabled()) { speakBrowser(text, onEnd); return; }
   const token = speakToken;

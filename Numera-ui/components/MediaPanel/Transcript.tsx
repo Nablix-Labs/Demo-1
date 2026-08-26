@@ -3,6 +3,7 @@
 import { useEffect, useRef } from 'react';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { cn } from '@/lib/cn';
+import TutorProse from '@/components/TutorProse';
 
 export default function Transcript() {
   const transcript = useNumeraStore((s) => s.transcript);
@@ -59,7 +60,7 @@ export default function Transcript() {
                 msg.partial ? 'border-dashed italic text-slate-blue' : ''
               )}
             >
-              {msg.text}
+              <TutorProse text={msg.text} />
               {msg.partial && (
                 <span className="ml-1 text-[10px] text-slate-blue">{waitingLabel}</span>
               )}

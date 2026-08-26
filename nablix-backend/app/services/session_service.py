@@ -9,8 +9,13 @@ from typing_extensions import NotRequired
 
 from app.adapters.provider import get_adapters
 from app.core.config import get_settings
-from app.core.exceptions import JourneyVersionConflict
+from app.core.exceptions import DOWNSTREAM_FAILURE, JourneyVersionConflict
 from app.core.logger import logger
+from app.ai_engine.phase4_review import generate_phase4_review
+from app.models.phase4_review import Phase4ReviewResponse, QuestionJourneyItem
+from app.models.work_artifact import Phase4ReviewPersistRequest
+from app.services.phase4_context_builder import build_phase4_review_request
+from app.services.phase4_replay_filter import PHASE_3, filter_replay_attempts
 from app.models.adapters import ConversationMessage, StudentModelResult, VisualCue, VisionOCRResult
 from app.models.canvas import CanvasQuestionMemory, CanvasStroke, CanvasSubmissionRecord
 from app.models.canvas_memory import CanvasEvent
@@ -35,7 +40,6 @@ from app.models.session import (
     SessionSummary,
     VoiceState,
 )
-from app.models.session_review import SessionReviewResponse
 from app.models.student_model_session import (
     DiagnosticResult,
     DiagnosticCompletedEvent,
@@ -537,6 +541,16 @@ async def start_session(
             else None
         ),
     )
+    # A session can OPEN in Review: the student finished Independent Practice,
+    # left, and came back. That path never ran through _apply_schema_event, and
+    # generate_phase4_review_for is only reachable from there, so a resumed
+    # Review rendered the screen with no review on it, permanently. The message
+    # two fields up ("Session Review -- practice questions complete.") shows the
+    # path was always intended; only the review was missing.
+    if session.current_phase == "REVIEW":
+        session = session.model_copy(
+            update={"phase4_review": await generate_phase4_review_for(session, event)}
+        )
     _sessions[session_id] = session
     await save_session(session)
     return session
@@ -753,11 +767,134 @@ def _require_schema_phase(
         )
 
 
+# Shown when Student Model reports it has no question left to serve. Deliberately
+# vague about the cause: a missing question is our problem to fix, not something
+# to explain to a child mid-lesson.
+CONTENT_GAP_MESSAGE = (
+    "That is everything I have ready for this topic right now. "
+    "Your work so far is saved."
+)
+
+
+async def generate_phase4_review_for(
+    session: SessionRecord,
+    event: StudentModelSessionEventResponse,
+) -> Phase4ReviewResponse | None:
+    """Review the finished topic as the student enters Phase 4.
+
+    A failure here must not strand the student outside Review, so the phase
+    transition still happens and the review is simply absent; the frontend
+    shows the topic outcome without a tutor replay.
+    """
+
+    try:
+        history = await get_adapters().student_model.fetch_topic_event_history(
+            session.student_id,
+            event.journey_state.topic_id,
+        )
+        request = build_phase4_review_request(
+            history,
+            filter_replay_attempts(history.attempts),
+            event.journey_state.mastery_status,
+            event.routing.next_action,
+        )
+        review = generate_phase4_review(request)
+    # ValueError covers Phase4ContextError, Phase4ReviewValidationError and
+    # pydantic's ValidationError, so malformed evidence degrades to no review
+    # rather than stranding the student outside Review.
+    except (*DOWNSTREAM_FAILURE, ValueError) as error:
+        logger.warning(
+            "phase4_review_not_generated",
+            extra={
+                "session_id": session.session_id,
+                "topic_id": event.journey_state.topic_id,
+                "status_code": getattr(error, "status_code", None),
+                "error": str(error),
+            },
+        )
+        return None
+
+    # Deterministic fields the model was never asked for: forwarded straight
+    # from the request that was just built, not generated.
+    replay_context_by_id = {item.review_item_id: item for item in request.replay_items}
+    review = review.model_copy(
+        update={
+            "tutor_replays": [
+                replay.model_copy(
+                    update={
+                        "question_text": replay_context_by_id[replay.review_item_id].question_text,
+                        "work_artifact": replay_context_by_id[replay.review_item_id].work_artifact,
+                    }
+                )
+                if replay.review_item_id in replay_context_by_id
+                else replay
+                for replay in review.tutor_replays
+            ],
+            "topic_outcome": request.topic_outcome,
+            "question_journey": [
+                QuestionJourneyItem(
+                    question_id=attempt.question_id,
+                    evaluation=attempt.evaluation,
+                    hint_used=attempt.hint_used,
+                    independent_success=attempt.independent_success,
+                    attempted_at=attempt.attempted_at,
+                )
+                for attempt in history.attempts
+                if attempt.phase == PHASE_3
+            ],
+        }
+    )
+
+    try:
+        await get_adapters().student_model.persist_phase4_review(
+            Phase4ReviewPersistRequest(
+                student_id=session.student_id,
+                topic_id=event.journey_state.topic_id,
+                tutor_replays=[
+                    replay.model_dump(mode="json") for replay in review.tutor_replays
+                ],
+                student_insights=review.student_insights.model_dump(mode="json"),
+            ),
+        )
+    except DOWNSTREAM_FAILURE as error:
+        # The review is already generated; the student should still see it
+        # even if it could not be stored for reuse.
+        logger.warning(
+            "phase4_review_not_persisted",
+            extra={
+                "session_id": session.session_id,
+                "topic_id": event.journey_state.topic_id,
+                "status_code": getattr(error, "status_code", None),
+                "error": str(error),
+            },
+        )
+    return review
+
+
 async def _apply_schema_event(
     session: SessionRecord,
     event: StudentModelSessionEventResponse,
 ) -> SessionRecord:
     payload = event.phase_payload
+    # Student Model raises these when it cannot serve content and a human has to
+    # act -- a fresh Phase 3 question that does not exist, for instance. Nothing
+    # here consumed them, so the student was left on a screen with no question
+    # and no explanation, and nothing in the logs said why. Surfaced rather than
+    # raised: the session is still valid, and failing the turn would strand the
+    # student instead of the content.
+    if event.routing.content_gap_detected or event.status.intervention_required:
+        logger.warning(
+            "student_model_content_gap",
+            extra={
+                "session_id": session.session_id,
+                "reason_code": event.routing.reason_code,
+                "next_action": event.routing.next_action,
+                "status_code": event.status.status_code,
+                "missing_micro_skill_ids": event.routing.missing_micro_skill_ids,
+                "intervention_reason": event.status.intervention_reason,
+            },
+        )
+
     has_questions = (
         payload is not None
         and payload.question_set is not None
@@ -851,6 +988,16 @@ async def _apply_schema_event(
         updates["orientation_messages"] = phase1_messages
         if next_phase == session.current_phase:
             updates["message"] = phase1_messages.before_video_message
+    # A content gap that leaves no question to answer is the one case where the
+    # student cannot act and cannot be told why by the tutor: the last thing they
+    # heard was a promise of a fresh question that Student Model has just said it
+    # cannot serve. Saying nothing leaves that promise standing.
+    if (
+        event.routing.content_gap_detected
+        and not has_questions
+        and updates.get("question_id", session.question_id) is None
+    ):
+        updates["message"] = CONTENT_GAP_MESSAGE
     next_question_id = (
         session.question_id
         if question_updates is None
@@ -859,11 +1006,6 @@ async def _apply_schema_event(
     if next_question_id != session.question_id:
         updates.update(
             {
-                "question_number": (
-                    session.question_number + 1
-                    if next_question_id is not None
-                    else session.question_number
-                ),
                 "attempt_count": 0,
                 "question_completed": next_question_id is None,
                 "generated_question_rubric": None,
@@ -894,6 +1036,11 @@ async def _apply_schema_event(
                 ],
             }
         )
+        if next_phase == "REVIEW":
+            updates["phase4_review"] = await generate_phase4_review_for(
+                session,
+                event,
+            )
         phase0_config = load_phase0_tutor_config()
         transition_message = (
             _orientation_entry_message(event)
@@ -1276,6 +1423,7 @@ async def resume_session(
     request_id = _schema_request_id(session, request.turn_id, "SESSION_RESUMED")
     if stored_event.request_id == request_id:
         return session
+    last_activity_at = request.last_activity_at or session.last_tutor_response_at
     event = SessionResumedEvent(
         request_id=request_id,
         event_type="SESSION_RESUMED",
@@ -1284,9 +1432,16 @@ async def resume_session(
         topic_id=stored_event.journey_state.topic_id,
         student_id=session.student_id,
         timestamp=_schema_timestamp(),
-        last_activity_at=request.last_activity_at.isoformat().replace("+00:00", "Z"),
-        continuity_threshold_days=request.continuity_threshold_days,
-        saved_journey=request.saved_journey,
+        last_activity_at=last_activity_at.isoformat().replace("+00:00", "Z"),
+        continuity_threshold_days=(
+            request.continuity_threshold_days
+            or get_settings().resume_continuity_threshold_days
+        ),
+        saved_journey=(
+            request.saved_journey
+            if request.saved_journey is not None
+            else stored_event.journey_state.model_dump(mode="json")
+        ),
     )
     response = await get_adapters().student_model.send_session_event(event, access_token)
     return await _apply_schema_event(session, response)
@@ -1373,202 +1528,16 @@ def assemble_session_summary(session: SessionRecord, ended_at: datetime) -> Sess
     )
 
 
-def _empty_session_review() -> SessionReviewResponse:
-    """Return the safe review contract for a session with no attempts."""
-
-    return SessionReviewResponse(
-        five_category_summary={
-            "category_1_strength": "No questions were attempted in this session.",
-            "category_2_first_error": None,
-            "category_3_pattern": None,
-            "category_4_next_practice": "Start a new practice session when ready.",
-            "category_5_mastery": "There is not enough attempt evidence to assess mastery.",
-        },
-        student_facing_summary="This session ended without any recorded attempts.",
-        b6_hook=None,
-        call_to_action="NONE",
-        voice_delivery_order=[
-            "category_1_strength",
-            "category_4_next_practice",
-            "category_5_mastery",
-            "student_facing_summary",
-        ],
-        answer_reveal_allowed=False,
-        guardrail_passed=True,
-    )
-
-
-_PHASE_WORDS: dict[str, str] = {
-    "DIAGNOSTIC": "diagnostic",
-    "CONCEPT_ORIENTATION": "concept",
-    "GUIDED_PRACTICE": "guided practice",
-    "INDEPENDENT_PRACTICE": "independent practice",
-    "REVIEW": "review",
-}
-
-
-def _review_hint_level(hint_level: int) -> int | None:
-    return min(hint_level, 3) if hint_level > 0 else None
-
-
-def build_session_review_request(session: SessionRecord) -> "SessionReviewRequest":
-    """Map the stored session onto Chirudeva's strict session-review contract.
-
-    Evidence descriptions deliberately contain no digits or question text: the
-    review guardrail rejects any evidence that echoes a protected answer, and
-    algebra questions can contain their own answer as a coefficient.
-    """
-
-    from app.models.session_review import SessionReviewRequest
-
-    attempts: list[dict[str, object]] = []
-    attempt_numbers: dict[str, int] = {}
-    error_counts: dict[str, int] = {}
-    for record in session.per_question_history:
-        number = attempt_numbers.get(record.question_id, 0) + 1
-        attempt_numbers[record.question_id] = number
-        correct = record.evaluation == "CORRECT"
-        phase_word = _PHASE_WORDS.get(record.phase, "practice")
-        if not correct and record.error_type is not None:
-            error_counts[record.error_type] = error_counts.get(record.error_type, 0) + 1
-        attempts.append(
-            {
-                "question_id": record.question_id,
-                "phase": record.phase,
-                "attempt_number": number,
-                "evaluation": record.evaluation,
-                "error_type": record.error_type,
-                "hint_level_used": _review_hint_level(record.hint_level_used),
-                "independent_success": (
-                    correct
-                    and record.phase == "INDEPENDENT_PRACTICE"
-                    and record.hint_level_used == 0
-                ),
-                "canvas_submitted": record.input_source == "CANVAS",
-                "canvas_first_error_step": None,
-                "canvas_first_error_type": None,
-                "successful_step_descriptions": (
-                    [f"Reached the correct final answer on a {phase_word} question"]
-                    if correct
-                    else []
-                ),
-                "error_description": (
-                    None
-                    if correct
-                    else f"Did not reach the correct final answer on a {phase_word} question"
-                ),
-                "rescue_activated": False,
-            }
-        )
-    if not any(attempt["successful_step_descriptions"] for attempt in attempts) and attempts:
-        attempts[0]["successful_step_descriptions"] = [
-            "Kept attempting every question through the session"
-        ]
-
-    correct_attempts = sum(
-        record.evaluation == "CORRECT" for record in session.per_question_history
-    )
-    phases_completed: list[Phase] = []
-    for transition in session.phase_transitions:
-        if transition.previous_phase not in phases_completed:
-            phases_completed.append(transition.previous_phase)
-    if session.current_phase not in phases_completed:
-        phases_completed.append(session.current_phase)
-
-    student = session.last_student_model
-    dominant_error = max(error_counts, key=error_counts.get) if error_counts else None
-    recommended = session.recommended_entry_phase
-    if recommended not in _PHASE_WORDS:
-        recommended = session.current_phase
-
-    return SessionReviewRequest.model_validate(
-        {
-            "session_summary": {
-                "session_id": session.session_id,
-                "student_id": session.student_id,
-                "concept_id": session.concept_id,
-                "session_date": session.started_at.isoformat(),
-                "session_duration_seconds": max(
-                    0,
-                    int((datetime.now(timezone.utc) - session.started_at).total_seconds()),
-                ),
-                "interaction_mode": session.interaction_mode,
-                "phase_4_entry_reason": "normal_review",
-                "phases_completed": phases_completed,
-                "session_performance": {
-                    "total_attempts": len(attempts),
-                    "correct_attempts": correct_attempts,
-                    "incorrect_attempts": len(attempts) - correct_attempts,
-                    "hints_used": len(session.hint_levels_used),
-                    "hint_levels_used": [
-                        min(level, 3) for level in session.hint_levels_used
-                    ],
-                    "canvas_submissions": len(session.canvas_submissions),
-                    "rescue_mode_activations": int(session.rescue_mode_active),
-                    "long_pressure_events": 0,
-                    "voice_fallback_events": 0,
-                },
-                "per_question_history": attempts,
-                "canvas_feedback_history": [],
-                "phase_transitions": [
-                    {
-                        "from_phase": transition.previous_phase,
-                        "to_phase": transition.current_phase,
-                        "timestamp": transition.transitioned_at.isoformat(),
-                    }
-                    for transition in session.phase_transitions
-                ],
-            },
-            "student_model": {
-                "mastery_status": student.mastery_status if student else "DEVELOPING",
-                "error_counts": error_counts,
-                "dominant_error_type": dominant_error,
-                "hint_dependency_score": (
-                    student.hint_dependency_score if student else 0.0
-                ),
-                "error_confirmed_pattern": False,
-                "recommended_entry_phase": recommended,
-                "next_concept_recommendation": None,
-            },
-        }
-    )
-
-
 async def end_session(request: SessionEndRequest) -> SessionRecord:
-    """Generate the engine review, then mark a stored mock session as ended.
-
-    Review generation runs first; empty-attempt REVIEW sessions use the
-    deterministic zero-attempt review contract.
-    """
-
-    # Imported here: ai_engine.session_review imports this module for answers.
-    from pydantic import ValidationError
-
-    from app.ai_engine.session_review import (
-        SessionReviewValidationError,
-        generate_session_review,
-    )
+    """Mark a stored session as ended without generating a legacy review."""
 
     session: SessionRecord = _get_owned_session(request.session_id, request.student_id)
-    try:
-        review = (
-            _empty_session_review()
-            if not session.per_question_history
-            else generate_session_review(build_session_review_request(session))
-        )
-    except (SessionReviewValidationError, ValidationError, RuntimeError) as error:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Session review could not be generated; the session is still active. ({error})",
-        ) from error
-
     summary: SessionSummary = assemble_session_summary(session, datetime.now(timezone.utc))
     ended_session: SessionRecord = session.model_copy(
         update={
             "status": "ended",
             "message": "Session ended.",
             "session_summary": summary,
-            "session_review": review,
         }
     )
     _sessions[request.session_id] = ended_session
@@ -1610,6 +1579,7 @@ async def record_canvas_submission(
     last_student_model: StudentModelResult | None,
     strokes: list[CanvasStroke],
     canvas_events: list[CanvasEvent],
+    work_artifact_id: str | None = None,
 ) -> SessionRecord:
     """Append a reviewed canvas submission without replacing Schema 3.0 state."""
 
@@ -1648,6 +1618,7 @@ async def record_canvas_submission(
                 input_source="CANVAS",
                 hint_level_used=record.tutor.hint_level,
                 attempted_at=record.submitted_at,
+                work_artifact_id=work_artifact_id,
             ),
         ]
     updated_session: SessionRecord = session.model_copy(
@@ -1837,5 +1808,3 @@ async def update_interaction_state(
     _sessions[session_id] = updated_session
     await save_session(updated_session)
     return updated_session
-    ReviewCompletedEvent,
-    SessionResumedEvent,

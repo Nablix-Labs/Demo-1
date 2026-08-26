@@ -13,6 +13,7 @@ from app.models.adapters import (
     VisionOCRResult,
 )
 from app.models.canvas import CanvasQuestionMemory, CanvasSubmissionRecord
+from app.models.phase4_review import Phase4ReviewResponse
 from app.models.fields import (
     ConceptId,
     InteractionMode,
@@ -31,7 +32,6 @@ from app.models.guided_learning import (
     InactivityPolicy,
     inactivity_policy,
 )
-from app.models.session_review import SessionReviewResponse
 from app.models.student_model_session import (
     PublicStudentModelEvent,
     QuestionType,
@@ -110,9 +110,13 @@ class SessionResumeRequest(BaseModel):
 
     student_id: StudentId
     turn_id: TurnId
-    last_activity_at: datetime
-    continuity_threshold_days: int = Field(ge=1)
-    saved_journey: dict[str, object]
+    # All three below are server-authoritative: the client only honestly knows
+    # student_id and turn_id. If sent anyway (an older client), they're used as
+    # given; otherwise resume_session fills them from stored session state and
+    # policy (see Settings.resume_continuity_threshold_days).
+    last_activity_at: datetime | None = None
+    continuity_threshold_days: int | None = Field(default=None, ge=1)
+    saved_journey: dict[str, object] | None = None
 
 
 class ReviewCompleteRequest(BaseModel):
@@ -160,6 +164,10 @@ class QuestionAttemptRecord(BaseModel):
     input_source: Literal["TEXT", "VOICE", "CANVAS"]
     hint_level_used: int
     attempted_at: datetime
+    # Links this attempt to its stored Phase 3 canvas work, so Phase 4 can
+    # replay it. None when the work could not be stored, and for every attempt
+    # made before work artifacts existed.
+    work_artifact_id: str | None = None
 
 
 class PhaseTransitionRecord(BaseModel):
@@ -285,11 +293,13 @@ class SessionRecord(BaseModel):
     # end-of-session review reflects his data rather than a reconstruction.
     last_student_model: StudentModelResult | None = None
     student_model_event: StudentModelSessionEventResponse | None = None
+    # Tutor replay and learning summary, generated once on entering Review.
+    # None when the topic has not reached Review, or generation failed.
+    phase4_review: Phase4ReviewResponse | None = None
     prerequisite_repair_event: StudentModelSessionEventResponse | None = None
     student_model_state: StudentModelCoreState | None = None
     active_student_model_question: StudentModelQuestion | None = None
     session_summary: SessionSummary | None = None
-    session_review: SessionReviewResponse | None = None
 
 
 class SessionResponse(SessionRecord):

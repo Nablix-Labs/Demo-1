@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.api import ai_engine, canvas, health, interaction, session, voice
+from app.api import ai_engine, canvas, health, interaction, session, voice, work_artifacts
 from app.ai_engine.prompt_registry import load_prompt_registry
 from app.core.config import get_settings
 from app.core.logger import logger
@@ -64,6 +64,9 @@ app.include_router(session.router, prefix="/session", tags=["Session"])
 app.include_router(interaction.router, tags=["Interaction"])
 app.include_router(canvas.router, prefix="/canvas", tags=["Canvas"])
 app.include_router(voice.router, prefix="/voice", tags=["Voice"])
+# No prefix: the path must be exactly /work-artifacts/{id}/pdf to match the
+# logical pdf_url Student Model already emits from POST /work-artifacts.
+app.include_router(work_artifacts.router, tags=["Work Artifacts"])
 
 
 def _utc_timestamp() -> str:

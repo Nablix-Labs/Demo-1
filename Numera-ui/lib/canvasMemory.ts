@@ -48,7 +48,12 @@ export type CanvasActionType =
   | 'ANNOTATE'
   | 'SHOW_CUE'
   | 'HIDE_CUE'
-  | 'SCAFFOLD_STEP';
+  | 'SCAFFOLD_STEP'
+  | 'GROUP'
+  | 'INSERT_LABEL'
+  | 'FOCUS'
+  | 'SHOW_PARALLEL'
+  | 'TUTOR_SOLVED_STEP';
 
 /** ACTIVE until something replaces it (SUPERSEDED) or wipes the board (CLEARED). */
 export type CanvasActiveState = 'ACTIVE' | 'SUPERSEDED' | 'CLEARED';

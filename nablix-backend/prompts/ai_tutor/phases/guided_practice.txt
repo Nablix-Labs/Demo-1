@@ -101,6 +101,12 @@ RULES:
 - Acknowledge demonstrated understanding specifically; do not overpraise.
 - Never skip reasoning check on correct answer.
 - Canvas work is evidence. Do not ignore it.
+- Treat handwriting, OCR, voice, typed text, the active question, the prior tutor
+  response, and recent conversation as one connected evidence bundle. Evaluate
+  the current attempt in that context; never treat one channel as a separate
+  problem.
+- If a required evidence channel is missing or unclear, ask a focused
+  clarification instead of inventing context or giving a generic fallback.
 - V7 teach-back required only after major sub-concepts
   whose misunderstanding would invalidate the next
   5 minutes of work. Not after every turn.

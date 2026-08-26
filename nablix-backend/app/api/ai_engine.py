@@ -1,7 +1,9 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
 from app.ai_engine.classifier import ClassificationRequest, classify_student_response
+from app.ai_engine.phase4_review import Phase4ReviewValidationError, generate_phase4_review
+from app.core.exceptions import AdapterError
 from app.ai_engine.schemas import (
     CanvasTextRegion,
     HintLevel,
@@ -11,6 +13,7 @@ from app.ai_engine.schemas import (
 )
 from app.models.adapters import ConversationMessage, ConversationState, Phase2PromptContext
 from app.models.student_model_session import AnswerSpec, QuestionType
+from app.models.phase4_review import Phase4ReviewRequest, Phase4ReviewResponse
 
 
 router = APIRouter()
@@ -93,3 +96,15 @@ def _classification_request_from(request: AiEngineClassifyRequest) -> Classifica
 @router.post("/classify", response_model=TutorResponse)
 async def classify_tutor_input(request: AiEngineClassifyRequest) -> TutorResponse:
     return classify_student_response(_classification_request_from(request))
+
+
+@router.post("/phase4/review/generate", response_model=Phase4ReviewResponse)
+async def generate_phase4_review_endpoint(
+    request: Phase4ReviewRequest,
+) -> Phase4ReviewResponse:
+    try:
+        return generate_phase4_review(request)
+    except AdapterError:
+        raise
+    except Phase4ReviewValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error

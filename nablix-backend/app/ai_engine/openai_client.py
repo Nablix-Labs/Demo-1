@@ -38,9 +38,6 @@ from app.models.guided_learning import (
     GeneratedConcept,
     GeneratedQuestionRubric,
     GuidedEvaluation,
-    HybridTutorRequest,
-    HybridTutorTurn,
-    HybridTutorTurnContext,
     ScaffoldEvaluationContext,
     ScaffoldStepEvaluation,
     GuidedTutorContext,
@@ -83,6 +80,18 @@ def focused_component_evidence_schema(
             "Focused component evidence schema has no component_id property."
         )
     component_property["enum"] = [component_id]
+    return schema
+
+
+def guided_evaluation_schema() -> dict[str, object]:
+    """Keep optional Python defaults compatible with OpenAI strict schemas."""
+
+    schema: dict[str, object] = GuidedEvaluation.model_json_schema()
+    properties = schema.get("properties")
+    required = schema.get("required")
+    if not isinstance(properties, dict) or not isinstance(required, list):
+        raise AdapterError("openai_ai_engine", "Guided evaluation schema is malformed.")
+    schema["required"] = [*required, "write_instruction", "canvas_intentions"]
     return schema
 
 
@@ -261,6 +270,11 @@ class OpenAIAIEngineClient:
                     else None
                 ),
                 "answer_reveal_allowed": False,
+                "evidence_bundle_instruction": (
+                    "Treat handwriting, OCR, voice, typed text, the active question, "
+                    "prior tutor response, and recent conversation as one connected "
+                    "evidence bundle. Evaluate the current attempt in that context."
+                ),
             },
         )
         return OpenAITutorTurn.model_validate(content)
@@ -339,7 +353,7 @@ class OpenAIAIEngineClient:
     ) -> GuidedEvaluation:
         content = self._request_guided_json(
             name="guided_turn_evaluation",
-            schema=GuidedEvaluation.model_json_schema(),
+            schema=guided_evaluation_schema(),
             system_prompt=system_prompt,
             user_payload={
                 "question_type": question_type,
@@ -460,68 +474,6 @@ class OpenAIAIEngineClient:
             raise AdapterError(
                 "openai_ai_engine",
                 f"invalid Explain Again response: {error}",
-            ) from error
-
-    def generate_hybrid_tutor_turn(
-        self,
-        context: HybridTutorTurnContext,
-        system_prompt: str,
-    ) -> HybridTutorTurn:
-        request = context.request
-        authored_steps = [
-            {
-                "step_id": f"{request.answer_spec.answer_spec_id}:STEP:{index + 1}",
-                "component_id": f"{request.answer_spec.answer_spec_id}:COMPONENT:{index + 1}",
-                "text": text,
-            }
-            for index, text in enumerate(request.answer_spec.answer_steps)
-        ]
-        completed = request.pedagogical_state.completed_component_ids
-        content = self._request_guided_json(
-            name="hybrid_tutor_turn",
-            schema=HybridTutorTurn.model_json_schema(),
-            system_prompt=system_prompt,
-            user_payload={
-                "question_id": request.question_id,
-                "question_type": request.question_type,
-                "question": request.question,
-                "answer_spec": request.answer_spec.model_dump(),
-                "authored_steps": authored_steps,
-                "completed_step_ids": [
-                    step["step_id"] for step in authored_steps[: len(completed)]
-                ],
-                "unresolved_step_ids": [
-                    step["step_id"] for step in authored_steps[len(completed) :]
-                ],
-                "selected_option": {
-                    "option_id": request.student_evidence.selected_option_id,
-                    "option_text": request.student_evidence.selected_option_text,
-                },
-                "resolved_student_meaning": context.resolved_student_meaning,
-                "student_evidence": request.student_evidence.model_dump(),
-                "recent_conversation": [
-                    item.model_dump() for item in request.session_history
-                ],
-                "support_state": request.support_state.model_dump(),
-                "active_support_content": (
-                    context.active_support_content.model_dump()
-                    if context.active_support_content is not None
-                    else None
-                ),
-                "ordered_canvas_memory": [
-                    item.model_dump() for item in request.ordered_canvas_memory
-                ],
-                "decision": context.decision.model_dump(),
-                "canvas_actions": [item.model_dump() for item in context.canvas_actions],
-                "approved_answer_reveal": context.approved_answer_reveal,
-            },
-        )
-        try:
-            return HybridTutorTurn.model_validate(content)
-        except ValidationError as error:
-            raise AdapterError(
-                "openai_ai_engine",
-                f"invalid hybrid tutor turn: {error}",
             ) from error
 
     def _request_guided_json(
@@ -678,37 +630,18 @@ class OpenAIAIEngineClient:
                 f"invalid Explain Again response: {error}",
             ) from error
 
-    def generate_session_review(
+    def generate_phase4_review(
         self,
         context: dict[str, object],
         schema: dict[str, object],
     ) -> dict[str, object]:
         return self._request_json(
-            name="session_review_generation",
+            name="phase4_review_generation",
             schema=schema,
             phase="REVIEW",
             active_triggers=[],
             conversation_history=[],
             user_payload=context,
-        )
-
-    def regenerate_session_review(
-        self,
-        context: dict[str, object],
-        schema: dict[str, object],
-        stricter_instruction: str,
-    ) -> dict[str, object]:
-        retry_context: dict[str, object] = {
-            **context,
-            "guardrail_retry_instruction": stricter_instruction,
-        }
-        return self._request_json(
-            name="session_review_guardrail_retry",
-            schema=schema,
-            phase="REVIEW",
-            active_triggers=[],
-            conversation_history=[],
-            user_payload=retry_context,
         )
 
     def _request_json(

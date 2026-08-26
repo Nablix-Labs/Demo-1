@@ -16,6 +16,11 @@ CanvasActionType = Literal[
     "SHOW_CUE",
     "HIDE_CUE",
     "SCAFFOLD_STEP",
+    "GROUP",
+    "INSERT_LABEL",
+    "FOCUS",
+    "SHOW_PARALLEL",
+    "TUTOR_SOLVED_STEP",
 ]
 CanvasActiveState = Literal["ACTIVE", "SUPERSEDED", "CLEARED"]
 

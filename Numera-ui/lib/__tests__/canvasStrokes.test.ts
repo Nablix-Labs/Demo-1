@@ -83,6 +83,36 @@ describe('submitCanvas', () => {
     expect(post.mock.calls[0][1].canvas_events).toEqual(EVENTS);
   });
 
+  it('omits off-screen stroke points instead of submitting an invalid coordinate', async () => {
+    const resizedStrokes: CanvasStrokeSnapshot[] = [
+      {
+        stroke_id: 'OFFSCREEN',
+        tool: 'pen',
+        points: [{ x: 1.25, y: 0.5 }, { x: 0.4, y: 0.5 }],
+        width: 2,
+      },
+    ];
+
+    await submitCanvas('SESSION001', PNG, 'STANDALONE_ATTEMPT', 'TURN-1', resizedStrokes, EVENTS, 'ST015');
+
+    expect(post.mock.calls[0][1].strokes).toEqual([
+      { stroke_id: 'OFFSCREEN', tool: 'pen', points: [{ x: 0.4, y: 0.5 }], width: 2 },
+    ]);
+  });
+
+  it('removes an invalid historical bounding box while retaining its canvas event', async () => {
+    const resizedEvents: CanvasEvent[] = [{
+      ...EVENTS[0],
+      bbox: { x: 1.1, y: 0.5, w: 0.1, h: 0.1 },
+    }];
+
+    await submitCanvas('SESSION001', PNG, 'STANDALONE_ATTEMPT', 'TURN-1', STROKES, resizedEvents, 'ST015');
+
+    expect(post.mock.calls[0][1].canvas_events).toEqual([
+      { ...resizedEvents[0], bbox: null },
+    ]);
+  });
+
   it('sends the §8 event shape', async () => {
     await submitCanvas('SESSION001', PNG, 'STANDALONE_ATTEMPT', 'TURN-1', STROKES, EVENTS, 'ST015');
     expect(Object.keys(post.mock.calls[0][1].canvas_events[0]).sort()).toEqual([

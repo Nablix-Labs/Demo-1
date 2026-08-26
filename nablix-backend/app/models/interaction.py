@@ -26,12 +26,14 @@ from app.models.fields import (
     StudentId,
     TurnId,
 )
+from app.models.question_anchor import QuestionTextAnchor
 from app.models.guided_learning import (
     ActiveScaffold,
     GuidedRescue,
     ActiveTeachingObjective,
     GuidedStudentState,
     EvaluationReasonCode,
+    TutorCanvasAction,
     PrerequisiteRepair,
     WrongEscalationCode,
 )
@@ -137,6 +139,8 @@ class InteractionResponse(BaseModel):
     conversation_action: ConversationAction
     expects_student_response: bool
     expected_student_response: ExpectedStudentResponse
+    next_expected_input: Literal["WRITE"] | None = None
+    write_instruction: str | None = Field(default=None, max_length=160)
     retry_safe: bool | None = None
     expected_previous_tutor_turn_id: TurnId | None = None
     attempt_increment: int = Field(ge=0, le=1)
@@ -205,6 +209,9 @@ class InteractionResponse(BaseModel):
     inactivity_policy: InactivityPolicy | None = None
     nudge_delivery: NudgeDeliveryRecord | None = None
     canvas_draw: list[CanvasDrawPayload] = Field(default_factory=list)
+    tutor_canvas_actions: list[TutorCanvasAction] = Field(default_factory=list)
+    # Spans into `current_question` for the frontend to highlight and label.
+    question_anchors: list[QuestionTextAnchor] = Field(default_factory=list)
     localization_status: Literal["grounded", "uncertain"] | None = None
     ocr: VisionOCRResult | None = None
     latency: CanvasLatency | None = None

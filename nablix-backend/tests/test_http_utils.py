@@ -94,3 +94,81 @@ def test_student_model_adapter_surfaces_journey_version_conflict(
         )
     assert "submit it once more" in str(conflict.value.detail)
     assert "journey_state" not in str(conflict.value.detail)
+
+
+def test_get_bytes_returns_body_and_content_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen_headers: dict[str, str] = {}
+
+    class FakeAsyncClient:
+        def __init__(self, timeout: int) -> None:
+            self.timeout = timeout
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def get(self, url: str, headers: dict[str, str]) -> httpx.Response:
+            seen_headers.update(headers)
+            return httpx.Response(
+                200,
+                content=b"%PDF-1.4 fake",
+                headers={"content-type": "application/pdf"},
+                request=httpx.Request("GET", url),
+            )
+
+    monkeypatch.setattr(http_utils.httpx, "AsyncClient", FakeAsyncClient)
+
+    body, content_type = asyncio.run(
+        http_utils.get_bytes(
+            "student_model",
+            "https://student-model.example/work-artifacts/ART-1/pdf",
+            {"Authorization": "Bearer caller-token"},
+            20,
+            2,
+        )
+    )
+
+    assert body == b"%PDF-1.4 fake"
+    assert content_type == "application/pdf"
+    assert seen_headers["Authorization"] == "Bearer caller-token"
+
+
+def test_get_bytes_does_not_retry_rejected_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    class FakeAsyncClient:
+        def __init__(self, timeout: int) -> None:
+            self.timeout = timeout
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def get(self, url: str, headers: dict[str, str]) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            return httpx.Response(
+                404,
+                json={"error_code": "NOT_FOUND"},
+                request=httpx.Request("GET", url),
+            )
+
+    monkeypatch.setattr(http_utils.httpx, "AsyncClient", FakeAsyncClient)
+
+    with pytest.raises(AdapterRequestRejected) as error:
+        asyncio.run(
+            http_utils.get_bytes(
+                "student_model",
+                "https://student-model.example/work-artifacts/ART-999/pdf",
+                {"Authorization": "Bearer caller-token"},
+                20,
+                2,
+            )
+        )
+
+    assert calls == 1
+    assert error.value.status_code == 404

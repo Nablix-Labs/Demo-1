@@ -12,19 +12,25 @@
  * A final spoken summary closes the session.
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   Check, X, ChevronLeft, ChevronRight, Volume2, Square, Eye, EyeOff,
 } from 'lucide-react';
 import PageShell, { Chip } from '@/components/PageShell';
 import PhaseGate from '@/components/PhaseGate';
+import { planReviewCompletion } from '@/lib/reviewCompletion';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useDemoTutor, resetSessionStart } from '@/hooks/useDemoTutor';
 import { useFlowNav } from '@/lib/useFlowNav';
 import { demoFor, type DemoWorksheet } from '@/lib/demoContent';
 import { cn } from '@/lib/cn';
-import { sessionTopicTitle, type FiveCategorySummary, type QuestionOutcome } from '@/lib/api';
+import {
+  sessionTopicTitle, completeReview, studentId,
+  type FiveCategorySummary, type QuestionOutcome,
+} from '@/lib/api';
+import { phase4FromSession, type SessionForPhase4 } from '@/lib/phase4FromSession';
 import { speakTutor, stopTutorSpeech } from '@/lib/tts';
+import Phase4Review from '@/components/Phase4/Phase4Review';
 
 /** Real session outcomes rendered through the same worksheet layout. */
 function outcomeWorksheets(outcomes: QuestionOutcome[]): DemoWorksheet[] {
@@ -84,6 +90,11 @@ export default function ReviewPage() {
   // worksheets as if they were the student's real results, with no way out.
   // Now it renders the empty state below instead.
   const { apiEnabled, sessionId, end } = tutor;
+  // Hold the id before end() clears it. The completion event belongs to the
+  // moment the student FINISHES the review, not the moment they arrive — but by
+  // then `sessionId` is null, so the id has to be captured on the way in.
+  const reviewSessionId = useRef<string | null>(null);
+  if (sessionId && !reviewSessionId.current) reviewSessionId.current = sessionId;
   useEffect(() => {
     if (apiEnabled && sessionId) {
       void end().catch((err: unknown) => {
@@ -93,13 +104,39 @@ export default function ReviewPage() {
     }
   }, [apiEnabled, sessionId, end]);
 
+
+
   // Escape hatch for a session the backend refuses to end: drop it locally so
   // a fresh one can start, and go back to the lesson to produce reviewable work.
+  /**
+   * Report the review as finished, once, on the way out.
+   *
+   * `REVIEW_COMPLETED` is what advances the Student Model past Review;
+   * `/session/end` does not emit it, so without this a student who works all the
+   * way through Phase 4 is never recorded as having done so.
+   *
+   * Deliberately not awaited. This is bookkeeping the student cannot act on, and
+   * a slow or failing call must never hold them on the review screen — the whole
+   * point of the button they just pressed is to leave.
+   */
+  const reportReviewFinished = useCallback(() => {
+    if (!apiEnabled) return;
+    const plan = planReviewCompletion(reviewSessionId.current, () => `REVIEW-COMPLETE-${Date.now()}`);
+    if (!plan.send) return;
+    void completeReview(reviewSessionId.current!, studentId(), plan.turnId);
+  }, [apiEnabled]);
+
+  const finishReview = useCallback((outcome: Parameters<typeof decideReview>[0]) => {
+    reportReviewFinished();
+    decideReview(outcome);
+  }, [reportReviewFinished, decideReview]);
+
   const backToLesson = useCallback(() => {
+    reportReviewFinished();
     resetSessionStart();
     useNumeraStore.getState().clearSessionId();
     goStage('guided', currentTopicId);
-  }, [goStage, currentTopicId]);
+  }, [reportReviewFinished, goStage, currentTopicId]);
 
   // Real session outcomes when the backend sent them; demo worksheets otherwise.
   const demo = demoFor(currentTopicId);
@@ -114,6 +151,23 @@ export default function ReviewPage() {
   // when the session is real and unnamed, say only when it happened.
   const topicLabel = live ? sessionTopicTitle(backendSession) : demo.label;
   const subtitle = [topicLabel, 'today'].filter(Boolean).join(' · ');
+
+  /**
+   * Phase 4 replaces this screen the moment the backend produces one.
+   *
+   * There is no endpoint: Chiru's orchestration (PR #156) generates the review
+   * on entering Review and attaches it to the session record, so /session/end
+   * already carries it and no second request is needed. `phase4FromSession`
+   * owns reading it and says what is still missing from that payload.
+   *
+   * Additive rather than a rewrite — a session that produced no review (an
+   * older backend, a generation that failed, a topic that never reached
+   * Review) falls through to the screen below exactly as before.
+   */
+  const phase4 = phase4FromSession(
+    backendSession as SessionForPhase4 | null,
+    topicLabel || 'This topic',
+  );
 
   const total = WORKSHEETS.length;
   const done = i >= total;                 // past the last sheet → final summary
@@ -145,6 +199,30 @@ export default function ReviewPage() {
   }, [speakingId, stop]);
 
   const goto = (next: number) => { stop(); setShowMarks(false); setI(next); };
+
+  // Phase 4 (§8). Takes precedence over everything below: when the backend has
+  // produced a real review, no fallback is relevant.
+  if (phase4) {
+    return (
+      <PhaseGate phase="review">
+        <PageShell title="Review &amp; feedback" subtitle={phase4.topic_title} wide>
+          <Phase4Review
+            review={phase4}
+            onEnd={() => {
+              completePhase('review');
+              // §6.9 makes routing the backend's decision, and
+              // `recommended_next_action` carries it — but the specification
+              // never enumerates its values (START_NEXT_TOPIC is the only one
+              // shown, in an example). Until Chiru confirms the vocabulary,
+              // this takes the existing pass route rather than branching on a
+              // string we would be guessing at.
+              finishReview('pass');
+            }}
+          />
+        </PageShell>
+      </PhaseGate>
+    );
+  }
 
   // The session couldn't be ended and nothing was graded — showing the demo
   // worksheets here would present fake results as the student's own.
@@ -401,7 +479,7 @@ export default function ReviewPage() {
                     </button>
                   ) : (
                     <button
-                      onClick={() => decideReview('pass')}
+                      onClick={() => finishReview('pass')}
                       className="rounded-md border border-focus-navy bg-focus-navy px-4 py-3 text-left text-white hover:opacity-80 transition-opacity"
                     >
                       <div className="text-[13px] font-semibold">Next topic</div>
@@ -415,21 +493,21 @@ export default function ReviewPage() {
               <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-3">What happens next</div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                 <button
-                  onClick={() => decideReview('foundation_weak')}
+                  onClick={() => finishReview('foundation_weak')}
                   className="rounded-md border border-muted-gray bg-white px-3 py-3 text-left hover:border-focus-navy transition-colors"
                 >
                   <div className="text-[13px] font-semibold text-ink">Foundation weak</div>
                   <div className="text-[11.5px] text-slate-blue mt-0.5">Recap the concept — back to orientation.</div>
                 </button>
                 <button
-                  onClick={() => decideReview('cant_solve')}
+                  onClick={() => finishReview('cant_solve')}
                   className="rounded-md border border-muted-gray bg-white px-3 py-3 text-left hover:border-focus-navy transition-colors"
                 >
                   <div className="text-[13px] font-semibold text-ink">Can&apos;t solve yet</div>
                   <div className="text-[11.5px] text-slate-blue mt-0.5">Knows it, needs help applying — back to guided.</div>
                 </button>
                 <button
-                  onClick={() => decideReview('pass')}
+                  onClick={() => finishReview('pass')}
                   className="rounded-md border border-focus-navy bg-focus-navy px-3 py-3 text-left text-white hover:opacity-80 transition-opacity"
                 >
                   <div className="text-[13px] font-semibold">Mastered</div>

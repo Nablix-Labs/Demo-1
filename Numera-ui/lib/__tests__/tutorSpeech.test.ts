@@ -180,3 +180,20 @@ describe('guards', () => {
     expect(spoken).toEqual([]);
   });
 });
+
+describe('speaking hands the floor back (Manjusha, 22 Aug 2026)', () => {
+  it('a student who writes then talks does not mute the tutor forever', () => {
+    // The report: wrote "n + 5", said "I fully written that in the Canvas",
+    // and the tutor rendered text it never spoke for the rest of the question.
+    //
+    // Pen-down takes the floor, and before this the ONLY things that gave it
+    // back were the Check button, Explain Again, and a fresh question — none of
+    // which a student who answers by voice ever touches.
+    setStudentWriting(true);
+    expect(tutorSay('silenced while the pen is down')).toBe(false);
+
+    // What useWebSocket now does on a student transcript_final.
+    setStudentWriting(false);
+    expect(tutorSay('and the tutor can answer again')).toBe(true);
+  });
+});

@@ -8,20 +8,11 @@ from app.models.adapters import ConversationAction
 from app.models.guided_learning import (
     ActiveScaffold,
     ActiveTeachingObjective,
-    AuthoredAnswerStep,
-    CanvasPedagogyAction,
+    CanvasPedagogyIntent,
     GeneratedQuestionRubric,
     GuidedStudentState,
-    HybridEvidenceResolution,
-    HybridCanvasPlannerRequest,
-    HybridPedagogyDecision,
-    HybridSemanticEvaluation,
-    HybridTutorWording,
-    HybridTutorWordingRequest,
-    HybridTutorRequest,
-    HybridTutorResponse,
-    validate_hybrid_tutor_progression,
     GuidedTeachingState,
+    TutorCanvasAction,
 )
 
 
@@ -74,7 +65,7 @@ ResponseStrategy = Literal[
     "CONTINUE",
 ]
 
-InputSource = Literal["TEXT", "VOICE", "CANVAS", "CHOICE"]
+InputSource = Literal["TEXT", "VOICE", "CANVAS", "CHOICE", "MIXED"]
 Phase3SubmissionKind = Literal["CANVAS", "CHOICE"]
 IndependentOutcome = Literal[
     "AWAITING_SUBMISSION",
@@ -122,6 +113,7 @@ HighlightType = Literal["ERROR"]
 HighlightColour = Literal["RED"]
 HintLevel = Literal[1, 2, 3]
 MistakeStatus = Literal["mistake_found", "no_mistake", "uncertain"]
+LocalizationLevel = Literal["TOKEN", "SPAN", "STEP"]
 AnnotationIntentKind = Literal["circle_target", "write_correction", "draw_arrow"]
 AnnotationPlacement = Literal["right", "below"]
 
@@ -248,6 +240,9 @@ class CanvasMistakeClassification(StrictSchema):
     target_span: list[int] | None
     replacement_text: str | None
     confidence: float = Field(ge=0.0, le=1.0)
+    localization_level: LocalizationLevel | None = None
+    semantic_path: str | None = None
+    fallback_reason: str | None = None
 
 
 class CanvasAnnotationIntent(StrictSchema):
@@ -334,6 +329,10 @@ class TutorResponse(StrictSchema):
     independent_attempt_terminal: StrictBool = False
     first_error_step: str | None = None
     phase3_review_evidence: Phase3ReviewEvidence | None = None
+    requires_written_math_evidence: StrictBool = False
+    write_instruction: str | None = Field(default=None, max_length=160)
+    canvas_intentions: list[CanvasPedagogyIntent] = Field(default_factory=list)
+    tutor_canvas_actions: list[TutorCanvasAction] = Field(default_factory=list)
 
 
 class ExplainAgainResult(StrictSchema):

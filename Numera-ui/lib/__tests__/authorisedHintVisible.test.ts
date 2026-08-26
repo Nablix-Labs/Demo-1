@@ -51,8 +51,16 @@ describe('an authorised hint', () => {
   });
 
   it('is not shown when the turn served no hint', () => {
-    applyInteractionSupport(turn({ conversation_action: 'ASK_QUESTION' }));
+    applyInteractionSupport(turn({ conversation_action: 'ASK_QUESTION', support_message: null }));
     expect(state().visibleHint).toBeNull();
+  });
+
+  it('is shown when support arrives under a different action', () => {
+    // Live VM, 18 Aug: real support served as REQUEST_EXPLANATION with
+    // hint_count already incremented, and the card never appeared because the
+    // client was filtering on GIVE_HINT.
+    applyInteractionSupport(turn({ conversation_action: 'REQUEST_EXPLANATION' }));
+    expect(state().visibleHint).toBe('What happens to the +5 each time?');
   });
 
   it('is not shown twice when it only repeats the tutor line', () => {

@@ -14,11 +14,13 @@ from app.models.canvas_memory import CanvasEvent
 from app.models.student_model_session import AnswerSpec, QuestionType
 from app.models.guided_learning import (
     ActiveTeachingObjective,
+    CanvasPedagogyIntent,
     ConversationMessage,
     GuidedTeachingState,
     GeneratedQuestionRubric,
     GuidedStudentState,
     ScaffoldEvaluationContext,
+    TutorCanvasAction,
 )
 
 MasteryStatus = Literal[
@@ -113,6 +115,7 @@ class AdapterContext(BaseModel):
     detected_equation: str | None = None
     detected_steps: list[str] = Field(default_factory=list)
     ocr_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    canvas_ocr_text: str | None = None
     canvas_regions: list["OCRTextRegion"] = Field(default_factory=list)
     canvas_mathml_blocks: list[str] = Field(default_factory=list)
     spatial_tokens: list["SpatialMathToken"] = Field(default_factory=list)
@@ -213,6 +216,8 @@ class SpatialMathToken(BaseModel):
         "identifier",
         "operator",
         "fraction_bar",
+        "fraction_numerator",
+        "fraction_denominator",
         "radical",
         "fence",
         "unknown",
@@ -286,6 +291,11 @@ class TutorResult(BaseModel):
     first_error_step: str | None = None
     phase3_review_evidence: dict[str, object] | None = None
 
+    requires_written_math_evidence: bool = False
+    write_instruction: str | None = Field(default=None, max_length=160)
+    canvas_intentions: list[CanvasPedagogyIntent] = Field(default_factory=list)
+    tutor_canvas_actions: list[TutorCanvasAction] = Field(default_factory=list)
+
 
 class VoiceResult(BaseModel):
     transcript: str
@@ -342,6 +352,9 @@ class VisionOCRResult(BaseModel):
     detected_equation: str = ""
     detected_steps: list[str] = []
     detected_regions: list[OCRTextRegion] = Field(default_factory=list)
+    # Per-symbol boxes when the provider reports them. Distinct from
+    # detected_regions, which is one box per written line.
+    word_regions: list[OCRTextRegion] = Field(default_factory=list)
     final_answer: str | None = None
     confidence: float
     needs_clarification: bool = False

@@ -5,74 +5,16 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
-from app.models.student_model_session import AnswerSpec, QuestionType, SupportUsed
+from app.models.canvas_memory import CanvasEvent
+from app.models.question_anchor import QuestionTextAnchor
 
 
 GuidedStudentState = Literal["CORRECT", "PARTIAL", "WRONG", "STUCK", "UNCLEAR"]
-HybridPedagogicalStateName = Literal[
-    "CORRECT",
-    "PARTIAL",
-    "WRONG",
-    "STUCK",
-    "NEEDS_WRITING",
-]
-HybridInputReliability = Literal["RELIABLE", "NEEDS_WRITING"]
-HybridEvidenceResolutionSource = Literal[
-    "TYPED",
-    "STRUCTURED",
-    "OCR",
-    "VOICE_CONTEXT",
-    "NEEDS_WRITING",
-]
-HybridExpectedInput = Literal[
-    "VOICE",
-    "WRITE",
-    "STRUCTURED",
-    "VOICE_OR_WRITE",
-    "NONE",
-]
-HybridEvidenceSource = Literal[
-    "VOICE",
-    "TEXT",
-    "STRUCTURED",
-    "CANVAS",
-    "MULTIMODAL",
-]
-CanvasMemoryActor = Literal["STUDENT", "TUTOR", "SYSTEM_SUPPORT"]
-CanvasMemoryState = Literal["ACTIVE", "SUPERSEDED", "CLEARED"]
-CanvasActionType = Literal[
-    "HIGHLIGHT",
-    "CIRCLE",
-    "GROUP",
-    "ARROW",
-    "INSERT_MATH",
-    "INSERT_LABEL",
-    "SHOW_CUE",
-    "OPEN_SCAFFOLD_STEP",
-    "SHOW_PARALLEL",
-    "TUTOR_SOLVED_STEP",
-    "FOCUS",
-]
-CanvasActionLayer = Literal["TUTOR", "SUPPORT"]
-HybridPedagogyStrategy = Literal[
-    "ADVANCE_AND_FADE",
-    "AFFIRM_AND_ISOLATE",
-    "SOCRATIC_MISCONCEPTION_TEST",
-    "LOAD_REDUCTION",
-    "SUPPORT_ESCALATION",
-]
-CanvasSemanticTag = Literal[
-    "changing_value",
-    "fixed_value",
-    "operation",
-    "student_attempt",
-    "misconception_test",
-    "answer_step",
-]
 GuidedPromptType = Literal[
     "COMPONENT",
     "OPTION_COMPARISON",
     "SOURCE_CORRECTION",
+    "DEFENCE",
 ]
 ComponentEvidenceStatus = Literal[
     "DEMONSTRATED",
@@ -87,6 +29,26 @@ GuidedRoutingReasonCode = Literal[
     "GUIDED_COMPLETED",
     "GUIDED_PHASE_COMPLETED",
     "PARALLEL_EXAMPLE_REQUIRED",
+]
+TutorCanvasActionType = Literal[
+    "HIGHLIGHT",
+    "GROUP",
+    "ARROW",
+    "INSERT_MATH",
+    "INSERT_LABEL",
+    "FOCUS",
+    "SHOW_CUE",
+    "OPEN_SCAFFOLD_STEP",
+    "SHOW_PARALLEL",
+    "TUTOR_SOLVED_STEP",
+]
+TutorCanvasTargetKind = Literal[
+    "QUESTION_ANCHOR",
+    "QUESTION_OPTION",
+    "CANVAS_OBJECT",
+    "STUDENT_ATTEMPT",
+    "TUTOR_ANCHOR",
+    "WRITE_AREA",
 ]
 
 
@@ -113,277 +75,6 @@ class GuidedLearningModel(BaseModel):
 class ConversationMessage(BaseModel):
     role: Literal["user", "assistant"]
     content: str
-
-
-class HybridStudentEvidence(GuidedLearningModel):
-    input_source: HybridEvidenceSource
-    raw_voice_transcript: str | None
-    transcript_confidence: float | None = Field(ge=0.0, le=1.0)
-    transcript_alternatives: list[str]
-    typed_answer: str | None
-    structured_answer: dict[str, str]
-    selected_option_id: str | None
-    selected_option_text: str | None
-    raw_ocr_text: str | None
-    processed_math_text: str | None
-    ocr_confidence: float | None = Field(ge=0.0, le=1.0)
-    canvas_object_ids: list[str]
-
-
-class HybridEvidenceResolution(GuidedLearningModel):
-    input_reliability: HybridInputReliability
-    resolved_student_meaning: str | None
-    resolution_source: HybridEvidenceResolutionSource
-    can_update_learning_state: StrictBool
-
-
-class AuthoredAnswerStep(GuidedLearningModel):
-    step_id: str = Field(min_length=1)
-    order_index: int = Field(ge=0)
-    text: str = Field(min_length=1)
-    component_id: str = Field(min_length=1)
-
-
-class OrderedCanvasMemoryItem(GuidedLearningModel):
-    object_id: str = Field(min_length=1)
-    order_index: int = Field(ge=0)
-    turn_id: str = Field(min_length=1)
-    question_id: str = Field(min_length=1)
-    actor: CanvasMemoryActor
-    action_type: str = Field(min_length=1)
-    content: str | None
-    math_text: str | None
-    target_object_id: str | None
-    semantic_tag: str | None
-    source_id: str | None
-    active_state: CanvasMemoryState
-    reliability: HybridInputReliability
-
-
-class HybridSupportState(GuidedLearningModel):
-    current_support: SupportUsed
-    highest_support_used: SupportUsed
-    active_support_id: str | None
-    support_history_ids: list[str]
-    consecutive_stuck_count: int = Field(ge=0)
-
-
-class HybridPedagogicalState(GuidedLearningModel):
-    student_state: HybridPedagogicalStateName
-    completed_component_ids: list[str]
-    current_answer_step_index: int | None = Field(ge=0)
-    consecutive_stuck_count: int = Field(ge=0)
-
-
-class HybridPedagogyDecision(GuidedLearningModel):
-    strategy: HybridPedagogyStrategy
-    support_action: SupportUsed
-    support_id: str | None
-    next_expected_input: HybridExpectedInput
-
-
-class HybridAuthoredSupportContent(GuidedLearningModel):
-    source_id: str = Field(min_length=1)
-    support_action: SupportUsed
-    text: str = Field(min_length=1)
-
-
-class HybridTutorAnchor(GuidedLearningModel):
-    target_object_id: str = Field(min_length=1)
-    text: str = Field(min_length=1)
-    semantic_tag: CanvasSemanticTag
-    component_id: str = Field(min_length=1)
-
-
-class HybridCanvasPlannerRequest(GuidedLearningModel):
-    turn_id: str = Field(min_length=1)
-    question_id: str = Field(min_length=1)
-    answer_spec: AnswerSpec
-    current_answer_step_index: int | None = Field(ge=0)
-    current_answer_step_id: str | None
-    completed_component_ids: list[str]
-    input_reliability: HybridInputReliability
-    decision: HybridPedagogyDecision
-    ordered_canvas_memory: list[OrderedCanvasMemoryItem]
-    authored_support_content: list[HybridAuthoredSupportContent]
-    confirmed_tutor_anchors: list[HybridTutorAnchor]
-    approved_answer_reveal: StrictBool
-    active_action_ids: list[str]
-
-
-class HybridSemanticEvaluation(GuidedLearningModel):
-    pedagogical_state: HybridPedagogicalStateName
-    completed_components: list[str]
-    current_answer_step_index: int | None = Field(ge=0)
-    current_answer_step_id: str | None
-
-
-class HybridTutorWordingRequest(GuidedLearningModel):
-    question: str = Field(min_length=1)
-    resolved_student_meaning: str | None
-    semantic_evaluation: HybridSemanticEvaluation
-    decision: HybridPedagogyDecision
-    canvas_actions: list["CanvasPedagogyAction"]
-    active_support_content: HybridAuthoredSupportContent | None
-    current_answer_step_id: str | None
-    current_answer_step_text: str | None
-
-
-class HybridTutorWording(GuidedLearningModel):
-    tutor_voice_text: str = Field(min_length=1)
-
-
-class HybridTutorTurn(HybridSemanticEvaluation):
-    tutor_voice_text: str = Field(min_length=1)
-    requires_written_math_evidence: StrictBool
-    next_expected_input: HybridExpectedInput
-
-
-class HybridTutorTurnContext(GuidedLearningModel):
-    request: "HybridTutorRequest"
-    resolved_student_meaning: str | None
-    input_reliability: HybridInputReliability
-    decision: HybridPedagogyDecision
-    canvas_actions: list["CanvasPedagogyAction"]
-    active_support_content: HybridAuthoredSupportContent | None
-    approved_answer_reveal: StrictBool
-
-
-class CanvasPedagogyAction(GuidedLearningModel):
-    action_id: str = Field(min_length=1)
-    type: CanvasActionType
-    layer: CanvasActionLayer
-    target_object_id: str = Field(min_length=1)
-    semantic_tag: CanvasSemanticTag
-    text: str | None
-    source_id: str | None
-    answer_reveal_allowed: StrictBool
-
-
-class HybridTutorRequest(GuidedLearningModel):
-    schema_version: Literal["1.0"]
-    question_id: str = Field(min_length=1)
-    question_type: QuestionType
-    question: str = Field(min_length=1)
-    answer_spec: AnswerSpec
-    support_state: HybridSupportState
-    session_history: list[ConversationMessage]
-    ordered_canvas_memory: list[OrderedCanvasMemoryItem]
-    student_evidence: HybridStudentEvidence
-    pedagogical_state: HybridPedagogicalState
-
-    @model_validator(mode="after")
-    def validate_authored_answer_progression(self) -> HybridTutorRequest:
-        authored_steps = authored_hybrid_answer_steps(self.answer_spec)
-        _validate_hybrid_progression_state(
-            authored_steps,
-            self.pedagogical_state.completed_component_ids,
-            self.pedagogical_state.current_answer_step_index,
-            current_hybrid_answer_step_id(
-                authored_steps,
-                self.pedagogical_state.current_answer_step_index,
-            ),
-        )
-        return self
-
-
-class HybridTutorResponse(GuidedLearningModel):
-    schema_version: Literal["1.0"]
-    pedagogical_state: HybridPedagogicalStateName
-    resolved_student_meaning: str | None
-    input_reliability: HybridInputReliability
-    tutor_voice_text: str = Field(min_length=1)
-    canvas_actions: list[CanvasPedagogyAction]
-    support_action: SupportUsed
-    next_expected_input: HybridExpectedInput
-    completed_components: list[str]
-    current_answer_step_index: int | None = Field(ge=0)
-    current_answer_step_id: str | None
-
-
-def authored_hybrid_answer_steps(
-    answer_spec: AnswerSpec,
-) -> list[AuthoredAnswerStep]:
-    """Derive stable ordered step and component IDs from authored step positions."""
-
-    if not answer_spec.answer_steps:
-        raise ValueError("Hybrid questions require at least one authored answer step.")
-    authored_steps: list[AuthoredAnswerStep] = []
-    for index, step_text in enumerate(answer_spec.answer_steps):
-        if not step_text.strip():
-            raise ValueError("Hybrid answer_steps cannot contain blank text.")
-        authored_steps.append(
-            AuthoredAnswerStep(
-                step_id=f"{answer_spec.answer_spec_id}:STEP:{index + 1}",
-                order_index=index,
-                text=step_text,
-                component_id=f"{answer_spec.answer_spec_id}:COMPONENT:{index + 1}",
-            )
-        )
-    return authored_steps
-
-
-def current_hybrid_answer_step_id(
-    authored_steps: list[AuthoredAnswerStep],
-    current_answer_step_index: int | None,
-) -> str | None:
-    if current_answer_step_index is None:
-        return None
-    if current_answer_step_index >= len(authored_steps):
-        raise ValueError("current_answer_step_index is outside the authored answer steps.")
-    return authored_steps[current_answer_step_index].step_id
-
-
-def _validate_hybrid_progression_state(
-    authored_steps: list[AuthoredAnswerStep],
-    completed_component_ids: list[str],
-    current_answer_step_index: int | None,
-    current_answer_step_id: str | None,
-) -> None:
-    expected_completed_ids = [
-        step.component_id for step in authored_steps[: len(completed_component_ids)]
-    ]
-    if completed_component_ids != expected_completed_ids:
-        raise ValueError(
-            "completed component IDs must be the ordered prefix of authored components."
-        )
-    expected_step_index = (
-        None
-        if len(completed_component_ids) == len(authored_steps)
-        else len(completed_component_ids)
-    )
-    if current_answer_step_index != expected_step_index:
-        raise ValueError(
-            "current_answer_step_index must name the earliest unresolved authored step."
-        )
-    expected_step_id = current_hybrid_answer_step_id(
-        authored_steps,
-        current_answer_step_index,
-    )
-    if current_answer_step_id != expected_step_id:
-        raise ValueError(
-            "current_answer_step_id must match the earliest unresolved authored step."
-        )
-
-
-def validate_hybrid_tutor_progression(
-    request: HybridTutorRequest,
-    response: HybridTutorResponse,
-) -> HybridTutorResponse:
-    """Reject a Hybrid tutor result that skips, reorders, or forgets components."""
-
-    authored_steps = authored_hybrid_answer_steps(request.answer_spec)
-    _validate_hybrid_progression_state(
-        authored_steps,
-        response.completed_components,
-        response.current_answer_step_index,
-        response.current_answer_step_id,
-    )
-    previous_completed = request.pedagogical_state.completed_component_ids
-    response_completed = response.completed_components
-    if response_completed[: len(previous_completed)] != previous_completed:
-        raise ValueError("Hybrid tutor response cannot remove confirmed components.")
-    return response
 
 
 class GeneratedConcept(GuidedLearningModel):
@@ -421,9 +112,15 @@ class GuidedTeachingState(GuidedLearningModel):
     active_component_id: str | None
     last_tutor_question_type: GuidedPromptType
     selected_option_id: str | None
+    selected_option_text: str | None = None
     awaiting_response: StrictBool
     active_step_id: str | None = None
     teaching_step_ids: list[str] = Field(default_factory=list)
+    answer_step_ids: list[str] = Field(default_factory=list)
+    completed_step_ids: list[str] = Field(default_factory=list)
+    current_step_index: int | None = Field(default=None, ge=0)
+    affect_state: Literal["NORMAL", "DISTRESS", "FRUSTRATED", "GENTLE_RETURN"] = "NORMAL"
+    last_reasoning_probe: str | None = None
 
 
 class GuidedTeachingPlanStep(GuidedLearningModel):
@@ -431,6 +128,49 @@ class GuidedTeachingPlanStep(GuidedLearningModel):
 
     step_id: str
     tutor_question: str
+    answer_step_id: str | None = None
+
+
+class GuidedRescueContext(GuidedLearningModel):
+    """Authored rescue step selected by orchestration for this tutor turn."""
+
+    rescue_id: str = Field(min_length=1)
+    rescue_type: Literal["PARALLEL_EXAMPLE", "TUTOR_SOLVED"]
+    source_id: str = Field(min_length=1)
+    current_step_index: int = Field(ge=1)
+    total_steps: int = Field(ge=1)
+    current_step_text: str = Field(min_length=1, max_length=80)
+    is_final_step: StrictBool
+    approved_answer_reveal: StrictBool
+    return_target_object_id: str = Field(min_length=1)
+    active_support: Literal["PARALLEL_EXAMPLE", "TUTOR_SOLVED"]
+    active_action_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_rescue_step(self) -> "GuidedRescueContext":
+        if self.rescue_type != self.active_support:
+            raise ValueError("rescue_type must match active_support.")
+        if self.current_step_index > self.total_steps:
+            raise ValueError("current_step_index must not exceed total_steps.")
+        if self.is_final_step != (self.current_step_index == self.total_steps):
+            raise ValueError("is_final_step must match current_step_index.")
+        if self.approved_answer_reveal and (
+            self.rescue_type != "TUTOR_SOLVED" or not self.is_final_step
+        ):
+            raise ValueError(
+                "approved_answer_reveal is allowed only for the final Tutor-Solved step."
+            )
+        return self
+
+
+class GuidedCanvasEvidence(GuidedLearningModel):
+    """Canvas evidence paired with the learner's current turn."""
+
+    snapshot_reference: str | None = None
+    ocr_regions: list[dict[str, object]] = Field(default_factory=list)
+    spatial_tokens: list[dict[str, object]] = Field(default_factory=list)
+    strokes: list[dict[str, object]] = Field(default_factory=list)
+    ordered_events: list[CanvasEvent] = Field(default_factory=list)
 
 
 class GuidedTutorContext(GuidedLearningModel):
@@ -443,9 +183,19 @@ class GuidedTutorContext(GuidedLearningModel):
     missing_concept_ids: list[str]
     support_state: dict[str, object]
     current_support: dict[str, object] | None
+    active_support_content: dict[str, object] | None
+    selected_option_id: str | None
+    selected_option_text: str | None
+    active_canvas_events: list[CanvasEvent]
+    canvas_evidence: GuidedCanvasEvidence = Field(default_factory=GuidedCanvasEvidence)
+    prior_tutor_response: str | None = None
+    attempt_count: int = Field(default=0, ge=0)
+    learning_phase: str = "GUIDED_PRACTICE"
+    active_question_anchors: list[QuestionTextAnchor]
     current_scaffold_step_number: int
     consecutive_stuck_count: int
     conversation_state_summary: str
+    rescue_context: GuidedRescueContext | None = None
 
 
 class ActiveScaffold(GuidedLearningModel):
@@ -475,6 +225,7 @@ class GuidedRescue(GuidedLearningModel):
     micro_skill_id: str
     parallel_example: ParallelExample | None
     tutor_solved: TutorSolved | None
+    tutor_engine_context: GuidedRescueContext | None = None
 
 
 class PrerequisiteRepair(GuidedLearningModel):
@@ -493,6 +244,74 @@ class NudgeDelivery(GuidedLearningModel):
     interaction_id: str
     status: Literal["GENERATED", "PRESENTED"]
     message: str = Field(min_length=1)
+
+
+class CanvasPedagogyIntent(GuidedLearningModel):
+    """A semantic evaluator suggestion, not a browser drawing command."""
+
+    action_type: TutorCanvasActionType
+    target_kind: TutorCanvasTargetKind
+    target_object_id: str | None
+    confirmed_component_id: str | None
+    text: str | None = Field(max_length=80)
+    source_id: str | None
+
+
+class TutorCanvasAction(GuidedLearningModel):
+    """Validated Phase 2 action owned visually by the frontend."""
+
+    action_id: str
+    type: TutorCanvasActionType
+    target_kind: TutorCanvasTargetKind
+    target_object_id: str | None
+    confirmed_component_id: str | None
+    text: str | None = Field(default=None, max_length=80)
+    source_id: str | None
+    answer_reveal_allowed: StrictBool = False
+    rescue_id: str | None = None
+    step_index: int | None = Field(default=None, ge=1)
+    total_steps: int | None = Field(default=None, ge=1)
+    presentation_mode: Literal["PARALLEL", "TUTOR_SOLVED"] | None = None
+    return_target_object_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_rescue_action(self) -> "TutorCanvasAction":
+        rescue_types = {"SHOW_PARALLEL", "TUTOR_SOLVED_STEP"}
+        rescue_fields_present = any(
+            value is not None
+            for value in (
+                self.rescue_id,
+                self.step_index,
+                self.total_steps,
+                self.presentation_mode,
+                self.return_target_object_id,
+            )
+        )
+        if self.type not in rescue_types:
+            if rescue_fields_present:
+                raise ValueError("rescue fields are allowed only on rescue actions.")
+            if self.answer_reveal_allowed:
+                raise ValueError("only an approved Tutor-Solved step may reveal an answer.")
+            return self
+        if (
+            self.rescue_id is None
+            or self.step_index is None
+            or self.total_steps is None
+            or self.presentation_mode is None
+            or self.return_target_object_id is None
+            or self.source_id is None
+        ):
+            raise ValueError("rescue actions require rescue metadata and source_id.")
+        if self.step_index > self.total_steps:
+            raise ValueError("rescue action step_index must not exceed total_steps.")
+        expected_mode = "PARALLEL" if self.type == "SHOW_PARALLEL" else "TUTOR_SOLVED"
+        if self.presentation_mode != expected_mode:
+            raise ValueError("rescue action presentation_mode does not match type.")
+        if self.answer_reveal_allowed and (
+            self.type != "TUTOR_SOLVED_STEP" or self.step_index != self.total_steps
+        ):
+            raise ValueError("only the final Tutor-Solved step may reveal an answer.")
+        return self
 
 
 def inactivity_policy() -> InactivityPolicy:
@@ -515,6 +334,8 @@ class GuidedEvaluation(GuidedLearningModel):
     next_objective: ActiveTeachingObjective | None
     tutor_message: str = Field(min_length=1)
     tutor_message_voice: str = Field(min_length=1)
+    write_instruction: str | None = Field(default=None, max_length=160)
+    canvas_intentions: list[CanvasPedagogyIntent] = Field(default_factory=list)
 
 
 class FocusedComponentEvidence(GuidedLearningModel):

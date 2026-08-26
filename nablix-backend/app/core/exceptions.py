@@ -15,6 +15,16 @@ class SessionNotFoundError(HTTPException):
         self.message = f"Session with ID {session_id} not found."
         self.field = "session_id"
 
+#for a work artifact PDF neither found nor owned by the caller -- browser-
+#reachable, so Student Model's own rejection body/URL must never leak here.
+class WorkArtifactNotFoundError(HTTPException):
+    def __init__(self, artifact_id: str):
+        super().__init__(status_code=404, detail=f"Work artifact {artifact_id} not found.")
+        self.error_code = "NOT_FOUND"
+        self.message = f"Work artifact {artifact_id} not found."
+        self.field = "artifact_id"
+
+
 #for failed next-question fetches on a phase transition (Chirudeva 6.7).
 class QuestionFetchError(HTTPException):
     def __init__(self, concept_id: str, phase: str):
@@ -72,6 +82,12 @@ class AdapterRequestRejected(HTTPException):
                 "payload": payload,
             },
         )
+
+
+# A downstream call fails in two unrelated ways: AdapterError for transport
+# faults and 5xx, AdapterRequestRejected for 4xx. They are siblings, not
+# parent and child, so catching only AdapterError silently misses every 4xx.
+DOWNSTREAM_FAILURE = (AdapterError, AdapterRequestRejected)
 
 
 class JourneyVersionConflict(HTTPException):

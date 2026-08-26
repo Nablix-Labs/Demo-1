@@ -228,9 +228,10 @@ def test_voice_transcript_routes_through_interaction_flow() -> None:
     body = response.json()
     assert body["session_id"] == session_id
     assert body["student_id"] == "ST011"
-    # The authored support hint is delivered alongside the tutor reply, not in
-    # place of it (see "fix: preserve guided tutor reply alongside support").
-    assert body["support_message"] == "Undo the addition first."
+    # The separate hint is not replayed in chat. This response delivers its
+    # own visual cue, which the frontend can render once from the turn field.
+    assert body["support_message"] is None
+    assert body["support_served_this_turn"] == "VISUAL_CUE"
     assert body["message"]
     assert body["message"] != "Undo the addition first."
     assert body["message_voice"] == body["message"]
@@ -266,6 +267,32 @@ def test_voice_transcript_normalizes_spoken_correct_answer() -> None:
     assert body["message_voice"] == body["message"]
     assert body["answer_value_confirmed"] is True
     assert body["question_completed"] is True
+
+
+def test_low_confidence_voice_requires_written_input_without_penalty() -> None:
+    session_id = _start_session("ST014")
+
+    response = client.post(
+        "/voice/transcript",
+        json={
+            "session_id": session_id,
+            "student_id": "ST014",
+            "transcript": "x equals five",
+            "confidence": 0.2,
+            "audio_duration_seconds": 3.2,
+            "turn": "STUDENT",
+            "timestamp": "2026-06-10T10:00:00Z",
+            "turn_id": "TURN-BROWSER-LOW-CONFIDENCE",
+            "transcript_final": True,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "CLARIFICATION_REQUIRED"
+    assert body["next_expected_input"] == "WRITE"
+    assert body["attempt_increment"] == 0
+    assert body["attempt_count"] == 0
 
 
 @pytest.mark.parametrize(

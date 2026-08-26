@@ -60,9 +60,24 @@ export function SectionLoading() {
 /** Small labelled value used inside section sheets. */
 export function Meta({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="grid grid-cols-[128px_minmax(0,1fr)] items-start gap-3 py-1.5">
-      <span className="text-xs font-semibold text-slate-blue">{label}</span>
-      <span className="min-w-0 break-words text-sm text-ink">{value}</span>
+    // Wraps rather than using a fixed two-column grid. The old
+    // `grid-cols-[128px_minmax(0,1fr)]` demanded 128px for the label whatever
+    // the container was, and the workspace detail sheets get genuinely narrow:
+    // the shell is [240px_1fr_320px] inside a 240px app rail, so at a 1440px
+    // viewport the Hints detail panel is ~180px, and a two-column split inside
+    // that leaves each Meta ~57px. The label then overflowed its own container
+    // and the value column collapsed to zero, rendering text one character per
+    // line down the page.
+    //
+    // flex-wrap reacts to the container instead of the viewport: while the label
+    // and a readable value both fit they share a row, otherwise the value drops
+    // below. `basis-40` is what decides that — it asks for 160px before
+    // agreeing to share. Tailwind's sm:/lg: cannot express this, because they
+    // measure the window, and here the window is wide while the box is not.
+    <div className="flex flex-wrap items-start gap-x-3 gap-y-0.5 py-1.5">
+      {/* max-w-full so a label never pushes past a container narrower than itself. */}
+      <span className="w-32 max-w-full shrink-0 text-xs font-semibold text-slate-blue">{label}</span>
+      <span className="min-w-0 flex-1 basis-40 break-words text-sm text-ink">{value}</span>
     </div>
   );
 }

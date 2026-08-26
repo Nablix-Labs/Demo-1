@@ -82,3 +82,39 @@ describe('the Phase 3 lock', () => {
     expect(after.state.phase3LockedQuestionId).toBe('Q-T03-002');
   });
 });
+
+describe('the tutor-draw de-duplication window', () => {
+  beforeEach(() => useNumeraStore.setState({
+    tutorElements: [], currentPhase: 'GUIDED_PRACTICE',
+    activeQuestionId: 'Q1', backendSession: null,
+  }));
+
+  const mark = (actionId: string) => ({
+    author: 'tutor' as const,
+    actionId,
+    elements: [{ kind: 'text' as const, x: 0.1, y: 0.2, text: 'c + 4' }],
+  });
+
+  it('still drops a re-delivered action within one question', () => {
+    // The reconnect case the window exists for: the same command arriving
+    // twice must not show the tutor annotating twice.
+    state().applyCanvasDraw(mark('ACT-1'));
+    state().applyCanvasDraw(mark('ACT-1'));
+    expect(state().tutorElements).toHaveLength(1);
+  });
+
+  it('accepts the same action id again on the next question', () => {
+    // The tutor now draws confirmed learner ideas on ordinary turns (Sanya,
+    // 18 Aug 2026), so the same idea can be confirmed again on a new question.
+    // Before the window was scoped, the second drawing was silently dropped and
+    // the canvas stayed blank with nothing reporting why.
+    state().applyCanvasDraw(mark('ACT-1'));
+    state().applyBackendPhase({
+      phase: 'GUIDED_PRACTICE', questionId: 'Q2',
+      questionText: 'Next question', questionType: null,
+    });
+    state().applyCanvasDraw(mark('ACT-1'));
+    expect(state().tutorElements).toHaveLength(1);
+    expect(state().tutorElements[0].text).toBe('c + 4');
+  });
+});

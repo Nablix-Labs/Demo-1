@@ -12,6 +12,8 @@
  */
 
 import { questionLayout } from '@/lib/questionText';
+import { fragmentRanges, type QuestionAnchor } from '@/lib/questionAnchors';
+import AnchoredText from '@/components/AnchoredText';
 import type { QuestionType, SchemaQuestionOption } from '@/lib/api';
 import { cn } from '@/lib/cn';
 
@@ -39,6 +41,8 @@ function Options({
   onSelect,
   requiresExplanation,
   readOnly = false,
+  questionId,
+  highlightedOptionIds,
 }: {
   options: SchemaQuestionOption[];
   selectedId: string | null;
@@ -46,11 +50,15 @@ function Options({
   requiresExplanation: boolean;
   /** Shown but not changeable — a Phase 3 answer that has been accepted. */
   readOnly?: boolean;
+  questionId: string | null;
+  highlightedOptionIds: string[];
 }) {
   return (
     <div className="flex flex-col gap-1.5" role="radiogroup" aria-label="Answer options">
       {options.map((option, i) => {
         const selected = option.option_id === selectedId;
+        const tutorHighlighted = questionId !== null
+          && highlightedOptionIds.includes(`${questionId}:OPTION:${option.option_id}`);
         return (
           <button
             key={option.option_id}
@@ -64,6 +72,7 @@ function Options({
               selected
                 ? 'border-focus-navy bg-focus-navy/5 text-ink font-medium'
                 : 'border-muted-gray bg-white text-ink',
+              tutorHighlighted && 'ring-2 ring-highlight-amber bg-highlight-amber/15',
               // A locked choice still SHOWS what was picked — hiding it would
               // erase the student's own answer from the screen — but it must
               // not look pressable.
@@ -96,6 +105,18 @@ function Options({
   );
 }
 
+
+/**
+ * `from`/`to` props for one fragment, resolved against the original question.
+ *
+ * Undefined when the fragment is not a slice of the question (an added lead-in),
+ * which makes AnchoredText render it plainly — correct, since the backend never
+ * measured text it did not send.
+ */
+function spanProps(range: { from: number | null; to: number | null }) {
+  return range.from === null ? {} : { from: range.from, to: range.to as number };
+}
+
 export default function QuestionDisplay({
   question,
   size = 'lesson',
@@ -104,6 +125,9 @@ export default function QuestionDisplay({
   selectedOptionId = null,
   onSelectOption,
   optionsReadOnly = false,
+  anchors,
+  questionId = null,
+  highlightedOptionIds = [],
 }: {
   question: string;
   /** `lesson` is the full canvas header; `compact` is the practice header. */
@@ -115,6 +139,18 @@ export default function QuestionDisplay({
   onSelectOption?: (option: SchemaQuestionOption) => void;
   /** Render the choices as a record of what was picked, not a chooser. */
   optionsReadOnly?: boolean;
+  /**
+   * Spans of `question` the tutor is pointing at (Chirudeva handoff §1).
+   *
+   * The offsets index `question` as sent, but this component renders it in
+   * FRAGMENTS — a bare equation gets a lead-in wrapped round it, a run of cases
+   * is split into a grid — so each fragment is resolved back to its own range
+   * before its anchors are drawn. `fragmentRanges` does that with one moving
+   * cursor, in render order.
+   */
+  anchors?: QuestionAnchor[];
+  questionId?: string | null;
+  highlightedOptionIds?: string[];
 }) {
   const layout = questionLayout(question);
   const equationSize = size === 'lesson' ? 'text-[22px]' : 'text-[16px]';
@@ -135,6 +171,8 @@ export default function QuestionDisplay({
       onSelect={onSelectOption!}
       requiresExplanation={requiresExplanation}
       readOnly={optionsReadOnly}
+      questionId={questionId}
+      highlightedOptionIds={highlightedOptionIds}
     />
   ) : null;
 
@@ -142,8 +180,16 @@ export default function QuestionDisplay({
     return (
       <div className="flex flex-col gap-3">
         <div className={`${equationSize} font-semibold text-ink`}>
+          {/* The lead-in is added text, not part of the question, so it carries
+              no anchors — see fragmentRanges. */}
           Solve for <span className="italic" style={MATHS_FONT}>x</span>:{' '}
-          <span style={MATHS_FONT}>{layout.text}</span>
+          <span style={MATHS_FONT}>
+            <AnchoredText
+              question={question}
+              anchors={anchors}
+              {...spanProps(fragmentRanges(question, [layout.text])[0])}
+            />
+          </span>
         </div>
         {optionList}
       </div>
@@ -156,6 +202,14 @@ export default function QuestionDisplay({
     // 14 sits under 9, not one character to its right — and tabular numerals
     // keep every digit the same width regardless of the glyphs involved.
     const columns = layout.rows[0].length;
+    // Every fragment this branch renders, in the order it renders them, so one
+    // cursor resolves them all — a stack of cases repeats "+ 5" verbatim, and
+    // each occurrence must claim its own position.
+    const cells = layout.rows.flat();
+    const ranges = fragmentRanges(
+      question,
+      layout.instruction ? [...cells, layout.instruction] : cells,
+    );
     return (
       <div className="flex flex-col gap-2">
         <div
@@ -167,7 +221,11 @@ export default function QuestionDisplay({
           {layout.rows.map((row, r) =>
             row.map((cell, c) => (
               <span key={`${r}-${c}`} className="text-right">
-                {cell}
+                <AnchoredText
+                  question={question}
+                  anchors={anchors}
+                  {...spanProps(ranges[r * columns + c])}
+                />
               </span>
             )),
           )}
@@ -176,7 +234,11 @@ export default function QuestionDisplay({
             strip / evidence area split. */}
         {layout.instruction && (
           <p className={`${proseSize} font-medium text-ink leading-snug max-w-[62ch]`}>
-            {layout.instruction}
+            <AnchoredText
+              question={question}
+              anchors={anchors}
+              {...spanProps(ranges[cells.length])}
+            />
           </p>
         )}
         {optionList}
@@ -192,7 +254,14 @@ export default function QuestionDisplay({
       <p
         className={`${proseSize} font-semibold text-ink leading-snug max-w-[62ch] whitespace-pre-line`}
       >
-        {layout.text}
+        {/* `layout.text` is the question trimmed, so its range is resolved
+            rather than assumed to start at 0 — leading whitespace would shift
+            every anchor by exactly the amount that was trimmed. */}
+        <AnchoredText
+          question={question}
+          anchors={anchors}
+          {...spanProps(fragmentRanges(question, [layout.text])[0])}
+        />
       </p>
       {optionList}
     </div>

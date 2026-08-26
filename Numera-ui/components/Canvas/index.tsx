@@ -24,6 +24,7 @@ import QuestionDisplay from '@/components/QuestionDisplay';
 import ScaffoldPanel from '@/components/ScaffoldPanel';
 import Toolbar from './Toolbar';
 import TeachBack from './TeachBack';
+import { displayedQuestionNumber } from '@/lib/questionNumber';
 
 // react-konva requires client-only rendering (no SSR)
 const DrawingCanvas = dynamic(() => import('./DrawingCanvas'), { ssr: false });
@@ -48,6 +49,17 @@ export default function CanvasStage() {
       setCanvasExporter: s.setCanvasExporter, canvasGrid: s.canvasGrid, setCanvasGrid: s.setCanvasGrid,
     })),
   );
+  const questionAnchors = useNumeraStore((s) => s.questionAnchors);
+  const tutorOptionActionIds = useNumeraStore((s) => s.tutorOptionActionIds);
+  const activeQuestionId = useNumeraStore((s) => s.activeQuestionId);
+  const backendSession = useNumeraStore((s) => s.backendSession);
+  // The badge counts the question's position in the served set rather than the
+  // backend's running `question_number`, which is one high on the first question
+  // of a phase — see lib/questionNumber.
+  const shownQuestionNumber = displayedQuestionNumber(
+    backendSession, activeQuestionId, questionNumber,
+  );
+
   const activeScaffold = useNumeraStore((s) => s.activeScaffold);
   // Phase 3 spec §3.2: no scaffold panels during an independent attempt. Read
   // from the phase rather than the route — the phase is what decides whether
@@ -166,11 +178,16 @@ export default function CanvasStage() {
           the rest is the gap. If its label changes, re-measure. */}
       <div className="absolute top-[26px] left-[34px] right-[34px] z-10">
       <div className="flex items-start gap-3 pr-[150px]">
-        <div className="w-[30px] h-[30px] rounded-md border border-muted-gray bg-reading-surface flex items-center justify-center text-xs font-semibold text-slate-blue flex-shrink-0">
-          {questionNumber}
-        </div>
+        {shownQuestionNumber !== null && (
+          <div className="w-[30px] h-[30px] rounded-md border border-muted-gray bg-reading-surface flex items-center justify-center text-xs font-semibold text-slate-blue flex-shrink-0">
+            {shownQuestionNumber}
+          </div>
+        )}
         <QuestionDisplay
           question={questionText}
+          anchors={questionAnchors}
+          questionId={activeQuestionId}
+          highlightedOptionIds={tutorOptionActionIds}
           size="lesson"
           questionType={questionType}
           options={questionOptions}
@@ -243,8 +260,22 @@ export default function CanvasStage() {
         </div>
       )}
 
-      {/* Paper-style + Help FABs */}
-      <div className="absolute bottom-6 right-6 z-20 flex items-center gap-2.5">
+      {/* Paper-style + Help FABs.
+
+          bottom-[86px], not bottom-6. The Nablix Assist launcher is `fixed
+          bottom-6 right-4 z-[60]` in the app shell, so it lands in this exact
+          corner and outranks these on z — measured live on 26 Aug 2026 at a
+          1440x900 viewport: the pill covers 24-74px up from the bottom edge,
+          both FABs sat at 24-64px, and elementFromPoint on either one returned
+          the pill. They were fully visible and completely unclickable, so
+          nothing about the screen said the paper style or the canvas help was
+          out of reach. 86px clears the pill's 74 with a 12px gap.
+
+          The practice action row already dodges the same pill sideways
+          (app/practice/page.tsx, right-[180px]); this cluster was missed. Up
+          rather than across, because the right edge is where the FABs belong
+          and the drawing toolbar owns bottom-centre. */}
+      <div className="absolute bottom-[86px] right-6 z-20 flex items-center gap-2.5">
         {/* Paper / grid style picker */}
         <div className="relative">
           {gridOpen && (
