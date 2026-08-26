@@ -4401,6 +4401,9 @@ def test_canvas_math_review_scopes_multipart_sentence_to_active_rule_component(
 
 
 def test_canvas_math_review_circles_direct_expression_with_multiple_errors() -> None:
+    """Kill switch off: structural differences fall back to circling the line."""
+
+
     review = review_canvas_math(
         question=(
             "3 + 5, 9 + 5, 14 + 5. Use n for the changing starting "
@@ -4419,7 +4422,9 @@ def test_canvas_math_review_circles_direct_expression_with_multiple_errors() -> 
             )
             for index, text in enumerate(["n", "-", "7"], start=1)
         ],
-        config=classifier.load_classifier_rules().canvas_review,
+        config=classifier.load_classifier_rules().canvas_review.model_copy(
+            update={"semantic_localization_enabled": False}
+        ),
         confidence=0.95,
     )
 

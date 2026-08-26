@@ -215,6 +215,8 @@ class SpatialMathToken(BaseModel):
         "identifier",
         "operator",
         "fraction_bar",
+        "fraction_numerator",
+        "fraction_denominator",
         "radical",
         "fence",
         "unknown",
