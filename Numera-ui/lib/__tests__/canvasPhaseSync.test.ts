@@ -8,7 +8,11 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   submitCanvas: (...args: unknown[]) => submitCanvas(...args),
 }));
-vi.mock('@/lib/tutorSpeech', () => ({
+// Only the two that reach a speech engine are stubbed. The rest of the module
+// is kept real so it cannot go stale: the voice-floor helpers no-op while
+// `voiceStatus` is 'idle', which is what these tests run in.
+vi.mock('@/lib/tutorSpeech', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/tutorSpeech')>()),
   setStudentWriting: vi.fn(),
   tutorSay: vi.fn(),
 }));

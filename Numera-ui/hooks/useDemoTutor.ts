@@ -40,7 +40,10 @@ import { revealDecision } from '@/lib/revealBeforeClear';
 import { refreshedRecord } from '@/lib/sessionRecordRefresh';
 import { sessionEndSummary, storeEndedSession } from '@/lib/sessionEnd';
 import { useNumeraStore, type TrailKind, type TutorCanvasAction } from '@/store/useNumeraStore';
-import { tutorSay, setStudentWriting } from '@/lib/tutorSpeech';
+import {
+  tutorSay, setStudentWriting,
+  closeMicForSubmission, takeFloorForReply, reopenFloorAfterFailure,
+} from '@/lib/tutorSpeech';
 import { phaseAnnouncement, withTransitionVoice } from '@/lib/phaseTransition';
 import { speakBrowser } from '@/lib/tts';
 import type { SupportRung } from '@/lib/supportLadder';
@@ -563,6 +566,7 @@ export function useDemoTutor() {
       if (!questionId) return null;
       addTrailEntry({ kind: 'answer', text });
       const turnId = useNumeraStore.getState().beginSubmissionTurn();
+      closeMicForSubmission();
       try {
         const state = useNumeraStore.getState();
         const res = await sendSynchronizedInteraction({
@@ -624,9 +628,10 @@ export function useDemoTutor() {
         if (drew) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw!);
         // §1: highlight first, pause, then speak. When the turn also drew, the
         // mark lands before it is described; when it didn't, this speaks at once.
-        tutorSay(withHint(hint, spoken), { afterMarks: drew });
+        tutorSay(withHint(hint, spoken), { afterMarks: drew, onEnd: takeFloorForReply() });
         return res;
       } catch (err) {
+        reopenFloorAfterFailure();
         if (recoverIfStaleSession(err)) return null;
         reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage, '/interaction (answer)');
         addTrailEntry({ kind: 'tutor', text: errorMessage(err, 'Tutor unavailable.') });
@@ -653,6 +658,7 @@ export function useDemoTutor() {
       // submission without it (422), and it is what lets the backend recognise
       // a resend as the same attempt rather than a second one.
       const turnId = useNumeraStore.getState().beginSubmissionTurn();
+      closeMicForSubmission();
       const res = await submitCanvas(
         sessionId,
         canvasSnapshot.snapshotDataUrl,
@@ -714,9 +720,13 @@ export function useDemoTutor() {
       // With no tutor message there may still be a phase-change line to speak,
       // and in Phase 3 there is deliberately nothing to say at all.
       const spoken = withTransitionVoice(entering, supportSpoken);
-      if (spoken.trim()) tutorSay(spoken, { afterMarks: drew });
+      // Unguarded on purpose: tutorSay fires onEnd for empty text, so a turn
+      // with nothing to say — Phase 3, where that is the point — still hands
+      // the floor back instead of stranding it in 'speaking'.
+      tutorSay(spoken, { afterMarks: drew, onEnd: takeFloorForReply() });
       return res;
     } catch (err) {
+      reopenFloorAfterFailure();
       // A forgotten session recovers by opening a new one; see
       // recoverIfStaleSession. Nothing to report to the student.
       if (recoverIfStaleSession(err)) return null;
@@ -752,6 +762,7 @@ export function useDemoTutor() {
     }
 
     const turnId = useNumeraStore.getState().beginSubmissionTurn();
+    closeMicForSubmission();
     addTranscriptMessage({ role: 'ai', text: EXPLAIN_AGAIN_ACKNOWLEDGEMENT });
     addTrailEntry({ kind: 'tutor', text: EXPLAIN_AGAIN_ACKNOWLEDGEMENT });
     // Explain Again is an explicit handoff from the student to the tutor, even
@@ -795,7 +806,7 @@ export function useDemoTutor() {
       await acknowledgementWindow;
       const spoken = applyInteractionSupport(res);
       addTranscriptMessage({ role: 'ai', text: res.message });
-      tutorSay(spoken, { afterMarks: Boolean(res.canvas_draw?.length) });
+      tutorSay(spoken, { afterMarks: Boolean(res.canvas_draw?.length), onEnd: takeFloorForReply() });
       if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
       return res;
     } catch (err) {
@@ -803,6 +814,7 @@ export function useDemoTutor() {
       // catch turned every real failure — a 500, an auth rejection, a timeout —
       // into a silent local replay, so the student saw the old cue reappear and
       // nobody ever learned the backend had failed.
+      reopenFloorAfterFailure();
       const status = (err as { response?: { status?: number } })?.response?.status;
       const endpointMissing = status === 404 || status === 405 || status === 422;
       if (endpointMissing) {
@@ -944,7 +956,11 @@ export function useDemoTutor() {
       return null;
     }
     const turnId = s.beginSubmissionTurn();
-    const res = await sendSynchronizedInteraction({
+    closeMicForSubmission();
+    // Rethrown, not swallowed: the caller renders the failure (see
+    // hintFailureMessage). All this does is stop the mic being left shut behind
+    // a hint that never arrived.
+    const request = sendSynchronizedInteraction({
       session_id: sessionId,
       student_id: studentId(),
       interaction_type: 'HELP_REQUEST',
@@ -962,12 +978,16 @@ export function useDemoTutor() {
       turn_id: turnId,
       previous_tutor_turn_id: s.lastTutorTurnId,
     });
+    const res = await request.catch((err: unknown) => {
+      reopenFloorAfterFailure();
+      throw err;
+    });
     if (!acceptResponse(res)) return null;
     syncBackendSession(res);
     const spoken = applyInteractionSupport(res);
     addTranscriptMessage({ role: 'ai', text: res.message });
     addTrailEntry({ kind: 'hint', text: res.message, meta: res.support_served_this_turn ?? 'support' });
-    tutorSay(spoken, { afterMarks: Boolean(res.canvas_draw?.length) });
+    tutorSay(spoken, { afterMarks: Boolean(res.canvas_draw?.length), onEnd: takeFloorForReply() });
     const served = res.support_served_this_turn;
     const rung: SupportRung | null = served && served !== 'NONE' ? served : null;
     if (rung) useNumeraStore.getState().setSupportShown(rung);
@@ -1151,6 +1171,7 @@ export function useDemoTutor() {
     const state = useNumeraStore.getState();
     if (!apiEnabled() || !sessionId || !state.activeQuestionId) return;
     const turnId = state.beginSubmissionTurn();
+    closeMicForSubmission();
     const selection = `Selected ${optionId}: ${optionText}`;
     addTranscriptMessage({ role: 'student', text: selection });
     addTrailEntry({ kind: 'answer', text: selection, meta: 'option selected' });
@@ -1182,8 +1203,9 @@ export function useDemoTutor() {
       const hint = presentAuthorisedHint(res, addTranscriptMessage, addTrailEntry);
       addTranscriptMessage({ role: 'ai', text: res.message });
       addTrailEntry({ kind: 'tutor', text: res.message, meta: 'option selected' });
-      tutorSay(withHint(hint, spoken));
+      tutorSay(withHint(hint, spoken), { onEnd: takeFloorForReply() });
     } catch (err) {
+      reopenFloorAfterFailure();
       reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage, '/interaction (option selected)');
     }
   }, [sessionId, addTranscriptMessage, addTrailEntry]);
@@ -1192,6 +1214,7 @@ export function useDemoTutor() {
     const state = useNumeraStore.getState();
     if (!apiEnabled() || !sessionId || !state.activeQuestionId || !text.trim()) return false;
     const turnId = state.beginSubmissionTurn();
+    closeMicForSubmission();
     addTranscriptMessage({ role: 'student', text });
     addTrailEntry({ kind: 'answer', text, meta: 'teach back' });
     try {
@@ -1214,9 +1237,10 @@ export function useDemoTutor() {
       const hint = presentAuthorisedHint(res, addTranscriptMessage, addTrailEntry);
       addTranscriptMessage({ role: 'ai', text: res.message });
       addTrailEntry({ kind: 'tutor', text: res.message, meta: 'teach back feedback' });
-      tutorSay(withHint(hint, spoken));
+      tutorSay(withHint(hint, spoken), { onEnd: takeFloorForReply() });
       return true;
     } catch (err) {
+      reopenFloorAfterFailure();
       reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage, '/interaction (teach back)');
       return false;
     }
