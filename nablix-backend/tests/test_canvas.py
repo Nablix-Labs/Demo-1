@@ -1830,6 +1830,13 @@ def test_canvas_clarification_identifies_a_missing_operation() -> None:
     tutor = canvas_service._clarification_result(
         ocr,
         canvas_service.load_classifier_rules(),
+        AdapterContext(
+            session_id="SESSION-CANVAS-CLARIFICATION",
+            student_id="ST-CANVAS-CLARIFICATION",
+            message="n 5",
+            question="Write the general rule.",
+            correct_answer="n + 5",
+        ),
     )
 
     assert tutor.evaluation == "UNCLEAR"

@@ -9,6 +9,10 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from app.adapters.provider import get_adapters
+from app.ai_engine.classifier import (
+    build_openai_ai_engine_client,
+    build_support_aware_tutor_message,
+)
 from app.ai_engine.classifier_config import ClassifierRulesConfig, load_classifier_rules
 from app.core.config import get_settings
 from app.core.exceptions import DOWNSTREAM_FAILURE, JourneyVersionConflict
@@ -93,13 +97,38 @@ def _semantic_canvas_text(ocr: VisionOCRResult) -> str:
 def _clarification_result(
     ocr: VisionOCRResult,
     rules: ClassifierRulesConfig,
+    context: AdapterContext,
 ) -> TutorResult:
     normalized_ocr_text = re.sub(r"\s+", " ", ocr.raw_ocr_text).strip()
-    message = (
-        rules.guided_learning.critical_thinking.missing_operation_canvas_prompt
-        if _MISSING_OPERATION_CANVAS_PATTERN.fullmatch(normalized_ocr_text)
-        else _UNRELIABLE_EVIDENCE_MESSAGE
-    )
+    missing_operation = _MISSING_OPERATION_CANVAS_PATTERN.fullmatch(normalized_ocr_text)
+    message = _UNRELIABLE_EVIDENCE_MESSAGE
+    if missing_operation:
+        fallback_message = rules.guided_learning.critical_thinking.missing_operation_canvas_prompt
+        authored_message = build_support_aware_tutor_message(
+            question_id=context.question_id,
+            question=context.question or "",
+            correct_answer=context.correct_answer or "",
+            student_input=ocr.raw_ocr_text,
+            evaluation="UNCLEAR",
+            error_type="INSUFFICIENT_INFORMATION",
+            response_strategy="CLARIFY",
+            hint_level=None,
+            conversation_history=context.conversation_history,
+            support_context={
+                "diagnostic_focus": "MISSING_OPERATION",
+                "ocr_evidence": normalized_ocr_text,
+                "response_constraints": (
+                    rules.guided_learning.critical_thinking
+                    .missing_operation_canvas_llm_constraints
+                ),
+            },
+            openai_client=build_openai_ai_engine_client(get_settings()),
+        )
+        message = (
+            authored_message.tutor_message
+            if authored_message is not None
+            else fallback_message
+        )
     return TutorResult(
         evaluation="UNCLEAR",
         error_type="INSUFFICIENT_INFORMATION",
@@ -350,7 +379,7 @@ async def submit_canvas(
         settings.min_ocr_confidence_threshold,
         rules.guided_learning.minimum_ocr_confidence,
     ):
-        tutor = _clarification_result(ocr, rules)
+        tutor = _clarification_result(ocr, rules, context)
         student_result = None
         schema_content_response = None
         updated_session = session

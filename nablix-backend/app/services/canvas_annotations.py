@@ -437,26 +437,34 @@ def plan_tutor_canvas_actions(
                 answer_reveal_allowed=False,
             )
         )
-    if not actions and selected_option_action is not None:
-        actions.append(selected_option_action)
-    if not actions:
-        actions = explicit_student_confirmation_actions(
+    supplementary_actions = [
+        *([selected_option_action] if selected_option_action is not None else []),
+        *explicit_student_confirmation_actions(
             tutor,
             question_anchors,
             canvas_events,
             turn_id,
             student_response,
             fallback_labels,
-        )
-    if not actions:
-        actions = fallback_confirmation_actions(
+        ),
+        *fallback_confirmation_actions(
             tutor,
             question_anchors,
             canvas_events,
             turn_id,
             canonical_answer,
             fallback_labels,
-        )
+        ),
+    ]
+    action_keys = {
+        (action.type, action.target_object_id, action.text)
+        for action in actions
+    }
+    for action in supplementary_actions:
+        key = (action.type, action.target_object_id, action.text)
+        if key not in action_keys:
+            actions.append(action)
+            action_keys.add(key)
     return add_confirmation_canvas_slots(actions, turn_id)
 
 
