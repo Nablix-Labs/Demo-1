@@ -113,6 +113,8 @@ class ClassificationRequest(StrictSchema):
     max_hint_results: int = Field(default=3, ge=1)
     exclude_content_ids: list[str] = Field(default_factory=list)
     canvas_regions: list[CanvasTextRegion] = Field(default_factory=list)
+    canvas_ocr_text: str | None = None
+    canvas_ocr_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     canvas_mathml_blocks: list[str] = Field(default_factory=list)
     spatial_tokens: list[SpatialMathToken] = Field(default_factory=list)
     canvas_events: list[CanvasEvent] = Field(default_factory=list)
@@ -1202,6 +1204,46 @@ def deterministic_teaching_step_evaluation(
             any(token in normalized for token in ("+ is", "plus is", "the +", "the plus"))
             and any(token in normalized for token in ("fixed value", "a value", "stays fixed"))
         )
+        operation_identified_on_canvas = has_reliable_canvas_operator_evidence(
+            request,
+            operator,
+            rules,
+        )
+        if changing_claimed and fixed_claimed and operation_identified_on_canvas:
+            confirmed = set(objective.confirmed_concept_ids)
+            for role in ("CHANGING_VALUE", "FIXED_VALUE", "OPERATION"):
+                component_id = _component_for_step(request, rubric, role)
+                if component_id is not None:
+                    confirmed.add(component_id)
+            missing = [
+                item
+                for item in rubric.required_concepts
+                if item.required and item.concept_id not in confirmed
+            ]
+            next_objective = ActiveTeachingObjective(
+                objective_type="EXPLAIN_CONCEPT",
+                target_concept_ids=[item.concept_id for item in missing],
+                confirmed_concept_ids=sorted(confirmed),
+                missing_concept_ids=[item.concept_id for item in missing],
+            )
+            message = (
+                f"You identified {variable} as changing, {number} as fixed, "
+                f"and {operator} as the operation. Nice work."
+            )
+            return GuidedEvaluation(
+                student_state="CORRECT" if not missing else "PARTIAL",
+                newly_confirmed_concept_ids=sorted(
+                    confirmed - set(objective.confirmed_concept_ids)
+                ),
+                preserved_concept_ids=objective.confirmed_concept_ids,
+                contradicted_concept_ids=[],
+                missing_concept_ids=next_objective.missing_concept_ids,
+                selected_error_code=None,
+                confidence=1.0,
+                next_objective=next_objective,
+                tutor_message=message,
+                tutor_message_voice=message,
+            )
         if changing_claimed and fixed_claimed and operation_called_value:
             confirmed = set(objective.confirmed_concept_ids)
             for role in ("CHANGING_VALUE", "FIXED_VALUE"):
@@ -1385,8 +1427,19 @@ def deterministic_teaching_step_evaluation(
         )
 
     if step.step_id == "OPERATION":
-        accepted = ("add", "addition", "plus") if operator == "+" else ("subtract", "subtraction", "minus")
-        if any(word in normalized for word in accepted):
+        accepted = (
+            ("add", "addition", "plus")
+            if operator == "+"
+            else ("subtract", "subtraction", "minus")
+        )
+        if (
+            any(word in normalized for word in accepted)
+            or has_reliable_canvas_operator_evidence(
+                request,
+                operator,
+                rules,
+            )
+        ):
             if next_step is None:
                 return _controller_evaluation(request, "CORRECT", objective, "Nice work.", step.step_id, rubric)
             return _controller_evaluation(request, "PARTIAL", objective, f"Yes. {next_step.prompt}", step.step_id, rubric)
@@ -1517,6 +1570,13 @@ def request_with_reliable_canvas_evidence(
         if region.confidence >= rules.guided_learning.minimum_ocr_confidence
         and region.text.strip()
     ]
+    if (
+        request.canvas_ocr_text is not None
+        and request.canvas_ocr_confidence is not None
+        and request.canvas_ocr_confidence >= rules.guided_learning.minimum_ocr_confidence
+        and request.canvas_ocr_text.strip()
+    ):
+        reliable_text.append(request.canvas_ocr_text.strip())
     if not reliable_text:
         return request
     evidence_text = " ".join(reliable_text)
@@ -1533,6 +1593,31 @@ def request_with_reliable_canvas_evidence(
         },
     )
     return request.model_copy(update={"student_input": merged_input})
+
+
+def has_reliable_canvas_operator_evidence(
+    request: ClassificationRequest,
+    operator: str,
+    rules: ClassifierRulesConfig,
+) -> bool:
+    """Return whether OCR isolated the operation symbol as student work."""
+
+    if any(
+        region.confidence >= rules.guided_learning.minimum_ocr_confidence
+        and region.text.strip() == operator
+        for region in request.canvas_regions
+    ):
+        return True
+    if (
+        request.canvas_ocr_text is None
+        or request.canvas_ocr_confidence is None
+        or request.canvas_ocr_confidence < rules.guided_learning.minimum_ocr_confidence
+    ):
+        return False
+    return any(
+        line.strip() == operator
+        for line in request.canvas_ocr_text.splitlines()
+    )
 
 
 def wrong_choice_evaluation(

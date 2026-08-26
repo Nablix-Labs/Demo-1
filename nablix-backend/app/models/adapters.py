@@ -115,6 +115,7 @@ class AdapterContext(BaseModel):
     detected_equation: str | None = None
     detected_steps: list[str] = Field(default_factory=list)
     ocr_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    canvas_ocr_text: str | None = None
     canvas_regions: list["OCRTextRegion"] = Field(default_factory=list)
     canvas_mathml_blocks: list[str] = Field(default_factory=list)
     spatial_tokens: list["SpatialMathToken"] = Field(default_factory=list)

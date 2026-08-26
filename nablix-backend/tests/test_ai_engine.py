@@ -160,6 +160,33 @@ def test_topic1_same_turn_reliable_ocr_confirms_changing_and_fixed_roles() -> No
     assert evaluation.tutor_message.endswith("What operation does + tell us to use?")
 
 
+def test_topic1_reliable_ocr_operator_symbol_completes_all_demonstrated_roles() -> None:
+    request = _topic1_request("7 stays fixed").model_copy(
+        update={
+            "canvas_ocr_text": "M Changes\n+",
+            "canvas_ocr_confidence": 0.96,
+        }
+    )
+    rules = load_classifier_rules()
+    evidence_request = classifier.request_with_reliable_canvas_evidence(request, rules)
+    rubric = classifier.rubric_from_authored_answer_parts(
+        "Q-T01-002", evidence_request.question_type, evidence_request.answer_spec, "test"
+    )
+    assert rubric is not None
+    evaluation = classifier.deterministic_teaching_step_evaluation(
+        evidence_request, rubric, classifier.initial_guided_objective(rubric), rules
+    )
+
+    assert "+" in evidence_request.student_input
+    assert evaluation is not None
+    assert evaluation.student_state == "CORRECT"
+    assert set(evaluation.newly_confirmed_concept_ids) == {
+        "CHANGING_VALUE",
+        "FIXED_VALUE",
+        "OPERATION",
+    }
+
+
 def test_topic1_low_confidence_ocr_is_not_confirmed_as_student_evidence() -> None:
     request = _topic1_request("7 stays fixed").model_copy(
         update={

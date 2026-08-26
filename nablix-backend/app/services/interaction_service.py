@@ -3291,6 +3291,7 @@ async def _process_interaction(
         detected_equation=ocr.detected_equation if ocr is not None else None,
         detected_steps=ocr.detected_steps if ocr is not None else [],
         ocr_confidence=ocr.confidence if ocr is not None else None,
+        canvas_ocr_text=ocr.raw_ocr_text if ocr is not None else None,
         canvas_regions=ocr.detected_regions if ocr is not None else [],
         canvas_mathml_blocks=ocr.mathml_blocks if ocr is not None else [],
         spatial_tokens=(canvas_evidence.spatial_tokens if canvas_evidence is not None else []),
