@@ -289,11 +289,15 @@ async def submit_canvas(
     canvas_regions = ocr.detected_regions
     ocr_latency_ms = canvas_evidence.ocr_latency_ms
     # Every Phase 3 submit stores its work, wrong or right: correct attempts are
-    # evidence, wrong ones are replayed in Phase 4.
+    # evidence, wrong ones are replayed in Phase 4. A page OCR read nothing on is
+    # neither -- the turn is UNCLEAR, so it carries no attempt and no detected
+    # errors, and _replay_item could never surface the artifact. Multi-page is
+    # covered too: raw_ocr_text is the join of every page (canvas_evidence).
     work_artifact_id: str | None = None
     if (
         session.current_phase == "INDEPENDENT_PRACTICE"
         and request.submission_role == "STANDALONE_ATTEMPT"
+        and ocr.raw_ocr_text.strip() != ""
     ):
         work_artifact_id = await _store_work_artifact(
             session,
