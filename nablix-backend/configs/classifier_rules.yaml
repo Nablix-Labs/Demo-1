@@ -534,6 +534,9 @@ canvas_review:
   annotation_enabled_phases:
     - DIAGNOSTIC
     - GUIDED_PRACTICE
+  # Kill switch: token-level mistake localization. Off falls back to the
+  # previous per-path matching, which stays in place underneath.
+  semantic_localization_enabled: true
   messages:
     ARITHMETIC_ERROR: Check the arithmetic in this step before continuing.
     SIGN_ERROR: Check the sign in this step before continuing.
