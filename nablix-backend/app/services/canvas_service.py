@@ -102,6 +102,7 @@ def _clarification_result(
     normalized_ocr_text = re.sub(r"\s+", " ", ocr.raw_ocr_text).strip()
     missing_operation = _MISSING_OPERATION_CANVAS_PATTERN.fullmatch(normalized_ocr_text)
     message = _UNRELIABLE_EVIDENCE_MESSAGE
+    message_source = "controller"
     if missing_operation:
         fallback_message = rules.guided_learning.critical_thinking.missing_operation_canvas_prompt
         authored_message = build_support_aware_tutor_message(
@@ -129,6 +130,16 @@ def _clarification_result(
             if authored_message is not None
             else fallback_message
         )
+        message_source = "openai" if authored_message is not None else "configured_fallback"
+    logger.info(
+        "canvas_clarification_diagnostics",
+        extra={
+            "question_id": context.question_id,
+            "diagnostic_focus": "MISSING_OPERATION" if missing_operation else "OCR_UNCLEAR",
+            "message_source": message_source,
+            "ocr_evidence": normalized_ocr_text,
+        },
+    )
     return TutorResult(
         evaluation="UNCLEAR",
         error_type="INSUFFICIENT_INFORMATION",
