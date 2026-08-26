@@ -334,7 +334,6 @@ class GuidedEvaluation(GuidedLearningModel):
     next_objective: ActiveTeachingObjective | None
     tutor_message: str = Field(min_length=1)
     tutor_message_voice: str = Field(min_length=1)
-    message_source: Literal["CONTROLLER", "OPENAI"] = "CONTROLLER"
     write_instruction: str | None = Field(default=None, max_length=160)
     canvas_intentions: list[CanvasPedagogyIntent] = Field(default_factory=list)
 
