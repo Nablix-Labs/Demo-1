@@ -666,6 +666,7 @@ export function useDemoTutor() {
         // POST is still in the history the tutor reasons over.
         useNumeraStore.getState().canvasEvents,
       );
+      if (!acceptResponse(res)) return res;
       // Canvas responses now carry the same phase state as /interaction, so a
       // backend phase change here also drives usePhaseRouting.
       const entering = phaseAnnouncement(res, useNumeraStore.getState().currentPhase);
@@ -684,10 +685,25 @@ export function useDemoTutor() {
         addTranscriptMessage({ role: 'ai', text: entering.text });
         addTrailEntry({ kind: 'tutor', text: entering.text, meta: 'phase change' });
       }
-      const tutorMessage = view.tutorText;
+      const tutorMessage = res.message?.trim() || view.tutorText;
       if (tutorMessage) {
         addTranscriptMessage({ role: 'ai', text: tutorMessage });
         addTrailEntry({ kind: 'tutor', text: tutorMessage, meta: view.tutorEvaluation });
+      }
+      // A canvas submission is a normal Guided Practice tutor turn. Applying
+      // its actions here makes the OCR evidence visible immediately instead of
+      // waiting for the next typed or voice answer to happen to render it.
+      const supportReply = {
+        ...res,
+        message: tutorMessage ?? '',
+      };
+      const supportSpoken = applyInteractionSupport(supportReply);
+      const tutorTurnId = res.tutor_turn_id ?? res.expected_previous_tutor_turn_id;
+      if (tutorTurnId !== undefined) {
+        useNumeraStore.getState().setTutorTurn(tutorTurnId, {
+          expects: res.expected_student_response !== 'NONE',
+          allow: res.allow_voice_input ?? false,
+        });
       }
       const drew = Boolean(res.canvas_draw?.length);
       if (drew) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw!);
@@ -697,7 +713,7 @@ export function useDemoTutor() {
       setStudentWriting(false);
       // With no tutor message there may still be a phase-change line to speak,
       // and in Phase 3 there is deliberately nothing to say at all.
-      const spoken = withTransitionVoice(entering, tutorMessage ?? '');
+      const spoken = withTransitionVoice(entering, supportSpoken);
       if (spoken.trim()) tutorSay(spoken, { afterMarks: drew });
       return res;
     } catch (err) {

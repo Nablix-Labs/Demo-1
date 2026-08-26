@@ -187,6 +187,51 @@ def test_topic1_reliable_ocr_operator_symbol_completes_all_demonstrated_roles() 
     }
 
 
+def test_topic1_text_operation_completes_roles_confirmed_by_canvas() -> None:
+    request = _topic1_request("addition").model_copy(
+        update={
+            "canvas_regions": [
+                CanvasTextRegion(
+                    step_id="step-1",
+                    text="m changes",
+                    x=0.1,
+                    y=0.1,
+                    w=0.2,
+                    h=0.1,
+                    confidence=0.96,
+                ),
+                CanvasTextRegion(
+                    step_id="step-2",
+                    text="7 fixed",
+                    x=0.1,
+                    y=0.3,
+                    w=0.2,
+                    h=0.1,
+                    confidence=0.96,
+                ),
+            ]
+        }
+    )
+    rules = load_classifier_rules()
+    evidence_request = classifier.request_with_reliable_canvas_evidence(request, rules)
+    rubric = classifier.rubric_from_authored_answer_parts(
+        "Q-T01-002", evidence_request.question_type, evidence_request.answer_spec, "test"
+    )
+    assert rubric is not None
+
+    evaluation = classifier.deterministic_teaching_step_evaluation(
+        evidence_request, rubric, classifier.initial_guided_objective(rubric), rules
+    )
+
+    assert evaluation is not None
+    assert evaluation.student_state == "CORRECT"
+    assert set(evaluation.newly_confirmed_concept_ids) == {
+        "CHANGING_VALUE",
+        "FIXED_VALUE",
+        "OPERATION",
+    }
+
+
 def test_topic1_reliable_ocr_preserves_all_roles_with_generic_components() -> None:
     request = _topic1_request("it is on the canvas").model_copy(
         update={

@@ -1492,6 +1492,33 @@ export interface CanvasSubmissionResult extends Phase3ResponseFields {
   recommended_entry_phase?: string | null;
   phase_transition_message?: string | null;
   phase_transition_voice?: string | null;
+  /** Full Guided Practice presentation fields, returned by /canvas/submit too. */
+  message?: string;
+  message_voice?: string;
+  support_message?: string | null;
+  show_visual_cue?: boolean;
+  visual_cue?: VisualCue | null;
+  question_type?: QuestionType | null;
+  question_anchors?: QuestionAnchor[];
+  tutor_canvas_actions?: TutorCanvasAction[];
+  tutor_turn_id?: string | null;
+  expected_previous_tutor_turn_id?: string | null;
+  expected_student_response?: string;
+  allow_voice_input?: boolean;
+  interaction_state_version?: number | null;
+  accepted_turn_id?: string | null;
+  conversation_action?: string | null;
+  next_expected_input?: string | null;
+  requires_written_math_evidence?: boolean | null;
+  write_instruction?: string | null;
+  active_scaffold?: GuidedStateFields['active_scaffold'];
+  show_scaffold_panel?: boolean;
+  scaffold_id?: string | null;
+  current_scaffold_step_id?: string | null;
+  scaffold_step_number?: number | null;
+  scaffold_step_text?: string | null;
+  scaffold_step_voice?: string | null;
+  total_scaffold_steps?: number | null;
 }
 
 const PNG_DATA_URL_PREFIX = 'data:image/png;base64,';

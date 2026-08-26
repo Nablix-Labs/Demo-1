@@ -1209,6 +1209,20 @@ def deterministic_teaching_step_evaluation(
             operator,
             rules,
         )
+        operation_identified_in_response = (
+            not operation_called_value
+            and any(
+                word in normalized
+                for word in (
+                    ("add", "addition", "plus")
+                    if operator == "+"
+                    else ("subtract", "subtraction", "minus")
+                )
+            )
+        )
+        operation_identified = (
+            operation_identified_on_canvas or operation_identified_in_response
+        )
         logger.info(
             "guided_role_evidence_evaluated",
             extra={
@@ -1217,6 +1231,7 @@ def deterministic_teaching_step_evaluation(
                 "changing_claimed": changing_claimed,
                 "fixed_claimed": fixed_claimed,
                 "operation_identified_on_canvas": operation_identified_on_canvas,
+                "operation_identified_in_response": operation_identified_in_response,
                 "canvas_region_texts": [
                     region.text
                     for region in request.canvas_regions
@@ -1234,7 +1249,7 @@ def deterministic_teaching_step_evaluation(
                 },
             },
         )
-        if changing_claimed and fixed_claimed and operation_identified_on_canvas:
+        if changing_claimed and fixed_claimed and operation_identified:
             confirmed = set(objective.confirmed_concept_ids)
             for role in ("CHANGING_VALUE", "FIXED_VALUE", "OPERATION"):
                 component_id = _component_for_step(request, rubric, role)
@@ -2159,6 +2174,17 @@ def classify_guided_learning_response(
     )
     if controller_evaluation is not None:
         next_objective = normalized_guided_objective(controller_evaluation, objective)
+        if next_objective is not None:
+            controller_evaluation = write_deterministic_guided_follow_up(
+                controller_evaluation,
+                request,
+                rubric,
+                next_objective,
+                openai_client,
+                allowed_errors,
+                guided_tutor_context_for(request, rubric, next_objective),
+                rules,
+            )
         return build_guided_tutor_response(
             request,
             rules,
@@ -2194,6 +2220,7 @@ def classify_guided_learning_response(
                 evaluator_prompt_version=rules.guided_learning.evaluator_prompt_version,
                 system_prompt=rules.guided_learning.evaluator_system_prompt,
             )
+            candidate = candidate.model_copy(update={"message_source": "OPENAI"})
             candidate = merge_authored_component_evidence(
                 candidate,
                 rubric,
@@ -2498,6 +2525,7 @@ def write_deterministic_guided_follow_up(
         update={
             "tutor_message": candidate.tutor_message,
             "tutor_message_voice": candidate.tutor_message_voice,
+            "message_source": "OPENAI",
         }
     )
     rewritten = remove_unsupported_guided_praise(rewritten, request)
@@ -2509,6 +2537,13 @@ def write_deterministic_guided_follow_up(
         controller_prompt,
     )
     if rejection_reason is None:
+        logger.info(
+            "guided_deterministic_wording_openai_accepted",
+            extra={
+                "question_id": request.question_id,
+                "active_prompt": controller_prompt,
+            },
+        )
         return rewritten
     logger.warning(
         "guided_deterministic_wording_rejected",
@@ -2595,6 +2630,7 @@ def rewrite_invalid_guided_message_once(
         update={
             "tutor_message": rewritten.tutor_message,
             "tutor_message_voice": rewritten.tutor_message_voice,
+            "message_source": "OPENAI",
         }
     )
     rewritten_evaluation = remove_unsupported_guided_praise(
@@ -4144,7 +4180,7 @@ def build_guided_tutor_response(
         "guided_turn_diagnostics",
         extra={
             "question_id": request.question_id,
-            "message_source": "controller" if evaluation.confidence == 1.0 else "openai",
+            "message_source": evaluation.message_source.casefold(),
             "diagnostic_focus": diagnostic_focus,
             "pedagogy_archetype": pedagogy_archetype,
             "confirmed_concept_ids": objective.confirmed_concept_ids if objective is not None else [],
