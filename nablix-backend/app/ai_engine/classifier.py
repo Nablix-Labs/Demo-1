@@ -3323,7 +3323,18 @@ def general_rule_explanation_evidence(
 
     if request.question_type != "CHOICE_WITH_EXPLANATION":
         return None
-    expression = _GENERAL_RULE_EXPRESSION_RE.search(request.question.casefold())
+    # By the time this runs ANSWER_SELECTION is confirmed, so the selected
+    # option's own text is the correct source. Searching the raw question
+    # instead can match a distractor's expression when one is authored
+    # first, locking the evidence check onto the wrong variable/constant.
+    selected_option_text = (
+        request.guided_teaching_state.selected_option_text
+        if request.guided_teaching_state is not None
+        else None
+    )
+    expression = _GENERAL_RULE_EXPRESSION_RE.search(
+        (selected_option_text or request.question).casefold()
+    )
     if expression is None:
         return None
     variable, _operator, fixed_value = expression.groups()
