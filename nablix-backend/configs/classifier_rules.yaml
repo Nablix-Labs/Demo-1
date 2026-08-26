@@ -260,6 +260,7 @@ guided_learning:
     wrong_choice_prompt: "Let’s test that choice with a different starting number. Would it still describe the new case?"
     single_case_defence_prompt: "That works for that one starting value. Try a different starting value: what does the same rule predict?"
     written_rule_prompt: "You have the rule. Now write it on the canvas, then press Check."
+    missing_operation_canvas_prompt: "Look closely: I can read the letter and number, but I cannot see the operation between them. Check whether a sign is missing, then write the rule again."
 safety:
   unsafe_terms:
     - hurt myself

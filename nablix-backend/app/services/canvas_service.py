@@ -69,6 +69,7 @@ _CANVAS_RELATION_PATTERN = re.compile(
     r"(?:\\+(?:rightarrow|to)|[→⟶⟹⇒])"
 )
 _UNRELIABLE_EVIDENCE_MESSAGE = "Please write out that step so I can check it."
+_MISSING_OPERATION_CANVAS_PATTERN = re.compile(r"^[a-z]\s+\d+$", re.IGNORECASE)
 
 
 def _canvas_request_fingerprint(request: CanvasSubmitRequest) -> str:
@@ -89,8 +90,16 @@ def _semantic_canvas_text(ocr: VisionOCRResult) -> str:
     return _CANVAS_RELATION_PATTERN.sub(" means ", written_work)
 
 
-def _clarification_result(ocr: VisionOCRResult) -> TutorResult:
-    message = _UNRELIABLE_EVIDENCE_MESSAGE
+def _clarification_result(
+    ocr: VisionOCRResult,
+    rules: ClassifierRulesConfig,
+) -> TutorResult:
+    normalized_ocr_text = re.sub(r"\s+", " ", ocr.raw_ocr_text).strip()
+    message = (
+        rules.guided_learning.critical_thinking.missing_operation_canvas_prompt
+        if _MISSING_OPERATION_CANVAS_PATTERN.fullmatch(normalized_ocr_text)
+        else _UNRELIABLE_EVIDENCE_MESSAGE
+    )
     return TutorResult(
         evaluation="UNCLEAR",
         error_type="INSUFFICIENT_INFORMATION",
@@ -341,7 +350,7 @@ async def submit_canvas(
         settings.min_ocr_confidence_threshold,
         rules.guided_learning.minimum_ocr_confidence,
     ):
-        tutor = _clarification_result(ocr)
+        tutor = _clarification_result(ocr, rules)
         student_result = None
         schema_content_response = None
         updated_session = session
