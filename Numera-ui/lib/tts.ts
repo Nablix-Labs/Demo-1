@@ -20,6 +20,7 @@
  * markBoundary), so the face animates the same way regardless of engine.
  */
 
+import { stripTutorMarkdown } from '@/lib/tutorMarkdown';
 import { useMicLevel } from '@/store/useMicLevel';
 import { useAuthStore } from '@/store/useAuthStore';
 import { defaultVoiceForTier, providersForTier } from '@/lib/voiceOptions';
@@ -68,7 +69,8 @@ export function speakBrowser(text: string, onEnd?: () => void): void {
     onEnd?.();
     return;
   }
-  const utterance = new SpeechSynthesisUtterance(text);
+  // The tutor emphasises with **…**; an engine must never be handed the markers.
+  const utterance = new SpeechSynthesisUtterance(stripTutorMarkdown(text));
   utterance.rate = tutorRate;
   utterance.onstart = () => useMicLevel.getState().setAiSpeaking(true);
   utterance.onboundary = () => useMicLevel.getState().markBoundary();
@@ -293,6 +295,9 @@ const coolingOff = (provider: string | null): boolean => {
  */
 export function speakTutor(text: string, onEnd?: () => void): void {
   if (!text) { onEnd?.(); return; }
+  // Speak the words, not the markdown the tutor wrote them in. The chat bubble
+  // renders the same string with the emphasis applied (lib/tutorMarkdown).
+  text = stripTutorMarkdown(text);
   stopTutorSpeech();
   if (!ttsApiEnabled()) { speakBrowser(text, onEnd); return; }
   const token = speakToken;

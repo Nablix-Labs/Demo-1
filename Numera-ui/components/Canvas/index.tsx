@@ -260,8 +260,22 @@ export default function CanvasStage() {
         </div>
       )}
 
-      {/* Paper-style + Help FABs */}
-      <div className="absolute bottom-6 right-6 z-20 flex items-center gap-2.5">
+      {/* Paper-style + Help FABs.
+
+          bottom-[86px], not bottom-6. The Nablix Assist launcher is `fixed
+          bottom-6 right-4 z-[60]` in the app shell, so it lands in this exact
+          corner and outranks these on z — measured live on 26 Aug 2026 at a
+          1440x900 viewport: the pill covers 24-74px up from the bottom edge,
+          both FABs sat at 24-64px, and elementFromPoint on either one returned
+          the pill. They were fully visible and completely unclickable, so
+          nothing about the screen said the paper style or the canvas help was
+          out of reach. 86px clears the pill's 74 with a 12px gap.
+
+          The practice action row already dodges the same pill sideways
+          (app/practice/page.tsx, right-[180px]); this cluster was missed. Up
+          rather than across, because the right edge is where the FABs belong
+          and the drawing toolbar owns bottom-centre. */}
+      <div className="absolute bottom-[86px] right-6 z-20 flex items-center gap-2.5">
         {/* Paper / grid style picker */}
         <div className="relative">
           {gridOpen && (
