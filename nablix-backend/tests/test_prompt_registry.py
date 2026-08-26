@@ -114,6 +114,16 @@ def test_each_valid_phase_returns_exactly_one_prompt_block(phase: str) -> None:
     assert get_phase_block(phase) == registry.phases[phase]
 
 
+def test_guided_practice_prompt_requires_combined_evidence_and_natural_voice() -> None:
+    load_prompt_registry.cache_clear()
+    guided_prompt = get_phase_block("GUIDED_PRACTICE")
+
+    assert "COMBINED EVIDENCE BUNDLE:" in guided_prompt
+    assert "Never ask again for a component\nlisted as confirmed." in guided_prompt
+    assert "conversational beats, not a rigid three-line script" in guided_prompt
+    assert "GUIDED TUTOR VOICE:" in guided_prompt
+
+
 # Part 14 Test 4: Exactly One Phase
 def test_missing_phase_fails() -> None:
     with pytest.raises(ValueError, match="LearningPhase is required"):
