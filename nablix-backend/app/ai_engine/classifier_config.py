@@ -199,6 +199,7 @@ class CriticalThinkingConfig(StrictSchema):
     ambiguity_message: str
     wrong_choice_prompt: str
     single_case_defence_prompt: str
+    written_rule_prompt: str
 
 
 class GuidedLearningConfig(StrictSchema):

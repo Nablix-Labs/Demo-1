@@ -4253,8 +4253,7 @@ def build_guided_tutor_response(
         rules,
     )
     message = write_instruction or (
-        "Use a different starting value to test whether your rule still works. "
-        "What does it predict?"
+        rules.guided_learning.critical_thinking.written_rule_prompt
     )
     return guarded_response.model_copy(
         update={

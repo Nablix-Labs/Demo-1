@@ -259,6 +259,7 @@ guided_learning:
     ambiguity_message: "I want to read your notation correctly. Did you mean a letter followed by a number, or an operation between them?"
     wrong_choice_prompt: "Let’s test that choice with a different starting number. Would it still describe the new case?"
     single_case_defence_prompt: "That works for that one starting value. Try a different starting value: what does the same rule predict?"
+    written_rule_prompt: "You have the rule. Now write it on the canvas, then press Check."
 safety:
   unsafe_terms:
     - hurt myself
