@@ -138,6 +138,7 @@ class CanvasReviewConfig(StrictSchema):
     max_expression_characters: int = Field(ge=1)
     feedback_enabled_phases: list[LearningPhase]
     annotation_enabled_phases: list[LearningPhase]
+    semantic_localization_enabled: StrictBool
     messages: CanvasReviewMessagesConfig
 
 

@@ -113,6 +113,7 @@ HighlightType = Literal["ERROR"]
 HighlightColour = Literal["RED"]
 HintLevel = Literal[1, 2, 3]
 MistakeStatus = Literal["mistake_found", "no_mistake", "uncertain"]
+LocalizationLevel = Literal["TOKEN", "SPAN", "STEP"]
 AnnotationIntentKind = Literal["circle_target", "write_correction", "draw_arrow"]
 AnnotationPlacement = Literal["right", "below"]
 
@@ -239,6 +240,9 @@ class CanvasMistakeClassification(StrictSchema):
     target_span: list[int] | None
     replacement_text: str | None
     confidence: float = Field(ge=0.0, le=1.0)
+    localization_level: LocalizationLevel | None = None
+    semantic_path: str | None = None
+    fallback_reason: str | None = None
 
 
 class CanvasAnnotationIntent(StrictSchema):
