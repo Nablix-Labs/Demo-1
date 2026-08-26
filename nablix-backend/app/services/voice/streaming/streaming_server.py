@@ -314,39 +314,179 @@ def _flux_confidence(turn_info: dict) -> float:
     return sum(scores) / len(scores)
 
 
+# A word Flux is less sure of than this is worth surfacing. Defaults to the
+# same threshold the transcript-level check uses.
+WORD_CONFIDENCE_FLOOR = float(os.getenv("VOICE_WORD_CONFIDENCE_FLOOR", "0.8"))
+
+
+def _tutor_failure(exc: Exception) -> tuple[str, str]:
+    """Turn an exception from the tutor call into a code and a student message.
+
+    Every failure used to arrive as the single string "Tutor unavailable.
+    Please try again." Five unrelated causes produced it, so it could not be
+    triaged from a report: a timeout, an unreachable backend, a non-200, a bad
+    payload, and a canvas problem all looked the same. Each one was re-diagnosed
+    from scratch every time it was seen.
+
+    The code is for us and the frontend. The message is what a student reads,
+    so it stays plain, and stays honest about whether waiting will help.
+    """
+    # httpx is imported at module level; its exception tree is what these
+    # calls actually raise.
+    if isinstance(exc, httpx.TimeoutException):
+        return (
+            "TUTOR_TIMEOUT",
+            "The tutor is taking longer than usual. Please try again.",
+        )
+    if isinstance(exc, httpx.ConnectError):
+        return (
+            "TUTOR_UNREACHABLE",
+            "Cannot reach the tutor right now. Please try again in a moment.",
+        )
+    if isinstance(exc, httpx.HTTPError):
+        return (
+            "TUTOR_TRANSPORT_ERROR",
+            "The connection to the tutor dropped. Please try again.",
+        )
+    if isinstance(exc, ValueError):
+        # evaluate_voice_transcript's own guards: no turn_id, or a transcript
+        # that was not final. Since the voice server mints the id itself these
+        # should be unreachable, so treat one as a fault in this server.
+        return (
+            "TURN_CONTEXT_INVALID",
+            "Something went wrong on our side. Please try again.",
+        )
+    if isinstance(exc, RuntimeError):
+        # Raised for a non-200 from /voice/transcript, with the status in the
+        # message. Worth keeping separate: it means the backend answered and
+        # refused, which is a different problem from it not answering.
+        return (
+            "TUTOR_REJECTED",
+            "The tutor could not process that. Please try again.",
+        )
+    return (
+        "TUTOR_UNAVAILABLE",
+        "Tutor unavailable. Please try again.",
+    )
+
+
+def _word_details(turn_info: dict) -> list[dict[str, object]]:
+    """Flux's per-word confidences and timings, in a stable shape.
+
+    Spec section 10 asks for confidence and alternative metadata to reach the
+    backend. `_flux_confidence` averages the same numbers into a single float,
+    which is what the rest of the pipeline needs, but averaging is exactly
+    what hides the case the spec cares about: one wrong token inside an
+    otherwise confident sentence.
+
+    That happened for real on 22 August. The student said the variable "c" and
+    it was transcribed "see", inside a turn whose averaged confidence was
+    0.9342 -- high enough to look fine. The spec's own worked example is the
+    same failure ("sex plus six" when the variable is "s"), so this is the
+    data that makes it detectable.
+
+    Returned as plain dicts rather than passed through raw so the shape is
+    ours and does not move if Flux adds fields.
+    """
+    words = turn_info.get("words") or []
+    out: list[dict[str, object]] = []
+    for word in words:
+        if not isinstance(word, dict):
+            continue
+        text = word.get("word")
+        if not isinstance(text, str):
+            continue
+        entry: dict[str, object] = {"word": text}
+        for src, dst in (("confidence", "confidence"), ("start", "start"), ("end", "end")):
+            if _is_number(word.get(src)):
+                entry[dst] = float(word[src])
+        out.append(entry)
+    return out
+
+
+def _low_confidence_words(
+    turn_info: dict,
+    floor: float | None = None,
+) -> list[str]:
+    """Words below the confidence floor, formatted for a log line.
+
+    Logged rather than only forwarded because nothing downstream consumes the
+    per-word data yet. This makes the problem countable now, from the voice
+    logs alone, instead of waiting on a contract.
+    """
+    limit = WORD_CONFIDENCE_FLOOR if floor is None else floor
+    flagged = [
+        f"{w['word']!r}={w['confidence']:.3f}"
+        for w in _word_details(turn_info)
+        if _is_number(w.get("confidence")) and w["confidence"] < limit
+    ]
+    return flagged
+
+
+def _is_number(value: object) -> bool:
+    """True for a real number. bool is an int in Python, so exclude it."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _word_span(turn_info: dict) -> tuple[float | None, float | None]:
+    """When the student's first and last word occurred, in audio time.
+
+    Flux timestamps every word. Those timestamps and `audio_window_end` share
+    one clock, which is what makes them comparable; wall-clock time does not
+    share it, for reasons in _turn_timing.
+    """
+    words = turn_info.get("words") or []
+    starts = [w.get("start") for w in words if isinstance(w, dict)]
+    ends = [w.get("end") for w in words if isinstance(w, dict)]
+    starts = [float(s) for s in starts if _is_number(s)]
+    ends = [float(e) for e in ends if _is_number(e)]
+    if not starts or not ends:
+        return None, None
+    return min(starts), max(ends)
+
+
 def _turn_timing(
-    audio_window_start: object,
-    audio_window_end: object,
+    turn_info: dict,
     wall_seconds: float,
 ) -> tuple[float | None, float | None]:
-    """Split a turn's wall-clock time into speaking time and detection time.
+    """Split a turn into speaking time and turn-detection time.
 
-    Wall-clock StartOfTurn to EndOfTurn is not a measure of turn detection.
-    Most of it is however long the student chose to speak, so a student who
-    talks for eight seconds and one who pauses for eight look identical.
+    An earlier version of this used `audio_window_end - audio_window_start`
+    as speaking time. That was wrong, and the logs said so immediately:
+    detection came out negative on all 29 turns of the 22 August session.
 
-    Flux stamps every TurnInfo with the audio window it covers. That window is
-    how much audio the turn contains, which is speaking time; whatever is left
-    on the wall clock is what we spent waiting to be told the turn had ended.
+    The windows are contiguous. Turn N's window starts exactly where turn
+    N-1's ended, so the window spans every second of audio since the previous
+    turn finished -- including the silence while the tutor was talking and the
+    student was thinking. One turn in that session reported a 16 second
+    "spoken" time for the single word "Check."
 
-    Returns (spoken_seconds, detection_seconds), or (None, None) when Flux did
-    not give a usable window. Returning None rather than guessing matters: a
-    zero here would read as "detection is free", which is the conclusion this
-    measurement exists to test.
+    Word timestamps are the right source. The student's speech runs from the
+    first word to the last; whatever audio Flux consumed after the last word
+    before declaring the turn over is what detection cost. Both are stamped on
+    the same audio clock, which the wall clock is not: the browser does not
+    stream audio in real time, so 16 seconds of audio can arrive in a burst
+    lasting 40 milliseconds.
+
+    Returns (spoken_seconds, detection_seconds), or (None, None) when Flux
+    gave nothing usable. None rather than zero on purpose -- a zero would read
+    as "detection is free", which is the very thing being measured.
     """
-    if not isinstance(audio_window_start, (int, float)):
-        return None, None
-    if not isinstance(audio_window_end, (int, float)):
-        return None, None
-    if isinstance(audio_window_start, bool) or isinstance(audio_window_end, bool):
+    first_word, last_word = _word_span(turn_info)
+    if first_word is None or last_word is None:
         return None, None
 
-    spoken = float(audio_window_end) - float(audio_window_start)
+    spoken = last_word - first_word
     if spoken < 0:
-        # Windows should advance. If they do not, something has changed at
-        # their end and the arithmetic below would be meaningless.
         return None, None
-    return spoken, wall_seconds - spoken
+
+    window_end = turn_info.get("audio_window_end")
+    if not _is_number(window_end):
+        # Speech duration is still usable on its own; detection is not.
+        return spoken, None
+
+    detection = float(window_end) - last_word
+    return spoken, detection
 
 
 # The backend rejects audio_duration_seconds <= 0 outright
@@ -427,6 +567,7 @@ async def evaluate_voice_transcript(
     previous_tutor_turn_id: str | None,
     transcript_final: bool | None,
     canvas_snapshot_id: str | None,
+    words: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     if turn_id is None:
         raise ValueError("turn_id is required for voice interactions")
@@ -445,6 +586,19 @@ async def evaluate_voice_transcript(
         "transcript_final": transcript_final,
         "canvas_snapshot_id": canvas_snapshot_id,
     }
+    # Per-word confidence and timings, spec section 10.
+    #
+    # `confidence` above is these averaged, which is what the rest of the
+    # pipeline reads. Averaging hides a single wrong token inside a confident
+    # sentence, which is the case the spec is actually about, so the detail
+    # rides alongside rather than replacing it.
+    #
+    # VoiceTranscriptRequest does not set `extra`, so Pydantic v2 ignores an
+    # unknown key. That makes this safe to send before the backend reads it:
+    # it costs a few hundred bytes and cannot reject a turn. Omitted entirely
+    # when empty rather than sent as null.
+    if words:
+        payload["words"] = words
     logger.info(f"[{session_id}] POST /voice/transcript")
     response = await get_backend_http_client().post(
         "/voice/transcript",
@@ -494,6 +648,55 @@ def _canvas_draw_from(result: dict[str, object]) -> list[object]:
     if not isinstance(canvas_draw, list):
         raise RuntimeError("canvas response missing canvas_draw list")
     return canvas_draw
+
+
+def _merge_canvas_draw(
+    canvas_feedback: list[object],
+    tutor_response: dict[str, object],
+) -> list[object]:
+    """Combine the two sources of canvas actions for one turn.
+
+    There are two, and they are not alternatives:
+
+      * marks on what the student just wrote, from /canvas/submit
+      * the tutor's own instruction, most often a write block, which rides in
+        on InteractionResponse.canvas_draw when requires_written_math_evidence
+        is set
+
+    This used to send only the first. The frame spread **tutor_response and
+    then re-set canvas_draw underneath it, so the tutor's instruction was
+    discarded on every voice turn -- and on the turn that matters most, the one
+    where the tutor asks the student to write something and there is therefore
+    nothing drawn yet to submit. It worked over REST and vanished over voice,
+    which is why it read as a voice bug.
+
+    Concatenating is safe rather than a guess: the frontend applies the array
+    as one list and resolves each action independently against local state,
+    dropping any whose target it cannot find (useWebSocket.ts, applyCanvasDraw
+    -> tutorCanvasActions). Reference labels are allocated by occupancy rather
+    than turn position, so appending cannot collide with what came before.
+
+    Feedback goes first, since it refers to writing that already exists; the
+    instruction about what to do next goes after it.
+    """
+    tutor_actions = tutor_response.get("canvas_draw")
+    if not isinstance(tutor_actions, list):
+        tutor_actions = []
+
+    merged: list[object] = [*canvas_feedback, *tutor_actions]
+
+    # Identical actions from both sources would be drawn twice. Only dict
+    # actions can be compared cheaply; anything else is passed through.
+    seen: set[str] = set()
+    deduped: list[object] = []
+    for action in merged:
+        if isinstance(action, dict):
+            key = json.dumps(action, sort_keys=True, default=str)
+            if key in seen:
+                continue
+            seen.add(key)
+        deduped.append(action)
+    return deduped
 
 
 def _tts_retry_count() -> int:
@@ -943,7 +1146,11 @@ async def voice_stream(
             await _emit_audio_cancel(reason, expect_new_turn)
 
     async def _run_turn(
-        transcript: str, confidence: float, duration: float, turn_id: str
+        transcript: str,
+        confidence: float,
+        duration: float,
+        turn_id: str,
+        words: list[dict[str, object]] | None = None,
     ) -> None:
         """Own the state transitions around one call to process_and_respond.
 
@@ -997,7 +1204,9 @@ async def voice_stream(
                 )
                 await _send_json_if_connected(ws, {
                     "type": "error",
-                    "message": "Tutor unavailable. Please try again.",
+                    "code": "TURN_ID_NOT_MINTED",
+                    "message": "Something went wrong on our side. Please try again.",
+                    "detail": "voice server failed to mint a turn id",
                     "fallback_mode": "TEXT",
                 })
                 return
@@ -1036,6 +1245,7 @@ async def voice_stream(
                 turn_id, None, True,
                 on_audio_start=_mark_speaking,
                 should_suppress=lambda: suppress["value"],
+                words=words,
             )
         except asyncio.CancelledError:
             # Barge-in or superseded turn. Expected, not an error.
@@ -1055,12 +1265,6 @@ async def voice_stream(
         """
         nonlocal turn_state, active_turn_task, audio_started_at
         nonlocal voice_turn_sequence
-
-        # Where in the audio stream the current turn began, per Flux.
-        #
-        # A plain local rather than nonlocal state: the whole turn loop lives
-        # in this coroutine, so nothing else needs to see it.
-        turn_audio_window_start: float | None = None
 
         try:
             async for msg in dg_ws:
@@ -1145,10 +1349,9 @@ async def voice_stream(
                     # the next turn itself.
                     turn_state = TurnState.LISTENING
                     audio_started_at = time.time()
-                    turn_audio_window_start = data.get("audio_window_start")
                     logger.info(
                         f"[{session_id}] Flux StartOfTurn (turn {turn_index}, "
-                        f"audio_window_start={turn_audio_window_start})"
+                        f"audio_window_start={data.get('audio_window_start')})"
                     )
 
                 elif event == "Update":
@@ -1227,30 +1430,36 @@ async def voice_stream(
                     # investigation, and it is the one to watch against
                     # VOICE_FLUX_EOT_THRESHOLD: raising the threshold buys
                     # accuracy and should show up here as a longer wait.
-                    audio_window_end = data.get("audio_window_end")
                     wall_seconds = time.time() - audio_started_at
                     spoken_seconds, detection_seconds = _turn_timing(
-                        turn_audio_window_start, audio_window_end, wall_seconds
+                        data, wall_seconds
                     )
                     if spoken_seconds is None:
                         # Say so rather than logging nothing, or a change at
                         # Flux's end would read as "detection is free".
                         logger.info(
                             f"[{session_id}] Turn timing (turn {turn_index}): "
-                            f"wall={wall_seconds:.3f}s, detection unknown "
-                            f"(audio_window_start={turn_audio_window_start!r}, "
-                            f"audio_window_end={audio_window_end!r})"
+                            f"wall={wall_seconds:.3f}s, no word timestamps"
                         )
                     else:
+                        detection_text = (
+                            f"{detection_seconds:.3f}s"
+                            if detection_seconds is not None
+                            else "unknown"
+                        )
                         logger.info(
                             f"[{session_id}] Turn timing (turn {turn_index}): "
                             f"spoken={spoken_seconds:.3f}s "
-                            f"detection={detection_seconds:.3f}s "
-                            f"wall={wall_seconds:.3f}s "
-                            f"(audio_window {turn_audio_window_start}-"
-                            f"{audio_window_end})"
+                            f"detection={detection_text} "
+                            f"wall={wall_seconds:.3f}s"
                         )
-                    turn_audio_window_start = None
+
+                    # Words Flux was unsure of, per spec section 10.
+                    for uncertain in _low_confidence_words(data):
+                        logger.info(
+                            f"[{session_id}] Low STT confidence (turn "
+                            f"{turn_index}): {uncertain}"
+                        )
 
                     # How much of this turn was actually speech.
                     #
@@ -1267,7 +1476,8 @@ async def voice_stream(
 
                     active_turn_task = asyncio.create_task(
                         _run_turn(
-                            transcript, confidence, duration, minted_turn_id
+                            transcript, confidence, duration, minted_turn_id,
+                            _word_details(data),
                         )
                     )
                     _background_tasks.add(active_turn_task)
@@ -1842,6 +2052,7 @@ async def process_and_respond(
     transcript_final: bool | None,
     on_audio_start=None,
     should_suppress=None,
+    words: list[dict[str, object]] | None = None,
 ):
     """Run one student turn through the tutor backend and stream the reply.
 
@@ -1858,10 +2069,23 @@ async def process_and_respond(
     """
     pipeline_start = time.time()
 
-    try:
-        tutor_start = time.time()
-        canvas_draw: list[object] = []
-        if canvas_snapshot:
+    tutor_start = time.time()
+    canvas_draw: list[object] = []
+    canvas_snapshot_id: str | None = None
+
+    # The canvas is attempted on its own, and a failure here no longer loses
+    # the turn.
+    #
+    # It used to sit inside the same try as the tutor call, so an unreadable
+    # canvas produced "Tutor unavailable" and the student's speech was thrown
+    # away with it. That is the wrong trade: they said something, and we can
+    # still answer it. /canvas/submit currently returns 503 whenever OCR finds
+    # nothing legible -- a doodle, a stray mark, a blank page -- which for a
+    # thirteen year old with a stylus is an ordinary event, not an outage.
+    #
+    # So a canvas failure degrades to a voice-only turn and says so.
+    if canvas_snapshot:
+        try:
             canvas_response = await submit_canvas_work(
                 session_id,
                 student_id,
@@ -1872,8 +2096,13 @@ async def process_and_respond(
             )
             canvas_draw = _canvas_draw_from(canvas_response)
             canvas_snapshot_id = str(canvas_response["submission_id"])
-        else:
-            canvas_snapshot_id = None
+        except Exception as exc:
+            logger.warning(
+                f"[{session_id}] Canvas submit failed ({type(exc).__name__}: "
+                f"{exc}) - continuing with the spoken turn alone"
+            )
+
+    try:
         tutor_response = await evaluate_voice_transcript(
             session_id,
             student_id,
@@ -1885,14 +2114,21 @@ async def process_and_respond(
             previous_tutor_turn_id,
             transcript_final,
             canvas_snapshot_id,
+            words,
         )
         tutor_ms = int((time.time() - tutor_start) * 1000)
         logger.info(f"[{session_id}] Backend tutor call took {tutor_ms}ms")
     except Exception as e:
-        logger.error(f"[{session_id}] Main backend tutor call failed: {e}")
+        code, message = _tutor_failure(e)
+        logger.error(
+            f"[{session_id}] Tutor call failed [{code}] "
+            f"({type(e).__name__}): {e}"
+        )
         await _send_json_if_connected(ws, {
             "type": "error",
-            "message": "Tutor unavailable. Please try again.",
+            "code": code,
+            "message": message,
+            "detail": f"{type(e).__name__}: {e}"[:300],
             "fallback_mode": "TEXT",
         })
         return
@@ -1938,7 +2174,10 @@ async def process_and_respond(
         "voice_text": tutor_voice_text,
         "needs_clarification": confidence < voice_config.CONFIDENCE_THRESHOLD,
         "text_latency_ms": text_sent_ms,
-        "canvas_draw": canvas_draw,
+        # Both sources, not just the canvas one. See _merge_canvas_draw: this
+        # key sits after the **tutor_response spread, so setting it to the
+        # canvas actions alone silently dropped the tutor's write block.
+        "canvas_draw": _merge_canvas_draw(canvas_draw, tutor_response),
     })
     if not text_sent:
         logger.info(f"[{session_id}] Client closed before tutor response delivery")

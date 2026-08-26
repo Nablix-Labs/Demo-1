@@ -36,12 +36,18 @@ from starlette.websockets import WebSocketState
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import streaming_server  # noqa: E402
+import httpx  # noqa: E402
+
 from streaming_server import (  # noqa: E402
     MIN_REPORTED_DURATION_SECONDS,
     VOICE_TURN_ID_PREFIX,
+    _low_confidence_words,
+    _merge_canvas_draw,
     _mint_voice_turn_id,
     _reported_audio_duration,
+    _tutor_failure,
     _turn_timing,
+    _word_details,
     evaluate_voice_transcript,
 )
 
@@ -249,75 +255,229 @@ def test_the_turn_is_minted_before_it_is_run():
 # Turn timing: separating speaking time from detection time
 # ──────────────────────────────────────────────────────────────────────
 
-def test_detection_is_wall_clock_minus_speaking_time():
-    """A student who spoke for 4s on a 4.6s turn cost 0.6s of detection."""
-    spoken, detection = _turn_timing(10.0, 14.0, 4.6)
-    assert spoken == pytest.approx(4.0)
-    assert detection == pytest.approx(0.6)
+def _turn(words, window_end=None):
+    info = {"words": words}
+    if window_end is not None:
+        info["audio_window_end"] = window_end
+    return info
 
 
-def test_a_long_utterance_is_not_mistaken_for_slow_detection():
-    """The whole point. Wall clock alone cannot tell these two apart."""
-    talkative = _turn_timing(0.0, 8.0, 8.5)
-    hesitant = _turn_timing(0.0, 1.0, 8.5)
-
-    assert talkative[1] == pytest.approx(0.5)
-    assert hesitant[1] == pytest.approx(7.5)
-    assert talkative[1] < hesitant[1], (
-        "the talkative student must not look like slow detection"
-    )
+def _w(word, start, end, conf=0.99):
+    return {"word": word, "start": start, "end": end, "confidence": conf}
 
 
-def test_a_window_starting_mid_stream_is_handled():
-    """audio_window_start is a position in the stream, not zero per turn."""
-    spoken, detection = _turn_timing(123.4, 125.4, 2.3)
-    assert spoken == pytest.approx(2.0)
-    assert detection == pytest.approx(0.3)
+def test_speech_is_first_word_to_last_and_detection_is_what_follows():
+    info = _turn([_w("hello", 10.0, 10.4), _w("there", 10.5, 11.0)], window_end=11.5)
+    spoken, detection = _turn_timing(info, wall_seconds=99.0)
+    assert spoken == pytest.approx(1.0)
+    assert detection == pytest.approx(0.5)
 
 
-def test_integer_windows_are_accepted():
-    assert _turn_timing(1, 3, 2.5) == (pytest.approx(2.0), pytest.approx(0.5))
+def test_the_wall_clock_does_not_enter_the_calculation():
+    """The bug that shipped. Audio time and wall time are different clocks.
+
+    The browser does not stream in real time: on 22 Aug, 16 seconds of audio
+    arrived in a 0.037s burst. Mixing the two produced negative detection on
+    all 29 turns.
+    """
+    info = _turn([_w("Check.", 158.4, 158.9)], window_end=158.96)
+    a = _turn_timing(info, wall_seconds=0.037)
+    b = _turn_timing(info, wall_seconds=90.0)
+    assert a == b
 
 
-@pytest.mark.parametrize("start,end", [
-    (None, 4.0),
-    (4.0, None),
-    (None, None),
-    ("0.0", 4.0),
-    (4.0, "8.0"),
-])
-def test_a_missing_or_unusable_window_reports_unknown(start, end):
-    """None, not zero. Zero would read as 'detection is free'."""
-    assert _turn_timing(start, end, 5.0) == (None, None)
+def test_the_real_turn_13_case_is_now_sane():
+    """Same turn that previously read spoken=16.000s detection=-15.963s."""
+    info = _turn([_w("Check.", 158.4, 158.9)], window_end=158.96)
+    spoken, detection = _turn_timing(info, wall_seconds=0.037)
+    assert spoken == pytest.approx(0.5)
+    assert 0 <= detection < 1
+    assert spoken < 1, "one word must not report 16 seconds of speech"
+
+
+def test_silence_before_the_turn_is_not_counted_as_speech():
+    """Windows are contiguous, so they include the previous gap. Words do not."""
+    info = _turn([_w("yes", 142.0, 142.4)], window_end=142.9)
+    spoken, _ = _turn_timing(info, wall_seconds=5.0)
+    assert spoken == pytest.approx(0.4)
+
+
+def test_a_talkative_student_is_not_mistaken_for_slow_detection():
+    talkative = _turn_timing(_turn([_w("a", 0.0, 8.0)], window_end=8.4), 9.0)
+    hesitant = _turn_timing(_turn([_w("a", 0.0, 1.0)], window_end=8.4), 9.0)
+    assert talkative[1] == pytest.approx(0.4)
+    assert hesitant[1] == pytest.approx(7.4)
+
+
+def test_words_out_of_order_still_give_the_true_span():
+    info = _turn([_w("b", 5.0, 6.0), _w("a", 1.0, 2.0)], window_end=6.5)
+    spoken, detection = _turn_timing(info, 9.0)
+    assert spoken == pytest.approx(5.0)
+    assert detection == pytest.approx(0.5)
+
+
+def test_no_words_means_no_measurement():
+    assert _turn_timing({}, 5.0) == (None, None)
+    assert _turn_timing(_turn([]), 5.0) == (None, None)
+
+
+def test_speech_is_still_reported_when_the_window_is_missing():
+    """Duration is usable on its own; detection is not."""
+    spoken, detection = _turn_timing(_turn([_w("x", 1.0, 2.0)]), 5.0)
+    assert spoken == pytest.approx(1.0)
+    assert detection is None
 
 
 def test_booleans_are_not_treated_as_numbers():
     """bool is an int in Python, so True would otherwise arrive as 1.0."""
-    assert _turn_timing(True, 4.0, 5.0) == (None, None)
-    assert _turn_timing(0.0, True, 5.0) == (None, None)
+    assert _turn_timing(_turn([{"word": "x", "start": True, "end": True}]), 5.0) \
+        == (None, None)
 
 
-def test_a_window_that_goes_backwards_is_refused():
-    """Windows should advance; if they stop, the arithmetic is meaningless."""
-    assert _turn_timing(10.0, 4.0, 5.0) == (None, None)
+def test_malformed_word_entries_are_skipped_not_fatal():
+    info = _turn(["junk", None, {"word": "x", "start": 1.0, "end": 2.0}], window_end=2.5)
+    spoken, detection = _turn_timing(info, 5.0)
+    assert spoken == pytest.approx(1.0)
+    assert detection == pytest.approx(0.5)
 
 
-def test_a_zero_length_window_is_still_a_real_answer():
-    """An empty turn is not the same as a missing measurement."""
-    spoken, detection = _turn_timing(5.0, 5.0, 0.8)
-    assert spoken == 0.0
-    assert detection == pytest.approx(0.8)
+def test_word_timestamps_are_what_the_code_reads():
+    assert "_word_span(" in SOURCE
+    assert "_turn_timing(\n                        data, wall_seconds\n                    )" in SOURCE
 
 
-def test_detection_can_be_negative_and_is_not_hidden():
-    """If it goes negative our clock assumption is wrong, and we want to see it."""
-    _, detection = _turn_timing(0.0, 10.0, 4.0)
-    assert detection == pytest.approx(-6.0)
+# ──────────────────────────────────────────────────────────────────────
+# Per-word confidence (spec section 10)
+# ──────────────────────────────────────────────────────────────────────
+
+def test_word_details_carry_confidence_and_timings():
+    out = _word_details(_turn([_w("c", 1.0, 1.4, 0.41)]))
+    assert out == [{"word": "c", "confidence": 0.41, "start": 1.0, "end": 1.4}]
 
 
-def test_both_window_fields_are_read_from_flux():
-    assert 'data.get("audio_window_start")' in SOURCE
-    assert 'data.get("audio_window_end")' in SOURCE
+def test_word_details_survive_missing_optional_fields():
+    assert _word_details({"words": [{"word": "x"}]}) == [{"word": "x"}]
+
+
+def test_word_details_skip_entries_with_no_word():
+    assert _word_details({"words": [{"confidence": 0.9}, {"word": "y"}]}) \
+        == [{"word": "y"}]
+
+
+def test_the_real_mis_transcription_is_flagged():
+    """22 Aug: the student said the variable 'c', it came through as 'see'.
+
+    Turn confidence averaged 0.9342, which hides it completely.
+    """
+    info = _turn([
+        _w("as", 1.0, 1.2), _w("I", 1.2, 1.3), _w("told,", 1.3, 1.7),
+        _w("see", 1.8, 2.1, 0.41), _w("can", 2.1, 2.4), _w("change.", 2.4, 2.9),
+    ])
+    flagged = _low_confidence_words(info)
+    assert len(flagged) == 1
+    assert "'see'" in flagged[0]
+
+
+def test_a_confident_turn_flags_nothing():
+    assert _low_confidence_words(_turn([_w("fine", 1.0, 1.5, 0.99)])) == []
+
+
+def test_the_floor_is_configurable_per_call():
+    info = _turn([_w("maybe", 1.0, 1.5, 0.85)])
+    assert _low_confidence_words(info) == []
+    assert len(_low_confidence_words(info, floor=0.9)) == 1
+
+
+def test_words_are_forwarded_to_the_backend():
+    assert '"words"' in SOURCE or "payload[\"words\"] = words" in SOURCE
+    assert "_word_details(data)" in SOURCE
+
+
+# ──────────────────────────────────────────────────────────────────────
+# canvas_draw: two sources, not one
+# ──────────────────────────────────────────────────────────────────────
+
+WRITE = {"action": "FOCUS", "target": "WRITE_AREA"}
+MARK = {"action": "HIGHLIGHT", "target": "tok1"}
+
+
+def test_the_write_block_survives_when_there_is_no_canvas():
+    """The bug: the tutor asks the student to write, so nothing is drawn yet."""
+    assert _merge_canvas_draw([], {"canvas_draw": [WRITE]}) == [WRITE]
+
+
+def test_both_sources_are_kept_with_feedback_first():
+    assert _merge_canvas_draw([MARK], {"canvas_draw": [WRITE]}) == [MARK, WRITE]
+
+
+def test_canvas_feedback_alone_still_works():
+    assert _merge_canvas_draw([MARK], {}) == [MARK]
+
+
+def test_neither_source_gives_an_empty_list():
+    assert _merge_canvas_draw([], {}) == []
+
+
+def test_an_action_sent_by_both_is_not_drawn_twice():
+    assert _merge_canvas_draw([WRITE], {"canvas_draw": [WRITE]}) == [WRITE]
+
+
+def test_a_non_list_from_the_tutor_is_ignored_not_fatal():
+    assert _merge_canvas_draw([MARK], {"canvas_draw": "oops"}) == [MARK]
+
+
+def test_unhashable_actions_do_not_break_dedupe():
+    nested = {"action": "X", "meta": {"a": [1, 2]}}
+    assert _merge_canvas_draw([nested], {"canvas_draw": [nested]}) == [nested]
+
+
+def test_the_frame_merges_instead_of_overwriting():
+    assert '"canvas_draw": _merge_canvas_draw(canvas_draw, tutor_response)' in SOURCE
+    assert '"canvas_draw": canvas_draw,\n    })' not in SOURCE
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Distinct failure codes
+# ──────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("exc,code", [
+    (httpx.ReadTimeout("slow"), "TUTOR_TIMEOUT"),
+    (httpx.ConnectError("refused"), "TUTOR_UNREACHABLE"),
+    (httpx.RemoteProtocolError("dropped"), "TUTOR_TRANSPORT_ERROR"),
+    (ValueError("turn_id is required"), "TURN_CONTEXT_INVALID"),
+    (RuntimeError("status=500"), "TUTOR_REJECTED"),
+    (KeyError("submission_id"), "TUTOR_UNAVAILABLE"),
+])
+def test_each_failure_gets_its_own_code(exc, code):
+    assert _tutor_failure(exc)[0] == code
+
+
+def test_the_five_causes_no_longer_share_one_code():
+    """The whole point: they used to be one string."""
+    codes = {
+        _tutor_failure(e)[0] for e in (
+            httpx.ReadTimeout("x"), httpx.ConnectError("x"),
+            ValueError("x"), RuntimeError("x"), KeyError("x"),
+        )
+    }
+    assert len(codes) == 5
+
+
+def test_every_code_comes_with_a_student_readable_message():
+    for exc in (httpx.ReadTimeout("x"), ValueError("x"), RuntimeError("x")):
+        code, message = _tutor_failure(exc)
+        assert code.isupper()
+        assert message.endswith(".")
+        assert code not in message, "the student should not see the code"
+
+
+def test_a_canvas_failure_no_longer_loses_the_spoken_turn():
+    """An unreadable canvas is an ordinary event, not a reason to drop speech."""
+    assert "continuing with the spoken turn alone" in SOURCE
+    canvas = SOURCE.index("canvas_response = await submit_canvas_work(")
+    tutor = SOURCE.index("tutor_response = await evaluate_voice_transcript(")
+    between = SOURCE[canvas:tutor]
+    assert "except Exception" in between, "canvas is not in its own try block"
 
 
 # ──────────────────────────────────────────────────────────────────────
