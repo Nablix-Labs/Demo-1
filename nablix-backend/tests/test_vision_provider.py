@@ -285,10 +285,52 @@ def test_mathpix_adapter_raises_adapter_error_on_http_error(monkeypatch) -> None
 
 
 def test_mathpix_adapter_raises_adapter_error_on_mathpix_error(monkeypatch) -> None:
-    _patch_mathpix_post(monkeypatch, _FakeResponse(200, {"error": "image_no_content"}))
+    # Retargeted from image_no_content, which is no longer an adapter failure:
+    # see test_mathpix_adapter_reads_nothing_when_the_image_has_no_content.
+    _patch_mathpix_post(
+        monkeypatch,
+        _FakeResponse(
+            200,
+            {
+                "error": "Invalid credentials",
+                "error_info": {"id": "http_unauthorized", "message": "Invalid credentials"},
+            },
+        ),
+    )
 
     with pytest.raises(AdapterError):
         asyncio.run(_mathpix_adapter().recognize(DATA_URL))
+
+
+def test_mathpix_adapter_reads_nothing_when_the_image_has_no_content(monkeypatch) -> None:
+    """A canvas OCR cannot read is a tutoring outcome, not an adapter outage.
+
+    Mathpix answers HTTP 200 with this body for a doodle, a stray mark, or a
+    blank page. Raising here turned every one of those into a 503 that failed
+    the student's turn (Manav, 26 Aug: ten-image control matrix — size,
+    transparency and encoding all ruled out, legibility the only variable).
+    """
+
+    _patch_mathpix_post(
+        monkeypatch,
+        _FakeResponse(
+            200,
+            {
+                "error": "Content not found",
+                "error_info": {"id": "image_no_content", "message": "Content not found"},
+            },
+        ),
+    )
+
+    result = asyncio.run(_mathpix_adapter().recognize(DATA_URL))
+
+    assert result.needs_clarification is True
+    assert result.confidence == 0.0
+    assert result.raw_ocr_text == ""
+    assert result.detected_steps == []
+    assert result.detected_regions == []
+    assert result.final_answer is None
+    assert result.provider == "mathpix"
 
 
 def test_mathpix_adapter_requests_and_maps_per_symbol_word_boxes(monkeypatch) -> None:

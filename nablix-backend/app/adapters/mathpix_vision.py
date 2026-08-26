@@ -9,6 +9,8 @@ from app.core.exceptions import AdapterError
 from app.models.adapters import OCRTextRegion, VisionOCRResult
 
 _MATHPIX_TEXT_URL = "https://api.mathpix.com/v3/text"
+# Mathpix's id for "there is nothing readable in this image".
+_NO_CONTENT_ERROR_ID = "image_no_content"
 _ARRAY_BLOCK = re.compile(
     r"\\begin\{array\}\{[^{}]+\}(.*?)\\end\{array\}",
     flags=re.DOTALL,
@@ -97,6 +99,13 @@ class MathpixVisionOCRAdapter:
         except (ValueError, ValidationError) as error:
             raise AdapterError("mathpix_vision", f"unparseable response: {error}; body={response.text}") from error
 
+        if _reports_no_readable_content(payload):
+            # Mathpix answers 200 with this for a doodle, a stray mark or a blank
+            # page. That is a tutoring outcome — the tutor asks for clearer
+            # writing — not an adapter outage, so it must not become a 503 that
+            # fails the student's turn.
+            return _unreadable_result()
+
         if payload.error is not None or payload.error_info is not None:
             raise AdapterError(
                 "mathpix_vision",
@@ -127,6 +136,35 @@ class MathpixVisionOCRAdapter:
             confidence_source="ocr_native",
             provider="mathpix",
         )
+
+
+def _reports_no_readable_content(payload: _MathpixOCRPayload) -> bool:
+    """Return whether Mathpix found nothing legible, rather than failing."""
+
+    error_id = (
+        payload.error_info.get("id")
+        if isinstance(payload.error_info, dict)
+        else None
+    )
+    return _NO_CONTENT_ERROR_ID in {error_id, payload.error}
+
+
+def _unreadable_result() -> VisionOCRResult:
+    return VisionOCRResult(
+        raw_ocr_text="",
+        detected_equation="",
+        detected_steps=[],
+        detected_regions=[],
+        word_regions=[],
+        final_answer=None,
+        confidence=0.0,
+        needs_clarification=True,
+        latex=None,
+        mathml_blocks=[],
+        detected_shapes=[],
+        confidence_source="ocr_native",
+        provider="mathpix",
+    )
 
 
 def _steps_for(payload: _MathpixOCRPayload) -> list[str]:
