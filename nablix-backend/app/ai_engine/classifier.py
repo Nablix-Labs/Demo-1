@@ -1209,6 +1209,31 @@ def deterministic_teaching_step_evaluation(
             operator,
             rules,
         )
+        logger.info(
+            "guided_role_evidence_evaluated",
+            extra={
+                "question_id": request.question_id,
+                "active_step_id": step.step_id,
+                "changing_claimed": changing_claimed,
+                "fixed_claimed": fixed_claimed,
+                "operation_identified_on_canvas": operation_identified_on_canvas,
+                "canvas_region_texts": [
+                    region.text
+                    for region in request.canvas_regions
+                    if region.confidence
+                    >= rules.guided_learning.minimum_ocr_confidence
+                ],
+                "canvas_ocr_text": request.canvas_ocr_text,
+                "component_ids_by_step": {
+                    teaching_step.step_id: _component_for_step(
+                        request,
+                        rubric,
+                        teaching_step.step_id,
+                    )
+                    for teaching_step in teaching_steps_for(request)
+                },
+            },
+        )
         if changing_claimed and fixed_claimed and operation_identified_on_canvas:
             confirmed = set(objective.confirmed_concept_ids)
             for role in ("CHANGING_VALUE", "FIXED_VALUE", "OPERATION"):

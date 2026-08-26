@@ -187,6 +187,108 @@ def test_topic1_reliable_ocr_operator_symbol_completes_all_demonstrated_roles() 
     }
 
 
+def test_topic1_reliable_ocr_preserves_all_roles_with_generic_components() -> None:
+    request = _topic1_request("it is on the canvas").model_copy(
+        update={
+            "canvas_regions": [
+                CanvasTextRegion(
+                    step_id="step-1",
+                    text="M Changes",
+                    x=0.1,
+                    y=0.1,
+                    w=0.2,
+                    h=0.1,
+                    confidence=0.96,
+                ),
+                CanvasTextRegion(
+                    step_id="step-2",
+                    text="7 fixed",
+                    x=0.1,
+                    y=0.3,
+                    w=0.2,
+                    h=0.1,
+                    confidence=0.96,
+                ),
+                CanvasTextRegion(
+                    step_id="step-3",
+                    text="+",
+                    x=0.1,
+                    y=0.5,
+                    w=0.1,
+                    h=0.1,
+                    confidence=0.96,
+                ),
+            ],
+            "generated_question_rubric": GeneratedQuestionRubric(
+                question_id="Q-T01-002",
+                required_concepts=[
+                    GeneratedConcept(
+                        concept_id="REQUIRED_COMPONENT_1",
+                        description="First required learner idea.",
+                        required=True,
+                    ),
+                    GeneratedConcept(
+                        concept_id="REQUIRED_COMPONENT_2",
+                        description="Second required learner idea.",
+                        required=True,
+                    ),
+                    GeneratedConcept(
+                        concept_id="REQUIRED_COMPONENT_3",
+                        description="Third required learner idea.",
+                        required=True,
+                    ),
+                ],
+                completion_rule="ALL_REQUIRED_CONCEPTS",
+                cache_key="generic-topic1-roles",
+                prompt_version="1.0.0",
+            ),
+            "active_teaching_objective": ActiveTeachingObjective(
+                objective_type="EXPLAIN_CONCEPT",
+                target_concept_ids=["REQUIRED_COMPONENT_2", "REQUIRED_COMPONENT_3"],
+                confirmed_concept_ids=["REQUIRED_COMPONENT_1"],
+                missing_concept_ids=["REQUIRED_COMPONENT_2", "REQUIRED_COMPONENT_3"],
+            ),
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-T01-002",
+                objective_component_ids=[
+                    "REQUIRED_COMPONENT_1",
+                    "REQUIRED_COMPONENT_2",
+                    "REQUIRED_COMPONENT_3",
+                ],
+                confirmed_component_ids=["REQUIRED_COMPONENT_1"],
+                missing_component_ids=["REQUIRED_COMPONENT_2", "REQUIRED_COMPONENT_3"],
+                active_component_id="REQUIRED_COMPONENT_2",
+                last_tutor_question_type="COMPONENT",
+                selected_option_id=None,
+                awaiting_response=True,
+                active_step_id="FIXED_VALUE",
+                teaching_step_ids=["CHANGING_VALUE", "FIXED_VALUE", "OPERATION"],
+                completed_step_ids=["CHANGING_VALUE"],
+                current_step_index=1,
+            ),
+        }
+    )
+    rules = load_classifier_rules()
+    evidence_request = classifier.request_with_reliable_canvas_evidence(request, rules)
+    rubric = request.generated_question_rubric
+    assert rubric is not None
+    objective = request.active_teaching_objective
+    assert objective is not None
+    evaluation = classifier.deterministic_teaching_step_evaluation(
+        evidence_request,
+        rubric,
+        objective,
+        rules,
+    )
+
+    assert evaluation is not None
+    assert evaluation.student_state == "CORRECT"
+    assert set(evaluation.newly_confirmed_concept_ids) == {
+        "REQUIRED_COMPONENT_2",
+        "REQUIRED_COMPONENT_3",
+    }
+
+
 def test_topic1_low_confidence_ocr_is_not_confirmed_as_student_evidence() -> None:
     request = _topic1_request("7 stays fixed").model_copy(
         update={
