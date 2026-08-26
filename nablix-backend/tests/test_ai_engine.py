@@ -978,7 +978,10 @@ def test_guided_follow_up_preserves_a_relevant_non_revealing_llm_correction() ->
     request = ClassificationRequest(
         question_id="Q-T01-006",
         question_type="MULTI_PART_SHORT_RESPONSE",
-        question="A counter starts at any value c and increases by 4. Write the general rule.",
+        question=(
+            "A counter starts at any value c and increases by 4. "
+            "Write the general rule."
+        ),
         correct_answer="c + 4",
         answer_spec=AnswerSpec(
             answer_spec_id="ANS-T01-006",
@@ -1068,6 +1071,69 @@ def test_guided_follow_up_replaces_an_answer_revealing_llm_reply() -> None:
 
     assert aligned.tutor_message == "Let's check that carefully. What general rule represents this situation?"
     assert aligned.tutor_message_voice == aligned.tutor_message
+
+
+def test_guided_fact_budget_excludes_an_unwritten_canonical_rule() -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-006",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="GENERAL_RULE",
+                description="general rule",
+                required=True,
+            )
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="counter-rule",
+        prompt_version="1.0.0",
+    )
+    objective = classifier.initial_guided_objective(rubric)
+    request = ClassificationRequest(
+        question_id="Q-T01-006",
+        question_type="MULTI_PART_SHORT_RESPONSE",
+        question="A counter starts at any value c and increases by 4. Write the general rule.",
+        correct_answer="c + 4",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-006",
+            canonical_answer="c + 4",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=False,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        student_input="addition four",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+    )
+    evaluation = GuidedEvaluation(
+        student_state="PARTIAL",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=["GENERAL_RULE"],
+        selected_error_code=None,
+        confidence=0.9,
+        next_objective=objective,
+        tutor_message="What general rule represents this situation?",
+        tutor_message_voice="What general rule represents this situation?",
+    )
+
+    context = classifier.guided_fact_budget_context(
+        evaluation,
+        request,
+        objective,
+        "What general rule represents this situation?",
+        load_classifier_rules(),
+    )
+
+    assert "c add 4" not in classifier.normalize_semantic_answer(json.dumps(context))
+    assert (
+        context["abstract_rule_shape"]
+        == "[changing quantity] [operation] [fixed value]"
+    )
 
 
 def test_guided_follow_up_blocks_unresolved_component_reveal() -> None:

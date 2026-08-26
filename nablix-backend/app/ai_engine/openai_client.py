@@ -383,6 +383,27 @@ class OpenAIAIEngineClient:
                 f"invalid guided evaluation: {error}",
             ) from error
 
+    def write_guided_fact_budget_message(
+        self,
+        system_prompt: str,
+        wording_context: dict[str, object],
+    ) -> OpenAITutorMessage:
+        """Write one safe tutor turn from learner-visible evidence only."""
+
+        content = self._request_guided_json(
+            name="guided_fact_budget_wording",
+            schema=OpenAITutorMessage.model_json_schema(),
+            system_prompt=system_prompt,
+            user_payload=wording_context,
+        )
+        try:
+            return OpenAITutorMessage.model_validate(content)
+        except ValidationError as error:
+            raise AdapterError(
+                "openai_ai_engine",
+                f"invalid guided fact-budget wording: {error}",
+            ) from error
+
     def adjudicate_component_evidence(
         self,
         question_type: QuestionType | None,

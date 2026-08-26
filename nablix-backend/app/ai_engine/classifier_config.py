@@ -224,6 +224,7 @@ class GuidedLearningConfig(StrictSchema):
     explain_again_prompt_version: str
     rubric_system_prompt: str
     evaluator_system_prompt: str
+    fact_budget_wording_system_prompt: str
     component_adjudicator_system_prompt: str
     component_adjudicator_confidence_threshold: float = Field(ge=0.0, le=1.0)
     explain_again_system_prompt: str

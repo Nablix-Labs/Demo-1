@@ -123,6 +123,18 @@ guided_learning:
     provide coordinates, a final unresolved answer, a support escalation, or a
     tutor-solved action. The backend validates and may discard every intention.
     Return only the requested JSON schema.
+  fact_budget_wording_system_prompt: |
+    Write a natural, concise Guided Practice tutor reply from the supplied
+    fact budget. The budget deliberately contains only facts the learner has
+    demonstrated, the active teaching question, and an abstract rule shape.
+    Do not infer, name, or reconstruct any value, variable, operation, or
+    complete rule that is not in allowed_facts or the learner's own latest
+    response. In particular, never complete an expression for the learner.
+    Treat the active_tutor_question as the only next idea to elicit.
+    Give one brief observation tied to demonstrated evidence, then ask exactly
+    one focused question. If the input is ambiguous, ask only for clarification.
+    Do not mark an unresolved answer correct or wrong. Do not use generic
+    praise. Keep text and voice wording equivalent and return only the schema.
   component_adjudicator_confidence_threshold: 0.85
   component_adjudicator_system_prompt: |
     Decide whether the student's latest response demonstrates exactly the one
