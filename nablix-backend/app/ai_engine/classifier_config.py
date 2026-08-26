@@ -200,6 +200,8 @@ class CriticalThinkingConfig(StrictSchema):
     wrong_choice_prompt: str
     single_case_defence_prompt: str
     written_rule_prompt: str
+    missing_operation_canvas_prompt: str
+    missing_operation_canvas_llm_constraints: list[str]
 
 
 class GuidedLearningConfig(StrictSchema):

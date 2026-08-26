@@ -1820,6 +1820,34 @@ def test_unified_voice_canvas_confirms_a_correct_intermediate_step(
     assert session_service._sessions[session_id].attempt_count == 0
 
 
+def test_canvas_clarification_identifies_a_missing_operation() -> None:
+    ocr = VisionOCRResult(
+        raw_ocr_text="n 5",
+        confidence=0.4,
+        needs_clarification=True,
+    )
+
+    tutor = canvas_service._clarification_result(
+        ocr,
+        canvas_service.load_classifier_rules(),
+        AdapterContext(
+            session_id="SESSION-CANVAS-CLARIFICATION",
+            student_id="ST-CANVAS-CLARIFICATION",
+            message="n 5",
+            question="Write the general rule.",
+            correct_answer="n + 5",
+        ),
+    )
+
+    assert tutor.evaluation == "UNCLEAR"
+    assert tutor.attempt_increment == 0
+    assert tutor.tutor_message == (
+        "Look closely: I can read the letter and number, but I cannot see the "
+        "operation between them. Check whether a sign is missing, then write "
+        "the rule again."
+    )
+
+
 def test_unified_voice_canvas_unclear_ocr_does_not_grade(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
