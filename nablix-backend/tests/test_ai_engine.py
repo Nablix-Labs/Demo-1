@@ -704,6 +704,69 @@ def test_typed_symbolic_rule_requires_canvas_evidence() -> None:
     ) is False
 
 
+def test_typed_general_rule_requests_canvas_writing_not_an_unrelated_defence() -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-001",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="GENERAL_RULE",
+                description="States the general rule.",
+                required=True,
+            )
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="typed-general-rule",
+        prompt_version="1.0.0",
+    )
+    request = ClassificationRequest(
+        question_id="Q-T01-001",
+        question_type="SHORT_RESPONSE",
+        question=(
+            "3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number. "
+            "Write the general rule."
+        ),
+        correct_answer="n + 5",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-001",
+            canonical_answer="n + 5",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=False,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        student_input="n + 5",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+    )
+    evaluation = GuidedEvaluation(
+        student_state="CORRECT",
+        newly_confirmed_concept_ids=["GENERAL_RULE"],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=[],
+        selected_error_code=None,
+        confidence=1.0,
+        next_objective=None,
+        tutor_message="Nice work.",
+        tutor_message_voice="Nice work.",
+    )
+
+    response = classifier.build_guided_tutor_response(
+        request,
+        classifier.load_classifier_rules(),
+        classifier.SafetyCheck(passed=True, flag_type=None, action_taken=None),
+        rubric,
+        evaluation,
+        classifier.initial_guided_objective(rubric),
+    )
+
+    assert response.requires_written_math_evidence is True
+    assert response.tutor_message == "You have the rule. Now write it on the canvas, then press Check."
+
+
 def test_guided_follow_up_replaces_an_unrelated_llm_question() -> None:
     rubric = GeneratedQuestionRubric(
         question_id="Q-T01-SCORE",
