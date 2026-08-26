@@ -1209,6 +1209,20 @@ def deterministic_teaching_step_evaluation(
             operator,
             rules,
         )
+        operation_identified_in_response = (
+            not operation_called_value
+            and any(
+                word in normalized
+                for word in (
+                    ("add", "addition", "plus")
+                    if operator == "+"
+                    else ("subtract", "subtraction", "minus")
+                )
+            )
+        )
+        operation_identified = (
+            operation_identified_on_canvas or operation_identified_in_response
+        )
         logger.info(
             "guided_role_evidence_evaluated",
             extra={
@@ -1217,6 +1231,7 @@ def deterministic_teaching_step_evaluation(
                 "changing_claimed": changing_claimed,
                 "fixed_claimed": fixed_claimed,
                 "operation_identified_on_canvas": operation_identified_on_canvas,
+                "operation_identified_in_response": operation_identified_in_response,
                 "canvas_region_texts": [
                     region.text
                     for region in request.canvas_regions
@@ -1234,7 +1249,7 @@ def deterministic_teaching_step_evaluation(
                 },
             },
         )
-        if changing_claimed and fixed_claimed and operation_identified_on_canvas:
+        if changing_claimed and fixed_claimed and operation_identified:
             confirmed = set(objective.confirmed_concept_ids)
             for role in ("CHANGING_VALUE", "FIXED_VALUE", "OPERATION"):
                 component_id = _component_for_step(request, rubric, role)
