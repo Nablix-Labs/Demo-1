@@ -260,7 +260,12 @@ export default function PracticePage() {
     if (submitting || locked) return; // one in-flight submission; none after lock
     setSubmitting(true);
     setSubmitError(null);
-    const res = await tutor.submitCanvasWork();
+    const selectedOption = questionType === 'SINGLE_CHOICE'
+      ? questionOptions.find((option) => option.option_id === selectedOptionId)
+      : undefined;
+    const res = selectedOption
+      ? await tutor.selectOption(selectedOption.option_id, selectedOption.text)
+      : await tutor.submitCanvasWork();
     setSubmitting(false);
     if (res) {
       if (silent) {

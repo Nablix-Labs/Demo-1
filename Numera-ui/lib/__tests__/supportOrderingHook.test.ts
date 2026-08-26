@@ -21,6 +21,7 @@ vi.mock('@/lib/api', async (importOriginal) => ({
 vi.mock('@/lib/tutorSpeech', () => ({ setStudentWriting: vi.fn(), tutorSay: vi.fn() }));
 
 import { useDemoTutor } from '@/hooks/useDemoTutor';
+import type { InteractionResponse } from '@/lib/api';
 import { useNumeraStore } from '@/store/useNumeraStore';
 
 /** A turn that serves a cue and then talks about it. */
@@ -97,6 +98,38 @@ describe('every reply path shows support before the message', () => {
     await act(async () => { await tutor?.selectOption('B', 'n + 4'); });
     unsubscribe();
     expect(order[0]).toBe('cue');
+  });
+
+  it('submits a Phase 3 choice without tutor feedback and applies REVIEW', async () => {
+    useNumeraStore.setState({
+      currentPhase: 'INDEPENDENT_PRACTICE',
+      activeQuestionId: 'Q-T01-008',
+      transcript: [],
+    });
+    sendInteraction.mockResolvedValue(replyWithCue({
+      current_phase: 'REVIEW',
+      current_question: null,
+      question_id: null,
+      phase3_submission_confirmed: true,
+      phase3_submission_kind: 'CHOICE',
+      independent_outcome: 'INDEPENDENTLY_VERIFIED',
+      interaction_state_version: 2,
+    }));
+
+    let response: InteractionResponse | null | undefined;
+    await act(async () => { response = await tutor?.selectOption('B', 'p decreases by 2'); });
+
+    expect(sendInteraction).toHaveBeenCalledWith(expect.objectContaining({
+      interaction_type: 'OPTION_SELECTED',
+      input_source: 'CHOICE',
+      selected_option_id: 'B',
+      selected_option_text: 'p decreases by 2',
+      current_phase: 'INDEPENDENT_PRACTICE',
+      question_id: 'Q-T01-008',
+    }));
+    expect(response).toMatchObject({ current_phase: 'REVIEW' });
+    expect(useNumeraStore.getState().currentPhase).toBe('REVIEW');
+    expect(useNumeraStore.getState().transcript).toEqual([]);
   });
 
   it('hint(): cue before the tutor line', async () => {

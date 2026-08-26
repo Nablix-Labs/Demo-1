@@ -49,6 +49,7 @@ import { reportFailure } from '@/lib/failureReport';
 import { canvasSubmissionView } from '@/lib/canvasSubmission';
 import { canvasEvidenceFor } from '@/lib/canvasEvidence';
 import type { QuestionAnchor } from '@/lib/questionAnchors';
+import { isPhase3 } from '@/lib/phase3';
 
 const apiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
@@ -1131,13 +1132,19 @@ export function useDemoTutor() {
     [sessionId, canvasExporter, addTranscriptMessage, addTrailEntry]
   );
 
-  const selectOption = useCallback(async (optionId: string, optionText: string): Promise<void> => {
+  const selectOption = useCallback(async (
+    optionId: string,
+    optionText: string,
+  ): Promise<InteractionResponse | null> => {
     const state = useNumeraStore.getState();
-    if (!apiEnabled() || !sessionId || !state.activeQuestionId) return;
+    if (!apiEnabled() || !sessionId || !state.activeQuestionId) return null;
+    const silent = isPhase3(state.currentPhase);
     const turnId = state.beginSubmissionTurn();
     const selection = `Selected ${optionId}: ${optionText}`;
-    addTranscriptMessage({ role: 'student', text: selection });
-    addTrailEntry({ kind: 'answer', text: selection, meta: 'option selected' });
+    if (!silent) {
+      addTranscriptMessage({ role: 'student', text: selection });
+      addTrailEntry({ kind: 'answer', text: selection, meta: 'option selected' });
+    }
     try {
       const res = await sendSynchronizedInteraction({
         session_id: sessionId,
@@ -1156,8 +1163,9 @@ export function useDemoTutor() {
         turn_id: turnId,
         previous_tutor_turn_id: state.lastTutorTurnId,
       });
-      if (!acceptResponse(res)) return;
+      if (!acceptResponse(res)) return null;
       syncBackendSession(res);
+      if (silent) return res;
       // This path never applied support at all, so a cue or scaffold served in
       // reply to a choice was silently dropped — and with the backend now
       // referring to it out loud, the tutor would point at something that was
@@ -1167,8 +1175,10 @@ export function useDemoTutor() {
       addTranscriptMessage({ role: 'ai', text: res.message });
       addTrailEntry({ kind: 'tutor', text: res.message, meta: 'option selected' });
       tutorSay(withHint(hint, spoken));
+      return res;
     } catch (err) {
       reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage, '/interaction (option selected)');
+      return null;
     }
   }, [sessionId, addTranscriptMessage, addTrailEntry]);
 
