@@ -2406,6 +2406,17 @@ def classify_guided_learning_response(
         rubric,
         next_objective,
     )
+    if next_objective is not None:
+        evaluation = write_deterministic_guided_follow_up(
+            evaluation,
+            request,
+            rubric,
+            next_objective,
+            openai_client,
+            allowed_errors,
+            guided_tutor_context,
+            rules,
+        )
     logger.info(
         "guided_state_evaluated",
         extra={
@@ -2486,28 +2497,20 @@ def write_deterministic_guided_follow_up(
     """Let OpenAI phrase a backend-selected next teaching target."""
 
     controller_prompt = controller_prompt_for_objective(request, rubric, objective)
+    writer = getattr(openai_client, "write_guided_fact_budget_message", None)
+    if not callable(writer):
+        return evaluation
+    wording_context = guided_fact_budget_context(
+        evaluation,
+        request,
+        objective,
+        controller_prompt,
+        rules,
+    )
     try:
-        candidate = openai_client.evaluate_guided_turn(
-            question_type=request.question_type,
-            question=request.question,
-            answer_spec=request.answer_spec,
-            deterministic_evaluation=evaluate_answer_contract(request),
-            generated_rubric=rubric,
-            active_objective=objective,
-            guided_tutor_context=guided_tutor_context,
-            student_response=request.student_input,
-            input_source=request.input_source,
-            allowed_error_codes=allowed_errors,
-            recent_conversation=request.conversation_history[
-                -rules.guided_learning.maximum_recent_history_turns:
-            ],
-            validation_feedback=(
-                rules.guided_learning.deterministic_follow_up_wording_feedback.format(
-                    controller_prompt=controller_prompt
-                )
-            ),
-            evaluator_prompt_version=rules.guided_learning.evaluator_prompt_version,
-            system_prompt=rules.guided_learning.evaluator_system_prompt,
+        candidate = writer(
+            system_prompt=rules.guided_learning.fact_budget_wording_system_prompt,
+            wording_context=wording_context,
         )
     except AdapterError as error:
         logger.warning(
@@ -2543,15 +2546,125 @@ def write_deterministic_guided_follow_up(
             },
         )
         return rewritten
+    try:
+        retry = writer(
+            system_prompt=rules.guided_learning.fact_budget_wording_system_prompt,
+            wording_context={
+                **wording_context,
+                "validation_feedback": (
+                    f"The previous wording was rejected for {rejection_reason}. "
+                    "Keep the same active question and do not disclose an "
+                    "unresolved answer."
+                ),
+            },
+        )
+    except AdapterError as error:
+        logger.warning(
+            "guided_deterministic_wording_rewrite_failed",
+            extra={
+                "question_id": request.question_id,
+                "rejection_reason": rejection_reason,
+                "detail": error.detail,
+            },
+        )
+        return evaluation
+    retried = evaluation.model_copy(
+        update={
+            "tutor_message": retry.tutor_message,
+            "tutor_message_voice": retry.tutor_message_voice_optimised,
+        }
+    )
+    retry_reason = guided_tutor_message_validation_reason(
+        retried,
+        request,
+        rubric,
+        objective,
+        controller_prompt,
+    )
+    if retry_reason is None:
+        logger.info(
+            "guided_deterministic_wording_rewrite_accepted",
+            extra={
+                "question_id": request.question_id,
+                "initial_rejection_reason": rejection_reason,
+                "active_prompt": controller_prompt,
+            },
+        )
+        return retried
     logger.warning(
         "guided_deterministic_wording_rejected",
         extra={
             "question_id": request.question_id,
             "rejection_reason": rejection_reason,
+            "rewrite_rejection_reason": retry_reason,
             "active_prompt": controller_prompt,
         },
     )
     return evaluation
+
+
+def guided_fact_budget_context(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+    objective: ActiveTeachingObjective,
+    controller_prompt: str,
+    rules: ClassifierRulesConfig,
+) -> dict[str, object]:
+    """Build the writer context without passing the hidden canonical answer."""
+
+    confirmed_ids = set(objective.confirmed_concept_ids)
+    confirmed_ids.update(evaluation.newly_confirmed_concept_ids)
+    confirmed_ids.update(evaluation.preserved_concept_ids)
+    confirmed_ids.difference_update(evaluation.contradicted_concept_ids)
+    allowed_facts = ["The learner's latest words: " + request.student_input]
+    expression = _expression_parts(
+        request.answer_spec.canonical_answer if request.answer_spec else ""
+    )
+    if expression is not None:
+        variable, operator, fixed_value = expression
+        if "CHANGING_VALUE" in confirmed_ids:
+            allowed_facts.append(f"{variable} is a changing quantity.")
+        if "FIXED_VALUE" in confirmed_ids:
+            allowed_facts.append(f"{fixed_value} is fixed.")
+        if "OPERATION" in confirmed_ids:
+            allowed_facts.append(
+                f"The learner identified the operation as {operation_word(operator)}."
+            )
+    return {
+        "question": request.question,
+        "student_response": request.student_input,
+        "input_source": request.input_source,
+        "student_state": evaluation.student_state,
+        "active_tutor_question": controller_prompt,
+        "confirmed_concept_ids": sorted(confirmed_ids),
+        "missing_concept_ids": objective.missing_concept_ids,
+        "allowed_facts": allowed_facts,
+        "abstract_rule_shape": "[changing quantity] [operation] [fixed value]",
+        "support_context": (
+            support_context_text(request.phase_2_prompt_context.current_support)
+            if request.phase_2_prompt_context is not None
+            and request.phase_2_prompt_context.current_support is not None
+            else None
+        ),
+        "recent_conversation": [
+            message.model_dump()
+            for message in request.conversation_history[
+                -rules.guided_learning.maximum_recent_history_turns:
+            ]
+        ],
+    }
+
+
+def operation_word(operator: str) -> str:
+    """Return a learner-facing operation name for confirmed evidence only."""
+
+    return {
+        "+": "addition",
+        "-": "subtraction",
+        "×": "multiplication",
+        "x": "multiplication",
+        "*": "multiplication",
+    }.get(operator, "the operation")
 
 
 def rewrite_invalid_guided_message_once(
@@ -3015,6 +3128,13 @@ def guided_message_reveals_multiple_unresolved_teaching_steps(
     if not missing_step_ids:
         return False
 
+    if (
+        "GENERAL_RULE" in objective.missing_concept_ids
+        and message_contains_canonical_answer(message, message, request)
+        and not learner_input_matches_canonical_answer(request)
+    ):
+        return True
+
     normalized = normalize_semantic_answer(message)
     normalized_student_input = normalize_semantic_answer(request.student_input)
     revealed_step_count = 0
@@ -3197,9 +3317,31 @@ def guided_message_reveals_undemonstrated_answer(
         voice_message,
         request.correct_answer,
         rules,
-    ):
+    ) and not message_contains_canonical_answer(message, voice_message, request):
         return False
     return not guided_turn_has_answer_evidence(request, evaluation)
+
+
+def message_contains_canonical_answer(
+    message: str,
+    voice_message: str,
+    request: ClassificationRequest,
+) -> bool:
+    """Detect a canonical answer in tutor prose even without correct_answer."""
+
+    if request.answer_spec is None:
+        return False
+    canonical = normalize_semantic_answer(request.answer_spec.canonical_answer)
+    if canonical == "":
+        return False
+    for candidate in (message, voice_message):
+        normalized = normalize_semantic_answer(candidate)
+        if len(canonical) == 1 and canonical.isalnum():
+            if re.search(rf"(?<!\w){re.escape(canonical)}(?!\w)", normalized):
+                return True
+        elif canonical in normalized:
+            return True
+    return False
 
 
 def guided_turn_has_answer_evidence(
