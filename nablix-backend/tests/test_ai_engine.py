@@ -7576,3 +7576,72 @@ def test_bare_fixed_value_answers_the_active_fixed_value_question() -> None:
     )
 
     assert classifier.general_rule_explanation_evidence(request) == (True, True)
+
+
+def test_role_correction_cannot_reveal_the_unanswered_changing_value() -> None:
+    request = _topic1_request("m is fixed")
+    rubric = classifier.rubric_from_authored_answer_parts(
+        "Q-T01-002",
+        request.question_type,
+        request.answer_spec,
+        "test",
+    )
+    assert rubric is not None
+    objective = classifier.initial_guided_objective(rubric)
+    evaluation = GuidedEvaluation(
+        student_state="WRONG",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=["REQUIRED_COMPONENT_1"],
+        missing_concept_ids=objective.missing_concept_ids,
+        selected_error_code=None,
+        confidence=1.0,
+        next_objective=objective,
+        tutor_message="m can change. Which quantity changes?",
+        tutor_message_voice="m can change. Which quantity changes?",
+    )
+
+    assert classifier.guided_tutor_message_validation_reason(
+        evaluation,
+        request,
+        rubric,
+        objective,
+        "Does the letter stay the same, or can it change?",
+    ) == "ACTIVE_STEP_REVEAL"
+
+
+def test_anaphoric_changing_number_answers_an_active_variable_prompt() -> None:
+    request = ClassificationRequest(
+        question_id="Q-T01-004",
+        question_type="CHOICE_WITH_EXPLANATION",
+        question="Which is the general rule: A: 12 + 4. B: n + 4? Explain briefly.",
+        correct_answer="B",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-004",
+            canonical_answer="B",
+            accepted_answers=["B", "n + 4"],
+            verification_method="CHOICE_AND_CONCEPT_MATCH",
+            explanation_required=True,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        guided_teaching_state=GuidedTeachingState(
+            question_id="Q-T01-004",
+            objective_component_ids=["ANSWER_SELECTION", "ANSWER_EXPLANATION"],
+            confirmed_component_ids=["ANSWER_SELECTION"],
+            missing_component_ids=["ANSWER_EXPLANATION"],
+            active_component_id="ANSWER_EXPLANATION",
+            last_tutor_question_type="COMPONENT",
+            selected_option_id="B",
+            selected_option_text="n + 4",
+            awaiting_response=True,
+            last_reasoning_probe="What does n represent in this rule?",
+        ),
+        student_input="any changing number",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+    )
+
+    assert classifier.general_rule_explanation_evidence(request) == (True, False)

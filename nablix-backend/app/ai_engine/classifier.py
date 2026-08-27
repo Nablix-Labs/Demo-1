@@ -3379,6 +3379,14 @@ def guided_tutor_message_validation_reason(
     ):
         return "ANSWER_REVEAL"
 
+    if guided_message_reveals_active_unresolved_teaching_step(
+        message,
+        request,
+        rubric,
+        objective,
+    ):
+        return "ACTIVE_STEP_REVEAL"
+
     if guided_message_reveals_multiple_unresolved_teaching_steps(
         message,
         request,
@@ -3473,7 +3481,9 @@ def guided_message_reveals_multiple_unresolved_teaching_steps(
     answer_spec = request.answer_spec
     if answer_spec is None:
         return False
-    expression = _expression_parts(answer_spec.canonical_answer)
+    expression = _expression_parts(answer_spec.canonical_answer) or _expression_parts(
+        request.question
+    )
     active_step = active_teaching_step(request)
     if expression is None or active_step is None:
         return False
@@ -3543,6 +3553,48 @@ def guided_message_reveals_multiple_unresolved_teaching_steps(
     return revealed_step_count >= 2
 
 
+def guided_message_reveals_active_unresolved_teaching_step(
+    message: str,
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+) -> bool:
+    """Reject a reply that supplies the unanswered role the tutor just asked for."""
+
+    answer_spec = request.answer_spec
+    active_step = active_teaching_step(request)
+    if answer_spec is None or active_step is None:
+        return False
+    expression = _expression_parts(answer_spec.canonical_answer) or _expression_parts(
+        request.question
+    )
+    if expression is None:
+        return False
+    component_id = _component_for_step(request, rubric, active_step.step_id)
+    if component_id is None or component_id not in objective.missing_concept_ids:
+        return False
+    variable, operator, fixed_value = expression
+    learner_words = normalize_semantic_answer(request.student_input)
+    tutor_words = normalize_semantic_answer(message)
+    if active_step.step_id == "CHANGING_VALUE":
+        return (
+            not teaches_changing_value(learner_words, variable)
+            and teaches_changing_value(tutor_words, variable)
+        )
+    if active_step.step_id == "FIXED_VALUE":
+        return (
+            not teaches_fixed_value(learner_words, fixed_value)
+            and teaches_fixed_value(tutor_words, fixed_value)
+        )
+    if active_step.step_id == "OPERATION":
+        operation_terms = operation_answer_terms(operator)
+        return (
+            not teaches_operation(learner_words, operation_terms)
+            and teaches_operation(tutor_words, operation_terms)
+        )
+    return False
+
+
 def teaches_changing_value(message: str, variable: str) -> bool:
     """Return whether prose directly supplies the changing-value answer."""
 
@@ -3554,7 +3606,8 @@ def teaches_changing_value(message: str, variable: str) -> bool:
             message,
         )
         or re.search(
-            rf"\b{escaped_variable}\b\s+(?:is|represents|can change|varies)",
+            rf"\b{escaped_variable}\b\s+(?:(?:is|represents)\s+(?:a\s+)?"
+            r"(?:changing\s+(?:quantity|value)|variable)|can\s+change|varies)",
             message,
         )
     )
@@ -4004,25 +4057,30 @@ def general_rule_explanation_evidence(
         rf"\b{re.escape(variable)}\b.*\b(?:change|changes|changing|variable|any|different)\b"
         rf"|\b(?:change|changes|changing|variable|any|different)\b.*\b{re.escape(variable)}\b"
     )
-    fixed_pattern = re.compile(
-        rf"(?<!\d)[+\-−]?\s*{re.escape(fixed_value)}(?!\d).*"
-        r"\b(?:fixed|constant|stay|stays|same)\b"
-        rf"|\b(?:fixed|constant|stay|stays|same)\b.*(?<!\d)[+\-−]?\s*{re.escape(fixed_value)}(?!\d)"
-    )
-    last_probe = (
+    active_probe = (
         request.guided_teaching_state.last_reasoning_probe.casefold()
         if request.guided_teaching_state is not None
         and request.guided_teaching_state.last_reasoning_probe is not None
         else ""
     )
+    concise_variable_answer = (
+        re.search(r"\b(?:any|changing|different|variable)\b", request.student_input.casefold())
+        is not None
+        and re.search(rf"\b{re.escape(variable)}\b", active_probe) is not None
+    )
+    fixed_pattern = re.compile(
+        rf"(?<!\d)[+\-−]?\s*{re.escape(fixed_value)}(?!\d).*"
+        r"\b(?:fixed|constant|stay|stays|same)\b"
+        rf"|\b(?:fixed|constant|stay|stays|same)\b.*(?<!\d)[+\-−]?\s*{re.escape(fixed_value)}(?!\d)"
+    )
     concise_fixed_answer = re.fullmatch(
         rf"[+\-−]?\s*{re.escape(fixed_value)}", request.student_input.casefold().strip()
     ) is not None and any(
-        phrase in last_probe
+        phrase in active_probe
         for phrase in ("stays fixed", "stays the same", "value stays fixed", "fixed value")
     )
     return (
-        variable_pattern.search(learner_text) is not None,
+        variable_pattern.search(learner_text) is not None or concise_variable_answer,
         fixed_pattern.search(learner_text) is not None or concise_fixed_answer,
     )
 
