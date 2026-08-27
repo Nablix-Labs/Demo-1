@@ -64,6 +64,80 @@ describe('Canvas phase synchronization', () => {
     delete process.env.NEXT_PUBLIC_API_BASE_URL;
   });
 
+  /**
+   * Rows 24 and 55 — "question options are not shown in phase 3", reported on
+   * 11 Aug and again on 26 Aug.
+   *
+   * Options never travel on a reply; they are looked up out of the cached
+   * session record by question id. /canvas/submit is the path a student
+   * actually LEAVES Phase 2 by — they press "Check my work" and the backend
+   * moves them to Independent Practice with a new question set — and this
+   * handler used to pass syncBackendSession three hand-picked fields off the
+   * response. student_model_event was not among them, so the record kept
+   * PHASE 2's questions, the new question id was not in them, and Phase 3
+   * opened with questionType null and no options at all.
+   */
+  it('carries the new phase\'s question set, so Phase 3 has its options', async () => {
+    useNumeraStore.setState({
+      currentPhase: 'GUIDED_PRACTICE',
+      activeQuestionId: 'Q-T01-004',
+      questionType: null,
+      questionOptions: [],
+      backendSession: {
+        session_id: 'SESSION001',
+        student_model_event: {
+          phase_payload: {
+            question_set: {
+              questions: [{ question_id: 'Q-T01-004', student_view: {
+                question_text: 'Write the general rule.',
+                question_type: 'SHORT_RESPONSE',
+                options: [],
+              } }],
+            },
+          },
+        },
+      } as never,
+    });
+    submitCanvas.mockResolvedValue({
+      session_id: 'SESSION001',
+      student_id: 'ST001',
+      status: 'processed',
+      submission_id: 'SUBMISSION002',
+      snapshot_reference: 'snapshot://SUBMISSION002',
+      current_phase: 'INDEPENDENT_PRACTICE',
+      current_question: 'Which is the general rule?',
+      question_id: 'Q-T01-009',
+      question_type: 'SINGLE_CHOICE',
+      phase_changed: true,
+      previous_phase: 'GUIDED_PRACTICE',
+      ocr: null,
+      tutor: null,
+      // The new phase's set rides on the reply, exactly as it does on
+      // /interaction. Nothing read it here.
+      student_model_event: {
+        phase_payload: {
+          question_set: {
+            questions: [{ question_id: 'Q-T01-009', student_view: {
+              question_text: 'Which is the general rule?',
+              question_type: 'SINGLE_CHOICE',
+              options: [
+                { option_id: 'A', text: 'n + 4' },
+                { option_id: 'B', text: '3 + 4' },
+              ],
+            } }],
+          },
+        },
+      },
+    });
+
+    await act(async () => { await tutor?.submitCanvasWork(); });
+
+    const state = useNumeraStore.getState();
+    expect(state.activeQuestionId).toBe('Q-T01-009');
+    expect(state.questionType).toBe('SINGLE_CHOICE');
+    expect(state.questionOptions.map((o) => o.option_id)).toEqual(['A', 'B']);
+  });
+
   it('applies Review when a successful Canvas response clears the question', async () => {
     submitCanvas.mockResolvedValue({
       session_id: 'SESSION001',

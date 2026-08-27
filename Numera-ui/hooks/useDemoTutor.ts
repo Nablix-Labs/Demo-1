@@ -678,7 +678,24 @@ export function useDemoTutor() {
       // backend phase change here also drives usePhaseRouting.
       const entering = phaseAnnouncement(res, useNumeraStore.getState().currentPhase);
       if (res.current_phase) {
+        // The WHOLE reply, not three fields off it.
+        //
+        // This is the path a student actually leaves Phase 2 by — they press
+        // "Check my work" and the backend moves them to Independent Practice —
+        // and it was handing syncBackendSession a hand-built triple. So
+        // `student_model_event` never arrived, refreshedRecord had no question
+        // set to write, and the cached record still held PHASE 2's questions.
+        // studentViewFor then looked the new Phase 3 question up in the old
+        // phase's set, found nothing, and applyBackendPhase settled on
+        // questionType null with an empty options array.
+        //
+        // That is rows 24 and 55 — "question options are not shown in phase 3",
+        // reported on 11 Aug and again on 26 Aug. Every other reply path
+        // already passes `res` whole; this one narrowed it, back when
+        // /canvas/submit returned a different shape. It no longer does (row 16),
+        // and the fields it now carries are exactly the ones that were missing.
         syncBackendSession({
+          ...res,
           current_phase: res.current_phase,
           current_question: res.current_question ?? null,
           question_id: res.question_id ?? null,
