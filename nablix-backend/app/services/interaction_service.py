@@ -1023,6 +1023,40 @@ def _active_answer_spec(session: SessionRecord) -> AnswerSpec | None:
     return _schema_question(session).tutor_view.answer_spec
 
 
+def _choice_selection_canvas_actions(
+    session: SessionRecord,
+    tutor: TutorResult,
+    turn_id: str,
+) -> list[TutorCanvasAction]:
+    """Highlight each available choice while the learner is being asked to select."""
+
+    objective = tutor.active_teaching_objective
+    teaching_state = tutor.guided_teaching_state
+    selected_option_id = (
+        teaching_state.selected_option_id if teaching_state is not None else None
+    )
+    if (
+        session.question_type != "CHOICE_WITH_EXPLANATION"
+        or objective is None
+        or "ANSWER_SELECTION" not in objective.missing_concept_ids
+        or selected_option_id is not None
+    ):
+        return []
+    return [
+        TutorCanvasAction(
+            action_id=f"{turn_id}:SELECT_OPTION:{option.option_id}",
+            type="HIGHLIGHT",
+            target_kind="QUESTION_OPTION",
+            target_object_id=f"{session.question_id}:OPTION:{option.option_id}",
+            confirmed_component_id=None,
+            text="Tap an option.",
+            source_id=None,
+            answer_reveal_allowed=False,
+        )
+        for option in _schema_question(session).student_view.options
+    ]
+
+
 def _question_anchors(session: SessionRecord) -> list[QuestionTextAnchor]:
     """Anchor the active teaching step into the question the learner is reading."""
 
@@ -3905,6 +3939,14 @@ async def _process_interaction(
             student_response=request.text_input or request.voice_transcript or "",
         )
     )
+    tutor_canvas_actions = [
+        *_choice_selection_canvas_actions(
+            turn_session,
+            tutor,
+            request.turn_id or "TURN-0000",
+        ),
+        *tutor_canvas_actions,
+    ]
     logger.info(
         "guided_canvas_actions_planned",
         extra={
