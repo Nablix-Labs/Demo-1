@@ -1996,6 +1996,14 @@ def _response_from(
         session.current_phase == "INDEPENDENT_PRACTICE"
         and previous_phase != "GUIDED_PRACTICE"
     )
+    # The panel flag and the step it needs are updated by different code paths:
+    # `_completed_scaffold_state` clears the ids when a scaffold finishes but
+    # never lowers the flag, and every later turn carries the raised flag
+    # forward. Gated here, at the one seam all of those paths return through,
+    # so the flag can never outlive the step it promises.
+    scaffold_is_renderable = (
+        bool(scaffold_steps) and session.current_scaffold_step_id is not None
+    )
     if phase3_silent and phase3_attempt is not None:
         outcome = phase3_attempt.outcome
         message = (
@@ -2040,7 +2048,9 @@ def _response_from(
         show_hint_button=False if phase3_silent else session.show_hint_button,
         show_visual_cue=False if phase3_silent else visual_cue is not None,
         visual_cue=None if phase3_silent else visual_cue,
-        show_scaffold_panel=False if phase3_silent else session.show_scaffold_panel,
+        show_scaffold_panel=(
+            False if phase3_silent else session.show_scaffold_panel and scaffold_is_renderable
+        ),
         scaffold_id=session.scaffold_id,
         current_scaffold_step_id=session.current_scaffold_step_id,
         scaffold_step_number=session.scaffold_step_number,

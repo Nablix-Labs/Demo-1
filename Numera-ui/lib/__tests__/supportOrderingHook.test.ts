@@ -18,7 +18,12 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   sendInteraction: (...args: unknown[]) => sendInteraction(...args),
 }));
-vi.mock('@/lib/tutorSpeech', () => ({ setStudentWriting: vi.fn(), tutorSay: vi.fn() }));
+// Real module except the two that reach a speech engine — see canvasPhaseSync.
+vi.mock('@/lib/tutorSpeech', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/tutorSpeech')>()),
+  setStudentWriting: vi.fn(),
+  tutorSay: vi.fn(),
+}));
 
 import { useDemoTutor } from '@/hooks/useDemoTutor';
 import type { InteractionResponse } from '@/lib/api';

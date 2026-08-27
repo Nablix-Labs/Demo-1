@@ -8,7 +8,11 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   submitCanvas: (...args: unknown[]) => submitCanvas(...args),
 }));
-vi.mock('@/lib/tutorSpeech', () => ({
+// Only the two that reach a speech engine are stubbed. The rest of the module
+// is kept real so it cannot go stale: the voice-floor helpers no-op while
+// `voiceStatus` is 'idle', which is what these tests run in.
+vi.mock('@/lib/tutorSpeech', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/tutorSpeech')>()),
   setStudentWriting: vi.fn(),
   tutorSay: vi.fn(),
 }));
@@ -125,6 +129,45 @@ describe('Canvas phase synchronization', () => {
     const [, , submissionRole, turnId] = submitCanvas.mock.calls[0];
     expect(submissionRole).toBe('STANDALONE_ATTEMPT');
     expect(turnId).toMatch(/^TURN-/);
+  });
+
+  it('applies Guided canvas actions and records the canvas tutor turn immediately', async () => {
+    useNumeraStore.setState({
+      currentPhase: 'GUIDED_PRACTICE',
+      activeQuestionId: 'Q-T01-002',
+      questionText: 'In m + 7, identify the changing quantity.',
+    });
+    submitCanvas.mockResolvedValue({
+      session_id: 'SESSION001', student_id: 'ST001', status: 'processed',
+      submission_id: 'S-ACTION', snapshot_reference: 'snapshot://S-ACTION',
+      current_phase: 'GUIDED_PRACTICE',
+      current_question: 'In m + 7, identify the changing quantity.',
+      question_id: 'Q-T01-002',
+      message: 'I can see that 7 stays fixed. What does m do?',
+      tutor_turn_id: 'TUTOR-CANVAS-1',
+      expected_student_response: 'ANSWER',
+      allow_voice_input: true,
+      tutor_canvas_actions: [{
+        action_id: 'CANVAS-CONFIRM-1',
+        type: 'INSERT_LABEL',
+        target_kind: 'TUTOR_ANCHOR',
+        target_object_id: 'TUTOR_ANCHOR:CONFIRMED:Q-T01-002:1',
+        confirmed_component_id: 'FIXED_VALUE',
+        text: '7 → stays fixed',
+        source_id: null,
+        answer_reveal_allowed: false,
+      }],
+      ocr: null,
+      tutor: { evaluation: 'PARTIAL', tutor_message: 'I can see that 7 stays fixed.' },
+      latency: { ocr_latency_ms: 1, tutor_latency_ms: 1, total_latency_ms: 2 },
+    });
+
+    await act(async () => { await tutor?.submitCanvasWork(); });
+
+    const state = useNumeraStore.getState();
+    expect(state.lastTutorTurnId).toBe('TUTOR-CANVAS-1');
+    expect(state.expectsStudentResponse).toBe(true);
+    expect(state.tutorElements.some((element) => element.text === '7 → stays fixed')).toBe(true);
   });
 
   it('gives each submission its own turn id', async () => {

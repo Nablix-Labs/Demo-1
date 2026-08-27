@@ -418,6 +418,56 @@ def test_help_request_without_active_support_is_explicit() -> None:
     assert stored.json()["attempt_count"] == session["attempt_count"]
 
 
+def test_scaffold_panel_is_never_opened_without_a_step_to_show() -> None:
+    """`show_scaffold_panel` must imply a renderable step.
+
+    Live session SESSION04b34eb30d494bd186c9b96d05586de1 answered with the flag
+    raised, `scaffold_id` null, `current_scaffold_step_id` null and
+    `scaffold_total_steps` 0 (Manav, 26 Aug). The frontend drops the panel in
+    that state on purpose, so the flag is a promise nothing keeps. Either half
+    of the fix satisfies this: send the step, or leave the flag down.
+    """
+
+    student_id = "ST157"
+    session = _start(student_id)
+    session_id = str(session["session_id"])
+    stranded = session_service._sessions[session_id].model_copy(
+        update={
+            "show_scaffold_panel": True,
+            "scaffold_steps": [],
+            "scaffold_id": None,
+            "current_scaffold_step_id": None,
+            "scaffold_step_number": 1,
+            "scaffold_total_steps": 0,
+            "delivered_scaffold_step_ids": [],
+        }
+    )
+
+    response = interaction_service._response_from(
+        session_id=session_id,
+        student_id=student_id,
+        turn_id="TURN-SCAFFOLD-1",
+        interaction_type="ANSWER_SUBMISSION",
+        nudge_id=None,
+        session=stranded,
+        message="Keep going.",
+        message_voice="Keep going.",
+        visual_cue=None,
+        scaffold_steps=[],
+        session_summary=None,
+        conversation_action="ASK_QUESTION",
+        attempt_increment=0,
+        status=None,
+        retry_safe=None,
+    )
+
+    panel_is_renderable = (
+        response.scaffold_step_text is not None
+        and response.current_scaffold_step_id is not None
+    )
+    assert response.show_scaffold_panel is False or panel_is_renderable
+
+
 def test_inactivity_nudge_is_cached_without_pedagogical_mutation() -> None:
     student_id = "ST154"
     session = _start(student_id)

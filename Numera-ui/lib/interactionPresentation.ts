@@ -100,6 +100,39 @@ export function authorisedHint(response: SupportPresentation): string | null {
   return hint === response.message?.trim() ? null : hint;
 }
 
+/**
+ * A scaffold step is spoken INSTEAD of the tutor's reply — so show it too.
+ *
+ * `scaffold_step_text` is "the guiding question to show" and
+ * `scaffold_step_voice` is "what to speak for this step". Two authored
+ * renderings of one step, which is right: the spoken form can say aloud what the
+ * written form prints as symbols. What was wrong is that only one of them ever
+ * reached the chat. The bubble carried `message` — the tutor's conversational
+ * reply, which on a scaffolded turn is never spoken at all — while the student
+ * heard the step. Two different sentences on every scaffolded turn, which is
+ * Manjusha's row 54, "the tutor voice should perfectly match the tutor text".
+ *
+ * The step goes in ahead of the reply, which is where support already goes (see
+ * the note above about the tutor's wording now referring to what is on screen)
+ * and where an authorised hint already goes. Deduped against the reply, so a
+ * backend that puts the same sentence in both does not say it twice.
+ *
+ * The DISPLAY wording is what lands on screen, never the voice wording. That one
+ * is written to be heard, and printing it is how "13 + 5" arrives as row 53's
+ * "slash 13+5" the other way round.
+ */
+function presentSpokenStep(
+  stepText: string | null | undefined,
+  stepVoice: string | null | undefined,
+  message: string | null | undefined,
+): string {
+  const shown = stepText?.trim();
+  if (shown && shown !== message?.trim()) {
+    useNumeraStore.getState().addTranscriptMessage({ role: 'ai', text: shown });
+  }
+  return stepVoice ?? stepText ?? message ?? '';
+}
+
 export function applyInteractionSupport(response: SupportPresentation): string {
   // Support is separate from the tutor's actual response. Keeping it apart
   // prevents a generic content hint from replacing a question-aware correction
@@ -194,7 +227,7 @@ export function applyInteractionSupport(response: SupportPresentation): string {
       stepVoice: persisted!.step_voice ?? null,
       totalSteps: persisted!.total_steps,
     });
-    return persisted!.step_voice ?? persisted!.step_text ?? response.message;
+    return presentSpokenStep(persisted!.step_text, persisted!.step_voice, response.message);
   }
 
   // Pre-contract backend: the per-turn booleans are all we have.
@@ -203,5 +236,5 @@ export function applyInteractionSupport(response: SupportPresentation): string {
   }
   const scaffold = activeScaffold(response as InteractionResponse);
   useNumeraStore.getState().setActiveScaffold(scaffold);
-  return scaffold?.stepVoice ?? scaffold?.stepText ?? response.message;
+  return presentSpokenStep(scaffold?.stepText, scaffold?.stepVoice, response.message);
 }

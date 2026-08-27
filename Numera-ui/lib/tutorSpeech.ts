@@ -206,3 +206,97 @@ export function resetTutorSpeech(): void {
   studentWriting = false;
   penDown = false;
 }
+
+/**
+ * Handing the voice floor back around a REST submission.
+ *
+ * `submitVoiceTurn` has always driven the turn machine by hand: PROCESSING
+ * while the request is out, SPEAKING while the reply is voiced, then a fresh
+ * LISTENING turn — or WAITING — once the audio ends (voice contract §12,
+ * half-duplex). Every OTHER submission skipped it entirely. A typed answer, an
+ * option pick, "Check my work", Explain Again and Explain-it-back all mint a
+ * submission turn with `beginSubmissionTurn()`, send it, render the reply and
+ * speak it without touching `voiceStatus` once.
+ *
+ * Two things break when they don't, and both are things Manjusha has reported.
+ *
+ * The mic stays OPEN across the request. `app/page.tsx` computes
+ * `listening = voiceStatus === 'listening' && …` and transmits on it, so for
+ * the whole round trip the room is still being transcribed against a question
+ * the student has just answered another way — a sibling or a television then
+ * submits a second answer over the top of theirs.
+ *
+ * And when the tutor stops speaking, no new listening turn is minted. The
+ * server clears its latched turn fields after each turn, so `currentTurnId` is
+ * still the SUBMISSION turn it has already resolved; whatever the student says
+ * next is attributed to a closed turn and nothing comes back. The mic is open,
+ * the level meter moves, and the tutor never answers. That is "when this input
+ * option in the canvas is pressed, voice is not listening" (26 Aug), and it is
+ * the same shape as rows 5 and 36 — the voice dying after the first question
+ * rather than at random.
+ *
+ * The rule these three functions exist to keep: anything that calls
+ * `beginSubmissionTurn()` owes the floor back. `lib/__tests__/voiceFloor.test.ts`
+ * asserts it against the source so a sixth submission path cannot forget.
+ *
+ * All three no-op unless a voice session is actually running. In a typed-only
+ * session `voiceStatus` is 'idle', and minting listening turns there would put
+ * a student who never opened the mic into a voice turn loop.
+ *
+ * Deliberately NOT wired into the ordering guard (`acceptResponse` returning
+ * false). A response is rejected there because something newer has superseded
+ * it, and that newer turn owns the floor — reopening the mic from the stale one
+ * would race a request that is still out.
+ */
+
+/** Submission is in flight: close the mic so the room cannot answer for them. */
+export function closeMicForSubmission(): void {
+  const store = useNumeraStore.getState();
+  if (store.voiceStatus === 'idle') return;
+  store.setVoiceStatus('processing');
+}
+
+/**
+ * The reply has landed and is about to be spoken.
+ *
+ * Returns the `onEnd` that hands the floor back, or undefined when no voice
+ * session is running. Pass it straight to `tutorSay` — which guarantees it
+ * fires even when the utterance is empty, dropped or superseded, so the floor
+ * cannot be stranded by a turn the tutor had nothing to say on (Phase 3, where
+ * saying nothing is the whole point).
+ *
+ * Reads `expectsStudentResponse` / `allowVoiceInput` out of the store at the
+ * moment the audio ends rather than capturing them, so it makes the same
+ * decision as the streaming transport's `onIdle` from the same two fields —
+ * both of which this turn's `setTutorTurn` has already written.
+ */
+export function takeFloorForReply(): (() => void) | undefined {
+  const store = useNumeraStore.getState();
+  if (store.voiceStatus === 'idle') return undefined;
+  store.setVoiceStatus('speaking');
+  return () => {
+    const s = useNumeraStore.getState();
+    if (s.voiceStatus !== 'speaking') return; // superseded meanwhile
+    // A reply that expects no answer, or forbids voice, parks rather than
+    // reopening: minting a listening turn there invites an answer the backend
+    // will reject.
+    if (!s.expectsStudentResponse || !s.allowVoiceInput) {
+      s.setVoiceStatus('waiting');
+      return;
+    }
+    s.beginListeningTurn();
+  };
+}
+
+/**
+ * The submission failed — give the student their turn back.
+ *
+ * Only from 'processing', which is the state `closeMicForSubmission` just
+ * caused. Reopening from anything else would tread on a turn something else
+ * now owns.
+ */
+export function reopenFloorAfterFailure(): void {
+  const store = useNumeraStore.getState();
+  if (store.voiceStatus !== 'processing') return;
+  store.beginListeningTurn();
+}

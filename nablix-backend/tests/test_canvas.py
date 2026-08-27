@@ -888,6 +888,62 @@ def test_canvas_submit_stops_before_tutor_below_legacy_reliability_threshold(
     assert stored_session["canvas_submissions"][0]["tutor"]["evaluation"] == "UNCLEAR"
 
 
+def test_canvas_submit_asks_for_clearer_writing_when_ocr_reads_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty OCR read must reach the student as a tutoring turn, not a 5xx.
+
+    Guards the whole path downstream of the adapter fix: an OCR result with no
+    text, no steps and no regions has to survive evidence collection and land
+    on the clarification branch rather than raising on the way through.
+    """
+
+    async def empty_ocr(
+        adapter: MockVisionOCRAdapter,
+        snapshot_data_url: str,
+    ) -> VisionOCRResult:
+        del adapter, snapshot_data_url
+        return VisionOCRResult(
+            raw_ocr_text="",
+            detected_equation="",
+            detected_steps=[],
+            detected_regions=[],
+            final_answer=None,
+            confidence=0.0,
+            needs_clarification=True,
+        )
+
+    async def unexpected_tutor_call(*args: object) -> object:
+        raise AssertionError(f"Tutor Engine received an unreadable canvas: {args}")
+
+    monkeypatch.setattr(MockVisionOCRAdapter, "recognize", empty_ocr)
+    monkeypatch.setattr(
+        canvas_service,
+        "process_answer_with_session_event",
+        unexpected_tutor_call,
+    )
+    session_id = _start_session("ST017")
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST017",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "CLARIFICATION_REQUIRED"
+    assert body["message"] == "Please write out that step so I can check it."
+    assert body["next_expected_input"] == "WRITE"
+    assert body["canvas_draw"] == []
+    stored = client.get(f"/session/{session_id}", params={"student_id": "ST017"}).json()
+    assert stored["attempt_count"] == 0
+    assert stored["canvas_submissions"][0]["tutor"]["evaluation"] == "UNCLEAR"
+
+
 def test_canvas_submit_accepts_optional_transcript() -> None:
     session_id = _start_session("ST010")
 
@@ -1820,6 +1876,34 @@ def test_unified_voice_canvas_confirms_a_correct_intermediate_step(
     assert session_service._sessions[session_id].attempt_count == 0
 
 
+def test_canvas_clarification_identifies_a_missing_operation() -> None:
+    ocr = VisionOCRResult(
+        raw_ocr_text="n 5",
+        confidence=0.4,
+        needs_clarification=True,
+    )
+
+    tutor = canvas_service._clarification_result(
+        ocr,
+        canvas_service.load_classifier_rules(),
+        AdapterContext(
+            session_id="SESSION-CANVAS-CLARIFICATION",
+            student_id="ST-CANVAS-CLARIFICATION",
+            message="n 5",
+            question="Write the general rule.",
+            correct_answer="n + 5",
+        ),
+    )
+
+    assert tutor.evaluation == "UNCLEAR"
+    assert tutor.attempt_increment == 0
+    assert tutor.tutor_message == (
+        "Look closely: I can read the letter and number, but I cannot see the "
+        "operation between them. Check whether a sign is missing, then write "
+        "the rule again."
+    )
+
+
 def test_unified_voice_canvas_unclear_ocr_does_not_grade(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2456,3 +2540,65 @@ def test_collect_canvas_evidence_keeps_all_regions_when_no_strokes_sent() -> Non
     )
 
     assert evidence.ocr.detected_steps == ["x + 4 = 9", "x = 5"]
+
+
+def test_canvas_does_not_store_work_for_an_unreadable_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nothing readable means nothing to file.
+
+    A blank page carries no attempt (the turn is UNCLEAR) and no detected
+    errors, so Phase 4 can never replay it — filing it writes an artifact
+    downstream that nothing can ever reach.
+    """
+
+    persisted: list[WorkArtifactPersistRequest] = []
+
+    async def persist_work_artifact(
+        adapter: StudentModelServiceAdapter,
+        request: WorkArtifactPersistRequest,
+        access_token: str,
+    ) -> WorkArtifactPersistResponse:
+        del adapter, access_token
+        persisted.append(request)
+        return WorkArtifactPersistResponse(
+            artifact_id="ART-P3-000125",
+            pdf_url="https://blob.example/submission.pdf",
+            page_count=request.page_count,
+        )
+
+    async def unreadable_ocr(
+        adapter: MockVisionOCRAdapter,
+        snapshot_data_url: str,
+    ) -> VisionOCRResult:
+        del adapter, snapshot_data_url
+        return VisionOCRResult(
+            raw_ocr_text="",
+            detected_equation="",
+            detected_steps=[],
+            detected_regions=[],
+            final_answer=None,
+            confidence=0.0,
+            needs_clarification=True,
+        )
+
+    session_id = _independent_practice_session(monkeypatch)
+    monkeypatch.setattr(MockVisionOCRAdapter, "recognize", unreadable_ocr)
+    monkeypatch.setattr(
+        StudentModelServiceAdapter,
+        "persist_work_artifact",
+        persist_work_artifact,
+    )
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST031",
+            "turn_id": "TURN-ST031-CANVAS-BLANK",
+            "snapshot_data_url": _real_png_data_url(),
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert persisted == []
