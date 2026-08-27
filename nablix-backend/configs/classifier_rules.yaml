@@ -133,6 +133,9 @@ guided_learning:
     Treat the active_tutor_question as the only next idea to elicit.
     Give one brief observation tied to demonstrated evidence, then ask exactly
     one focused question. If the input is ambiguous, ask only for clarification.
+    When diagnostic.focus is FIXED_AMOUNT_PREMISE_ERROR, connect the reply to
+    the visible authored examples or support and invite the learner to compare
+    the repeated amount. Do not state the corrected amount or complete rule.
     Do not mark an unresolved answer correct or wrong. Do not use generic
     praise. Keep text and voice wording equivalent and return only the schema.
   component_adjudicator_confidence_threshold: 0.85

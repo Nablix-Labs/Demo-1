@@ -164,6 +164,25 @@ def test_topic1_wrong_typed_rule_prompts_for_the_repeated_amount() -> None:
         "Compare the amount after the operation in each example. "
         "Which amount stays the same?"
     )
+    context = classifier.guided_fact_budget_context(
+        evaluation,
+        request,
+        classifier.initial_guided_objective(rubric),
+        evaluation.tutor_message,
+        load_classifier_rules(),
+    )
+    assert context["diagnostic"] == {
+        "focus": "FIXED_AMOUNT_PREMISE_ERROR",
+        "evidence": (
+            "The fixed amount in the learner's typed expression conflicts "
+            "with the repeated amount in the authored examples or options."
+        ),
+        "required_move": (
+            "Use the visible examples or support to ask the learner to "
+            "compare the repeated amount. Do not state the corrected "
+            "amount or complete rule."
+        ),
+    }
 
 
 def test_topic1_spaced_symbol_number_is_an_ambiguity_not_a_misconception() -> None:
