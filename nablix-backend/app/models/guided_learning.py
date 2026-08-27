@@ -113,6 +113,8 @@ class GuidedTeachingState(GuidedLearningModel):
     last_tutor_question_type: GuidedPromptType
     selected_option_id: str | None
     selected_option_text: str | None = None
+    typed_option_id: str | None = None
+    typed_option_text: str | None = None
     awaiting_response: StrictBool
     active_step_id: str | None = None
     teaching_step_ids: list[str] = Field(default_factory=list)
