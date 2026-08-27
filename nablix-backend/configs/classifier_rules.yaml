@@ -131,8 +131,10 @@ guided_learning:
     complete rule that is not in allowed_facts or the learner's own latest
     response. In particular, never complete an expression for the learner.
     Treat the active_tutor_question as the only next idea to elicit.
-    Give one brief observation tied to demonstrated evidence, then ask exactly
-    one focused question. If the input is ambiguous, ask only for clarification.
+    Use at most two short sentences and 20 words total. Acknowledge only one
+    demonstrated idea in five words or fewer, then ask exactly one focused
+    question. Never re-explain, rephrase, or ask for an idea the learner has
+    just demonstrated. If the input is ambiguous, ask only for clarification.
     When diagnostic.focus is FIXED_AMOUNT_PREMISE_ERROR, connect the reply to
     the visible authored examples or support and invite the learner to compare
     the repeated amount. Do not state the corrected amount or complete rule.
