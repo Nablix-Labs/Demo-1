@@ -1202,8 +1202,9 @@ export function useDemoTutor() {
       });
       if (!acceptResponse(res)) return null;
       syncBackendSession(res);
+      const onReplyEnd = takeFloorForReply();
       if (silent) {
-        tutorSay('', { onEnd: takeFloorForReply() });
+        tutorSay('', { onEnd: onReplyEnd });
         return res;
       }
       // This path never applied support at all, so a cue or scaffold served in
@@ -1214,7 +1215,7 @@ export function useDemoTutor() {
       const hint = presentAuthorisedHint(res, addTranscriptMessage, addTrailEntry);
       addTranscriptMessage({ role: 'ai', text: res.message });
       addTrailEntry({ kind: 'tutor', text: res.message, meta: 'option selected' });
-      tutorSay(withHint(hint, spoken), { onEnd: takeFloorForReply() });
+      tutorSay(withHint(hint, spoken), { onEnd: onReplyEnd });
       return res;
     } catch (err) {
       reopenFloorAfterFailure();
