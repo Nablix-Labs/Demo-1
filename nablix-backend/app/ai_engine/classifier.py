@@ -1531,6 +1531,7 @@ def teaching_state_for(
         previous is not None
         and previous.question_id == (request.question_id or rubric.question_id)
     )
+    typed_option_evidence = typed_option_text_evidence(request)
     message_normalized = tutor_message.casefold()
     affect_state: Literal["NORMAL", "DISTRESS", "FRUSTRATED", "GENTLE_RETURN"] = (
         "DISTRESS"
@@ -1558,6 +1559,20 @@ def teaching_state_for(
         ),
         selected_option_text=(
             previous.selected_option_text if previous_matches_question else None
+        ),
+        typed_option_id=(
+            typed_option_evidence[0]
+            if typed_option_evidence is not None
+            else (
+                previous.typed_option_id if previous_matches_question else None
+            )
+        ),
+        typed_option_text=(
+            typed_option_evidence[1]
+            if typed_option_evidence is not None
+            else (
+                previous.typed_option_text if previous_matches_question else None
+            )
         ),
         awaiting_response=objective is not None,
         active_step_id=active_step_id,
@@ -1587,6 +1602,30 @@ def typed_choice_selection(request: ClassificationRequest) -> str | None:
         request.student_input.casefold(),
     )
     return matches[0].upper() if len(set(matches)) == 1 else None
+
+
+def typed_option_text_evidence(
+    request: ClassificationRequest,
+) -> tuple[str, str] | None:
+    """Recognise exact option text without treating it as a click selection."""
+
+    if request.question_type != "CHOICE_WITH_EXPLANATION" or request.answer_spec is None:
+        return None
+    option_id = normalized_choice_response(request.answer_spec.canonical_answer)
+    if len(option_id) != 1 or not option_id.isalpha():
+        return None
+    attempted = normalize_semantic_answer(request.student_input)
+    if attempted == "":
+        return None
+    for accepted in request.answer_spec.accepted_answers:
+        normalized_accepted = normalize_semantic_answer(accepted)
+        if (
+            normalized_accepted != ""
+            and normalized_accepted != option_id
+            and attempted == normalized_accepted
+        ):
+            return option_id.upper(), accepted
+    return None
 
 
 def ambiguous_symbol_number_input(student_input: str) -> bool:
@@ -1710,6 +1749,33 @@ def wrong_direct_rule_evaluation(
         newly_confirmed_concept_ids=[],
         preserved_concept_ids=objective.confirmed_concept_ids,
         contradicted_concept_ids=["ANSWER_SELECTION"],
+        missing_concept_ids=objective.missing_concept_ids,
+        selected_error_code=None,
+        confidence=1.0,
+        next_objective=objective,
+        tutor_message=message,
+        tutor_message_voice=message,
+    )
+
+
+def typed_option_text_evaluation(
+    request: ClassificationRequest,
+    objective: ActiveTeachingObjective,
+    rules: ClassifierRulesConfig,
+) -> GuidedEvaluation | None:
+    """Ask for a click after the learner types exact correct option text."""
+
+    if (
+        typed_choice_selection(request) is not None
+        or typed_option_text_evidence(request) is None
+    ):
+        return None
+    message = rules.guided_learning.critical_thinking.typed_option_prompt
+    return GuidedEvaluation(
+        student_state="PARTIAL",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=objective.confirmed_concept_ids,
+        contradicted_concept_ids=[],
         missing_concept_ids=objective.missing_concept_ids,
         selected_error_code=None,
         confidence=1.0,
@@ -2174,6 +2240,28 @@ def classify_guided_learning_response(
         return build_guided_tutor_response(
             request, rules, safety_check, rubric, wrong_choice, objective
         )
+    typed_option = typed_option_text_evaluation(request, objective, rules)
+    if typed_option is not None:
+        next_objective = normalized_guided_objective(typed_option, objective)
+        if next_objective is not None:
+            typed_option = write_deterministic_guided_follow_up(
+                typed_option,
+                request,
+                rubric,
+                next_objective,
+                openai_client,
+                allowed_errors,
+                guided_tutor_context_for(request, rubric, next_objective),
+                rules,
+            )
+        return build_guided_tutor_response(
+            request,
+            rules,
+            safety_check,
+            rubric,
+            typed_option,
+            next_objective,
+        )
     wrong_direct_rule = wrong_direct_rule_evaluation(
         request,
         rubric,
@@ -2579,7 +2667,10 @@ def write_deterministic_guided_follow_up(
 
     controller_prompt = (
         evaluation.tutor_message
-        if evaluation.student_state == "WRONG"
+        if (
+            evaluation.student_state == "WRONG"
+            or typed_option_text_evidence(request) is not None
+        )
         and evaluation.tutor_message.rstrip().endswith("?")
         else controller_prompt_for_objective(request, rubric, objective)
     )
@@ -2717,6 +2808,7 @@ def guided_fact_budget_context(
                 f"The learner identified the operation as {operation_word(operator)}."
             )
     direct_rule_error = direct_rule_mismatch(request)
+    typed_option = typed_option_text_evidence(request)
     return {
         "question": request.question,
         "student_response": request.student_input,
@@ -2741,6 +2833,18 @@ def guided_fact_budget_context(
                 ),
             }
             if direct_rule_error is not None
+            else {
+                "focus": "TYPED_OPTION_NOT_SELECTED",
+                "evidence": (
+                    "The learner typed the text of an authored option but has "
+                    "not selected its option control."
+                ),
+                "required_move": (
+                    "Acknowledge the matched rule without confirming completion, "
+                    "then ask the learner to select the matching option."
+                ),
+            }
+            if typed_option is not None
             else None
         ),
         "support_context": (

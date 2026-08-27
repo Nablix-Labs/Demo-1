@@ -185,6 +185,55 @@ def test_topic1_wrong_typed_rule_prompts_for_the_repeated_amount() -> None:
     }
 
 
+def test_topic1_typed_correct_option_requires_an_explicit_selection() -> None:
+    request = ClassificationRequest(
+        question_id="Q-T01-004",
+        question_type="CHOICE_WITH_EXPLANATION",
+        question="Which is the general rule? A: 12 + 4. B: n + 4.",
+        correct_answer="B",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-004",
+            canonical_answer="B",
+            accepted_answers=["B", "n + 4"],
+            verification_method="EXACT_CHOICE_MATCH",
+            explanation_required=True,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        student_input="n + 4",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+    )
+    rubric = classifier.rubric_from_authored_answer_parts(
+        "Q-T01-004",
+        request.question_type,
+        request.answer_spec,
+        "test",
+    )
+    assert rubric is not None
+    objective = classifier.initial_guided_objective(rubric)
+
+    evaluation = classifier.typed_option_text_evaluation(
+        request,
+        objective,
+        load_classifier_rules(),
+    )
+    state = classifier.teaching_state_for(
+        request,
+        rubric,
+        objective,
+        "That rule matches one of the choices. Which option would you select?",
+    )
+
+    assert evaluation is not None
+    assert evaluation.student_state == "PARTIAL"
+    assert state.selected_option_id is None
+    assert state.typed_option_id == "B"
+    assert state.typed_option_text == "n + 4"
+
+
 def test_topic1_spaced_symbol_number_is_an_ambiguity_not_a_misconception() -> None:
     assert classifier.ambiguous_symbol_number_input("n 5")
     assert not classifier.ambiguous_symbol_number_input("n + 5")

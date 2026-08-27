@@ -136,6 +136,9 @@ guided_learning:
     When diagnostic.focus is FIXED_AMOUNT_PREMISE_ERROR, connect the reply to
     the visible authored examples or support and invite the learner to compare
     the repeated amount. Do not state the corrected amount or complete rule.
+    When diagnostic.focus is TYPED_OPTION_NOT_SELECTED, acknowledge that the
+    typed rule matches a choice, but do not mark the choice complete. Ask the
+    learner to select that option, then stop.
     Do not mark an unresolved answer correct or wrong. Do not use generic
     praise. Keep text and voice wording equivalent and return only the schema.
   component_adjudicator_confidence_threshold: 0.85
@@ -274,6 +277,7 @@ guided_learning:
     ambiguity_message: "I want to read your notation correctly. Did you mean a letter followed by a number, or an operation between them?"
     wrong_choice_prompt: "Let’s test that choice with a different starting number. Would it still describe the new case?"
     wrong_direct_rule_prompt: "Compare the amount after the operation in each example. Which amount stays the same?"
+    typed_option_prompt: "That rule matches one of the choices. Which option would you select?"
     single_case_defence_prompt: "That works for that one starting value. Try a different starting value: what does the same rule predict?"
     written_rule_prompt: "You have the rule. Now write it on the canvas, then press Check."
     missing_operation_canvas_prompt: "Look closely: I can read the letter and number, but I cannot see the operation between them. Check whether a sign is missing, then write the rule again."
