@@ -144,6 +144,11 @@ describe('the write affordance', () => {
     expect(useNumeraStore.getState().writeAffordance).toBe(true);
     // The rule with teeth: the answer must not appear in the place the student
     // is being asked to write it.
-    expect(useNumeraStore.getState().tutorElements).toHaveLength(0);
+    //
+    // On the CONTENT, not the count — the band is drawn now (row 56), and the
+    // old `toHaveLength(0)` said "no marks" when the rule is "no answer".
+    const elements = useNumeraStore.getState().tutorElements;
+    expect(elements.every((el) => el.text === undefined && el.tex === undefined)).toBe(true);
+    expect(JSON.stringify(elements)).not.toContain('n + 4');
   });
 });

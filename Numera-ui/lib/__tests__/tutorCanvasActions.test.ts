@@ -87,11 +87,20 @@ describe('what must never be rendered', () => {
     // The rule with teeth. WRITE_AREA is where the student is being asked to
     // commit the answer; writing it there hands over the thing being asked for,
     // while looking like ordinary tutor support.
+    //
+    // Asserted on the CONTENT rather than on the element count. This used to
+    // read `toEqual([])`, which was a faithful spelling of the rule only while
+    // a WRITE_AREA drew nothing whatsoever. It draws its band now (row 56: the
+    // semantic action replaced the backend's three positioned elements and put
+    // nothing in their place, so the ask survived and the place did not), and
+    // "renders no marks" would now forbid the fix rather than the leak.
     const write = action({
       target_kind: 'WRITE_AREA', type: 'INSERT_MATH', text: 'n + 4', target_object_id: null,
     });
     const target = resolveTarget(write, CTX)!;
-    expect(actionMarks(write, target)).toEqual([]);
+    const marks = actionMarks(write, target);
+    expect(marks.every((m) => m.text === undefined && m.tex === undefined)).toBe(true);
+    expect(JSON.stringify(marks)).not.toContain('n + 4');
     expect(showsWriteAffordance(write)).toBe(true);
   });
 

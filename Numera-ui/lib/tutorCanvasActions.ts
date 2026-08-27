@@ -263,11 +263,55 @@ export function revealsAnswer(): boolean {
 }
 
 /**
+ * The band the student is being asked to write in.
+ *
+ * Nothing the action carries is drawn. A WRITE_AREA action may arrive with
+ * `text`, and that text can be the rule itself — putting it on the board would
+ * hand the student the very thing they are being asked to produce, dressed as
+ * ordinary tutor support. That rule is unchanged; what was missing is the band.
+ *
+ * The backend's older write request came as three hand-positioned ELEMENTS
+ * (`:write-highlight`, `:write-prompt`, `:write-arrow`) which
+ * relocateWriteRequest moves onto the geometry below. That is the yellow area
+ * Manjusha knows. The semantic action that replaced it drew nothing at all: it
+ * raised the rose "write it down" note in the support lane and stopped there,
+ * so the ASK survived the migration and the PLACE did not. Row 56, "Phase 2
+ * yellow writing area to write the answer is not shown".
+ *
+ * Same geometry as the relocated block, so the two spellings of one request
+ * land in the same place and the reference slots above stay positioned against
+ * it. Closed, unlike the backend's three-sided polygon: this is a region to
+ * write inside, and an open box reads as a mark someone abandoned.
+ *
+ * No prompt text. The wording already exists once, on the WriteNote this same
+ * action raises; a second copy inside the band would say it twice, and writing
+ * canvas copy here is how the frontend starts authoring content it does not own.
+ */
+function writeAreaMarks(actionId: string): TutorElement[] {
+  const { x, y, w, h } = WRITE_AREA;
+  return [
+    {
+      id: `${actionId}${WRITE_HIGHLIGHT}`,
+      kind: 'highlight',
+      points: [x, y, x + w, y, x + w, y + h, x, y + h, x, y],
+      strokeWidth: HIGHLIGHT_WEIGHT,
+    },
+    {
+      id: `${actionId}${WRITE_ARROW}`,
+      kind: 'arrow',
+      from: [WRITE_ARROW_X, WRITE_ARROW_TOP],
+      to: [WRITE_ARROW_X, y],
+    },
+  ];
+}
+
+/**
  * The tutor-layer marks an action becomes, or [] when it draws nothing.
  *
  * Empty is a normal outcome, not a failure: FOCUS moves attention without
- * leaving a mark, an anchor label rides on the question text rather than the
- * canvas, and a WRITE_AREA deliberately renders no content at all.
+ * leaving a mark, and an anchor label rides on the question text rather than
+ * the canvas. A WRITE_AREA draws its band but never any CONTENT — that
+ * distinction is the whole of writeAreaMarks.
  */
 export function actionMarks(
   action: TutorCanvasAction,
@@ -276,8 +320,9 @@ export function actionMarks(
   // The rule that matters most here. WRITE_AREA is the place the student is
   // being asked to commit the answer; writing the answer into it would hand
   // them the thing that was being asked for, and would do it while looking
-  // like ordinary tutor support.
-  if (target.kind === 'write-area') return [];
+  // like ordinary tutor support. So the BAND is drawn and nothing the action
+  // carries is — see writeAreaMarks.
+  if (target.kind === 'write-area') return writeAreaMarks(action.action_id);
 
   // A question-text anchor is styled by the text renderer (AnchoredText), which
   // knows where the token actually wrapped to. Drawing a box on the canvas for
