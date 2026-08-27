@@ -7498,3 +7498,81 @@ def test_scaffold_semantic_evaluator_rejects_an_unrelated_response(
 
     assert response.evaluation == "INCORRECT"
     assert response.scaffold_original_answer_correct is False
+
+
+def test_choice_selection_stays_the_active_question_before_an_option_is_chosen() -> None:
+    request = ClassificationRequest(
+        question_id="Q-T01-004",
+        question_type="CHOICE_WITH_EXPLANATION",
+        question="Which is the general rule: A: 12 + 4. B: n + 4? Explain briefly.",
+        correct_answer="B",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-004",
+            canonical_answer="B",
+            accepted_answers=["B", "n + 4"],
+            verification_method="CHOICE_AND_CONCEPT_MATCH",
+            explanation_required=True,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        student_input="n changes",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+    )
+    rubric = classifier.rubric_from_authored_answer_parts(
+        request.question_id,
+        request.question_type,
+        request.answer_spec,
+        "test",
+    )
+    assert rubric is not None
+
+    evaluation = classifier.choice_selection_required_evaluation(
+        request,
+        classifier.initial_guided_objective(rubric),
+        load_classifier_rules(),
+    )
+
+    assert evaluation is not None
+    assert evaluation.student_state == "PARTIAL"
+    assert evaluation.missing_concept_ids == ["ANSWER_SELECTION", "ANSWER_EXPLANATION"]
+
+
+def test_bare_fixed_value_answers_the_active_fixed_value_question() -> None:
+    request = ClassificationRequest(
+        question_id="Q-T01-004",
+        question_type="CHOICE_WITH_EXPLANATION",
+        question="Which is the general rule: A: 12 + 4. B: n + 4? Explain briefly.",
+        correct_answer="B",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-004",
+            canonical_answer="B",
+            accepted_answers=["B", "n + 4"],
+            verification_method="CHOICE_AND_CONCEPT_MATCH",
+            explanation_required=True,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        guided_teaching_state=GuidedTeachingState(
+            question_id="Q-T01-004",
+            objective_component_ids=["ANSWER_SELECTION", "ANSWER_EXPLANATION"],
+            confirmed_component_ids=["ANSWER_SELECTION"],
+            missing_component_ids=["ANSWER_EXPLANATION"],
+            active_component_id="ANSWER_EXPLANATION",
+            last_tutor_question_type="COMPONENT",
+            selected_option_id="B",
+            selected_option_text="n + 4",
+            awaiting_response=True,
+            last_reasoning_probe="Which value stays fixed in this rule?",
+        ),
+        conversation_history=[ConversationMessage(role="user", content="n changes")],
+        student_input="4",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+    )
+
+    assert classifier.general_rule_explanation_evidence(request) == (True, True)
