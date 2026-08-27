@@ -135,7 +135,7 @@ class TutorEngineServiceAdapter:
                     phase3_allowed_error_definitions=context.phase3_allowed_error_definitions,
                 )
             )
-            return _tutor_result_from_ai_response(ai_response)
+            return tutor_result_from_ai_response(ai_response)
 
         return TutorResult(
             evaluation="INCORRECT",
@@ -180,7 +180,7 @@ class MockTutorEngineAdapter(TutorEngineServiceAdapter):
         super().__init__(Settings())
 
 
-def _tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:
+def tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:
     return TutorResult(
         evaluation=response.evaluation or "NO_ATTEMPT",
         error_type=response.error_type or "UNKNOWN_ERROR",

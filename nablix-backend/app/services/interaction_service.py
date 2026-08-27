@@ -12,8 +12,10 @@ from pydantic import ValidationError
 from app.adapters.base import StudentModelAdapter
 from app.adapters.provider import get_adapters
 from app.ai_engine.classifier import (
+    ClassificationRequest,
     build_openai_ai_engine_client,
     build_support_aware_tutor_message,
+    classify_student_response,
     contains_answer_reveal,
     detect_student_intent,
     generate_explain_again_response,
@@ -22,6 +24,7 @@ from app.ai_engine.classifier import (
     normalize_exact_notation,
     resolve_guided_rubric,
 )
+from app.adapters.tutor_engine import tutor_result_from_ai_response
 
 from app.ai_engine.classifier_config import (
     CanvasRescueWordingConfig,
@@ -2557,8 +2560,58 @@ async def _option_selected_interaction_response(
         raise HTTPException(status_code=409, detail="OPTION_SELECTED is available only in Guided Practice.")
     if request.selected_option_id is None:
         raise HTTPException(status_code=422, detail="selected_option_id is required.")
-    selection, message, option_text = _selected_option_message(session, request.selected_option_id)
+    selection, fallback_message, option_text = _selected_option_message(
+        session, request.selected_option_id
+    )
     rules = load_classifier_rules()
+    selected_state = (
+        session.guided_teaching_state.model_copy(
+            update={
+                "selected_option_id": request.selected_option_id,
+                "selected_option_text": option_text,
+                "last_tutor_question_type": "OPTION_COMPARISON",
+                "awaiting_response": True,
+            }
+        )
+        if session.guided_teaching_state is not None
+        else None
+    )
+    classification = classify_student_response(
+        ClassificationRequest(
+            question_id=session.question_id,
+            question_type=session.question_type,
+            question=session.current_question or "",
+            correct_answer=session.correct_answer or "",
+            answer_spec=_active_answer_spec(session),
+            phase_2_prompt_context=_phase_2_prompt_context(session),
+            student_input=selection,
+            current_phase=session.current_phase,
+            input_source="CHOICE",
+            transcript_confidence=None,
+            attempt_count=session.attempt_count,
+            question_completed=session.question_completed,
+            answer_value_confirmed=session.answer_value_confirmed,
+            question_number=session.question_number,
+            current_hint_level=_current_hint_level_from(session.hint_count),
+            concept_id=session.concept_id,
+            conversation_history=[
+                *session.conversation_history,
+                ConversationMessage(role="user", content=selection),
+            ],
+            conversation_state=_conversation_state_from_session(session),
+            generated_question_rubric=session.generated_question_rubric,
+            active_teaching_objective=session.active_teaching_objective,
+            guided_teaching_state=selected_state,
+            phase3_allowed_error_definitions=_schema_question(session).tutor_view.potential_errors,
+        )
+    )
+    tutor = tutor_result_from_ai_response(classification)
+    message = tutor.tutor_message or fallback_message
+    last_tutor_action, expected_student_response = _conversation_state_for(
+        tutor.recommended_conversation_action,
+        tutor.question_completed,
+        tutor.evaluation,
+    )
     updated_session = await update_interaction_state(
         request.session_id,
         request.student_id,
@@ -2579,19 +2632,16 @@ async def _option_selected_interaction_response(
                 message,
                 rules.conversation_rules.max_recent_messages,
             ),
-            "guided_teaching_state": (
-                session.guided_teaching_state.model_copy(
-                    update={
-                        "selected_option_id": request.selected_option_id,
-                        "selected_option_text": option_text,
-                        "last_tutor_question_type": "OPTION_COMPARISON",
-                        "awaiting_response": True,
-                    }
-                )
-                if session.guided_teaching_state is not None
-                else None
+            "answer_value_confirmed": tutor.answer_value_confirmed,
+            "question_completed": tutor.question_completed,
+            "generated_question_rubric": tutor.generated_question_rubric,
+            "active_teaching_objective": tutor.active_teaching_objective,
+            "guided_teaching_state": tutor.guided_teaching_state or selected_state,
+            **_turn_updates(
+                request,
+                last_tutor_action,
+                expected_student_response,
             ),
-            **_turn_updates(request, "REQUESTED_EXPLANATION", "EXPLANATION"),
         },
     )
     return _cache_response(
@@ -2604,14 +2654,22 @@ async def _option_selected_interaction_response(
             nudge_id=None,
             session=updated_session,
             message=message,
-            message_voice=message,
+            message_voice=tutor.tutor_message_voice or message,
             visual_cue=None,
             scaffold_steps=updated_session.scaffold_steps,
             session_summary=None,
-            conversation_action="REQUEST_EXPLANATION",
+            conversation_action=tutor.recommended_conversation_action,
             attempt_increment=0,
             status=None,
             retry_safe=True,
+        ).model_copy(
+            update={
+                "tutor": tutor,
+                "next_expected_input": (
+                    "WRITE" if tutor.requires_written_math_evidence else None
+                ),
+                "write_instruction": tutor.write_instruction,
+            }
         ),
     )
 
@@ -3120,6 +3178,8 @@ async def _process_interaction(
             ).model_copy(
                 update={
                     "next_expected_input": "WRITE",
+                    "requires_written_math_evidence": True,
+                    "write_instruction": rules.guided_learning.critical_thinking.written_rule_prompt,
                     "ocr": canvas_evidence.ocr if canvas_evidence is not None else None,
                     "snapshot_reference": (
                         canvas_evidence.snapshot_reference
@@ -3374,6 +3434,9 @@ async def _process_interaction(
                 retry_safe=None,
             ).model_copy(
                 update={
+                    "next_expected_input": "WRITE",
+                    "requires_written_math_evidence": True,
+                    "write_instruction": rules.guided_learning.critical_thinking.written_rule_prompt,
                     "ocr": ocr,
                     "snapshot_reference": (
                         canvas_evidence.snapshot_reference

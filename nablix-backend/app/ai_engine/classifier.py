@@ -1884,6 +1884,36 @@ def typed_option_text_evaluation(
     )
 
 
+def choice_selection_required_evaluation(
+    request: ClassificationRequest,
+    objective: ActiveTeachingObjective,
+    rules: ClassifierRulesConfig,
+) -> GuidedEvaluation | None:
+    """Keep a choice question on selection until the learner chooses an option."""
+
+    if request.question_type != "CHOICE_WITH_EXPLANATION":
+        return None
+    if "ANSWER_SELECTION" not in objective.missing_concept_ids:
+        return None
+    if typed_choice_selection(request) is not None:
+        return None
+    if typed_option_text_evidence(request) is not None:
+        return None
+    message = rules.guided_learning.critical_thinking.choice_selection_prompt
+    return GuidedEvaluation(
+        student_state="PARTIAL",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=objective.confirmed_concept_ids,
+        contradicted_concept_ids=[],
+        missing_concept_ids=objective.missing_concept_ids,
+        selected_error_code=None,
+        confidence=1.0,
+        next_objective=objective,
+        tutor_message=message,
+        tutor_message_voice=message,
+    )
+
+
 def direct_rule_mismatch(
     request: ClassificationRequest,
 ) -> tuple[tuple[str, str, str], tuple[str, str, str]] | None:
@@ -2386,6 +2416,32 @@ def classify_guided_learning_response(
             safety_check,
             rubric,
             wrong_direct_rule,
+            next_objective,
+        )
+    selection_required = choice_selection_required_evaluation(
+        request,
+        objective,
+        rules,
+    )
+    if selection_required is not None:
+        next_objective = normalized_guided_objective(selection_required, objective)
+        if next_objective is not None:
+            selection_required = write_deterministic_guided_follow_up(
+                selection_required,
+                request,
+                rubric,
+                next_objective,
+                openai_client,
+                allowed_errors,
+                guided_tutor_context_for(request, rubric, next_objective),
+                rules,
+            )
+        return build_guided_tutor_response(
+            request,
+            rules,
+            safety_check,
+            rubric,
+            selection_required,
             next_objective,
         )
     choice_follow_up = option_comparison_follow_up(
@@ -3953,9 +4009,21 @@ def general_rule_explanation_evidence(
         r"\b(?:fixed|constant|stay|stays|same)\b"
         rf"|\b(?:fixed|constant|stay|stays|same)\b.*(?<!\d)[+\-−]?\s*{re.escape(fixed_value)}(?!\d)"
     )
+    last_probe = (
+        request.guided_teaching_state.last_reasoning_probe.casefold()
+        if request.guided_teaching_state is not None
+        and request.guided_teaching_state.last_reasoning_probe is not None
+        else ""
+    )
+    concise_fixed_answer = re.fullmatch(
+        rf"[+\-−]?\s*{re.escape(fixed_value)}", request.student_input.casefold().strip()
+    ) is not None and any(
+        phrase in last_probe
+        for phrase in ("stays fixed", "stays the same", "value stays fixed", "fixed value")
+    )
     return (
         variable_pattern.search(learner_text) is not None,
-        fixed_pattern.search(learner_text) is not None,
+        fixed_pattern.search(learner_text) is not None or concise_fixed_answer,
     )
 
 
