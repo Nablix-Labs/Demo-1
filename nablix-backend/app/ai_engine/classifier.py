@@ -1155,6 +1155,70 @@ def _describes_changing_starting_value(student_input: str) -> bool:
     )
 
 
+def active_role_contradiction(request: ClassificationRequest) -> str | None:
+    """Identify a role claim that contradicts the active teaching step."""
+
+    step = active_teaching_step(request)
+    expression = (
+        _expression_parts(request.answer_spec.canonical_answer)
+        if request.answer_spec is not None
+        else None
+    ) or _expression_parts(request.question)
+    if step is None or expression is None:
+        return None
+    variable, operator, fixed_value = expression
+    normalized = re.sub(r"\s+", " ", request.student_input.casefold()).strip()
+    if (
+        step.step_id == "CHANGING_VALUE"
+        and re.search(
+            rf"\b{re.escape(variable)}\b\s+(?:is|stays|remains)\s+"
+            r"(?:fixed|constant)\b",
+            normalized,
+        )
+    ):
+        return "VARIABLE_CALLED_FIXED"
+    if (
+        step.step_id == "FIXED_VALUE"
+        and re.search(
+            rf"(?<!\d){re.escape(fixed_value)}(?!\d)\s+"
+            r"(?:changes|change|varies|vary)\b",
+            normalized,
+        )
+    ):
+        return "FIXED_VALUE_CALLED_CHANGING"
+    if (
+        step.step_id == "OPERATION"
+        and (
+            f"{operator} is fixed" in normalized
+            or f"{operator} is a value" in normalized
+            or "plus is fixed" in normalized
+            or "plus is a value" in normalized
+        )
+    ):
+        return "OPERATION_CALLED_VALUE"
+    return None
+
+
+def role_contradiction_prompt(
+    focus: str,
+    rules: ClassifierRulesConfig,
+) -> str:
+    """Return the authored Socratic fallback for one role contradiction."""
+
+    prompts = {
+        "VARIABLE_CALLED_FIXED": (
+            rules.guided_learning.critical_thinking.variable_called_fixed_prompt
+        ),
+        "FIXED_VALUE_CALLED_CHANGING": (
+            rules.guided_learning.critical_thinking.fixed_value_called_changing_prompt
+        ),
+        "OPERATION_CALLED_VALUE": (
+            rules.guided_learning.critical_thinking.operation_called_value_prompt
+        ),
+    }
+    return prompts[focus]
+
+
 def deterministic_teaching_step_evaluation(
     request: ClassificationRequest,
     rubric: GeneratedQuestionRubric,
@@ -1190,6 +1254,41 @@ def deterministic_teaching_step_evaluation(
     steps = teaching_steps_for(request)
     step_index = next(index for index, item in enumerate(steps) if item.step_id == step.step_id)
     next_step = steps[step_index + 1] if step_index + 1 < len(steps) else None
+
+    contradiction = active_role_contradiction(request)
+    if contradiction is not None:
+        contradicted_component = _component_for_step(request, rubric, step.step_id)
+        message = role_contradiction_prompt(contradiction, rules)
+        return GuidedEvaluation(
+            student_state="WRONG",
+            newly_confirmed_concept_ids=[],
+            preserved_concept_ids=objective.confirmed_concept_ids,
+            contradicted_concept_ids=(
+                [contradicted_component]
+                if contradicted_component is not None
+                else []
+            ),
+            missing_concept_ids=objective.missing_concept_ids,
+            selected_error_code=None,
+            confidence=1.0,
+            next_objective=objective,
+            tutor_message=message,
+            tutor_message_voice=message,
+        )
+    if (
+        step.step_id == "CHANGING_VALUE"
+        and any(word in normalized for word in ("add", "addition", "plus"))
+        and not (
+            variable in normalized
+            and any(marker in normalized for marker in ("change", "changing", "varies", "variable"))
+        )
+        and not (
+            number in normalized
+            and any(marker in normalized for marker in ("fixed", "stays", "constant", "same"))
+        )
+    ):
+        message = rules.guided_learning.critical_thinking.active_role_before_operation_prompt
+        return _controller_evaluation(request, "PARTIAL", objective, message, None, rubric)
 
     # A learner can answer several roles in one sentence.  Preserve each
     # demonstrated role, but do not accept an operation as if it were a value.
@@ -2667,11 +2766,7 @@ def write_deterministic_guided_follow_up(
 
     controller_prompt = (
         evaluation.tutor_message
-        if (
-            evaluation.student_state == "WRONG"
-            or typed_option_text_evidence(request) is not None
-        )
-        and evaluation.tutor_message.rstrip().endswith("?")
+        if evaluation.tutor_message.rstrip().endswith("?")
         else controller_prompt_for_objective(request, rubric, objective)
     )
     writer = getattr(openai_client, "write_guided_fact_budget_message", None)
@@ -2809,6 +2904,7 @@ def guided_fact_budget_context(
             )
     direct_rule_error = direct_rule_mismatch(request)
     typed_option = typed_option_text_evidence(request)
+    role_contradiction = active_role_contradiction(request)
     return {
         "question": request.question,
         "student_response": request.student_input,
@@ -2833,6 +2929,18 @@ def guided_fact_budget_context(
                 ),
             }
             if direct_rule_error is not None
+            else {
+                "focus": role_contradiction,
+                "evidence": (
+                    "The learner assigned an expression part a role that "
+                    "contradicts the active teaching target."
+                ),
+                "required_move": (
+                    "Ask one Socratic contrast question about the active role. "
+                    "Do not move to another role or reveal the answer."
+                ),
+            }
+            if role_contradiction is not None
             else {
                 "focus": "TYPED_OPTION_NOT_SELECTED",
                 "evidence": (

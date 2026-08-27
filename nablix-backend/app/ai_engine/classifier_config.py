@@ -200,6 +200,10 @@ class CriticalThinkingConfig(StrictSchema):
     wrong_choice_prompt: str
     wrong_direct_rule_prompt: str
     typed_option_prompt: str
+    variable_called_fixed_prompt: str
+    fixed_value_called_changing_prompt: str
+    operation_called_value_prompt: str
+    active_role_before_operation_prompt: str
     single_case_defence_prompt: str
     written_rule_prompt: str
     missing_operation_canvas_prompt: str
