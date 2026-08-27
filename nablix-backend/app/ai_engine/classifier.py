@@ -1702,6 +1702,28 @@ def wrong_direct_rule_evaluation(
 ) -> GuidedEvaluation | None:
     """Catch a typed rule that contradicts the expressions offered by a choice."""
 
+    if direct_rule_mismatch(request) is None:
+        return None
+    message = rules.guided_learning.critical_thinking.wrong_direct_rule_prompt
+    return GuidedEvaluation(
+        student_state="WRONG",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=objective.confirmed_concept_ids,
+        contradicted_concept_ids=["ANSWER_SELECTION"],
+        missing_concept_ids=objective.missing_concept_ids,
+        selected_error_code=None,
+        confidence=1.0,
+        next_objective=objective,
+        tutor_message=message,
+        tutor_message_voice=message,
+    )
+
+
+def direct_rule_mismatch(
+    request: ClassificationRequest,
+) -> tuple[tuple[str, str, str], tuple[str, str, str]] | None:
+    """Return a typed choice-rule mismatch without exposing its correction."""
+
     if request.question_type != "CHOICE_WITH_EXPLANATION" or request.answer_spec is None:
         return None
     attempted = _expression_parts(request.student_input)
@@ -1723,21 +1745,7 @@ def wrong_direct_rule_evaluation(
         ),
         None,
     )
-    if expected is None:
-        return None
-    message = rules.guided_learning.critical_thinking.wrong_direct_rule_prompt
-    return GuidedEvaluation(
-        student_state="WRONG",
-        newly_confirmed_concept_ids=[],
-        preserved_concept_ids=objective.confirmed_concept_ids,
-        contradicted_concept_ids=["ANSWER_SELECTION"],
-        missing_concept_ids=objective.missing_concept_ids,
-        selected_error_code=None,
-        confidence=1.0,
-        next_objective=objective,
-        tutor_message=message,
-        tutor_message_voice=message,
-    )
+    return (attempted, expected) if expected is not None else None
 
 
 def guided_tutor_context_for(
@@ -2708,6 +2716,7 @@ def guided_fact_budget_context(
             allowed_facts.append(
                 f"The learner identified the operation as {operation_word(operator)}."
             )
+    direct_rule_error = direct_rule_mismatch(request)
     return {
         "question": request.question,
         "student_response": request.student_input,
@@ -2718,6 +2727,22 @@ def guided_fact_budget_context(
         "missing_concept_ids": objective.missing_concept_ids,
         "allowed_facts": allowed_facts,
         "abstract_rule_shape": "[changing quantity] [operation] [fixed value]",
+        "diagnostic": (
+            {
+                "focus": "FIXED_AMOUNT_PREMISE_ERROR",
+                "evidence": (
+                    "The fixed amount in the learner's typed expression conflicts "
+                    "with the repeated amount in the authored examples or options."
+                ),
+                "required_move": (
+                    "Use the visible examples or support to ask the learner to "
+                    "compare the repeated amount. Do not state the corrected "
+                    "amount or complete rule."
+                ),
+            }
+            if direct_rule_error is not None
+            else None
+        ),
         "support_context": (
             support_context_text(request.phase_2_prompt_context.current_support)
             if request.phase_2_prompt_context is not None
