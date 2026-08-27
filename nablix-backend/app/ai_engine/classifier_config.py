@@ -198,6 +198,7 @@ class CriticalThinkingConfig(StrictSchema):
     frustration_acknowledgement: str
     ambiguity_message: str
     wrong_choice_prompt: str
+    wrong_direct_rule_prompt: str
     single_case_defence_prompt: str
     written_rule_prompt: str
     missing_operation_canvas_prompt: str

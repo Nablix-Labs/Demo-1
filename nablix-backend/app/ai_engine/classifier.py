@@ -1694,6 +1694,52 @@ def wrong_choice_evaluation(
     )
 
 
+def wrong_direct_rule_evaluation(
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+    rules: ClassifierRulesConfig,
+) -> GuidedEvaluation | None:
+    """Catch a typed rule that contradicts the expressions offered by a choice."""
+
+    if request.question_type != "CHOICE_WITH_EXPLANATION" or request.answer_spec is None:
+        return None
+    attempted = _expression_parts(request.student_input)
+    if attempted is None:
+        return None
+    candidate_expressions = [
+        expression
+        for answer in [request.question, *request.answer_spec.accepted_answers]
+        if (expression := _expression_parts(answer)) is not None
+    ]
+    if attempted in candidate_expressions:
+        return None
+    variable, operator, _ = attempted
+    expected = next(
+        (
+            expression
+            for expression in candidate_expressions
+            if expression[0] == variable and expression[1] == operator
+        ),
+        None,
+    )
+    if expected is None:
+        return None
+    message = rules.guided_learning.critical_thinking.wrong_direct_rule_prompt
+    return GuidedEvaluation(
+        student_state="WRONG",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=objective.confirmed_concept_ids,
+        contradicted_concept_ids=["ANSWER_SELECTION"],
+        missing_concept_ids=objective.missing_concept_ids,
+        selected_error_code=None,
+        confidence=1.0,
+        next_objective=objective,
+        tutor_message=message,
+        tutor_message_voice=message,
+    )
+
+
 def guided_tutor_context_for(
     request: ClassificationRequest,
     rubric: GeneratedQuestionRubric,
@@ -2120,6 +2166,33 @@ def classify_guided_learning_response(
         return build_guided_tutor_response(
             request, rules, safety_check, rubric, wrong_choice, objective
         )
+    wrong_direct_rule = wrong_direct_rule_evaluation(
+        request,
+        rubric,
+        objective,
+        rules,
+    )
+    if wrong_direct_rule is not None:
+        next_objective = normalized_guided_objective(wrong_direct_rule, objective)
+        if next_objective is not None:
+            wrong_direct_rule = write_deterministic_guided_follow_up(
+                wrong_direct_rule,
+                request,
+                rubric,
+                next_objective,
+                openai_client,
+                allowed_errors,
+                guided_tutor_context_for(request, rubric, next_objective),
+                rules,
+            )
+        return build_guided_tutor_response(
+            request,
+            rules,
+            safety_check,
+            rubric,
+            wrong_direct_rule,
+            next_objective,
+        )
     choice_follow_up = option_comparison_follow_up(
         request.conversation_history,
         request.student_input,
@@ -2496,7 +2569,12 @@ def write_deterministic_guided_follow_up(
 ) -> GuidedEvaluation:
     """Let OpenAI phrase a backend-selected next teaching target."""
 
-    controller_prompt = controller_prompt_for_objective(request, rubric, objective)
+    controller_prompt = (
+        evaluation.tutor_message
+        if evaluation.student_state == "WRONG"
+        and evaluation.tutor_message.rstrip().endswith("?")
+        else controller_prompt_for_objective(request, rubric, objective)
+    )
     writer = getattr(openai_client, "write_guided_fact_budget_message", None)
     if not callable(writer):
         return evaluation
