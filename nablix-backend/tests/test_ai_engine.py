@@ -1136,6 +1136,51 @@ def test_guided_fact_budget_excludes_an_unwritten_canonical_rule() -> None:
     )
 
 
+def test_guided_fact_budget_writer_uses_the_voice_optimised_field() -> None:
+    class _Writer:
+        def write_guided_fact_budget_message(self, **kwargs: object):
+            return openai_client.OpenAITutorMessage(
+                tutor_message="Which part can take different possible values?",
+                tutor_message_voice_optimised="Which part can take different possible values?",
+                confidence=0.9,
+            )
+
+    request = _topic1_request("I am not sure")
+    rubric = classifier.rubric_from_authored_answer_parts(
+        "Q-T01-002",
+        request.question_type,
+        request.answer_spec,
+        "test",
+    )
+    assert rubric is not None
+    objective = classifier.initial_guided_objective(rubric)
+    evaluation = GuidedEvaluation(
+        student_state="STUCK",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=objective.missing_concept_ids,
+        selected_error_code=None,
+        confidence=1.0,
+        next_objective=objective,
+        tutor_message="Which part can take different possible values?",
+        tutor_message_voice="Which part can take different possible values?",
+    )
+
+    rewritten = classifier.write_deterministic_guided_follow_up(
+        evaluation,
+        request,
+        rubric,
+        objective,
+        _Writer(),
+        [],
+        None,
+        load_classifier_rules(),
+    )
+
+    assert rewritten.tutor_message_voice == "Which part can take different possible values?"
+
+
 def test_guided_follow_up_blocks_unresolved_component_reveal() -> None:
     rubric = GeneratedQuestionRubric(
         question_id="Q-T01-002",

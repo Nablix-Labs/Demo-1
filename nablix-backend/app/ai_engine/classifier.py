@@ -2526,7 +2526,7 @@ def write_deterministic_guided_follow_up(
     rewritten = evaluation.model_copy(
         update={
             "tutor_message": candidate.tutor_message,
-            "tutor_message_voice": candidate.tutor_message_voice,
+            "tutor_message_voice": candidate.tutor_message_voice_optimised,
         }
     )
     rewritten = remove_unsupported_guided_praise(rewritten, request)
