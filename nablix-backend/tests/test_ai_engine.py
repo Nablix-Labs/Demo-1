@@ -98,6 +98,69 @@ def test_topic1_role_evidence_preserves_values_and_challenges_operation() -> Non
     assert "Is + a value" in evaluation.tutor_message
 
 
+def test_topic1_variable_called_fixed_stays_on_the_changing_role() -> None:
+    request = _topic1_request("m is fixed")
+    rubric = classifier.rubric_from_authored_answer_parts(
+        "Q-T01-002",
+        request.question_type,
+        request.answer_spec,
+        "test",
+    )
+    assert rubric is not None
+    objective = classifier.initial_guided_objective(rubric)
+
+    evaluation = classifier.deterministic_teaching_step_evaluation(
+        request,
+        rubric,
+        objective,
+        load_classifier_rules(),
+    )
+    assert evaluation is not None
+    assert evaluation.student_state == "WRONG"
+    assert evaluation.contradicted_concept_ids == ["CHANGING_VALUE"]
+    assert evaluation.missing_concept_ids == objective.missing_concept_ids
+    assert evaluation.tutor_message == (
+        "Look at the letter in different examples. Does it stay the same, "
+        "or can it change?"
+    )
+    context = classifier.guided_fact_budget_context(
+        evaluation,
+        request,
+        objective,
+        evaluation.tutor_message,
+        load_classifier_rules(),
+    )
+    assert context["diagnostic"]["focus"] == "VARIABLE_CALLED_FIXED"
+
+
+def test_topic1_operation_does_not_advance_past_an_unresolved_changing_role() -> None:
+    request = _topic1_request("addition")
+    rubric = classifier.rubric_from_authored_answer_parts(
+        "Q-T01-002",
+        request.question_type,
+        request.answer_spec,
+        "test",
+    )
+    assert rubric is not None
+    objective = classifier.initial_guided_objective(rubric)
+
+    evaluation = classifier.deterministic_teaching_step_evaluation(
+        request,
+        rubric,
+        objective,
+        load_classifier_rules(),
+    )
+
+    assert evaluation is not None
+    assert evaluation.student_state == "PARTIAL"
+    assert evaluation.newly_confirmed_concept_ids == []
+    assert evaluation.missing_concept_ids == objective.missing_concept_ids
+    assert evaluation.tutor_message == (
+        "We will come back to the operation. First, which part can take "
+        "different values?"
+    )
+
+
 def test_topic1_choice_is_detected_inside_an_explanation() -> None:
     request = ClassificationRequest(
         question_id="Q-T01-004",
