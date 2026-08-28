@@ -87,6 +87,13 @@ def localize_math_difference(
         return _step_fallback("MULTIPLE_SEMANTIC_DIFFERENCES")
 
     tag, expected_start, expected_end, actual_start, actual_end = opcodes[0]
+    if (
+        tag == "delete"
+        and expected_end - expected_start == 1
+        and expected_tokens[expected_start].text in {"+", "-", "*", "/"}
+        and 0 < actual_start < len(comparable_actual)
+    ):
+        return _step_fallback("AMBIGUOUS_MISSING_OPERATOR")
     if tag == "insert" or actual_start == actual_end:
         return _step_fallback("MISSING_EXPECTED_TOKEN")
 

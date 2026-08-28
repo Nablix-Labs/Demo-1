@@ -164,6 +164,31 @@ def test_does_not_conflate_missing_unary_minus_with_binary_subtraction() -> None
     assert result.fallback_reason == "MISSING_EXPECTED_TOKEN"
 
 
+def test_missing_infix_operator_is_ambiguous_not_a_mistake() -> None:
+    result = localize_math_difference(
+        expected_text="n+5",
+        actual_text="n 5",
+        actual_tokens=_tokens(TokenSpec("n", "identifier"), TokenSpec("5", "number")),
+    )
+
+    assert result is not None
+    assert result.localization_level == "STEP"
+    assert result.fallback_reason == "AMBIGUOUS_MISSING_OPERATOR"
+    assert result.target_token_ids == ()
+
+
+def test_exact_expression_has_no_mistake() -> None:
+    result = localize_math_difference(
+        expected_text="n+5",
+        actual_text="n+5",
+        actual_tokens=_tokens(
+            TokenSpec("n", "identifier"), TokenSpec("+", "operator"), TokenSpec("5", "number")
+        ),
+    )
+
+    assert result is None
+
+
 def test_localizes_equation_value_token() -> None:
     result = localize_math_difference(
         expected_text="2x+3=7",
@@ -271,6 +296,51 @@ def test_multipart_missing_text_does_not_mark_correct_math_expression() -> None:
     )
 
     assert review.mistake_classification.status == "no_mistake"
+
+
+def test_review_treats_missing_infix_operator_as_uncertain_not_a_mistake() -> None:
+    review = review_canvas_math(
+        question="Write the general rule.",
+        correct_answer="n+5",
+        current_phase="GUIDED_PRACTICE",
+        canvas_regions=[
+            CanvasTextRegion(
+                step_id="step-1", text="n 5", x=0.1, y=0.2, w=0.4, h=0.1, confidence=0.99
+            )
+        ],
+        spatial_tokens=_tokens(TokenSpec("n", "identifier"), TokenSpec("5", "number")),
+        config=load_classifier_rules().canvas_review,
+        confidence=0.99,
+    )
+
+    assert review.mistake_classification.status == "uncertain"
+    assert review.mistake_classification.fallback_reason == "AMBIGUOUS_MISSING_OPERATOR"
+    assert review.error_type is None
+    assert review.annotation_intents == []
+
+
+def test_review_kill_switch_off_keeps_legacy_behaviour_for_missing_operator() -> None:
+    """Kill switch off: the localizer's uncertain guard must not apply."""
+
+    review = review_canvas_math(
+        question="Write the general rule.",
+        correct_answer="n+5",
+        current_phase="GUIDED_PRACTICE",
+        canvas_regions=[
+            CanvasTextRegion(
+                step_id="step-1", text="n 5", x=0.1, y=0.2, w=0.4, h=0.1, confidence=0.99
+            )
+        ],
+        spatial_tokens=_tokens(TokenSpec("n", "identifier"), TokenSpec("5", "number")),
+        config=load_classifier_rules().canvas_review.model_copy(
+            update={"semantic_localization_enabled": False}
+        ),
+        confidence=0.99,
+    )
+
+    assert review.mistake_classification.status == "mistake_found"
+    assert review.mistake_classification.target_text == "n 5"
+    assert [intent.kind for intent in review.annotation_intents] == ["circle_target"]
 
 
 def test_review_localizes_independent_practice_without_emitting_tutor_ink() -> None:
