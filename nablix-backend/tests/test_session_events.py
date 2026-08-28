@@ -2815,6 +2815,34 @@ def test_no_next_topic_projects_both_routing_fields_as_null() -> None:
     assert state.next_topic_entry_phase is None
 
 
+def test_core_state_restores_snapshot_without_next_topic_entry_phase() -> None:
+    """Persisted sessions from before the routing field was added still load."""
+
+    from app.models.student_model_session import StudentModelCoreState
+
+    state = StudentModelCoreState.model_validate(
+        {
+            "student_id": "ST001",
+            "topic_id": "ALG-KS3-01",
+            "current_phase": "REVIEW",
+            "mastery_status": "MASTERED",
+            "continuity_status": "CONTINUE",
+            "recommended_entry_phase": None,
+            "target_micro_skill_ids": ["T01.M1"],
+            "completed_micro_skill_ids": ["T01.M1"],
+            "independently_verified_micro_skill_ids": ["T01.M1"],
+            "unresolved_micro_skill_ids": [],
+            "highest_support_used_by_skill": {},
+            "used_question_ids": ["Q-T01-001"],
+            "current_question_id": None,
+            "transition_reason": "Review complete.",
+            "next_topic_recommendation": None,
+        }
+    )
+
+    assert state.next_topic_entry_phase is None
+
+
 def test_topic_code_starts_a_session_with_no_configured_mapping(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
