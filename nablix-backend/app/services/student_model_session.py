@@ -138,4 +138,5 @@ def project_student_model_state(
         current_question_id=active.current_question_id,
         transition_reason=event.routing.reason,
         next_topic_recommendation=event.routing.next_topic_id,
+        next_topic_entry_phase=event.routing.next_topic_entry_phase,
     )

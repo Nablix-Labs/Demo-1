@@ -93,7 +93,12 @@ class SessionStartRequest(BaseModel):
     """Validated input required to start a tutoring session."""
 
     student_id: StudentId
-    concept_id: ConceptId
+    # Saravanan's Student Model owns topic identity. When topic_code is sent it
+    # IS the topic -- no lookup, so a new topic never needs a Nablix deploy.
+    # concept_id survives only as the RAG/Qdrant key; older clients that send it
+    # alone still resolve through settings.student_model_topic_codes.
+    topic_code: ConceptId | None = None
+    concept_id: ConceptId | None = None
     interaction_mode: InteractionMode
     initial_phase: Phase | None = None
 

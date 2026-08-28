@@ -164,7 +164,62 @@ def student_model_service(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
                             "pdf_url": f"/work-artifacts/{ARTIFACT_ID}/pdf",
                             "page_count": 1,
                         },
-                    }
+                    },
+                    # Same question_id, second attempt: proves the journey is
+                    # joined on (question_usage_id, attempt_id), not question_id.
+                    {
+                        "attempt_id": "ATTEMPT-901",
+                        "question_id": "Q-T01-005",
+                        "question_usage_id": "QU-T01-005-P3-B",
+                        "phase": "PHASE_3_INDEPENDENT_PRACTICE",
+                        "evaluation": "WRONG",
+                        "attempted_at": "2026-08-21T10:17:23Z",
+                        "question_text": "A temperature starts at t and falls by 3.",
+                        "canonical_answer": "t - 3",
+                        "answer_steps": ["Identify t.", "Subtract 3."],
+                        "detected_errors": [
+                            {
+                                "error_code": "ERR-DIRECTION-REVERSED",
+                                "micro_skill_id": "T01.M3",
+                            }
+                        ],
+                        "work_artifact": {
+                            "artifact_id": ARTIFACT_ID,
+                            "pdf_url": f"/work-artifacts/{ARTIFACT_ID}/pdf",
+                            "page_count": 1,
+                        },
+                    },
+                    # Correct: in the journey, never in the replays.
+                    {
+                        "attempt_id": "ATTEMPT-902",
+                        "question_id": "Q-T01-006",
+                        "question_usage_id": "QU-T01-006-P3",
+                        "phase": "PHASE_3_INDEPENDENT_PRACTICE",
+                        "evaluation": "CORRECT",
+                        "attempted_at": "2026-08-21T10:19:23Z",
+                        "question_text": "A price starts at p and rises by 5.",
+                    },
+                    # Wrong but unreplayable (no question_usage_id): still a
+                    # journey item, with no replay to link to.
+                    {
+                        "attempt_id": "ATTEMPT-903",
+                        "question_id": "Q-T01-007",
+                        "phase": "PHASE_3_INDEPENDENT_PRACTICE",
+                        "evaluation": "WRONG",
+                        "attempted_at": "2026-08-21T10:21:23Z",
+                        "question_text": "A mass starts at m and doubles.",
+                        "detected_errors": [
+                            {
+                                "error_code": "ERR-DIRECTION-REVERSED",
+                                "micro_skill_id": "T01.M3",
+                            }
+                        ],
+                        "work_artifact": {
+                            "artifact_id": ARTIFACT_ID,
+                            "pdf_url": f"/work-artifacts/{ARTIFACT_ID}/pdf",
+                            "page_count": 1,
+                        },
+                    },
                 ],
             }
         if url.endswith("/phase4-review"):
@@ -288,9 +343,28 @@ def test_canvas_submit_to_rendered_pdf(student_model_service: dict[str, object])
     assert review["topic_outcome"] is not None
     assert review["topic_outcome"]["mastery_status"]
     assert review["topic_outcome"]["recommended_next_action"]
-    assert review["question_journey"] is not None
-    assert review["question_journey"][0]["question_id"] == "Q-T01-005"
-    assert review["question_journey"][0]["evaluation"] == "INCORRECT"
+    journey = review["question_journey"]
+    assert journey is not None
+    assert [item["attempt_id"] for item in journey] == [
+        "ATTEMPT-900",
+        "ATTEMPT-901",
+        "ATTEMPT-902",
+        "ATTEMPT-903",
+    ]
+    assert journey[0]["question_id"] == "Q-T01-005"
+    assert journey[0]["evaluation"] == "INCORRECT"
+    # Real question text, not a fabricated placeholder.
+    assert journey[0]["question_text"] == "A temperature starts at t and falls by 3."
+    # Wrong attempts with a replay link to it; the two attempts on the same
+    # question_id get different replays.
+    assert journey[0]["review_item_id"] == "REV-001"
+    assert journey[1]["review_item_id"] == "REV-002"
+    # Correct attempt, and the wrong attempt with no question_usage_id: present
+    # in the journey, no replay.
+    assert journey[2]["review_item_id"] is None
+    assert journey[3]["review_item_id"] is None
+    linked = [item["review_item_id"] for item in journey if item["review_item_id"]]
+    assert len(linked) == len(set(linked))
 
     pdf = client.get(pdf_url)
 

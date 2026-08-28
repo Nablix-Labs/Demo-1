@@ -2681,6 +2681,11 @@ def test_tc25_review_complete_forwards_correlated_event_and_persists_next_topic(
     stored = session_service._sessions[session_id]
     assert stored.student_model_event is not None
     assert stored.student_model_event.routing.next_topic_id == "ALG-ORI-02"
+    # Both halves of the routing reach the wire; an entry phase that stays
+    # behind leaves the frontend guessing which phase to open the next topic in.
+    state = completed.json()["student_model_state"]
+    assert state["next_topic_recommendation"] == "ALG-ORI-02"
+    assert state["next_topic_entry_phase"] == "PHASE_0_DIAGNOSTIC"
 
 
 def test_first_question_of_a_phase_is_question_number_one(
@@ -2793,3 +2798,69 @@ def test_resume_with_only_student_id_and_turn_id_uses_server_state(
     assert getattr(resume_event, "last_activity_at") == (
         stored_before.last_tutor_response_at.isoformat().replace("+00:00", "Z")
     )
+
+
+def test_no_next_topic_projects_both_routing_fields_as_null() -> None:
+    """After the last content-backed topic both fields are null -- never a
+    silently defaulted phase the frontend would route on."""
+
+    from app.models.student_model_session import StudentModelSessionEventResponse
+    from app.services.student_model_session import project_student_model_state
+
+    event = StudentModelSessionEventResponse.model_validate(
+        _eight_skill_diagnostic_response()
+    )
+    state = project_student_model_state(event)
+    assert state.next_topic_recommendation is None
+    assert state.next_topic_entry_phase is None
+
+
+def test_topic_code_starts_a_session_with_no_configured_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """G1: Saravanan's topic code is authoritative. Sent directly it needs no
+    entry in student_model_topic_codes -- the dictionary that made every new
+    topic a Nablix deploy."""
+
+    opened: dict[str, str] = {}
+
+    async def send_session_event(adapter, event, access_token):
+        del adapter, access_token
+        opened["topic_id"] = event.topic_id
+        body = _session_opened_response("PHASE_0_DIAGNOSTIC")
+        body["request_id"] = event.request_id
+        return StudentModelSessionEventResponse.model_validate(body)
+
+    from app.adapters.student_model import StudentModelServiceAdapter
+    from app.models.student_model_session import StudentModelSessionEventResponse
+
+    settings = Settings(
+        student_model_url="https://student-model.test",
+        student_model_topic_codes={},
+        use_mock_student_model=False,
+    )
+    monkeypatch.setattr(provider, "get_settings", lambda: settings)
+    monkeypatch.setattr(session_service, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        StudentModelServiceAdapter, "send_session_event", send_session_event
+    )
+
+    started = client.post(
+        "/session/start",
+        json={
+            "student_id": "ST001",
+            "topic_code": "ALG-ORI-02",
+            "interaction_mode": "TEXT",
+        },
+    )
+
+    assert started.status_code == 200, started.text
+    assert opened["topic_id"] == "ALG-ORI-02"
+
+
+def test_session_start_without_either_identifier_is_rejected() -> None:
+    started = client.post(
+        "/session/start",
+        json={"student_id": "ST001", "interaction_mode": "TEXT"},
+    )
+    assert started.status_code == 422

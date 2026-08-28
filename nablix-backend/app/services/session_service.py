@@ -429,12 +429,21 @@ async def start_session(
         )
 
     settings = get_settings()
-    topic_id = settings.student_model_topic_codes.get(request.concept_id)
+    topic_id = request.topic_code or (
+        settings.student_model_topic_codes.get(request.concept_id)
+        if request.concept_id
+        else None
+    )
     if topic_id is None:
         raise HTTPException(
             status_code=422,
-            detail=f"No Student Model topic code is configured for {request.concept_id}.",
+            detail="Send topic_code, or a concept_id with a configured Student "
+            "Model topic code.",
         )
+    # ponytail: with no concept_id, the topic code doubles as the RAG key --
+    # qdrant_concept_id_map already falls back to the raw value, so an unmapped
+    # code surfaces as a retrieval miss, not a hard 422 before the session opens.
+    concept_id = request.concept_id or topic_id
 
     session_id = _build_session_id()
     started_at = datetime.now(timezone.utc)
@@ -469,7 +478,7 @@ async def start_session(
     session = SessionRecord(
         session_id=session_id,
         student_id=request.student_id,
-        concept_id=request.concept_id,
+        concept_id=concept_id,
         started_at=started_at,
         last_tutor_response_at=started_at,
         current_phase=phase,
@@ -817,6 +826,12 @@ async def generate_phase4_review_for(
     # Deterministic fields the model was never asked for: forwarded straight
     # from the request that was just built, not generated.
     replay_context_by_id = {item.review_item_id: item for item in request.replay_items}
+    # Attempt identity is (question_usage_id, attempt_id) — attempt_id sequences
+    # restart per question, so question_id alone cannot identify an attempt.
+    review_item_id_by_attempt = {
+        (item.question_usage_id, item.attempt_id): item.review_item_id
+        for item in request.replay_items
+    }
     review = review.model_copy(
         update={
             "tutor_replays": [
@@ -838,6 +853,12 @@ async def generate_phase4_review_for(
                     hint_used=attempt.hint_used,
                     independent_success=attempt.independent_success,
                     attempted_at=attempt.attempted_at,
+                    question_text=attempt.question_text,
+                    attempt_id=attempt.attempt_id,
+                    question_usage_id=attempt.question_usage_id,
+                    review_item_id=review_item_id_by_attempt.get(
+                        (attempt.question_usage_id, attempt.attempt_id)
+                    ),
                 )
                 for attempt in history.attempts
                 if attempt.phase == PHASE_3

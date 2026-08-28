@@ -166,6 +166,14 @@ class QuestionJourneyItem(StrictSchema):
     hint_used: bool
     independent_success: bool | None = None
     attempted_at: str = Field(min_length=1)
+    # Fails closed: a history row without question text degrades to no review
+    # rather than rendering an empty question.
+    question_text: str = Field(min_length=1)
+    attempt_id: str = Field(min_length=1)
+    # The service omits this for some attempts (see TopicAttemptRecord).
+    question_usage_id: str | None = None
+    # Null when this attempt has no replay (correct, or no work artifact).
+    review_item_id: str | None = None
 
 
 class Phase4ReviewResponse(StrictSchema):
