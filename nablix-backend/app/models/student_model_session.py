@@ -427,4 +427,4 @@ class StudentModelCoreState(BaseModel):
     current_question_id: str | None
     transition_reason: str
     next_topic_recommendation: str | None
-    next_topic_entry_phase: StudentModelPhase | None
+    next_topic_entry_phase: StudentModelPhase | None = None
