@@ -35,7 +35,9 @@ import {
   isStaleSessionError,
 } from '@/lib/api';
 import { selectedOptionText } from '@/lib/selectedOption';
-import { applyInteractionSupport, acceptResponse, authorisedHint } from '@/lib/interactionPresentation';
+import {
+  applyInteractionSupport, acceptResponse, authorisedHint, applyServedCue,
+} from '@/lib/interactionPresentation';
 import { revealDecision } from '@/lib/revealBeforeClear';
 import { refreshedRecord } from '@/lib/sessionRecordRefresh';
 import { sessionEndSummary, storeEndedSession } from '@/lib/sessionEnd';
@@ -506,6 +508,22 @@ export async function resumeSession(): Promise<void> {
       const s = useNumeraStore.getState();
       s.setBackendSession(rec);
       syncBackendSession(rec);
+      // Restore the cue the backend still has open for this question.
+      //
+      // None of the visualCue* fields are persisted — they are per-turn support
+      // and a stale one is worse than none — and syncBackendSession, the only
+      // thing resume runs, never applies support. So a refresh dropped the cue
+      // while the transcript came back in full from conversation_history, and
+      // the tutor's own restored line said "take a look at the visual cue on
+      // the screen" with nothing there to look at. Manjusha, 27 Aug: "after a
+      // refresh the visual cue is not shown on the screen / on session
+      // restart".
+      //
+      // Presence is the signal, not `show_visual_cue` beside it: on the record
+      // that flag means the PHASE may show cues, and session_service already
+      // nulls active_visual_cue unless the phase is guided and the question has
+      // not changed. See SessionRecord.active_visual_cue.
+      if (rec.active_visual_cue) applyServedCue(rec.active_visual_cue);
       if (s.transcript.length === 0) {
         const restored = (rec.conversation_history ?? []).map((message) => ({
           role: message.role === 'user' ? 'student' as const : 'ai' as const,

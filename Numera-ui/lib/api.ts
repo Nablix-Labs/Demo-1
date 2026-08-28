@@ -515,6 +515,20 @@ export interface SessionRecord {
   show_canvas: boolean;
   show_hint_button: boolean;
   show_visual_cue: boolean;
+  /**
+   * The cue currently on screen for the active guided question, or null.
+   *
+   * Distinct from `show_visual_cue` beside it, which on the RECORD is a
+   * per-phase capability ("this phase may show cues") rather than "a cue has
+   * been served" — at session start the backend sets it to
+   * `flags[...] or visual_cue is not None`, so it is true for every guided turn.
+   * This field is the one that means a cue is live: session_service nulls it
+   * unless the phase is GUIDED_PRACTICE and the question has not changed, so
+   * its PRESENCE is the signal.
+   *
+   * Read on resume, which is the only place it matters — see resumeSession.
+   */
+  active_visual_cue?: VisualCue | null;
   show_scaffold_panel: boolean;
   scaffold_steps: unknown[];
   allow_text_input: boolean;
