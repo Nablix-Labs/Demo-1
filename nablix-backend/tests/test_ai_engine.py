@@ -2235,6 +2235,138 @@ def test_changing_starting_numbers_are_acknowledged_before_requesting_the_rule(
     )
 
 
+def test_guided_state_machine_clarifies_ambiguous_canvas_then_accepts_defence() -> None:
+    """Two real turns through classify_guided_learning_response directly.
+
+    Turn 1: canvas OCR reads "n 5" (no operator) while the student typed
+    nothing new -> ambiguous_symbol_number_input fires before any canvas
+    mistake review or LLM call, so student_state is UNCLEAR.
+    Turn 2: the same canvas evidence is preserved and the student adds "its
+    +". Merging student_input + canvas evidence (student_input first, see
+    request_with_reliable_canvas_evidence) yields "its + n 5", whose compact
+    form does not fullmatch the GENERAL_RULE regex, so
+    deterministic_teaching_step_evaluation legitimately falls through to the
+    LLM (evaluate_guided_turn) -- stubbed here as CORRECT.
+    """
+
+    class _UnexpectedOpenAIClient:
+        def evaluate_guided_turn(self, **kwargs: object) -> GuidedEvaluation:
+            raise AssertionError("Turn 1 must resolve deterministically, before any LLM call.")
+
+        def generate_guided_rubric(self, **kwargs: object) -> GeneratedQuestionRubric:
+            raise AssertionError("The rubric is pre-supplied; it must not be regenerated.")
+
+    rules = load_classifier_rules()
+    question = (
+        "3 + 5, 9 + 5, 14 + 5. Write the general rule using n for the starting number."
+    )
+    answer_spec = AnswerSpec(
+        answer_spec_id="ANS-Q-T01-001",
+        canonical_answer="n + 5",
+        accepted_answers=[],
+        verification_method="STRUCTURED_TEXT_MATCH",
+        explanation_required=False,
+    )
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-001",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="GENERAL_RULE",
+                description="States the general rule.",
+                required=True,
+            )
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="q-t01-001-general-rule",
+        prompt_version="1.0.0",
+    )
+    canvas_region = _canvas_region("step-1", "n 5", 0.95)
+    safety = classifier.check_student_message_safety("", rules)
+
+    request_1 = ClassificationRequest(
+        question_id="Q-T01-001",
+        question_type="SHORT_RESPONSE",
+        question=question,
+        correct_answer="n + 5",
+        answer_spec=answer_spec,
+        phase_2_prompt_context=_guided_context(0),
+        generated_question_rubric=rubric,
+        active_teaching_objective=classifier.initial_guided_objective(rubric),
+        canvas_regions=[canvas_region],
+        student_input="",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+    )
+    response_1 = classifier.classify_guided_learning_response(
+        request_1, rules, safety, _UnexpectedOpenAIClient()
+    )
+
+    assert response_1.guided_student_state == "UNCLEAR"
+    assert response_1.tutor_message == rules.guided_learning.critical_thinking.ambiguity_message
+    assert response_1.error_type is None
+    assert response_1.mistake_classification is None
+    assert response_1.student_model_events == []
+
+    class _DefenceEvaluationClient:
+        def evaluate_guided_turn(self, **kwargs: object) -> GuidedEvaluation:
+            return GuidedEvaluation(
+                student_state="CORRECT",
+                newly_confirmed_concept_ids=["GENERAL_RULE"],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=[],
+                selected_error_code=None,
+                confidence=0.95,
+                next_objective=None,
+                tutor_message=(
+                    "Try a different starting value: what does the same rule predict?"
+                ),
+                tutor_message_voice=(
+                    "Try a different starting value: what does the same rule predict?"
+                ),
+            )
+
+        def generate_guided_rubric(self, **kwargs: object) -> GeneratedQuestionRubric:
+            raise AssertionError("The rubric is carried forward; it must not be regenerated.")
+
+    request_2 = ClassificationRequest(
+        question_id="Q-T01-001",
+        question_type="SHORT_RESPONSE",
+        question=question,
+        correct_answer="n + 5",
+        answer_spec=answer_spec,
+        phase_2_prompt_context=_guided_context(0),
+        generated_question_rubric=response_1.generated_question_rubric,
+        active_teaching_objective=response_1.active_teaching_objective,
+        guided_teaching_state=response_1.guided_teaching_state,
+        canvas_regions=[canvas_region],
+        # ponytail: lets the rubric close on CORRECT this turn instead of
+        # gating on separate written-canvas-evidence machinery, which is
+        # orthogonal to what this test exercises (the merge + LLM fallback).
+        canvas_solution_complete_candidate=True,
+        conversation_history=[
+            ConversationMessage(role="assistant", content=response_1.tutor_message),
+        ],
+        student_input="its +",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=2,
+        current_hint_level=None,
+    )
+    response_2 = classifier.classify_guided_learning_response(
+        request_2, rules, safety, _DefenceEvaluationClient()
+    )
+
+    assert response_2.guided_student_state == "CORRECT"
+    assert response_2.error_type is None
+    assert response_2.mistake_classification is None
+    assert response_2.student_model_events == []
+
+
 def test_source_correction_keeps_the_same_active_component(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

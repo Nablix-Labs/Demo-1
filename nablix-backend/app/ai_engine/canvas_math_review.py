@@ -105,7 +105,7 @@ def review_canvas_math(
 ) -> CanvasMathReview:
     """Find the first OCR equation step that changes the original solution set."""
 
-    uncertain: CanvasMathReview = _uncertain_review(confidence)
+    uncertain: CanvasMathReview = _uncertain_review(confidence, None)
     if len(canvas_regions) == 0:
         return uncertain
     if any(
@@ -373,6 +373,9 @@ def _semantic_direct_review(
             ),
             annotation_intents=[],
         )
+
+    if localization.fallback_reason == "AMBIGUOUS_MISSING_OPERATOR":
+        return _uncertain_review(confidence, "AMBIGUOUS_MISSING_OPERATOR")
 
     annotate: bool = current_phase in config.annotation_enabled_phases
     if localization.localization_level == "STEP" or localization.fallback_reason is not None:
@@ -894,7 +897,7 @@ def _correct_step_feedback(
     )
 
 
-def _uncertain_review(confidence: float) -> CanvasMathReview:
+def _uncertain_review(confidence: float, fallback_reason: str | None) -> CanvasMathReview:
     return CanvasMathReview(
         error_type=None,
         tutor_feedback=None,
@@ -906,6 +909,7 @@ def _uncertain_review(confidence: float) -> CanvasMathReview:
             target_span=None,
             replacement_text=None,
             confidence=confidence,
+            fallback_reason=fallback_reason,
         ),
         annotation_intents=[],
     )
