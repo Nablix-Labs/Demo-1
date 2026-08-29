@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Collection
+from copy import deepcopy
 from dataclasses import dataclass
 from time import perf_counter
 
@@ -46,6 +47,29 @@ from app.models.student_model_session import AnswerSpec, QuestionType
 
 
 _OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
+
+
+def openai_strict_schema(schema: dict[str, object]) -> dict[str, object]:
+    """Return an OpenAI-compatible strict schema without changing its caller."""
+
+    normalized = deepcopy(schema)
+
+    def normalize(node: object) -> None:
+        if isinstance(node, list):
+            for item in node:
+                normalize(item)
+            return
+        if not isinstance(node, dict):
+            return
+        for value in node.values():
+            normalize(value)
+        properties = node.get("properties")
+        if isinstance(properties, dict):
+            node["required"] = list(properties)
+            node["additionalProperties"] = False
+
+    normalize(normalized)
+    return normalized
 
 
 def _guided_conversation_history(
@@ -542,7 +566,7 @@ class OpenAIAIEngineClient:
                 "format": {
                     "type": "json_schema",
                     "name": name,
-                    "schema": schema,
+                    "schema": openai_strict_schema(schema),
                     "strict": True,
                 }
             },
@@ -701,7 +725,7 @@ class OpenAIAIEngineClient:
                 "format": {
                     "type": "json_schema",
                     "name": name,
-                    "schema": schema,
+                    "schema": openai_strict_schema(schema),
                     "strict": True,
                 }
             },

@@ -25,9 +25,10 @@ import { useFlowNav } from '@/lib/useFlowNav';
 import { demoFor, type DemoWorksheet } from '@/lib/demoContent';
 import { cn } from '@/lib/cn';
 import {
-  sessionTopicTitle, completeReview, studentId,
+  sessionTopicTitle, completeReview, studentId, getSession,
   type FiveCategorySummary, type QuestionOutcome,
 } from '@/lib/api';
+import { reviewIsReady, isReviewUnavailable } from '@/lib/reviewReady';
 import { phase4FromSession, type SessionForPhase4 } from '@/lib/phase4FromSession';
 import { reviewSource } from '@/lib/reviewContent';
 import { speakTutor, stopTutorSpeech } from '@/lib/tts';
@@ -80,60 +81,104 @@ export default function ReviewPage() {
   const { decideReview, goStage } = useFlowNav();
   const tutor = useDemoTutor();
 
-  // Arriving here IS the session end. Backend-driven navigation (a REVIEW
-  // phase recommendation) reaches this page without the explicit End-session
-  // flows, so end any live session on arrival; end() stores the summary +
-  // engine review and clears sessionId, so this runs at most once.
-  //
-  // Failure used to be swallowed, which meant the un-endable-session case
-  // (backend auto-transitions to REVIEW with zero graded questions, then
-  // /session/end 409s — reported by Aditya, 7 Aug) rendered the demo
-  // worksheets as if they were the student's real results, with no way out.
-  // Now it renders the empty state below instead.
   const { apiEnabled, sessionId, end } = tutor;
-  // Hold the id before end() clears it. The completion event belongs to the
-  // moment the student FINISHES the review, not the moment they arrive — but by
-  // then `sessionId` is null, so the id has to be captured on the way in.
+  // Hold the id so it survives end() clearing it on the way OUT. The completion
+  // event belongs to the moment the student finishes the review.
   const reviewSessionId = useRef<string | null>(null);
   if (sessionId && !reviewSessionId.current) reviewSessionId.current = sessionId;
-  useEffect(() => {
-    if (apiEnabled && sessionId) {
-      void end().catch((err: unknown) => {
-        const status = (err as { response?: { status?: number } })?.response?.status;
-        setEndFailed(status === 409 ? 'empty' : 'failed');
-      });
+
+  // Arriving here is NOT the session end.
+  //
+  // This used to call end() on mount, on the reasoning that reaching Review
+  // meant the session was over. It is the opposite way round: Review is a phase
+  // the student works through, and /session/end neither emits REVIEW_COMPLETED
+  // nor transitions anything -- it just marks the record ended. Ending on
+  // arrival therefore closed the session before the student had done the one
+  // thing this screen exists for, and REVIEW_COMPLETED (the event that actually
+  // advances the Student Model past Review) went out against a session already
+  // marked ended. The session is now ended on the way out, after completion.
+
+  // A review the backend could not prepare. Distinct from "no review" and from
+  // "nothing graded": generation failed and asking again may well work, so the
+  // student is offered a retry rather than an apology.
+  const [reviewBlocked, setReviewBlocked] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const retryReview = useCallback(async () => {
+    const id = reviewSessionId.current;
+    if (!id) return;
+    setRetrying(true);
+    try {
+      const fresh = await getSession(id);
+      useNumeraStore.getState().setBackendSession(fresh);
+      // Only clear the blocked state when the review is genuinely there;
+      // otherwise the screen would fall through to a Phase 4 it cannot render.
+      setReviewBlocked(!reviewIsReady(fresh));
+    } catch (err) {
+      setReviewBlocked(isReviewUnavailable(err));
+    } finally {
+      setRetrying(false);
     }
-  }, [apiEnabled, sessionId, end]);
+  }, []);
+
+  // Ask once on arrival: a student routed here by the backend has not been
+  // through the practice screen's readiness check.
+  useEffect(() => {
+    if (apiEnabled && reviewSessionId.current && !reviewIsReady(backendSession)) void retryReview();
+    // Deliberately mount-only — this is the initial read, and retryReview is
+    // the button for every read after it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
 
 
   // Escape hatch for a session the backend refuses to end: drop it locally so
   // a fresh one can start, and go back to the lesson to produce reviewable work.
   /**
-   * Report the review as finished, once, on the way out.
+   * Report the review as finished, on the way out. Awaited, in order.
    *
    * `REVIEW_COMPLETED` is what advances the Student Model past Review;
    * `/session/end` does not emit it, so without this a student who works all the
    * way through Phase 4 is never recorded as having done so.
    *
-   * Deliberately not awaited. This is bookkeeping the student cannot act on, and
-   * a slow or failing call must never hold them on the review screen — the whole
-   * point of the button they just pressed is to leave.
+   * This was fire-and-forget, on the reasoning that a slow call should not hold
+   * the student on a screen they had asked to leave. The cost was silent: a
+   * REVIEW_COMPLETED that failed left the Student Model still in Review, so the
+   * next session reopened into a topic the student had finished, and nobody
+   * learned why. It is also ordered -- completion before end -- because ending
+   * first marks the session done while the event that closes the phase has not
+   * landed.
+   *
+   * Returns false when the student should stay put.
    */
-  const reportReviewFinished = useCallback(() => {
-    if (!apiEnabled) return;
+  const reportReviewFinished = useCallback(async (): Promise<boolean> => {
+    if (!apiEnabled) return true;
     const plan = planReviewCompletion(reviewSessionId.current, () => `REVIEW-COMPLETE-${Date.now()}`);
-    if (!plan.send) return;
-    void completeReview(reviewSessionId.current!, studentId(), plan.turnId);
+    if (!plan.send) return true;
+    await completeReview(reviewSessionId.current!, studentId(), plan.turnId);
+    // Ending is bookkeeping and must not strand a student whose review DID
+    // complete: the phase has already advanced, so a failure here is logged by
+    // the caller's catch and the student still leaves.
+    return true;
   }, [apiEnabled]);
 
-  const finishReview = useCallback((outcome: Parameters<typeof decideReview>[0]) => {
-    reportReviewFinished();
-    decideReview(outcome);
-  }, [reportReviewFinished, decideReview]);
+  const [leaving, setLeaving] = useState(false);
+  const [leaveError, setLeaveError] = useState<string | null>(null);
+  const finishReview = useCallback(async (outcome: Parameters<typeof decideReview>[0]) => {
+    setLeaveError(null);
+    setLeaving(true);
+    try {
+      await reportReviewFinished();
+      if (apiEnabled && sessionId) await end().catch(() => undefined);
+      decideReview(outcome);
+    } catch {
+      setLeaveError("We couldn't close your review. Please try again.");
+    } finally {
+      setLeaving(false);
+    }
+  }, [reportReviewFinished, decideReview, apiEnabled, sessionId, end]);
 
-  const backToLesson = useCallback(() => {
-    reportReviewFinished();
+  const backToLesson = useCallback(async () => {
+    await reportReviewFinished().catch(() => undefined);
     resetSessionStart();
     useNumeraStore.getState().clearSessionId();
     goStage('guided', currentTopicId);
@@ -220,9 +265,44 @@ export default function ReviewPage() {
               // shown, in an example). Until Chiru confirms the vocabulary,
               // this takes the existing pass route rather than branching on a
               // string we would be guessing at.
-              finishReview('pass');
+              void finishReview('pass');
             }}
           />
+          {leaveError && (
+            <p role="alert" className="mt-4 text-[13px] text-action-orange">
+              {leaveError}
+            </p>
+          )}
+        </PageShell>
+      </PhaseGate>
+    );
+  }
+
+  // The backend is in Review but could not prepare one. Retryable, and
+  // deliberately ABOVE the empty state: "nothing to review yet" is the wrong
+  // thing to tell a student who has work waiting behind a failed generation.
+  // The session id is kept, because it is the argument to the retry.
+  if (apiEnabled && reviewBlocked) {
+    return (
+      <PhaseGate phase="review">
+        <PageShell title="Review &amp; feedback" subtitle={subtitle}>
+          <div className="rounded-lg border border-muted-gray bg-white px-6 py-8 flex flex-col items-start gap-3">
+            <div className="text-[11px] font-semibold tracking-widest uppercase text-slate-blue">
+              Review could not be prepared
+            </div>
+            <p className="text-[14px] text-ink leading-relaxed max-w-prose">
+              Your work is saved. We could not put your review together just now —
+              try again in a moment.
+            </p>
+            <button
+              onClick={() => void retryReview()}
+              disabled={retrying}
+              aria-busy={retrying}
+              className="mt-2 inline-flex items-center gap-1.5 rounded-md bg-focus-navy text-white px-5 py-2.5 text-[13px] font-semibold hover:opacity-80 transition-opacity disabled:opacity-60"
+            >
+              {retrying ? 'Trying again…' : <>Try again <ChevronRight size={15} strokeWidth={1.8} /></>}
+            </button>
+          </div>
         </PageShell>
       </PhaseGate>
     );
@@ -250,7 +330,7 @@ export default function ReviewPage() {
                 : 'Your session review could not be loaded. Head back to the lesson and try again in a moment.'}
             </p>
             <button
-              onClick={backToLesson}
+              onClick={() => void backToLesson()}
               className="mt-2 inline-flex items-center gap-1.5 rounded-md bg-focus-navy text-white px-5 py-2.5 text-[13px] font-semibold hover:opacity-80 transition-opacity"
             >
               Back to the lesson <ChevronRight size={15} strokeWidth={1.8} />
@@ -489,7 +569,8 @@ export default function ReviewPage() {
                     </button>
                   ) : (
                     <button
-                      onClick={() => finishReview('pass')}
+                      onClick={() => void finishReview('pass')}
+                  disabled={leaving}
                       className="rounded-md border border-focus-navy bg-focus-navy px-4 py-3 text-left text-white hover:opacity-80 transition-opacity"
                     >
                       <div className="text-[13px] font-semibold">Next topic</div>
@@ -503,21 +584,24 @@ export default function ReviewPage() {
               <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-3">What happens next</div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                 <button
-                  onClick={() => finishReview('foundation_weak')}
+                  onClick={() => void finishReview('foundation_weak')}
+                  disabled={leaving}
                   className="rounded-md border border-muted-gray bg-white px-3 py-3 text-left hover:border-focus-navy transition-colors"
                 >
                   <div className="text-[13px] font-semibold text-ink">Foundation weak</div>
                   <div className="text-[11.5px] text-slate-blue mt-0.5">Recap the concept — back to orientation.</div>
                 </button>
                 <button
-                  onClick={() => finishReview('cant_solve')}
+                  onClick={() => void finishReview('cant_solve')}
+                  disabled={leaving}
                   className="rounded-md border border-muted-gray bg-white px-3 py-3 text-left hover:border-focus-navy transition-colors"
                 >
                   <div className="text-[13px] font-semibold text-ink">Can&apos;t solve yet</div>
                   <div className="text-[11.5px] text-slate-blue mt-0.5">Knows it, needs help applying — back to guided.</div>
                 </button>
                 <button
-                  onClick={() => finishReview('pass')}
+                  onClick={() => void finishReview('pass')}
+                  disabled={leaving}
                   className="rounded-md border border-focus-navy bg-focus-navy px-3 py-3 text-left text-white hover:opacity-80 transition-opacity"
                 >
                   <div className="text-[13px] font-semibold">Mastered</div>

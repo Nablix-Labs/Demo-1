@@ -1,8 +1,9 @@
-"""Entering Review generates the tutor review, and never blocks on it."""
+"""Entering Review generates and stores the tutor review."""
 
 import asyncio
 
 import pytest
+from fastapi import HTTPException
 
 from app.adapters.student_model import StudentModelServiceAdapter
 from app.core.exceptions import AdapterError, AdapterRequestRejected
@@ -269,14 +270,17 @@ def test_review_is_not_persisted_when_generation_failed(
         StudentModelServiceAdapter, "persist_phase4_review", persist
     )
 
-    asyncio.run(
-        session_service.generate_phase4_review_for(
-            _review_ready_session(),
-            _event("REVIEW"),
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(
+            session_service.generate_phase4_review_for(
+                _review_ready_session(),
+                _event("REVIEW"),
+            )
         )
-    )
 
     assert persisted == []
+    assert error.value.status_code == 503
+    assert error.value.detail["code"] == "PHASE4_REVIEW_UNAVAILABLE"
 
 
 def test_rejected_history_request_does_not_block_review(
@@ -305,14 +309,15 @@ def test_rejected_history_request_does_not_block_review(
         StudentModelServiceAdapter, "fetch_topic_event_history", rejected
     )
 
-    result = asyncio.run(
-        session_service.generate_phase4_review_for(
-            _review_ready_session(),
-            _event("REVIEW"),
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(
+            session_service.generate_phase4_review_for(
+                _review_ready_session(),
+                _event("REVIEW"),
+            )
         )
-    )
 
-    assert result is None
+    assert error.value.status_code == 503
 
 
 def test_malformed_evidence_does_not_block_review(
@@ -338,14 +343,15 @@ def test_malformed_evidence_does_not_block_review(
         StudentModelServiceAdapter, "fetch_topic_event_history", fetch
     )
 
-    result = asyncio.run(
-        session_service.generate_phase4_review_for(
-            _review_ready_session(),
-            _event("REVIEW"),
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(
+            session_service.generate_phase4_review_for(
+                _review_ready_session(),
+                _event("REVIEW"),
+            )
         )
-    )
 
-    assert result is None
+    assert error.value.status_code == 503
 
 
 def test_rejected_persistence_keeps_the_generated_review(
@@ -392,7 +398,7 @@ def test_rejected_persistence_keeps_the_generated_review(
     assert result is not None
 
 
-def test_review_generation_failure_does_not_raise(
+def test_review_generation_failure_returns_retryable_503(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def failing_fetch(
@@ -408,15 +414,19 @@ def test_review_generation_failure_does_not_raise(
     )
     session = _review_ready_session()
 
-    # The student still reaches Review; only the review itself is missing.
-    result = asyncio.run(
-        session_service.generate_phase4_review_for(
-            session,
-            _event("REVIEW"),
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(
+            session_service.generate_phase4_review_for(
+                session,
+                _event("REVIEW"),
+            )
         )
-    )
 
-    assert result is None
+    assert error.value.status_code == 503
+    assert error.value.detail == {
+        "code": "PHASE4_REVIEW_UNAVAILABLE",
+        "message": "The session review could not be prepared. Retry the review.",
+    }
 
 
 def test_review_lands_on_the_session_when_the_student_enters_review(
@@ -519,3 +529,138 @@ def test_session_opening_in_review_generates_the_review(
     assert session.current_phase == "REVIEW"
     assert session.phase4_review is not None, "a session opening in Review has no review"
     assert session.phase4_review.tutor_replays[0].review_item_id == "REV-001"
+
+
+def test_entering_review_stays_200_while_the_retry_read_reports_the_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A generation failure is reported on the read, never on the way in.
+
+    Raising out of start_session looks like the stricter, safer choice and is
+    the opposite: the 503 is raised before the client is told its session_id,
+    and that id is the argument to the GET which is the only retry. The student
+    is locked out of Review entirely rather than shown it late. The same applies
+    to /interaction and /canvas/submit, where the failure would report the
+    student's accepted final answer as a failed submission.
+
+    So the transition answers 200 with no review, and GET /session/{id} answers
+    PHASE4_REVIEW_UNAVAILABLE until generation succeeds. An absent review is
+    still never shown as success -- the client renders Phase 4 only on a
+    non-null phase4_review.
+    """
+
+    generation_works = False
+
+    async def fetch(
+        adapter: StudentModelServiceAdapter,
+        student_id: str,
+        topic_id: str,
+    ) -> TopicEventHistoryResponse:
+        del adapter, student_id, topic_id
+        if not generation_works:
+            raise AdapterError("student_model", "history unavailable")
+        return _history()
+
+    async def persist(
+        adapter: StudentModelServiceAdapter,
+        request: Phase4ReviewPersistRequest,
+    ) -> None:
+        del adapter, request
+
+    async def send_session_event(
+        adapter: StudentModelServiceAdapter,
+        event: object,
+        access_token: str,
+    ) -> StudentModelSessionEventResponse:
+        del adapter, access_token
+        body = _session_opened_response("REVIEW")
+        body["request_id"] = event.request_id
+        return StudentModelSessionEventResponse.model_validate(body)
+
+    monkeypatch.setattr(StudentModelServiceAdapter, "fetch_topic_event_history", fetch)
+    monkeypatch.setattr(StudentModelServiceAdapter, "persist_phase4_review", persist)
+    monkeypatch.setattr(
+        StudentModelServiceAdapter, "send_session_event", send_session_event
+    )
+    monkeypatch.setattr(
+        session_service, "generate_phase4_review", lambda request: _review()
+    )
+
+    session = asyncio.run(
+        session_service.start_session(
+            SessionStartRequest(
+                student_id="ST021",
+                concept_id="ALG_LINEAR_ONE_STEP",
+                interaction_mode="TEXT",
+            ),
+            "student-token",
+        )
+    )
+
+    # The way in: the transition is persisted and the id reaches the client.
+    assert session.current_phase == "REVIEW"
+    assert session.phase4_review is None
+
+    # The read: visibly unavailable, not a 200 carrying a null review.
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(session_service.get_session(session.session_id, "ST021"))
+    assert error.value.status_code == 503
+    assert error.value.detail["code"] == "PHASE4_REVIEW_UNAVAILABLE"
+
+    # The retry, once the provider recovers.
+    generation_works = True
+    recovered = asyncio.run(session_service.get_session(session.session_id, "ST021"))
+    assert recovered.phase4_review is not None
+    assert recovered.phase4_review.tutor_replays[0].review_item_id == "REV-001"
+
+
+def test_review_unavailable_reaches_the_client_as_a_readable_error_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PHASE4_REVIEW_UNAVAILABLE must arrive as error_code, not as prose.
+
+    The review screen branches on this code to decide between "Review could not
+    be prepared, Retry" and a generic failure. FastAPI's handler used to render
+    a dict detail with str(), so the browser received the Python repr
+    "{'code': 'PHASE4_REVIEW_UNAVAILABLE', ...}" inside `message` and would have
+    had to pattern-match a language's repr format out of a human sentence.
+    """
+
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    from tests.test_session_events import _use_live_student_model
+
+    async def post_json(
+        adapter_name: str,
+        url: str,
+        payload: dict[str, object],
+        headers: dict[str, str],
+        timeout_seconds: int,
+        retry_count: int,
+    ) -> dict[str, object]:
+        del adapter_name, headers, timeout_seconds, retry_count
+        if url.endswith("/topic/event-history"):
+            raise AdapterError("student_model", "history unavailable")
+        body = _session_opened_response("REVIEW")
+        body["request_id"] = payload["request_id"]
+        return body
+
+    _use_live_student_model(monkeypatch, post_json)
+    client = TestClient(app, headers={"Authorization": "Bearer test-token"})
+
+    started = client.post(
+        "/session/start",
+        json={
+            "student_id": "ST001",
+            "concept_id": "ALG_LINEAR_ONE_STEP",
+            "interaction_mode": "TEXT",
+        },
+    )
+    # The way in stays 200 so the client learns the id it needs to retry with.
+    assert started.status_code == 200, started.text
+    session_id = started.json()["session_id"]
+
+    read = client.get(f"/session/{session_id}", params={"student_id": "ST001"})
+    assert read.status_code == 503
+    assert read.json()["error_code"] == "PHASE4_REVIEW_UNAVAILABLE"

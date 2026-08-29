@@ -1266,7 +1266,13 @@ export function useDemoTutor() {
       const res = await sendSynchronizedInteraction({
         session_id: sessionId,
         student_id: studentId(),
-        interaction_type: 'OPTION_SELECTED',
+        // Phase 3 grades; Phase 2 coaches. OPTION_SELECTED is the coached
+        // option discussion, so sending it from Independent Practice asked the
+        // backend to talk about a choice the student had already committed to
+        // as their answer -- the attempt was never graded and no evidence
+        // reached the Student Model, which is what mastery is computed from.
+        // The option fields ride along either way; only the verb changes.
+        interaction_type: silent ? 'ANSWER_SUBMISSION' : 'OPTION_SELECTED',
         input_source: 'CHOICE',
         selected_option_id: optionId,
         // The caller already holds the authored wording, so it goes as sent

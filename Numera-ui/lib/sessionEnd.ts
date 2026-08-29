@@ -56,17 +56,25 @@ export function storeEndedSession(
   if (res.session_review) store.setSessionReview(res.session_review);
   store.clearSessionId();
   store.setBackendSession(ended);
-  // An ended session belongs on the review screen, and the client has to say
-  // so itself: /session/end returns the record with `current_phase` UNCHANGED
-  // (session_service.py:1556 updates status, message and session_summary, and
-  // nothing else). So the store still read INDEPENDENT_PRACTICE afterwards,
-  // and usePhaseRouting — which re-asserts the backend's phase on every
-  // screen — pulled the student straight off /review and back to /practice,
-  // where the last question was still sitting. Manjusha, 29 Aug: "Why it's is
-  // taking me to this question".
+  // NOTE: this deliberately does NOT assert a phase.
   //
-  // Both callers of end() are on their way to /review (the page's own arrival
-  // effect, and "Review with tutor"), so there is no other destination this
-  // could be wrong for.
-  store.setCurrentPhase('REVIEW');
+  // It used to `setCurrentPhase('REVIEW')` here, and that was right for the
+  // shape the code had: /session/end returns the record with `current_phase`
+  // UNCHANGED (session_service.py updates status, message and session_summary,
+  // and nothing else), so the store still read INDEPENDENT_PRACTICE afterwards
+  // and usePhaseRouting — which re-asserts the backend's phase on every screen
+  // — pulled the student straight off /review back to /practice, where the last
+  // question was still sitting. Manjusha, 29 Aug: "Why it's is taking me to
+  // this question".
+  //
+  // That reasoning rested on "both callers of end() are on their way to
+  // /review". They no longer are: entering Review does not end the session
+  // (ending is not a phase transition), so end() now runs on the way OUT, after
+  // REVIEW_COMPLETED. Asserting REVIEW there would push a student who has just
+  // finished the review back onto /review and strand them.
+  //
+  // The assertion moved to app/practice/page.tsx's reviewWithTutor, which sets
+  // it after READING the phase back from the backend — a verified fact rather
+  // than one inferred from "a session ended". Manjusha's bug stays fixed; see
+  // the comment there.
 }

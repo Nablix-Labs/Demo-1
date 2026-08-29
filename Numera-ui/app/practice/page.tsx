@@ -15,7 +15,8 @@ import type { SchemaQuestionOption } from '@/lib/api';
 import { useFlowNav } from '@/lib/useFlowNav';
 import { useDemoTutor, resetSessionStart, resumeSession, sessionStartError, repairQuestionOptions } from '@/hooks/useDemoTutor';
 import { useVoiceTurn } from '@/hooks/useVoiceTurn';
-import { DEMO_CONCEPT_ID, DEMO_PHASE } from '@/lib/api';
+import { DEMO_CONCEPT_ID, DEMO_PHASE, getSession } from '@/lib/api';
+import { reviewIsReady, isReviewUnavailable } from '@/lib/reviewReady';
 import { demoFor } from '@/lib/demoContent';
 import { LADDER_EXHAUSTED, hintFailureMessage, type SupportRung } from '@/lib/supportLadder';
 import {
@@ -57,8 +58,19 @@ export default function PracticePage() {
   const { goStage } = useFlowNav();
   const tutor = useDemoTutor();
 
-  // "Review with tutor": end the backend session first, save its summary, then
-  // move to /review. Disabled while in flight; on failure the student stays here.
+  // "Review with tutor": confirm the backend is actually in Review with a
+  // review to show, then move to /review. Disabled while in flight; on failure
+  // the student stays here and the button is the retry.
+  //
+  // This used to call /session/end first, which was wrong twice over. Ending is
+  // not a phase transition -- end_session emits no Student Model event and
+  // leaves current_phase alone -- so the call moved the student to a Review
+  // screen the backend had never entered. And ending on the way IN meant a
+  // student who had not yet mastered the topic could terminate a session that
+  // was still mid-practice.
+  //
+  // Review is entered only on full mastery, decided by the Student Model. So
+  // this reads the session and navigates only if it is genuinely ready.
   const [ending, setEnding] = useState(false);
   const [endError, setEndError] = useState<string | null>(null);
   /**
@@ -80,14 +92,41 @@ export default function PracticePage() {
     setEnding(true);
     handedToReview.current = true;
     try {
-      // end() saves the summary + clears sessionId on success, or throws.
-      await tutor.end();
-      goStage('review');
-    } catch {
+      const session = await getSession(tutor.sessionId);
+      useNumeraStore.getState().setBackendSession(session);
+      if (reviewIsReady(session)) {
+        // Assert the phase we just VERIFIED, before navigating.
+        //
+        // usePhaseRouting re-asserts the backend's phase on every screen, so a
+        // store still reading INDEPENDENT_PRACTICE pulls the student straight
+        // back off /review to the question they finished (Manjusha, 29 Aug).
+        // storeEndedSession used to do this, which worked while entering Review
+        // meant ending the session; it no longer does, so the assertion moves
+        // to the one place that has just confirmed REVIEW from the backend.
+        useNumeraStore.getState().setCurrentPhase('REVIEW');
+        goStage('review');
+        return;
+      }
+      // Not handed over after all: the latch has to come off, or the start
+      // effect below can never open a session again and the screen is dead.
+      handedToReview.current = false;
+      // In Review with no review is the failed-generation state; anything else
+      // means practice is genuinely unfinished. Different causes, so say
+      // different things -- "try again" is wrong advice for the second.
+      setEndError(
+        String(session.current_phase).toUpperCase() === 'REVIEW'
+          ? 'Your review could not be prepared. Try again in a moment.'
+          : 'There is still practice to finish before the review.'
+      );
+    } catch (err) {
       // Still here, so the screen owns a session again — and needs to be able
       // to open one if the student retries.
       handedToReview.current = false;
-      setEndError("We couldn't finish your session. Please try again.");
+      setEndError(
+        isReviewUnavailable(err)
+          ? 'Your review could not be prepared. Try again in a moment.'
+          : "We couldn't open your review. Please try again."
+      );
     } finally {
       setEnding(false);
     }
