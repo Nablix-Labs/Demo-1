@@ -24,14 +24,18 @@ vi.mock('@/lib/tts', () => ({ speakTutor: vi.fn(), stopTutorSpeech: vi.fn() }));
 
 const { useNumeraStore } = await import('@/store/useNumeraStore');
 const { applyServedCue } = await import('@/lib/interactionPresentation');
+import type { VisualCue } from '@/lib/api';
 
-const CUE = {
+// Typed against the wire shape rather than inferred: `actions` is
+// `Record<string, unknown>[] | undefined`, and an inferred `null` here type-errors
+// while still passing at runtime — which is how it reached main.
+const CUE: VisualCue = {
   show: true,
   cue_id: 'VC-T01-002',
   cue_type: null,
   description: 'Contrasts one specific case with the general rule.',
   asset_url: null,
-  actions: null,
+  actions: [],
 };
 
 beforeEach(() => {

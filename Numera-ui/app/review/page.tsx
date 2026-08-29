@@ -29,6 +29,7 @@ import {
   type FiveCategorySummary, type QuestionOutcome,
 } from '@/lib/api';
 import { phase4FromSession, type SessionForPhase4 } from '@/lib/phase4FromSession';
+import { reviewSource } from '@/lib/reviewContent';
 import { speakTutor, stopTutorSpeech } from '@/lib/tts';
 import Phase4Review from '@/components/Phase4/Phase4Review';
 
@@ -141,7 +142,10 @@ export default function ReviewPage() {
   // Real session outcomes when the backend sent them; demo worksheets otherwise.
   const demo = demoFor(currentTopicId);
   const outcomes = sessionSummary?.outcomes ?? [];
-  const live = outcomes.length > 0;
+  // Which of the three sources this screen may draw on — see lib/reviewContent
+  // for why this is a mode question and not an outcome-count question.
+  const source = reviewSource(apiEnabled, outcomes.length);
+  const live = source !== 'demo';
   const WORKSHEETS = live ? outcomeWorksheets(outcomes) : demo.worksheets;
 
   // Row 42: the header read "Linear equations · today" for every student,
@@ -224,18 +228,24 @@ export default function ReviewPage() {
     );
   }
 
-  // The session couldn't be ended and nothing was graded — showing the demo
-  // worksheets here would present fake results as the student's own.
-  if (apiEnabled && endFailed && !sessionSummary) {
+  // Nothing to look back over — showing demo worksheets here would present
+  // fabricated results as the student's own.
+  //
+  // Two ways to arrive: the end failed outright, or it succeeded and graded
+  // nothing. The second was falling through to the demo, because it has a
+  // sessionSummary and no endFailed — it just has an empty outcome list.
+  // Phase 4 has already returned above, so this cannot hide a real review.
+  const nothingGraded = source === 'none';
+  if (apiEnabled && ((endFailed && !sessionSummary) || nothingGraded)) {
     return (
       <PhaseGate phase="review">
         <PageShell title="Review & feedback" subtitle={subtitle}>
           <div className="rounded-lg border border-muted-gray bg-white px-6 py-8 flex flex-col items-start gap-3">
             <div className="text-[11px] font-semibold tracking-widest uppercase text-slate-blue">
-              {endFailed === 'empty' ? 'Nothing to review yet' : 'Review unavailable'}
+              {endFailed === 'empty' || nothingGraded ? 'Nothing to review yet' : 'Review unavailable'}
             </div>
             <p className="text-[14px] text-ink leading-relaxed max-w-prose">
-              {endFailed === 'empty'
+              {endFailed === 'empty' || nothingGraded
                 ? 'This session ended before any questions were completed, so there is no work to look back over. Head back to the lesson and solve a question or two — the review will be waiting.'
                 : 'Your session review could not be loaded. Head back to the lesson and try again in a moment.'}
             </p>
