@@ -124,8 +124,14 @@ describe('every reply path shows support before the message', () => {
     let response: InteractionResponse | null | undefined;
     await act(async () => { response = await tutor?.selectOption('B', 'p decreases by 2'); });
 
+    // ANSWER_SUBMISSION, not OPTION_SELECTED. Phase 3 grades; Phase 2 coaches.
+    // Sending the coached verb from Independent Practice asked the backend to
+    // discuss a choice the student had already committed to as their answer,
+    // so the attempt was never graded and no evidence reached the Student
+    // Model -- which is what mastery, and therefore the exit from Phase 3, is
+    // computed from. The option fields ride along either way.
     expect(sendInteraction).toHaveBeenCalledWith(expect.objectContaining({
-      interaction_type: 'OPTION_SELECTED',
+      interaction_type: 'ANSWER_SUBMISSION',
       input_source: 'CHOICE',
       selected_option_id: 'B',
       selected_option_text: 'p decreases by 2',
@@ -135,6 +141,22 @@ describe('every reply path shows support before the message', () => {
     expect(response).toMatchObject({ current_phase: 'REVIEW' });
     expect(useNumeraStore.getState().currentPhase).toBe('REVIEW');
     expect(useNumeraStore.getState().transcript).toEqual([]);
+  });
+
+  it('keeps OPTION_SELECTED in Guided Practice, where it is coached discussion', async () => {
+    useNumeraStore.setState({
+      currentPhase: 'GUIDED_PRACTICE',
+      activeQuestionId: 'Q-T01-004',
+      transcript: [],
+    });
+    sendInteraction.mockResolvedValue(replyWithCue({ interaction_state_version: 2 }));
+
+    await act(async () => { await tutor?.selectOption('B', 'n + 4'); });
+
+    expect(sendInteraction).toHaveBeenCalledWith(expect.objectContaining({
+      interaction_type: 'OPTION_SELECTED',
+      current_phase: 'GUIDED_PRACTICE',
+    }));
   });
 
   it('hint(): cue before the tutor line', async () => {

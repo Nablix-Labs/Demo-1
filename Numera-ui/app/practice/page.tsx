@@ -14,7 +14,8 @@ import { useNumeraStore, type CanvasExporter } from '@/store/useNumeraStore';
 import { useFlowNav } from '@/lib/useFlowNav';
 import { useDemoTutor, resetSessionStart, resumeSession, sessionStartError } from '@/hooks/useDemoTutor';
 import { useVoiceTurn } from '@/hooks/useVoiceTurn';
-import { DEMO_CONCEPT_ID, DEMO_PHASE } from '@/lib/api';
+import { DEMO_CONCEPT_ID, DEMO_PHASE, getSession } from '@/lib/api';
+import { reviewIsReady, isReviewUnavailable } from '@/lib/reviewReady';
 import { demoFor } from '@/lib/demoContent';
 import { LADDER_EXHAUSTED, hintFailureMessage, type SupportRung } from '@/lib/supportLadder';
 import {
@@ -54,8 +55,19 @@ export default function PracticePage() {
   const { goStage } = useFlowNav();
   const tutor = useDemoTutor();
 
-  // "Review with tutor": end the backend session first, save its summary, then
-  // move to /review. Disabled while in flight; on failure the student stays here.
+  // "Review with tutor": confirm the backend is actually in Review with a
+  // review to show, then move to /review. Disabled while in flight; on failure
+  // the student stays here and the button is the retry.
+  //
+  // This used to call /session/end first, which was wrong twice over. Ending is
+  // not a phase transition -- end_session emits no Student Model event and
+  // leaves current_phase alone -- so the call moved the student to a Review
+  // screen the backend had never entered. And ending on the way IN meant a
+  // student who had not yet mastered the topic could terminate a session that
+  // was still mid-practice.
+  //
+  // Review is entered only on full mastery, decided by the Student Model. So
+  // this reads the session and navigates only if it is genuinely ready.
   const [ending, setEnding] = useState(false);
   const [endError, setEndError] = useState<string | null>(null);
   const reviewWithTutor = useCallback(async () => {
@@ -64,11 +76,26 @@ export default function PracticePage() {
     if (!tutor.apiEnabled || !tutor.sessionId) { goStage('review'); return; }
     setEnding(true);
     try {
-      // end() saves the summary + clears sessionId on success, or throws.
-      await tutor.end();
-      goStage('review');
-    } catch {
-      setEndError("We couldn't finish your session. Please try again.");
+      const session = await getSession(tutor.sessionId);
+      useNumeraStore.getState().setBackendSession(session);
+      if (reviewIsReady(session)) {
+        goStage('review');
+        return;
+      }
+      // In Review with no review is the failed-generation state; anything else
+      // means practice is genuinely unfinished. Different causes, so say
+      // different things -- "try again" is wrong advice for the second.
+      setEndError(
+        String(session.current_phase).toUpperCase() === 'REVIEW'
+          ? 'Your review could not be prepared. Try again in a moment.'
+          : 'There is still practice to finish before the review.'
+      );
+    } catch (err) {
+      setEndError(
+        isReviewUnavailable(err)
+          ? 'Your review could not be prepared. Try again in a moment.'
+          : "We couldn't open your review. Please try again."
+      );
     } finally {
       setEnding(false);
     }
