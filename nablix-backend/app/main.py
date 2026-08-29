@@ -187,9 +187,23 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    # A {"code": ..., "message": ...} detail is a machine-readable code the
+    # client branches on -- PHASE4_REVIEW_UNAVAILABLE decides whether the review
+    # screen offers Retry. str() on the dict would hand the browser a Python
+    # repr ("{'code': 'PHASE4_REVIEW_UNAVAILABLE', ...}") and force it to parse
+    # one out of prose, so lift it into the error_code field the client already
+    # reads. Any other detail keeps the previous behaviour.
+    detail = exc.detail
+    if isinstance(detail, dict) and isinstance(detail.get("code"), str):
+        return _error_response(
+            request,
+            exc.status_code,
+            detail["code"],
+            str(detail.get("message", "")),
+        )
     # Typed application exceptions carry their own error_code.
     return _error_response(
-        request, exc.status_code, getattr(exc, "error_code", "HTTP_ERROR"), str(exc.detail)
+        request, exc.status_code, getattr(exc, "error_code", "HTTP_ERROR"), str(detail)
     )
 
 

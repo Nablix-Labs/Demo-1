@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 import pytest
 
-from app.ai_engine import phase4_review
+from app.ai_engine import openai_client, phase4_review
 from app.main import app
 from app.models.phase4_review import Phase4ReviewRequest, Phase4ReviewResponse
 
@@ -158,6 +158,34 @@ def test_phase4_review_generates_exact_replay_contract(monkeypatch: pytest.Monke
     assert [replay.attempt_id for replay in result.tutor_replays] == ["ATTEMPT-021"]
     assert result.tutor_replays[0].first_error.student_page_no == 1
     assert len(result.student_insights.personalised_notes) == 3
+
+
+def test_phase4_schema_is_openai_strict_and_keeps_nullable_fields() -> None:
+    schema = openai_client.openai_strict_schema(
+        Phase4ReviewResponse.model_json_schema()
+    )
+
+    def assert_strict(node: object) -> None:
+        if isinstance(node, list):
+            for item in node:
+                assert_strict(item)
+            return
+        if not isinstance(node, dict):
+            return
+        properties = node.get("properties")
+        if isinstance(properties, dict):
+            assert node["required"] == list(properties)
+            assert node["additionalProperties"] is False
+        for value in node.values():
+            assert_strict(value)
+
+    assert_strict(schema)
+    first_error = schema["$defs"]["FirstError"]
+    assert "student_page_no" in first_error["required"]
+    assert {item.get("type") for item in first_error["properties"]["student_page_no"]["anyOf"]} == {
+        "integer",
+        "null",
+    }
 
 
 def test_phase4_review_rejects_invented_replay_identity(monkeypatch: pytest.MonkeyPatch) -> None:
