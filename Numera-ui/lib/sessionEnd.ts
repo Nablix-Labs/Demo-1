@@ -56,4 +56,17 @@ export function storeEndedSession(
   if (res.session_review) store.setSessionReview(res.session_review);
   store.clearSessionId();
   store.setBackendSession(ended);
+  // An ended session belongs on the review screen, and the client has to say
+  // so itself: /session/end returns the record with `current_phase` UNCHANGED
+  // (session_service.py:1556 updates status, message and session_summary, and
+  // nothing else). So the store still read INDEPENDENT_PRACTICE afterwards,
+  // and usePhaseRouting — which re-asserts the backend's phase on every
+  // screen — pulled the student straight off /review and back to /practice,
+  // where the last question was still sitting. Manjusha, 29 Aug: "Why it's is
+  // taking me to this question".
+  //
+  // Both callers of end() are on their way to /review (the page's own arrival
+  // effect, and "Review with tutor"), so there is no other destination this
+  // could be wrong for.
+  store.setCurrentPhase('REVIEW');
 }

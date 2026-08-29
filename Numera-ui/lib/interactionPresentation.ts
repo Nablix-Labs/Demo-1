@@ -164,6 +164,19 @@ export function applyServedCue(cue: VisualCue | null | undefined): void {
   });
 }
 
+/**
+ * Is this turn a support delivery, whatever it ended up putting on screen?
+ *
+ * Either half is enough. `support_message` IS the authorisation (see
+ * authorisedHint), and GIVE_HINT covers the turn where the backend puts the
+ * hint in the tutor's own line — which authorisedHint deliberately dedupes
+ * away, leaving nothing to show and, until now, the last hint still showing.
+ */
+function deliversSupport(response: SupportPresentation): boolean {
+  return response.conversation_action === 'GIVE_HINT'
+    || Boolean(response.support_message?.trim());
+}
+
 export function applyInteractionSupport(response: SupportPresentation): string {
   // Support is separate from the tutor's actual response. Keeping it apart
   // prevents a generic content hint from replacing a question-aware correction
@@ -184,8 +197,17 @@ export function applyInteractionSupport(response: SupportPresentation): string {
   // `authorisedHint` rather than `supportMessage`: it drops a support message
   // that only repeats the tutor's own line, which would otherwise put the same
   // sentence on the screen twice.
+  //
+  // A hint SURVIVES an ordinary reply — the student is still working on it and
+  // the tutor does not withdraw one by saying something else. But a turn that
+  // is itself a hint delivery has to replace the card outright, showing this
+  // turn's hint or nothing: `if (hint)` alone left the PREVIOUS hint standing
+  // whenever the new one deduped away against the tutor's own line, so the
+  // student read one hint while being delivered another. Manjusha, 29 Aug:
+  // "there is hint shown ( previous one ) even though it says delivering
+  // hint".
   const hint = authorisedHint(response);
-  if (hint) useNumeraStore.getState().setVisibleHint(hint);
+  if (hint || deliversSupport(response)) useNumeraStore.getState().setVisibleHint(hint);
 
   // What the tutor is pointing at in the question text (Chirudeva §1).
   //

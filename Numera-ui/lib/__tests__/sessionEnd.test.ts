@@ -76,3 +76,36 @@ describe('the completed record survives into Review', () => {
     expect(useNumeraStore.getState().backendSession).toMatchObject({ status: 'ended' });
   });
 });
+
+describe('where an ended session leaves the student', () => {
+  it('moves the client phase to REVIEW', () => {
+    // /session/end returns the record with current_phase UNCHANGED
+    // (session_service.py:1556 updates status, message and session_summary and
+    // nothing else). usePhaseRouting re-asserts the store's phase on every
+    // screen, so leaving it at INDEPENDENT_PRACTICE pulled the student off
+    // /review and back to /practice, where the question they had just finished
+    // was still sitting. Manjusha, 29 Aug: "Why it's is taking me to this
+    // question".
+    useNumeraStore.setState({ currentPhase: 'INDEPENDENT_PRACTICE' });
+    useNumeraStore.getState().setSessionId('SESSION1');
+
+    const res = ended({ current_phase: 'INDEPENDENT_PRACTICE' } as Partial<SessionEndResponse>);
+    storeEndedSession(res, sessionEndSummary(res));
+
+    expect(useNumeraStore.getState().currentPhase).toBe('REVIEW');
+  });
+
+  it('does so even though the record it merged still says otherwise', () => {
+    // The merged record keeps the backend's own field verbatim — the phase the
+    // CLIENT routes on is what changes. Asserting both keeps the two from
+    // being quietly collapsed into one.
+    useNumeraStore.getState().setSessionId('SESSION1');
+    const res = ended({ current_phase: 'INDEPENDENT_PRACTICE' } as Partial<SessionEndResponse>);
+    storeEndedSession(res, sessionEndSummary(res));
+
+    expect(useNumeraStore.getState().backendSession).toMatchObject({
+      current_phase: 'INDEPENDENT_PRACTICE',
+    });
+    expect(useNumeraStore.getState().currentPhase).toBe('REVIEW');
+  });
+});

@@ -1264,6 +1264,16 @@ export interface InteractionResponse extends GuidedStateFields, Phase3ResponseFi
   support_message?: string | null;
   hint_count: number;
   phase_indicator: string;
+  /**
+   * Where the Student Model says this student belongs next.
+   *
+   * On every reply and, unlike most of the routing block, NOT stripped in
+   * Phase 3 silent mode (interaction_service.py:2104) — which is what lets the
+   * client know independent practice is finished. It was already declared on
+   * CanvasSubmissionResult and missing here, so the same field read fine off a
+   * canvas submission and did not exist off a choice one.
+   */
+  recommended_entry_phase?: string | null;
   /** Optional tutor drawing to render on the canvas alongside this reply. */
   canvas_draw?: CanvasDrawPayload[];
   /** Coordinate-free Guided Practice tutor-layer actions. */

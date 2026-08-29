@@ -160,6 +160,48 @@ export function phase3Notice(res: Phase3ResponseFields | null | undefined): stri
 }
 
 /**
+ * Has the backend said REVIEW is where the student goes next?
+ *
+ * `recommended_entry_phase` rides on every interaction reply and is NOT
+ * stripped in silent mode (interaction_service.py:2104) — it is the Student
+ * Model's own answer to "where does this student belong now", carried through
+ * as `PHASE_FROM_STUDENT_MODEL[journey_state.recommended_entry_phase]`. It has
+ * been typed on InteractionResponse and read by nothing.
+ *
+ * Reading it is what closes Phase 3 by itself. Until now the last independent
+ * attempt locked the canvas, said "Answer recorded." and stopped: the student
+ * had to notice "Review with tutor" and press it to reach the review they had
+ * just earned (Manjusha, 29 Aug — "It doesn't take me to review page
+ * automatically when the inde practice is completed").
+ *
+ * Paired with `servedNextQuestion` at the call site, never alone. Acting on
+ * this field while a fresh question is arriving would end a session the
+ * student is still working in, and ending a session is not undoable.
+ */
+export function reviewIsNext(
+  res: { recommended_entry_phase?: string | null } | null | undefined,
+): boolean {
+  return res?.recommended_entry_phase?.trim().toUpperCase() === 'REVIEW';
+}
+
+/**
+ * Did this reply hand the student a different question to work on?
+ *
+ * A wrong independent attempt is answered with a FRESH question
+ * (interaction_service.py:792), and that reply closes the old attempt exactly
+ * like a right one does. So "the attempt is over" cannot mean "practice is
+ * over" — this is what tells them apart.
+ */
+export function servedNextQuestion(
+  res: Phase3ResponseFields | null | undefined,
+  answeredQuestionId: string | null,
+): boolean {
+  const served = res?.question_id?.trim();
+  if (!served) return false;
+  return served !== answeredQuestionId;
+}
+
+/**
  * Is the student's work locked right now?
  *
  * A lock belongs to the question it was taken on. Comparing ids rather than

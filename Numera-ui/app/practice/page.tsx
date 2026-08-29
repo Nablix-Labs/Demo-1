@@ -11,15 +11,18 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { Eye, EyeOff, Lightbulb, Check, ArrowRight } from 'lucide-react';
 import { useNumeraStore, type CanvasExporter } from '@/store/useNumeraStore';
+import type { SchemaQuestionOption } from '@/lib/api';
 import { useFlowNav } from '@/lib/useFlowNav';
-import { useDemoTutor, resetSessionStart, resumeSession, sessionStartError } from '@/hooks/useDemoTutor';
+import { useDemoTutor, resetSessionStart, resumeSession, sessionStartError, repairQuestionOptions } from '@/hooks/useDemoTutor';
 import { useVoiceTurn } from '@/hooks/useVoiceTurn';
 import { DEMO_CONCEPT_ID, DEMO_PHASE } from '@/lib/api';
 import { demoFor } from '@/lib/demoContent';
 import { LADDER_EXHAUSTED, hintFailureMessage, type SupportRung } from '@/lib/supportLadder';
 import {
   isPhase3, phase3AttemptClosed, phase3Locked, phase3LockTarget, phase3Notice, OCR_UNCLEAR, ANSWER_RECORDED,
+  reviewIsNext, servedNextQuestion,
 } from '@/lib/phase3';
+import { optionsMissing } from '@/lib/questionOptions';
 import QuestionDisplay from '@/components/QuestionDisplay';
 import StickyNote from '@/components/StickyNote';
 import PhaseGate from '@/components/PhaseGate';
@@ -58,16 +61,32 @@ export default function PracticePage() {
   // move to /review. Disabled while in flight; on failure the student stays here.
   const [ending, setEnding] = useState(false);
   const [endError, setEndError] = useState<string | null>(null);
+  /**
+   * This screen has handed the student over to review, and must never open
+   * another session.
+   *
+   * end() CLEARS sessionId, and the start effect below opens a session
+   * whenever there isn't one — so the render between "session ended" and
+   * "route changed" minted a brand new session, which came back in
+   * INDEPENDENT_PRACTICE, which usePhaseRouting then followed straight back
+   * here. A latch rather than `ending`, which goes false again in the finally
+   * while the navigation is still in flight.
+   */
+  const handedToReview = useRef(false);
   const reviewWithTutor = useCallback(async () => {
     setEndError(null);
     // No live backend session (mock mode) — just go to the review page.
     if (!tutor.apiEnabled || !tutor.sessionId) { goStage('review'); return; }
     setEnding(true);
+    handedToReview.current = true;
     try {
       // end() saves the summary + clears sessionId on success, or throws.
       await tutor.end();
       goStage('review');
     } catch {
+      // Still here, so the screen owns a session again — and needs to be able
+      // to open one if the student retries.
+      handedToReview.current = false;
       setEndError("We couldn't finish your session. Please try again.");
     } finally {
       setEnding(false);
@@ -121,8 +140,25 @@ export default function PracticePage() {
   const [hintIndex, setHintIndex] = useState(0);
   const [hintText, setHintText] = useState<string | null>(null);
   const [done, setDone] = useState(false);
-  /** The one neutral line Phase 3 is allowed to show after an attempt closes. */
-  const [notice, setNotice] = useState<string | null>(null);
+  /**
+   * The one neutral line Phase 3 is allowed to show after an attempt closes,
+   * and the question it was about.
+   *
+   * Keyed by question id for the same reason the lock is (see lib/phase3.ts):
+   * Phase 3 answers a wrong attempt with a FRESH question, and the reply that
+   * closes the attempt is the same reply that serves it. Held as bare text,
+   * this line stayed on screen beside the new question — Manjusha, 29 Aug: a
+   * question reading "Which statement correctly describes n + 6?" under
+   * "We'll review this one before a fresh independent check", which was about
+   * the question before it.
+   *
+   * Clearing it in an effect on `activeQuestionId` does NOT work, and the
+   * reason is worth keeping: the store is updated inside `selectOption`,
+   * before its promise resolves, so the id has already moved by the time the
+   * notice is set. The effect fires early, clears nothing, and never runs
+   * again. Comparing ids at RENDER has no such ordering to get wrong.
+   */
+  const [notice, setNotice] = useState<{ questionId: string | null; text: string } | null>(null);
   // Voice support is browser-only; gate render on mount to avoid SSR mismatch.
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
@@ -131,6 +167,16 @@ export default function PracticePage() {
   const handleExportReady = useCallback((fn: CanvasExporter) => {
     setCanvasExporter(fn);
   }, [setCanvasExporter]);
+
+  // Recover a choice question's options when the reply that served it could
+  // not carry them. Phase 3 only: silent mode is the one place the question
+  // set is stripped off the reply, and this puts a GET on the wire.
+  // See lib/questionOptions.ts.
+  useEffect(() => {
+    if (!silent) return;
+    if (!optionsMissing(questionType, questionOptions)) return;
+    void repairQuestionOptions();
+  }, [silent, questionType, questionOptions, activeQuestionId]);
 
   // Speak the line queued by a phase handoff or a session resume.
   //
@@ -171,11 +217,12 @@ export default function PracticePage() {
   // one. The lesson screen has had this since 28 Jul; this one never got it.
   const backendSession = useNumeraStore((s) => s.backendSession);
   useEffect(() => {
+    if (handedToReview.current) return;
     if (tutor.apiEnabled && tutor.sessionId && !backendSession) void resumeSession();
   }, [tutor.apiEnabled, tutor.sessionId, backendSession]);
 
   useEffect(() => {
-    if (!tutor.apiEnabled || tutor.sessionId) return;
+    if (!tutor.apiEnabled || tutor.sessionId || handedToReview.current) return;
     void tutor.start(DEMO_CONCEPT_ID, 'TEXT').then((rec) => {
       if (!rec) {
         setStartError(sessionStartError() ?? "We couldn't load your practice question.");
@@ -254,18 +301,46 @@ export default function PracticePage() {
   // IMMEDIATELY — so a rejected submission (her repro: three 409s in a row on
   // a second phase-3 submission) looked identical to a successful one, and
   // nothing stopped repeat clicks racing each other mid-OCR.
+  /**
+   * The notice, but only while it is still about the question on screen.
+   *
+   * phase3Locked is exactly this comparison — "does something taken on
+   * question X still apply?" — including its mid-transition rule that a null
+   * active id keeps it, so the line does not blink out between two questions.
+   */
+  const noticeText = notice && phase3Locked(notice.questionId, activeQuestionId)
+    ? notice.text
+    : null;
+
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const finish = async () => {
-    if (submitting || locked) return; // one in-flight submission; none after lock
+  // The in-flight guard has to be a ref, not `submitting`, now that a TAP is a
+  // submission: two taps land in one React batch, both read the old state, and
+  // both fire. Doubling a submission means doubling an independent-practice
+  // attempt, which is the evidence Phase 3 exists to collect.
+  const inFlight = useRef(false);
+  /**
+   * Hand in this attempt.
+   *
+   * `option` is passed when the student answered by TAPPING a choice, which is
+   * now the submission itself (see onSelectOption). Reading it from the
+   * argument rather than from `selectedOptionId` is what makes that work: the
+   * store write and this call happen in the same tick, so the state read here
+   * would still be the previous pick.
+   */
+  const submitAttempt = async (option?: SchemaQuestionOption) => {
+    if (inFlight.current || locked) return; // one in-flight submission; none after lock
+    inFlight.current = true;
     setSubmitting(true);
     setSubmitError(null);
-    const selectedOption = questionType === 'SINGLE_CHOICE'
-      ? questionOptions.find((option) => option.option_id === selectedOptionId)
-      : undefined;
+    const answeredQuestionId = useNumeraStore.getState().activeQuestionId;
+    const selectedOption = option ?? (questionType === 'SINGLE_CHOICE'
+      ? questionOptions.find((o) => o.option_id === selectedOptionId)
+      : undefined);
     const res = selectedOption
       ? await tutor.selectOption(selectedOption.option_id, selectedOption.text)
       : await tutor.submitCanvasWork();
+    inFlight.current = false;
     setSubmitting(false);
     if (res) {
       if (silent) {
@@ -275,7 +350,12 @@ export default function PracticePage() {
         // their handwriting (§3 acceptance: "OCR unclear preserves canvas and
         // leaves attempt unlocked").
         const closed = phase3AttemptClosed(res) && !res.ocr?.needs_clarification;
-        setNotice(closed ? phase3Notice(res) : OCR_UNCLEAR);
+        setNotice({
+          // The question this line is ABOUT, which is the one just answered —
+          // never `activeQuestionId`, which this same reply may have moved on.
+          questionId: closed ? phase3LockTarget(res, answeredQuestionId) : answeredQuestionId,
+          text: closed ? phase3Notice(res) : OCR_UNCLEAR,
+        });
         if (closed) {
           // Lock the question the BACKEND graded, not the one we think is
           // active — those have been observed to differ (see phase3LockTarget).
@@ -284,6 +364,14 @@ export default function PracticePage() {
           );
           setPracticeDone();
           completePhase('practice');
+          // Independent practice is over when the backend says the student
+          // belongs in REVIEW next AND has served no further question. Both
+          // halves are required: a wrong attempt closes exactly like a right
+          // one and is answered with a FRESH question, and auto-ending a
+          // session the student is still working in cannot be undone.
+          if (reviewIsNext(res) && !servedNextQuestion(res, answeredQuestionId)) {
+            void reviewWithTutor();
+          }
         }
         return;
       }
@@ -297,6 +385,8 @@ export default function PracticePage() {
       );
     }
   };
+  /** The Toolbar's "Check" — canvas work, or a pick already made. */
+  const finish = () => { void submitAttempt(); };
 
   return (
     <PhaseGate phase="practice">
@@ -336,7 +426,17 @@ export default function PracticePage() {
               questionType={questionType}
               options={questionOptions}
               selectedOptionId={selectedOptionId}
-              onSelectOption={(o) => { if (!locked) setSelectedOption(o.option_id); }}
+              /* The pick IS the submission, as it is in Phase 2
+                 (components/Canvas/index.tsx). A Phase 3 pick used only to
+                 tint the option and wait for "Check" at the far corner of the
+                 canvas, so a student who had answered saw nothing happen —
+                 Manjusha, 29 Aug: "Once this is selected it should go to next
+                 question like in phase 2". */
+              onSelectOption={(o) => {
+                if (locked || inFlight.current) return;
+                setSelectedOption(o.option_id);
+                void submitAttempt(o);
+              }}
               optionsReadOnly={locked}
             />
           )}
@@ -400,13 +500,13 @@ export default function PracticePage() {
             notice is not — a frozen canvas with nothing said would read as a
             broken page. ANSWER_RECORDED is the quiet default: it states the
             fact without implying an outcome. */}
-        {silent && (notice ?? (locked ? ANSWER_RECORDED : null)) && (
+        {silent && (noticeText ?? (locked ? ANSWER_RECORDED : null)) && (
           <div className="absolute top-5 left-6 z-20 flex items-center gap-2">
             <span
               role="status"
               className="bg-white border border-muted-gray rounded-full px-4 py-2 text-[12px] font-semibold text-ink shadow-sm"
             >
-              {notice ?? ANSWER_RECORDED}
+              {noticeText ?? ANSWER_RECORDED}
             </span>
             {locked && (
               <button
