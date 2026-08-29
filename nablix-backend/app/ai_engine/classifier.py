@@ -2787,7 +2787,7 @@ def controller_prompt_for_objective(
     ):
         general_rule_evidence = general_rule_explanation_evidence(request)
         if general_rule_evidence == (True, False):
-            expression = _GENERAL_RULE_EXPRESSION_RE.search(request.question.casefold())
+            expression = selected_general_rule_expression(request)
             if expression is not None:
                 return rules.guided_learning.general_rule_fixed_value_prompt.format(
                     variable=expression.group(1)
@@ -3296,11 +3296,15 @@ def unsupported_guided_praise_sentence(
         "great",
         "nice",
         "right",
+        "youve got it",
+        "got it",
         "well done",
         "on the right track",
     )
     if not any(term in normalized for term in praise_terms):
         return False
+    if "youve got it" in normalized or "got it" in normalized:
+        return True
     if not confirmed_component_ids:
         return True
 
@@ -3395,6 +3399,14 @@ def guided_tutor_message_validation_reason(
     ):
         return "ANSWER_REVEAL"
 
+    explanation_probe_reason = general_rule_explanation_probe_reason(
+        message,
+        request,
+        objective,
+    )
+    if explanation_probe_reason is not None:
+        return explanation_probe_reason
+
     normalized_message = normalize_semantic_answer(message)
     if normalize_semantic_answer(controller_prompt) in normalized_message:
         return None
@@ -3417,6 +3429,33 @@ def guided_tutor_message_validation_reason(
     if guided_message_mentions_selected_option(normalized_message, request):
         return None
     return "UNRELATED"
+
+
+def general_rule_explanation_probe_reason(
+    message: str,
+    request: ClassificationRequest,
+    objective: ActiveTeachingObjective,
+) -> str | None:
+    """Keep a general-rule explanation on the one fact the learner still needs."""
+
+    if (
+        request.question_type != "CHOICE_WITH_EXPLANATION"
+        or "ANSWER_SELECTION" not in objective.confirmed_concept_ids
+        or "ANSWER_EXPLANATION" not in objective.missing_concept_ids
+    ):
+        return None
+    evidence = general_rule_explanation_evidence(request)
+    if evidence is None:
+        return None
+    normalized_message = normalize_semantic_answer(message)
+    changing_identified, fixed_identified = evidence
+    if changing_identified and not fixed_identified:
+        if not re.search(r"\b(?:fixed|constant|same|stay|stays|remains)\b", normalized_message):
+            return "WRONG_EXPLANATION_PROBE"
+    if fixed_identified and not changing_identified:
+        if not re.search(r"\b(?:change|changes|changing|variable|vary|varies)\b", normalized_message):
+            return "WRONG_EXPLANATION_PROBE"
+    return None
 
 
 def active_support_context_tokens(request: ClassificationRequest) -> set[str]:
@@ -4036,14 +4075,7 @@ def general_rule_explanation_evidence(
     # option's own text is the correct source. Searching the raw question
     # instead can match a distractor's expression when one is authored
     # first, locking the evidence check onto the wrong variable/constant.
-    selected_option_text = (
-        request.guided_teaching_state.selected_option_text
-        if request.guided_teaching_state is not None
-        else None
-    )
-    expression = _GENERAL_RULE_EXPRESSION_RE.search(
-        (selected_option_text or request.question).casefold()
-    )
+    expression = selected_general_rule_expression(request)
     if expression is None:
         return None
     variable, _operator, fixed_value = expression.groups()
@@ -4085,6 +4117,21 @@ def general_rule_explanation_evidence(
     )
 
 
+def selected_general_rule_expression(
+    request: ClassificationRequest,
+) -> re.Match[str] | None:
+    """Find the rule being explained, preferring the learner's selected option."""
+
+    selected_option_text = (
+        request.guided_teaching_state.selected_option_text
+        if request.guided_teaching_state is not None
+        else None
+    )
+    return _GENERAL_RULE_EXPRESSION_RE.search(
+        (selected_option_text or request.question).casefold()
+    )
+
+
 def deterministic_choice_explanation_evaluation(
     request: ClassificationRequest,
     rubric: GeneratedQuestionRubric,
@@ -4118,7 +4165,7 @@ def deterministic_choice_explanation_evaluation(
             tutor_message=rules.messages.CORRECT,
             tutor_message_voice=rules.messages.CORRECT,
         )
-    expression = _GENERAL_RULE_EXPRESSION_RE.search(request.question.casefold())
+    expression = selected_general_rule_expression(request)
     if changing_identified and expression is not None:
         message = rules.guided_learning.general_rule_fixed_value_prompt.format(
             variable=expression.group(1)

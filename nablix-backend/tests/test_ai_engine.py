@@ -2011,6 +2011,54 @@ def test_general_rule_choice_completes_after_fixed_value_follows_changing_value(
     assert progressed.missing_concept_ids == []
 
 
+def test_general_rule_explanation_keeps_the_follow_up_on_the_missing_fact() -> None:
+    objective = ActiveTeachingObjective(
+        objective_type="EXPLAIN_REASONING",
+        target_concept_ids=["ANSWER_EXPLANATION"],
+        confirmed_concept_ids=["ANSWER_SELECTION"],
+        missing_concept_ids=["ANSWER_EXPLANATION"],
+    )
+    request = ClassificationRequest(
+        question_id="Q-T01-004",
+        question_type="CHOICE_WITH_EXPLANATION",
+        question="Which is the general rule? A: 12 + 4. B: n + 4. Explain briefly.",
+        correct_answer="B",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-004",
+            canonical_answer="B",
+            accepted_answers=["B"],
+            verification_method="CHOICE_AND_CONCEPT_MATCH",
+            explanation_required=True,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        active_teaching_objective=objective,
+        guided_teaching_state=GuidedTeachingState(
+            question_id="Q-T01-004",
+            objective_component_ids=["ANSWER_SELECTION", "ANSWER_EXPLANATION"],
+            confirmed_component_ids=["ANSWER_SELECTION"],
+            missing_component_ids=["ANSWER_EXPLANATION"],
+            active_component_id="ANSWER_EXPLANATION",
+            last_tutor_question_type="COMPONENT",
+            selected_option_id="B",
+            selected_option_text="n + 4",
+            awaiting_response=True,
+        ),
+        student_input="n can change",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+    )
+
+    assert classifier.general_rule_explanation_probe_reason(
+        "How does n + 4 work when n changes?", request, objective
+    ) == "WRONG_EXPLANATION_PROBE"
+    assert classifier.general_rule_explanation_probe_reason(
+        "What stays fixed in the rule?", request, objective
+    ) is None
+
+
 def test_compact_expression_component_gets_a_general_rule_prompt() -> None:
     rubric = GeneratedQuestionRubric(
         question_id="Q-T01-001",
