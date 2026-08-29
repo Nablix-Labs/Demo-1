@@ -1630,6 +1630,20 @@ def teaching_state_for(
         previous is not None
         and previous.question_id == (request.question_id or rubric.question_id)
     )
+    demonstrated_reasoning_ids = (
+        set(previous.demonstrated_reasoning_ids) if previous_matches_question else set()
+    )
+    general_rule_evidence = general_rule_explanation_evidence(request)
+    if (
+        request.question_type == "CHOICE_WITH_EXPLANATION"
+        and "ANSWER_SELECTION" in confirmed_ids
+        and general_rule_evidence is not None
+    ):
+        changing_identified, fixed_identified = general_rule_evidence
+        if changing_identified:
+            demonstrated_reasoning_ids.add("GENERAL_RULE_CHANGING_VALUE")
+        if fixed_identified:
+            demonstrated_reasoning_ids.add("GENERAL_RULE_FIXED_VALUE")
     typed_option_evidence = typed_option_text_evidence(request)
     message_normalized = tutor_message.casefold()
     affect_state: Literal["NORMAL", "DISTRESS", "FRUSTRATED", "GENTLE_RETURN"] = (
@@ -1685,6 +1699,7 @@ def teaching_state_for(
             if tutor_message.rstrip().endswith("?")
             else (previous.last_reasoning_probe if previous_matches_question else None)
         ),
+        demonstrated_reasoning_ids=sorted(demonstrated_reasoning_ids),
     )
 
 
@@ -4111,9 +4126,18 @@ def general_rule_explanation_evidence(
         phrase in active_probe
         for phrase in ("stays fixed", "stays the same", "value stays fixed", "fixed value")
     )
+    demonstrated_reasoning_ids = (
+        set(request.guided_teaching_state.demonstrated_reasoning_ids)
+        if request.guided_teaching_state is not None
+        else set()
+    )
     return (
-        variable_pattern.search(learner_text) is not None or concise_variable_answer,
-        fixed_pattern.search(learner_text) is not None or concise_fixed_answer,
+        variable_pattern.search(learner_text) is not None
+        or concise_variable_answer
+        or "GENERAL_RULE_CHANGING_VALUE" in demonstrated_reasoning_ids,
+        fixed_pattern.search(learner_text) is not None
+        or concise_fixed_answer
+        or "GENERAL_RULE_FIXED_VALUE" in demonstrated_reasoning_ids,
     )
 
 
