@@ -123,6 +123,7 @@ class GuidedTeachingState(GuidedLearningModel):
     current_step_index: int | None = Field(default=None, ge=0)
     affect_state: Literal["NORMAL", "DISTRESS", "FRUSTRATED", "GENTLE_RETURN"] = "NORMAL"
     last_reasoning_probe: str | None = None
+    demonstrated_reasoning_ids: list[str] = Field(default_factory=list)
 
 
 class GuidedTeachingPlanStep(GuidedLearningModel):
