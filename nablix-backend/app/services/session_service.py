@@ -1836,8 +1836,16 @@ async def update_interaction_state(
     question_changed = next_question_id != session.question_id
     canvas_state: CanvasState = session.canvas_state.model_copy(
         update={
-            "snapshot_id": None if question_changed else canvas_snapshot_id,
-            "ocr_result": None if question_changed else ocr_result,
+            "snapshot_id": (
+                None
+                if question_changed
+                else canvas_snapshot_id or session.canvas_state.snapshot_id
+            ),
+            "ocr_result": (
+                None
+                if question_changed
+                else ocr_result or session.canvas_state.ocr_result
+            ),
         }
     )
     requested_active_visual_cue = transition_updates.get(

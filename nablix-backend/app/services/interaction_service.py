@@ -3254,7 +3254,23 @@ async def _process_interaction(
         session.conversation_history,
         rules.conversation_rules.max_recent_messages,
     )
-    canvas_submission = get_canvas_submission(session, request.canvas_snapshot_id)
+    stored_canvas_submission = get_canvas_submission(
+        session,
+        request.canvas_snapshot_id or session.canvas_state.snapshot_id,
+    )
+    canvas_submission = (
+        stored_canvas_submission
+        if (
+            stored_canvas_submission is not None
+            and not stored_canvas_submission.ocr.needs_clarification
+            and stored_canvas_submission.ocr.confidence
+            >= max(
+                get_settings().min_ocr_confidence_threshold,
+                rules.guided_learning.minimum_ocr_confidence,
+            )
+        )
+        else None
+    )
     ocr = (
         canvas_evidence.ocr
         if canvas_evidence is not None
