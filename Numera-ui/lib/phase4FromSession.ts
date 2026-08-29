@@ -50,6 +50,14 @@ export interface SessionPhase4Review {
     work_artifact?: { artifact_id?: string; pdf_url?: string; page_count?: number };
   }>;
   student_insights?: Partial<Phase4StudentInsights>;
+  /**
+   * The real outcome, forwarded by the backend after generation.
+   *
+   * Optional on the wire (`TopicOutcome | None`, phase4_review.py:177) and so
+   * optional here, but when it IS sent it is the authority — see below for what
+   * reading it fixes.
+   */
+  topic_outcome?: { mastery_status?: string; recommended_next_action?: string } | null;
 }
 
 export interface SessionForPhase4 {
@@ -116,11 +124,36 @@ export function phase4FromSession(
     student_id: session?.student_id ?? '',
     topic_id: session?.concept_id ?? '',
     topic_title: topicTitle,
+    // The backend's own outcome wins.
+    //
+    // This was hardcoded to OUTCOME_PENDING / 'CONTINUE' unconditionally, so a
+    // reply carrying `topic_outcome: { mastery_status: 'DEVELOPING' }` was
+    // rendered as "REVIEWED · Next: continue". Verified live on 29 Aug against
+    // the deployed build: the payload said DEVELOPING and the screen said
+    // REVIEWED. The placeholder was written for a backend that sent nothing and
+    // then kept overwriting one that does.
+    //
+    // The fallback stays for the case it was built for — both fields are
+    // genuinely optional on the wire — and it is deliberately not a mastery
+    // claim, which is the whole reason OUTCOME_PENDING reads "Reviewed".
     topic_outcome: {
-      mastery_status: OUTCOME_PENDING,
-      recommended_next_action: 'CONTINUE',
+      mastery_status: raw.topic_outcome?.mastery_status?.trim() || OUTCOME_PENDING,
+      recommended_next_action: raw.topic_outcome?.recommended_next_action?.trim() || 'CONTINUE',
     },
-    // Derived from the replays until the full journey is sent — see the header.
+    // STILL derived from the replays, even though `question_journey` now
+    // arrives beside topic_outcome, and deliberately so.
+    //
+    // A journey entry needs `question_text` and a link to its replay. The
+    // backend's QuestionJourneyItem carries neither — it is
+    // (question_id, evaluation, hint_used, independent_success, attempted_at) —
+    // and lib/api.ts:1033 spells out why question_id cannot stand in for the
+    // link: one question can be answered wrong, repaired in Phase 2 and
+    // answered again, so matching on it attaches a single replay to two rows.
+    //
+    // So switching to it today would trade "only the corrected questions are
+    // listed" for "every question is listed, some with no text and some
+    // pointing at the wrong replay". That is worse. Needs question_text and an
+    // explicit review_item_id on QuestionJourneyItem first.
     question_journey: tutor_replays.map((replay) => ({
       question_id: replay.question_id,
       question_text: replay.question_text,

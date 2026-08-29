@@ -128,3 +128,51 @@ describe('a malformed replay', () => {
     expect(review?.tutor_replays.map((r) => r.review_item_id)).toEqual(['REV-1']);
   });
 });
+
+/**
+ * The backend's own topic outcome, not the client's placeholder.
+ *
+ * Verified live on 29 Aug against the deployed build: a payload carrying
+ * `topic_outcome: { mastery_status: 'DEVELOPING' }` rendered as
+ * "TOPIC OUTCOME · REVIEWED · Next: continue". The placeholder was written for
+ * a backend that sent nothing, and then went on overwriting one that does.
+ */
+describe('topic outcome', () => {
+  const base = {
+    student_id: 'ST015',
+    concept_id: 'T01',
+    phase4_review: {
+      tutor_replays: [],
+      student_insights: {
+        strength_summary: 'Secure on the arithmetic.',
+        next_practice_focus: 'Writing a rule with a letter.',
+      },
+    },
+  };
+
+  it('renders what the backend actually sent', () => {
+    const r = phase4FromSession({
+      ...base,
+      phase4_review: {
+        ...base.phase4_review,
+        topic_outcome: { mastery_status: 'DEVELOPING', recommended_next_action: 'REPAIR' },
+      },
+    } as never, 'Algebra');
+    expect(r!.topic_outcome.mastery_status).toBe('DEVELOPING');
+    expect(r!.topic_outcome.recommended_next_action).toBe('REPAIR');
+  });
+
+  it('falls back only when the backend sent none — and never claims mastery', () => {
+    const r = phase4FromSession(base as never, 'Algebra');
+    expect(r!.topic_outcome.mastery_status).toBe(OUTCOME_PENDING);
+    expect(OUTCOME_PENDING).not.toMatch(/master/i);
+  });
+
+  it('ignores an empty string rather than printing a blank outcome', () => {
+    const r = phase4FromSession({
+      ...base,
+      phase4_review: { ...base.phase4_review, topic_outcome: { mastery_status: '   ' } },
+    } as never, 'Algebra');
+    expect(r!.topic_outcome.mastery_status).toBe(OUTCOME_PENDING);
+  });
+});
