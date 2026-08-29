@@ -560,6 +560,51 @@ export async function resumeSession(): Promise<void> {
   return resumeInFlight;
 }
 
+/**
+ * One repair attempt per question id, so a question whose options genuinely do
+ * not exist cannot put a GET on the wire on every render.
+ */
+let optionRepairAttempted: string | null = null;
+
+/**
+ * Re-fetch the session record so a choice question can find its options.
+ *
+ * See lib/questionOptions.ts for why they can be missing at all: a Phase 3
+ * reply cannot carry the question set, and Phase 3 serves a fresh question
+ * after a wrong answer. GET /session is the same set without the answers.
+ *
+ * Re-applying the phase is what publishes the recovered options: the lookup
+ * lives inside applyBackendPhase, and calling it with the question already on
+ * screen changes nothing else — `questionChanged` is false, so none of the
+ * per-question resets (ink, cue, selection) run.
+ */
+export async function repairQuestionOptions(): Promise<void> {
+  if (!apiEnabled()) return;
+  const store = useNumeraStore.getState();
+  const questionId = store.activeQuestionId;
+  if (!store.sessionId || !questionId) return;
+  if (optionRepairAttempted === questionId) return;
+  optionRepairAttempted = questionId;
+  try {
+    const rec = await getSession(store.sessionId, studentId());
+    const s = useNumeraStore.getState();
+    // The student moved on while this was in flight. Writing the record now
+    // would be writing it for a question that is no longer on screen.
+    if (s.activeQuestionId !== questionId) return;
+    s.setBackendSession(rec);
+    s.applyBackendPhase({
+      phase: s.currentPhase,
+      questionId,
+      questionText: s.questionText,
+      questionType: s.questionType,
+    });
+  } catch (err) {
+    // Degrade, do not throw: a question with no options still has the canvas,
+    // and a failed repair must not take the screen down with it.
+    reportFailure('/session (option repair)', err, { question_id: questionId });
+  }
+}
+
 export function useDemoTutor() {
   const sessionId = useNumeraStore((s) => s.sessionId);
   const canvasExporter = useNumeraStore((s) => s.canvasExporter);

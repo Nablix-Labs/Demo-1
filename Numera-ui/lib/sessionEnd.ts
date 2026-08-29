@@ -56,4 +56,25 @@ export function storeEndedSession(
   if (res.session_review) store.setSessionReview(res.session_review);
   store.clearSessionId();
   store.setBackendSession(ended);
+  // NOTE: this deliberately does NOT assert a phase.
+  //
+  // It used to `setCurrentPhase('REVIEW')` here, and that was right for the
+  // shape the code had: /session/end returns the record with `current_phase`
+  // UNCHANGED (session_service.py updates status, message and session_summary,
+  // and nothing else), so the store still read INDEPENDENT_PRACTICE afterwards
+  // and usePhaseRouting — which re-asserts the backend's phase on every screen
+  // — pulled the student straight off /review back to /practice, where the last
+  // question was still sitting. Manjusha, 29 Aug: "Why it's is taking me to
+  // this question".
+  //
+  // That reasoning rested on "both callers of end() are on their way to
+  // /review". They no longer are: entering Review does not end the session
+  // (ending is not a phase transition), so end() now runs on the way OUT, after
+  // REVIEW_COMPLETED. Asserting REVIEW there would push a student who has just
+  // finished the review back onto /review and strand them.
+  //
+  // The assertion moved to app/practice/page.tsx's reviewWithTutor, which sets
+  // it after READING the phase back from the backend — a verified fact rather
+  // than one inferred from "a session ended". Manjusha's bug stays fixed; see
+  // the comment there.
 }

@@ -79,6 +79,25 @@ describe('an authorised hint', () => {
     expect(state().visibleHint).toBe('What happens to the +5 each time?');
   });
 
+  it('never leaves the previous one up on a turn that delivers a hint', () => {
+    // Manjusha, 29 Aug: "there is hint shown ( previous one ) even though it
+    // says delivering hint". The second turn IS a hint delivery, but its hint
+    // is the tutor's own line, so authorisedHint dedupes it to null — and the
+    // card was showing the hint from the turn before.
+    applyInteractionSupport(turn());
+    applyInteractionSupport(turn({ support_message: 'Have another look at the middle step.' }));
+    expect(state().visibleHint).toBeNull();
+  });
+
+  it('still clears when a hint turn puts the hint only in the tutor line', () => {
+    // GIVE_HINT with no support_message at all: interaction_service.py:2307
+    // returns the hint AS the message. Nothing extra to card, and the previous
+    // card must not stand in for it.
+    applyInteractionSupport(turn());
+    applyInteractionSupport(turn({ support_message: null }));
+    expect(state().visibleHint).toBeNull();
+  });
+
   it('is replaced when a later turn serves a different one', () => {
     applyInteractionSupport(turn());
     applyInteractionSupport(turn({ support_message: 'Try the smallest value first.' }));
