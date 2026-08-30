@@ -28,6 +28,7 @@ from reference_check import (                     # noqa: E402
     _classify,
     _strip_preamble,
     build_scope_rows,
+    compare_generated_rows,
     compare_to_reference,
     run_full_check,
 )
@@ -267,3 +268,148 @@ def test_the_full_run_passes_and_reports_no_validation_issues():
     text = result.render()
     assert "RESULT: PASS" in text
     assert "unexpected differences: 0" in text
+
+
+# ──────────────────────────────────────────────────────────────────────
+# compare_generated_rows: checking a generated table against the reference
+#
+# Different job from compare_to_reference above. That one asks whether the
+# parser read the documents correctly, where any difference is a defect. This
+# one asks whether a table the model wrote has the same shape as one a human
+# approved, where the wording is expected to differ and the structure is not.
+# ──────────────────────────────────────────────────────────────────────
+
+def _skill(mid, code, name, desc, priority="HIGH"):
+    return {
+        "micro_skill_id": mid, "topic_id": "ALG-KS3-01", "skill_code": code,
+        "skill_name": name, "description": desc,
+        "prerequisite_micro_skill_id": None, "assessment_priority": priority,
+        "status": "ACTIVE", "version": "1.0",
+    }
+
+
+def _compare(rows, **kw):
+    return compare_generated_rows(
+        "Micro_Skills", rows, key="micro_skill_id",
+        prose_fields=("skill_name", "description"),
+        only_topics={"T01"}, **kw,
+    )
+
+
+@needs_everything
+def test_authored_wording_is_reported_not_failed():
+    """The model writes these. Different wording is the point, not a defect."""
+    report = _compare([_skill("T01.M1", "M1", "Spot the pattern", "Notice what repeats.")])
+    prose = report.by_status(Status.PROSE_DIFFERS)
+    assert prose
+    assert all(not c.is_unexpected for c in prose)
+
+
+@needs_everything
+def test_structural_fields_are_compared_exactly():
+    """These are ours and deterministic, so a difference is a real failure."""
+    bad = _skill("T01.M1", "M9", "x", "y")          # skill_code should be M1
+    report = _compare([bad])
+    assert any(c.field == "skill_code" and c.is_unexpected
+               for c in report.unexpected_differences())
+
+
+@needs_everything
+def test_a_wrong_enum_value_is_caught():
+    report = _compare([_skill("T01.M1", "M1", "x", "y", priority="URGENT")])
+    assert any(c.field == "assessment_priority" for c in report.unexpected_differences())
+
+
+@needs_everything
+def test_a_row_the_reference_has_and_we_did_not_generate_is_a_failure():
+    report = _compare([_skill("T01.M1", "M1", "x", "y")])
+    missing = report.by_status(Status.MISSING_ROW)
+    assert len(missing) == 6, "T01 has 7 reference skills; we generated 1"
+    assert all(c.is_unexpected for c in missing)
+
+
+@needs_everything
+def test_a_row_we_invented_is_a_failure():
+    rows = [_skill(f"T01.M{i}", f"M{i}", "x", "y") for i in range(1, 8)]
+    rows.append(_skill("T01.M99", "M99", "invented", "should not exist"))
+    report = _compare(rows)
+    extra = report.by_status(Status.EXTRA_ROW)
+    assert [c.topic_code for c in extra] == ["T01.M99"]
+    assert extra[0].is_unexpected
+
+
+@needs_everything
+def test_prose_that_happens_to_match_is_a_match_not_a_difference():
+    report = _compare([_skill("T01.M2", "M2", "Identify changing quantity", "z")])
+    names = [c for c in report.comparisons if c.field == "skill_name"]
+    assert names and names[0].status is Status.MATCH
+
+
+@needs_everything
+def test_only_topics_keeps_uncovered_topics_out_of_the_report():
+    """The reference covers Topics 1 to 3. Generating 4 to 6 and reporting
+    them all as missing would bury the real signal."""
+    report = _compare([_skill("T01.M1", "M1", "x", "y")])
+    assert all("T01" in c.topic_code for c in report.comparisons)
+
+
+@needs_everything
+def test_pydantic_rows_are_accepted_not_just_dicts():
+    """The generators return models, so the harness must take them directly."""
+    from models import MicroSkillRow
+    row = MicroSkillRow(
+        micro_skill_id="T01.M1", topic_id="ALG-KS3-01", skill_code="M1",
+        skill_name="x", description="y", prerequisite_micro_skill_id=None,
+        assessment_priority="HIGH", status="ACTIVE", version="1.0",
+    )
+    report = _compare([row])
+    assert report.comparisons, "model rows produced no comparisons"
+    assert any(c.field == "skill_code" and c.status is Status.MATCH
+               for c in report.comparisons)
+
+
+def _reference_skills(topic="T01"):
+    """The reference's own T01 rows, structure intact, prose replaced.
+
+    Built from the workbook rather than hand-written. An earlier version of
+    this test hardcoded prerequisite=None and priority=HIGH for every row and
+    failed, because the reference has a real prerequisite chain (T01.M4
+    depends on T01.M2) and priorities that vary. The harness was right and the
+    fixture was wrong, which is worth keeping in mind for CG-010: generating
+    flat prerequisites would be a defect the reference would catch.
+    """
+    from openpyxl import load_workbook
+    ws = load_workbook(REFERENCE_WORKBOOK)["Micro_Skills"]
+    header = [c.value for c in ws[1]]
+    rows = []
+    for raw in ws.iter_rows(min_row=2, values_only=True):
+        row = dict(zip(header, raw))
+        if not row.get("micro_skill_id", "").startswith(topic):
+            continue
+        row["skill_name"] = f"model wording for {row['micro_skill_id']}"
+        row["description"] = f"model description for {row['micro_skill_id']}"
+        rows.append(row)
+    return rows
+
+
+@needs_everything
+def test_a_perfect_structural_match_has_no_unexpected_differences():
+    """Same ids, same structure, the model's own wording. Should be clean."""
+    report = _compare(_reference_skills())
+    assert report.unexpected_differences() == [], [
+        f"{c.topic_code} {c.field} {c.status.value}"
+        for c in report.unexpected_differences()
+    ]
+    assert report.matched
+    assert report.by_status(Status.PROSE_DIFFERS), "prose should still be reported"
+
+
+@needs_everything
+def test_the_reference_prerequisite_chain_is_compared_not_ignored():
+    """CG-010 has to reproduce it; a flat chain must not pass silently."""
+    rows = _reference_skills()
+    for row in rows:
+        row["prerequisite_micro_skill_id"] = None
+    report = _compare(rows)
+    assert any(c.field == "prerequisite_micro_skill_id"
+               for c in report.unexpected_differences())
