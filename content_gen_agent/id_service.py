@@ -251,6 +251,23 @@ class IdService:
             f"QU-{self.topic_code}-{suffix}-P{self._phase_digit(phase)}"
         )
 
+    def item_family_id(self, descriptor: str) -> str:
+        """FAM-T04-CONTEXT-ADD.
+
+        Deliberately NOT put through _issue, unlike every other ID here.
+
+        An item family is a grouping, not a row identity: variants of the
+        same question are meant to share one, so asking for the same family
+        twice has to return the same ID rather than raise a collision. The
+        reference workbook happens to have one question per family because
+        no variants have been authored yet, which makes this look like a
+        unique ID until the first variant arrives.
+
+        So it is a pure function of the descriptor -- same descriptor, same
+        family, on this run or any later one.
+        """
+        return f"FAM-{self.topic_code}-{slugify(descriptor)}"
+
     def answer_spec_id(self, question_id: str) -> str:
         """ANS-T04-001, sharing its parent question's number.
 

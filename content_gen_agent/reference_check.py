@@ -76,6 +76,12 @@ class Status(str, Enum):
     KNOWN_DIVERGENCE = "KNOWN_DIVERGENCE"
     DIFFERS = "DIFFERS"
     MISSING_IN_REFERENCE = "MISSING_IN_REFERENCE"
+    # Authored prose that the model wrote itself. Different wording is the
+    # expected outcome, not a defect, so it is reported for a person to read
+    # rather than counted as a failure. See compare_generated_rows.
+    PROSE_DIFFERS = "PROSE_DIFFERS"
+    MISSING_ROW = "MISSING_ROW"
+    EXTRA_ROW = "EXTRA_ROW"
 
 
 # (topic_code, field) -> why the reference disagrees on purpose.
@@ -112,9 +118,15 @@ class FieldComparison:
     status: Status
     note: str = ""
 
+    # Statuses that mean something is actually wrong. PROSE_DIFFERS is not one
+    # of them: the model authored that text and different wording is the point.
+    # Neither is MISSING_IN_REFERENCE, which means the reference does not cover
+    # that topic at all.
+    FAILING = (Status.DIFFERS, Status.MISSING_ROW, Status.EXTRA_ROW)
+
     @property
     def is_unexpected(self) -> bool:
-        return self.status is Status.DIFFERS
+        return self.status in self.FAILING
 
     def __str__(self) -> str:
         head = f"{self.topic_code} {self.sheet}.{self.field}: {self.status.value}"
@@ -244,6 +256,114 @@ def build_scope_rows(brief: NormalizedTopicBrief,
                 )
             )
     return rows
+
+
+def compare_generated_rows(
+    sheet_name: str,
+    generated: list,
+    key: str,
+    prose_fields: tuple[str, ...] = (),
+    reference_path: Optional[Path] = None,
+    only_topics: Optional[set[str]] = None,
+) -> ComparisonReport:
+    """Compare rows this pipeline generated against the approved workbook.
+
+    `compare_to_reference` above answers a narrow question: did the parser read
+    the documents correctly. This answers the one every generated table faces:
+    is what the model produced the same shape as what a human approved.
+
+    The two are not the same job, because a generated table has two kinds of
+    column and they need different treatment:
+
+      structural   ids, topic ids, codes, enums, ordering, counts. These are
+                   ours, derived deterministically, and any difference is a
+                   defect. Compared exactly.
+
+      prose        skill names, descriptions, question text. The model writes
+                   these, so different wording is the expected outcome and
+                   flagging it as a failure would make the report useless.
+                   Named in `prose_fields`, reported as PROSE_DIFFERS, and
+                   excluded from `unexpected_differences()`.
+
+    Rows are aligned on `key` rather than by position, which works because our
+    ids are deterministic: IdService produces T01.M1, T01.M2 and so on, so a
+    generated micro-skill lands on the same id as its reference counterpart.
+    A reference row with no generated match is MISSING_ROW; the reverse is
+    EXTRA_ROW. Both are real failures.
+
+    `only_topics` limits the comparison to topics the reference actually
+    covers. The reference has Topics 1 to 3; generating 4 to 6 and then
+    reporting them all as missing would bury the real signal.
+    """
+    reference_path = reference_path or REFERENCE_WORKBOOK
+    if reference_path is None:
+        raise FileNotFoundError("No reference workbook available to compare against.")
+
+    reference_rows = _read_sheet(Path(reference_path), sheet_name)
+
+    def as_dict(row) -> dict:
+        if isinstance(row, dict):
+            return row
+        dumped = row.model_dump() if hasattr(row, "model_dump") else dict(row)
+        return {
+            k: (v.value if isinstance(v, Enum) else v) for k, v in dumped.items()
+        }
+
+    gen_by_key = {str(as_dict(r).get(key)): as_dict(r) for r in generated}
+    ref_by_key = {str(r.get(key)): r for r in reference_rows if r.get(key)}
+
+    if only_topics is not None:
+        def in_scope(row_key: str) -> bool:
+            return any(t in row_key for t in only_topics)
+        ref_by_key = {k: v for k, v in ref_by_key.items() if in_scope(k)}
+        gen_by_key = {k: v for k, v in gen_by_key.items() if in_scope(k)}
+
+    report = ComparisonReport()
+    report.topics_covered = sorted({
+        part for k in ref_by_key for part in [k.split(".")[0].split("-")[-1]]
+    })
+
+    for row_key, ref_row in ref_by_key.items():
+        gen_row = gen_by_key.get(row_key)
+        if gen_row is None:
+            report.comparisons.append(
+                FieldComparison(row_key, sheet_name, key, row_key, None,
+                                Status.MISSING_ROW,
+                                "the reference has this row and we did not generate it")
+            )
+            continue
+
+        for column, ref_value in ref_row.items():
+            if column not in gen_row:
+                continue
+            gen_value = gen_row[column]
+            if column in prose_fields:
+                same = _normalise(ref_value) == _normalise(gen_value)
+                report.comparisons.append(
+                    FieldComparison(
+                        row_key, sheet_name, column,
+                        _normalise(ref_value), _normalise(gen_value),
+                        Status.MATCH if same else Status.PROSE_DIFFERS,
+                        "" if same else "authored wording, read it rather than counting it",
+                    )
+                )
+                continue
+            status, note = _classify(row_key, column, ref_value, gen_value)
+            report.comparisons.append(
+                FieldComparison(row_key, sheet_name, column,
+                                _normalise(ref_value), _normalise(gen_value),
+                                status, note)
+            )
+
+    for row_key in gen_by_key:
+        if row_key not in ref_by_key:
+            report.comparisons.append(
+                FieldComparison(row_key, sheet_name, key, None, row_key,
+                                Status.EXTRA_ROW,
+                                "we generated a row the reference does not have")
+            )
+
+    return report
 
 
 def _read_sheet(path: Path, sheet: str) -> list[dict]:
