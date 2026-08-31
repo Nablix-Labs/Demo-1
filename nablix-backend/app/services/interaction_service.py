@@ -3614,7 +3614,11 @@ async def _process_interaction(
         schema_support_steps,
         tutor_message,
     )
-    if support_context is not None and not scaffold_turn:
+    if (
+        support_context is not None
+        and not scaffold_turn
+        and not tutor.question_completed
+    ):
         support_message = build_support_aware_tutor_message(
             question_id=session.question_id,
             question=session.current_question,
@@ -4081,11 +4085,7 @@ async def _process_interaction(
                 else None
             ),
             "support_served_this_turn": support_served,
-            "support_message": (
-                schema_support_message
-                if support_served == "HINT"
-                else None
-            ),
+            "support_message": None,
             "wrong_attempt_count": updated_session.wrong_attempt_count,
             "intervention_triggered": (
                 _is_support_failure(tutor)
