@@ -181,6 +181,102 @@ def test_topic1_persisted_role_evidence_completes_operation_without_reasking() -
     assert evaluation.newly_confirmed_concept_ids == ["OPERATION"]
 
 
+def test_topic1_fixed_value_accepts_a_short_spoken_sentence() -> None:
+    request = _topic1_request("its 7")
+    rubric = classifier.rubric_from_authored_answer_parts(
+        "Q-T01-002",
+        request.question_type,
+        request.answer_spec,
+        "test",
+    )
+    assert rubric is not None
+    objective = ActiveTeachingObjective(
+        objective_type="ANSWER_QUESTION",
+        target_concept_ids=["FIXED_VALUE", "OPERATION"],
+        confirmed_concept_ids=["CHANGING_VALUE"],
+        missing_concept_ids=["FIXED_VALUE", "OPERATION"],
+    )
+    request = request.model_copy(
+        update={
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-T01-002",
+                objective_component_ids=["CHANGING_VALUE", "FIXED_VALUE", "OPERATION"],
+                confirmed_component_ids=["CHANGING_VALUE"],
+                missing_component_ids=["FIXED_VALUE", "OPERATION"],
+                active_component_id="FIXED_VALUE",
+                last_tutor_question_type="COMPONENT",
+                selected_option_id=None,
+                awaiting_response=True,
+                active_step_id="FIXED_VALUE",
+                teaching_step_ids=["CHANGING_VALUE", "FIXED_VALUE", "OPERATION"],
+                completed_step_ids=["CHANGING_VALUE"],
+                current_step_index=1,
+            )
+        }
+    )
+
+    evaluation = classifier.deterministic_teaching_step_evaluation(
+        request,
+        rubric,
+        objective,
+        load_classifier_rules(),
+    )
+
+    assert evaluation is not None
+    assert evaluation.newly_confirmed_concept_ids == ["FIXED_VALUE"]
+    assert evaluation.tutor_message.endswith("What operation does the sign tell us to use?")
+
+
+def test_topic1_selected_option_text_confirms_a_matching_expression() -> None:
+    request = ClassificationRequest(
+        question_id="Q-T01-004",
+        question_type="CHOICE_WITH_EXPLANATION",
+        question="Which is the general rule? A: 12 + 4. B: n + 4.",
+        correct_answer="n + 4",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-004",
+            canonical_answer="n + 4",
+            accepted_answers=[],
+            verification_method="EXACT_CHOICE_MATCH",
+            explanation_required=True,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        student_input="Selected B: n + 4",
+        current_phase="GUIDED_PRACTICE",
+        input_source="CHOICE",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+        guided_teaching_state=GuidedTeachingState(
+            question_id="Q-T01-004",
+            objective_component_ids=["ANSWER_SELECTION", "ANSWER_EXPLANATION"],
+            confirmed_component_ids=[],
+            missing_component_ids=["ANSWER_SELECTION", "ANSWER_EXPLANATION"],
+            active_component_id="ANSWER_SELECTION",
+            last_tutor_question_type="OPTION_COMPARISON",
+            selected_option_id="B",
+            selected_option_text="n + 4",
+            awaiting_response=True,
+        ),
+    )
+    rubric = classifier.rubric_from_authored_answer_parts(
+        "Q-T01-004",
+        request.question_type,
+        request.answer_spec,
+        "test",
+    )
+    assert rubric is not None
+
+    objective = classifier.objective_with_persisted_choice_selection(
+        request,
+        rubric,
+        classifier.initial_guided_objective(rubric),
+    )
+
+    assert objective.confirmed_concept_ids == ["ANSWER_SELECTION"]
+    assert objective.missing_concept_ids == ["ANSWER_EXPLANATION"]
+
+
 def test_topic1_operation_does_not_advance_past_an_unresolved_changing_role() -> None:
     request = _topic1_request("addition")
     rubric = classifier.rubric_from_authored_answer_parts(

@@ -825,7 +825,20 @@ def objective_with_persisted_choice_selection(
         normalized_choice_response(answer)
         for answer in [answer_spec.canonical_answer, *answer_spec.accepted_answers]
     }
-    if normalized_choice_response(selected_option_id) not in accepted_choices:
+    selected_option_text = (
+        request.guided_teaching_state.selected_option_text
+        if request.guided_teaching_state is not None
+        and request.guided_teaching_state.question_id == request.question_id
+        else None
+    )
+    selected_choice_is_correct = (
+        normalized_choice_response(selected_option_id) in accepted_choices
+        or (
+            selected_option_text is not None
+            and normalized_choice_response(selected_option_text) in accepted_choices
+        )
+    )
+    if not selected_choice_is_correct:
         return objective
     required_ids = {
         component.concept_id
@@ -1581,7 +1594,21 @@ def deterministic_teaching_step_evaluation(
 
     if step.step_id == "FIXED_VALUE":
         expected = f"{operator}{number}"
-        if compact in {number, expected} or (number in normalized and any(word in normalized for word in ("fixed", "constant", "stays"))):
+        short_fixed_answer = re.fullmatch(
+            (
+                rf"(?:it'?s|it is|the (?:number|value) is)\s*"
+                rf"[+\-−]?\s*{re.escape(number)}"
+            ),
+            normalized,
+        ) is not None
+        if (
+            compact in {number, expected}
+            or short_fixed_answer
+            or (
+                number in normalized
+                and any(word in normalized for word in ("fixed", "constant", "stays"))
+            )
+        ):
             if next_step is None:
                 return _controller_evaluation(request, "CORRECT", objective, "Nice work.", step.step_id, rubric)
             return _controller_evaluation(request, "PARTIAL", objective, f"Yes. {next_step.prompt}", step.step_id, rubric)
