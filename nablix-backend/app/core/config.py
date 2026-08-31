@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 
 from pydantic import Field
@@ -91,7 +92,11 @@ class Settings(BaseSettings):
     session_id_pattern: str = r"^SESSION(?:\d{3}|[0-9a-fA-F]{32})$"
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # The tests set NABLIX_ENV_FILE="" so they never read the deployment
+        # .env: a test that picks up real service URLs and API keys stops
+        # testing this code and starts testing someone else's uptime.
+        # Nothing outside pytest sets it, so deployments still read .env.
+        env_file=os.getenv("NABLIX_ENV_FILE", ".env") or None,
         env_file_encoding="utf-8",
         env_prefix="NABLIX_",
         extra="ignore",

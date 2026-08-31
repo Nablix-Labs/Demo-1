@@ -9,6 +9,25 @@ explicit settings and monkeypatches `httpx`, so it still exercises the real
 adapter path without leaving the process.
 """
 
+import os
+
+# Both of these must land before the first app import.
+#
+# 1. Settings binds its env-file source at class-creation time.
+# 2. Four modules (voice/core, rag/*) call load_dotenv() at import, which
+#    copies the whole deployment .env into os.environ -- at which point
+#    Settings reads the values as ordinary environment variables and
+#    env_file is irrelevant. Neutering it here is the only single place
+#    that covers all four.
+#
+# A suite that picks up real service URLs and API keys stops testing this
+# code and starts testing someone else's uptime and billing.
+os.environ["NABLIX_ENV_FILE"] = ""
+
+import dotenv
+
+dotenv.load_dotenv = lambda *args, **kwargs: False
+
 from collections.abc import Iterator
 
 import pytest
@@ -51,6 +70,10 @@ def force_mock_adapters(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         student_model_url="",
         student_model_topic_ids={},
         use_mock_student_model=True,
+        # Several tests borrow helpers across modules and start a session by
+        # concept_id. Without a mapping here they only passed because the
+        # deployment .env leaked one in.
+        student_model_topic_codes={"ALG_LINEAR_ONE_STEP": "ALG-ORI-02"},
         use_mock_voice=True,
         use_mock_vision=True,
         use_openai_ai_engine=False,
@@ -63,6 +86,7 @@ def force_mock_adapters(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         "get_settings",
         lambda: test_settings,
     )
+    monkeypatch.setattr(session_service, "get_settings", lambda: test_settings)
     monkeypatch.setattr(session_service, "save_session", _skip_session_persistence)
     yield
     get_settings.cache_clear()
