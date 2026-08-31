@@ -31,7 +31,9 @@ import {
   type CanvasBBox, type CanvasSize, type CanvasActionType,
 } from '@/lib/canvasMemory';
 import type { DrawnItem, TutorCanvasAction, TutorElement } from '@/store/useNumeraStore';
-import { parseRescueAnchor, answerRevealPermitted } from '@/lib/rescueActions';
+import {
+  parseRescueAnchor, answerRevealPermitted, writesToStudentCanvas,
+} from '@/lib/rescueActions';
 
 /** Where an action's target turned out to be, once resolved locally. */
 export type ResolvedTarget =
@@ -338,6 +340,11 @@ export function actionMarks(
   if (target.kind === 'rescue-slot') {
     const stepText = action.text?.trim();
     if (!stepText) return [];
+    // A parallel example is a DIFFERENT problem, so it never goes on the page
+    // the student is working on — it belongs in the panel beside the original
+    // question (Sanya's "split view"). Only tutor-solved is written here, and
+    // only additively. See writesToStudentCanvas for the full account.
+    if (!writesToStudentCanvas(action)) return [];
     // The flag is a REQUEST to present this as the answer, re-checked here.
     // When it is set but the action does not satisfy the checkable conditions,
     // the step still renders — it is authored content the student is meant to

@@ -10,7 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   rescueAnchorId, parseRescueAnchor, isRescueAction,
-  answerRevealPermitted, rescueStep, isFinalStep, mergeStep,
+  answerRevealPermitted, rescueStep, isFinalStep, mergeStep, writesToStudentCanvas,
 } from '@/lib/rescueActions';
 import type { TutorCanvasAction } from '@/store/useNumeraStore';
 
@@ -176,5 +176,57 @@ describe('mergeStep', () => {
     })!;
     const merged = mergeStep(mergeStep([], step(1)), other);
     expect(merged.map((s) => s.rescueId)).toEqual(['RESCUE-OTHER']);
+  });
+});
+
+describe('which rescue steps reach the student\'s canvas', () => {
+  // Sanya's rescue handoff, item 3, draws the line: tutor-solved is "add each
+  // authorised worked step without overwriting the child's writing" — the tutor
+  // working through the student's OWN problem — while a parallel example gets
+  // "a split view between the original question and similar example", because
+  // it is a different problem entirely.
+  //
+  // Nothing enforced that, so a parallel example was written across the page
+  // the student was answering on: `2x + 4 = 10` sprawled over the working area
+  // for `3x + 6 = 18`. Found on 31 Aug by running the presentation with the
+  // flag on, which no test had done.
+  const action = (over: Record<string, unknown> = {}) => ({
+    action_id: 'A1', type: 'TUTOR_SOLVED_STEP', target_kind: 'TUTOR_ANCHOR',
+    target_object_id: 'TUTOR_ANCHOR:RESCUE:R1:STEP:1',
+    confirmed_component_id: null, text: 'Take 6 from both sides.',
+    source_id: 'R1', answer_reveal_allowed: false,
+    rescue_id: 'R1', step_index: 1, total_steps: 3,
+    presentation_mode: 'TUTOR_SOLVED', return_target_object_id: null,
+    ...over,
+  }) as unknown as Parameters<typeof writesToStudentCanvas>[0];
+
+  it('writes a tutor-solved step onto the canvas', () => {
+    expect(writesToStudentCanvas(action())).toBe(true);
+  });
+
+  it('keeps a parallel example OFF the canvas', () => {
+    expect(writesToStudentCanvas(action({
+      type: 'SHOW_PARALLEL', presentation_mode: 'PARALLEL',
+    }))).toBe(false);
+  });
+
+  it('takes the mode from the type when the backend omits it', () => {
+    expect(writesToStudentCanvas(action({
+      type: 'SHOW_PARALLEL', presentation_mode: null,
+    }))).toBe(false);
+    expect(writesToStudentCanvas(action({ presentation_mode: null }))).toBe(true);
+  });
+
+  it('refuses to draw when the mode contradicts the type', () => {
+    // Drift. Guessing which of the two is right is how a worked answer lands on
+    // the student's page under the wrong heading — so it is drawn nowhere.
+    expect(writesToStudentCanvas(action({ presentation_mode: 'PARALLEL' }))).toBe(false);
+    expect(writesToStudentCanvas(action({
+      type: 'SHOW_PARALLEL', presentation_mode: 'TUTOR_SOLVED',
+    }))).toBe(false);
+  });
+
+  it('is false for anything that is not a rescue action', () => {
+    expect(writesToStudentCanvas(action({ type: 'HIGHLIGHT' }))).toBe(false);
   });
 });

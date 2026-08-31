@@ -122,6 +122,35 @@ export function answerRevealPermitted(action: TutorCanvasAction): boolean {
  * done nothing. Backend fields go missing here without notice, so every read is
  * defensive by default.
  */
+/**
+ * Does this rescue step belong on the student's own canvas?
+ *
+ * Only TUTOR_SOLVED does, and the distinction is Sanya's, not a nicety
+ * (rescue handoff, item 3): tutor-solved is "add each authorised worked step
+ * without overwriting the child's writing" — the tutor working through the
+ * student's OWN problem beside them — while a parallel example is "a split
+ * view between the original question and similar example", because it is a
+ * DIFFERENT problem.
+ *
+ * Writing a parallel example onto the canvas therefore puts another question's
+ * working across the page the student is answering on. Seen on 31 Aug with the
+ * presentation flag on: three lines of `2x + 4 = 10` sprawled over the working
+ * area for `3x + 6 = 18`, which is the one thing both halves of item 3 are
+ * written to prevent.
+ *
+ * Mode is derived exactly as `rescueStep` derives it, including the refusal on
+ * a mode that contradicts its type — if the two ever disagree the step is not
+ * drawn, because guessing wrong here means an answer landing on the student's
+ * page under the wrong heading.
+ */
+export function writesToStudentCanvas(action: TutorCanvasAction): boolean {
+  if (!isRescueAction(action)) return false;
+  const expected: RescuePresentationMode =
+    action.type === 'SHOW_PARALLEL' ? 'PARALLEL' : 'TUTOR_SOLVED';
+  if (action.presentation_mode && action.presentation_mode !== expected) return false;
+  return expected === 'TUTOR_SOLVED';
+}
+
 export function rescueStep(action: TutorCanvasAction): RescueStep | null {
   if (!isRescueAction(action)) return null;
 
