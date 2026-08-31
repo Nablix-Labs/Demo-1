@@ -51,6 +51,9 @@ import {
 } from '@/lib/api';
 import { applyPhaseHandoff } from '@/lib/phaseHandoff';
 import { useWorkedExamplePlayer } from '@/hooks/useWorkedExamplePlayer';
+import {
+  PLAYBACK_RATES, currentRate, rememberRate, rateLabel, type PlaybackRate,
+} from '@/lib/playbackSpeed';
 import { speakTutor, stopTutorSpeech } from '@/lib/tts';
 import { cn } from '@/lib/cn';
 import { Skeleton } from '@/components/PageShell';
@@ -366,6 +369,27 @@ function VideoFile({
 }) {
   const [failed, setFailed] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+  // Opens at whatever the student last chose this session — see
+  // lib/playbackSpeed.ts for why that is not simply 1×.
+  const [rate, setRate] = useState<PlaybackRate>(currentRate);
+
+  /**
+   * Apply the rate to the element.
+   *
+   * Also re-applied on loadedmetadata, not only when the student picks: a rate
+   * set on a video that has not loaded its metadata yet is reset to 1 by the
+   * browser, which is exactly the case on mount — the player is created with a
+   * remembered rate before it has a source to apply it to.
+   */
+  const applyRate = useCallback(() => {
+    const el = videoRef.current;
+    if (el) el.playbackRate = rate;
+  }, [rate]);
+  useEffect(applyRate, [applyRate]);
+
+  const chooseRate = useCallback((next: PlaybackRate) => {
+    setRate(rememberRate(next));
+  }, []);
 
   /**
    * Say the tutor's line, THEN start the video.
@@ -431,10 +455,33 @@ function VideoFile({
         playsInline
         preload="metadata"
         onPlay={hushForVideo}
+        onLoadedMetadata={applyRate}
         onEnded={onEnded}
         onError={() => setFailed(true)}
         className="w-full h-full"
       />
+    </div>
+    <div className="mt-2.5 flex items-center gap-2">
+      {/* Labelled, because an unlabelled row of "0.75× 1× 1.25×" beside a video
+          could as easily be a chapter list. */}
+      <span className="text-[11px] tracking-wide uppercase text-slate-blue">Speed</span>
+      <div role="group" aria-label="Playback speed" className="inline-flex rounded-md border border-muted-gray overflow-hidden">
+        {PLAYBACK_RATES.map((r) => (
+          <button
+            key={r}
+            onClick={() => chooseRate(r)}
+            aria-pressed={r === rate}
+            className={cn(
+              'px-2.5 py-1 text-[12px] font-semibold transition-colors border-l border-muted-gray first:border-l-0',
+              r === rate
+                ? 'bg-focus-navy text-white'
+                : 'bg-white text-slate-blue hover:text-ink hover:bg-reading-surface',
+            )}
+          >
+            {rateLabel(r)}
+          </button>
+        ))}
+      </div>
     </div>
     </>
   );

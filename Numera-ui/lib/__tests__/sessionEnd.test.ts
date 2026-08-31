@@ -117,3 +117,37 @@ describe('where an ended session leaves the student', () => {
     });
   });
 });
+
+describe('surviving a refresh on the Review screen', () => {
+  it('remembers which session the review belongs to', () => {
+    // `backendSession` is not persisted and `sessionId` is cleared by the end,
+    // so without this a refresh on /review had nothing to render from and no id
+    // to ask the backend for — the student was shown the empty state for work
+    // they had just finished.
+    useNumeraStore.getState().setSessionId('SESSION1');
+    const res = ended();
+    storeEndedSession(res, sessionEndSummary(res));
+
+    expect(useNumeraStore.getState().endedSessionId).toBe('SESSION1');
+  });
+
+  it('keeps it after the live session id is gone', () => {
+    // The two must not be the same field: sessionId being null is what stops
+    // anything being sent to an ended session, and it is what the review page's
+    // end-on-arrival effect keys on.
+    useNumeraStore.getState().setSessionId('SESSION1');
+    const res = ended();
+    storeEndedSession(res, sessionEndSummary(res));
+
+    expect(useNumeraStore.getState().sessionId).toBeNull();
+    expect(useNumeraStore.getState().endedSessionId).toBe('SESSION1');
+  });
+
+  it('prefers the id the backend confirmed', () => {
+    useNumeraStore.getState().setSessionId('STALE');
+    const res = ended({ session_id: 'SESSION1' });
+    storeEndedSession(res, sessionEndSummary(res));
+
+    expect(useNumeraStore.getState().endedSessionId).toBe('SESSION1');
+  });
+});

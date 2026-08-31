@@ -129,6 +129,41 @@ export default function ReviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // The same rescue as the mount read above, for a refresh AFTER the session
+  // has been ended.
+  //
+  // `backendSession` is not persisted, so a reload always arrives with the
+  // record gone and has to fetch it back. Which id to fetch depends on where in
+  // the review the student was:
+  //
+  //   • still working through it — the session is open, `sessionId` persisted,
+  //     and retryReview() above uses it. That is the ordinary refresh.
+  //   • already finished it — ending happens on the way out and clears
+  //     `sessionId`, so retryReview has no id to use and the screen would show
+  //     "nothing to review yet" for work the student had just completed.
+  //
+  // The second case is this effect, keyed on the ended id kept for exactly this
+  // (see NumeraState.endedSessionId). GET /session serves an ended session and
+  // does not strip `phase4_review`, so the review comes back from the backend
+  // and only an ID was ever stored on the device.
+  //
+  // Guarded on `!sessionId` so the two never both fire: a live session belongs
+  // to retryReview, which also knows how to report a failed generation.
+  const endedSessionId = useNumeraStore((s) => s.endedSessionId);
+  const setBackendSession = useNumeraStore((s) => s.setBackendSession);
+  const restoring = useRef(false);
+  useEffect(() => {
+    if (!apiEnabled || sessionId || backendSession || !endedSessionId) return;
+    if (restoring.current) return;
+    restoring.current = true;
+    getSession(endedSessionId, studentId())
+      .then((rec) => setBackendSession(rec))
+      // Degrade to the empty state, which is what this screen already shows
+      // when there is nothing to review. A session the backend has forgotten
+      // (its store is in memory) is not an error the student can act on.
+      .catch(() => { restoring.current = false; });
+  }, [apiEnabled, sessionId, backendSession, endedSessionId, setBackendSession]);
+
 
 
   // Escape hatch for a session the backend refuses to end: drop it locally so

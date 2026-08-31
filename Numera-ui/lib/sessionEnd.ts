@@ -52,6 +52,10 @@ export function storeEndedSession(
   // Merged, not replaced: the record built up over the session carries the
   // question set and student-model state that the end response does not.
   const ended = { ...store.backendSession, ...res };
+  // Remember WHICH session the review belongs to before clearSessionId drops
+  // it, so a refresh on /review can fetch the record back. The id is the only
+  // thing stored on the device; see NumeraState.endedSessionId.
+  store.setEndedSessionId(res.session_id ?? store.sessionId);
   store.setSessionSummary(summary);
   if (res.session_review) store.setSessionReview(res.session_review);
   store.clearSessionId();

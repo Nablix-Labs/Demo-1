@@ -300,6 +300,25 @@ export type ReviewStatus = 'idle' | 'reviewing' | 'reviewed';
 export interface NumeraState {
   // Session
   sessionId: string | null;
+  /**
+   * The session whose Phase 4 review is on the Review screen.
+   *
+   * Separate from `sessionId`, and that separation is the point: ending a
+   * session clears `sessionId` (nothing may be sent to it any more) while the
+   * review the student just worked through still belongs to it. Persisted, so
+   * a refresh AFTER the review is finished can fetch the record back —
+   * `backendSession` is not persisted, so without an id the screen would tell
+   * a student there was nothing to review moments after they reviewed it.
+   *
+   * A refresh DURING the review does not need this: the session is still open
+   * then, so `sessionId` survives and app/review/page.tsx reads the record with
+   * that instead.
+   *
+   * Only the ID is stored on the device. The review itself — the student's
+   * answers, their errors, the tutor's replay — stays in memory and is
+   * re-fetched from the backend, which is the one place it belongs.
+   */
+  endedSessionId: string | null;
   sessionState: SessionState;
   activeSlide: number;
   totalSlides: number;
@@ -649,6 +668,8 @@ export interface NumeraState {
   setSessionSummary: (summary: SessionSummary | null) => void;
   setSessionReview: (review: SessionReview | null) => void;
   clearSessionId: () => void;
+  /** Remember which ended session the Review screen is showing. */
+  setEndedSessionId: (id: string | null) => void;
   toggleMic: () => void;
   setMicMuted: (value: boolean) => void;
   setVoiceStatus: (s: NumeraState['voiceStatus']) => void;
@@ -787,7 +808,7 @@ export interface NumeraState {
 const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
-  | 'setQuestionText' | 'setQuestionAnchors' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'noteTutorLineage' | 'markTutorTurnFailed'
+  | 'setQuestionText' | 'setQuestionAnchors' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'setEndedSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'noteTutorLineage' | 'markTutorTurnFailed'
   | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue' | 'setVisibleHint' | 'setWriteInstruction' | 'setGuidedRescue' | 'clearRescueSteps'
   | 'setSupportShown' | 'setLastHintText' | 'lockPhase3Attempt'
   | 'setPendingTutorSpeech' | 'claimPendingTutorSpeech' | 'setQuestionProgress' | 'setAppliedResponse' | 'setInactivityPolicy'
@@ -864,6 +885,7 @@ const initial: Omit<
   supportShown: null as SupportRung | null,
   lastHintText: null as string | null,
   phase3LockedQuestionId: null as string | null,
+  endedSessionId: null as string | null,
   pendingTutorSpeech: null as string | null,
   appliedResponse: EMPTY_APPLIED,
   inactivityPolicy: null as InactivityPolicy | null,
@@ -1116,6 +1138,8 @@ export const useNumeraStore = create<NumeraState>()(
     }),
   setSessionSummary: (sessionSummary) => set({ sessionSummary }),
   setSessionReview: (sessionReview) => set({ sessionReview }),
+  setEndedSessionId: (endedSessionId) => set({ endedSessionId }),
+
   clearSessionId: () => set({
     sessionId: null,
     backendSession: null,
@@ -1806,6 +1830,9 @@ export const useNumeraStore = create<NumeraState>()(
       // from that, rather than leaving the lesson wedged.
       partialize: (s) => ({
         sessionId: s.sessionId,
+        // The ended session behind the Review screen — an ID only, never the
+        // review itself. See the field's own note for why it is not sessionId.
+        endedSessionId: s.endedSessionId,
         // Phase 3 spec §3.3: "Keep the locked state through reconnect." The
         // canvas and transcript are deliberately per-session below, but an
         // accepted independent attempt must NOT come back editable after a
