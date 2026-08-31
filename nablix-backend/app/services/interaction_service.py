@@ -60,6 +60,7 @@ from app.models.guided_learning import (
     ActiveScaffold,
     EvaluationReasonCode,
     GuidedRescue,
+    GuidedTeachingState,
     NudgeDelivery,
     PrerequisiteRepair,
     ScaffoldEvaluationContext,
@@ -2586,6 +2587,37 @@ def _selected_option_message(session: SessionRecord, option_id: str) -> tuple[st
     )
 
 
+def _guided_state_with_selected_option(
+    session: SessionRecord,
+    option_id: str,
+    option_text: str,
+) -> GuidedTeachingState:
+    """Record a choice even when it is the first guided-state field."""
+
+    if session.question_id is None:
+        raise RuntimeError("Guided option selection requires an active question_id.")
+    if session.guided_teaching_state is not None:
+        return session.guided_teaching_state.model_copy(
+            update={
+                "selected_option_id": option_id,
+                "selected_option_text": option_text,
+                "last_tutor_question_type": "OPTION_COMPARISON",
+                "awaiting_response": True,
+            }
+        )
+    return GuidedTeachingState(
+        question_id=session.question_id,
+        objective_component_ids=[],
+        confirmed_component_ids=[],
+        missing_component_ids=[],
+        active_component_id=None,
+        last_tutor_question_type="OPTION_COMPARISON",
+        selected_option_id=option_id,
+        selected_option_text=option_text,
+        awaiting_response=True,
+    )
+
+
 async def _option_selected_interaction_response(
     request: InteractionRequest,
     session: SessionRecord,
@@ -2598,17 +2630,10 @@ async def _option_selected_interaction_response(
         session, request.selected_option_id
     )
     rules = load_classifier_rules()
-    selected_state = (
-        session.guided_teaching_state.model_copy(
-            update={
-                "selected_option_id": request.selected_option_id,
-                "selected_option_text": option_text,
-                "last_tutor_question_type": "OPTION_COMPARISON",
-                "awaiting_response": True,
-            }
-        )
-        if session.guided_teaching_state is not None
-        else None
+    selected_state = _guided_state_with_selected_option(
+        session,
+        request.selected_option_id,
+        option_text,
     )
     classification = classify_student_response(
         ClassificationRequest(
@@ -2660,6 +2685,7 @@ async def _option_selected_interaction_response(
         session.show_scaffold_panel,
         session.scaffold_steps,
         {
+            "interaction_state_version": session.interaction_state_version + 1,
             "conversation_history": _updated_conversation_history(
                 session.conversation_history,
                 selection,

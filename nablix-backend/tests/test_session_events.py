@@ -56,6 +56,24 @@ def test_unresolved_partial_does_not_emit_an_incorrect_attempt() -> None:
     assert interaction_service._guided_attempt_event_type(defence, rules) is None
 
 
+def test_option_selection_creates_guided_state_when_none_exists() -> None:
+    session = session_service.SessionRecord.model_construct(
+        question_id="Q-T01-004",
+        guided_teaching_state=None,
+    )
+
+    state = interaction_service._guided_state_with_selected_option(
+        session,
+        "B",
+        "n + 4",
+    )
+
+    assert state.question_id == "Q-T01-004"
+    assert state.selected_option_id == "B"
+    assert state.selected_option_text == "n + 4"
+    assert state.awaiting_response is True
+
+
 @pytest.mark.parametrize("support_type", ["HINT", "VISUAL_CUE", "SCAFFOLD"])
 def test_empty_support_keeps_the_tutor_response_available(
     support_type: str,
