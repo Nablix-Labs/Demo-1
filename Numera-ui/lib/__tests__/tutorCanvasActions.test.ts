@@ -389,3 +389,44 @@ describe('the writing block on the left', () => {
     expect(actionMarks(a, resolveTarget(a, CTX)!)[0].fontStyle).toBe('bold');
   });
 });
+
+describe('a rescue step reaching the canvas', () => {
+  // The guard lives in actionMarks, so it is tested here as well as on the
+  // helper. writesToStudentCanvas had four unit tests and the call site had
+  // none, which meant deleting the guard entirely left the whole suite green
+  // and let `2x + 4 = 10` back onto the page a student was answering
+  // `3x + 6 = 18` on. See Sanya's rescue handoff, item 3.
+  const slot = { kind: 'rescue-slot', at: { x: 0.5, y: 0.5 } } as const;
+  const step = (over: Partial<TutorCanvasAction> = {}): TutorCanvasAction => action({
+    action_id: 'R1:step:1',
+    type: 'TUTOR_SOLVED_STEP',
+    target_kind: 'TUTOR_ANCHOR',
+    target_object_id: 'TUTOR_ANCHOR:RESCUE:R1:STEP:1',
+    text: 'Take 6 from both sides.',
+    source_id: 'R1',
+    rescue_id: 'R1',
+    step_index: 1,
+    total_steps: 3,
+    presentation_mode: 'TUTOR_SOLVED',
+    return_target_object_id: null,
+    ...over,
+  } as Partial<TutorCanvasAction>);
+
+  it('draws a tutor-solved step on the student canvas', () => {
+    expect(actionMarks(step(), slot).length).toBeGreaterThan(0);
+  });
+
+  it('draws NOTHING for a parallel example', () => {
+    expect(actionMarks(step({
+      type: 'SHOW_PARALLEL',
+      presentation_mode: 'PARALLEL',
+      text: '2x + 4 = 10',
+    } as Partial<TutorCanvasAction>), slot)).toEqual([]);
+  });
+
+  it('draws nothing when the mode contradicts the type', () => {
+    expect(actionMarks(step({
+      presentation_mode: 'PARALLEL',
+    } as Partial<TutorCanvasAction>), slot)).toEqual([]);
+  });
+});
