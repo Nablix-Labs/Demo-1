@@ -10,7 +10,11 @@ from app.models.adapters import (
 )
 from app.models.canvas import CanvasDrawPayload, TutorElement
 from app.models.canvas_memory import CanvasEvent
-from app.models.guided_learning import GuidedRescueContext, TutorCanvasAction
+from app.models.guided_learning import (
+    GuidedRescueContext,
+    TutorCanvasAction,
+    rescue_action_id,
+)
 from app.models.question_anchor import QuestionTextAnchor
 from app.services.canvas_spatial import canonical_math_token_text
 
@@ -481,9 +485,8 @@ def plan_rescue_canvas_actions(
         if rescue_context.rescue_type == "PARALLEL_EXAMPLE"
         else "TUTOR_SOLVED_STEP"
     )
-    action_id = (
-        f"{turn_id}:1:{action_type}:{rescue_context.rescue_id}:"
-        f"{rescue_context.current_step_index}"
+    action_id = rescue_action_id(
+        rescue_context.rescue_id, rescue_context.current_step_index
     )
     if action_id in rescue_context.active_action_ids:
         return []

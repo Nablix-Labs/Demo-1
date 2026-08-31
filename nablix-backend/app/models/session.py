@@ -25,11 +25,13 @@ from app.models.fields import (
     TurnId,
 )
 from app.models.guided_learning import (
+    ActiveGuidedRescue,
     ActiveTeachingObjective,
     GuidedTeachingState,
     GeneratedQuestionRubric,
     GuidedStudentState,
     InactivityPolicy,
+    TutorCanvasAction,
     inactivity_policy,
 )
 from app.models.student_model_session import (
@@ -129,6 +131,32 @@ class ReviewCompleteRequest(BaseModel):
 
     student_id: StudentId
     turn_id: TurnId
+
+
+class RescueRenderAckRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    student_id: StudentId
+    action_id: NonEmptyText
+    status: Literal["RENDERED"]
+    target_object_id: NonEmptyText
+
+
+class RescueAdvanceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    student_id: StudentId
+    question_id: QuestionId
+    rescue_id: NonEmptyText
+    current_step_index: int = Field(ge=1)
+    trigger: Literal["UI_NEXT", "UI_NEXT_STEP", "VOICE_NEXT"]
+
+
+class RescueStepResponse(BaseModel):
+    # Both are None once the rescue completes: there is no next step to render.
+    action: TutorCanvasAction | None = None
+    current_step_index: int | None = Field(default=None, ge=1)
+    completed: bool = False
 
 
 class DiagnosticAnswer(BaseModel):
@@ -282,6 +310,10 @@ class SessionRecord(BaseModel):
     delivered_scaffold_step_ids: list[str] = Field(default_factory=list)
     scaffold_expected_response: str | None = None
     rescue_mode_active: bool = False
+    active_guided_rescue: ActiveGuidedRescue | None = None
+    # Kept after the rescue is cleared so a client retrying the final
+    # acknowledgement gets 200 completed instead of 409.
+    last_completed_rescue_action_id: str | None = None
     mastery_check_question_count: int = 0
     # Functional fields the guide omits but the backend needs.
     status: Literal["started", "ended"]
@@ -311,6 +343,8 @@ class SessionResponse(SessionRecord):
     model_config = ConfigDict(from_attributes=True)
 
     correct_answer: str | None = Field(default=None, exclude=True)
+    active_guided_rescue: ActiveGuidedRescue | None = Field(default=None, exclude=True)
+    last_completed_rescue_action_id: str | None = Field(default=None, exclude=True)
     scaffold_steps: list[str] = Field(default_factory=list, exclude=True)
     scaffold_expected_response: str | None = Field(default=None, exclude=True)
     student_model_event: PublicStudentModelEvent | None = None
