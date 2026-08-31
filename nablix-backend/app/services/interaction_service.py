@@ -719,7 +719,7 @@ async def process_answer_with_session_event(
     guided_rescue = _guided_rescue(content_response)
     active_guided_rescue = (
         active_rescue_from(
-            session.question_id or "UNKNOWN_QUESTION",
+            session.question_id,
             guided_rescue,
             context.correct_answer,
             content_response.request_id,
@@ -3778,17 +3778,16 @@ async def _process_interaction(
         and session.current_phase != turn_session.current_phase
         else None
     )
-    if schema_content_response is not None:
-        logger.info(
-            "phase_transition_evaluated",
-            extra={
-                "session_id": session.session_id,
-                "current_phase": turn_session.current_phase,
-                "student_model_recommended_phase": recommended,
-                "phase_changed": new_phase is not None,
-                "attempt_count": applied_attempt_count,
-            },
-        )
+    logger.info(
+        "phase_transition_evaluated",
+        extra={
+            "session_id": session.session_id,
+            "current_phase": turn_session.current_phase,
+            "student_model_recommended_phase": recommended,
+            "phase_changed": new_phase is not None,
+            "attempt_count": applied_attempt_count,
+        },
+    )
 
     next_hint_count: int = _next_hint_count_from(session)
     conversation_action: ConversationAction = tutor.recommended_conversation_action
