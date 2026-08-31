@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 
 from starlette.websockets import WebSocketState
 
@@ -8,6 +9,10 @@ from app.services.voice.streaming.streaming_server import _canvas_draw_from
 
 def test_voice_canvas_attaches_before_canonical_voice_interaction(monkeypatch) -> None:
     calls: list[tuple[str, object]] = []
+    # Captured before the patch, and matched by name rather than position: the
+    # previous assertion read args[-1], which silently started reading the
+    # `words` parameter the day one was appended to the signature.
+    signature = inspect.signature(streaming_server.evaluate_voice_transcript)
 
     class FakeWebSocket:
         client_state = WebSocketState.CONNECTED
@@ -72,7 +77,7 @@ def test_voice_canvas_attaches_before_canonical_voice_interaction(monkeypatch) -
     assert [kind for kind, _ in calls[:2]] == ["canvas", "voice"]
     voice_args = calls[1][1]
     assert isinstance(voice_args, tuple)
-    assert voice_args[-1] == "canvas-1"
+    assert signature.bind(*voice_args).arguments["canvas_snapshot_id"] == "canvas-1"
     tutor_response = next(
         payload
         for kind, payload in calls
