@@ -177,7 +177,11 @@ export default function CanvasStage() {
           150px because that button measures 131px with the app's own styles;
           the rest is the gap. If its label changes, re-measure. */}
       <div className="absolute top-[26px] left-[34px] right-[34px] z-10">
-      <div className="flex items-start gap-3 pr-[150px]">
+      {/* Tagged so returning from a rescue can put the question back in view —
+          see lib/rescueReturn.ts. A data attribute rather than an id because
+          this block is rendered once per screen and an id would collide the
+          moment a second question strip appears anywhere. */}
+      <div data-question-text className="flex items-start gap-3 pr-[150px]">
         {shownQuestionNumber !== null && (
           <div className="w-[30px] h-[30px] rounded-md border border-muted-gray bg-reading-surface flex items-center justify-center text-xs font-semibold text-slate-blue flex-shrink-0">
             {shownQuestionNumber}

@@ -30,6 +30,7 @@ import { useNumeraStore } from '@/store/useNumeraStore';
 import { isPhase3 } from '@/lib/phase3';
 import { isFinalStep } from '@/lib/rescueActions';
 import { emitRescueAdvance } from '@/lib/rescueEvents';
+import { findReturnSurfaces, returnToQuestion } from '@/lib/rescueReturn';
 import StickyNote from '@/components/StickyNote';
 
 const TITLE = {
@@ -39,7 +40,6 @@ const TITLE = {
 
 export default function RescueSteps() {
   const steps = useNumeraStore((s) => s.rescueSteps);
-  const returnTarget = useNumeraStore((s) => s.rescueReturnTarget);
   const clearRescueSteps = useNumeraStore((s) => s.clearRescueSteps);
   const currentPhase = useNumeraStore((s) => s.currentPhase);
   const sessionId = useNumeraStore((s) => s.sessionId);
@@ -53,6 +53,26 @@ export default function RescueSteps() {
   // B starting at step 1, and B opened with its button already disabled and no
   // way to re-enable it.
   const [awaiting, setAwaiting] = useState<{ rescueId: string; step: number } | null>(null);
+  /**
+   * Set when a press could not be delivered at all.
+   *
+   * Rescue events ride the voice socket (hooks/useWebSocket registers the only
+   * transport). A student in text mode, or one whose socket has dropped, has
+   * nothing carrying the advance — and the button then did LITERALLY nothing:
+   * no step, no latch, no message. Verified in the browser on 31 Aug with the
+   * presentation flag on and the socket closed.
+   *
+   * The component's own contract is that a press which goes nowhere must say
+   * what it is waiting for rather than pretend; that only held for a press that
+   * was actually sent. This is the other half.
+   *
+   * Keyed to the step it happened on, for the same reason `awaiting` is keyed
+   * to the rescue: held as a bare boolean it survived onto the steps that DID
+   * arrive, so step 2 rendered with "couldn't ask for the next step" sitting
+   * under it — a failure notice attached to a success.
+   */
+  const [undeliverable, setUndeliverable] =
+    useState<{ rescueId: string; step: number } | null>(null);
 
   if (steps.length === 0) return null;
   // Phase 3 is answered alone (spec §3.2). Support does not appear during an
@@ -67,6 +87,10 @@ export default function RescueSteps() {
   const pending = awaiting !== null
     && awaiting.rescueId === current.rescueId
     && awaiting.step > current.stepIndex;
+  /** Only for the step the student actually pressed on. */
+  const failedToSend = undeliverable !== null
+    && undeliverable.rescueId === current.rescueId
+    && undeliverable.step === current.stepIndex;
 
   const onNext = () => {
     if (!sessionId || !activeQuestionId) return;
@@ -84,6 +108,9 @@ export default function RescueSteps() {
     // Only latch on a send that actually left. A closed socket, or a backend
     // that does not know this frame yet, must not leave the button reading
     // "Waiting for the next step…" for the rest of the question.
+    setUndeliverable(
+      sent ? null : { rescueId: current.rescueId, step: current.stepIndex },
+    );
     if (sent) setAwaiting({ rescueId: current.rescueId, step: current.stepIndex + 1 });
   };
 
@@ -93,11 +120,18 @@ export default function RescueSteps() {
     // or replaces student work, which the handoff states twice.
     clearRescueSteps();
     setAwaiting(null);
-    if (returnTarget) {
-      // Focus is the backend's stated return target. We record the intent; the
-      // canvas owns where that id actually is.
-      console.log('[rescue] returning to', returnTarget);
-    }
+    setUndeliverable(null);
+    // ...and puts the student back where they answer (Sanya's item 3, "return
+    // focus to the original problem and restore normal input"). This used to
+    // be a console.log, so the panel vanished and the student was left with
+    // the caret nowhere after several steps of reading.
+    //
+    // The backend's `return_target_object_id` is deliberately NOT read here:
+    // it names a question token, and nothing on the canvas can focus a single
+    // token, so acting on it would be the same silent no-op in a new place. It
+    // stays on the step (RescueStep.returnTargetObjectId) for whenever a real
+    // focus mechanism exists. See lib/rescueReturn.
+    returnToQuestion(findReturnSurfaces(document));
   };
 
   return (
@@ -138,6 +172,11 @@ export default function RescueSteps() {
               {pending ? 'Waiting for the next step…' : 'Next step'}
               {!pending && <ChevronRight className="h-4 w-4" aria-hidden />}
             </button>
+          )}
+          {failedToSend && !pending && (
+            <span role="status" className="text-xs text-slate-500">
+              Couldn&apos;t ask for the next step — try again in a moment.
+            </span>
           )}
           {final && (
             <button
