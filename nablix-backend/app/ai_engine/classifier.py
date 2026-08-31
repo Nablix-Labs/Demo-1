@@ -825,7 +825,20 @@ def objective_with_persisted_choice_selection(
         normalized_choice_response(answer)
         for answer in [answer_spec.canonical_answer, *answer_spec.accepted_answers]
     }
-    if normalized_choice_response(selected_option_id) not in accepted_choices:
+    selected_option_text = (
+        request.guided_teaching_state.selected_option_text
+        if request.guided_teaching_state is not None
+        and request.guided_teaching_state.question_id == request.question_id
+        else None
+    )
+    selected_choice_is_correct = (
+        normalized_choice_response(selected_option_id) in accepted_choices
+        or (
+            selected_option_text is not None
+            and normalized_choice_response(selected_option_text) in accepted_choices
+        )
+    )
+    if not selected_choice_is_correct:
         return objective
     required_ids = {
         component.concept_id
@@ -839,6 +852,39 @@ def objective_with_persisted_choice_selection(
     missing_ids = required_ids - confirmed_ids
     return ActiveTeachingObjective(
         objective_type="EXPLAIN_REASONING",
+        target_concept_ids=sorted(missing_ids),
+        confirmed_concept_ids=sorted(confirmed_ids),
+        missing_concept_ids=sorted(missing_ids),
+    )
+
+
+def objective_with_persisted_component_evidence(
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+) -> ActiveTeachingObjective:
+    """Recover confirmed guided components from the durable session state."""
+
+    state = request.guided_teaching_state
+    if state is None or state.question_id != request.question_id:
+        return objective
+    required_ids = {
+        component.concept_id
+        for component in rubric.required_concepts
+        if component.required
+    }
+    confirmed_ids = (
+        set(objective.confirmed_concept_ids)
+        | set(state.confirmed_component_ids)
+    ) & required_ids
+    missing_ids = required_ids - confirmed_ids
+    if (
+        confirmed_ids == set(objective.confirmed_concept_ids)
+        and missing_ids == set(objective.missing_concept_ids)
+    ):
+        return objective
+    return ActiveTeachingObjective(
+        objective_type=objective.objective_type,
         target_concept_ids=sorted(missing_ids),
         confirmed_concept_ids=sorted(confirmed_ids),
         missing_concept_ids=sorted(missing_ids),
@@ -1548,7 +1594,21 @@ def deterministic_teaching_step_evaluation(
 
     if step.step_id == "FIXED_VALUE":
         expected = f"{operator}{number}"
-        if compact in {number, expected} or (number in normalized and any(word in normalized for word in ("fixed", "constant", "stays"))):
+        short_fixed_answer = re.fullmatch(
+            (
+                rf"(?:it'?s|it is|the (?:number|value) is)\s*"
+                rf"[+\-−]?\s*{re.escape(number)}"
+            ),
+            normalized,
+        ) is not None
+        if (
+            compact in {number, expected}
+            or short_fixed_answer
+            or (
+                number in normalized
+                and any(word in normalized for word in ("fixed", "constant", "stays"))
+            )
+        ):
             if next_step is None:
                 return _controller_evaluation(request, "CORRECT", objective, "Nice work.", step.step_id, rubric)
             return _controller_evaluation(request, "PARTIAL", objective, f"Yes. {next_step.prompt}", step.step_id, rubric)
@@ -2332,6 +2392,7 @@ def classify_guided_learning_response(
     )
     objective = objective_for_rubric(request.active_teaching_objective, rubric)
     objective = objective_with_persisted_choice_selection(request, rubric, objective)
+    objective = objective_with_persisted_component_evidence(request, rubric, objective)
     affect = affect_evaluation(request, objective, rules)
     if affect is not None:
         return build_guided_tutor_response(request, rules, safety_check, rubric, affect, objective)
