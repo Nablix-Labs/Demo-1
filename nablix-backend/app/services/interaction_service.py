@@ -3614,7 +3614,11 @@ async def _process_interaction(
         schema_support_steps,
         tutor_message,
     )
-    if support_context is not None and not scaffold_turn:
+    if (
+        support_context is not None
+        and not scaffold_turn
+        and not tutor.question_completed
+    ):
         support_message = build_support_aware_tutor_message(
             question_id=session.question_id,
             question=session.current_question,
