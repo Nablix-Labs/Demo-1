@@ -7,6 +7,9 @@ from app.models.session import (
     OrientationCompletionRequest,
     OrientationPhaseRequest,
     ReviewCompleteRequest,
+    RescueAdvanceRequest,
+    RescueRenderAckRequest,
+    RescueStepResponse,
     SessionResumeRequest,
     SessionEndRequest,
     SessionRecord,
@@ -17,6 +20,8 @@ from app.services.session_service import (
     complete_diagnostic,
     complete_orientation,
     complete_review,
+    acknowledge_rescue_render,
+    advance_rescue,
     end_session,
     get_session,
     resume_session,
@@ -89,7 +94,24 @@ async def complete_review_endpoint(
     return await complete_review(session_id, request, access_token)
 
 
+@router.post("/{session_id}/rescue/render-ack", response_model=RescueStepResponse)
+async def acknowledge_rescue_render_endpoint(
+    session_id: SessionId,
+    request: RescueRenderAckRequest,
+    access_token: AccessToken,
+) -> RescueStepResponse:
+    return await acknowledge_rescue_render(session_id, request, access_token)
+
+
+@router.post("/{session_id}/rescue/advance", response_model=RescueStepResponse)
+async def advance_rescue_endpoint(
+    session_id: SessionId,
+    request: RescueAdvanceRequest,
+    access_token: AccessToken,
+) -> RescueStepResponse:
+    return await advance_rescue(session_id, request)
+
+
 @router.post("/end", response_model=SessionResponse)
 async def end_session_endpoint(request: SessionEndRequest) -> SessionRecord:
     return await end_session(request)
-

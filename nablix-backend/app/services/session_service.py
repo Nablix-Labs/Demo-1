@@ -20,6 +20,7 @@ from app.models.adapters import ConversationMessage, StudentModelResult, VisualC
 from app.models.canvas import CanvasQuestionMemory, CanvasStroke, CanvasSubmissionRecord
 from app.models.canvas_memory import CanvasEvent
 from app.models.fields import Phase
+from app.models.guided_learning import ActiveGuidedRescue
 from app.models.interaction import InteractionResponse
 from app.models.session import (
     CanvasState,
@@ -32,6 +33,9 @@ from app.models.session import (
     PhaseTransitionRecord,
     QuestionAttemptRecord,
     ReviewCompleteRequest,
+    RescueAdvanceRequest,
+    RescueRenderAckRequest,
+    RescueStepResponse,
     SessionEndRequest,
     SessionPerformance,
     SessionRecord,
@@ -43,6 +47,8 @@ from app.models.session import (
 from app.models.student_model_session import (
     DiagnosticResult,
     DiagnosticCompletedEvent,
+    IndependentQuestionSetRequestedEvent,
+    Phase2RepairResult,
     JourneyPhaseState,
     MicroSkillResult,
     OrientationCompletedEvent,
@@ -73,6 +79,11 @@ from app.services.student_model_session import (
     schema_visual_cue,
 )
 from app.services.session_store import save_session
+from app.services.rescue_presentation import (
+    acknowledge_active_rescue,
+    advance_active_rescue,
+    rescue_action_for,
+)
 
 
 _sessions: dict[str, SessionRecord] = {}
@@ -1475,6 +1486,132 @@ async def get_session(session_id: str, student_id: str) -> SessionRecord:
         # rather than a 200 carrying a null review the screen cannot use.
         return await _attach_phase4_review(session, event, strict=True)
     return session
+
+
+async def _complete_tutor_solved_rescue(
+    session: SessionRecord,
+    active: ActiveGuidedRescue,
+    access_token: str,
+) -> SessionRecord:
+    """Run the deferred Phase 2 -> Phase 3 transition owed by a Tutor-Solved rescue."""
+
+    event = session.student_model_event
+    if event is None:
+        raise RuntimeError("Tutor-Solved rescue completion requires a Student Model event.")
+    guided = event.journey_state.phase_2_guided_learning
+    try:
+        response = await get_adapters().student_model.send_session_event(
+            IndependentQuestionSetRequestedEvent(
+                # The final rescue action id is the idempotency key: a retry of
+                # the same acknowledgement sends exactly the same event.
+                request_id=active.current_action_id,
+                event_type="INDEPENDENT_QUESTION_SET_REQUESTED",
+                source_turn_id=active.current_action_id,
+                expected_journey_version=event.journey_state.version,
+                topic_id=event.journey_state.topic_id,
+                student_id=session.student_id,
+                timestamp=_schema_timestamp(),
+                phase2_repair_results=[
+                    Phase2RepairResult(
+                        micro_skill_id=skill,
+                        highest_support_used=guided.highest_support_used_by_skill.get(
+                            skill,
+                            "TUTOR_SOLVED",
+                        ),
+                    )
+                    for skill in guided.target_micro_skill_ids
+                ],
+                used_question_ids=guided.used_question_ids,
+            ),
+            access_token,
+        )
+    except HTTPException:
+        raise
+    except Exception as error:
+        # The acknowledged rescue stays persisted, so the same ack retries.
+        raise HTTPException(
+            status_code=503,
+            detail="Student Model did not deliver Independent Practice after the rescue.",
+        ) from error
+    return await _apply_schema_event(session, response)
+
+
+async def _clear_completed_rescue(
+    session: SessionRecord,
+    action_id: str,
+) -> SessionRecord:
+    updated = session.model_copy(
+        update={
+            "active_guided_rescue": None,
+            "last_completed_rescue_action_id": action_id,
+        }
+    )
+    _sessions[updated.session_id] = updated
+    await save_session(updated)
+    return updated
+
+
+async def acknowledge_rescue_render(
+    session_id: str,
+    request: RescueRenderAckRequest,
+    access_token: str,
+) -> RescueStepResponse:
+    async with interaction_lock_for(session_id):
+        session = _get_owned_session(session_id, request.student_id)
+        active = session.active_guided_rescue
+        if active is None:
+            if session.last_completed_rescue_action_id == request.action_id:
+                return RescueStepResponse(completed=True)
+            raise HTTPException(status_code=409, detail="No active rescue is awaiting render acknowledgement.")
+        updated_active = acknowledge_active_rescue(
+            active,
+            request.action_id,
+            request.target_object_id,
+        )
+        updated = session.model_copy(update={"active_guided_rescue": updated_active})
+        _sessions[session_id] = updated
+        await save_session(updated)
+        if not updated_active.is_final_step:
+            return RescueStepResponse(
+                action=rescue_action_for(updated_active),
+                current_step_index=updated_active.current_step_index,
+                completed=False,
+            )
+        # Final step: the ack above is already persisted, so a downstream
+        # failure below leaves the same acknowledgement safely retryable.
+        if updated_active.pending_phase3_transition:
+            updated = await _complete_tutor_solved_rescue(
+                updated,
+                updated_active,
+                access_token,
+            )
+        await _clear_completed_rescue(updated, updated_active.current_action_id)
+        return RescueStepResponse(completed=True)
+
+
+async def advance_rescue(
+    session_id: str,
+    request: RescueAdvanceRequest,
+) -> RescueStepResponse:
+    async with interaction_lock_for(session_id):
+        session = _get_owned_session(session_id, request.student_id)
+        active = session.active_guided_rescue
+        if active is None:
+            raise HTTPException(status_code=409, detail="No active rescue can be advanced.")
+        updated_active = await advance_active_rescue(
+            active,
+            request.question_id,
+            request.rescue_id,
+            request.current_step_index,
+        )
+        updated = session.model_copy(update={"active_guided_rescue": updated_active})
+        _sessions[session_id] = updated
+        await save_session(updated)
+        return RescueStepResponse(
+            action=rescue_action_for(updated_active),
+            current_step_index=updated_active.current_step_index,
+            completed=False,
+        )
 
 
 async def resume_session(
