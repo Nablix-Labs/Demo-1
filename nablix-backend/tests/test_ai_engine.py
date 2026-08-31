@@ -133,6 +133,54 @@ def test_topic1_variable_called_fixed_stays_on_the_changing_role() -> None:
     assert context["diagnostic"]["focus"] == "VARIABLE_CALLED_FIXED"
 
 
+def test_topic1_persisted_role_evidence_completes_operation_without_reasking() -> None:
+    request = _topic1_request("addition")
+    rubric = classifier.rubric_from_authored_answer_parts(
+        "Q-T01-002",
+        request.question_type,
+        request.answer_spec,
+        "test",
+    )
+    assert rubric is not None
+    request = request.model_copy(
+        update={
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-T01-002",
+                objective_component_ids=["CHANGING_VALUE", "FIXED_VALUE", "OPERATION"],
+                confirmed_component_ids=["CHANGING_VALUE", "FIXED_VALUE"],
+                missing_component_ids=["OPERATION"],
+                active_component_id="OPERATION",
+                last_tutor_question_type="COMPONENT",
+                selected_option_id=None,
+                awaiting_response=True,
+                active_step_id="OPERATION",
+                teaching_step_ids=["CHANGING_VALUE", "FIXED_VALUE", "OPERATION"],
+                completed_step_ids=["CHANGING_VALUE", "FIXED_VALUE"],
+                current_step_index=2,
+            )
+        }
+    )
+    stale_objective = classifier.initial_guided_objective(rubric)
+    objective = classifier.objective_with_persisted_component_evidence(
+        request,
+        rubric,
+        stale_objective,
+    )
+
+    evaluation = classifier.deterministic_teaching_step_evaluation(
+        request,
+        rubric,
+        objective,
+        load_classifier_rules(),
+    )
+
+    assert objective.confirmed_concept_ids == ["CHANGING_VALUE", "FIXED_VALUE"]
+    assert objective.missing_concept_ids == ["OPERATION"]
+    assert evaluation is not None
+    assert evaluation.student_state == "CORRECT"
+    assert evaluation.newly_confirmed_concept_ids == ["OPERATION"]
+
+
 def test_topic1_operation_does_not_advance_past_an_unresolved_changing_role() -> None:
     request = _topic1_request("addition")
     rubric = classifier.rubric_from_authored_answer_parts(

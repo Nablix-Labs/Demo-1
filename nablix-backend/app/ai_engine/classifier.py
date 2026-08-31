@@ -845,6 +845,39 @@ def objective_with_persisted_choice_selection(
     )
 
 
+def objective_with_persisted_component_evidence(
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+) -> ActiveTeachingObjective:
+    """Recover confirmed guided components from the durable session state."""
+
+    state = request.guided_teaching_state
+    if state is None or state.question_id != request.question_id:
+        return objective
+    required_ids = {
+        component.concept_id
+        for component in rubric.required_concepts
+        if component.required
+    }
+    confirmed_ids = (
+        set(objective.confirmed_concept_ids)
+        | set(state.confirmed_component_ids)
+    ) & required_ids
+    missing_ids = required_ids - confirmed_ids
+    if (
+        confirmed_ids == set(objective.confirmed_concept_ids)
+        and missing_ids == set(objective.missing_concept_ids)
+    ):
+        return objective
+    return ActiveTeachingObjective(
+        objective_type=objective.objective_type,
+        target_concept_ids=sorted(missing_ids),
+        confirmed_concept_ids=sorted(confirmed_ids),
+        missing_concept_ids=sorted(missing_ids),
+    )
+
+
 def focused_unresolved_prompt(
     rubric: GeneratedQuestionRubric,
     objective: ActiveTeachingObjective,
@@ -2332,6 +2365,7 @@ def classify_guided_learning_response(
     )
     objective = objective_for_rubric(request.active_teaching_objective, rubric)
     objective = objective_with_persisted_choice_selection(request, rubric, objective)
+    objective = objective_with_persisted_component_evidence(request, rubric, objective)
     affect = affect_evaluation(request, objective, rules)
     if affect is not None:
         return build_guided_tutor_response(request, rules, safety_check, rubric, affect, objective)
