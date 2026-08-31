@@ -113,15 +113,26 @@ export function answerRevealPermitted(action: TutorCanvasAction): boolean {
 }
 
 /**
- * Normalise a rescue action into a step, or null when it is unusable.
+ * The mode a rescue action is in, or null when it refuses to say consistently.
  *
- * Null rather than a throw, and null rather than a partial step. A rescue
- * action with no `rescue_id` cannot be acknowledged, advanced or superseded —
- * rendering its text anyway would put content on screen that no subsequent
- * event could ever refer to, which is worse than the rung appearing to have
- * done nothing. Backend fields go missing here without notice, so every read is
- * defensive by default.
+ * Mode follows the action type when the backend omits presentation_mode: the
+ * two carry the same fact, and the type is the one the switch already keys
+ * off. A mode that CONTRADICTS the type is refused instead — that is drift,
+ * and guessing which of the two is right is how a tutor-solved answer ends up
+ * rendered as a parallel example, or a worked answer lands on the student's
+ * page under the wrong heading.
+ *
+ * One derivation, deliberately. Both `rescueStep` and `writesToStudentCanvas`
+ * turn on this decision, and two copies of it that must agree is a copy too
+ * many.
  */
+function rescueMode(action: TutorCanvasAction): RescuePresentationMode | null {
+  const expected: RescuePresentationMode =
+    action.type === 'SHOW_PARALLEL' ? 'PARALLEL' : 'TUTOR_SOLVED';
+  if (action.presentation_mode && action.presentation_mode !== expected) return null;
+  return expected;
+}
+
 /**
  * Does this rescue step belong on the student's own canvas?
  *
@@ -138,19 +149,26 @@ export function answerRevealPermitted(action: TutorCanvasAction): boolean {
  * area for `3x + 6 = 18`, which is the one thing both halves of item 3 are
  * written to prevent.
  *
- * Mode is derived exactly as `rescueStep` derives it, including the refusal on
- * a mode that contradicts its type — if the two ever disagree the step is not
- * drawn, because guessing wrong here means an answer landing on the student's
- * page under the wrong heading.
+ * Mode comes from `rescueMode`, the same derivation `rescueStep` uses, refusal
+ * on a contradicting mode included — if type and mode ever disagree the step is
+ * drawn nowhere, because guessing wrong here means an answer landing on the
+ * student's page under the wrong heading.
  */
 export function writesToStudentCanvas(action: TutorCanvasAction): boolean {
   if (!isRescueAction(action)) return false;
-  const expected: RescuePresentationMode =
-    action.type === 'SHOW_PARALLEL' ? 'PARALLEL' : 'TUTOR_SOLVED';
-  if (action.presentation_mode && action.presentation_mode !== expected) return false;
-  return expected === 'TUTOR_SOLVED';
+  return rescueMode(action) === 'TUTOR_SOLVED';
 }
 
+/**
+ * Normalise a rescue action into a step, or null when it is unusable.
+ *
+ * Null rather than a throw, and null rather than a partial step. A rescue
+ * action with no `rescue_id` cannot be acknowledged, advanced or superseded —
+ * rendering its text anyway would put content on screen that no subsequent
+ * event could ever refer to, which is worse than the rung appearing to have
+ * done nothing. Backend fields go missing here without notice, so every read is
+ * defensive by default.
+ */
 export function rescueStep(action: TutorCanvasAction): RescueStep | null {
   if (!isRescueAction(action)) return null;
 
@@ -163,14 +181,8 @@ export function rescueStep(action: TutorCanvasAction): RescueStep | null {
   const stepIndex = action.step_index;
   if (!Number.isInteger(stepIndex) || (stepIndex as number) < 1) return null;
 
-  // Mode follows the action type when the backend omits presentation_mode: the
-  // two carry the same fact, and the type is the one the switch already keys
-  // off. A mode that CONTRADICTS the type is refused instead — that is drift,
-  // and guessing which of the two is right is how a tutor-solved answer ends up
-  // rendered as a parallel example.
-  const expected: RescuePresentationMode =
-    action.type === 'SHOW_PARALLEL' ? 'PARALLEL' : 'TUTOR_SOLVED';
-  if (action.presentation_mode && action.presentation_mode !== expected) return null;
+  const mode = rescueMode(action);
+  if (!mode) return null;
 
   // Unknown total: show the step, hide the counter. "Step 2" alone is honest;
   // "step 2 of 0" is not — and neither is silently calling it the last one.
@@ -182,7 +194,7 @@ export function rescueStep(action: TutorCanvasAction): RescueStep | null {
   return {
     actionId: action.action_id,
     rescueId,
-    mode: expected,
+    mode,
     stepIndex: stepIndex as number,
     totalSteps,
     text,
