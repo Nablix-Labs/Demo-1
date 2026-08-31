@@ -231,6 +231,47 @@ class GuidedRescue(GuidedLearningModel):
     tutor_engine_context: GuidedRescueContext | None = None
 
 
+def rescue_action_id(rescue_id: str, step_index: int) -> str:
+    """The one stable rescue action id, shared by every producer."""
+
+    return f"{rescue_id}:step:{step_index}"
+
+
+class ActiveGuidedRescue(GuidedLearningModel):
+    """Private persisted cursor for server-owned rescue presentation."""
+
+    question_id: str = Field(min_length=1)
+    rescue_id: str = Field(min_length=1)
+    source_id: str = Field(min_length=1)
+    rescue_type: Literal["PARALLEL_EXAMPLE", "TUTOR_SOLVED"]
+    steps: list[str] = Field(min_length=1)
+    current_step_index: int = Field(default=1, ge=1)
+    rendered_action_ids: list[str] = Field(default_factory=list)
+    return_target_object_id: str = Field(min_length=1)
+    final_reveal_approved: StrictBool = False
+    pending_phase3_transition: StrictBool = False
+
+    @model_validator(mode="after")
+    def validate_cursor(self) -> "ActiveGuidedRescue":
+        if self.current_step_index > len(self.steps):
+            raise ValueError("current_step_index must not exceed rescue steps.")
+        if any(len(step.strip()) == 0 for step in self.steps):
+            raise ValueError("rescue steps must not be empty.")
+        return self
+
+    @property
+    def current_action_id(self) -> str:
+        return rescue_action_id(self.rescue_id, self.current_step_index)
+
+    @property
+    def current_target_object_id(self) -> str:
+        return f"TUTOR_ANCHOR:RESCUE:{self.rescue_id}:STEP:{self.current_step_index}"
+
+    @property
+    def is_final_step(self) -> bool:
+        return self.current_step_index == len(self.steps)
+
+
 class PrerequisiteRepair(GuidedLearningModel):
     prerequisite_micro_skill_ids: list[str]
     reason_code: str

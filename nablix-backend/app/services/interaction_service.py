@@ -60,6 +60,7 @@ from app.models.guided_learning import (
     ActiveScaffold,
     EvaluationReasonCode,
     GuidedRescue,
+    GuidedRescueContext,
     GuidedTeachingState,
     NudgeDelivery,
     PrerequisiteRepair,
@@ -138,6 +139,7 @@ from app.services.student_model_session import (
 from app.core.exceptions import JourneyVersionConflict
 from app.services.student_model_debug import begin as begin_student_model_debug
 from app.services.student_model_debug import payload as student_model_debug_payload
+from app.services.rescue_presentation import active_rescue_from, rescue_context_for
 
 
 _NUMBER_WORD_VALUES: Final[dict[str, str]] = {
@@ -393,11 +395,12 @@ def _tutor_with_guided_rescue(
     canvas_rescue_presentation_enabled: bool,
     canonical_answer: str,
     rescue_wording: CanvasRescueWordingConfig,
+    persisted_rescue_context: GuidedRescueContext | None,
 ) -> TutorResult:
     rescue = _guided_rescue(event)
     if rescue is None:
         return tutor
-    rescue_context = rescue.tutor_engine_context
+    rescue_context = persisted_rescue_context or rescue.tutor_engine_context
     if canvas_rescue_presentation_enabled and rescue_context is None:
         logger.warning(
             "guided_rescue_context_missing",
@@ -713,12 +716,33 @@ async def process_answer_with_session_event(
         )
 
     content_response = response
+    guided_rescue = _guided_rescue(content_response)
+    active_guided_rescue = (
+        active_rescue_from(
+            session.question_id or "UNKNOWN_QUESTION",
+            guided_rescue,
+            context.correct_answer,
+            content_response.request_id,
+        )
+        if (
+            rules.guided_learning.canvas_rescue_presentation_enabled
+            and guided_rescue is not None
+            and session.question_id is not None
+        )
+        else None
+    )
+    persisted_rescue_context = (
+        rescue_context_for(active_guided_rescue)
+        if active_guided_rescue is not None
+        else None
+    )
     tutor = _tutor_with_guided_rescue(
         tutor,
         content_response,
         rules.guided_learning.canvas_rescue_presentation_enabled,
         context.correct_answer,
         rules.guided_learning.canvas_rescue_wording,
+        persisted_rescue_context,
     )
     support_to_serve = (
         response.phase_payload.support_to_serve
@@ -751,6 +775,10 @@ async def process_answer_with_session_event(
     guided = response.journey_state.phase_2_guided_learning
     if (
         session.current_phase == "GUIDED_PRACTICE"
+        and not (
+            active_guided_rescue is not None
+            and active_guided_rescue.rescue_type == "TUTOR_SOLVED"
+        )
         and (
             response.routing.next_action == "PROCEED_TO_PHASE_3"
             or (event_type == "CORRECT_ATTEMPT" and not guided.remaining_micro_skill_ids)
@@ -3750,16 +3778,17 @@ async def _process_interaction(
         and session.current_phase != turn_session.current_phase
         else None
     )
-    logger.info(
-        "phase_transition_evaluated",
-        extra={
-            "session_id": session.session_id,
-            "current_phase": turn_session.current_phase,
-            "student_model_recommended_phase": recommended,
-            "phase_changed": new_phase is not None,
-            "attempt_count": applied_attempt_count,
-        },
-    )
+    if schema_content_response is not None:
+        logger.info(
+            "phase_transition_evaluated",
+            extra={
+                "session_id": session.session_id,
+                "current_phase": turn_session.current_phase,
+                "student_model_recommended_phase": recommended,
+                "phase_changed": new_phase is not None,
+                "attempt_count": applied_attempt_count,
+            },
+        )
 
     next_hint_count: int = _next_hint_count_from(session)
     conversation_action: ConversationAction = tutor.recommended_conversation_action
@@ -3958,12 +3987,23 @@ async def _process_interaction(
     )
     canonical_answer = answer_spec.canonical_answer if answer_spec is not None else ""
     guided_rescue = _guided_rescue(schema_content_response)
-    rescue_context = (
-        guided_rescue.tutor_engine_context
+    active_guided_rescue = (
+        active_rescue_from(
+            turn_session.question_id,
+            guided_rescue,
+            canonical_answer,
+            schema_content_response.request_id,
+        )
         if (
             rules.guided_learning.canvas_rescue_presentation_enabled
             and guided_rescue is not None
+            and turn_session.question_id is not None
         )
+        else None
+    )
+    rescue_context = (
+        rescue_context_for(active_guided_rescue)
+        if active_guided_rescue is not None
         else None
     )
     tutor_canvas_actions = (
@@ -4015,6 +4055,8 @@ async def _process_interaction(
             tutor_canvas_actions,
         )
     )
+    if active_guided_rescue is not None:
+        state_updates["active_guided_rescue"] = active_guided_rescue
 
     next_phase = session.current_phase
     canvas_is_for_active_question = session.question_id == turn_session.question_id
@@ -4070,7 +4112,14 @@ async def _process_interaction(
     )
     response = response.model_copy(
         update={
-            "guided_rescue": guided_rescue,
+            # Stepwise presentation authorises one step at a time through the
+            # canvas action; the full payload would hand the client every
+            # future step and the answer.
+            "guided_rescue": (
+                None
+                if rules.guided_learning.canvas_rescue_presentation_enabled
+                else guided_rescue
+            ),
             "active_support_level": (
                 guided_rescue.rescue_type
                 if guided_rescue is not None
