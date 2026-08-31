@@ -1597,6 +1597,14 @@ async def advance_rescue(
         session = _get_owned_session(session_id, request.student_id)
         active = session.active_guided_rescue
         if active is None:
+            # The final acknowledgement completes the rescue, so a "Next step"
+            # already in flight arrives after it is gone. That is the same
+            # rescue finishing, not an error to show the student.
+            completed = session.last_completed_rescue_action_id
+            if completed is not None and completed.startswith(
+                f"{request.rescue_id}:step:"
+            ):
+                return RescueStepResponse(completed=True)
             raise HTTPException(status_code=409, detail="No active rescue can be advanced.")
         updated_active = await advance_active_rescue(
             active,

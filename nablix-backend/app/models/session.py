@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.adapters import (
     CanvasFeedback,
@@ -157,6 +157,12 @@ class RescueStepResponse(BaseModel):
     action: TutorCanvasAction | None = None
     current_step_index: int | None = Field(default=None, ge=1)
     completed: bool = False
+
+    @model_validator(mode="after")
+    def validate_step(self) -> "RescueStepResponse":
+        if self.completed != (self.action is None):
+            raise ValueError("an unfinished rescue must carry its current action.")
+        return self
 
 
 class DiagnosticAnswer(BaseModel):

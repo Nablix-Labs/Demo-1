@@ -552,3 +552,17 @@ def test_stepwise_interaction_hides_the_full_rescue_payload(monkeypatch) -> None
     active = session_service._get_owned_session(session_id, "ST920").active_guided_rescue
     assert active is not None
     assert active.current_step_index == 1
+
+
+def test_advance_after_completion_is_not_an_error(monkeypatch) -> None:
+    active = _tutor_solved_active()
+    session_id = _seed_session(active)
+    _stub_adapters(monkeypatch, _phase3_response())
+    final = _drive_to_final(session_id, active)
+    _ack(session_id, final)
+
+    # The click that was already in flight when the final render completed.
+    assert _advance(session_id, final.rescue_id, final.current_step_index).completed
+
+    with pytest.raises(HTTPException, match="No active rescue"):
+        _advance(session_id, "SOME-OTHER-RESCUE", 1)
