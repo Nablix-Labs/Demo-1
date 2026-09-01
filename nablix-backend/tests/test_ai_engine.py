@@ -8116,6 +8116,64 @@ def test_role_correction_cannot_reveal_the_unanswered_changing_value() -> None:
     ) == "ACTIVE_STEP_REVEAL"
 
 
+def test_fixed_value_acknowledgement_cannot_reuse_the_changing_role() -> None:
+    request = _topic1_request("5").model_copy(
+        update={
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-T01-002",
+                objective_component_ids=["CHANGING_VALUE", "FIXED_VALUE", "OPERATION"],
+                confirmed_component_ids=["CHANGING_VALUE"],
+                missing_component_ids=["FIXED_VALUE", "OPERATION"],
+                active_component_id="FIXED_VALUE",
+                last_tutor_question_type="COMPONENT",
+                selected_option_id=None,
+                awaiting_response=True,
+                active_step_id="FIXED_VALUE",
+                teaching_step_ids=["CHANGING_VALUE", "FIXED_VALUE", "OPERATION"],
+                completed_step_ids=["CHANGING_VALUE"],
+                current_step_index=1,
+            )
+        }
+    )
+    rubric = classifier.rubric_from_authored_answer_parts(
+        "Q-T01-002",
+        request.question_type,
+        request.answer_spec,
+        "test",
+    )
+    assert rubric is not None
+    objective = ActiveTeachingObjective(
+        objective_type="ANSWER_QUESTION",
+        target_concept_ids=["FIXED_VALUE", "OPERATION"],
+        confirmed_concept_ids=["CHANGING_VALUE"],
+        missing_concept_ids=["FIXED_VALUE", "OPERATION"],
+    )
+    evaluation = GuidedEvaluation(
+        student_state="PARTIAL",
+        newly_confirmed_concept_ids=["FIXED_VALUE"],
+        preserved_concept_ids=["CHANGING_VALUE"],
+        contradicted_concept_ids=[],
+        missing_concept_ids=["OPERATION"],
+        selected_error_code=None,
+        confidence=1.0,
+        next_objective=objective,
+        tutor_message=(
+            "You're right about the changing numbers. What operation does the sign tell us to use?"
+        ),
+        tutor_message_voice=(
+            "You're right about the changing numbers. What operation does the sign tell us to use?"
+        ),
+    )
+
+    assert classifier.guided_tutor_message_validation_reason(
+        evaluation,
+        request,
+        rubric,
+        objective,
+        "Yes, 7 stays fixed. What operation does the sign tell us to use?",
+    ) == "MISALIGNED_ACKNOWLEDGEMENT"
+
+
 def test_anaphoric_changing_number_answers_an_active_variable_prompt() -> None:
     request = ClassificationRequest(
         question_id="Q-T01-004",

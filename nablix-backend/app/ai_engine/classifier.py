@@ -1611,7 +1611,15 @@ def deterministic_teaching_step_evaluation(
         ):
             if next_step is None:
                 return _controller_evaluation(request, "CORRECT", objective, "Nice work.", step.step_id, rubric)
-            return _controller_evaluation(request, "PARTIAL", objective, f"Yes. {next_step.prompt}", step.step_id, rubric)
+            message = f"Yes, {number} stays fixed. {next_step.prompt}"
+            return _controller_evaluation(
+                request,
+                "PARTIAL",
+                objective,
+                message,
+                step.step_id,
+                rubric,
+            )
         if f"-{number}" in compact and operator == "+":
             message = f"Check the sign: this rule adds {number}, so the fixed amount is +{number}. {step.prompt}"
             return _controller_evaluation(request, "WRONG", objective, message, None, rubric)
@@ -3034,6 +3042,18 @@ def guided_fact_budget_context(
             allowed_facts.append(
                 f"The learner identified the operation as {operation_word(operator)}."
             )
+        active_step = active_teaching_step(request)
+        if active_step is not None and evaluation.newly_confirmed_concept_ids:
+            active_fact = {
+                "CHANGING_VALUE": f"The learner identified {variable} as changing.",
+                "FIXED_VALUE": f"The learner identified {fixed_value} as fixed.",
+                "OPERATION": (
+                    "The learner identified the operation as "
+                    f"{operation_word(operator)}."
+                ),
+            }.get(active_step.step_id)
+            if active_fact is not None:
+                allowed_facts.append(active_fact)
     direct_rule_error = direct_rule_mismatch(request)
     typed_option = typed_option_text_evidence(request)
     role_contradiction = active_role_contradiction(request)
@@ -3475,6 +3495,14 @@ def guided_tutor_message_validation_reason(
     ):
         return "ANSWER_REVEAL"
 
+    if guided_message_mislabels_current_role(
+        message,
+        request,
+        rubric,
+        evaluation,
+    ):
+        return "MISALIGNED_ACKNOWLEDGEMENT"
+
     explanation_probe_reason = general_rule_explanation_probe_reason(
         message,
         request,
@@ -3505,6 +3533,29 @@ def guided_tutor_message_validation_reason(
     if guided_message_mentions_selected_option(normalized_message, request):
         return None
     return "UNRELATED"
+
+
+def guided_message_mislabels_current_role(
+    message: str,
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    evaluation: GuidedEvaluation,
+) -> bool:
+    """Reject praise that names an earlier role instead of this turn's evidence."""
+
+    active_step = active_teaching_step(request)
+    if active_step is None:
+        return False
+    component_id = _component_for_step(request, rubric, active_step.step_id)
+    if component_id not in evaluation.newly_confirmed_concept_ids:
+        return False
+    first_sentence = re.split(r"[.!?]", message.casefold(), maxsplit=1)[0]
+    acknowledgement = r"(?:right|correct|identified|noted|said|found)"
+    if active_step.step_id == "FIXED_VALUE":
+        return re.search(rf"\b{acknowledgement}\b.*\bchang", first_sentence) is not None
+    if active_step.step_id == "CHANGING_VALUE":
+        return re.search(rf"\b{acknowledgement}\b.*\b(?:fixed|constant|same)", first_sentence) is not None
+    return False
 
 
 def general_rule_explanation_probe_reason(
