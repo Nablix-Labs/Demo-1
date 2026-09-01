@@ -1536,6 +1536,18 @@ async def _complete_tutor_solved_rescue(
     return await _apply_schema_event(session, response)
 
 
+async def store_active_rescue(
+    session: SessionRecord,
+    active: ActiveGuidedRescue,
+) -> SessionRecord:
+    """Persist the rescue cursor so render-ack and advance can find it."""
+
+    updated = session.model_copy(update={"active_guided_rescue": active})
+    _sessions[updated.session_id] = updated
+    await save_session(updated)
+    return updated
+
+
 async def _clear_completed_rescue(
     session: SessionRecord,
     action_id: str,
