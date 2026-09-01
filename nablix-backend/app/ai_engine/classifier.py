@@ -1202,44 +1202,35 @@ def _describes_changing_starting_value(student_input: str) -> bool:
 
 
 def active_role_contradiction(request: ClassificationRequest) -> str | None:
-    """Identify a role claim that contradicts the active teaching step."""
+    """Identify a role claim that contradicts the expression being discussed."""
 
-    step = active_teaching_step(request)
+    active_step = active_teaching_step(request)
     expression = (
         _expression_parts(request.answer_spec.canonical_answer)
         if request.answer_spec is not None
         else None
     ) or _expression_parts(request.question)
-    if step is None or expression is None:
+    if active_step is None or expression is None:
         return None
     variable, operator, fixed_value = expression
     normalized = re.sub(r"\s+", " ", request.student_input.casefold()).strip()
-    if (
-        step.step_id == "CHANGING_VALUE"
-        and re.search(
-            rf"\b{re.escape(variable)}\b\s+(?:is|stays|remains)\s+"
-            r"(?:fixed|constant)\b",
-            normalized,
-        )
+    if re.search(
+        rf"\b{re.escape(variable)}\b\s+(?:is|stays|remains)\s+"
+        r"(?:fixed|constant)\b",
+        normalized,
     ):
         return "VARIABLE_CALLED_FIXED"
-    if (
-        step.step_id == "FIXED_VALUE"
-        and re.search(
-            rf"(?<!\d){re.escape(fixed_value)}(?!\d)\s+"
-            r"(?:changes|change|varies|vary)\b",
-            normalized,
-        )
+    if re.search(
+        rf"(?<!\d){re.escape(fixed_value)}(?!\d)\s+"
+        r"(?:changes|change|varies|vary)\b",
+        normalized,
     ):
         return "FIXED_VALUE_CALLED_CHANGING"
     if (
-        step.step_id == "OPERATION"
-        and (
-            f"{operator} is fixed" in normalized
-            or f"{operator} is a value" in normalized
-            or "plus is fixed" in normalized
-            or "plus is a value" in normalized
-        )
+        f"{operator} is fixed" in normalized
+        or f"{operator} is a value" in normalized
+        or "plus is fixed" in normalized
+        or "plus is a value" in normalized
     ):
         return "OPERATION_CALLED_VALUE"
     return None
@@ -1303,7 +1294,16 @@ def deterministic_teaching_step_evaluation(
 
     contradiction = active_role_contradiction(request)
     if contradiction is not None:
-        contradicted_component = _component_for_step(request, rubric, step.step_id)
+        contradicted_step_id = {
+            "VARIABLE_CALLED_FIXED": "CHANGING_VALUE",
+            "FIXED_VALUE_CALLED_CHANGING": "FIXED_VALUE",
+            "OPERATION_CALLED_VALUE": "OPERATION",
+        }[contradiction]
+        contradicted_component = _component_for_step(
+            request,
+            rubric,
+            contradicted_step_id,
+        )
         message = role_contradiction_prompt(contradiction, rules)
         return GuidedEvaluation(
             student_state="WRONG",
@@ -1772,7 +1772,7 @@ def typed_choice_selection(request: ClassificationRequest) -> str | None:
     if len(choice) == 1 and choice.isalpha():
         return choice
     matches = re.findall(
-        r"(?:^\s*|\b(?:option|choose|chose)\s+)([a-d])\b",
+        r"(?:^\s*|\b(?:option|choose|chose|selected)\s+)([a-d])\b",
         request.student_input.casefold(),
     )
     return matches[0].upper() if len(set(matches)) == 1 else None
