@@ -259,6 +259,18 @@ async def submit_canvas(
                 request.turn_id,
             )
             if fingerprint != _canvas_request_fingerprint(request):
+                # Both 409s below look identical in the access log, and the
+                # client shows one sentence for either. Name the guard here or
+                # the next report is another log archaeology session.
+                logger.warning(
+                    "canvas_submit_rejected",
+                    extra={
+                        "session_id": request.session_id,
+                        "turn_id": request.turn_id,
+                        "reason": "TURN_EVIDENCE_CHANGED",
+                        "question_id": session.question_id,
+                    },
+                )
                 raise HTTPException(
                     status_code=409,
                     detail="turn_id was already accepted with different Canvas evidence.",
@@ -277,6 +289,22 @@ async def submit_canvas(
         access_token,
     )
     if canvas_events_are_stale(request.canvas_events, session.question_id):
+        logger.warning(
+            "canvas_submit_rejected",
+            extra={
+                "session_id": request.session_id,
+                "turn_id": request.turn_id,
+                "reason": "STALE_CANVAS_EVENTS",
+                "question_id": session.question_id,
+                "event_question_ids": sorted(
+                    {
+                        event.question_id
+                        for event in request.canvas_events
+                        if event.question_id is not None
+                    }
+                ),
+            },
+        )
         return _stale_turn_response(session)
     schema_question = _schema_question(session)
     turn_session = session

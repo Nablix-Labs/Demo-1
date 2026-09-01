@@ -1246,6 +1246,17 @@ def test_canvas_final_independent_attempt_is_recorded_before_review(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     terminal_events: list[str] = []
+    rejections: list[dict[str, object]] = []
+
+    class RecordingLogger:
+        def warning(self, event: str, extra: dict[str, object]) -> None:
+            if event == "canvas_submit_rejected":
+                rejections.append(extra)
+
+        def __getattr__(self, name: str):
+            return lambda *args, **kwargs: None
+
+    monkeypatch.setattr(canvas_service, "logger", RecordingLogger())
 
     async def send_session_event(
         adapter: StudentModelServiceAdapter,
@@ -1344,6 +1355,12 @@ def test_canvas_final_independent_attempt_is_recorded_before_review(
     assert duplicate.json()["status"] == "DUPLICATE_TURN"
     assert changed.status_code == 409
     assert changed_strokes.status_code == 409
+    # Both canvas 409s are indistinguishable in the access log, so the journal
+    # has to say which guard fired.
+    assert [record["reason"] for record in rejections] == [
+        "TURN_EVIDENCE_CHANGED",
+        "TURN_EVIDENCE_CHANGED",
+    ]
     body = response.json()
     assert body["current_phase"] == "REVIEW"
     assert body["question_id"] is None
@@ -2103,6 +2120,42 @@ def test_canvas_stale_question_is_rejected_before_ocr(
     assert after.attempt_count == before.attempt_count
     assert after.canvas_submissions == before.canvas_submissions
     assert after.canvas_memory_by_question == before.canvas_memory_by_question
+
+
+def test_canvas_rejection_names_the_guard_that_fired(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The two 409s are indistinguishable in the access log and the client shows
+    # one sentence for either, so the reason has to be in the journal.
+    records: list[dict[str, object]] = []
+
+    class RecordingLogger:
+        def warning(self, event: str, extra: dict[str, object]) -> None:
+            records.append({"event": event, **extra})
+
+        def __getattr__(self, name: str):
+            return lambda *args, **kwargs: None
+
+    monkeypatch.setattr(MockVisionOCRAdapter, "recognize", _unexpected_ocr)
+    monkeypatch.setattr(canvas_service, "logger", RecordingLogger())
+    session_id = _start_session("ST074")
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST074",
+            "turn_id": "TURN-ST074-CANVAS-1",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+            "canvas_events": [_canvas_event("STALE-QUESTION", 0)],
+        },
+    )
+
+    assert response.status_code == 409
+    assert len(records) == 1
+    assert records[0]["event"] == "canvas_submit_rejected"
+    assert records[0]["reason"] == "STALE_CANVAS_EVENTS"
+    assert records[0]["event_question_ids"] == ["STALE-QUESTION"]
+    assert records[0]["turn_id"] == "TURN-ST074-CANVAS-1"
 
 
 @pytest.mark.parametrize("oversized_field", ["strokes", "canvas_events"])
