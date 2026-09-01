@@ -1588,6 +1588,13 @@ def deterministic_teaching_step_evaluation(
                 return _controller_evaluation(request, "CORRECT", objective, "Nice work.", step.step_id, rubric)
             message = f"Good. {next_step.prompt}"
             return _controller_evaluation(request, "PARTIAL", objective, message, step.step_id, rubric)
+        typed_rule = re.fullmatch(
+            r"\s*(?:(?:it'?s|it is|the rule is)\s*)?[a-z]\s*[+\-×x*]\s*\d+\s*",
+            normalized,
+        )
+        if typed_rule is not None:
+            message = rules.guided_learning.critical_thinking.wrong_direct_rule_prompt
+            return _controller_evaluation(request, "WRONG", objective, message, None, rubric)
         if _numeric_expressions(request.student_input):
             changing = next((item for item in steps if item.step_id == "CHANGING_VALUE"), None)
             if changing is not None:
