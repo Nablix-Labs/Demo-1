@@ -82,13 +82,27 @@ export function resolveTarget(
     // That is what stops a rescue arriving before its anchor exists — the case
     // the ordinary "target not on screen" drop was written for, and which for
     // a rescue would drop the only step the student was going to be shown.
+    //
+    // Both ladders below start clear of whatever the question strip currently
+    // occupies; see `ladderTop`. Measured per action rather than cached: the
+    // question rewraps with the panel and the viewport, and a turn only ever
+    // carries a handful of actions.
+    const stripBottom = questionStripBottom(
+      typeof document === 'undefined' ? undefined : document,
+    );
+    const topFor = (fixed: number) => ladderTop(fixed, stripBottom, ctx.canvasSize.height);
+
     const rescue = parseRescueAnchor(id);
-    if (rescue) return rescueSlot(rescue.stepIndex);
+    if (rescue) return rescueSlot(rescue.stepIndex, topFor(RESCUE_FIRST_Y));
     const writeRuleMatch = id.match(/^TUTOR_ANCHOR:WRITE_RULE:(\d+)$/);
-    if (writeRuleMatch) return nextSlot(ctx.tutorElements, WRITE_RULE_X);
+    if (writeRuleMatch) {
+      return nextSlot(ctx.tutorElements, WRITE_RULE_X, topFor(SLOT_FIRST_Y));
+    }
     const confirmedMatch = id.match(/^TUTOR_ANCHOR:CONFIRMED:(.+):(\d+)$/);
     if (confirmedMatch) {
-      return confirmedMatch[1] === ctx.questionId ? nextSlot(ctx.tutorElements, CONFIRMED_X) : null;
+      return confirmedMatch[1] === ctx.questionId
+        ? nextSlot(ctx.tutorElements, CONFIRMED_X, topFor(SLOT_FIRST_Y))
+        : null;
     }
     const element = ctx.tutorElements.find((el) => el.id === id);
     const box = element ? tutorElementBBox(element) : null;
@@ -166,15 +180,77 @@ const SLOT_LAST_Y = 0.46;
 /** A slot mark, identified by the suffix `actionMarks` gives it. */
 const SLOT_SUFFIX = ':slot';
 
+/* ── Clearing the question strip ────────────────────────────────────────────
+ *
+ * SLOT_FIRST_Y and RESCUE_FIRST_Y are fractions of the WHOLE canvas, measured
+ * from its top edge — and the question strip is an HTML overlay sitting on that
+ * same top edge (Canvas/index.tsx, `absolute top-[26px]`), whose height depends
+ * entirely on the question. A one-line question ends around 70px and the fixed
+ * ladder clears it; the Topic 1 general-rule question is three worked rows plus
+ * two wrapped prose lines, ends near 200px, and the first two rows land inside
+ * it. That is Manjusha's 1 Sep screenshot: "Start: n" beside `14 + 5`, and
+ * "Gain: +5" written across the word "rule".
+ *
+ * So the top is measured rather than assumed, which is the rule the rest of
+ * this module already follows — the client is the only side that knows where
+ * anything currently is. The fixed constants stay as the floor: a short
+ * question must not push the labels DOWN from where they have always been.
+ */
+
+/** Breathing room between the bottom of the question and the first label. */
+const LADDER_PAD = 0.03;
+
+/**
+ * The lowest a ladder may be pushed to.
+ *
+ * Two rows still fit below it (0.39, then 0.46) before SLOT_LAST_Y clamps them
+ * onto each other. Past this the honest answer is that the question is too tall
+ * to also hold a reference column, and crowding the writing area — the arrow
+ * into it starts at WRITE_ARROW_TOP — would cost more than the overlap does.
+ */
+const LADDER_TOP_MAX = 0.39;
+
+/**
+ * How far down the canvas the question strip reaches, in canvas pixels.
+ *
+ * Null when there is nothing to measure — server render, tests, or a screen
+ * with no question — and the caller then keeps the fixed ladder. Read off the
+ * live DOM like `rescueReturn`, for the same reason: layout is only knowable
+ * where it is laid out.
+ */
+export function questionStripBottom(doc: Document | undefined): number | null {
+  const canvas = doc?.querySelector<HTMLElement>('[aria-label="Drawing canvas"]');
+  const strip = doc?.querySelector<HTMLElement>('[data-question-text]');
+  if (!canvas || !strip) return null;
+  const stripRect = strip.getBoundingClientRect();
+  if (stripRect.height === 0) return null;
+  return stripRect.bottom - canvas.getBoundingClientRect().top;
+}
+
+/** The first row of a ladder, clear of the question strip. */
+export function ladderTop(
+  fixedTop: number,
+  stripBottomPx: number | null,
+  canvasHeight: number,
+): number {
+  if (stripBottomPx === null || canvasHeight <= 0) return fixedTop;
+  const clear = stripBottomPx / canvasHeight + LADDER_PAD;
+  return Math.max(fixedTop, Math.min(LADDER_TOP_MAX, clear));
+}
+
 /** How many reference rows are already occupied. */
 export function occupiedSlots(tutorElements: TutorElement[]): number {
   return tutorElements.filter((el) => el.id.endsWith(SLOT_SUFFIX)).length;
 }
 
-/** The first free row, at the given column. */
-export function nextSlot(tutorElements: TutorElement[], x: number): ResolvedTarget {
+/** The first free row, at the given column, starting below the question. */
+export function nextSlot(
+  tutorElements: TutorElement[],
+  x: number,
+  top: number = SLOT_FIRST_Y,
+): ResolvedTarget {
   const index = occupiedSlots(tutorElements);
-  return { kind: 'slot', at: { x, y: Math.min(SLOT_LAST_Y, SLOT_FIRST_Y + index * SLOT_GAP) } };
+  return { kind: 'slot', at: { x, y: Math.min(SLOT_LAST_Y, top + index * SLOT_GAP) } };
 }
 
 /** WRITE_RULE parts are indented, so a reference still reads apart from a note. */
@@ -215,11 +291,14 @@ const RESCUE_LAST_Y = 0.68;
 export const RESCUE_SUFFIX = ':rescue';
 
 /** The row a rescue step occupies, from its authored index (1-based). */
-export function rescueSlot(stepIndex: number): ResolvedTarget {
+export function rescueSlot(
+  stepIndex: number,
+  top: number = RESCUE_FIRST_Y,
+): ResolvedTarget {
   const row = Math.max(1, stepIndex) - 1;
   return {
     kind: 'rescue-slot',
-    at: { x: RESCUE_X, y: Math.min(RESCUE_LAST_Y, RESCUE_FIRST_Y + row * RESCUE_GAP) },
+    at: { x: RESCUE_X, y: Math.min(RESCUE_LAST_Y, top + row * RESCUE_GAP) },
   };
 }
 

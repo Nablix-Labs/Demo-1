@@ -389,3 +389,79 @@ describe('the writing block on the left', () => {
     expect(actionMarks(a, resolveTarget(a, CTX)!)[0].fontStyle).toBe('bold');
   });
 });
+
+describe('clearing the question strip', () => {
+  const CANVAS_H = 620;
+
+  /**
+   * Manjusha, 1 Sep 2026: on a question with three worked rows and two wrapped
+   * prose lines, "Start: n" landed beside `14 + 5` and "Gain: +5" was written
+   * across the word "rule." The ladder started at a fixed 0.14 of the canvas,
+   * while the question strip above it is an HTML overlay whose height depends
+   * entirely on the question.
+   */
+  const layout = (stripBottomPx: number) => {
+    document.body.innerHTML = '';
+    const canvas = document.createElement('div');
+    canvas.setAttribute('aria-label', 'Drawing canvas');
+    const strip = document.createElement('div');
+    strip.setAttribute('data-question-text', '');
+    canvas.appendChild(strip);
+    document.body.appendChild(canvas);
+    canvas.getBoundingClientRect = () =>
+      ({ top: 0, bottom: CANVAS_H, height: CANVAS_H, left: 0, right: 900, width: 900 }) as DOMRect;
+    strip.getBoundingClientRect = () =>
+      ({ top: 26, bottom: stripBottomPx, height: stripBottomPx - 26, left: 34, right: 866, width: 832 }) as DOMRect;
+  };
+
+  const slot = (position: number): TutorCanvasAction => ({
+    action_id: `T1:CONFIRMED_SLOT:${position}:INSERT_LABEL`,
+    type: 'INSERT_LABEL',
+    target_kind: 'TUTOR_ANCHOR',
+    target_object_id: `TUTOR_ANCHOR:CONFIRMED:${CTX.questionId}:1`,
+    confirmed_component_id: null,
+    text: position === 1 ? 'Start: n' : 'Gain: +5',
+    source_id: null,
+    answer_reveal_allowed: false,
+  });
+
+  const placeAll = (actions: TutorCanvasAction[]): TutorElement[] => {
+    let tutorElements: TutorElement[] = [];
+    for (const a of actions) {
+      const target = resolveTarget(a, { ...CTX, tutorElements, canvasSize: { width: 900, height: CANVAS_H } });
+      if (target) tutorElements = [...tutorElements, ...actionMarks(a, target)];
+    }
+    return tutorElements;
+  };
+
+  it('keeps every label below a tall question strip', () => {
+    layout(200); // three equation rows plus two wrapped prose lines
+    const marks = placeAll([slot(1), slot(2)]);
+    expect(marks).toHaveLength(2);
+    for (const m of marks) {
+      expect(m.y! * CANVAS_H).toBeGreaterThanOrEqual(200);
+    }
+  });
+
+  it('still gives each label its own row under a tall strip', () => {
+    layout(200);
+    const ys = placeAll([slot(1), slot(2)]).map((m) => m.y!);
+    expect(new Set(ys).size).toBe(2);
+    expect(ys[0]).toBeLessThan(ys[1]);
+  });
+
+  it('leaves the ladder where it has always been when the question is short', () => {
+    layout(70); // a one-line question, which the fixed ladder already cleared
+    const [first] = placeAll([slot(1)]);
+    // Never ABOVE the fixed ladder, and never more than a pixel or two below
+    // it — a short question must not move labels the students already know.
+    expect(first.y! * CANVAS_H).toBeGreaterThanOrEqual(0.14 * CANVAS_H);
+    expect(first.y! * CANVAS_H).toBeLessThan(0.14 * CANVAS_H + 3);
+  });
+
+  it('falls back to the fixed ladder when the strip cannot be measured', () => {
+    document.body.innerHTML = '';
+    const [first] = placeAll([slot(1)]);
+    expect(first.y).toBeCloseTo(0.14, 5);
+  });
+});
