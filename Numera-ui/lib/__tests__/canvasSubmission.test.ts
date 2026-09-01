@@ -14,7 +14,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { canvasSubmissionView } from '@/lib/canvasSubmission';
+import { canvasSubmissionView, canvasResponseIdentity } from '@/lib/canvasSubmission';
+import { shouldApply, noteApplied, EMPTY_APPLIED } from '@/lib/responseGate';
 
 /** Sanya's payload, reduced to the two fields that mattered. */
 const PHASE_3_ACCEPTED = { ocr: null, tutor: null };
@@ -101,5 +102,56 @@ describe('the partial replies in between', () => {
     const view = canvasSubmissionView({ ocr: null, tutor: FULL_REPLY.tutor });
     expect(view.ocr).toBeNull();
     expect(view.tutorText).toBe('Nice work!');
+  });
+});
+
+describe('who a canvas reply says it is', () => {
+  /**
+   * Measured against the live backend on 1 Sep 2026:
+   *
+   *   POST /interaction   (turn_id TURN-AAA) → version 1, accepted_turn_id TURN-AAA
+   *   POST /canvas/submit (turn_id TURN-BBB) → version 1, accepted_turn_id TURN-AAA
+   *
+   * The canvas reply reports the PREVIOUS turn's id and the unchanged version,
+   * because nothing on that path advances either (`record_canvas_submission`
+   * and `_apply_schema_event` both leave them alone). The response gate then
+   * sees a turn it has already applied and drops the whole reply — so the
+   * backend advanced the question, said "Nice work. Here is the next question."
+   * and the student's screen did not move. Manjusha, 1 Sep.
+   */
+  const interaction = { interaction_state_version: 1, accepted_turn_id: 'TURN-AAA' };
+  const canvas = {
+    interaction_state_version: 1,
+    accepted_turn_id: 'TURN-AAA',
+    submission_id: 'SUB-001',
+  };
+
+  const applyRun = (replies: { interaction_state_version?: number; accepted_turn_id?: string | null }[]) => {
+    let applied = EMPTY_APPLIED;
+    return replies.map((r) => {
+      const ok = shouldApply(r, applied);
+      if (ok) applied = noteApplied(r, applied);
+      return ok;
+    });
+  };
+
+  it('applies a canvas reply that follows an interaction turn', () => {
+    expect(applyRun([interaction, canvasResponseIdentity(canvas)])).toEqual([true, true]);
+  });
+
+  it('still drops a genuine replay of the same submission', () => {
+    const id = canvasResponseIdentity(canvas);
+    expect(applyRun([interaction, id, id])).toEqual([true, true, false]);
+  });
+
+  it('still refuses a canvas reply that is genuinely out of date', () => {
+    const newer = { interaction_state_version: 2, accepted_turn_id: 'TURN-CCC' };
+    const stale = canvasResponseIdentity(canvas); // version 1, older
+    expect(applyRun([interaction, newer, stale])).toEqual([true, true, false]);
+  });
+
+  it('leaves the reply alone when there is no submission id to use', () => {
+    const noId = { interaction_state_version: 1, accepted_turn_id: 'TURN-AAA' };
+    expect(canvasResponseIdentity(noId).accepted_turn_id).toBe('TURN-AAA');
   });
 });

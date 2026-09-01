@@ -67,3 +67,51 @@ export function canvasSubmissionView(res: CanvasReply): CanvasSubmissionView {
     tutorEvaluation: tutorText ? tutor?.evaluation : undefined,
   };
 }
+
+/**
+ * Give a canvas reply its OWN identity before the response gate reads it.
+ *
+ * `/canvas/submit` returns an `InteractionResponse`, and the backend stamps it
+ * with `accepted_turn_id = session.last_processed_turn_id` and the session's
+ * current `interaction_state_version` — but nothing on that path advances
+ * either field. `record_canvas_submission` and `_apply_schema_event` both leave
+ * them untouched, and the two places that do bump the version
+ * (`_option_selected_interaction_response`, `_process_interaction`) are
+ * `/interaction` only. Measured against the live backend, 1 Sep 2026:
+ *
+ *   POST /interaction   (turn_id TURN-AAA) → version 1, accepted_turn_id TURN-AAA
+ *   POST /canvas/submit (turn_id TURN-BBB) → version 1, accepted_turn_id TURN-AAA
+ *
+ * So a canvas reply arrives wearing the PREVIOUS turn's name. `shouldApply`
+ * sees a turn id it has already applied at the same version and drops the whole
+ * reply, and `submitCanvasWork` returns before syncBackendSession, before the
+ * transcript line and before the tutor's message. That is Manjusha's report:
+ * the backend advanced the question and said "Nice work. Here is the next
+ * question.", and the screen did not move at all — no question, no message, no
+ * error. Every canvas Check after a typed turn was being swallowed.
+ *
+ * The gate is not wrong; the identity it was given is. `submission_id` is this
+ * submission's own id — measured, it is the client's `turn_id` echoed straight
+ * back, which is the ideal key here: minted per submission by
+ * `beginSubmissionTurn`, and deliberately REUSED verbatim on a retry, so it
+ * dedupes a resend for the same reason the backend does. Using it restores
+ * exactly what the gate was built to do rather than switching it off:
+ *
+ *   - a first reply applies once, because its id has not been seen;
+ *   - a resend of the same submission is still deduped, because it carries the
+ *     same submission_id;
+ *   - a canvas reply that really IS out of date still loses, because the
+ *     version comparison is untouched and an older version never wins.
+ *
+ * The backend fix — advance both fields on a canvas turn, as /interaction does
+ * — is still the right one and is Chiru's. This makes the client correct on its
+ * own side either way: once the backend stamps a real turn id, the reply simply
+ * arrives with a fresh version and this changes nothing.
+ */
+export function canvasResponseIdentity<
+  T extends { accepted_turn_id?: string | null; submission_id?: string | null },
+>(res: T): T {
+  const own = res.submission_id?.trim();
+  if (!own) return res;
+  return { ...res, accepted_turn_id: own };
+}

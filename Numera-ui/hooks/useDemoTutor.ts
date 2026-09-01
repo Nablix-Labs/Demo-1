@@ -51,7 +51,7 @@ import { speakBrowser } from '@/lib/tts';
 import type { SupportRung } from '@/lib/supportLadder';
 import type { NudgeClaimResult } from '@/hooks/useInactivityNudge';
 import { reportFailure } from '@/lib/failureReport';
-import { canvasSubmissionView } from '@/lib/canvasSubmission';
+import { canvasSubmissionView, canvasResponseIdentity } from '@/lib/canvasSubmission';
 import { canvasEvidenceFor } from '@/lib/canvasEvidence';
 import type { QuestionAnchor } from '@/lib/questionAnchors';
 import { isPhase3 } from '@/lib/phase3';
@@ -736,7 +736,11 @@ export function useDemoTutor() {
         // POST is still in the history the tutor reasons over.
         useNumeraStore.getState().canvasEvents,
       );
-      if (!acceptResponse(res)) return res;
+      // Gated on the submission's OWN id, not the turn id the backend put on
+      // the reply — that one belongs to the previous /interaction turn, and the
+      // gate was correctly dropping the whole reply as already applied. See
+      // `canvasResponseIdentity`.
+      if (!acceptResponse(canvasResponseIdentity(res))) return res;
       // Canvas responses now carry the same phase state as /interaction, so a
       // backend phase change here also drives usePhaseRouting.
       const entering = phaseAnnouncement(res, useNumeraStore.getState().currentPhase);
