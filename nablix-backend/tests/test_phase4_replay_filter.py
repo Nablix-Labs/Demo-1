@@ -90,3 +90,12 @@ def test_replays_keep_the_order_the_attempts_were_made() -> None:
     ]
 
     assert _ids(filter_replay_attempts(journey)) == ["F1", "F3"]
+
+
+def test_zero_phase_3_attempts_replay_nothing() -> None:
+    """Phase 4 was reached without the student ever submitting in Phase 3 --
+    a content gap, not mastery. There is no wrong work, so there is nothing to
+    replay, and the tutor must not invent any."""
+
+    assert filter_replay_attempts([]) == []
+    assert filter_replay_attempts([_attempt("G1", "CORRECT", phase="PHASE_2_GUIDED_LEARNING")]) == []

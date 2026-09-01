@@ -173,6 +173,26 @@ def _error_response(
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     errors: list[dict[str, object]] = exc.errors()
+    # A 422 previously reported only the first rejected field, and only to the
+    # caller -- the VM journal showed a bare 422, so a frontend field mismatch
+    # was undiagnosable from the server side. Field paths and types only: never
+    # the submitted values, tokens, or the body.
+    body = exc.body if isinstance(exc.body, dict) else {}
+    logger.warning(
+        "request_validation_rejected",
+        extra={
+            "route": request.url.path,
+            "rejected_field_paths": [
+                ".".join(str(part) for part in error.get("loc", ()))
+                for error in errors
+            ],
+            "rejected_error_types": [str(error.get("type")) for error in errors],
+            "session_id": body.get("session_id"),
+            "student_id": body.get("student_id"),
+            "turn_id": body.get("turn_id"),
+            "interaction_type": body.get("interaction_type"),
+        },
+    )
     first_error: dict[str, object] = errors[0] if len(errors) > 0 else {}
     field: str | None = _validation_field(first_error)
     error_code: str = _validation_error_code(first_error, field)

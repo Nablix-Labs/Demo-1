@@ -3,7 +3,7 @@ import json
 import re
 from datetime import datetime, timezone
 from dataclasses import dataclass
-from typing import Final, Literal, cast
+from typing import Final, Literal, NoReturn, cast
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -116,6 +116,7 @@ from app.services.phase_transition import (
     TRANSITION_MESSAGES,
 )
 from app.services.session_service import (
+    CONTENT_GAP_MESSAGE,
     reconcile_journey_conflict,
     _apply_schema_event,
     _get_owned_session_for_turn,
@@ -1234,6 +1235,36 @@ def _schema_support_used(
     return max(supports, key=_SUPPORT_RANK.index)
 
 
+def _raise_content_gap(
+    session: SessionRecord,
+    event: StudentModelSessionEventResponse,
+) -> NoReturn:
+    """Report a Student Model content gap as itself, not as a restore failure.
+
+    FRESH_CONTENT_UNAVAILABLE is an authoritative answer -- the question does
+    not exist -- so it must never be re-requested in a loop, and never be
+    laundered into MASTERED, REVIEW, or a Phase 4 review. The client branches on
+    the CONTENT_GAP code; the previous 503 said only "did not initialize".
+    """
+
+    logger.warning(
+        "restore_phase_content_gap",
+        extra={
+            "session_id": session.session_id,
+            "phase": session.current_phase,
+            "journey_version": event.journey_state.version,
+            "reason_code": event.routing.reason_code,
+            "next_action": event.routing.next_action,
+            "status_code": event.status.status_code,
+            "missing_micro_skill_ids": event.routing.missing_micro_skill_ids,
+        },
+    )
+    raise HTTPException(
+        status_code=409,
+        detail={"code": "CONTENT_GAP", "message": CONTENT_GAP_MESSAGE},
+    )
+
+
 async def _initialize_restored_schema_phase(
     session: SessionRecord,
     student_model: StudentModelAdapter,
@@ -1251,6 +1282,13 @@ async def _initialize_restored_schema_phase(
         and payload.question_set.questions
     ):
         session = await _apply_schema_event(session, event)
+
+    # The stored event already said the content does not exist. Asking again
+    # returns the same gap, and the answer used to arrive as an opaque 503.
+    if (
+        session.current_question is None or session.question_id is None
+    ) and event.routing.content_gap_detected:
+        _raise_content_gap(session, event)
 
     if session.current_phase == "GUIDED_PRACTICE":
         phase_state = event.journey_state.phase_2_guided_learning
@@ -1345,15 +1383,45 @@ async def _initialize_restored_schema_phase(
         if session.current_phase == "GUIDED_PRACTICE"
         else response.journey_state.phase_3_independent_practice
     )
-    if (
-        payload is None
-        or PHASE_FROM_STUDENT_MODEL[payload.phase] != session.current_phase
-        or payload.phase != effective_phase
-        or payload.payload_type != "QUESTION_SET"
-        or payload.question_set is None
-        or not payload.question_set.questions
-        or initialized_state.status == "NOT_STARTED"
-    ):
+    if response.routing.content_gap_detected:
+        _raise_content_gap(session, response)
+    failure_reason = (
+        "MISSING_PAYLOAD"
+        if payload is None
+        else "PHASE_MISMATCH"
+        if PHASE_FROM_STUDENT_MODEL[payload.phase] != session.current_phase
+        else "EFFECTIVE_PHASE_MISMATCH"
+        if payload.phase != effective_phase
+        else "WRONG_PAYLOAD_TYPE"
+        if payload.payload_type != "QUESTION_SET"
+        else "NO_QUESTIONS"
+        if payload.question_set is None or not payload.question_set.questions
+        else "PHASE_NOT_STARTED"
+        if initialized_state.status == "NOT_STARTED"
+        else None
+    )
+    if failure_reason is not None:
+        # Enough to tell these six causes apart in production without carrying
+        # answers, tokens, or request bodies into the log.
+        logger.error(
+            "restore_phase_not_initialized",
+            extra={
+                "session_id": session.session_id,
+                "journey_version": response.journey_state.version,
+                "phase": session.current_phase,
+                "payload_phase": None if payload is None else payload.phase,
+                "payload_type": None if payload is None else payload.payload_type,
+                "question_count": (
+                    0
+                    if payload is None or payload.question_set is None
+                    else len(payload.question_set.questions)
+                ),
+                "current_question_id": session.question_id,
+                "effective_phase": effective_phase,
+                "initialized_status": initialized_state.status,
+                "failure_reason": failure_reason,
+            },
+        )
         raise HTTPException(
             status_code=503,
             detail="Student Model did not initialize the restored phase with questions.",
@@ -1781,7 +1849,7 @@ def _schema_interaction_request_id(
 
 
 def _turn_updates(
-    request: InteractionRequest,
+    turn_id: str,
     last_tutor_action: TutorAction,
     expected_student_response: ExpectedStudentResponse,
 ) -> dict[str, object]:
@@ -1789,11 +1857,9 @@ def _turn_updates(
         "last_tutor_action": last_tutor_action,
         "expected_student_response": expected_student_response,
     }
-    if request.turn_id is None:
-        raise RuntimeError("validated interaction is missing turn_id")
     updates.update(
         {
-            "last_processed_turn_id": request.turn_id,
+            "last_processed_turn_id": turn_id,
             "last_tutor_turn_id": _new_tutor_turn_id(),
             "last_tutor_response_at": datetime.now(timezone.utc),
         }
@@ -2747,7 +2813,7 @@ async def _option_selected_interaction_response(
             "active_teaching_objective": tutor.active_teaching_objective,
             "guided_teaching_state": tutor.guided_teaching_state or selected_state,
             **_turn_updates(
-                request,
+                request.turn_id,
                 last_tutor_action,
                 expected_student_response,
             ),
@@ -3072,7 +3138,7 @@ async def _explain_again_interaction_response(
         session.show_scaffold_panel,
         session.scaffold_steps,
         {
-            **_turn_updates(request, "ASKED_QUESTION", "ANSWER"),
+            **_turn_updates(request.turn_id, "ASKED_QUESTION", "ANSWER"),
             "conversation_history": history,
         },
     )
@@ -3265,7 +3331,7 @@ async def _process_interaction(
                     request, session, write_actions
                 ),
                 **_turn_updates(
-                    request,
+                    request.turn_id,
                     "REQUESTED_CLARIFICATION",
                     "CLARIFICATION",
                 ),
@@ -3398,7 +3464,7 @@ async def _process_interaction(
                     rules.conversation_rules.max_recent_messages,
                 ),
                 **_canvas_memory_update_from_request(request, session),
-                **_turn_updates(request, "REQUESTED_CLARIFICATION", "CLARIFICATION"),
+                **_turn_updates(request.turn_id, "REQUESTED_CLARIFICATION", "CLARIFICATION"),
             },
         )
         return _cache_response(
@@ -3550,7 +3616,7 @@ async def _process_interaction(
                 **_canvas_memory_update_with_tutor_actions(
                     request, session, write_actions
                 ),
-                **_turn_updates(request, "REQUESTED_CLARIFICATION", "CLARIFICATION"),
+                **_turn_updates(request.turn_id, "REQUESTED_CLARIFICATION", "CLARIFICATION"),
             },
         )
         return _cache_response(
@@ -3617,14 +3683,14 @@ async def _process_interaction(
                 ),
                 **_canvas_memory_update_from_request(request, session),
                 **_turn_updates(
-                    request,
+                    request.turn_id,
                     session.last_tutor_action,
                     session.expected_student_response,
                 ),
             },
         )
         return _cache_response(
-            request,
+            request.turn_id,
             _response_from(
                 session_id=request.session_id,
                 student_id=request.student_id,
@@ -4010,7 +4076,7 @@ async def _process_interaction(
     )
     state_updates.update(
         _turn_updates(
-            request,
+            request.turn_id,
             last_tutor_action,
             expected_student_response,
         )

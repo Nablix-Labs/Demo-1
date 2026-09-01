@@ -4,6 +4,18 @@ This context captures the language for tutor-led canvas correction. It defines t
 
 ## Language
 
+**Student Turn**:
+The client-generated identity for one accepted student request, returned as `accepted_turn_id`.
+
+**Tutor Turn**:
+The backend-generated identity for the tutor reply committed for an accepted student turn, returned as `tutor_turn_id`.
+
+**Interaction State Version**:
+The Tutor Backend's monotonic response-ordering counter. It increases once for each newly committed student turn and is returned as `interaction_state_version`.
+
+**Journey Version**:
+The separate Student Model version for its learning journey. It is not the Tutor Backend interaction state version.
+
 **Student Work**:
 The math or geometry content written by the student on the canvas.
 _Avoid_: Canvas image, user drawing
