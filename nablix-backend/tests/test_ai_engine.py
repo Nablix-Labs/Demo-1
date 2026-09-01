@@ -423,6 +423,115 @@ def test_topic1_role_contradiction_is_corrected_before_the_rule_step() -> None:
     )
 
 
+def test_expression_role_rubric_requires_the_operation_for_general_rule_prompts() -> None:
+    answer_spec = AnswerSpec(
+        answer_spec_id="ANS-T01-006",
+        canonical_answer="c + 4",
+        accepted_answers=[],
+        verification_method="STRUCTURED_TEXT_MATCH",
+        explanation_required=False,
+    )
+
+    rubric = classifier.expression_role_rubric_from_question(
+        "Q-T01-006",
+        "MULTI_PART_SHORT_RESPONSE",
+        (
+            "A counter starts at any value c and increases by 4. Write the general "
+            "rule and state what changes and what stays fixed."
+        ),
+        answer_spec,
+        "test",
+    )
+
+    assert rubric is not None
+    assert [concept.concept_id for concept in rubric.required_concepts] == [
+        "GENERAL_RULE",
+        "CHANGING_VALUE",
+        "FIXED_VALUE",
+        "OPERATION",
+    ]
+
+
+def test_expression_role_steps_ask_for_the_operation_after_the_fixed_value() -> None:
+    request = ClassificationRequest(
+        question_id="Q-T01-006",
+        question_type="MULTI_PART_SHORT_RESPONSE",
+        question=(
+            "A counter starts at any value c and increases by 4. Write the general "
+            "rule and state what changes and what stays fixed."
+        ),
+        correct_answer="c + 4",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-006",
+            canonical_answer="c + 4",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=False,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        student_input="+4",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+    )
+    rubric = classifier.expression_role_rubric_from_question(
+        request.question_id,
+        request.question_type,
+        request.question,
+        request.answer_spec,
+        "test",
+    )
+    assert rubric is not None
+    objective = ActiveTeachingObjective(
+        objective_type="EXPLAIN_CONCEPT",
+        target_concept_ids=["FIXED_VALUE", "OPERATION"],
+        confirmed_concept_ids=["GENERAL_RULE", "CHANGING_VALUE"],
+        missing_concept_ids=["FIXED_VALUE", "OPERATION"],
+    )
+    request = request.model_copy(
+        update={
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-T01-006",
+                objective_component_ids=[
+                    "GENERAL_RULE",
+                    "CHANGING_VALUE",
+                    "FIXED_VALUE",
+                    "OPERATION",
+                ],
+                confirmed_component_ids=["GENERAL_RULE", "CHANGING_VALUE"],
+                missing_component_ids=["FIXED_VALUE", "OPERATION"],
+                active_component_id="FIXED_VALUE",
+                last_tutor_question_type="COMPONENT",
+                selected_option_id=None,
+                awaiting_response=True,
+                active_step_id="FIXED_VALUE",
+                teaching_step_ids=[
+                    "GENERAL_RULE",
+                    "CHANGING_VALUE",
+                    "FIXED_VALUE",
+                    "OPERATION",
+                ],
+                completed_step_ids=["GENERAL_RULE", "CHANGING_VALUE"],
+                current_step_index=2,
+            )
+        }
+    )
+
+    evaluation = classifier.deterministic_teaching_step_evaluation(
+        request,
+        rubric,
+        objective,
+        load_classifier_rules(),
+    )
+
+    assert evaluation is not None
+    assert evaluation.newly_confirmed_concept_ids == ["FIXED_VALUE"]
+    assert evaluation.missing_concept_ids == ["OPERATION"]
+    assert evaluation.tutor_message == "Yes, 4 stays fixed. What operation does the sign tell us to use?"
+
+
 def test_topic1_correct_rule_advances_after_a_role_contradiction() -> None:
     request = ClassificationRequest(
         question_id="Q-T01-006",
@@ -6981,6 +7090,11 @@ def test_generic_teaching_steps_map_to_distinct_components() -> None:
                 description="Third required learner idea.",
                 required=True,
             ),
+            GeneratedConcept(
+                concept_id="REQUIRED_COMPONENT_4",
+                description="Fourth required learner idea.",
+                required=True,
+            ),
         ],
         completion_rule="ALL_REQUIRED_CONCEPTS",
         cache_key="generic-components",
@@ -6996,6 +7110,7 @@ def test_generic_teaching_steps_map_to_distinct_components() -> None:
         "REQUIRED_COMPONENT_1",
         "REQUIRED_COMPONENT_2",
         "REQUIRED_COMPONENT_3",
+        "REQUIRED_COMPONENT_4",
     ]
 
 

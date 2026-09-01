@@ -577,6 +577,16 @@ def resolve_guided_rubric(
 ) -> GeneratedQuestionRubric:
     """Return the persisted runtime rubric or generate it once from existing content."""
 
+    expression_role_rubric = expression_role_rubric_from_question(
+        question_id,
+        question_type,
+        question,
+        answer_spec,
+        rules.guided_learning.rubric_prompt_version,
+    )
+    if expression_role_rubric is not None:
+        return expression_role_rubric
+
     rubric = existing_rubric
     if rubric is not None and rubric.question_id == question_id:
         try:
@@ -768,6 +778,58 @@ def rubric_from_authored_answer_parts(
                 required=True,
             )
             for index, answer_part in enumerate(answer_parts, start=1)
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key=hashlib.sha256(cache_source.encode("utf-8")).hexdigest(),
+        prompt_version=prompt_version,
+    )
+
+
+def expression_role_rubric_from_question(
+    question_id: str,
+    question_type: QuestionType | None,
+    question: str,
+    answer_spec: AnswerSpec,
+    prompt_version: str,
+) -> GeneratedQuestionRubric | None:
+    """Require all expression roles when an authored prompt asks for them."""
+
+    if question_type != "MULTI_PART_SHORT_RESPONSE":
+        return None
+    if re.fullmatch(r"\s*[a-z]\s*[+\-×x*]\s*\d+\s*", answer_spec.canonical_answer.casefold()) is None:
+        return None
+    normalized_question = question.casefold()
+    asks_changing_value = "chang" in normalized_question
+    asks_fixed_value = "fixed" in normalized_question or "stays the same" in normalized_question
+    if not (asks_changing_value and asks_fixed_value):
+        return None
+
+    role_parts: list[tuple[str, str]] = []
+    if "general rule" in normalized_question or "write the rule" in normalized_question:
+        role_parts.append(("GENERAL_RULE", "States the general rule."))
+    role_parts.extend(
+        [
+            ("CHANGING_VALUE", "The variable or starting value changes."),
+            ("FIXED_VALUE", "The numerical value that stays fixed."),
+            ("OPERATION", "The operation represented by the sign."),
+        ]
+    )
+    cache_source = json.dumps(
+        {
+            "question_id": question_id,
+            "question": normalized_question,
+            "roles": role_parts,
+            "prompt_version": prompt_version,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return GeneratedQuestionRubric(
+        question_id=question_id,
+        required_concepts=[
+            GeneratedConcept(concept_id=concept_id, description=description, required=True)
+            for concept_id, description in role_parts
         ],
         completion_rule="ALL_REQUIRED_CONCEPTS",
         cache_key=hashlib.sha256(cache_source.encode("utf-8")).hexdigest(),
@@ -1011,14 +1073,22 @@ def teaching_steps_for(request: ClassificationRequest) -> list[TeachingStep]:
     fixed_prompt = "Which value stays fixed in this rule?"
     operation_prompt = "What operation does the sign tell us to use?"
     rule_prompt = "What general rule represents this situation?"
+    requires_operation_step = (
+        re.fullmatch(r"\s*[a-z]\s*[+\-×x*]\s*\d+\s*", answer_text.casefold())
+        is not None
+        or "operation" in question
+    )
     if "general rule" in question and (
         "changing" in question or "changes" in question
     ):
-        return [
+        steps = [
             TeachingStep("GENERAL_RULE", rule_prompt),
             TeachingStep("CHANGING_VALUE", changing_prompt),
-            TeachingStep("FIXED_VALUE", "What operation or amount stays fixed?"),
+            TeachingStep("FIXED_VALUE", fixed_prompt),
         ]
+        if requires_operation_step:
+            steps.append(TeachingStep("OPERATION", operation_prompt))
+        return steps
     if "general rule" in question:
         return [
             TeachingStep("GENERAL_RULE", rule_prompt), TeachingStep("DEFENCE", "Try a different starting value: what does the same rule predict?"),
@@ -1594,6 +1664,16 @@ def deterministic_teaching_step_evaluation(
 
     if step.step_id == "FIXED_VALUE":
         expected = f"{operator}{number}"
+        supplied_opposite_sign = (
+            operator == "+"
+            and re.search(rf"(?:^|\\s)-\\s*{re.escape(number)}\\b", normalized) is not None
+        ) or (
+            operator == "-"
+            and re.search(rf"(?:^|\\s)\\+\\s*{re.escape(number)}\\b", normalized) is not None
+        )
+        if supplied_opposite_sign:
+            message = rules.guided_learning.critical_thinking.fixed_value_sign_mismatch_prompt
+            return _controller_evaluation(request, "WRONG", objective, message, None, rubric)
         short_fixed_answer = re.fullmatch(
             (
                 rf"(?:it'?s|it is|the (?:number|value) is)\s*"
@@ -1620,9 +1700,6 @@ def deterministic_teaching_step_evaluation(
                 step.step_id,
                 rubric,
             )
-        if f"-{number}" in compact and operator == "+":
-            message = f"Check the sign: this rule adds {number}, so the fixed amount is +{number}. {step.prompt}"
-            return _controller_evaluation(request, "WRONG", objective, message, None, rubric)
         if variable in normalized:
             message = (
                 f"{variable} can change; we are looking for the number that stays the same. "
