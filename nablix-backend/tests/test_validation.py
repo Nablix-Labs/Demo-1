@@ -1,5 +1,9 @@
+import logging
+
+import pytest
 from fastapi.testclient import TestClient
 
+from app.core.logger import logger as app_logger
 from app.main import app
 
 
@@ -129,3 +133,31 @@ def test_validation_returns_invalid_json_code() -> None:
     assert body["message"] == "Request body must be valid JSON."
     assert body["field"] is None
     assert body["request_id"] == "REQ006"
+
+
+def test_a_422_names_every_rejected_field_in_the_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A frontend field mismatch showed up in the VM journal as a bare 422: the
+    response names only the first bad field, and it goes to the browser, not the
+    journal. Field paths and safe IDs only -- never the student's answer."""
+
+    app_logger.addHandler(caplog.handler)
+    body = _valid_interaction_body(SESSION_ID)
+    body["interaction_type"] = "NOT_A_REAL_TYPE"
+    body["hint_count"] = "not a number"
+    try:
+        with caplog.at_level(logging.WARNING):
+            assert client.post("/interaction", json=body).status_code == 422
+    finally:
+        app_logger.removeHandler(caplog.handler)
+
+    record = next(
+        r for r in caplog.records if r.getMessage() == "request_validation_rejected"
+    )
+    assert record.route == "/interaction"
+    assert "body.interaction_type" in record.rejected_field_paths
+    assert "body.hint_count" in record.rejected_field_paths
+    assert record.session_id == SESSION_ID
+    assert record.turn_id == "TURN-VALIDATION-1"
+    assert not any("I think x equals 5" in str(v) for v in vars(record).values())

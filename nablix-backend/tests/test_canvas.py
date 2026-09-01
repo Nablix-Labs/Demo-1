@@ -826,6 +826,7 @@ def test_voice_canvas_attachment_does_not_record_a_second_attempt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session_id = _start_session("ST013")
+    before = session_service._sessions[session_id]
     original_send = StudentModelServiceAdapter.send_session_event
 
     async def unexpected_event(
@@ -853,6 +854,9 @@ def test_voice_canvas_attachment_does_not_record_a_second_attempt(
     assert stored_session["attempt_count"] == 0
     assert stored_session["per_question_history"] == []
     assert len(stored_session["canvas_submissions"]) == 1
+    assert stored_session["interaction_state_version"] == before.interaction_state_version
+    assert stored_session["last_processed_turn_id"] == before.last_processed_turn_id
+    assert stored_session["last_tutor_turn_id"] == before.last_tutor_turn_id
 
 
 def test_canvas_submit_stops_before_tutor_below_legacy_reliability_threshold(
@@ -1140,26 +1144,60 @@ def test_canvas_correct_same_phase_routes_next_question(
 
     monkeypatch.setattr(interaction_service, "run_tutor_pipeline", fake_pipeline)
     session_id = _start_session("ST012")
+    before = session_service._sessions[session_id]
+    student_model_events: list[str] = []
+    original_send = StudentModelServiceAdapter.send_session_event
+
+    async def capture_student_model_event(
+        adapter: StudentModelServiceAdapter,
+        event: StudentModelSessionEvent,
+        access_token: str,
+    ) -> StudentModelSessionEventResponse:
+        student_model_events.append(event.event_type)
+        return await original_send(adapter, event, access_token)
+
+    monkeypatch.setattr(
+        StudentModelServiceAdapter,
+        "send_session_event",
+        capture_student_model_event,
+    )
+    payload = {
+        "session_id": session_id,
+        "student_id": "ST012",
+        "turn_id": "TURN-ST012-CANVAS-1",
+        "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+    }
     response = client.post(
         "/canvas/submit",
-        json={
-            "session_id": session_id,
-            "student_id": "ST012",
-            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
-        },
+        json=payload,
     )
+    duplicate = client.post("/canvas/submit", json=payload)
 
     assert response.status_code == 200
     body = response.json()
+    assert body["accepted_turn_id"] == payload["turn_id"]
+    assert body["tutor_turn_id"] != before.last_tutor_turn_id
+    assert body["interaction_state_version"] == before.interaction_state_version + 1
     assert body["phase_changed"] is True
     assert body["current_phase"] == "INDEPENDENT_PRACTICE"
     assert body["question_id"] == "Q-T02-004"
 
     stored = session_service._sessions[session_id]
+    assert stored.last_processed_turn_id == body["accepted_turn_id"]
+    assert stored.last_tutor_turn_id == body["tutor_turn_id"]
+    assert stored.interaction_state_version == body["interaction_state_version"]
     assert stored.question_id == "Q-T02-004"
     assert stored.attempt_count == 0
     assert stored.question_completed is False
     assert stored.question_number == 1
+    assert len(stored.canvas_submissions) == 1
+    assert student_model_events.count("CORRECT_ATTEMPT") == 1
+    assert duplicate.status_code == 200
+    duplicate_body = duplicate.json()
+    assert duplicate_body["status"] == "DUPLICATE_TURN"
+    assert duplicate_body["accepted_turn_id"] == body["accepted_turn_id"]
+    assert duplicate_body["tutor_turn_id"] == body["tutor_turn_id"]
+    assert duplicate_body["interaction_state_version"] == body["interaction_state_version"]
 
 
 def test_canvas_guided_validation_question_remains_active(
@@ -2118,6 +2156,7 @@ def test_canvas_stale_question_is_rejected_before_ocr(
     assert response.json()["status"] == "STALE_TURN"
     after = session_service._sessions[session_id]
     assert after.attempt_count == before.attempt_count
+    assert after.interaction_state_version == before.interaction_state_version
     assert after.canvas_submissions == before.canvas_submissions
     assert after.canvas_memory_by_question == before.canvas_memory_by_question
 
