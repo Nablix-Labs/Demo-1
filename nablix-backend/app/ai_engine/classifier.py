@@ -1807,6 +1807,12 @@ def teaching_state_for(
         if previous_matches_question and previous.affect_state == "DISTRESS"
         else "NORMAL"
     )
+    selected_option_id = typed_choice_selection(request) or (
+        previous.selected_option_id if previous_matches_question else None
+    )
+    selected_option_text = selected_option_text_for_choice(request, selected_option_id) or (
+        previous.selected_option_text if previous_matches_question else None
+    )
     return GuidedTeachingState(
         question_id=request.question_id or rubric.question_id,
         objective_component_ids=required_ids,
@@ -1814,17 +1820,8 @@ def teaching_state_for(
         missing_component_ids=missing_ids,
         active_component_id=active_component_id(rubric, objective),
         last_tutor_question_type=prompt_type_for_message(tutor_message),
-        selected_option_id=(
-            typed_choice_selection(request)
-            or (
-                previous.selected_option_id
-                if previous_matches_question
-                else None
-            )
-        ),
-        selected_option_text=(
-            previous.selected_option_text if previous_matches_question else None
-        ),
+        selected_option_id=selected_option_id,
+        selected_option_text=selected_option_text,
         typed_option_id=(
             typed_option_evidence[0]
             if typed_option_evidence is not None
@@ -1868,6 +1865,29 @@ def typed_choice_selection(request: ClassificationRequest) -> str | None:
         request.student_input.casefold(),
     )
     return matches[0].upper() if len(set(matches)) == 1 else None
+
+
+def selected_option_text_for_choice(
+    request: ClassificationRequest,
+    selected_option_id: str | None,
+) -> str | None:
+    """Resolve the authored text for a spoken or typed option selection."""
+
+    answer_spec = request.answer_spec
+    if selected_option_id is None or answer_spec is None:
+        return None
+    canonical_option_id = normalized_choice_response(answer_spec.canonical_answer)
+    if normalized_choice_response(selected_option_id) != canonical_option_id:
+        return None
+    option_texts = [
+        accepted_answer
+        for accepted_answer in answer_spec.accepted_answers
+        if normalized_choice_response(accepted_answer) != canonical_option_id
+    ]
+    for option_text in option_texts:
+        if _expression_parts(option_text) is not None:
+            return option_text
+    return option_texts[0] if option_texts else None
 
 
 def typed_option_text_evidence(
@@ -1996,6 +2016,56 @@ def wrong_choice_evaluation(
         next_objective=objective,
         tutor_message=message,
         tutor_message_voice=message,
+    )
+
+
+def correct_choice_selection_evaluation(
+    request: ClassificationRequest,
+    objective: ActiveTeachingObjective,
+    rules: ClassifierRulesConfig,
+) -> GuidedEvaluation | None:
+    """Move a spoken correct choice out of a prior wrong-choice probe."""
+
+    if request.question_type != "CHOICE_WITH_EXPLANATION" or request.answer_spec is None:
+        return None
+    selected_option_id = typed_choice_selection(request)
+    if selected_option_id is None:
+        return None
+    accepted_choices = {
+        normalized_choice_response(answer)
+        for answer in [
+            request.answer_spec.canonical_answer,
+            *request.answer_spec.accepted_answers,
+        ]
+    }
+    if normalized_choice_response(selected_option_id) not in accepted_choices:
+        return None
+    previous_selection = (
+        request.guided_teaching_state.selected_option_id
+        if request.guided_teaching_state is not None
+        and request.guided_teaching_state.question_id == request.question_id
+        else None
+    )
+    if (
+        previous_selection is None
+        or previous_selection.casefold() == selected_option_id.casefold()
+    ):
+        return None
+    if "ANSWER_SELECTION" not in objective.confirmed_concept_ids:
+        return None
+    if "ANSWER_EXPLANATION" not in objective.missing_concept_ids:
+        return None
+    return GuidedEvaluation(
+        student_state="PARTIAL",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=objective.confirmed_concept_ids,
+        contradicted_concept_ids=[],
+        missing_concept_ids=objective.missing_concept_ids,
+        selected_error_code=None,
+        confidence=1.0,
+        next_objective=objective,
+        tutor_message=rules.guided_learning.critical_thinking.choice_reasoning_prompt,
+        tutor_message_voice=rules.guided_learning.critical_thinking.choice_reasoning_prompt,
     )
 
 
@@ -2536,6 +2606,16 @@ def classify_guided_learning_response(
     if wrong_choice is not None:
         return build_guided_tutor_response(
             request, rules, safety_check, rubric, wrong_choice, objective
+        )
+    correct_choice = correct_choice_selection_evaluation(request, objective, rules)
+    if correct_choice is not None:
+        return build_guided_tutor_response(
+            request,
+            rules,
+            safety_check,
+            rubric,
+            correct_choice,
+            objective,
         )
     typed_option = typed_option_text_evaluation(request, objective, rules)
     if typed_option is not None:

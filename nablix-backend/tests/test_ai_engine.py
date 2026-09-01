@@ -2104,7 +2104,7 @@ def test_guided_follow_up_blocks_an_unselected_choice_reveal() -> None:
     )
 
 
-def test_guided_choice_repetition_keeps_the_llm_explanation_and_updates_selection(
+def test_spoken_correct_choice_leaves_a_prior_wrong_choice_probe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = 0
@@ -2154,7 +2154,7 @@ def test_guided_choice_repetition_keeps_the_llm_explanation_and_updates_selectio
             answer_spec=AnswerSpec(
                 answer_spec_id="ANS-T01-004",
                 canonical_answer="B",
-                accepted_answers=["B", "n+4", "second option"],
+                accepted_answers=["B", "second option", "n+4"],
                 verification_method="CHOICE_AND_CONCEPT_MATCH",
                 explanation_required=True,
             ),
@@ -2178,11 +2178,14 @@ def test_guided_choice_repetition_keeps_the_llm_explanation_and_updates_selectio
         )
     )
 
-    assert calls == 1
-    assert response.tutor_message.startswith("You chose option B")
+    assert calls == 0
+    assert response.tutor_message == (
+        "You chose the option. Why does that rule work for every starting value?"
+    )
     assert response.answer_reveal_allowed is True
     assert response.guided_teaching_state is not None
     assert response.guided_teaching_state.selected_option_id == "B"
+    assert response.guided_teaching_state.selected_option_text == "n+4"
 
 
 def test_final_partial_wording_is_replaced_when_it_is_generic() -> None:
