@@ -129,6 +129,7 @@ from app.services.session_service import (
     nudge_deliveries_for_tutor_turn,
     nudge_delivery_for,
     store_nudge_delivery,
+    store_active_rescue,
     store_prerequisite_repair_event,
     update_nudge_delivery_status,
     update_side_channel_state,
@@ -745,6 +746,20 @@ async def process_answer_with_session_event(
         rules.guided_learning.canvas_rescue_wording,
         persisted_rescue_context,
     )
+    if persisted_rescue_context is not None:
+        # /canvas/submit reads tutor.tutor_canvas_actions directly, so the step
+        # has to ride on the tutor result. _process_interaction replans and
+        # overwrites this for the text path, so it is planned once per turn.
+        tutor = tutor.model_copy(
+            update={
+                "tutor_canvas_actions": plan_rescue_canvas_actions(
+                    persisted_rescue_context,
+                    context.source_turn_id,
+                    context.correct_answer,
+                    rules.guided_learning.canvas_rescue_wording,
+                )
+            }
+        )
     support_to_serve = (
         response.phase_payload.support_to_serve
         if response.phase_payload is not None
@@ -880,6 +895,11 @@ async def process_answer_with_session_event(
             access_token,
         )
     updated_session = await _apply_schema_event(session, response)
+    if active_guided_rescue is not None:
+        updated_session = await store_active_rescue(
+            updated_session,
+            active_guided_rescue,
+        )
     if prerequisite_repair_event is not None:
         updated_session = await store_prerequisite_repair_event(
             updated_session,

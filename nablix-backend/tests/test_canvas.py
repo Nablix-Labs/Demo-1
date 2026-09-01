@@ -699,9 +699,25 @@ def test_canvas_preserves_question_metadata_for_guided_rescue(
     )
 
     assert response.status_code == 200, response.text
-    assert response.json()["guided_rescue"]["rescue_type"] == "TUTOR_SOLVED"
-    assert "correct answer is x = 5" in response.json()["tutor"]["tutor_message"]
+    # Stepwise presentation: the canvas turn withholds the payload the same way
+    # the interaction turn does, and authorises only step 1 through the action.
+    assert response.json()["guided_rescue"] is None
+    assert "x = 5" not in response.json()["tutor"]["tutor_message"]
+    assert response.json()["guided_rescue"] is None
+    assert "x = 5" not in response.json()["tutor"]["tutor_message"]
+    assert "Subtract 4 from both sides." in response.json()["tutor"]["tutor_message"]
+    rescue_action = response.json()["tutor_canvas_actions"][0]
+    assert rescue_action["type"] == "TUTOR_SOLVED_STEP"
+    assert rescue_action["step_index"] == 1
+    # Single-step Tutor-Solved: step 1 is also the final step, so the reveal is
+    # approved here. The step text still withholds the original answer.
+    assert rescue_action["total_steps"] == 1
+    assert rescue_action["answer_reveal_allowed"] is True
     after = session_service._get_owned_session(session_id, "ST016")
+    # Without the persisted cursor, render-ack and advance 409 from a canvas turn.
+    assert after.active_guided_rescue is not None
+    assert after.active_guided_rescue.current_step_index == 1
+    assert after.active_guided_rescue.rescue_type == "TUTOR_SOLVED"
     assert after.question_id == before.question_id
     assert after.current_question == before.current_question
     assert after.student_model_event is not None

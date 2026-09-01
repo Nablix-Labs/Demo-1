@@ -5,7 +5,7 @@ confidence:
 guided_learning:
   minimum_voice_transcript_confidence: 0.85
   minimum_ocr_confidence: 0.80
-  canvas_rescue_presentation_enabled: false
+  canvas_rescue_presentation_enabled: true
   canvas_rescue_wording:
     parallel_step_suffix: " Look at this similar example."
     parallel_final_suffix: " Now return to the original question and try it."

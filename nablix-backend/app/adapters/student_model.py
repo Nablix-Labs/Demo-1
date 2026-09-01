@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from app.adapters.http_utils import get_bytes, post_json
 from app.core.config import Settings
+from app.core.logger import logger
 from app.core.exceptions import (
     AdapterError,
     AdapterRequestRejected,
@@ -131,6 +132,27 @@ class StudentModelServiceAdapter:
                     f"body={response}"
                 ),
             )
+        # Only rejections were ever logged, so "did the Student Model send a
+        # rescue?" was unanswerable after the fact. One line at the single choke
+        # point every Phase 2 and Phase 3 event passes through.
+        payload = parsed.phase_payload
+        rescue = payload.rescue_to_serve if payload is not None else None
+        logger.info(
+            "student_model_event_response",
+            extra={
+                "student_model_event": event.event_type,
+                "phase": payload.phase if payload is not None else None,
+                "payload_type": payload.payload_type if payload is not None else None,
+                "rescue_type": (
+                    rescue.get("rescue_type") if isinstance(rescue, dict) else None
+                ),
+                "rescue_micro_skill_id": (
+                    rescue.get("micro_skill_id") if isinstance(rescue, dict) else None
+                ),
+                "routing_reason_code": parsed.routing.reason_code,
+                "journey_version": parsed.journey_state.version,
+            },
+        )
         return parsed
 
     async def persist_work_artifact(

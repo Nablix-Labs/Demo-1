@@ -43,8 +43,10 @@ def _rescue_wording() -> CanvasRescueWordingConfig:
     return load_classifier_rules().guided_learning.canvas_rescue_wording
 
 
-def test_canvas_rescue_presentation_is_disabled_by_default() -> None:
-    assert load_classifier_rules().guided_learning.canvas_rescue_presentation_enabled is False
+def test_canvas_rescue_presentation_is_enabled() -> None:
+    # Stepwise presentation is on: the tutor authorises one rescue step at a
+    # time through the canvas action instead of shipping the whole payload.
+    assert load_classifier_rules().guided_learning.canvas_rescue_presentation_enabled is True
 
 
 def _tutor_result(

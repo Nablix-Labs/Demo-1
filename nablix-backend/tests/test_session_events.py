@@ -13,6 +13,7 @@ from app.main import app
 from app.ai_engine.classifier_config import load_classifier_rules
 from app.models.adapters import TutorResult
 from app.models.guided_learning import GuidedRescue
+from app.models.student_model_session import SessionOpenedEvent
 from app.services import interaction_service, session_service
 
 
@@ -886,6 +887,57 @@ def _independent_rescue_response() -> dict[str, object]:
         }
     }
     return response
+
+
+def test_student_model_response_logs_its_payload_type_and_rescue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Only rejections used to be logged, so a rescue that never arrived and a
+    # rescue that arrived and was dropped looked identical in the journal.
+    records: list[dict[str, object]] = []
+
+    class RecordingLogger:
+        def info(self, event: str, extra: dict[str, object]) -> None:
+            records.append({"event": event, **extra})
+
+        def __getattr__(self, name: str):
+            return lambda *args, **kwargs: None
+
+    async def serve_rescue(*args: object) -> dict[str, object]:
+        del args
+        response = _independent_rescue_response()
+        response["request_id"] = "SESSION001:SESSION001:SESSION_OPENED"
+        return response
+
+    monkeypatch.setattr(student_model, "post_json", serve_rescue)
+    monkeypatch.setattr(student_model, "logger", RecordingLogger())
+    adapter = student_model.StudentModelServiceAdapter(
+        Settings(
+            student_model_url="https://student-model.example",
+            student_model_topic_ids={},
+            use_mock_student_model=False,
+        )
+    )
+
+    asyncio.run(
+        adapter.send_session_event(
+            SessionOpenedEvent(
+                request_id="SESSION001:SESSION001:SESSION_OPENED",
+                event_type="SESSION_OPENED",
+                topic_id="ALG-ORI-02",
+                student_id="ST001",
+                timestamp="2026-08-01T00:00:00Z",
+            ),
+            "token",
+        )
+    )
+
+    assert len(records) == 1
+    logged = records[0]
+    assert logged["event"] == "student_model_event_response"
+    assert logged["payload_type"] == "RESCUE_AND_FRESH_QUESTION"
+    assert logged["phase"] == "PHASE_3_INDEPENDENT_PRACTICE"
+    assert logged["student_model_event"] == "SESSION_OPENED"
 
 
 def _use_live_student_model(
@@ -1886,10 +1938,21 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert parallel.status_code == 200
     assert events[-1]["event_type"] == "MAXIMUM_GUIDED_SUPPORT_PARALLEL"
     assert events[-1]["error_code"] == "ERR-T02-SUBTRACTION-MISAPPLIED"
-    assert parallel.json()["guided_rescue"]["rescue_type"] == "PARALLEL_EXAMPLE"
+    # Stepwise presentation: the payload is withheld and step 1 arrives as a
+    # canvas action instead, so the client never holds the later steps.
+    assert parallel.json()["guided_rescue"] is None
     assert parallel.json()["support_served_this_turn"] == "PARALLEL_EXAMPLE"
     assert "Solve y + 3 = 8" in parallel.json()["message"]
-    assert "try the original question again" in parallel.json()["message"]
+    parallel_action = parallel.json()["tutor_canvas_actions"][0]
+    assert parallel_action["type"] == "SHOW_PARALLEL"
+    assert parallel_action["rescue_id"] == "PAR-T02-M1"
+    assert parallel_action["step_index"] == 1
+    assert parallel_action["total_steps"] == 4
+    assert parallel_action["answer_reveal_allowed"] is False
+    assert (
+        parallel_action["return_target_object_id"]
+        == "TUTOR_ANCHOR:QUESTION:Q-T02-004"
+    )
 
     tutor_solved = client.post(
         "/interaction",
@@ -1907,18 +1970,22 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
         },
     )
     assert tutor_solved.status_code == 200, tutor_solved.text
-    assert events[-2]["event_type"] == "MAXIMUM_GUIDED_SUPPORT_REQUIRED"
-    assert events[-2]["error_code"] == "ERR-T02-SUBTRACTION-MISAPPLIED"
-    assert events[-1]["event_type"] == "INDEPENDENT_QUESTION_SET_REQUESTED"
-    assert events[-1]["phase2_repair_results"] == [
-        {"micro_skill_id": "T02.M1", "highest_support_used": "TUTOR_SOLVED"}
+    assert events[-1]["event_type"] == "MAXIMUM_GUIDED_SUPPORT_REQUIRED"
+    assert events[-1]["error_code"] == "ERR-T02-SUBTRACTION-MISAPPLIED"
+    # Stepwise Tutor-Solved defers the Phase 3 handover: the student is still
+    # being walked through the rescue, so INDEPENDENT_QUESTION_SET_REQUESTED
+    # waits for the final render acknowledgement.
+    assert "INDEPENDENT_QUESTION_SET_REQUESTED" not in [
+        event["event_type"] for event in events
     ]
-    assert events[-1]["used_question_ids"] == ["Q-T02-004"]
-    assert tutor_solved.json()["guided_rescue"]["rescue_type"] == "TUTOR_SOLVED"
+    assert tutor_solved.json()["guided_rescue"] is None
     assert tutor_solved.json()["support_served_this_turn"] == "TUTOR_SOLVED"
-    assert "correct answer is x = 5" in tutor_solved.json()["message"]
-    assert tutor_solved.json()["current_phase"] == "INDEPENDENT_PRACTICE"
-    assert tutor_solved.json()["student_model_state"] is None
+    solved_action = tutor_solved.json()["tutor_canvas_actions"][0]
+    assert solved_action["type"] == "TUTOR_SOLVED_STEP"
+    assert solved_action["step_index"] == 1
+    assert solved_action["answer_reveal_allowed"] is False
+    assert "x = 5" not in tutor_solved.json()["message"]
+    assert tutor_solved.json()["current_phase"] == "GUIDED_PRACTICE"
 
 
 def test_diagnostic_no_gaps_honors_direct_independent_transition(monkeypatch) -> None:
