@@ -646,6 +646,55 @@ def test_topic1_wrong_typed_rule_prompts_for_the_repeated_amount() -> None:
     }
 
 
+def test_wrong_short_response_rule_does_not_require_an_openai_turn() -> None:
+    request = ClassificationRequest(
+        question_id="Q-T01-001",
+        question_type="SHORT_RESPONSE",
+        question=(
+            "3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number. "
+            "Write the general rule."
+        ),
+        correct_answer="n + 5",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-001",
+            canonical_answer="n + 5",
+            accepted_answers=["n + 5"],
+            verification_method="EXACT_MATCH",
+            explanation_required=False,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        student_input="n + 6",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+    )
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-001",
+        required_concepts=[
+            GeneratedConcept(concept_id="GENERAL_RULE", description="States the general rule.", required=True),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="short-rule",
+        prompt_version="test",
+    )
+
+    evaluation = classifier.deterministic_teaching_step_evaluation(
+        request,
+        rubric,
+        classifier.initial_guided_objective(rubric),
+        load_classifier_rules(),
+    )
+
+    assert evaluation is not None
+    assert evaluation.student_state == "WRONG"
+    assert evaluation.tutor_message == (
+        "Compare the amount after the operation in each example. "
+        "Which amount stays the same?"
+    )
+
+
 def test_topic1_typed_correct_option_requires_an_explicit_selection() -> None:
     request = ClassificationRequest(
         question_id="Q-T01-004",
