@@ -203,6 +203,7 @@ class CriticalThinkingConfig(StrictSchema):
     choice_selection_prompt: str
     variable_called_fixed_prompt: str
     fixed_value_called_changing_prompt: str
+    fixed_value_sign_mismatch_prompt: str
     operation_called_value_prompt: str
     active_role_before_operation_prompt: str
     single_case_defence_prompt: str

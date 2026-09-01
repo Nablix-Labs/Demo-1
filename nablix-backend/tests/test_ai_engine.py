@@ -329,6 +329,260 @@ def test_topic1_choice_is_detected_inside_an_explanation() -> None:
     assert "different starting number" in evaluation.tutor_message
 
 
+def test_topic1_selected_option_transport_is_detected_as_a_wrong_choice() -> None:
+    request = ClassificationRequest(
+        question_id="Q-T01-004",
+        question_type="CHOICE_WITH_EXPLANATION",
+        question="Which is the general rule? A: 12 + 4. B: n + 4.",
+        correct_answer="B",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-004",
+            canonical_answer="B",
+            accepted_answers=["B", "n + 4"],
+            verification_method="EXACT_CHOICE_MATCH",
+            explanation_required=True,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        student_input="Selected A: 12 + 4",
+        current_phase="GUIDED_PRACTICE",
+        input_source="CHOICE",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+    )
+    rubric = classifier.rubric_from_authored_answer_parts(
+        "Q-T01-004",
+        request.question_type,
+        request.answer_spec,
+        "test",
+    )
+    assert rubric is not None
+
+    evaluation = classifier.wrong_choice_evaluation(
+        request,
+        rubric,
+        classifier.initial_guided_objective(rubric),
+        load_classifier_rules(),
+    )
+
+    assert classifier.typed_choice_selection(request) == "A"
+    assert evaluation is not None
+    assert evaluation.student_state == "WRONG"
+    assert "different starting number" in evaluation.tutor_message
+
+
+def test_topic1_role_contradiction_is_corrected_before_the_rule_step() -> None:
+    request = ClassificationRequest(
+        question_id="Q-T01-006",
+        question_type="MULTI_PART_SHORT_RESPONSE",
+        question=(
+            "A counter starts at any value c and increases by 4. "
+            "Write the general rule and state what changes and what stays fixed."
+        ),
+        correct_answer="c + 4",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-006",
+            canonical_answer="c + 4",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=False,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        student_input="c is fixed",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+    )
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-006",
+        required_concepts=[
+            GeneratedConcept(concept_id="GENERAL_RULE", description="States the general rule.", required=True),
+            GeneratedConcept(concept_id="CHANGING_VALUE", description="Identifies what changes.", required=True),
+            GeneratedConcept(concept_id="FIXED_INCREMENT", description="Identifies what stays fixed.", required=True),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="counter-components",
+        prompt_version="test",
+    )
+    objective = classifier.initial_guided_objective(rubric)
+
+    evaluation = classifier.deterministic_teaching_step_evaluation(
+        request,
+        rubric,
+        objective,
+        load_classifier_rules(),
+    )
+
+    assert evaluation is not None
+    assert evaluation.student_state == "WRONG"
+    assert evaluation.contradicted_concept_ids == ["CHANGING_VALUE"]
+    assert evaluation.tutor_message == (
+        "Look at the letter in different examples. Does it stay the same, or can it change?"
+    )
+
+
+def test_expression_role_rubric_requires_the_operation_for_general_rule_prompts() -> None:
+    answer_spec = AnswerSpec(
+        answer_spec_id="ANS-T01-006",
+        canonical_answer="c + 4",
+        accepted_answers=[],
+        verification_method="STRUCTURED_TEXT_MATCH",
+        explanation_required=False,
+    )
+
+    rubric = classifier.expression_role_rubric_from_question(
+        "Q-T01-006",
+        "MULTI_PART_SHORT_RESPONSE",
+        (
+            "A counter starts at any value c and increases by 4. Write the general "
+            "rule and state what changes and what stays fixed."
+        ),
+        answer_spec,
+        "test",
+    )
+
+    assert rubric is not None
+    assert [concept.concept_id for concept in rubric.required_concepts] == [
+        "GENERAL_RULE",
+        "CHANGING_VALUE",
+        "FIXED_VALUE",
+        "OPERATION",
+    ]
+
+
+def test_expression_role_steps_ask_for_the_operation_after_the_fixed_value() -> None:
+    request = ClassificationRequest(
+        question_id="Q-T01-006",
+        question_type="MULTI_PART_SHORT_RESPONSE",
+        question=(
+            "A counter starts at any value c and increases by 4. Write the general "
+            "rule and state what changes and what stays fixed."
+        ),
+        correct_answer="c + 4",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-006",
+            canonical_answer="c + 4",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=False,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        student_input="+4",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+    )
+    rubric = classifier.expression_role_rubric_from_question(
+        request.question_id,
+        request.question_type,
+        request.question,
+        request.answer_spec,
+        "test",
+    )
+    assert rubric is not None
+    objective = ActiveTeachingObjective(
+        objective_type="EXPLAIN_CONCEPT",
+        target_concept_ids=["FIXED_VALUE", "OPERATION"],
+        confirmed_concept_ids=["GENERAL_RULE", "CHANGING_VALUE"],
+        missing_concept_ids=["FIXED_VALUE", "OPERATION"],
+    )
+    request = request.model_copy(
+        update={
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-T01-006",
+                objective_component_ids=[
+                    "GENERAL_RULE",
+                    "CHANGING_VALUE",
+                    "FIXED_VALUE",
+                    "OPERATION",
+                ],
+                confirmed_component_ids=["GENERAL_RULE", "CHANGING_VALUE"],
+                missing_component_ids=["FIXED_VALUE", "OPERATION"],
+                active_component_id="FIXED_VALUE",
+                last_tutor_question_type="COMPONENT",
+                selected_option_id=None,
+                awaiting_response=True,
+                active_step_id="FIXED_VALUE",
+                teaching_step_ids=[
+                    "GENERAL_RULE",
+                    "CHANGING_VALUE",
+                    "FIXED_VALUE",
+                    "OPERATION",
+                ],
+                completed_step_ids=["GENERAL_RULE", "CHANGING_VALUE"],
+                current_step_index=2,
+            )
+        }
+    )
+
+    evaluation = classifier.deterministic_teaching_step_evaluation(
+        request,
+        rubric,
+        objective,
+        load_classifier_rules(),
+    )
+
+    assert evaluation is not None
+    assert evaluation.newly_confirmed_concept_ids == ["FIXED_VALUE"]
+    assert evaluation.missing_concept_ids == ["OPERATION"]
+    assert evaluation.tutor_message == "Yes, 4 stays fixed. What operation does the sign tell us to use?"
+
+
+def test_topic1_correct_rule_advances_after_a_role_contradiction() -> None:
+    request = ClassificationRequest(
+        question_id="Q-T01-006",
+        question_type="MULTI_PART_SHORT_RESPONSE",
+        question=(
+            "A counter starts at any value c and increases by 4. "
+            "Write the general rule and state what changes and what stays fixed."
+        ),
+        correct_answer="c + 4",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-006",
+            canonical_answer="c + 4",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=False,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        student_input="c + 4",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+    )
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-006",
+        required_concepts=[
+            GeneratedConcept(concept_id="GENERAL_RULE", description="States the general rule.", required=True),
+            GeneratedConcept(concept_id="CHANGING_VALUE", description="Identifies what changes.", required=True),
+            GeneratedConcept(concept_id="FIXED_INCREMENT", description="Identifies what stays fixed.", required=True),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="counter-components",
+        prompt_version="test",
+    )
+    objective = classifier.initial_guided_objective(rubric)
+
+    evaluation = classifier.deterministic_teaching_step_evaluation(
+        request,
+        rubric,
+        objective,
+        load_classifier_rules(),
+    )
+
+    assert evaluation is not None
+    assert evaluation.student_state == "PARTIAL"
+    assert evaluation.newly_confirmed_concept_ids == ["GENERAL_RULE"]
+    assert evaluation.missing_concept_ids == ["CHANGING_VALUE", "FIXED_INCREMENT"]
+    assert "Which part can take different possible values?" in evaluation.tutor_message
+
+
 def test_topic1_wrong_typed_rule_prompts_for_the_repeated_amount() -> None:
     request = ClassificationRequest(
         question_id="Q-T01-004",
@@ -6836,6 +7090,11 @@ def test_generic_teaching_steps_map_to_distinct_components() -> None:
                 description="Third required learner idea.",
                 required=True,
             ),
+            GeneratedConcept(
+                concept_id="REQUIRED_COMPONENT_4",
+                description="Fourth required learner idea.",
+                required=True,
+            ),
         ],
         completion_rule="ALL_REQUIRED_CONCEPTS",
         cache_key="generic-components",
@@ -6851,6 +7110,7 @@ def test_generic_teaching_steps_map_to_distinct_components() -> None:
         "REQUIRED_COMPONENT_1",
         "REQUIRED_COMPONENT_2",
         "REQUIRED_COMPONENT_3",
+        "REQUIRED_COMPONENT_4",
     ]
 
 
@@ -7969,6 +8229,64 @@ def test_role_correction_cannot_reveal_the_unanswered_changing_value() -> None:
         objective,
         "Does the letter stay the same, or can it change?",
     ) == "ACTIVE_STEP_REVEAL"
+
+
+def test_fixed_value_acknowledgement_cannot_reuse_the_changing_role() -> None:
+    request = _topic1_request("5").model_copy(
+        update={
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-T01-002",
+                objective_component_ids=["CHANGING_VALUE", "FIXED_VALUE", "OPERATION"],
+                confirmed_component_ids=["CHANGING_VALUE"],
+                missing_component_ids=["FIXED_VALUE", "OPERATION"],
+                active_component_id="FIXED_VALUE",
+                last_tutor_question_type="COMPONENT",
+                selected_option_id=None,
+                awaiting_response=True,
+                active_step_id="FIXED_VALUE",
+                teaching_step_ids=["CHANGING_VALUE", "FIXED_VALUE", "OPERATION"],
+                completed_step_ids=["CHANGING_VALUE"],
+                current_step_index=1,
+            )
+        }
+    )
+    rubric = classifier.rubric_from_authored_answer_parts(
+        "Q-T01-002",
+        request.question_type,
+        request.answer_spec,
+        "test",
+    )
+    assert rubric is not None
+    objective = ActiveTeachingObjective(
+        objective_type="ANSWER_QUESTION",
+        target_concept_ids=["FIXED_VALUE", "OPERATION"],
+        confirmed_concept_ids=["CHANGING_VALUE"],
+        missing_concept_ids=["FIXED_VALUE", "OPERATION"],
+    )
+    evaluation = GuidedEvaluation(
+        student_state="PARTIAL",
+        newly_confirmed_concept_ids=["FIXED_VALUE"],
+        preserved_concept_ids=["CHANGING_VALUE"],
+        contradicted_concept_ids=[],
+        missing_concept_ids=["OPERATION"],
+        selected_error_code=None,
+        confidence=1.0,
+        next_objective=objective,
+        tutor_message=(
+            "You're right about the changing numbers. What operation does the sign tell us to use?"
+        ),
+        tutor_message_voice=(
+            "You're right about the changing numbers. What operation does the sign tell us to use?"
+        ),
+    )
+
+    assert classifier.guided_tutor_message_validation_reason(
+        evaluation,
+        request,
+        rubric,
+        objective,
+        "Yes, 7 stays fixed. What operation does the sign tell us to use?",
+    ) == "MISALIGNED_ACKNOWLEDGEMENT"
 
 
 def test_anaphoric_changing_number_answers_an_active_variable_prompt() -> None:
