@@ -319,16 +319,7 @@ def plan_tutor_canvas_actions(
         ]
         return [
             *anchor_actions,
-            TutorCanvasAction(
-                action_id=f"{turn_id}:{len(anchor_actions) + 1}:FOCUS:WRITE_AREA",
-                type="FOCUS",
-                target_kind="WRITE_AREA",
-                target_object_id=None,
-                confirmed_component_id=None,
-                text="Write your rule on the canvas.",
-                source_id=None,
-                answer_reveal_allowed=False,
-            )
+            *plan_write_request_tutor_actions(turn_id, len(anchor_actions) + 1)
         ]
 
     selected_option_id = (
@@ -942,6 +933,26 @@ def plan_write_request_tutor_draw(turn_id: str) -> list[CanvasDrawPayload]:
                     stroke_width=2.0,
                 ),
             ],
+        )
+    ]
+
+
+def plan_write_request_tutor_actions(
+    turn_id: str,
+    action_index: int,
+) -> list[TutorCanvasAction]:
+    """Describe the focused writing area for clients that use semantic actions."""
+
+    return [
+        TutorCanvasAction(
+            action_id=f"{turn_id}:{action_index}:FOCUS:WRITE_AREA",
+            type="FOCUS",
+            target_kind="WRITE_AREA",
+            target_object_id=None,
+            confirmed_component_id=None,
+            text="Write your rule on the canvas.",
+            source_id=None,
+            answer_reveal_allowed=False,
         )
     ]
 

@@ -101,6 +101,7 @@ from app.services.canvas_annotations import (
     plan_rescue_canvas_actions,
     plan_tutor_canvas_actions,
     plan_write_request_tutor_draw,
+    plan_write_request_tutor_actions,
     rescue_tutor_wording,
 )
 from app.services.question_anchors import plan_canvas_action_anchors, plan_question_anchors
@@ -3214,6 +3215,9 @@ async def _process_interaction(
         < rules.guided_learning.minimum_voice_transcript_confidence
         and not canvas_complete_correct
     ):
+        write_actions = plan_write_request_tutor_actions(
+            request.turn_id or "TURN-0000", 1
+        )
         clarification_history = _updated_conversation_history(
             session.conversation_history,
             student_message,
@@ -3237,7 +3241,9 @@ async def _process_interaction(
                 "attempt_count": session.attempt_count,
                 "question_completed": session.question_completed,
                 "conversation_history": clarification_history,
-                **_canvas_memory_update_from_request(request, session),
+                **_canvas_memory_update_with_tutor_actions(
+                    request, session, write_actions
+                ),
                 **_turn_updates(
                     request,
                     "REQUESTED_CLARIFICATION",
@@ -3281,6 +3287,10 @@ async def _process_interaction(
                         else None
                     ),
                     "feedback_type": "CLARIFICATION",
+                    "canvas_draw": plan_write_request_tutor_draw(
+                        request.turn_id or "TURN-0000"
+                    ),
+                    "tutor_canvas_actions": write_actions,
                 }
             ),
         )
@@ -3492,6 +3502,9 @@ async def _process_interaction(
     )
     if ocr is not None and _legacy_ocr_needs_writing(ocr, minimum_ocr_confidence):
         message = _UNRELIABLE_EVIDENCE_MESSAGE
+        write_actions = plan_write_request_tutor_actions(
+            request.turn_id or "TURN-0000", 1
+        )
         updated_session = await update_interaction_state(
             request.session_id,
             request.student_id,
@@ -3514,7 +3527,9 @@ async def _process_interaction(
                     message,
                     rules.conversation_rules.max_recent_messages,
                 ),
-                **_canvas_memory_update_from_request(request, session),
+                **_canvas_memory_update_with_tutor_actions(
+                    request, session, write_actions
+                ),
                 **_turn_updates(request, "REQUESTED_CLARIFICATION", "CLARIFICATION"),
             },
         )
@@ -3548,6 +3563,10 @@ async def _process_interaction(
                         else None
                     ),
                     "feedback_type": "CLARIFICATION",
+                    "canvas_draw": plan_write_request_tutor_draw(
+                        request.turn_id or "TURN-0000"
+                    ),
+                    "tutor_canvas_actions": write_actions,
                 }
             ),
         )
