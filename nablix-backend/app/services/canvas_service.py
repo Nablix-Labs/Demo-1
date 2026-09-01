@@ -550,7 +550,14 @@ async def submit_canvas(
     )
     response.ocr = None if phase3_silent else ocr
     response.latency = latency
-    response.guided_rescue = _guided_rescue(schema_content_response)
+    # Same rule as the interaction path: stepwise presentation authorises one
+    # step at a time through the canvas action, so shipping the whole payload
+    # here would hand the client every future step and the answer.
+    response.guided_rescue = (
+        None
+        if load_classifier_rules().guided_learning.canvas_rescue_presentation_enabled
+        else _guided_rescue(schema_content_response)
+    )
     response.advance_to_next_question = question_advanced
     if phase3_silent:
         response.phase3_submission_kind = "CANVAS"

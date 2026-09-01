@@ -699,8 +699,18 @@ def test_canvas_preserves_question_metadata_for_guided_rescue(
     )
 
     assert response.status_code == 200, response.text
-    assert response.json()["guided_rescue"]["rescue_type"] == "TUTOR_SOLVED"
-    assert "correct answer is x = 5" in response.json()["tutor"]["tutor_message"]
+    # Stepwise presentation: the canvas turn withholds the payload the same way
+    # the interaction turn does, and authorises only step 1 through the action.
+    assert response.json()["guided_rescue"] is None
+    assert "x = 5" not in response.json()["tutor"]["tutor_message"]
+    assert response.json()["guided_rescue"] is None
+    assert "x = 5" not in response.json()["tutor"]["tutor_message"]
+    assert "Subtract 4 from both sides." in response.json()["tutor"]["tutor_message"]
+    # Known gap: /canvas/submit delivers the rescue step as tutor text only. It
+    # does not emit the stepwise canvas action and does not persist the rescue
+    # cursor, so render-ack and advance cannot run from a canvas turn. Text
+    # interaction is the path that drives the full stepwise flow today.
+    assert response.json()["tutor_canvas_actions"] == []
     after = session_service._get_owned_session(session_id, "ST016")
     assert after.question_id == before.question_id
     assert after.current_question == before.current_question
