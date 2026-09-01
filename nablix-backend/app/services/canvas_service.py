@@ -30,7 +30,11 @@ from app.models.canvas import (
     CanvasSubmitRequest,
 )
 from app.models.interaction import InteractionResponse, StaleTurnResponse
-from app.services.canvas_annotations import plan_canvas_draw
+from app.services.canvas_annotations import (
+    plan_canvas_draw,
+    plan_write_request_tutor_actions,
+    plan_write_request_tutor_draw,
+)
 from app.models.session import SessionRecord
 from app.models.student_model_session import StudentModelQuestion
 from app.services.canvas_evidence import (
@@ -420,7 +424,14 @@ async def submit_canvas(
     canvas_draw = (
         []
         if phase3_silent
-        else plan_canvas_draw(tutor, canvas_regions, canvas_evidence.spatial_tokens)
+        else [
+            *plan_canvas_draw(tutor, canvas_regions, canvas_evidence.spatial_tokens),
+            *(
+                plan_write_request_tutor_draw(request.turn_id or "TURN-0000")
+                if tutor.requires_written_math_evidence
+                else []
+            ),
+        ]
     )
 
     latency = CanvasLatency(
@@ -529,6 +540,11 @@ async def submit_canvas(
         tutor.write_instruction if tutor.requires_written_math_evidence else None
     )
     response.canvas_draw = canvas_draw
+    response.tutor_canvas_actions = (
+        plan_write_request_tutor_actions(request.turn_id or "TURN-0000", 1)
+        if tutor.requires_written_math_evidence
+        else tutor.tutor_canvas_actions
+    )
     response.localization_status = (
         "grounded" if canvas_evidence.spatial_tokens else "uncertain"
     )
