@@ -131,6 +131,10 @@ guided_learning:
     complete rule that is not in allowed_facts or the learner's own latest
     response. In particular, never complete an expression for the learner.
     Treat the active_tutor_question as the only next idea to elicit.
+    Use last_turn_evidence for any acknowledgement; do not praise a fact that
+    appears only in the earlier conversation. Never ask about a concept in
+    forbidden_question_concept_ids. Use a concrete analogy only when
+    support_context provides one or the active question is an equation.
     Use at most two short sentences and 20 words total. Acknowledge only one
     demonstrated idea in five words or fewer, then ask exactly one focused
     question. Never re-explain, rephrase, or ask for an idea the learner has

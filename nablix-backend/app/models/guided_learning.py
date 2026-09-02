@@ -10,6 +10,8 @@ from app.models.question_anchor import QuestionTextAnchor
 
 
 GuidedStudentState = Literal["CORRECT", "PARTIAL", "WRONG", "STUCK", "UNCLEAR"]
+GuidedEvidenceStatus = Literal["DEMONSTRATED", "CONTRADICTED"]
+GuidedEvidenceSource = Literal["TEXT", "VOICE", "OCR", "CANVAS", "STRUCTURED"]
 GuidedPromptType = Literal[
     "COMPONENT",
     "OPTION_COMPARISON",
@@ -98,6 +100,14 @@ class ActiveTeachingObjective(GuidedLearningModel):
     missing_concept_ids: list[str]
 
 
+class GuidedEvidenceClaim(GuidedLearningModel):
+    """One concept claim with the channel that demonstrated it."""
+
+    concept_id: str
+    status: GuidedEvidenceStatus
+    source: GuidedEvidenceSource
+
+
 class GuidedTeachingState(GuidedLearningModel):
     """Persisted controller state for one Guided Learning question.
 
@@ -124,6 +134,8 @@ class GuidedTeachingState(GuidedLearningModel):
     affect_state: Literal["NORMAL", "DISTRESS", "FRUSTRATED", "GENTLE_RETURN"] = "NORMAL"
     last_reasoning_probe: str | None = None
     demonstrated_reasoning_ids: list[str] = Field(default_factory=list)
+    evidence_ledger: list[GuidedEvidenceClaim] = Field(default_factory=list)
+    last_turn_evidence: list[GuidedEvidenceClaim] = Field(default_factory=list)
 
 
 class GuidedTeachingPlanStep(GuidedLearningModel):
