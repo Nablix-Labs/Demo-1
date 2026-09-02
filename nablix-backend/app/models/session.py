@@ -226,7 +226,13 @@ class SessionPerformance(BaseModel):
     canvas_submissions: int
     # Phase 3 only, and terminal Phase 3 only. total_attempts counts every
     # phase together, so it cannot answer "how many did they do alone?".
-    independent_attempts: int
+    #
+    # Defaulted, not required: every persisted session is revalidated through
+    # SessionRecord at startup, and a summary written before this field existed
+    # has no key for it. Without the default one such row aborts the boot -- it
+    # did, on 2 Sep 2026. Sessions from before the counter read 0 because
+    # nothing counted them, which is the only honest answer available.
+    independent_attempts: int = 0
 
 
 class SessionSummary(BaseModel):
