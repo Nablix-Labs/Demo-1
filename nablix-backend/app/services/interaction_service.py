@@ -1849,23 +1849,38 @@ def _schema_interaction_request_id(
     return f"{session.session_id}:{source_turn_id}:{event_type}"
 
 
+def _accepted_turn_identity(turn_id: str) -> dict[str, object]:
+    """The identity the client gates on, for one accepted turn.
+
+    `Numera-ui/lib/responseGate.ts` applies a reply when its version is newer,
+    or when the version is equal and this `accepted_turn_id` has not been
+    applied yet. A reply that keeps the previous turn's id at an unchanged
+    version is therefore read as an already-rendered replay and dropped, with
+    nothing shown to the student -- so every accepted turn advances this, even
+    the ones that change no pedagogical state and need no new version.
+
+    These three are exactly the fields `update_side_channel_state` permits,
+    which is what lets a non-pedagogical reply stamp its identity without
+    reaching for a full interaction write.
+    """
+
+    return {
+        "last_processed_turn_id": turn_id,
+        "last_tutor_turn_id": _new_tutor_turn_id(),
+        "last_tutor_response_at": datetime.now(timezone.utc),
+    }
+
+
 def _turn_updates(
     turn_id: str,
     last_tutor_action: TutorAction,
     expected_student_response: ExpectedStudentResponse,
 ) -> dict[str, object]:
-    updates: dict[str, object] = {
+    return {
         "last_tutor_action": last_tutor_action,
         "expected_student_response": expected_student_response,
+        **_accepted_turn_identity(turn_id),
     }
-    updates.update(
-        {
-            "last_processed_turn_id": turn_id,
-            "last_tutor_turn_id": _new_tutor_turn_id(),
-            "last_tutor_response_at": datetime.now(timezone.utc),
-        }
-    )
-    return updates
 
 
 def _independent_attempt_updates(
@@ -3245,6 +3260,13 @@ async def _process_interaction(
 
     if session.current_phase == "INDEPENDENT_PRACTICE":
         if request.interaction_type == "CLARIFICATION_REQUEST":
+            # Refusing to grade is still answering the turn, so the reply has
+            # to wear the turn's own identity or the client drops it as a
+            # replay of the previous one. No new version: nothing pedagogical
+            # moved.
+            session = await update_side_channel_state(
+                session, _accepted_turn_identity(request.turn_id or "TURN-0000")
+            )
             response = _response_from(
                 session_id=request.session_id,
                 student_id=request.student_id,
@@ -3267,6 +3289,9 @@ async def _process_interaction(
             raise HTTPException(status_code=409, detail="Teaching support is unavailable during Independent Practice.")
         if request.interaction_type == "ANSWER_SUBMISSION":
             if request.input_source in {"TEXT", "VOICE"}:
+                session = await update_side_channel_state(
+                    session, _accepted_turn_identity(request.turn_id or "TURN-0000")
+                )
                 response = _response_from(
                     session_id=request.session_id, student_id=request.student_id,
                     turn_id=request.turn_id or "TURN-0000", interaction_type=request.interaction_type,
