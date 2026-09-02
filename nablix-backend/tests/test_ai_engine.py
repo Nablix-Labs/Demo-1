@@ -48,6 +48,7 @@ from app.models.guided_learning import (
     GeneratedConcept,
     GeneratedQuestionRubric,
     GuidedEvaluation,
+    GuidedEvidenceClaim,
     FocusedComponentEvidence,
     GuidedTeachingState,
     ScaffoldEvaluationContext,
@@ -63,7 +64,7 @@ def _topic1_request(student_input: str) -> ClassificationRequest:
     return ClassificationRequest(
         question_id="Q-T01-002",
         question_type="MULTI_PART_SHORT_RESPONSE",
-        question="In m + 7, identify the changing quantity and the fixed change.",
+        question="In m + 7, identify the changing quantity, the fixed value and the operation.",
         correct_answer="m; 7; addition",
         answer_spec=AnswerSpec(
             answer_spec_id="ANS-T01-002",
@@ -423,7 +424,7 @@ def test_topic1_role_contradiction_is_corrected_before_the_rule_step() -> None:
     )
 
 
-def test_expression_role_rubric_requires_the_operation_for_general_rule_prompts() -> None:
+def test_expression_role_rubric_uses_only_roles_requested_by_the_question() -> None:
     answer_spec = AnswerSpec(
         answer_spec_id="ANS-T01-006",
         canonical_answer="c + 4",
@@ -448,11 +449,10 @@ def test_expression_role_rubric_requires_the_operation_for_general_rule_prompts(
         "GENERAL_RULE",
         "CHANGING_VALUE",
         "FIXED_VALUE",
-        "OPERATION",
     ]
 
 
-def test_expression_role_steps_ask_for_the_operation_after_the_fixed_value() -> None:
+def test_expression_role_steps_complete_after_the_requested_fixed_value() -> None:
     request = ClassificationRequest(
         question_id="Q-T01-006",
         question_type="MULTI_PART_SHORT_RESPONSE",
@@ -486,9 +486,9 @@ def test_expression_role_steps_ask_for_the_operation_after_the_fixed_value() -> 
     assert rubric is not None
     objective = ActiveTeachingObjective(
         objective_type="EXPLAIN_CONCEPT",
-        target_concept_ids=["FIXED_VALUE", "OPERATION"],
+        target_concept_ids=["FIXED_VALUE"],
         confirmed_concept_ids=["GENERAL_RULE", "CHANGING_VALUE"],
-        missing_concept_ids=["FIXED_VALUE", "OPERATION"],
+        missing_concept_ids=["FIXED_VALUE"],
     )
     request = request.model_copy(
         update={
@@ -498,10 +498,9 @@ def test_expression_role_steps_ask_for_the_operation_after_the_fixed_value() -> 
                     "GENERAL_RULE",
                     "CHANGING_VALUE",
                     "FIXED_VALUE",
-                    "OPERATION",
                 ],
                 confirmed_component_ids=["GENERAL_RULE", "CHANGING_VALUE"],
-                missing_component_ids=["FIXED_VALUE", "OPERATION"],
+                missing_component_ids=["FIXED_VALUE"],
                 active_component_id="FIXED_VALUE",
                 last_tutor_question_type="COMPONENT",
                 selected_option_id=None,
@@ -511,7 +510,6 @@ def test_expression_role_steps_ask_for_the_operation_after_the_fixed_value() -> 
                     "GENERAL_RULE",
                     "CHANGING_VALUE",
                     "FIXED_VALUE",
-                    "OPERATION",
                 ],
                 completed_step_ids=["GENERAL_RULE", "CHANGING_VALUE"],
                 current_step_index=2,
@@ -528,8 +526,8 @@ def test_expression_role_steps_ask_for_the_operation_after_the_fixed_value() -> 
 
     assert evaluation is not None
     assert evaluation.newly_confirmed_concept_ids == ["FIXED_VALUE"]
-    assert evaluation.missing_concept_ids == ["OPERATION"]
-    assert evaluation.tutor_message == "Yes, 4 stays fixed. What operation does the sign tell us to use?"
+    assert evaluation.missing_concept_ids == []
+    assert evaluation.tutor_message == "Nice work."
 
 
 def test_topic1_correct_rule_advances_after_a_role_contradiction() -> None:
@@ -7162,7 +7160,6 @@ def test_generic_teaching_steps_map_to_distinct_components() -> None:
         "REQUIRED_COMPONENT_1",
         "REQUIRED_COMPONENT_2",
         "REQUIRED_COMPONENT_3",
-        "REQUIRED_COMPONENT_4",
     ]
 
 
@@ -8376,3 +8373,166 @@ def test_anaphoric_changing_number_answers_an_active_variable_prompt() -> None:
     )
 
     assert classifier.general_rule_explanation_evidence(request) == (True, False)
+
+
+def test_counter_rule_progress_completes_without_an_unrequested_operation_step() -> None:
+    answer_spec = AnswerSpec(
+        answer_spec_id="ANS-T01-006",
+        canonical_answer="c + 4",
+        accepted_answers=["c + 4"],
+        verification_method="STRUCTURED_TEXT_MATCH",
+        explanation_required=False,
+    )
+    question = (
+        "A counter starts at any value c and increases by 4. Write the general "
+        "rule and state what changes and what stays fixed."
+    )
+    request = ClassificationRequest(
+        question_id="Q-T01-006",
+        question_type="MULTI_PART_SHORT_RESPONSE",
+        question=question,
+        correct_answer="c + 4",
+        answer_spec=answer_spec,
+        phase_2_prompt_context=_guided_context(0),
+        student_input="c + 4",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+    )
+    rubric = classifier.expression_role_rubric_from_question(
+        "Q-T01-006",
+        request.question_type,
+        question,
+        answer_spec,
+        "test",
+    )
+    assert rubric is not None
+    first_objective = classifier.objective_with_turn_evidence(
+        request,
+        rubric,
+        classifier.initial_guided_objective(rubric),
+        load_classifier_rules(),
+    )
+    assert first_objective.missing_concept_ids == ["CHANGING_VALUE", "FIXED_VALUE"]
+
+    fixed_request = request.model_copy(
+        update={"student_input": "4 remains fixed"}
+    )
+    second_objective = classifier.objective_with_turn_evidence(
+        fixed_request,
+        rubric,
+        first_objective,
+        load_classifier_rules(),
+    )
+    assert second_objective.missing_concept_ids == ["CHANGING_VALUE"]
+
+    changing_request = request.model_copy(
+        update={"student_input": "c changes because it can take any value"}
+    )
+    completed_objective = classifier.objective_with_turn_evidence(
+        changing_request,
+        rubric,
+        second_objective,
+        load_classifier_rules(),
+    )
+    assert completed_objective.missing_concept_ids == []
+    assert classifier.completed_evidence_evaluation(completed_objective) is not None
+
+
+def test_selected_general_rule_completes_after_changing_and_fixed_evidence() -> None:
+    request = ClassificationRequest(
+        question_id="Q-T01-004",
+        question_type="CHOICE_WITH_EXPLANATION",
+        question="Which is the general rule: A: 12 + 4. B: n + 4? Explain briefly.",
+        correct_answer="B",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-004",
+            canonical_answer="B",
+            accepted_answers=["B", "n + 4"],
+            verification_method="CHOICE_AND_CONCEPT_MATCH",
+            explanation_required=True,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        guided_teaching_state=GuidedTeachingState(
+            question_id="Q-T01-004",
+            objective_component_ids=["ANSWER_SELECTION", "ANSWER_EXPLANATION"],
+            confirmed_component_ids=["ANSWER_SELECTION"],
+            missing_component_ids=["ANSWER_EXPLANATION"],
+            active_component_id="ANSWER_EXPLANATION",
+            last_tutor_question_type="COMPONENT",
+            selected_option_id="B",
+            selected_option_text="n + 4",
+            awaiting_response=True,
+        ),
+        student_input="n represents any changing starting number",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+    )
+    rubric = classifier.rubric_from_authored_answer_parts(
+        "Q-T01-004",
+        request.question_type,
+        request.answer_spec,
+        "test",
+    )
+    assert rubric is not None
+    objective = classifier.objective_with_turn_evidence(
+        request,
+        rubric,
+        ActiveTeachingObjective(
+            objective_type="EXPLAIN_REASONING",
+            target_concept_ids=["ANSWER_EXPLANATION"],
+            confirmed_concept_ids=["ANSWER_SELECTION"],
+            missing_concept_ids=["ANSWER_EXPLANATION"],
+        ),
+        load_classifier_rules(),
+    )
+    assert objective.missing_concept_ids == ["ANSWER_EXPLANATION"]
+
+    completed_request = request.model_copy(
+        update={
+            "student_input": "add 4 stays the same",
+            "guided_teaching_state": request.guided_teaching_state.model_copy(
+                update={
+                    "evidence_ledger": [
+                        GuidedEvidenceClaim(
+                            concept_id="CHANGING_VALUE",
+                            status="DEMONSTRATED",
+                            source="TEXT",
+                        )
+                    ]
+                }
+            ),
+        }
+    )
+    completed_objective = classifier.objective_with_turn_evidence(
+        completed_request,
+        rubric,
+        objective,
+        load_classifier_rules(),
+    )
+    assert completed_objective.missing_concept_ids == []
+
+
+def test_guided_model_experiment_assignment_is_stable_per_session() -> None:
+    settings = Settings(
+        openai_ai_engine_model="gpt-4o-mini",
+        openai_ai_engine_experiment_model="gpt-5.6-terra",
+        openai_ai_engine_experiment_percentage=50,
+    )
+    request = _topic1_request("m changes").model_copy(
+        update={"experiment_subject_id": "SESSION-fixed", "current_phase": "GUIDED_PRACTICE"}
+    )
+
+    selected = classifier.openai_model_for_request(settings, request)
+    assert classifier.openai_model_for_request(settings, request) == selected
+    assert selected in {"gpt-4o-mini", "gpt-5.6-terra"}
+
+    disabled = settings.model_copy(
+        update={"openai_ai_engine_experiment_percentage": 0}
+    )
+    assert classifier.openai_model_for_request(disabled, request) == "gpt-4o-mini"

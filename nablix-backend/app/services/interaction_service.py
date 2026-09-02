@@ -2752,6 +2752,7 @@ async def _option_selected_interaction_response(
     )
     classification = classify_student_response(
         ClassificationRequest(
+            experiment_subject_id=request.session_id,
             question_id=session.question_id,
             question_type=session.question_type,
             question=session.current_question or "",
