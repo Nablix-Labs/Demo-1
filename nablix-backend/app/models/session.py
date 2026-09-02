@@ -16,6 +16,7 @@ from app.models.canvas import CanvasQuestionMemory, CanvasSubmissionRecord
 from app.models.phase4_review import Phase4ReviewResponse
 from app.models.fields import (
     ConceptId,
+    InputSource,
     InteractionMode,
     NonEmptyText,
     Phase,
@@ -201,7 +202,11 @@ class QuestionAttemptRecord(BaseModel):
     phase: Phase
     evaluation: str
     error_type: str | None = None
-    input_source: Literal["TEXT", "VOICE", "CANVAS"]
+    # InputSource itself, not a narrower copy: the writer passes
+    # request.input_source straight through, so any member omitted here is a 500
+    # after the student has already answered. CHOICE was. Widening is safe for
+    # stored rows -- every value they hold is still valid.
+    input_source: InputSource
     hint_level_used: int
     attempted_at: datetime
     # Links this attempt to its stored Phase 3 canvas work, so Phase 4 can
