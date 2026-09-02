@@ -25,7 +25,10 @@ def _decode_page(page_data_url: str) -> Image.Image:
         image.load()
     except (binascii.Error, ValueError, UnidentifiedImageError, OSError) as error:
         raise PdfAssemblyError(f"canvas page is not a readable image: {error}") from error
-    # PDF has no alpha channel; RGBA pages fail to save without this.
+    # PDF has no alpha channel. Composite transparent pages onto white so transparent pixels do not turn black.
+    if image.mode in ("RGBA", "LA") or (image.mode == "P" and "transparency" in image.info):
+        background = Image.new("RGBA", image.size, (255, 255, 255, 255))
+        return Image.alpha_composite(background, image.convert("RGBA")).convert("RGB")
     return image.convert("RGB")
 
 

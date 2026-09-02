@@ -4,7 +4,7 @@ from io import BytesIO
 import pytest
 from PIL import Image
 
-from app.services.pdf_assembly import PdfAssemblyError, assemble_pdf
+from app.services.pdf_assembly import PdfAssemblyError, _decode_page, assemble_pdf
 
 
 def _page(color: str = "white", size: tuple[int, int] = (40, 30)) -> str:
@@ -40,6 +40,21 @@ def test_assemble_pdf_accepts_rgba_pages() -> None:
     pdf = assemble_pdf([f"data:image/png;base64,{encoded}"])
 
     assert pdf.startswith(b"%PDF-")
+
+
+def test_decode_page_composites_transparent_rgba_onto_white() -> None:
+    image = Image.new("RGBA", (10, 10), (0, 0, 0, 0))  # fully transparent
+    image.putpixel((5, 5), (0, 0, 0, 255))             # black stroke
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    encoded = base64.b64encode(buffer.getvalue()).decode()
+
+    decoded = _decode_page(f"data:image/png;base64,{encoded}")
+
+    assert decoded.mode == "RGB"
+    assert decoded.getpixel((0, 0)) == (255, 255, 255)  # transparent background becomes white
+    assert decoded.getpixel((5, 5)) == (0, 0, 0)        # stroke preserved
+
 
 
 def test_assemble_pdf_rejects_empty_input() -> None:
