@@ -90,7 +90,9 @@ from app.models.student_model_session import (
     IndependentQuestionSetRequestedEvent,
     Phase2RepairResult,
     IndependentRetryCompletedEvent,
+    JourneyPhaseState,
     QuestionType,
+    StudentModelPhasePayload,
     StudentModelSessionEventResponse,
     StudentModelQuestion,
     SupportUsed,
@@ -1236,6 +1238,34 @@ def _schema_support_used(
     return max(supports, key=_SUPPORT_RANK.index)
 
 
+def _restore_failure_reason(
+    payload: StudentModelPhasePayload | None,
+    session_phase: Phase,
+    effective_phase: str,
+    initialized_state: JourneyPhaseState,
+) -> str | None:
+    """Which of the restore checks rejected this response, or None if it passed.
+
+    Ordered, and each check assumes the ones above it passed -- so this is a
+    sequence of guards rather than a table: `payload.phase` cannot be read
+    until `payload is None` has been ruled out.
+    """
+
+    if payload is None:
+        return "MISSING_PAYLOAD"
+    if PHASE_FROM_STUDENT_MODEL[payload.phase] != session_phase:
+        return "PHASE_MISMATCH"
+    if payload.phase != effective_phase:
+        return "EFFECTIVE_PHASE_MISMATCH"
+    if payload.payload_type != "QUESTION_SET":
+        return "WRONG_PAYLOAD_TYPE"
+    if payload.question_set is None or not payload.question_set.questions:
+        return "NO_QUESTIONS"
+    if initialized_state.status == "NOT_STARTED":
+        return "PHASE_NOT_STARTED"
+    return None
+
+
 def _raise_content_gap(
     session: SessionRecord,
     event: StudentModelSessionEventResponse,
@@ -1244,8 +1274,9 @@ def _raise_content_gap(
 
     FRESH_CONTENT_UNAVAILABLE is an authoritative answer -- the question does
     not exist -- so it must never be re-requested in a loop, and never be
-    laundered into MASTERED, REVIEW, or a Phase 4 review. The client branches on
-    the CONTENT_GAP code; the previous 503 said only "did not initialize".
+    laundered into MASTERED, REVIEW, or a Phase 4 review. CONTENT_GAP is a
+    stable code the client can branch on -- nothing in Numera-ui reads it yet;
+    the previous 503 said only "did not initialize", which nothing could.
     """
 
     logger.warning(
@@ -1386,20 +1417,8 @@ async def _initialize_restored_schema_phase(
     )
     if response.routing.content_gap_detected:
         _raise_content_gap(session, response)
-    failure_reason = (
-        "MISSING_PAYLOAD"
-        if payload is None
-        else "PHASE_MISMATCH"
-        if PHASE_FROM_STUDENT_MODEL[payload.phase] != session.current_phase
-        else "EFFECTIVE_PHASE_MISMATCH"
-        if payload.phase != effective_phase
-        else "WRONG_PAYLOAD_TYPE"
-        if payload.payload_type != "QUESTION_SET"
-        else "NO_QUESTIONS"
-        if payload.question_set is None or not payload.question_set.questions
-        else "PHASE_NOT_STARTED"
-        if initialized_state.status == "NOT_STARTED"
-        else None
+    failure_reason = _restore_failure_reason(
+        payload, session.current_phase, effective_phase, initialized_state
     )
     if failure_reason is not None:
         # Enough to tell these six causes apart in production without carrying
@@ -3289,6 +3308,8 @@ async def _process_interaction(
             raise HTTPException(status_code=409, detail="Teaching support is unavailable during Independent Practice.")
         if request.interaction_type == "ANSWER_SUBMISSION":
             if request.input_source in {"TEXT", "VOICE"}:
+                # Same reason as the clarification refusal above: an answer we
+                # decline to grade is still a turn the student must see.
                 session = await update_side_channel_state(
                     session, _accepted_turn_identity(request.turn_id or "TURN-0000")
                 )
@@ -3756,7 +3777,7 @@ async def _process_interaction(
             },
         )
         return _cache_response(
-            request.turn_id,
+            request,
             _response_from(
                 session_id=request.session_id,
                 student_id=request.student_id,

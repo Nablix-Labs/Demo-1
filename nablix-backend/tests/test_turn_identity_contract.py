@@ -99,15 +99,10 @@ def test_a_second_typed_answer_is_not_mistaken_for_the_first(
 
     assert first.status_code == 200 and second.status_code == 200
     first_body, second_body = first.json(), second.json()
-    assert second_body["accepted_turn_id"] == "TURN-P3-2"
-    assert second_body["accepted_turn_id"] != first_body["accepted_turn_id"]
     # Either a new turn id or a higher version satisfies the gate; this path
     # changes no pedagogical state, so the turn id is what has to move.
-    assert (
-        second_body["accepted_turn_id"] != first_body["accepted_turn_id"]
-        or second_body["interaction_state_version"]
-        > first_body["interaction_state_version"]
-    )
+    assert second_body["accepted_turn_id"] == "TURN-P3-2"
+    assert second_body["accepted_turn_id"] != first_body["accepted_turn_id"]
 
 
 def test_the_stored_session_agrees_with_what_the_client_was_told(

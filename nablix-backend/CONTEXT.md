@@ -6,15 +6,23 @@ This context captures the language for tutor-led canvas correction. It defines t
 
 **Student Turn**:
 The client-generated identity for one accepted student request, returned as `accepted_turn_id`.
+_Avoid_: Request id, message id
 
 **Tutor Turn**:
 The backend-generated identity for the tutor reply committed for an accepted student turn, returned as `tutor_turn_id`.
+_Avoid_: Response id, reply id
 
 **Interaction State Version**:
 The Tutor Backend's monotonic response-ordering counter. It increases once for each newly committed student turn and is returned as `interaction_state_version`.
+_Avoid_: Journey version, session version
 
 **Journey Version**:
 The separate Student Model version for its learning journey. It is not the Tutor Backend interaction state version.
+_Avoid_: Interaction state version, state version
+
+**Independent Attempt**:
+One terminal Independent Practice result: the student either answered unaided or needs the rescue. Unreadable work, an unsubmitted turn, a hint, a voice attachment, a stale turn and a duplicate retry are none of them. Counted on the session as `independent_attempt_count` and reported on the receipt as `session_performance.independent_attempts` — one concept, two field names.
+_Avoid_: Attempt, total attempts, canvas submission
 
 **Student Work**:
 The math or geometry content written by the student on the canvas.
