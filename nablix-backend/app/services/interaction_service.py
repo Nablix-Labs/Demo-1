@@ -274,12 +274,13 @@ def _is_complete_correct_canvas(
     ocr: VisionOCRResult | None,
     correct_answer: str | None,
 ) -> bool:
-    return (
-        ocr is not None
-        and not ocr.needs_clarification
-        and ocr.final_answer is not None
-        and normalize_exact_notation(ocr.final_answer)
-        == normalize_exact_notation(correct_answer or "")
+    if ocr is None or ocr.needs_clarification or correct_answer is None:
+        return False
+    expected = normalize_exact_notation(correct_answer)
+    candidates = [ocr.final_answer, ocr.detected_equation, *ocr.detected_steps]
+    return any(
+        candidate is not None and normalize_exact_notation(candidate) == expected
+        for candidate in candidates
     )
 
 
@@ -1982,12 +1983,24 @@ def _canvas_events_for_context(
     request: InteractionRequest,
     session: SessionRecord,
 ) -> list[CanvasEvent]:
-    if request.canvas_state is not None:
-        return request.canvas_state.canvas_events
     if session.question_id is None:
         return []
     memory = session.canvas_memory_by_question.get(session.question_id)
-    return memory.canvas_events if memory is not None else []
+    stored_events = memory.canvas_events if memory is not None else []
+    submitted_events = (
+        request.canvas_state.canvas_events if request.canvas_state is not None else []
+    )
+    seen = {
+        event.source_id
+        for event in stored_events
+        if event.source_id is not None
+    }
+    new_events = [
+        event
+        for event in submitted_events
+        if event.source_id is None or event.source_id not in seen
+    ]
+    return [*stored_events, *new_events]
 
 
 def _canvas_memory_update_with_tutor_actions(
