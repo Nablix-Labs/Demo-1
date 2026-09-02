@@ -1867,6 +1867,33 @@ def _turn_updates(
     return updates
 
 
+def _independent_attempt_updates(
+    turn_session: SessionRecord,
+    tutor: TutorResult,
+) -> dict[str, object]:
+    """Count one terminal Independent Practice result, or nothing.
+
+    `independent_attempt_terminal` is already the single place that decides
+    what terminal means (`classifier.py`: INDEPENDENTLY_VERIFIED or
+    RESCUE_REQUIRED, never INPUT_UNCLEAR or AWAITING_SUBMISSION), so this reads
+    it rather than restating the set. The phase is checked as well because the
+    counter is the one field whose whole meaning is "in Phase 3, alone".
+
+    Callers apply this on the committed-turn path only, which is what keeps
+    duplicates, stale turns and voice attachments out: none of them reach a
+    session write.
+    """
+
+    if (
+        turn_session.current_phase != "INDEPENDENT_PRACTICE"
+        or not tutor.independent_attempt_terminal
+    ):
+        return {}
+    return {
+        "independent_attempt_count": turn_session.independent_attempt_count + 1
+    }
+
+
 def _conversation_state_for(
     conversation_action: ConversationAction,
     question_completed: bool,
@@ -3905,6 +3932,7 @@ async def _process_interaction(
     )
     state_updates: dict[str, object] = {
         "interaction_state_version": session.interaction_state_version + 1,
+        **_independent_attempt_updates(turn_session, tutor),
         "nudge_generated_count": 0,
         "nudge_presented_count": 0,
         "attempt_count": (

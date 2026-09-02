@@ -1739,6 +1739,7 @@ def assemble_session_summary(session: SessionRecord, ended_at: datetime) -> Sess
             hint_levels_used=session.hint_levels_used,
             scaffold_steps_delivered=None,
             canvas_submissions=len(session.canvas_submissions),
+            independent_attempts=session.independent_attempt_count,
         ),
         per_question_history=session.per_question_history,
         scaffold_history=None,

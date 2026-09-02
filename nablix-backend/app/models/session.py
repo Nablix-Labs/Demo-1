@@ -224,6 +224,9 @@ class SessionPerformance(BaseModel):
     hint_levels_used: list[int]
     scaffold_steps_delivered: None
     canvas_submissions: int
+    # Phase 3 only, and terminal Phase 3 only. total_attempts counts every
+    # phase together, so it cannot answer "how many did they do alone?".
+    independent_attempts: int
 
 
 class SessionSummary(BaseModel):
@@ -280,6 +283,10 @@ class SessionRecord(BaseModel):
     hint_count: int
     attempt_count: int = 0
     wrong_attempt_count: int = 0
+    # Terminal Independent Practice results only: the student either answered
+    # unaided or needs the rescue. Never raised by unreadable work, a hint, a
+    # voice attachment, a stale turn, or a duplicate retry.
+    independent_attempt_count: int = 0
     interaction_state_version: int = 0
     nudge_generated_count: int = 0
     nudge_presented_count: int = 0

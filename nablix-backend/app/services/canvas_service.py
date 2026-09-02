@@ -49,6 +49,7 @@ from app.models.work_artifact import WorkArtifactPersistRequest
 from app.services.interaction_service import (
     _current_hint_level_from,
     _conversation_state_for,
+    _independent_attempt_updates,
     _independent_correct_in_session,
     _is_complete_correct_canvas,
     _initialize_restored_schema_phase,
@@ -519,6 +520,7 @@ async def submit_canvas(
         updated_session = updated_session.model_copy(
             update={
                 "interaction_state_version": turn_session.interaction_state_version + 1,
+                **_independent_attempt_updates(turn_session, tutor),
                 **_turn_updates(
                     submission_id,
                     last_tutor_action,
