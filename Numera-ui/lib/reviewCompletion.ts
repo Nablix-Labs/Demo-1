@@ -55,3 +55,57 @@ export function forgetReviewCompletion(sessionId?: string): void {
   if (sessionId) reported.delete(sessionId);
   else reported.clear();
 }
+
+/** Which step of the exit sequence failed, when one did. */
+export type FinishStage = 'complete' | 'end';
+
+export type FinishOutcome =
+  | { ok: true }
+  | { ok: false; stage: FinishStage; message: string };
+
+/**
+ * Leave the review: report REVIEW_COMPLETED, then end the session.
+ *
+ * Both failures are REPORTED. `/session/end` used to be called as
+ * `await end().catch(() => undefined)` with the navigation running regardless,
+ * so a failed end was indistinguishable from a successful one and the student
+ * left on a session the backend never closed — with nothing on screen, and
+ * nothing in any log, to say so.
+ *
+ * The old code's reasoning for swallowing it was not wrong: REVIEW_COMPLETED
+ * has already landed by then, the phase HAS advanced, and stranding a student
+ * over bookkeeping would be its own bug. What was wrong was the conclusion.
+ * Reporting the failure and offering a retry costs the student one button; a
+ * silent failure costs a session record nobody knows is missing. So the stage
+ * is returned rather than a bare boolean: the caller can say which step needs
+ * retrying, and can decide that a failed `end` is recoverable where a failed
+ * `complete` is not.
+ *
+ * Ordered, and short-circuiting: ending first would mark the session done while
+ * the event that closes the phase has not landed, so a failed completion never
+ * reaches the end call.
+ *
+ * Safe to call again after a failure. `planReviewCompletion` memoises the turn
+ * id per session and refuses a second send, so a retry re-attempts only the
+ * step that failed and can never emit a second REVIEW_COMPLETED.
+ */
+export async function runReviewFinish(steps: {
+  reportCompletion: () => Promise<void>;
+  endSession: () => Promise<void>;
+}): Promise<FinishOutcome> {
+  try {
+    await steps.reportCompletion();
+  } catch (err) {
+    return { ok: false, stage: 'complete', message: messageOf(err) };
+  }
+  try {
+    await steps.endSession();
+  } catch (err) {
+    return { ok: false, stage: 'end', message: messageOf(err) };
+  }
+  return { ok: true };
+}
+
+function messageOf(err: unknown): string {
+  return err instanceof Error && err.message ? err.message : 'Unknown error';
+}

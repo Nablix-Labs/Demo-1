@@ -14,7 +14,11 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { canvasSubmissionView, canvasResponseIdentity } from '@/lib/canvasSubmission';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import {
+  canvasSubmissionView, canvasResponseIdentity, advancesSession,
+} from '@/lib/canvasSubmission';
 import { shouldApply, noteApplied, EMPTY_APPLIED } from '@/lib/responseGate';
 
 /** Sanya's payload, reduced to the two fields that mattered. */
@@ -153,5 +157,24 @@ describe('who a canvas reply says it is', () => {
   it('leaves the reply alone when there is no submission id to use', () => {
     const noId = { interaction_state_version: 1, accepted_turn_id: 'TURN-AAA' };
     expect(canvasResponseIdentity(noId).accepted_turn_id).toBe('TURN-AAA');
+  });
+});
+
+describe('a voice attachment is evidence, not an attempt', () => {
+  it('only a standalone attempt may advance the session', () => {
+    expect(advancesSession('STANDALONE_ATTEMPT')).toBe(true);
+    // A VOICE_ATTACHMENT is the canvas that happened to be on screen while the
+    // student spoke. The backend records its OCR and returns the session
+    // unchanged (record_canvas_attachment), so applying its reply would move a
+    // question, phase or counter that nothing actually advanced.
+    expect(advancesSession('VOICE_ATTACHMENT')).toBe(false);
+  });
+
+  it('is the single place the rule is written down', () => {
+    // The frontend has one submitCanvas call site and it sends
+    // STANDALONE_ATTEMPT, so today the rule holds by construction. That is
+    // exactly why it is worth encoding: the second call site is where it breaks.
+    const src = readFileSync(resolve(process.cwd(), 'hooks/useDemoTutor.ts'), 'utf8');
+    expect(src).toContain('advancesSession(');
   });
 });

@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import PageShell, { Chip } from '@/components/PageShell';
 import PhaseGate from '@/components/PhaseGate';
-import { planReviewCompletion } from '@/lib/reviewCompletion';
+import { planReviewCompletion, runReviewFinish } from '@/lib/reviewCompletion';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useDemoTutor, resetSessionStart } from '@/hooks/useDemoTutor';
 import { useFlowNav } from '@/lib/useFlowNav';
@@ -190,26 +190,36 @@ export default function ReviewPage() {
     const plan = planReviewCompletion(reviewSessionId.current, () => `REVIEW-COMPLETE-${Date.now()}`);
     if (!plan.send) return true;
     await completeReview(reviewSessionId.current!, studentId(), plan.turnId);
-    // Ending is bookkeeping and must not strand a student whose review DID
-    // complete: the phase has already advanced, so a failure here is logged by
-    // the caller's catch and the student still leaves.
     return true;
   }, [apiEnabled]);
 
   const [leaving, setLeaving] = useState(false);
   const [leaveError, setLeaveError] = useState<string | null>(null);
+  /** The outcome to retry with, set only when a step actually failed. */
+  const [retryOutcome, setRetryOutcome] = useState<Parameters<typeof decideReview>[0] | null>(null);
+
   const finishReview = useCallback(async (outcome: Parameters<typeof decideReview>[0]) => {
     setLeaveError(null);
+    setRetryOutcome(null);
     setLeaving(true);
-    try {
-      await reportReviewFinished();
-      if (apiEnabled && sessionId) await end().catch(() => undefined);
+    // Neither step may fail silently — see runReviewFinish. Retrying is safe:
+    // planReviewCompletion refuses a second REVIEW_COMPLETED for this session,
+    // so a retry re-attempts only what did not land.
+    const outcomeOf = await runReviewFinish({
+      reportCompletion: async () => { await reportReviewFinished(); },
+      endSession: async () => { if (apiEnabled && sessionId) await end(); },
+    });
+    setLeaving(false);
+    if (outcomeOf.ok) {
       decideReview(outcome);
-    } catch {
-      setLeaveError("We couldn't close your review. Please try again.");
-    } finally {
-      setLeaving(false);
+      return;
     }
+    setRetryOutcome(outcome);
+    setLeaveError(
+      outcomeOf.stage === 'complete'
+        ? "We couldn't record that you finished this review. Your work is saved — try again."
+        : "Your review is recorded, but we couldn't close the session. Try again.",
+    );
   }, [reportReviewFinished, decideReview, apiEnabled, sessionId, end]);
 
   const backToLesson = useCallback(async () => {
@@ -304,9 +314,19 @@ export default function ReviewPage() {
             }}
           />
           {leaveError && (
-            <p role="alert" className="mt-4 text-[13px] text-action-orange">
-              {leaveError}
-            </p>
+            <div role="alert" className="mt-4 flex flex-wrap items-center gap-3">
+              <p className="text-[13px] text-action-orange">{leaveError}</p>
+              {retryOutcome && (
+                <button
+                  onClick={() => void finishReview(retryOutcome)}
+                  disabled={leaving}
+                  aria-busy={leaving}
+                  className="rounded-full border border-focus-navy bg-white px-4 py-1.5 text-[12px] font-semibold text-ink hover:bg-focus-navy hover:text-white transition-colors disabled:opacity-60"
+                >
+                  {leaving ? 'Trying again…' : 'Try again'}
+                </button>
+              )}
+            </div>
           )}
         </PageShell>
       </PhaseGate>
@@ -390,15 +410,52 @@ export default function ReviewPage() {
             <div className="text-[11px] font-semibold tracking-widest uppercase text-slate-blue mb-3">
               Session summary
             </div>
+            {/* Totals come from the backend's own counters and are shown only
+                when it sent them — see SessionPerformance. The screen saying
+                nothing is recoverable; the screen stating a number the session
+                did not produce is not. */}
             <div className="flex flex-wrap gap-x-10 gap-y-3">
-              <div>
-                <div className="text-[22px] font-semibold text-ink leading-none">{sessionSummary.attempts}</div>
-                <div className="text-[11px] text-slate-blue mt-1">Attempts</div>
-              </div>
-              <div>
-                <div className="text-[22px] font-semibold text-ink leading-none">{sessionSummary.hints_used}</div>
-                <div className="text-[11px] text-slate-blue mt-1">Hints used</div>
-              </div>
+              {sessionSummary.performance ? (
+                <>
+                  <div>
+                    <div className="text-[22px] font-semibold text-ink leading-none tabular-nums">
+                      {sessionSummary.performance.total_attempts}
+                    </div>
+                    <div className="text-[11px] text-slate-blue mt-1">Attempts</div>
+                  </div>
+                  <div>
+                    <div className="text-[22px] font-semibold text-ink leading-none tabular-nums">
+                      {sessionSummary.performance.correct_attempts}
+                      <span className="text-[13px] font-normal text-slate-blue">
+                        {' '}/ {sessionSummary.performance.incorrect_attempts} wrong
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-blue mt-1">Correct</div>
+                  </div>
+                  <div>
+                    <div className="text-[22px] font-semibold text-ink leading-none tabular-nums">
+                      {sessionSummary.performance.independent_attempts}
+                    </div>
+                    <div className="text-[11px] text-slate-blue mt-1">Independent attempts</div>
+                  </div>
+                  <div>
+                    <div className="text-[22px] font-semibold text-ink leading-none tabular-nums">
+                      {sessionSummary.performance.hints_used}
+                    </div>
+                    <div className="text-[11px] text-slate-blue mt-1">Hints used</div>
+                  </div>
+                  <div>
+                    <div className="text-[22px] font-semibold text-ink leading-none tabular-nums">
+                      {sessionSummary.performance.canvas_submissions}
+                    </div>
+                    <div className="text-[11px] text-slate-blue mt-1">Canvas submissions</div>
+                  </div>
+                </>
+              ) : (
+                <div className="text-[12.5px] text-slate-blue">
+                  Your totals for this session aren&apos;t available yet.
+                </div>
+              )}
               {sessionSummary.question && (
                 <div className="min-w-0">
                   <div className="text-[15px] font-semibold text-ink leading-tight font-[Cambria_Math,Georgia,serif] truncate">

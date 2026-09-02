@@ -51,7 +51,10 @@ import { speakBrowser } from '@/lib/tts';
 import type { SupportRung } from '@/lib/supportLadder';
 import type { NudgeClaimResult } from '@/hooks/useInactivityNudge';
 import { reportFailure } from '@/lib/failureReport';
-import { canvasSubmissionView, canvasResponseIdentity } from '@/lib/canvasSubmission';
+import {
+  canvasSubmissionView, canvasResponseIdentity, advancesSession,
+  type SubmissionRole,
+} from '@/lib/canvasSubmission';
 import { canvasEvidenceFor } from '@/lib/canvasEvidence';
 import type { QuestionAnchor } from '@/lib/questionAnchors';
 import { isPhase3 } from '@/lib/phase3';
@@ -687,7 +690,12 @@ export function useDemoTutor() {
         const hint = presentAuthorisedHint(res, addTranscriptMessage, addTrailEntry);
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message });
-        if (res.current_phase) useNumeraStore.getState().setCurrentPhase(res.current_phase); // advance phase
+        // The phase is NOT set here. syncBackendSession above owns it, and it
+        // commits the whole snapshot together — deliberately holding the change
+        // back by REVEAL_MS when this turn also annotated the question being
+        // left, so the marks can be read before the board clears. A bare
+        // setCurrentPhase did not wait, so for that window the phase had moved
+        // while the question, options and anchors were still the old one's.
         const drew = Boolean(res.canvas_draw?.length);
         if (drew) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw!);
         // §1: highlight first, pause, then speak. When the turn also drew, the
@@ -723,10 +731,13 @@ export function useDemoTutor() {
       // a resend as the same attempt rather than a second one.
       const turnId = useNumeraStore.getState().beginSubmissionTurn();
       closeMicForSubmission();
+      // Named so the guard below reads against the role actually sent, rather
+      // than against a literal repeated two hundred lines apart.
+      const role: SubmissionRole = 'STANDALONE_ATTEMPT';
       const res = await submitCanvas(
         sessionId,
         canvasSnapshot.snapshotDataUrl,
-        'STANDALONE_ATTEMPT',
+        role,
         turnId,
         // The strokes are what let the tutor mark the exact symbol rather than
         // the whole line. They were already captured here and simply not sent.
@@ -741,6 +752,10 @@ export function useDemoTutor() {
       // gate was correctly dropping the whole reply as already applied. See
       // `canvasResponseIdentity`.
       if (!acceptResponse(canvasResponseIdentity(res))) return res;
+      // A voice attachment is evidence, not an attempt: the backend returns the
+      // session unchanged for one, so nothing here may advance. See
+      // `advancesSession`.
+      if (!advancesSession(role)) return res;
       // Canvas responses now carry the same phase state as /interaction, so a
       // backend phase change here also drives usePhaseRouting.
       const entering = phaseAnnouncement(res, useNumeraStore.getState().currentPhase);
@@ -1209,7 +1224,12 @@ export function useDemoTutor() {
             meta: `OCR ${(res.ocr.confidence * 100).toFixed(0)}%`,
           });
         }
-        if (res.current_phase) useNumeraStore.getState().setCurrentPhase(res.current_phase); // advance phase
+        // The phase is NOT set here. syncBackendSession above owns it, and it
+        // commits the whole snapshot together — deliberately holding the change
+        // back by REVEAL_MS when this turn also annotated the question being
+        // left, so the marks can be read before the board clears. A bare
+        // setCurrentPhase did not wait, so for that window the phase had moved
+        // while the question, options and anchors were still the old one's.
         if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
         // Record the tutor turn + backend gating for the next turn (contract §11).
         // Fallbacks keep the loop working before the backend sends these fields.

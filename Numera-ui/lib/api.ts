@@ -850,6 +850,32 @@ export interface QuestionOutcome {
 }
 
 /** Summary of an ended session, shown on the Review screen. */
+/**
+ * The backend's own session counters (`SessionPerformance`, session.py:219).
+ *
+ * The receipt's totals come from here and from nowhere else. They used to be
+ * derived client-side from `attempt_count` — the CURRENT QUESTION's counter —
+ * falling back to `canvas_submissions.length`, which counts submissions rather
+ * than attempts. Both produced a plausible number that was not the one it
+ * claimed to be, on the one screen that is the student's record of the session.
+ *
+ * `independent_attempts` arrived with backend PR #235 and is the reason the
+ * distinction matters: `total_attempts` counts every phase together, so two
+ * Phase 3 answers and eleven Guided read as thirteen.
+ *
+ * `hint_levels_used` and `scaffold_steps_delivered` are on the backend model
+ * and deliberately not mirrored here — nothing on the receipt shows them, and a
+ * field the screen never reads is one more thing to keep true.
+ */
+export interface SessionPerformance {
+  total_attempts: number;
+  correct_attempts: number;
+  incorrect_attempts: number;
+  hints_used: number;
+  canvas_submissions: number;
+  independent_attempts: number;
+}
+
 export interface SessionSummary {
   session_id: string;
   concept_id: string;
@@ -857,6 +883,13 @@ export interface SessionSummary {
   attempts: number;    // canvas submissions the student made
   hints_used: number;  // hints requested during the session
   status: string;      // e.g. "ended"
+  /**
+   * The authoritative totals, or null when the backend sent none.
+   *
+   * Null rather than a locally computed stand-in: the screen can say nothing,
+   * but it must not present a guess as the session's record.
+   */
+  performance: SessionPerformance | null;
   /** Real per-question outcomes; empty when the backend sent no history. */
   outcomes: QuestionOutcome[];
 }
@@ -897,6 +930,7 @@ export interface SessionEndResponse extends SessionRecord {
   summary?: Partial<SessionSummary>;
   session_summary?: {
     per_question_history?: QuestionAttemptRecord[];
+    session_performance?: Partial<SessionPerformance>;
   };
   session_review?: SessionReview | null;
 }
@@ -935,7 +969,35 @@ export function toSessionSummary(res: SessionEndResponse | null | undefined): Se
     attempts: s?.attempts ?? res.attempt_count ?? res.canvas_submissions?.length ?? 0,
     hints_used: s?.hints_used ?? res.hint_count ?? 0,
     status: s?.status ?? res.status,
+    performance: toPerformance(res.session_summary?.session_performance),
     outcomes: toOutcomes(res.session_summary?.per_question_history),
+  };
+}
+
+/**
+ * The receipt's totals, or null when the backend sent none.
+ *
+ * Every field is required to be a number before any of them is trusted: a
+ * partially-filled block would render some real totals beside some zeros, and
+ * nothing on screen would say which were which. Absent is a state the receipt
+ * can show honestly; half-true is not.
+ */
+function toPerformance(
+  p: Partial<SessionPerformance> | undefined,
+): SessionPerformance | null {
+  if (!p) return null;
+  const keys = [
+    'total_attempts', 'correct_attempts', 'incorrect_attempts',
+    'hints_used', 'canvas_submissions', 'independent_attempts',
+  ] as const;
+  if (keys.some((k) => typeof p[k] !== 'number')) return null;
+  return {
+    total_attempts: p.total_attempts!,
+    correct_attempts: p.correct_attempts!,
+    incorrect_attempts: p.incorrect_attempts!,
+    hints_used: p.hints_used!,
+    canvas_submissions: p.canvas_submissions!,
+    independent_attempts: p.independent_attempts!,
   };
 }
 

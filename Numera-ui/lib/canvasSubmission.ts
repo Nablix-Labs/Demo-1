@@ -115,3 +115,26 @@ export function canvasResponseIdentity<
   if (!own) return res;
   return { ...res, accepted_turn_id: own };
 }
+
+/** How a canvas snapshot was submitted. Mirrors the backend's own two roles. */
+export type SubmissionRole = 'STANDALONE_ATTEMPT' | 'VOICE_ATTACHMENT';
+
+/**
+ * May this submission's reply move the session on?
+ *
+ * Only a standalone attempt. A `VOICE_ATTACHMENT` is the canvas that happened
+ * to be on screen while the student was speaking: the backend reads its OCR and
+ * returns the session **unchanged** — `record_canvas_attachment` stores the
+ * record and explicitly does not count a second attempt — so applying its reply
+ * would advance a question, phase, version, attempt counter or lock that
+ * nothing actually moved.
+ *
+ * Today the frontend has exactly one `submitCanvas` call site and it always
+ * sends `STANDALONE_ATTEMPT`, so the rule already holds — by construction, not
+ * by enforcement. That is the reason to write it down rather than a reason not
+ * to: the rule is invisible at the moment someone adds the second call site,
+ * which is precisely when it would be broken.
+ */
+export function advancesSession(role: SubmissionRole): boolean {
+  return role === 'STANDALONE_ATTEMPT';
+}

@@ -27,7 +27,7 @@ import { useNumeraStore } from '@/store/useNumeraStore';
 import { useWorkedExamplePlayer } from '@/hooks/useWorkedExamplePlayer';
 import { setTutorSpeechRate } from '@/lib/tts';
 import { boardDraw } from '@/lib/phase4Board';
-import { fetchWorkArtifactPdfUrl } from '@/lib/workArtifactPdf';
+import { loadWorkArtifactPdf, type PdfOutcome } from '@/lib/workArtifactPdf';
 import { openingPageNo } from '@/lib/phase4Review';
 import { cn } from '@/lib/cn';
 import type { Phase4Replay, SchemaWorkedExampleStep } from '@/lib/api';
@@ -39,6 +39,19 @@ const DrawingCanvas = dynamic(() => import('@/components/Canvas/DrawingCanvas'),
 
 /** §8.5 speed control. 1× first, because that is what the tutor is tuned for. */
 const SPEEDS = [1, 1.25, 1.5, 0.75];
+
+/**
+ * What each non-ready state says. Written for the person reading it: each one
+ * names what happened and, where there is one, what to do about it. None of
+ * them apologise, and none say "error".
+ */
+const PDF_MESSAGE: Record<Exclude<PdfOutcome, { kind: 'ready' }>['kind'] | 'loading', string> = {
+  loading: 'Loading your original work\u2026',
+  unauthorized: 'You do not have permission to view this work. Sign in again, or ask your teacher.',
+  unavailable: 'This work is no longer stored. The review below still applies.',
+  invalid: 'The stored file could not be opened as a document. Please report this question.',
+  error: 'Your original work could not be loaded just now.',
+};
 
 export default function TutorStage({
   replay,
@@ -127,31 +140,32 @@ export default function TutorStage({
   const { pdf_url: pdfUrl, page_count: pageCount } = replay.work_artifact;
   const stepPosition = Math.min(Math.max(index, 0) + 1, steps.length);
 
+  // Five named states, not one boolean: an approver has to be able to tell "you
+  // may not read this" from "there is nothing here" from "what came back was not
+  // a document". See PdfOutcome.
+  //
   // Keyed on pdfUrl, not pageNo: the page selector only moves the #page=N
   // fragment on an already-loaded blob (see the iframe below) — refetching per
   // page would thrash the blob and leak object URLs.
-  const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
-  const [pdfLoadFailed, setPdfLoadFailed] = useState(false);
+  const [pdf, setPdf] = useState<PdfOutcome | { kind: 'loading' }>({ kind: 'loading' });
+  const pdfBlobUrl = pdf.kind === 'ready' ? pdf.url : null;
 
   useEffect(() => {
     if (!pdfUrl) {
-      setPdfBlobUrl(null);
-      setPdfLoadFailed(false);
+      setPdf({ kind: 'loading' });
       return;
     }
     let cancelled = false;
-    setPdfLoadFailed(false);
-    fetchWorkArtifactPdfUrl(pdfUrl)
-      .then((url) => {
-        if (cancelled) {
-          URL.revokeObjectURL(url);
-          return;
-        }
-        setPdfBlobUrl(url);
-      })
-      .catch(() => {
-        if (!cancelled) setPdfLoadFailed(true);
-      });
+    setPdf({ kind: 'loading' });
+    void loadWorkArtifactPdf(pdfUrl).then((outcome) => {
+      if (cancelled) {
+        // The load finished after this stage moved on. Revoke here or the URL
+        // outlives every reference to it.
+        if (outcome.kind === 'ready') URL.revokeObjectURL(outcome.url);
+        return;
+      }
+      setPdf(outcome);
+    });
     return () => {
       cancelled = true;
     };
@@ -224,18 +238,18 @@ export default function TutorStage({
               <p className="text-[11.5px] text-slate-blue leading-relaxed">
                 Your original work is not available for this question.
               </p>
-            ) : pdfLoadFailed ? (
-              <p className="text-[11.5px] text-slate-blue leading-relaxed">
-                Your original work could not be loaded.
-              </p>
-            ) : pdfBlobUrl ? (
+            ) : pdf.kind === 'ready' ? (
               <iframe
                 key={pageNo}
-                src={`${pdfBlobUrl}#page=${pageNo}&view=FitH&toolbar=0&navpanes=0`}
+                src={`${pdf.url}#page=${pageNo}&view=FitH&toolbar=0&navpanes=0`}
                 title={`Your submitted work, page ${pageNo} of ${pageCount}`}
                 className="w-full h-full rounded border border-muted-gray bg-white"
               />
-            ) : null}
+            ) : (
+              <p role="status" className="text-[11.5px] text-slate-blue leading-relaxed">
+                {PDF_MESSAGE[pdf.kind]}
+              </p>
+            )}
           </div>
           {/* Only when there is more than one page — a selector over a single
               page is a control that cannot do anything. */}
