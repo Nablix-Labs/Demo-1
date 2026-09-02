@@ -8536,3 +8536,61 @@ def test_guided_model_experiment_assignment_is_stable_per_session() -> None:
         update={"openai_ai_engine_experiment_percentage": 0}
     )
     assert classifier.openai_model_for_request(disabled, request) == "gpt-4o-mini"
+
+
+def test_general_rule_number_guess_stays_on_the_repeating_addend() -> None:
+    answer_spec = AnswerSpec(
+        answer_spec_id="ANS-T01-001",
+        canonical_answer="n + 5",
+        accepted_answers=["n + 5"],
+        verification_method="STRUCTURED_TEXT_MATCH",
+        explanation_required=False,
+    )
+    request = ClassificationRequest(
+        question_id="Q-T01-001",
+        question_type="MULTI_PART_SHORT_RESPONSE",
+        question=(
+            "3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number. "
+            "Write the general rule."
+        ),
+        correct_answer="n + 5",
+        answer_spec=answer_spec,
+        phase_2_prompt_context=_guided_context(0),
+        student_input="the number is 3",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+    )
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-001",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="GENERAL_RULE", description="Writes the rule.", required=True
+            ),
+            GeneratedConcept(
+                concept_id="CHANGING_VALUE", description="States what changes.", required=True
+            ),
+            GeneratedConcept(
+                concept_id="FIXED_VALUE", description="States what stays fixed.", required=True
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="topic1-general-rule",
+        prompt_version="test",
+    )
+
+    evaluation = classifier.deterministic_teaching_step_evaluation(
+        request,
+        rubric,
+        classifier.initial_guided_objective(rubric),
+        load_classifier_rules(),
+    )
+
+    assert evaluation is not None
+    assert evaluation.student_state == "WRONG"
+    assert evaluation.tutor_message == (
+        "Look again at the number after the sign in each example. Which number repeats?"
+    )
+    assert evaluation.write_instruction is None

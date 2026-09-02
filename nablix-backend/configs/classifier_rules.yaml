@@ -301,6 +301,9 @@ guided_learning:
     operation_called_value_prompt: "Is the sign a value, or does it tell us what operation to use?"
     active_role_before_operation_prompt: "We will come back to the operation. First, which part can take different values?"
     single_case_defence_prompt: "That works for that one starting value. Try a different starting value: what does the same rule predict?"
+    general_rule_observation_prompt: "Look at the number after the sign in each example. Which number repeats?"
+    general_rule_value_check_prompt: "Look again at the number after the sign in each example. Which number repeats?"
+    low_confidence_voice_message: "I didn't catch that clearly. Could you say it once more?"
     written_rule_prompt: "You have the rule. Now write it on the canvas, then press Check."
     missing_operation_canvas_prompt: "Look closely: I can read the letter and number, but I cannot see the operation between them. Check whether a sign is missing, then write the rule again."
     missing_operation_canvas_llm_constraints:

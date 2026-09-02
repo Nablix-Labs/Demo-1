@@ -1281,6 +1281,12 @@ def deterministic_turn_evidence(
         marker in normalized for marker in ("fixed", "constant", "stays", "same", "remains")
     ):
         add_claim("FIXED_VALUE", "DEMONSTRATED", source)
+    if (
+        active_step is not None
+        and active_step.step_id == "GENERAL_RULE"
+        and re.fullmatch(rf"(?:the number is )?{re.escape(fixed_value)}", normalized)
+    ):
+        add_claim("FIXED_VALUE", "DEMONSTRATED", source)
     operation_words = (
         ("add", "addition", "plus")
         if operator == "+"
@@ -1798,6 +1804,26 @@ def deterministic_teaching_step_evaluation(
         if typed_rule is not None:
             message = rules.guided_learning.critical_thinking.wrong_direct_rule_prompt
             return _controller_evaluation(request, "WRONG", objective, message, None, rubric)
+        repeated_value = re.fullmatch(r"(?:the number is )?(\d+)", normalized)
+        if repeated_value is not None:
+            if repeated_value.group(1) == number:
+                message = f"Yes, {number} repeats. What rule uses n for the starting number?"
+                return _controller_evaluation(
+                    request,
+                    "PARTIAL",
+                    objective,
+                    message,
+                    "FIXED_VALUE",
+                    rubric,
+                )
+            return _controller_evaluation(
+                request,
+                "WRONG",
+                objective,
+                rules.guided_learning.critical_thinking.general_rule_value_check_prompt,
+                None,
+                rubric,
+            )
         if _numeric_expressions(request.student_input):
             changing = next((item for item in steps if item.step_id == "CHANGING_VALUE"), None)
             if changing is not None:

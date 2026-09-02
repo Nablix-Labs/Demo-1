@@ -3249,13 +3249,11 @@ async def _process_interaction(
         < rules.guided_learning.minimum_voice_transcript_confidence
         and not canvas_complete_correct
     ):
-        write_actions = plan_write_request_tutor_actions(
-            request.turn_id or "TURN-0000", 1
-        )
+        message = rules.guided_learning.critical_thinking.low_confidence_voice_message
         clarification_history = _updated_conversation_history(
             session.conversation_history,
             student_message,
-            _UNRELIABLE_EVIDENCE_MESSAGE,
+            message,
             rules.conversation_rules.max_recent_messages,
         )
         updated_session = await update_interaction_state(
@@ -3275,9 +3273,6 @@ async def _process_interaction(
                 "attempt_count": session.attempt_count,
                 "question_completed": session.question_completed,
                 "conversation_history": clarification_history,
-                **_canvas_memory_update_with_tutor_actions(
-                    request, session, write_actions
-                ),
                 **_turn_updates(
                     request,
                     "REQUESTED_CLARIFICATION",
@@ -3294,8 +3289,8 @@ async def _process_interaction(
                 interaction_type=request.interaction_type,
                 nudge_id=request.nudge_id,
                 session=updated_session,
-                message=_UNRELIABLE_EVIDENCE_MESSAGE,
-                message_voice=_UNRELIABLE_EVIDENCE_MESSAGE,
+                message=message,
+                message_voice=message,
                 visual_cue=None,
                 scaffold_steps=updated_session.scaffold_steps,
                 session_summary=None,
@@ -3305,9 +3300,6 @@ async def _process_interaction(
                 retry_safe=None,
             ).model_copy(
                 update={
-                    "next_expected_input": "WRITE",
-                    "requires_written_math_evidence": True,
-                    "write_instruction": rules.guided_learning.critical_thinking.written_rule_prompt,
                     "ocr": canvas_evidence.ocr if canvas_evidence is not None else None,
                     "snapshot_reference": (
                         canvas_evidence.snapshot_reference
@@ -3321,10 +3313,6 @@ async def _process_interaction(
                         else None
                     ),
                     "feedback_type": "CLARIFICATION",
-                    "canvas_draw": plan_write_request_tutor_draw(
-                        request.turn_id or "TURN-0000"
-                    ),
-                    "tutor_canvas_actions": write_actions,
                 }
             ),
         )

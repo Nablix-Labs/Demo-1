@@ -208,6 +208,9 @@ class CriticalThinkingConfig(StrictSchema):
     operation_called_value_prompt: str
     active_role_before_operation_prompt: str
     single_case_defence_prompt: str
+    general_rule_observation_prompt: str
+    general_rule_value_check_prompt: str
+    low_confidence_voice_message: str
     written_rule_prompt: str
     missing_operation_canvas_prompt: str
     missing_operation_canvas_llm_constraints: list[str]
