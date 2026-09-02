@@ -1422,8 +1422,147 @@ def test_new_score_rule_uses_the_same_guided_rule_controller() -> None:
 
     assert evaluation is not None
     assert evaluation.student_state == "WRONG"
-    assert "add, not subtract" in evaluation.tutor_message
-    assert "falls" not in evaluation.tutor_message
+    assert evaluation.tutor_message == (
+        "Look at the word that describes the change. "
+        "What operation does it tell us to use?"
+    )
+
+
+def test_operation_phrase_confirms_the_fixed_amount() -> None:
+    request = _topic1_request("add 7").model_copy(
+        update={
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-T01-002",
+                objective_component_ids=["CHANGING_VALUE", "FIXED_VALUE", "OPERATION"],
+                confirmed_component_ids=["CHANGING_VALUE"],
+                missing_component_ids=["FIXED_VALUE", "OPERATION"],
+                active_component_id="FIXED_VALUE",
+                last_tutor_question_type="COMPONENT",
+                selected_option_id=None,
+                awaiting_response=True,
+                active_step_id="FIXED_VALUE",
+                teaching_step_ids=["CHANGING_VALUE", "FIXED_VALUE", "OPERATION"],
+                completed_step_ids=["CHANGING_VALUE"],
+                current_step_index=1,
+            )
+        }
+    )
+    rubric = classifier.rubric_from_authored_answer_parts(
+        "Q-T01-002", request.question_type, request.answer_spec, "test"
+    )
+    assert rubric is not None
+
+    evidence = classifier.deterministic_turn_evidence(
+        request,
+        rubric,
+        load_classifier_rules(),
+    )
+
+    assert {claim.concept_id for claim in evidence} == {"FIXED_VALUE", "OPERATION"}
+
+
+def test_writer_cannot_reveal_the_correct_fixed_amount_while_correcting_a_rule() -> None:
+    request = _plain_general_rule_request("n + 7")
+    rubric = _plain_general_rule_rubric()
+    objective = classifier.initial_guided_objective(rubric)
+    evaluation = GuidedEvaluation(
+        student_state="WRONG",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=objective.missing_concept_ids,
+        selected_error_code=None,
+        confidence=1.0,
+        next_objective=objective,
+        tutor_message="Is it always 5 or something else?",
+        tutor_message_voice="Is it always 5 or something else?",
+    )
+
+    assert classifier.guided_tutor_message_validation_reason(
+        evaluation,
+        request,
+        rubric,
+        objective,
+        "Which amount stays the same?",
+    ) == "FIXED_AMOUNT_REVEAL"
+
+
+def test_stuck_writer_reply_must_keep_the_controller_task() -> None:
+    request = _plain_general_rule_request("i don't know")
+    rubric = _plain_general_rule_rubric()
+    objective = classifier.initial_guided_objective(rubric)
+    evaluation = GuidedEvaluation(
+        student_state="STUCK",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=objective.missing_concept_ids,
+        selected_error_code=None,
+        confidence=1.0,
+        next_objective=objective,
+        tutor_message="What makes B a general rule?",
+        tutor_message_voice="What makes B a general rule?",
+    )
+
+    assert classifier.guided_tutor_message_validation_reason(
+        evaluation,
+        request,
+        rubric,
+        objective,
+        "Try a different starting number. Which option would still work?",
+    ) == "ACTIVE_PROMPT_DRIFT"
+
+
+def test_confused_choice_explanation_uses_a_concrete_comparison() -> None:
+    request = ClassificationRequest(
+        question_id="Q-T01-004",
+        question_type="CHOICE_WITH_EXPLANATION",
+        question="Which is the general rule: A: 12 + 4. B: n + 4. Explain briefly.",
+        correct_answer="B",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-004",
+            canonical_answer="B",
+            accepted_answers=["B"],
+            verification_method="EXACT_CHOICE_MATCH",
+            explanation_required=True,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        guided_teaching_state=GuidedTeachingState(
+            question_id="Q-T01-004",
+            objective_component_ids=["ANSWER_SELECTION", "ANSWER_EXPLANATION"],
+            confirmed_component_ids=["ANSWER_SELECTION"],
+            missing_component_ids=["ANSWER_EXPLANATION"],
+            active_component_id="ANSWER_EXPLANATION",
+            last_tutor_question_type="COMPONENT",
+            selected_option_id="B",
+            selected_option_text="n + 4",
+            awaiting_response=True,
+        ),
+        student_input="i don't know",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+    )
+    objective = ActiveTeachingObjective(
+        objective_type="EXPLAIN_REASONING",
+        target_concept_ids=["ANSWER_EXPLANATION"],
+        confirmed_concept_ids=["ANSWER_SELECTION"],
+        missing_concept_ids=["ANSWER_EXPLANATION"],
+    )
+
+    evaluation = classifier.choice_reasoning_stuck_evaluation(
+        request,
+        objective,
+        load_classifier_rules(),
+    )
+
+    assert evaluation is not None
+    assert evaluation.student_state == "STUCK"
+    assert evaluation.tutor_message == (
+        "Try a different starting number. Which option would still work?"
+    )
 
 
 def test_voice_only_symbolic_rule_requires_written_evidence() -> None:
