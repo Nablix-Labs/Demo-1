@@ -930,7 +930,10 @@ async def process_answer_with_session_event(
     )
 
 
-def _student_message_from(request: InteractionRequest) -> str:
+def _student_message_from(
+    request: InteractionRequest,
+    session: SessionRecord,
+) -> str:
     if request.input_source in {"TEXT", "CANVAS"}:
         if request.text_input is None:
             raise HTTPException(
@@ -938,6 +941,19 @@ def _student_message_from(request: InteractionRequest) -> str:
                 detail=f"text_input is required for {request.input_source} interactions.",
             )
         return request.text_input
+
+    # A chosen option is an answer. Independent Practice has to submit one as
+    # ANSWER_SUBMISSION -- OPTION_SELECTED is 409 outside Guided Practice -- so
+    # it missed that dispatch branch, fell through to the VOICE arm below, and
+    # every Phase 3 multiple-choice answer was told it needed a voice
+    # transcript. The option text comes from the served question, never from
+    # the client's copy of it. selected_option_id is guaranteed here by
+    # InteractionRequest.validate_turn.
+    if request.input_source == "CHOICE":
+        selection, _prompt, _text = _selected_option_message(
+            session, request.selected_option_id
+        )
+        return selection
 
     if request.voice_transcript is None or len(request.voice_transcript.strip()) == 0:
         raise HTTPException(
@@ -3457,7 +3473,7 @@ async def _process_interaction(
         request = request.model_copy(update={"interaction_type": "ANSWER_SUBMISSION"})
 
 
-    student_message = _student_message_from(request)
+    student_message = _student_message_from(request, session)
     rules: ClassifierRulesConfig = load_classifier_rules()
     canvas_evidence = await _canvas_evidence_for(request)
 
