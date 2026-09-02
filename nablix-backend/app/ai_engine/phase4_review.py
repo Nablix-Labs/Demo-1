@@ -76,6 +76,9 @@ def build_openai_phase4_review_client(settings: Settings) -> OpenAIAIEngineClien
             "phase4_review",
             "Phase 4 review generation requires NABLIX_USE_OPENAI_AI_ENGINE=true and an OpenAI API key.",
         )
+    from app.ai_engine.classifier_config import load_classifier_rules
+
+    rules = load_classifier_rules()
     return OpenAIAIEngineClient(
         api_key=settings.openai_api_key,
         model=settings.openai_ai_engine_model,
@@ -83,6 +86,8 @@ def build_openai_phase4_review_client(settings: Settings) -> OpenAIAIEngineClien
         prompt_cache_key_enabled=settings.openai_prompt_cache_key_enabled,
         store_responses=settings.openai_store_responses,
         retry_count=settings.adapter_request_retry_count,
+        guided_reasoning_effort=rules.guided_learning.reasoning_effort,
+        guided_verbosity=rules.guided_learning.verbosity,
     )
 
 

@@ -20,9 +20,17 @@ guided_learning:
     WRONG: 0.50
     STUCK: 0.00
     UNCLEAR: 0.00
-  maximum_retries: 2
+  maximum_retries: 1
   stuck_escalation_count: 2
   maximum_recent_history_turns: 6
+  tutor_message_similarity_threshold: 0.72
+  reasoning_effort: low
+  verbosity: low
+  semantic_confusion_patterns:
+    - "\\b(?:this|that|it)\\s+(?:is\\s+)?(?:not|isn't)\\s+(?:clicking|making sense)\\b"
+    - "\\bi(?: am|'m)\\s+lost\\b"
+    - "\\bi\\s+(?:(?:still|really|just)\\s+)?(?:cannot|can't)\\s+(?:follow|work out|make sense of)\\b"
+    - "\\bwhere\\s+do\\s+i\\s+(?:even\\s+)?start\\b"
   rubric_prompt_version: "1.1.0"
   evaluator_prompt_version: "1.2.0"
   component_adjudicator_prompt_version: "1.0.0"
@@ -125,20 +133,22 @@ guided_learning:
     Return only the requested JSON schema.
   fact_budget_wording_system_prompt: |
     Write a natural, concise Guided Practice tutor reply from the supplied
-    fact budget. The budget deliberately contains only facts the learner has
-    demonstrated, the active teaching question, and an abstract rule shape.
+    fact budget. It contains demonstrated facts and, for TEACH_AND_PROBE, one
+    authorised teaching fact from the authored support catalog.
     Do not infer, name, or reconstruct any value, variable, operation, or
     complete rule that is not in allowed_facts or the learner's own latest
     response. In particular, never complete an expression for the learner.
-    Treat the active_tutor_question as the only next idea to elicit.
+    Treat the active objective as the next idea to elicit. Do not copy the
+    active_tutor_question when it repeats a recent tutor question.
     Use last_turn_evidence for any acknowledgement; do not praise a fact that
     appears only in the earlier conversation. Never ask about a concept in
-    forbidden_question_concept_ids. Use a concrete analogy only when
-    support_context provides one or the active question is an equation.
-    Use at most two short sentences and 20 words total. Acknowledge only one
-    demonstrated idea in five words or fewer, then ask exactly one focused
-    question. Never re-explain, rephrase, or ask for an idea the learner has
-    just demonstrated. If the input is ambiguous, ask only for clarification.
+    forbidden_question_concept_ids. For TEACH_AND_PROBE, acknowledge the
+    difficulty without praise, teach one authorised_teaching_fact, and ask one
+    simpler question that is meaningfully different from recent_tutor_questions.
+    Otherwise acknowledge only one demonstrated idea in five words or fewer,
+    then ask exactly one focused question. Use at most three short sentences and
+    40 words total. Never ask for an idea the learner has just demonstrated. If
+    the input is ambiguous, ask only for clarification.
     If the learner has identified the changing part but not the fixed part,
     ask only what stays fixed. If the learner has identified the fixed part
     but not the changing part, ask only what can change. Do not replace either
@@ -290,6 +300,9 @@ guided_learning:
     distress_message: "I’m glad you told me. You are not stupid, and we can slow down. Would you like to look at one small part together?"
     frustration_acknowledgement: "That can feel frustrating. Let’s take just one small step."
     ambiguity_message: "I want to read your notation correctly. Did you mean a letter followed by a number, or an operation between them?"
+    confusion_teaching_probe: "That’s okay. Let’s use one small clue, then try a simpler question: what part of the question can change?"
+    confusion_choice_teaching_probe: "That’s okay. You chose {option_text}. A general rule must work with different starting values. What changes when you try another starting value?"
+    repeated_confusion_scaffold_message: "Let’s open this up one step at a time. Start with the first scaffold step and tell me what you notice."
     confusion_phrases:
       - "idk"
       - "i don't know"

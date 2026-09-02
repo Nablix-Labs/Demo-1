@@ -614,6 +614,8 @@ export function useDemoTutor() {
   const canvasSubmissionInFlight = useRef(false);
   const explainAgainRequest = useRef<Promise<InteractionResponse | null> | null>(null);
   const [explainAgainPending, setExplainAgainPending] = useState(false);
+  const optionSelectionRequest = useRef<Promise<InteractionResponse | null> | null>(null);
+  const [optionSelectionPending, setOptionSelectionPending] = useState(false);
   const addTranscriptMessage = useNumeraStore((s) => s.addTranscriptMessage);
   const addTrailEntry = useNumeraStore((s) => s.addTrailEntry);
 
@@ -947,7 +949,8 @@ export function useDemoTutor() {
     idleDurationMs: number,
   ): Promise<NudgeClaimResult> => {
     const state = useNumeraStore.getState();
-    if (!apiEnabled() || !sessionId || !state.activeQuestionId) {
+    const activeQuestionId = state.activeQuestionId;
+    if (!apiEnabled() || !sessionId || !activeQuestionId) {
       return { status: 'SUPPRESSED' };
     }
     const turnId = nextSystemTurnId('NUDGE');
@@ -961,7 +964,7 @@ export function useDemoTutor() {
       idle_duration_ms: idleDurationMs,
       current_phase: state.currentPhase,
       concept_id: state.activeConceptId,
-      question_id: state.activeQuestionId,
+      question_id: activeQuestionId,
       hint_count: state.lastHintText ? 1 : 0,
     });
     if (isStaleTurnResponse(res)) {
@@ -1272,66 +1275,80 @@ export function useDemoTutor() {
     [sessionId, canvasExporter, addTranscriptMessage, addTrailEntry]
   );
 
-  const selectOption = useCallback(async (
+  const selectOption = useCallback((
     optionId: string,
     optionText: string,
   ): Promise<InteractionResponse | null> => {
-    const state = useNumeraStore.getState();
-    if (!apiEnabled() || !sessionId || !state.activeQuestionId) return null;
-    const silent = isPhase3(state.currentPhase);
-    const turnId = state.beginSubmissionTurn();
-    closeMicForSubmission();
-    const selection = `Selected ${optionId}: ${optionText}`;
-    if (!silent) {
-      addTranscriptMessage({ role: 'student', text: selection });
-      addTrailEntry({ kind: 'answer', text: selection, meta: 'option selected' });
+    if (optionSelectionRequest.current !== null) {
+      return optionSelectionRequest.current;
     }
-    try {
-      const res = await sendSynchronizedInteraction({
-        session_id: sessionId,
-        student_id: studentId(),
-        // Phase 3 grades; Phase 2 coaches. OPTION_SELECTED is the coached
-        // option discussion, so sending it from Independent Practice asked the
-        // backend to talk about a choice the student had already committed to
-        // as their answer -- the attempt was never graded and no evidence
-        // reached the Student Model, which is what mastery is computed from.
-        // The option fields ride along either way; only the verb changes.
-        interaction_type: silent ? 'ANSWER_SUBMISSION' : 'OPTION_SELECTED',
-        input_source: 'CHOICE',
-        selected_option_id: optionId,
-        // The caller already holds the authored wording, so it goes as sent
-        // rather than being looked up again — this is the one path where the
-        // exact text is beyond doubt.
-        selected_option_text: optionText.trim() || undefined,
-        current_phase: state.currentPhase,
-        concept_id: state.activeConceptId,
-        question_id: state.activeQuestionId,
-        hint_count: state.lastHintText ? 1 : 0,
-        turn_id: turnId,
-        previous_tutor_turn_id: state.lastTutorTurnId,
-      });
-      if (!acceptResponse(res)) return null;
-      syncBackendSession(res);
-      const onReplyEnd = takeFloorForReply();
-      if (silent) {
-        tutorSay('', { onEnd: onReplyEnd });
-        return res;
+    const state = useNumeraStore.getState();
+    const activeQuestionId = state.activeQuestionId;
+    if (!apiEnabled() || !sessionId || !activeQuestionId) {
+      return Promise.resolve(null);
+    }
+    const request = (async (): Promise<InteractionResponse | null> => {
+      const silent = isPhase3(state.currentPhase);
+      const turnId = state.beginSubmissionTurn();
+      closeMicForSubmission();
+      const selection = `Selected ${optionId}: ${optionText}`;
+      if (!silent) {
+        addTranscriptMessage({ role: 'student', text: selection });
+        addTrailEntry({ kind: 'answer', text: selection, meta: 'option selected' });
       }
+      try {
+        const res = await sendSynchronizedInteraction({
+          session_id: sessionId,
+          student_id: studentId(),
+          // Phase 3 grades; Phase 2 coaches. OPTION_SELECTED is the coached
+          // option discussion, so sending it from Independent Practice asked the
+          // backend to talk about a choice the student had already committed to
+          // as their answer -- the attempt was never graded and no evidence
+          // reached the Student Model, which is what mastery is computed from.
+          // The option fields ride along either way; only the verb changes.
+          interaction_type: silent ? 'ANSWER_SUBMISSION' : 'OPTION_SELECTED',
+          input_source: 'CHOICE',
+          selected_option_id: optionId,
+          // The caller already holds the authored wording, so it goes as sent
+          // rather than being looked up again — this is the one path where the
+          // exact text is beyond doubt.
+          selected_option_text: optionText.trim() || undefined,
+          current_phase: state.currentPhase,
+          concept_id: state.activeConceptId,
+          question_id: activeQuestionId,
+          hint_count: state.lastHintText ? 1 : 0,
+          turn_id: turnId,
+          previous_tutor_turn_id: state.lastTutorTurnId,
+        });
+        if (!acceptResponse(res)) return null;
+        syncBackendSession(res);
+        const onReplyEnd = takeFloorForReply();
+        if (silent) {
+          tutorSay('', { onEnd: onReplyEnd });
+          return res;
+        }
       // This path never applied support at all, so a cue or scaffold served in
       // reply to a choice was silently dropped — and with the backend now
       // referring to it out loud, the tutor would point at something that was
       // never rendered.
-      const spoken = applyInteractionSupport(res);
-      const hint = presentAuthorisedHint(res, addTranscriptMessage, addTrailEntry);
-      addTranscriptMessage({ role: 'ai', text: res.message });
-      addTrailEntry({ kind: 'tutor', text: res.message, meta: 'option selected' });
-      tutorSay(withHint(hint, spoken), { onEnd: onReplyEnd });
-      return res;
-    } catch (err) {
-      reopenFloorAfterFailure();
-      reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage, '/interaction (option selected)');
-      return null;
-    }
+        const spoken = applyInteractionSupport(res);
+        const hint = presentAuthorisedHint(res, addTranscriptMessage, addTrailEntry);
+        addTranscriptMessage({ role: 'ai', text: res.message });
+        addTrailEntry({ kind: 'tutor', text: res.message, meta: 'option selected' });
+        tutorSay(withHint(hint, spoken), { onEnd: onReplyEnd });
+        return res;
+      } catch (err) {
+        reopenFloorAfterFailure();
+        reportTutorFailure(err, TUTOR_UNAVAILABLE, addTranscriptMessage, '/interaction (option selected)');
+        return null;
+      } finally {
+        optionSelectionRequest.current = null;
+        setOptionSelectionPending(false);
+      }
+    })();
+    optionSelectionRequest.current = request;
+    setOptionSelectionPending(true);
+    return request;
   }, [sessionId, addTranscriptMessage, addTrailEntry]);
 
   const submitTeachBack = useCallback(async (text: string): Promise<boolean> => {
@@ -1412,6 +1429,7 @@ export function useDemoTutor() {
     hint,
     explainAgain,
     explainAgainPending,
+    optionSelectionPending,
     claimInactivityNudge,
     presentInactivityNudge,
     acknowledgeInactivityNudge,

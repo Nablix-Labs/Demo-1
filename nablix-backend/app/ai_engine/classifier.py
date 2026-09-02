@@ -62,6 +62,7 @@ from app.models.guided_learning import (
     GuidedEvidenceSource,
     GuidedEvaluation,
     GuidedCanvasEvidence,
+    GuidedPedagogicalMove,
     GuidedPromptType,
     GuidedRescueContext,
     GuidedStudentState,
@@ -230,6 +231,7 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
             rules=rules,
             safety_check=safety_check,
             openai_client=openai_client,
+            intent=intent,
         )
     authoritative_verification = (
         uses_authoritative_verification(request)
@@ -1920,7 +1922,15 @@ def deterministic_teaching_step_evaluation(
             "first number",
         }
         valid_variable_statement = variable in normalized and any(
-            marker in normalized for marker in ("change", "vary", "different")
+            marker in normalized
+            for marker in (
+                "change",
+                "changing",
+                "vary",
+                "varies",
+                "variable",
+                "different",
+            )
         )
         if (
             normalized in exact_aliases
@@ -2840,11 +2850,68 @@ def affect_evaluation(
     return None
 
 
+def explicit_confusion_evaluation(
+    request: ClassificationRequest,
+    objective: ActiveTeachingObjective,
+    rules: ClassifierRulesConfig,
+) -> GuidedEvaluation:
+    context = request.phase_2_prompt_context
+    repeated = (
+        context is not None
+        and context.consecutive_stuck_count + 1
+        >= rules.strategy_rules.stuck_scaffold_min_count
+    )
+    selected_option = (
+        request.guided_teaching_state.selected_option_text
+        if request.guided_teaching_state is not None
+        else None
+    )
+    if repeated:
+        message = rules.guided_learning.critical_thinking.repeated_confusion_scaffold_message
+    elif selected_option is not None:
+        message = rules.guided_learning.critical_thinking.confusion_choice_teaching_probe.format(
+            option_text=selected_option,
+        )
+    else:
+        message = rules.guided_learning.critical_thinking.confusion_teaching_probe
+    return GuidedEvaluation(
+        student_state="STUCK",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=objective.confirmed_concept_ids,
+        contradicted_concept_ids=[],
+        missing_concept_ids=objective.missing_concept_ids,
+        selected_error_code=None,
+        confidence=1.0,
+        next_objective=objective,
+        tutor_message=message,
+        tutor_message_voice=message,
+    )
+
+
+def guided_pedagogical_move(
+    state: GuidedStudentState,
+    consecutive_stuck_count: int,
+    stuck_scaffold_min_count: int,
+) -> GuidedPedagogicalMove:
+    if state == "CORRECT":
+        return "ADVANCE"
+    if state == "PARTIAL":
+        return "REQUEST_EXPLANATION"
+    if state == "WRONG":
+        return "CORRECT_MISCONCEPTION"
+    if state == "STUCK":
+        if consecutive_stuck_count + 1 >= stuck_scaffold_min_count:
+            return "DELIVER_SUPPORT"
+        return "TEACH_AND_PROBE"
+    return "ACKNOWLEDGE_AND_PROBE"
+
+
 def classify_guided_learning_response(
     request: ClassificationRequest,
     rules: ClassifierRulesConfig,
     safety_check: SafetyCheck,
     openai_client: OpenAIAIEngineClient,
+    intent: IntentType,
 ) -> TutorResponse:
     if request.answer_spec is None or request.question_id is None:
         raise AdapterError(
@@ -2889,6 +2956,22 @@ def classify_guided_learning_response(
     affect = affect_evaluation(request, objective, rules)
     if affect is not None:
         return build_guided_tutor_response(request, rules, safety_check, rubric, affect, objective)
+    if intent == "EXPRESSING_CONFUSION":
+        confusion = explicit_confusion_evaluation(request, objective, rules)
+        if context.consecutive_stuck_count + 1 < rules.strategy_rules.stuck_scaffold_min_count:
+            confusion = write_deterministic_guided_follow_up(
+                confusion,
+                request,
+                rubric,
+                objective,
+                openai_client,
+                allowed_errors,
+                guided_tutor_context_for(request, rubric, objective),
+                rules,
+            )
+        return build_guided_tutor_response(
+            request, rules, safety_check, rubric, confusion, objective
+        )
     copied_example = copied_example_correction(
         request.question,
         request.student_input,
@@ -3138,9 +3221,11 @@ def classify_guided_learning_response(
     last_error: AdapterError | None = None
     rejected_evaluation: GuidedEvaluation | None = None
     validation_feedback: str | None = None
+    model_call_count = 0
     guided_tutor_context = guided_tutor_context_for(request, rubric, objective)
     for attempt in range(rules.guided_learning.maximum_retries + 1):
         try:
+            model_call_count += 1
             candidate = openai_client.evaluate_guided_turn(
                 question_type=request.question_type,
                 question=request.question,
@@ -3244,6 +3329,7 @@ def classify_guided_learning_response(
                 "openai_ai_engine",
                 "Guided turn evaluation failed without a validated response.",
             )
+    remaining_model_calls = max(0, 2 - model_call_count)
     adjudication_targets = component_adjudication_targets(
         evaluation,
         objective,
@@ -3251,7 +3337,7 @@ def classify_guided_learning_response(
         request.student_input,
         request.question,
         request.answer_spec,
-    )
+    )[:remaining_model_calls]
     adjudicator = getattr(openai_client, "adjudicate_component_evidence", None)
     component_evidence_summaries: list[dict[str, str | float]] = []
     if adjudication_targets and callable(adjudicator):
@@ -3282,6 +3368,7 @@ def classify_guided_learning_response(
                     rules.guided_learning.component_adjudicator_system_prompt
                 ),
             )
+            model_call_count += 1
             evaluation = apply_focused_component_evidence(
                 evaluation,
                 evidence,
@@ -3326,19 +3413,47 @@ def classify_guided_learning_response(
         rubric,
         objective,
     )
+    if (
+        evaluation.student_state == "PARTIAL"
+        and not evaluation.newly_confirmed_concept_ids
+    ):
+        evaluation = reconcile_guided_evaluation(
+            evaluation,
+            objective,
+            rubric,
+            rules,
+            "PARTIAL did not demonstrate a new current-turn component",
+        )
     if is_authoritative_guided_completion(request):
         evaluation = authoritative_guided_completion(evaluation, rules)
     next_objective = normalized_guided_objective(evaluation, objective)
-    evaluation = rewrite_invalid_guided_message_once(
-        evaluation,
-        request,
-        rubric,
-        next_objective,
-        openai_client,
-        allowed_errors,
-        guided_tutor_context,
-        rules,
+    rewrite_candidate = remove_unsupported_guided_praise(evaluation, request)
+    rewrite_required = (
+        rewrite_candidate.student_state != "CORRECT"
+        and next_objective is not None
+        and guided_tutor_message_validation_reason(
+            rewrite_candidate,
+            request,
+            rubric,
+            next_objective,
+            controller_prompt_for_objective(request, rubric, next_objective),
+        )
+        is not None
     )
+    if model_call_count < 2 and rewrite_required:
+        evaluation = rewrite_invalid_guided_message_once(
+            evaluation,
+            request,
+            rubric,
+            next_objective,
+            openai_client,
+            allowed_errors,
+            guided_tutor_context,
+            rules,
+        )
+        model_call_count += 1
+    else:
+        evaluation = rewrite_candidate
     evaluation = align_guided_follow_up(
         evaluation,
         request,
@@ -3360,9 +3475,23 @@ def classify_guided_learning_response(
             "raw_student_state": raw_student_state,
             "raw_confidence": raw_confidence,
             "selected_error_code": evaluation.selected_error_code,
-            "student_input": request.student_input,
+            "current_turn_evidence_ids": evaluation.newly_confirmed_concept_ids,
+            "contradicted_evidence_ids": evaluation.contradicted_concept_ids,
+            "pedagogical_move": guided_pedagogical_move(
+                evaluation.student_state,
+                request.phase_2_prompt_context.consecutive_stuck_count
+                if request.phase_2_prompt_context is not None
+                else 0,
+                rules.strategy_rules.stuck_scaffold_min_count,
+            ),
+            "model_call_count": model_call_count,
+            "student_input_sha256": hashlib.sha256(
+                request.student_input.encode("utf-8")
+            ).hexdigest(),
             "component_evidence": component_evidence_summaries,
-            "displayed_tutor_message": evaluation.tutor_message,
+            "tutor_message_sha256": hashlib.sha256(
+                evaluation.tutor_message.encode("utf-8")
+            ).hexdigest(),
         },
     )
     return build_guided_tutor_response(
@@ -3446,14 +3575,16 @@ def write_deterministic_guided_follow_up(
         )
     except AdapterError as error:
         logger.warning(
-            "guided_deterministic_wording_fallback",
+            "guided_deterministic_wording_failed",
             extra={
                 "question_id": request.question_id,
                 "detail": error.detail,
-                "active_prompt": controller_prompt,
+                "active_prompt_sha256": hashlib.sha256(
+                    controller_prompt.encode("utf-8")
+                ).hexdigest(),
             },
         )
-        return evaluation
+        raise
 
     rewritten = evaluation.model_copy(
         update={
@@ -3474,7 +3605,9 @@ def write_deterministic_guided_follow_up(
             "guided_deterministic_wording_openai_accepted",
             extra={
                 "question_id": request.question_id,
-                "active_prompt": controller_prompt,
+                "active_prompt_sha256": hashlib.sha256(
+                    controller_prompt.encode("utf-8")
+                ).hexdigest(),
             },
         )
         return rewritten
@@ -3499,7 +3632,7 @@ def write_deterministic_guided_follow_up(
                 "detail": error.detail,
             },
         )
-        return evaluation
+        raise
     retried = evaluation.model_copy(
         update={
             "tutor_message": retry.tutor_message,
@@ -3519,7 +3652,9 @@ def write_deterministic_guided_follow_up(
             extra={
                 "question_id": request.question_id,
                 "initial_rejection_reason": rejection_reason,
-                "active_prompt": controller_prompt,
+                "active_prompt_sha256": hashlib.sha256(
+                    controller_prompt.encode("utf-8")
+                ).hexdigest(),
             },
         )
         return retried
@@ -3529,10 +3664,15 @@ def write_deterministic_guided_follow_up(
             "question_id": request.question_id,
             "rejection_reason": rejection_reason,
             "rewrite_rejection_reason": retry_reason,
-            "active_prompt": controller_prompt,
+            "active_prompt_sha256": hashlib.sha256(
+                controller_prompt.encode("utf-8")
+            ).hexdigest(),
         },
     )
-    return evaluation
+    raise AdapterError(
+        "openai_ai_engine",
+        f"Guided wording remained invalid after one retry: {retry_reason}.",
+    )
 
 
 def guided_fact_budget_context(
@@ -3549,6 +3689,29 @@ def guided_fact_budget_context(
     confirmed_ids.update(evaluation.preserved_concept_ids)
     confirmed_ids.difference_update(evaluation.contradicted_concept_ids)
     allowed_facts = ["The learner's latest words: " + request.student_input]
+    phase_context = request.phase_2_prompt_context
+    consecutive_stuck_count = (
+        phase_context.consecutive_stuck_count if phase_context is not None else 0
+    )
+    pedagogical_move = guided_pedagogical_move(
+        evaluation.student_state,
+        consecutive_stuck_count,
+        rules.strategy_rules.stuck_scaffold_min_count,
+    )
+    authorised_teaching_facts: list[str] = []
+    if pedagogical_move == "TEACH_AND_PROBE" and phase_context is not None:
+        hints = phase_context.support_catalog.get("hints")
+        if isinstance(hints, list):
+            first_hint = next(
+                (
+                    hint.get("content")
+                    for hint in hints
+                    if isinstance(hint, dict) and isinstance(hint.get("content"), str)
+                ),
+                None,
+            )
+            if first_hint is not None:
+                authorised_teaching_facts.append(first_hint)
     expression = _expression_parts(
         request.answer_spec.canonical_answer if request.answer_spec else ""
     )
@@ -3583,6 +3746,13 @@ def guided_fact_budget_context(
         "input_source": request.input_source,
         "student_state": evaluation.student_state,
         "active_tutor_question": controller_prompt,
+        "pedagogical_move": pedagogical_move,
+        "authorised_teaching_facts": authorised_teaching_facts,
+        "recent_tutor_questions": [
+            message.content
+            for message in request.conversation_history[-4:]
+            if message.role == "assistant"
+        ],
         "confirmed_concept_ids": sorted(confirmed_ids),
         "missing_concept_ids": objective.missing_concept_ids,
         "last_turn_evidence": (
@@ -3699,7 +3869,9 @@ def rewrite_invalid_guided_message_once(
             "question_id": request.question_id,
             "student_state": evaluation.student_state,
             "rejection_reason": rejection_reason,
-            "active_prompt": controller_prompt,
+            "active_prompt_sha256": hashlib.sha256(
+                controller_prompt.encode("utf-8")
+            ).hexdigest(),
         },
     )
     try:
@@ -3734,7 +3906,7 @@ def rewrite_invalid_guided_message_once(
                 "detail": error.detail,
             },
         )
-        return evaluation
+        raise
 
     rewritten_evaluation = evaluation.model_copy(
         update={
@@ -3773,7 +3945,10 @@ def rewrite_invalid_guided_message_once(
             "rewritten_rejection_reason": rewritten_reason,
         },
     )
-    return evaluation
+    raise AdapterError(
+        "openai_ai_engine",
+        f"Guided message remained invalid after one rewrite: {rewritten_reason}.",
+    )
 
 
 def guided_message_rewrite_feedback(
@@ -3782,10 +3957,17 @@ def guided_message_rewrite_feedback(
 ) -> str:
     """Tell the LLM how to repair only its wording for one guided turn."""
 
+    variation_instruction = (
+        "Do not repeat or closely paraphrase a recent tutor question. Choose a "
+        "smaller concrete probe for the same objective. "
+        if rejection_reason == "NEAR_DUPLICATE"
+        else ""
+    )
     return (
         "Your previous tutor wording was rejected for "
         f"{rejection_reason}. Keep the same student-state classification and "
         "component evidence. Rewrite only tutor_message and tutor_message_voice. "
+        f"{variation_instruction}"
         "Respond naturally to the student's exact words or misconception, do not "
         "reveal any unresolved answer, and end with one focused question about "
         f"the active step: {controller_prompt}"
@@ -3816,6 +3998,11 @@ def align_guided_follow_up(
     )
     if rejection_reason is None:
         return evaluation
+    if rejection_reason == "NEAR_DUPLICATE":
+        raise AdapterError(
+            "openai_ai_engine",
+            "Guided tutor wording repeated a recent tutor question after rewrite.",
+        )
     prefix = {
         "PARTIAL": "Good.",
         "WRONG": "Let's check that carefully.",
@@ -4002,6 +4189,17 @@ def guided_tutor_message_validation_reason(
         return "EMPTY"
 
     rules = load_classifier_rules()
+    similarity = maximum_recent_tutor_message_similarity(message, request)
+    if similarity >= rules.guided_learning.tutor_message_similarity_threshold:
+        logger.warning(
+            "guided_duplicate_tutor_question_rejected",
+            extra={
+                "question_id": request.question_id,
+                "student_state": evaluation.student_state,
+                "similarity": round(similarity, 3),
+            },
+        )
+        return "NEAR_DUPLICATE"
     if guided_message_reveals_undemonstrated_answer(
         message,
         voice_message,
@@ -4058,8 +4256,6 @@ def guided_tutor_message_validation_reason(
         return explanation_probe_reason
 
     normalized_message = normalize_semantic_answer(message)
-    if normalize_semantic_answer(controller_prompt) in normalized_message:
-        return None
 
     if (
         evaluation.selected_error_code is not None
@@ -4068,17 +4264,49 @@ def guided_tutor_message_validation_reason(
         return None
 
     message_tokens = significant_component_tokens(message)
+    if (
+        objective.objective_type == "EXPLAIN_REASONING"
+        and message_tokens.intersection(
+            {"explain", "reason", "reasoning", "support", "supports", "why"}
+        )
+    ):
+        return None
     turn_context_tokens = (
         significant_component_tokens(request.student_input)
         | significant_component_tokens(request.question)
     )
     if message_tokens.intersection(turn_context_tokens):
         return None
+    if message_tokens.intersection(significant_component_tokens(controller_prompt)):
+        return None
     if message_tokens.intersection(active_support_context_tokens(request)):
         return None
     if guided_message_mentions_selected_option(normalized_message, request):
         return None
     return "UNRELATED"
+
+
+def maximum_recent_tutor_message_similarity(
+    message: str,
+    request: ClassificationRequest,
+) -> float:
+    candidate_tokens = significant_component_tokens(message)
+    similarities: list[float] = []
+    for prior in request.conversation_history[-4:]:
+        if prior.role != "assistant":
+            continue
+        prior_tokens = significant_component_tokens(prior.content)
+        union = candidate_tokens | prior_tokens
+        if not union:
+            similarities.append(
+                1.0
+                if normalize_semantic_answer(message)
+                == normalize_semantic_answer(prior.content)
+                else 0.0
+            )
+            continue
+        similarities.append(len(candidate_tokens & prior_tokens) / len(union))
+    return max(similarities, default=0.0)
 
 
 def guided_message_asserts_wrong_fixed_amount(
@@ -5609,6 +5837,15 @@ def build_guided_tutor_response(
     objective: ActiveTeachingObjective | None,
 ) -> TutorResponse:
     state = evaluation.student_state
+    phase_context = request.phase_2_prompt_context
+    consecutive_stuck_count = (
+        phase_context.consecutive_stuck_count if phase_context is not None else 0
+    )
+    pedagogical_move = guided_pedagogical_move(
+        state,
+        consecutive_stuck_count,
+        rules.strategy_rules.stuck_scaffold_min_count,
+    )
     diagnostic_focus = (
         "SOURCE_CORRECTION"
         if prompt_type_for_message(evaluation.tutor_message) == "SOURCE_CORRECTION"
@@ -5637,6 +5874,9 @@ def build_guided_tutor_response(
             "openai_model": openai_model_for_request(get_settings(), request),
             "diagnostic_focus": diagnostic_focus,
             "pedagogy_archetype": pedagogy_archetype,
+            "detected_intent": detect_student_intent(request.student_input, rules),
+            "pedagogical_move": pedagogical_move,
+            "consecutive_stuck_count": consecutive_stuck_count,
             "confirmed_concept_ids": objective.confirmed_concept_ids if objective is not None else [],
             "missing_concept_ids": objective.missing_concept_ids if objective is not None else [],
             "turn_evidence": [
@@ -5822,6 +6062,7 @@ def build_openai_ai_engine_client(settings: Settings) -> OpenAIAIEngineClient | 
     if settings.openai_api_key == "":
         return None
     from app.ai_engine.openai_client import OpenAIAIEngineClient
+    rules = load_classifier_rules()
 
     return OpenAIAIEngineClient(
         api_key=settings.openai_api_key,
@@ -5830,6 +6071,8 @@ def build_openai_ai_engine_client(settings: Settings) -> OpenAIAIEngineClient | 
         prompt_cache_key_enabled=settings.openai_prompt_cache_key_enabled,
         store_responses=settings.openai_store_responses,
         retry_count=settings.adapter_request_retry_count,
+        guided_reasoning_effort=rules.guided_learning.reasoning_effort,
+        guided_verbosity=rules.guided_learning.verbosity,
     )
 
 
@@ -6386,6 +6629,11 @@ def detect_student_intent(student_input: str, rules: ClassifierRulesConfig) -> I
         return "ATTEMPTING_OVERRIDE"
     if detects_direct_answer_request(normalized_input, rules):
         return "REQUESTING_ANSWER"
+    if any(
+        re.search(pattern, normalized_input)
+        for pattern in rules.guided_learning.semantic_confusion_patterns
+    ):
+        return "EXPRESSING_CONFUSION"
     for intent, phrases in rules.intent_phrases.items():
         if contains_any(normalized_input, phrases):
             return intent

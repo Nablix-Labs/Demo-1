@@ -10,6 +10,14 @@ from app.models.question_anchor import QuestionTextAnchor
 
 
 GuidedStudentState = Literal["CORRECT", "PARTIAL", "WRONG", "STUCK", "UNCLEAR"]
+GuidedPedagogicalMove = Literal[
+    "ACKNOWLEDGE_AND_PROBE",
+    "TEACH_AND_PROBE",
+    "CORRECT_MISCONCEPTION",
+    "REQUEST_EXPLANATION",
+    "DELIVER_SUPPORT",
+    "ADVANCE",
+]
 GuidedEvidenceStatus = Literal["DEMONSTRATED", "CONTRADICTED"]
 GuidedEvidenceSource = Literal["TEXT", "VOICE", "OCR", "CANVAS", "STRUCTURED"]
 GuidedPromptType = Literal[

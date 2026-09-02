@@ -1138,7 +1138,18 @@ def _guided_rubric() -> GeneratedQuestionRubric:
     )
 
 
-@pytest.mark.parametrize("student_input", ["what", "idk", "I have no idea", "are u stupid"])
+@pytest.mark.parametrize(
+    "student_input",
+    [
+        "what",
+        "idk",
+        "I have no idea",
+        "are u stupid",
+        "This is not clicking for me",
+        "Where do I even start",
+        "I still cannot make sense of it",
+    ],
+)
 def test_guided_confusion_uses_semantic_tutor_evaluation(
     monkeypatch,
     student_input: str,
@@ -1196,8 +1207,10 @@ def test_guided_confusion_uses_semantic_tutor_evaluation(
     assert response.guided_student_state == "STUCK"
     assert response.intent == "EXPRESSING_CONFUSION"
     assert response.attempt_increment == 0
-    assert "what does the plus sign" in response.tutor_message
-    assert "one part at a time" not in response.tutor_message
+    assert response.tutor_message == (
+        load_classifier_rules()
+        .guided_learning.critical_thinking.confusion_teaching_probe
+    )
 
 
 def test_guided_component_question_stays_specific_after_confusion_and_wrong_value(
@@ -1266,7 +1279,10 @@ def test_guided_component_question_stays_specific_after_confusion_and_wrong_valu
     confused = classify_student_response(request)
 
     assert confused.guided_student_state == "STUCK"
-    assert confused.tutor_message.endswith("Which part can take different possible values?")
+    assert confused.tutor_message == (
+        load_classifier_rules()
+        .guided_learning.critical_thinking.confusion_teaching_probe
+    )
     assert confused.guided_teaching_state is not None
 
     wrong = classify_student_response(
@@ -3072,7 +3088,7 @@ def test_guided_state_machine_clarifies_ambiguous_canvas_then_accepts_defence() 
         current_hint_level=None,
     )
     response_1 = classifier.classify_guided_learning_response(
-        request_1, rules, safety, _UnexpectedOpenAIClient()
+        request_1, rules, safety, _UnexpectedOpenAIClient(), "SUBMITTING_ANSWER"
     )
 
     assert response_1.guided_student_state == "UNCLEAR"
@@ -3129,7 +3145,7 @@ def test_guided_state_machine_clarifies_ambiguous_canvas_then_accepts_defence() 
         current_hint_level=None,
     )
     response_2 = classifier.classify_guided_learning_response(
-        request_2, rules, safety, _DefenceEvaluationClient()
+        request_2, rules, safety, _DefenceEvaluationClient(), "SUBMITTING_ANSWER"
     )
 
     assert response_2.guided_student_state == "CORRECT"
@@ -4631,6 +4647,8 @@ def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> 
         prompt_cache_key_enabled=False,
         store_responses=False,
         retry_count=0,
+        guided_reasoning_effort="low",
+        guided_verbosity="low",
     )
     disabled_client.generate_tutor_turn(
         question="Solve for x: x + 4 = 9",
@@ -4661,6 +4679,8 @@ def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> 
         prompt_cache_key_enabled=True,
         store_responses=True,
         retry_count=0,
+        guided_reasoning_effort="low",
+        guided_verbosity="low",
     )
     enabled_client.generate_tutor_turn(
         question="Solve for x: x + 4 = 9",
@@ -8048,7 +8068,8 @@ def test_guided_exact_notation_stuck_uses_question_aware_llm_message(
     # The bespoke stuck wording was folded into the shared prefix map by
     # "fix: retry invalid guided tutor wording once".
     assert response.tutor_message == (
-        "That's okay. State the remaining idea in your own words."
+        load_classifier_rules()
+        .guided_learning.critical_thinking.confusion_teaching_probe
     )
     assert "x" not in response.tutor_message
     assert response.attempt_increment == 0
@@ -8268,6 +8289,8 @@ def test_guided_rubric_uses_phase_prompt_and_specialized_contract(
         prompt_cache_key_enabled=False,
         store_responses=False,
         retry_count=0,
+        guided_reasoning_effort="low",
+        guided_verbosity="low",
     )
     system_prompt = "Compact rubric prompt."
     ai_client.generate_guided_rubric(
@@ -8288,12 +8311,11 @@ def test_guided_rubric_uses_phase_prompt_and_specialized_contract(
     assert len(request_bodies) == 1
     messages = request_bodies[0]["input"]
     assert isinstance(messages, list)
-    assert messages[0]["role"] == "system"
-    assert "Nablix AI Math Tutor" in messages[0]["content"]
-    assert messages[1]["role"] == "system"
-    assert "PHASE 2" in messages[1]["content"]
-    assert messages[3] == {"role": "system", "content": system_prompt}
+    assert messages[0] == {"role": "system", "content": system_prompt}
     assert messages[-1]["role"] == "user"
+    assert len(messages) == 2
+    assert request_bodies[0]["reasoning"] == {"effort": "low"}
+    assert request_bodies[0]["text"]["verbosity"] == "low"
 
 
 def test_focused_component_schema_requires_the_requested_component_id() -> None:

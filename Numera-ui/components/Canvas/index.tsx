@@ -95,9 +95,18 @@ export default function CanvasStage() {
   const selectedOptionId = useNumeraStore((s) => s.selectedOptionId);
   const setSelectedOption = useNumeraStore((s) => s.setSelectedOption);
   const setTextInput = useNumeraStore((s) => s.setTextInput);
-  const { explainAgain, explainAgainPending, selectOption, submitTeachBack } = tutor;
+  const {
+    explainAgain,
+    explainAgainPending,
+    optionSelectionPending,
+    selectOption,
+    submitTeachBack,
+  } = tutor;
+  const optionSelectionInFlight = useRef(false);
   const pickOption = useCallback(
-    (option: SchemaQuestionOption) => {
+    async (option: SchemaQuestionOption): Promise<void> => {
+      if (optionSelectionInFlight.current) return;
+      optionSelectionInFlight.current = true;
       const s = useNumeraStore.getState();
       const previous = s.questionOptions.find((o) => o.option_id === s.selectedOptionId);
       const trailing = previous
@@ -105,7 +114,11 @@ export default function CanvasStage() {
         : s.textInput.trimStart();
       setSelectedOption(option.option_id);
       setTextInput(trailing ? `${option.text} ${trailing}` : option.text);
-      void selectOption(option.option_id, option.text);
+      try {
+        await selectOption(option.option_id, option.text);
+      } finally {
+        optionSelectionInFlight.current = false;
+      }
     },
     [setSelectedOption, setTextInput, selectOption],
   );
@@ -197,6 +210,7 @@ export default function CanvasStage() {
           options={questionOptions}
           selectedOptionId={selectedOptionId}
           onSelectOption={pickOption}
+          optionsPending={optionSelectionPending}
         />
         {/* §2: "Explain Again — replays the current concept visually without
             counting as an attempt." The backend generates the re-expression;

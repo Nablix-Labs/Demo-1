@@ -105,6 +105,33 @@ describe('every reply path shows support before the message', () => {
     expect(order[0]).toBe('cue');
   });
 
+  it('coalesces rapid Guided option selections into one turn', async () => {
+    let resolveInteraction!: (response: ReturnType<typeof replyWithCue>) => void;
+    sendInteraction.mockReturnValue(new Promise((resolve) => {
+      resolveInteraction = resolve;
+    }));
+
+    let firstRequest: Promise<InteractionResponse | null> | undefined;
+    let secondRequest: Promise<InteractionResponse | null> | undefined;
+    await act(async () => {
+      firstRequest = tutor?.selectOption('B', 'n + 4');
+      secondRequest = tutor?.selectOption('A', '12 + 4');
+    });
+
+    expect(firstRequest).toBe(secondRequest);
+    expect(sendInteraction).toHaveBeenCalledTimes(1);
+    expect(tutor?.optionSelectionPending).toBe(true);
+    expect(useNumeraStore.getState().transcript.filter((message) => message.role === 'student'))
+      .toHaveLength(1);
+
+    resolveInteraction(replyWithCue({ interaction_state_version: 2 }));
+    await act(async () => {
+      await firstRequest;
+    });
+
+    expect(tutor?.optionSelectionPending).toBe(false);
+  });
+
   it('submits a Phase 3 choice without tutor feedback and applies REVIEW', async () => {
     useNumeraStore.setState({
       currentPhase: 'INDEPENDENT_PRACTICE',

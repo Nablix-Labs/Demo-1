@@ -41,6 +41,7 @@ function Options({
   onSelect,
   requiresExplanation,
   readOnly = false,
+  pending,
   questionId,
   highlightedOptionIds,
 }: {
@@ -50,11 +51,17 @@ function Options({
   requiresExplanation: boolean;
   /** Shown but not changeable — a Phase 3 answer that has been accepted. */
   readOnly?: boolean;
+  pending: boolean;
   questionId: string | null;
   highlightedOptionIds: string[];
 }) {
   return (
-    <div className="flex flex-col gap-1.5" role="radiogroup" aria-label="Answer options">
+    <div
+      className="flex flex-col gap-1.5"
+      role="radiogroup"
+      aria-label="Answer options"
+      aria-busy={pending}
+    >
       {options.map((option, i) => {
         const selected = option.option_id === selectedId;
         const tutorHighlighted = questionId !== null
@@ -65,7 +72,7 @@ function Options({
             type="button"
             role="radio"
             aria-checked={selected}
-            disabled={readOnly}
+            disabled={readOnly || pending}
             onClick={() => onSelect(option)}
             className={cn(
               'group flex items-center gap-2.5 rounded-lg border px-3 py-2 text-left text-[14px] transition-colors',
@@ -76,7 +83,11 @@ function Options({
               // A locked choice still SHOWS what was picked — hiding it would
               // erase the student's own answer from the screen — but it must
               // not look pressable.
-              readOnly ? 'cursor-default opacity-90' : !selected && 'hover:bg-reading-surface',
+              readOnly
+                ? 'cursor-default opacity-90'
+                : pending
+                  ? 'cursor-wait opacity-70'
+                  : !selected && 'hover:bg-reading-surface',
             )}
           >
             <span
@@ -125,6 +136,7 @@ export default function QuestionDisplay({
   selectedOptionId = null,
   onSelectOption,
   optionsReadOnly = false,
+  optionsPending = false,
   anchors,
   questionId = null,
   highlightedOptionIds = [],
@@ -139,6 +151,8 @@ export default function QuestionDisplay({
   onSelectOption?: (option: SchemaQuestionOption) => void;
   /** Render the choices as a record of what was picked, not a chooser. */
   optionsReadOnly?: boolean;
+  /** Prevent duplicate option turns while the current selection is being handled. */
+  optionsPending?: boolean;
   /**
    * Spans of `question` the tutor is pointing at (Chirudeva handoff §1).
    *
@@ -171,6 +185,7 @@ export default function QuestionDisplay({
       onSelect={onSelectOption!}
       requiresExplanation={requiresExplanation}
       readOnly={optionsReadOnly}
+      pending={optionsPending}
       questionId={questionId}
       highlightedOptionIds={highlightedOptionIds}
     />

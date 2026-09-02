@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import yaml
 from pydantic import Field, StrictBool, model_validator
@@ -197,6 +197,9 @@ class CriticalThinkingConfig(StrictSchema):
     distress_message: str
     frustration_acknowledgement: str
     ambiguity_message: str
+    confusion_teaching_probe: str
+    confusion_choice_teaching_probe: str
+    repeated_confusion_scaffold_message: str
     confusion_phrases: list[str]
     wrong_choice_prompt: str
     wrong_direct_rule_prompt: str
@@ -230,6 +233,10 @@ class GuidedLearningConfig(StrictSchema):
     maximum_retries: int = Field(ge=0)
     stuck_escalation_count: int = Field(ge=1)
     maximum_recent_history_turns: int = Field(ge=0)
+    tutor_message_similarity_threshold: float = Field(ge=0.0, le=1.0)
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high"]
+    verbosity: Literal["low", "medium", "high"]
+    semantic_confusion_patterns: list[str]
     rubric_prompt_version: str
     evaluator_prompt_version: str
     component_adjudicator_prompt_version: str
