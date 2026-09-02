@@ -2132,17 +2132,9 @@ def _guided_support_levels(session: SessionRecord) -> tuple[SupportUsed, Support
         if stored_event is not None
         else None
     )
-    support = (
-        stored_event.phase_payload.support_to_serve
-        if stored_event is not None and stored_event.phase_payload is not None
-        else None
-    )
-    support_type = support.get("support_type") if support is not None else None
-    active_support_level: SupportUsed = (
-        support_type
-        if support_type in _SUPPORT_RANK
-        else "VISUAL_CUE"
-        if support_type == "HINT_AND_VISUAL_CUE"
+    active_support_level = (
+        _renderable_support_level(stored_event)
+        if stored_event is not None
         else "NONE"
     )
     highest_support_used: SupportUsed = (
@@ -2155,6 +2147,40 @@ def _guided_support_levels(session: SessionRecord) -> tuple[SupportUsed, Support
         else "NONE"
     )
     return active_support_level, highest_support_used
+
+
+def _renderable_support_level(
+    event: StudentModelSessionEventResponse,
+) -> SupportUsed:
+    """Return a support rung only when the response contains something to show."""
+    payload = event.phase_payload
+    support = payload.support_to_serve if payload is not None else None
+    if support is None:
+        return "NONE"
+
+    support_type = support.get("support_type")
+    hint = _schema_hint(event)
+    if support_type == "HINT":
+        return "HINT" if hint is not None else "NONE"
+
+    if support_type in {"VISUAL_CUE", "HINT_AND_VISUAL_CUE"}:
+        if _schema_visual_cue(event) is not None:
+            return "VISUAL_CUE"
+        return "HINT" if hint is not None else "NONE"
+
+    if support_type == "SCAFFOLD":
+        scaffold_state = _schema_scaffold_state(event)
+        has_scaffold = (
+            bool(_schema_support_steps(event))
+            and scaffold_state.get("scaffold_id") is not None
+            and scaffold_state.get("current_scaffold_step_id") is not None
+            and scaffold_state.get("scaffold_expected_response") is not None
+        )
+        if has_scaffold:
+            return "SCAFFOLD"
+        return "HINT" if hint is not None else "NONE"
+
+    return "NONE"
 
 
 def _response_from(

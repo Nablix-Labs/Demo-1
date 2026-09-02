@@ -100,6 +100,23 @@ def test_empty_support_keeps_the_tutor_response_available(
     assert support_used is None
 
 
+def test_missing_support_content_is_not_reported_as_active_support() -> None:
+    response = _event_response("INCORRECT_ATTEMPT", "REQ-MISSING-HINT")
+    phase_payload = response["phase_payload"]
+    assert isinstance(phase_payload, dict)
+    phase_payload["support_to_serve"] = {
+        "support_type": "HINT",
+        "items": [],
+        "retry_same_question": True,
+    }
+    event = session_service.StudentModelSessionEventResponse.model_validate(response)
+    session = session_service.SessionRecord.model_construct(student_model_event=event)
+
+    active_support_level, _ = interaction_service._guided_support_levels(session)
+
+    assert active_support_level == "NONE"
+
+
 def test_visual_cue_requires_an_authored_visual_cue_item() -> None:
     response = _event_response("INCORRECT_ATTEMPT", "REQ-MISSING-VISUAL")
     phase_payload = response["phase_payload"]
