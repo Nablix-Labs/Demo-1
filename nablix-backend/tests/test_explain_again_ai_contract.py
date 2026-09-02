@@ -91,6 +91,8 @@ def _client() -> openai_client.OpenAIAIEngineClient:
         prompt_cache_key_enabled=False,
         store_responses=False,
         retry_count=0,
+        guided_reasoning_effort="low",
+        guided_verbosity="low",
     )
 
 

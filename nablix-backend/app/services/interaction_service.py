@@ -585,17 +585,12 @@ async def process_answer_with_session_event(
         and _is_support_failure(tutor)
         and wrong_attempt_count >= 4
     )
-    stuck_support_request = (
+    confusion_support_request = (
         schema_managed
         and session.current_phase == "GUIDED_PRACTICE"
         and tutor.intent == "EXPRESSING_CONFUSION"
-        and (
-            tutor.response_strategy in {"SCAFFOLD", "PROVIDE_WORKED_EXAMPLE"}
-            or session.stuck_count + 1
-            >= rules.strategy_rules.stuck_scaffold_min_count
-        )
     )
-    support_escalation = wrong_four_escalation or stuck_support_request
+    support_escalation = wrong_four_escalation or confusion_support_request
     if not schema_managed or (event_type is None and not support_escalation):
         return student, tutor, None, None, session
 
@@ -609,20 +604,35 @@ async def process_answer_with_session_event(
         .retry_required_micro_skill_ids
     )
     if support_escalation:
+        next_stuck_count = session.stuck_count + 1
         escalation_type: Literal[
             "GUIDED_SUPPORT_REQUESTED",
             "GUIDED_SUPPORT_ESCALATION_REQUIRED",
             "GUIDED_STUCK_SUPPORT_REQUIRED",
             "MAXIMUM_GUIDED_SUPPORT_PARALLEL",
             "MAXIMUM_GUIDED_SUPPORT_REQUIRED",
-        ] = (
-            "MAXIMUM_GUIDED_SUPPORT_REQUIRED"
-            if highest_guided_support == "PARALLEL_EXAMPLE"
-            else "MAXIMUM_GUIDED_SUPPORT_PARALLEL"
-            if highest_guided_support == "SCAFFOLD"
-            else "GUIDED_SUPPORT_REQUESTED"
-            if stuck_support_request and not wrong_four_escalation
-            else "GUIDED_SUPPORT_ESCALATION_REQUIRED"
+        ]
+        if confusion_support_request:
+            escalation_type = (
+                "GUIDED_STUCK_SUPPORT_REQUIRED"
+                if next_stuck_count >= rules.strategy_rules.stuck_scaffold_min_count
+                else "GUIDED_SUPPORT_REQUESTED"
+            )
+        elif highest_guided_support == "PARALLEL_EXAMPLE":
+            escalation_type = "MAXIMUM_GUIDED_SUPPORT_REQUIRED"
+        elif highest_guided_support == "SCAFFOLD":
+            escalation_type = "MAXIMUM_GUIDED_SUPPORT_PARALLEL"
+        else:
+            escalation_type = "GUIDED_SUPPORT_ESCALATION_REQUIRED"
+        logger.info(
+            "guided_support_escalation_selected",
+            extra={
+                "question_id": session.question_id,
+                "event_type": escalation_type,
+                "detected_intent": tutor.intent,
+                "next_stuck_count": next_stuck_count,
+                "highest_guided_support": highest_guided_support,
+            },
         )
         escalation_error_code = _validated_error_code(
             session,
@@ -2869,10 +2879,7 @@ async def _option_selected_interaction_response(
             question_number=session.question_number,
             current_hint_level=_current_hint_level_from(session.hint_count),
             concept_id=session.concept_id,
-            conversation_history=[
-                *session.conversation_history,
-                ConversationMessage(role="user", content=selection),
-            ],
+            conversation_history=session.conversation_history,
             conversation_state=_conversation_state_from_session(session),
             generated_question_rubric=session.generated_question_rubric,
             active_teaching_objective=session.active_teaching_objective,
@@ -4054,7 +4061,15 @@ async def _process_interaction(
             if tutor.intent == "EXPRESSING_CONFUSION"
             else (
                 0
-                if request.interaction_type == "ANSWER_SUBMISSION"
+                if tutor.attempt_increment > 0
+                or (
+                    tutor.intent == "SUBMITTING_ANSWER"
+                    and tutor.guided_student_state in {
+                        "CORRECT",
+                        "PARTIAL",
+                        "WRONG",
+                    }
+                )
                 else session.stuck_count
             )
         ),

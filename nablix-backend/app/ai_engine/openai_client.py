@@ -227,6 +227,8 @@ class OpenAIAIEngineClient:
         prompt_cache_key_enabled: bool,
         store_responses: bool,
         retry_count: int,
+        guided_reasoning_effort: str,
+        guided_verbosity: str,
     ) -> None:
         self._api_key = api_key
         self._model = model
@@ -234,6 +236,8 @@ class OpenAIAIEngineClient:
         self._prompt_cache_key_enabled = prompt_cache_key_enabled
         self._store_responses = store_responses
         self._retry_count = retry_count
+        self._guided_reasoning_effort = guided_reasoning_effort
+        self._guided_verbosity = guided_verbosity
 
     def generate_tutor_turn(
         self,
@@ -534,35 +538,24 @@ class OpenAIAIEngineClient:
             for key, value in user_payload.items()
             if key != "recent_conversation"
         }
-        active_tutor_question = next(
-            (
-                message.content
-                for message in reversed(recent_conversation)
-                if message.role == "assistant"
-            ),
-            None,
-        )
-        if active_tutor_question is not None:
-            session_context["active_tutor_question"] = active_tutor_question
         request_content = json.dumps(
             {"component": name, **session_context},
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
         )
-        messages = build_openai_tutor_messages(
-            phase="GUIDED_PRACTICE",
-            active_triggers=[],
-            session_context={"component": name, **session_context},
-            conversation_history=[message.model_dump() for message in recent_conversation],
-            current_user_input=request_content,
-        )
-        messages.insert(3, {"role": "system", "content": system_prompt})
+        messages = [
+            {"role": "system", "content": system_prompt},
+            *[message.model_dump() for message in recent_conversation],
+            {"role": "user", "content": request_content},
+        ]
         request_body: dict[str, object] = {
             "model": self._model,
             "input": messages,
             "store": self._store_responses,
+            "reasoning": {"effort": self._guided_reasoning_effort},
             "text": {
+                "verbosity": self._guided_verbosity,
                 "format": {
                     "type": "json_schema",
                     "name": name,
@@ -572,7 +565,13 @@ class OpenAIAIEngineClient:
             },
         }
         if self._prompt_cache_key_enabled:
-            request_body["prompt_cache_key"] = sha256_text(system_prompt)
+            prompt_version = session_context.get(
+                "prompt_version",
+                session_context.get("evaluator_prompt_version", "unversioned"),
+            )
+            request_body["prompt_cache_key"] = sha256_text(
+                f"{name}:{prompt_version}:{sha256_text(system_prompt)}"
+            )
         response, latency_ms = self._post_with_retries(request_body)
         if response.status_code != 200:
             raise AdapterError(
@@ -596,6 +595,7 @@ class OpenAIAIEngineClient:
                     "input_tokens": usage.input_tokens,
                     "output_tokens": usage.output_tokens,
                     "cached_tokens": usage.cached_tokens,
+                    "cache_write_tokens": usage.cache_write_tokens,
                     "total_tokens": usage.total_tokens,
                     "latency_ms": round(latency_ms, 3),
                 },

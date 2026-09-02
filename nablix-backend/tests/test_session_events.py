@@ -700,8 +700,38 @@ def _event_response(
                 "next_action": "START_INDEPENDENT",
             }
         )
+    elif event_type == "GUIDED_SUPPORT_REQUESTED":
+        response = _event_response("ORIENTATION_COMPLETED", request_id)
+        journey = response["journey_state"]
+        payload = response["phase_payload"]
+        routing = response["routing"]
+        assert isinstance(journey, dict)
+        assert isinstance(payload, dict)
+        assert isinstance(routing, dict)
+        journey["phase_2_guided_learning"]["highest_support_used_by_skill"] = {
+            "T02.M1": "HINT"
+        }
+        payload["payload_type"] = "SUPPORT_AND_RETRY"
+        payload["support_to_serve"] = {
+            "support_type": "HINT",
+            "items": [
+                {
+                    "content_type": "HINT",
+                    "content_id": "HINT-T02-M1-L1",
+                    "content": "Undo the addition first.",
+                    "level": 1,
+                }
+            ],
+            "retry_same_question": True,
+        }
+        routing.update(
+            {
+                "reason_code": "GUIDED_HINT_REQUIRED",
+                "reason": "Student requested help. Delivering support for retry.",
+                "next_action": "DELIVER_SUPPORT_AND_RETRY",
+            }
+        )
     elif event_type in {
-        "GUIDED_SUPPORT_REQUESTED",
         "GUIDED_SUPPORT_ESCALATION_REQUIRED",
         "GUIDED_STUCK_SUPPORT_REQUIRED",
     }:
@@ -1694,12 +1724,13 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
         assert stuck.status_code == 200
         assert stuck.json()["attempt_count"] == 0
         if expected_stuck_count == 1:
-            assert len(events) == event_count_before_stuck
+            assert len(events) == event_count_before_stuck + 1
+            assert events[-1]["event_type"] == "GUIDED_SUPPORT_REQUESTED"
             assert "scaffold_steps" not in stuck.json()
             assert stuck.json()["current_scaffold_step_id"] is None
         else:
-            assert len(events) == event_count_before_stuck + 1
-            assert events[-1]["event_type"] == "GUIDED_SUPPORT_REQUESTED"
+            assert len(events) == event_count_before_stuck + 2
+            assert events[-1]["event_type"] == "GUIDED_STUCK_SUPPORT_REQUIRED"
             assert events[-1]["micro_skill_id"] == "T02.M1"
             assert events[-1].get("triggering_response") is None
             assert events[-1].get("error_code") is None
