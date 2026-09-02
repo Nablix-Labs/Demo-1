@@ -123,6 +123,8 @@ from app.services.session_service import (
     _apply_schema_event,
     _get_owned_session_for_turn,
     cache_interaction_response,
+    final_turn_receipt_for,
+    record_final_turn_receipt,
     build_canvas_memory_update,
     get_canvas_submission,
     interaction_lock_for,
@@ -1994,12 +1996,16 @@ def _duplicate_turn_response(
     response = last_interaction_response_for(session.session_id, request.turn_id)
     if response is None and request.turn_id != session.last_processed_turn_id:
         return None
-    if response is None:
-        raise RuntimeError(
-            f"cached response is missing for duplicate session_id={session.session_id} "
-            f"turn_id={request.turn_id}"
-        )
     fingerprint = interaction_payload_fingerprint_for(session.session_id, request.turn_id)
+    if response is None:
+        # The cache is process-local and the turn id is not, so a restart lands
+        # here: the session has already processed this turn and the response is
+        # gone. It used to raise, which turned a retry into a 500. The receipt
+        # is the durable half of the same answer.
+        receipt = final_turn_receipt_for(session, request.turn_id)
+        if receipt is not None:
+            fingerprint = receipt.evidence_fingerprint
+        response = replayed_turn_response(session, request.turn_id)
     if fingerprint is not None and fingerprint != _request_fingerprint(request):
         raise HTTPException(
             status_code=409,
@@ -2012,6 +2018,37 @@ def _duplicate_turn_response(
             "attempt_increment": 0,
             "retry_safe": True,
         }
+    )
+
+
+def replayed_turn_response(
+    session: SessionRecord,
+    turn_id: str,
+) -> InteractionResponse:
+    """Rebuild an accepted turn's answer from persisted session state alone.
+
+    No OCR, no tutor evaluation, no Student Model event: the turn is already
+    accepted, and everything the client needs to carry on -- the phase it
+    landed in, whether the review is materialized -- is on the session record.
+    Used when the in-memory response for `turn_id` did not survive a restart.
+    """
+
+    return _response_from(
+        session_id=session.session_id,
+        student_id=session.student_id,
+        turn_id=turn_id,
+        interaction_type="ANSWER_SUBMISSION",
+        nudge_id=None,
+        session=session,
+        message=session.message,
+        message_voice="",
+        visual_cue=None,
+        scaffold_steps=[],
+        session_summary=None,
+        conversation_action="WAIT_FOR_STUDENT",
+        attempt_increment=0,
+        status=None,
+        retry_safe=True,
     )
 
 
@@ -2379,6 +2416,7 @@ def _response_from(
             None if phase3_silent else session.selected_error_code
         ),
         first_error_step=None,
+        review_materialization_state=session.review_materialization_state,
     )
 
 
@@ -2411,18 +2449,31 @@ def _phase3_terminal_attempt(
     return Phase3TerminalAttempt(question_id, outcome, selected_error_code)
 
 
-def _cache_response(
+async def _cache_response(
     request: InteractionRequest,
     response: InteractionResponse,
 ) -> InteractionResponse:
     if request.turn_id is None:
         raise RuntimeError("validated interaction is missing turn_id")
+    fingerprint = _request_fingerprint(request)
     cache_interaction_response(
         request.session_id,
         request.turn_id,
         response,
-        _request_fingerprint(request),
+        fingerprint,
     )
+    # The turn that ENTERED Review, not merely a turn taken while in it. The
+    # receipt is a single slot, and an inactivity nudge on the review screen is
+    # also a turn in REVIEW -- gating on the phase alone let one overwrite the
+    # final answer's receipt, at which point the retry it exists for falls
+    # through to a second CORRECT_ATTEMPT and the changed-evidence 409 becomes
+    # a 200. phase_changed is only set on a turn that executed a transition.
+    if response.phase_changed and response.current_phase == "REVIEW":
+        await record_final_turn_receipt(
+            request.session_id,
+            request.turn_id,
+            fingerprint,
+        )
     return response
 
 
@@ -2756,7 +2807,7 @@ async def _side_channel_response(
         status=None,
         retry_safe=True,
     )
-    return _cache_response(request, response)
+    return await _cache_response(request, response)
 
 
 
@@ -2927,7 +2978,7 @@ async def _option_selected_interaction_response(
             ),
         },
     )
-    return _cache_response(
+    return await _cache_response(
         request,
         _response_from(
             session_id=request.session_id,
@@ -3012,7 +3063,7 @@ async def _nudge_response(
     )
 
 
-    return _cache_response(
+    return await _cache_response(
         request,
         response.model_copy(
             update={
@@ -3283,7 +3334,7 @@ async def _explain_again_interaction_response(
             ),
         }
     )
-    return _cache_response(request, response)
+    return await _cache_response(request, response)
 
 
 async def _process_interaction(
@@ -3336,7 +3387,7 @@ async def _process_interaction(
                 status="CLARIFICATION_REQUIRED",
                 retry_safe=True,
             )
-            return _cache_response(request, response)
+            return await _cache_response(request, response)
         if request.interaction_type in {"HELP_REQUEST", "SUPPORT_REPLAY", "EXPLAIN_AGAIN"}:
             raise HTTPException(status_code=409, detail="Teaching support is unavailable during Independent Practice.")
         if request.interaction_type == "ANSWER_SUBMISSION":
@@ -3355,7 +3406,7 @@ async def _process_interaction(
                     conversation_action="WAIT_FOR_STUDENT", attempt_increment=0,
                     status="processed", retry_safe=True,
                 )
-                return _cache_response(request, response.model_copy(update={
+                return await _cache_response(request, response.model_copy(update={
                     "phase3_submission_confirmed": False,
                     "independent_outcome": "AWAITING_SUBMISSION",
                     "independent_attempt_terminal": False,
@@ -3457,7 +3508,7 @@ async def _process_interaction(
                 ),
             },
         )
-        return _cache_response(
+        return await _cache_response(
             request,
             _response_from(
                 session_id=request.session_id,
@@ -3587,7 +3638,7 @@ async def _process_interaction(
                 **_turn_updates(request.turn_id, "REQUESTED_CLARIFICATION", "CLARIFICATION"),
             },
         )
-        return _cache_response(
+        return await _cache_response(
             request,
             _response_from(
                 session_id=request.session_id,
@@ -3739,7 +3790,7 @@ async def _process_interaction(
                 **_turn_updates(request.turn_id, "REQUESTED_CLARIFICATION", "CLARIFICATION"),
             },
         )
-        return _cache_response(
+        return await _cache_response(
             request,
             _response_from(
                 session_id=request.session_id,
@@ -3809,7 +3860,7 @@ async def _process_interaction(
                 ),
             },
         )
-        return _cache_response(
+        return await _cache_response(
             request,
             _response_from(
                 session_id=request.session_id,
@@ -4509,4 +4560,4 @@ async def _process_interaction(
                 "phase3_submission_kind": "CHOICE" if request.input_source == "CHOICE" else None,
             }
         )
-    return _cache_response(request, response)
+    return await _cache_response(request, response)

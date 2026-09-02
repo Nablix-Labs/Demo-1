@@ -36,6 +36,7 @@ from app.models.guided_learning import (
 )
 from app.models.student_model_session import (
     PublicStudentModelEvent,
+    StudentModelPhase,
     QuestionType,
     StudentModelCoreState,
     StudentModelSessionEventResponse,
@@ -253,6 +254,45 @@ class SessionSummary(BaseModel):
     conversation_history: list[ConversationMessage]
 
 
+ReviewMaterializationState = Literal["PENDING", "READY"]
+
+
+class NextTopicHandoff(BaseModel):
+    """Student Model's next-topic decision, relayed verbatim (ADR 0003).
+
+    Projected only from a REVIEW_COMPLETED response. The backend never fills a
+    field here from curriculum data of its own -- an absent handoff means
+    Student Model said there is no next topic, not that one must be guessed.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_session_id: SessionId
+    student_model_request_id: str
+    topic_id: str
+    entry_phase: StudentModelPhase
+
+
+class FinalTurnReceipt(BaseModel):
+    """What one accepted final turn did, small enough to keep in session JSON.
+
+    The in-memory response cache does not survive a restart, but
+    `last_processed_turn_id` does -- so a retried final turn used to arrive at a
+    session that had already processed it and no longer had the answer. This is
+    the durable half: enough to answer the retry, and to tell an honest replay
+    from the same turn_id carrying different evidence.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    turn_id: TurnId
+    evidence_fingerprint: str
+    student_model_request_id: str
+    journey_version: int
+    phase: Phase
+    review_materialization_state: ReviewMaterializationState | None = None
+
+
 class SessionRecord(BaseModel):
     """Current mock session state stored by the in-memory registry."""
 
@@ -355,6 +395,13 @@ class SessionRecord(BaseModel):
     prerequisite_repair_event: StudentModelSessionEventResponse | None = None
     student_model_state: StudentModelCoreState | None = None
     active_student_model_question: StudentModelQuestion | None = None
+    # Backend presentation state for the Phase 4 review, never a journey phase:
+    # PENDING means the student is in Review and the review is still being
+    # built, READY that it is attached. Neither value can move the authoritative
+    # Student Model journey, and PENDING never asks for the answer again.
+    review_materialization_state: ReviewMaterializationState | None = None
+    next_topic_handoff: NextTopicHandoff | None = None
+    final_turn_receipt: FinalTurnReceipt | None = None
     session_summary: SessionSummary | None = None
 
 
@@ -375,6 +422,11 @@ class SessionResponse(SessionRecord):
         default=None,
         exclude=True,
     )
+    # Two sources of mastery and phase in one response can only disagree.
+    # student_model_state is projected from the newest authoritative Schema 3
+    # event; last_student_model is a legacy snapshot kept for diagnostics only.
+    last_student_model: StudentModelResult | None = Field(default=None, exclude=True)
+    final_turn_receipt: FinalTurnReceipt | None = Field(default=None, exclude=True)
     generated_question_rubric: GeneratedQuestionRubric | None = Field(
         default=None,
         exclude=True,

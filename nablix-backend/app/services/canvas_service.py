@@ -62,12 +62,15 @@ from app.services.interaction_service import (
     _scaffold_evaluation_context,
     process_answer_with_session_event,
     _response_from,
+    replayed_turn_response,
 )
 from app.services.session_service import (
     _get_owned_session,
     cache_interaction_response,
+    final_turn_receipt_for,
     interaction_payload_fingerprint_for,
     last_interaction_response_for,
+    record_final_turn_receipt,
     record_canvas_attachment,
     reconcile_journey_conflict,
     record_canvas_submission,
@@ -256,11 +259,26 @@ async def submit_canvas(
         )
     if request.turn_id is not None:
         previous = last_interaction_response_for(request.session_id, request.turn_id)
+        fingerprint = interaction_payload_fingerprint_for(
+            request.session_id,
+            request.turn_id,
+        )
+        receipt = final_turn_receipt_for(session, request.turn_id)
+        if previous is None and receipt is not None:
+            # The response cache did not survive a restart but the receipt did.
+            # Replaying from it costs nothing; falling through would re-run OCR,
+            # re-evaluate the work, and send a second CORRECT_ATTEMPT for an
+            # answer Student Model already accepted.
+            #
+            # A receipt is REQUIRED here, unlike the interaction path, which may
+            # replay without one: `_duplicate_turn_response` has already
+            # established the turn was processed by matching
+            # last_processed_turn_id, and there is no such gate before this
+            # point. Do not "unify" the two -- replaying here without a receipt
+            # would answer DUPLICATE_TURN to a turn that was never accepted.
+            previous = replayed_turn_response(session, request.turn_id)
+            fingerprint = receipt.evidence_fingerprint
         if previous is not None:
-            fingerprint = interaction_payload_fingerprint_for(
-                request.session_id,
-                request.turn_id,
-            )
             if fingerprint != _canvas_request_fingerprint(request):
                 # Both 409s below look identical in the access log, and the
                 # client shows one sentence for either. Name the guard here or
@@ -631,12 +649,22 @@ async def submit_canvas(
             response.independent_attempt_terminal = tutor.independent_attempt_terminal
             response.first_error_step = None
             response.phase3_review_evidence = None
+    canvas_fingerprint = _canvas_request_fingerprint(request)
     cache_interaction_response(
         request.session_id,
         submission_id,
         response,
-        _canvas_request_fingerprint(request),
+        canvas_fingerprint,
     )
+    # Only the turn that ENTERED Review -- see _cache_response for why the phase
+    # alone is not enough. Its replay must survive a restart, because losing it
+    # costs a duplicated mastery decision, not a repeated sentence.
+    if phase_changed and updated_session.current_phase == "REVIEW":
+        await record_final_turn_receipt(
+            request.session_id,
+            submission_id,
+            canvas_fingerprint,
+        )
     # After caching, via model_copy: the cache holds the response by reference, so
     # a duplicate replay must not inherit this turn's exchange.
     debug = student_model_debug_payload()

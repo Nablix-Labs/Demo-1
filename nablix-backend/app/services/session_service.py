@@ -24,6 +24,7 @@ from app.models.guided_learning import ActiveGuidedRescue
 from app.models.interaction import InteractionResponse
 from app.models.session import (
     CanvasState,
+    FinalTurnReceipt,
     DiagnosticCompleteRequest,
     InactivityPolicy,
     NudgeDeliveryRecord,
@@ -38,6 +39,8 @@ from app.models.session import (
     RescueStepResponse,
     SessionEndRequest,
     SessionPerformance,
+    NextTopicHandoff,
+    ReviewMaterializationState,
     SessionRecord,
     SessionStartRequest,
     SessionResumeRequest,
@@ -55,7 +58,6 @@ from app.models.student_model_session import (
     QuestionType,
     ReviewCompletedEvent,
     SessionOpenedEvent,
-    SessionResumedEvent,
     StudentModelJourneyState,
     StudentModelPhasePayload,
     StudentModelPhase,
@@ -155,6 +157,63 @@ def cache_interaction_response(
 
 def interaction_payload_fingerprint_for(session_id: str, turn_id: str) -> str | None:
     return _interaction_payload_fingerprints.get((session_id, turn_id))
+
+
+async def record_final_turn_receipt(
+    session_id: str,
+    turn_id: str,
+    evidence_fingerprint: str,
+) -> SessionRecord | None:
+    """Persist what the final independent turn did, next to the session itself.
+
+    The response cache above is process-local; `last_processed_turn_id` is not.
+    A restart between losing the response and the client retrying therefore left
+    the backend certain it had processed the turn and unable to say what
+    happened -- so the retry either 500'd on the missing cache entry or paid for
+    OCR, tutor evaluation and a second Student Model event all over again.
+
+    Written only for the turn that ends Independent Practice, which is the one
+    whose replay is expensive to get wrong: a duplicated CORRECT_ATTEMPT is a
+    duplicated mastery decision.
+    """
+
+    # Looked up rather than passed in, and never raising: this runs AFTER the
+    # turn is committed and its response cached, so a missing session must not
+    # turn a successful turn into a 404.
+    session = _sessions.get(session_id)
+    if session is None or session.student_model_event is None:
+        return session
+    receipt = FinalTurnReceipt(
+        turn_id=turn_id,
+        evidence_fingerprint=evidence_fingerprint,
+        student_model_request_id=session.student_model_event.request_id,
+        journey_version=session.student_model_event.journey_state.version,
+        phase=session.current_phase,
+        review_materialization_state=session.review_materialization_state,
+    )
+    updated = session.model_copy(update={"final_turn_receipt": receipt})
+    _sessions[session.session_id] = updated
+    await save_session(updated)
+    _log_lifecycle(
+        updated,
+        "final_turn_receipt_recorded",
+        source_turn_id=turn_id,
+        student_model_request_id=receipt.student_model_request_id,
+        journey_version=receipt.journey_version,
+        phase=receipt.phase,
+        review_materialization_state=receipt.review_materialization_state,
+    )
+    return updated
+
+
+def final_turn_receipt_for(
+    session: SessionRecord,
+    turn_id: str,
+) -> FinalTurnReceipt | None:
+    """The persisted receipt for `turn_id`, or None if this is not that turn."""
+
+    receipt = session.final_turn_receipt
+    return receipt if receipt is not None and receipt.turn_id == turn_id else None
 
 
 def inactivity_policy() -> InactivityPolicy:
@@ -567,9 +626,23 @@ async def start_session(
     # Review rendered the screen with no review on it, permanently. The message
     # two fields up ("Session Review -- practice questions complete.") shows the
     # path was always intended; only the review was missing.
+    if session.current_phase == "REVIEW":
+        session = session.model_copy(update={"review_materialization_state": "PENDING"})
     _sessions[session_id] = session
     await save_session(session)
     if session.current_phase == "REVIEW":
+        # The refresh-into-Review path. It reaches Phase 4 without ever passing
+        # through a transition, so without this line the case being debugged is
+        # the one case that leaves no trace.
+        _log_lifecycle(
+            session,
+            "review_session_opened",
+            journey_version=event.journey_state.version,
+            mastery_status=event.journey_state.mastery_status,
+            topic_status=event.journey_state.topic_status,
+            student_model_request_id=event.request_id,
+            review_materialization_state=session.review_materialization_state,
+        )
         return await _attach_phase4_review(session, event)
     return session
 
@@ -903,21 +976,83 @@ async def generate_phase4_review_for(
     return review
 
 
+# Two, not one: a single transient failure against the review generator or the
+# topic-history read is the common case, and a second immediate try costs one
+# call. Beyond that the student is waiting on a service that is actually down,
+# and GET /session/{id} is already the retry that exists for it.
+MATERIALIZATION_ATTEMPTS = 2
+
+
+def _log_lifecycle(
+    session: SessionRecord,
+    event_name: str,
+    **fields: object,
+) -> None:
+    """One privacy-safe line per lifecycle decision, keyed by session id.
+
+    Ids, versions and states only: no transcript, OCR text, canvas image or
+    answer value ever reaches these, because the whole point is that they can
+    be read by whoever is on call.
+    """
+
+    logger.info(
+        event_name,
+        extra={
+            "session_id": session.session_id,
+            "student_id": session.student_id,
+            "topic_id": (
+                session.student_model_event.journey_state.topic_id
+                if session.student_model_event is not None
+                else None
+            ),
+            **fields,
+        },
+    )
+
+
+async def _set_review_materialization_state(
+    session: SessionRecord,
+    state: ReviewMaterializationState,
+    review: Phase4ReviewResponse | None = None,
+) -> SessionRecord:
+    """Persist the presentation state (and its review) as one write."""
+
+    updates: dict[str, object] = {"review_materialization_state": state}
+    if review is not None:
+        updates["phase4_review"] = review
+    updated = session.model_copy(update=updates)
+    _sessions[session.session_id] = updated
+    await save_session(updated)
+    _log_lifecycle(
+        updated,
+        "review_materialization_state",
+        review_materialization_state=state,
+        journey_version=(
+            updated.student_model_event.journey_state.version
+            if updated.student_model_event is not None
+            else None
+        ),
+        phase=updated.current_phase,
+    )
+    return updated
+
+
 async def _attach_phase4_review(
     session: SessionRecord,
     event: StudentModelSessionEventResponse,
     *,
     strict: bool = False,
 ) -> SessionRecord:
-    """Generate the review for an already-persisted REVIEW session.
+    """Materialize the review for an already-persisted REVIEW session.
 
-    `strict` decides who is told about a generation failure, and the split
-    matters more than it looks.
+    The REVIEW transition and its PENDING materialization state are persisted
+    by the caller before this runs, so a generation failure leaves the accepted
+    answer accepted and the journey in Review -- it never returns the student to
+    Phase 3 or asks for the answer again.
 
-    The REVIEW transition is persisted by the caller before this runs, so the
-    session survives a failure either way. But the endpoints that TRANSITION
-    into Review -- /session/start, /interaction, /canvas/submit -- must still
-    answer 200, for two reasons:
+    `strict` decides who is told about a failure, and the split matters more
+    than it looks. The endpoints that TRANSITION into Review --
+    /session/start, /interaction, /canvas/submit -- must still answer 200:
 
       * /session/start raising means the client never learns its session_id,
         which is the argument to GET /session/{id} -- the retry. A 503 there
@@ -926,22 +1061,32 @@ async def _attach_phase4_review(
         failed submission, and the retry then 409s on the recorded attempt.
 
     So the 503 lives on the read that exists to be retried, and nowhere else.
-    An absent review is never SHOWN as success: the client renders Phase 4 only
-    on a non-null phase4_review, and the strict read keeps failing until one
-    exists.
+    An absent review is never SHOWN as success: the response carries
+    review_materialization_state=PENDING, and the strict read keeps failing
+    until a review exists.
     """
 
-    try:
-        review = await generate_phase4_review_for(session, event)
-    except HTTPException:
-        if strict:
-            raise
-        # Already logged as phase4_review_not_generated by the callee.
-        return session
-    updated = session.model_copy(update={"phase4_review": review})
-    _sessions[session.session_id] = updated
-    await save_session(updated)
-    return updated
+    for attempt in range(1, MATERIALIZATION_ATTEMPTS + 1):
+        try:
+            review = await generate_phase4_review_for(session, event)
+        except HTTPException:
+            # Already logged as phase4_review_not_generated by the callee; this
+            # adds which of the bounded attempts it was.
+            logger.warning(
+                "review_materialization_attempt_failed",
+                extra={
+                    "session_id": session.session_id,
+                    "topic_id": event.journey_state.topic_id,
+                    "attempt": attempt,
+                    "attempts_allowed": MATERIALIZATION_ATTEMPTS,
+                },
+            )
+            if attempt == MATERIALIZATION_ATTEMPTS:
+                if strict:
+                    raise
+                return session
+            continue
+        return await _set_review_materialization_state(session, "READY", review)
 
 
 async def _apply_schema_event(
@@ -1145,10 +1290,28 @@ async def _apply_schema_event(
             question_updates["question_type"],
             str(updates["message"]),
         )
+    # The authoritative REVIEW transition is persisted with PENDING in the same
+    # write that records it, before a single line of Phase 4 generation runs.
+    # Materialization can then fail as often as it likes without the accepted
+    # answer, the journey version or the CORRECT_ATTEMPT count moving.
+    if next_phase == "REVIEW" and (
+        transition is not None or session.review_materialization_state is None
+    ):
+        updates["review_materialization_state"] = "PENDING"
     updated = session.model_copy(update=updates)
     _sessions[session.session_id] = updated
     await save_session(updated)
     if transition is not None and next_phase == "REVIEW":
+        _log_lifecycle(
+            updated,
+            "review_transition_accepted",
+            previous_phase=session.current_phase,
+            journey_version=event.journey_state.version,
+            mastery_status=event.journey_state.mastery_status,
+            student_model_request_id=event.request_id,
+            reason_code=event.routing.reason_code,
+            review_materialization_state=updated.review_materialization_state,
+        )
         return await _attach_phase4_review(updated, event)
     return updated
 
@@ -1481,9 +1644,14 @@ async def get_session(session_id: str, student_id: str) -> SessionRecord:
         event = session.student_model_event
         if event is None:
             raise RuntimeError("Review session is missing its Student Model event.")
-        # The retry. Strict on purpose: this is the one read whose answer the
-        # client acts on, so a failure has to be visible as PHASE4_REVIEW_UNAVAILABLE
-        # rather than a 200 carrying a null review the screen cannot use.
+        # The retry, and only the materialization half of it: the stored event
+        # is replayed into Phase 4 generation, never resent to Student Model, so
+        # a read can move PENDING -> READY but can never produce a second
+        # CORRECT_ATTEMPT or a second Review decision.
+        #
+        # Strict on purpose: this is the one read whose answer the client acts
+        # on, so a failure has to be visible as PHASE4_REVIEW_UNAVAILABLE rather
+        # than a 200 carrying a null review the screen cannot use.
         return await _attach_phase4_review(session, event, strict=True)
     return session
 
@@ -1639,35 +1807,34 @@ async def resume_session(
     request: SessionResumeRequest,
     access_token: str,
 ) -> SessionRecord:
-    session = _schema_session(session_id, request.student_id)
-    stored_event = session.student_model_event
-    if stored_event is None:
-        raise RuntimeError("Schema session is missing its Student Model event.")
-    request_id = _schema_request_id(session, request.turn_id, "SESSION_RESUMED")
-    if stored_event.request_id == request_id:
-        return session
-    last_activity_at = request.last_activity_at or session.last_tutor_response_at
-    event = SessionResumedEvent(
-        request_id=request_id,
-        event_type="SESSION_RESUMED",
-        source_turn_id=request.turn_id,
-        expected_journey_version=stored_event.journey_state.version,
-        topic_id=stored_event.journey_state.topic_id,
-        student_id=session.student_id,
-        timestamp=_schema_timestamp(),
-        last_activity_at=last_activity_at.isoformat().replace("+00:00", "Z"),
-        continuity_threshold_days=(
-            request.continuity_threshold_days
-            or get_settings().resume_continuity_threshold_days
-        ),
-        saved_journey=(
-            request.saved_journey
-            if request.saved_journey is not None
-            else stored_event.journey_state.model_dump(mode="json")
-        ),
+    """Retired (ADR 0004): a client snapshot is not a resume authority.
+
+    The request carried a `saved_journey` the client had stored, and Student
+    Model selected a phase from it. That selector had no REVIEW branch at all --
+    it fell through to Guided Learning -- so a finished topic could be reopened
+    mid-lesson by nothing more than a refresh. Rehydration now reads Student
+    Model's own journey through SESSION_OPENED, which /session/start already
+    does; there is no request shape that can write or select a phase.
+
+    Answered explicitly rather than removed, for one compatibility release, so
+    an older client sees why instead of a 404 it will read as a lost session.
+    """
+
+    del access_token
+    logger.warning(
+        "session_resume_retired",
+        extra={"session_id": session_id, "student_id": request.student_id},
     )
-    response = await get_adapters().student_model.send_session_event(event, access_token)
-    return await _apply_schema_event(session, response)
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "code": "SESSION_RESUME_RETIRED",
+            "message": (
+                "Session resume is retired. Start a session for the same topic; "
+                "Student Model restores the stored journey."
+            ),
+        },
+    )
 
 
 async def complete_review(
@@ -1696,7 +1863,89 @@ async def complete_review(
         ),
         access_token,
     )
-    return await _apply_schema_event(session, response)
+    # The event is authoritative and has already been applied remotely, so it is
+    # persisted BEFORE the handoff is judged. Validating first left the backend
+    # holding a stale journey version against a journey that had already
+    # completed, and the retry that should have recovered it carried that stale
+    # version. A malformed handoff is still refused below -- it just no longer
+    # takes the record of what actually happened down with it.
+    completed = await _apply_schema_event(session, response)
+    handoff = _next_topic_handoff(session.session_id, response)
+    # Handoff and ended status land in the same write, so a caller can never
+    # read an ended session with no handoff, or a handoff whose source session
+    # is still live. (The authoritative event above is its own, earlier write.)
+    ended = completed.model_copy(
+        update={
+            "status": "ended",
+            "next_topic_handoff": handoff,
+            "session_summary": assemble_session_summary(
+                completed,
+                datetime.now(timezone.utc),
+            ),
+        }
+    )
+    _sessions[session_id] = ended
+    await save_session(ended)
+    clear_nudge_deliveries_for_session(session_id)
+    _log_lifecycle(
+        ended,
+        "review_completed",
+        source_turn_id=request.turn_id,
+        student_model_request_id=response.request_id,
+        journey_version=response.journey_state.version,
+        mastery_status=response.journey_state.mastery_status,
+        topic_status=response.journey_state.topic_status,
+        phase=ended.current_phase,
+        next_action=response.routing.next_action,
+        next_topic_id=None if handoff is None else handoff.topic_id,
+        next_topic_entry_phase=None if handoff is None else handoff.entry_phase,
+    )
+    return ended
+
+
+def _next_topic_handoff(
+    session_id: str,
+    response: StudentModelSessionEventResponse,
+) -> NextTopicHandoff | None:
+    """Project Student Model's next-topic decision, or refuse to invent one.
+
+    Only two answers are legal (ADR 0003): START_NEXT_TOPIC with a whole
+    handoff, or some other next_action carrying none. A START_NEXT_TOPIC missing
+    its topic or entry phase is a malformed decision, and the one thing the
+    backend must not do with it is fill the gap from curriculum order of its
+    own -- that is how two systems end up choosing different next topics.
+    """
+
+    routing = response.routing
+    if routing.next_action != "START_NEXT_TOPIC":
+        return None
+    if not routing.next_topic_id or routing.next_topic_entry_phase is None:
+        logger.error(
+            "next_topic_handoff_malformed",
+            extra={
+                "session_id": session_id,
+                "student_model_request_id": response.request_id,
+                "next_action": routing.next_action,
+                "next_topic_id": routing.next_topic_id,
+                "next_topic_entry_phase": routing.next_topic_entry_phase,
+            },
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "NEXT_TOPIC_HANDOFF_INVALID",
+                "message": (
+                    "Student Model returned START_NEXT_TOPIC without a next topic "
+                    "and entry phase."
+                ),
+            },
+        )
+    return NextTopicHandoff(
+        source_session_id=session_id,
+        student_model_request_id=response.request_id,
+        topic_id=routing.next_topic_id,
+        entry_phase=routing.next_topic_entry_phase,
+    )
 
 
 def assemble_session_summary(session: SessionRecord, ended_at: datetime) -> SessionSummary:
