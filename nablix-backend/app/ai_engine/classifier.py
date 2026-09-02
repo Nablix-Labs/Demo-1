@@ -2315,20 +2315,11 @@ def correct_choice_selection_evaluation(
     }
     if normalized_choice_response(selected_option_id) not in accepted_choices:
         return None
-    previous_selection = (
-        request.guided_teaching_state.selected_option_id
-        if request.guided_teaching_state is not None
-        and request.guided_teaching_state.question_id == request.question_id
-        else None
-    )
-    if (
-        previous_selection is None
-        or previous_selection.casefold() == selected_option_id.casefold()
-    ):
-        return None
     if "ANSWER_SELECTION" not in objective.confirmed_concept_ids:
         return None
     if "ANSWER_EXPLANATION" not in objective.missing_concept_ids:
+        return None
+    if selected_general_rule_expression(request) is None:
         return None
     return GuidedEvaluation(
         student_state="PARTIAL",
@@ -3264,17 +3255,6 @@ def classify_guided_learning_response(
         rubric,
         next_objective,
     )
-    if next_objective is not None:
-        evaluation = write_deterministic_guided_follow_up(
-            evaluation,
-            request,
-            rubric,
-            next_objective,
-            openai_client,
-            allowed_errors,
-            guided_tutor_context,
-            rules,
-        )
     logger.info(
         "guided_state_evaluated",
         extra={
