@@ -24,6 +24,10 @@ _Avoid_: Interaction state version, state version
 One terminal Independent Practice result: the student either answered unaided or needs the rescue. Unreadable work, an unsubmitted turn, a hint, a voice attachment, a stale turn and a duplicate retry are none of them. Counted on the session as `independent_attempt_count` and reported on the receipt as `session_performance.independent_attempts` — one concept, two field names.
 _Avoid_: Attempt, total attempts, canvas submission
 
+**Review Materialization**:
+The backend-generated review presentation attached to a Student Model journey already in Review. Its `PENDING` or `READY` state never changes the authoritative journey phase, mastery outcome, or next-topic decision.
+_Avoid_: Review transition, mastery decision, Student Model state
+
 **Student Work**:
 The math or geometry content written by the student on the canvas.
 _Avoid_: Canvas image, user drawing

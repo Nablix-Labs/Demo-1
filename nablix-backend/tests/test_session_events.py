@@ -2676,38 +2676,24 @@ def test_tc21_rejects_reused_fresh_question(
     assert "previously used" in str(error.value.detail)
 
 
-@pytest.mark.parametrize(
-    ("phase", "reason_code", "continuity_status"),
-    [
-        ("PHASE_2_GUIDED_LEARNING", "SESSION_RESUMED", "RESUMED"),
-        ("PHASE_3_INDEPENDENT_PRACTICE", "SESSION_RESUMED", "RESUMED"),
-        ("PHASE_2_GUIDED_LEARNING", "SESSION_RESUMED_WITHIN_THRESHOLD", "ON_TRACK"),
-    ],
-)
-def test_tc22_tc24_resume_forwards_saved_journey_and_persists_returned_state(
+def test_resume_is_retired_and_never_mutates_the_journey(
     monkeypatch: pytest.MonkeyPatch,
-    phase: str,
-    reason_code: str,
-    continuity_status: str,
 ) -> None:
+    """A client snapshot is not a resume authority (ADR 0004).
+
+    The saved_journey the browser sent chose the phase, and the selector that
+    read it had no REVIEW branch -- it fell through to Guided Learning, so a
+    refresh could reopen a finished topic mid-lesson. The endpoint answers
+    explicitly for one release, and sends no Student Model event at all.
+    """
+
     events: list[object] = []
 
     async def send_session_event(adapter: object, event: object, access_token: str):
         del adapter, access_token
         events.append(event)
-        event_type = getattr(event, "event_type")
-        body = _session_opened_response(
-            "PHASE_2_GUIDED_LEARNING" if event_type == "SESSION_OPENED" else phase
-        )
+        body = _session_opened_response("PHASE_2_GUIDED_LEARNING")
         body["request_id"] = getattr(event, "request_id")
-        if event_type == "SESSION_RESUMED":
-            body["journey_state"]["continuity_status"] = continuity_status
-            body["routing"]["reason_code"] = reason_code
-            body["routing"]["next_action"] = (
-                "RESUME_INDEPENDENT_PRACTICE"
-                if phase == "PHASE_3_INDEPENDENT_PRACTICE"
-                else "RESUME_GUIDED_LEARNING"
-            )
         return session_service.StudentModelSessionEventResponse.model_validate(body)
 
     monkeypatch.setattr(
@@ -2727,34 +2713,31 @@ def test_tc22_tc24_resume_forwards_saved_journey_and_persists_returned_state(
         json={"student_id": "ST001", "concept_id": "ALG_LINEAR_ONE_STEP", "interaction_mode": "TEXT"},
     )
     session_id = started.json()["session_id"]
-    saved_journey = {
-        "phase_2_guided_learning": {
-            "target_micro_skill_ids": ["T02.M1"],
-            "remaining_micro_skill_ids": ["T02.M1"],
-            "used_question_ids": ["Q-T02-OLD"],
-        }
-    }
+    before = session_service._sessions[session_id]
+    opened_events = len(events)
 
     resumed = client.post(
         f"/session/{session_id}/resume",
         json={
             "student_id": "ST001",
-            "turn_id": f"TURN-{reason_code}-{phase}",
-            "last_activity_at": "2026-07-22T10:00:00Z",
-            "continuity_threshold_days": 3,
-            "saved_journey": saved_journey,
+            "turn_id": "TURN-RESUME",
+            "saved_journey": {
+                "phase_2_guided_learning": {
+                    "target_micro_skill_ids": ["T02.M1"],
+                    "remaining_micro_skill_ids": ["T02.M1"],
+                    "used_question_ids": ["Q-T02-OLD"],
+                }
+            },
         },
     )
 
-    assert resumed.status_code == 200, resumed.text
-    resume_event = events[-1]
-    assert getattr(resume_event, "event_type") == "SESSION_RESUMED"
-    assert getattr(resume_event, "saved_journey") == saved_journey
-    assert getattr(resume_event, "expected_journey_version") == 1
-    stored = session_service._sessions[session_id]
-    assert stored.student_model_event is not None
-    assert stored.student_model_event.routing.reason_code == reason_code
-    assert stored.student_model_event.journey_state.continuity_status == continuity_status
+    assert resumed.status_code == 410, resumed.text
+    assert resumed.json()["error_code"] == "SESSION_RESUME_RETIRED"
+    # No event, and no journey movement: the request could not select a phase.
+    assert len(events) == opened_events
+    after = session_service._sessions[session_id]
+    assert after.current_phase == before.current_phase
+    assert after.student_model_event == before.student_model_event
 
 
 def test_tc25_review_complete_forwards_correlated_event_and_persists_next_topic(
@@ -2874,63 +2857,6 @@ def test_first_question_of_a_phase_is_question_number_one(
 
     assert advanced.question_id == "Q-T02-005"
     assert advanced.question_number == 2
-
-
-def test_resume_with_only_student_id_and_turn_id_uses_server_state(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A client can only honestly know student_id and turn_id (see #6). The
-    other three fields must come from stored session state / policy, not be
-    demanded of the client."""
-
-    events: list[object] = []
-
-    async def send_session_event(adapter: object, event: object, access_token: str):
-        del adapter, access_token
-        events.append(event)
-        event_type = getattr(event, "event_type")
-        body = _session_opened_response(
-            "PHASE_2_GUIDED_LEARNING"
-            if event_type == "SESSION_OPENED"
-            else "PHASE_2_GUIDED_LEARNING"
-        )
-        body["request_id"] = getattr(event, "request_id")
-        return session_service.StudentModelSessionEventResponse.model_validate(body)
-
-    monkeypatch.setattr(
-        student_model.StudentModelServiceAdapter,
-        "send_session_event",
-        send_session_event,
-    )
-    settings = Settings(
-        student_model_url="https://student-model.example",
-        student_model_topic_codes={"ALG_LINEAR_ONE_STEP": "ALG-ORI-02"},
-        use_mock_student_model=False,
-        resume_continuity_threshold_days=9,
-    )
-    monkeypatch.setattr(provider, "get_settings", lambda: settings)
-    monkeypatch.setattr(session_service, "get_settings", lambda: settings)
-    started = client.post(
-        "/session/start",
-        json={"student_id": "ST001", "concept_id": "ALG_LINEAR_ONE_STEP", "interaction_mode": "TEXT"},
-    )
-    session_id = started.json()["session_id"]
-    stored_before = session_service._sessions[session_id]
-    stored_journey = stored_before.student_model_event.journey_state
-
-    resumed = client.post(
-        f"/session/{session_id}/resume",
-        json={"student_id": "ST001", "turn_id": "TURN-MINIMAL-RESUME"},
-    )
-
-    assert resumed.status_code == 200, resumed.text
-    resume_event = events[-1]
-    assert getattr(resume_event, "event_type") == "SESSION_RESUMED"
-    assert getattr(resume_event, "continuity_threshold_days") == 9
-    assert getattr(resume_event, "saved_journey") == stored_journey.model_dump(mode="json")
-    assert getattr(resume_event, "last_activity_at") == (
-        stored_before.last_tutor_response_at.isoformat().replace("+00:00", "Z")
-    )
 
 
 def test_no_next_topic_projects_both_routing_fields_as_null() -> None:

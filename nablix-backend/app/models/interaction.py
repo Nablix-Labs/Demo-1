@@ -41,6 +41,7 @@ from app.models.session import (
     CanvasState,
     InactivityPolicy,
     NudgeDeliveryRecord,
+    ReviewMaterializationState,
     SessionSummary,
     VoiceState,
 )
@@ -233,6 +234,11 @@ class InteractionResponse(BaseModel):
     phase3_locked_question_id: str | None = None
     first_error_step: str | None = None
     phase3_review_evidence: dict[str, object] | None = None
+    # Set once the turn has been accepted INTO Review: PENDING means the answer
+    # stands and the review screen is still being built, READY that it is there.
+    # A null phase4_review with no state here would say the same thing as a
+    # failure, which is how "accepted" and "could not be prepared" got confused.
+    review_materialization_state: ReviewMaterializationState | None = None
 
 
 class StaleTurnResponse(BaseModel):

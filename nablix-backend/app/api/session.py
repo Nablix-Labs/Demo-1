@@ -76,7 +76,9 @@ async def get_session_endpoint(
     return await get_session(session_id, student_id)
 
 
-@router.post("/{session_id}/resume", response_model=SessionResponse)
+# Retired (ADR 0004), kept for one release so an older client is told why
+# rather than shown a 404 it will read as a lost session.
+@router.post("/{session_id}/resume", response_model=SessionResponse, deprecated=True)
 async def resume_session_endpoint(
     session_id: SessionId,
     request: SessionResumeRequest,

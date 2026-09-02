@@ -23,8 +23,30 @@ def _decode_state(value: object) -> dict[str, object]:
     return decoded
 
 
+def restore_review_materialization_state(state: dict[str, object]) -> None:
+    """Give a session stored before the field existed an honest value.
+
+    A stored Review carrying its review was READY; one without it is still
+    waiting for it. A session that never reached Review has no materialization
+    state at all, and inventing one would claim a Review it never had.
+
+    Here rather than on `SessionRecord`: it is a property of reading an old row,
+    not an invariant of the model -- `model_copy(update=...)` skips validators,
+    so a validator could not have held it anyway.
+    """
+
+    if state.get("review_materialization_state") is not None:
+        return
+    if state.get("current_phase") != "REVIEW":
+        return
+    state["review_materialization_state"] = (
+        "READY" if state.get("phase4_review") is not None else "PENDING"
+    )
+
+
 def _restore_session(row: asyncpg.Record) -> SessionRecord:
     state = _decode_state(row["state"])
+    restore_review_materialization_state(state)
     snapshots = state.pop("_canvas_snapshots", {})
     if not isinstance(snapshots, dict):
         raise RuntimeError("Persisted canvas snapshots must be a JSON object.")
