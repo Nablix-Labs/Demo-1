@@ -5766,6 +5766,66 @@ def test_phase3_non_submission_does_not_mutate_independent_progression() -> None
     assert response.student_model_events == []
 
 
+def test_phase3_wrong_choice_is_terminal_and_needs_the_rescue() -> None:
+    """The other half of the terminal rule. A wrong independent answer still
+    ends the attempt -- it is what `independent_attempt_count` counts, so a
+    counter that trusted `evaluation == CORRECT` would silently under-count."""
+
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-IP-1",
+            question_type="SINGLE_CHOICE",
+            question="Choose A.",
+            correct_answer="A",
+            answer_spec=AnswerSpec(
+                answer_spec_id="AS-IP-1",
+                canonical_answer="A",
+                accepted_answers=[],
+                verification_method="EXACT_CHOICE_MATCH",
+            ),
+            student_input="B",
+            current_phase="INDEPENDENT_PRACTICE",
+            input_source="CHOICE",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+            phase3_submission_confirmed=True,
+            phase3_submission_kind="CHOICE",
+        )
+    )
+
+    assert response.independent_outcome == "RESCUE_REQUIRED"
+    assert response.independent_attempt_terminal is True
+    assert response.attempt_increment == 1
+
+
+def test_phase3_unreadable_canvas_is_not_a_terminal_attempt() -> None:
+    """Nothing was answered, so nothing may be counted: the student is being
+    asked to write it again."""
+
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-IP-1",
+            question_type="SHORT_RESPONSE",
+            question="Write an expression.",
+            correct_answer="t - 3",
+            student_input="t - 3",
+            current_phase="INDEPENDENT_PRACTICE",
+            input_source="CANVAS",
+            transcript_confidence=None,
+            attempt_count=0,
+            current_hint_level=None,
+            phase3_submission_confirmed=True,
+            phase3_submission_kind="CANVAS",
+            has_canvas_evidence=False,
+        )
+    )
+
+    assert response.independent_outcome == "INPUT_UNCLEAR"
+    assert response.independent_attempt_terminal is False
+    assert response.attempt_increment == 0
+
+
 def test_canvas_math_review_marks_first_mistake_in_diagnostic_phase() -> None:
     response = classify_student_response(
         ClassificationRequest(

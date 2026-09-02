@@ -2725,3 +2725,119 @@ def test_canvas_does_not_store_work_for_an_unreadable_page(
 
     assert response.status_code == 200, response.text
     assert persisted == []
+
+
+def test_a_canvas_reply_after_a_typed_turn_carries_its_own_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The measured frontend/backend desync, as a regression test.
+
+    Observed against the running backend:
+
+        POST /interaction   TURN-AAA -> version 1, accepted_turn_id TURN-AAA
+        POST /canvas/submit TURN-BBB -> version 1, accepted_turn_id TURN-AAA
+        POST /canvas/submit TURN-CCC -> version 1, accepted_turn_id TURN-AAA
+
+    Both canvas replies arrived wearing the *typed* turn's name at an unchanged
+    version, so the client's response gate read them as already-applied and
+    dropped them. The backend advanced the question and said "Nice work"; the
+    screen did not move. The single-turn tests could not see this -- it only
+    appears when a canvas turn follows a turn of another kind.
+    """
+
+    async def pipeline(
+        context: AdapterContext,
+    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
+        del context
+        student = StudentModelResult(
+            mastery_status="DEVELOPING",
+            continuity_status="on_track",
+            recommended_entry_phase="GUIDED_PRACTICE",
+            hint_dependency_score=0.0,
+            intervention_required=False,
+        )
+        tutor = TutorResult(
+            evaluation="INCORRECT",
+            error_type="CONCEPTUAL",
+            intent="SUBMITTING_ANSWER",
+            response_strategy="GIVE_HINT",
+            tutor_message="Not quite -- try isolating x.",
+            tutor_message_voice="Not quite -- try isolating x.",
+            voice_optimised=True,
+            hint_level=1,
+            answer_reveal_allowed=False,
+            confidence=0.9,
+            input_source="TEXT",
+            attempt_increment=1,
+            recommended_conversation_action="GIVE_HINT",
+            question_completed=False,
+        )
+        return RAGResult(documents=[], retrieval_confidence=0.0), student, tutor
+
+    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", pipeline)
+    session_id = _start_session("ST410")
+    before = session_service._get_owned_session(session_id, "ST410")
+
+    typed = client.post(
+        "/interaction",
+        json={
+            "session_id": session_id,
+            "student_id": "ST410",
+            "interaction_type": "ANSWER_SUBMISSION",
+            "input_source": "TEXT",
+            "turn_id": "TURN-AAA",
+            "text_input": "x = 9",
+            "current_phase": before.current_phase,
+            "concept_id": "ALG_LINEAR_ONE_STEP",
+            "question_id": before.question_id,
+            "hint_count": before.hint_count,
+        },
+    )
+    assert typed.status_code == 200, typed.text
+    typed_body = typed.json()
+    assert typed_body["accepted_turn_id"] == "TURN-AAA"
+
+    first = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST410",
+            "turn_id": "TURN-BBB",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+        },
+    )
+    assert first.status_code == 200, first.text
+    first_body = first.json()
+
+    # The canvas reply is its own turn, not a re-send of the typed one.
+    assert first_body["accepted_turn_id"] == "TURN-BBB"
+    assert first_body["tutor_turn_id"] != typed_body["tutor_turn_id"]
+    assert first_body["interaction_state_version"] == (
+        typed_body["interaction_state_version"] + 1
+    )
+
+    second = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST410",
+            "turn_id": "TURN-CCC",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+        },
+    )
+    assert second.status_code == 200, second.text
+    second_body = second.json()
+
+    # Under the old client the *second* Check was swallowed too, not just the
+    # first: both replies shared one identity.
+    assert second_body["accepted_turn_id"] == "TURN-CCC"
+    assert second_body["tutor_turn_id"] != first_body["tutor_turn_id"]
+    assert second_body["interaction_state_version"] == (
+        first_body["interaction_state_version"] + 1
+    )
+
+    # And the next typed turn can chain off the canvas reply: the client sends
+    # back the tutor turn id it was given, and it must not read as stale.
+    stored = session_service._get_owned_session(session_id, "ST410")
+    assert stored.last_tutor_turn_id == second_body["tutor_turn_id"]
+    assert stored.last_processed_turn_id == "TURN-CCC"

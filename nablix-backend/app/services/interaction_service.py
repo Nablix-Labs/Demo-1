@@ -90,7 +90,9 @@ from app.models.student_model_session import (
     IndependentQuestionSetRequestedEvent,
     Phase2RepairResult,
     IndependentRetryCompletedEvent,
+    JourneyPhaseState,
     QuestionType,
+    StudentModelPhasePayload,
     StudentModelSessionEventResponse,
     StudentModelQuestion,
     SupportUsed,
@@ -1236,6 +1238,34 @@ def _schema_support_used(
     return max(supports, key=_SUPPORT_RANK.index)
 
 
+def _restore_failure_reason(
+    payload: StudentModelPhasePayload | None,
+    session_phase: Phase,
+    effective_phase: str,
+    initialized_state: JourneyPhaseState,
+) -> str | None:
+    """Which of the restore checks rejected this response, or None if it passed.
+
+    Ordered, and each check assumes the ones above it passed -- so this is a
+    sequence of guards rather than a table: `payload.phase` cannot be read
+    until `payload is None` has been ruled out.
+    """
+
+    if payload is None:
+        return "MISSING_PAYLOAD"
+    if PHASE_FROM_STUDENT_MODEL[payload.phase] != session_phase:
+        return "PHASE_MISMATCH"
+    if payload.phase != effective_phase:
+        return "EFFECTIVE_PHASE_MISMATCH"
+    if payload.payload_type != "QUESTION_SET":
+        return "WRONG_PAYLOAD_TYPE"
+    if payload.question_set is None or not payload.question_set.questions:
+        return "NO_QUESTIONS"
+    if initialized_state.status == "NOT_STARTED":
+        return "PHASE_NOT_STARTED"
+    return None
+
+
 def _raise_content_gap(
     session: SessionRecord,
     event: StudentModelSessionEventResponse,
@@ -1244,8 +1274,9 @@ def _raise_content_gap(
 
     FRESH_CONTENT_UNAVAILABLE is an authoritative answer -- the question does
     not exist -- so it must never be re-requested in a loop, and never be
-    laundered into MASTERED, REVIEW, or a Phase 4 review. The client branches on
-    the CONTENT_GAP code; the previous 503 said only "did not initialize".
+    laundered into MASTERED, REVIEW, or a Phase 4 review. CONTENT_GAP is a
+    stable code the client can branch on -- nothing in Numera-ui reads it yet;
+    the previous 503 said only "did not initialize", which nothing could.
     """
 
     logger.warning(
@@ -1386,20 +1417,8 @@ async def _initialize_restored_schema_phase(
     )
     if response.routing.content_gap_detected:
         _raise_content_gap(session, response)
-    failure_reason = (
-        "MISSING_PAYLOAD"
-        if payload is None
-        else "PHASE_MISMATCH"
-        if PHASE_FROM_STUDENT_MODEL[payload.phase] != session.current_phase
-        else "EFFECTIVE_PHASE_MISMATCH"
-        if payload.phase != effective_phase
-        else "WRONG_PAYLOAD_TYPE"
-        if payload.payload_type != "QUESTION_SET"
-        else "NO_QUESTIONS"
-        if payload.question_set is None or not payload.question_set.questions
-        else "PHASE_NOT_STARTED"
-        if initialized_state.status == "NOT_STARTED"
-        else None
+    failure_reason = _restore_failure_reason(
+        payload, session.current_phase, effective_phase, initialized_state
     )
     if failure_reason is not None:
         # Enough to tell these six causes apart in production without carrying
@@ -1849,23 +1868,65 @@ def _schema_interaction_request_id(
     return f"{session.session_id}:{source_turn_id}:{event_type}"
 
 
+def _accepted_turn_identity(turn_id: str) -> dict[str, object]:
+    """The identity the client gates on, for one accepted turn.
+
+    `Numera-ui/lib/responseGate.ts` applies a reply when its version is newer,
+    or when the version is equal and this `accepted_turn_id` has not been
+    applied yet. A reply that keeps the previous turn's id at an unchanged
+    version is therefore read as an already-rendered replay and dropped, with
+    nothing shown to the student -- so every accepted turn advances this, even
+    the ones that change no pedagogical state and need no new version.
+
+    These three are exactly the fields `update_side_channel_state` permits,
+    which is what lets a non-pedagogical reply stamp its identity without
+    reaching for a full interaction write.
+    """
+
+    return {
+        "last_processed_turn_id": turn_id,
+        "last_tutor_turn_id": _new_tutor_turn_id(),
+        "last_tutor_response_at": datetime.now(timezone.utc),
+    }
+
+
 def _turn_updates(
     turn_id: str,
     last_tutor_action: TutorAction,
     expected_student_response: ExpectedStudentResponse,
 ) -> dict[str, object]:
-    updates: dict[str, object] = {
+    return {
         "last_tutor_action": last_tutor_action,
         "expected_student_response": expected_student_response,
+        **_accepted_turn_identity(turn_id),
     }
-    updates.update(
-        {
-            "last_processed_turn_id": turn_id,
-            "last_tutor_turn_id": _new_tutor_turn_id(),
-            "last_tutor_response_at": datetime.now(timezone.utc),
-        }
-    )
-    return updates
+
+
+def _independent_attempt_updates(
+    turn_session: SessionRecord,
+    tutor: TutorResult,
+) -> dict[str, object]:
+    """Count one terminal Independent Practice result, or nothing.
+
+    `independent_attempt_terminal` is already the single place that decides
+    what terminal means (`classifier.py`: INDEPENDENTLY_VERIFIED or
+    RESCUE_REQUIRED, never INPUT_UNCLEAR or AWAITING_SUBMISSION), so this reads
+    it rather than restating the set. The phase is checked as well because the
+    counter is the one field whose whole meaning is "in Phase 3, alone".
+
+    Callers apply this on the committed-turn path only, which is what keeps
+    duplicates, stale turns and voice attachments out: none of them reach a
+    session write.
+    """
+
+    if (
+        turn_session.current_phase != "INDEPENDENT_PRACTICE"
+        or not tutor.independent_attempt_terminal
+    ):
+        return {}
+    return {
+        "independent_attempt_count": turn_session.independent_attempt_count + 1
+    }
 
 
 def _conversation_state_for(
@@ -3218,6 +3279,13 @@ async def _process_interaction(
 
     if session.current_phase == "INDEPENDENT_PRACTICE":
         if request.interaction_type == "CLARIFICATION_REQUEST":
+            # Refusing to grade is still answering the turn, so the reply has
+            # to wear the turn's own identity or the client drops it as a
+            # replay of the previous one. No new version: nothing pedagogical
+            # moved.
+            session = await update_side_channel_state(
+                session, _accepted_turn_identity(request.turn_id or "TURN-0000")
+            )
             response = _response_from(
                 session_id=request.session_id,
                 student_id=request.student_id,
@@ -3240,6 +3308,11 @@ async def _process_interaction(
             raise HTTPException(status_code=409, detail="Teaching support is unavailable during Independent Practice.")
         if request.interaction_type == "ANSWER_SUBMISSION":
             if request.input_source in {"TEXT", "VOICE"}:
+                # Same reason as the clarification refusal above: an answer we
+                # decline to grade is still a turn the student must see.
+                session = await update_side_channel_state(
+                    session, _accepted_turn_identity(request.turn_id or "TURN-0000")
+                )
                 response = _response_from(
                     session_id=request.session_id, student_id=request.student_id,
                     turn_id=request.turn_id or "TURN-0000", interaction_type=request.interaction_type,
@@ -3704,7 +3777,7 @@ async def _process_interaction(
             },
         )
         return _cache_response(
-            request.turn_id,
+            request,
             _response_from(
                 session_id=request.session_id,
                 student_id=request.student_id,
@@ -3919,6 +3992,7 @@ async def _process_interaction(
     )
     state_updates: dict[str, object] = {
         "interaction_state_version": session.interaction_state_version + 1,
+        **_independent_attempt_updates(turn_session, tutor),
         "nudge_generated_count": 0,
         "nudge_presented_count": 0,
         "attempt_count": (
