@@ -349,6 +349,49 @@ def test_accepted_fixed_value_and_operation_get_tutor_layer_labels() -> None:
     ]
 
 
+def test_canvas_labels_use_only_the_current_student_statement() -> None:
+    tutor = _tutor_result(
+        TutorMistakeClassification(status="no_mistake", confidence=0.9),
+        [],
+    ).model_copy(
+        update={
+            "guided_student_state": "PARTIAL",
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-T01-001",
+                objective_component_ids=["GENERAL_RULE", "CHANGING_VALUE", "FIXED_VALUE"],
+                confirmed_component_ids=["GENERAL_RULE", "CHANGING_VALUE", "FIXED_VALUE"],
+                missing_component_ids=[],
+                active_component_id=None,
+                last_tutor_question_type="COMPONENT",
+                selected_option_id=None,
+                awaiting_response=True,
+            ),
+        }
+    )
+    anchors = [
+        QuestionTextAnchor(
+            token_id="Q-T01-001:QTOKEN:1", text="n", char_start=0, char_end=1
+        ),
+        QuestionTextAnchor(
+            token_id="Q-T01-001:QTOKEN:2", text="5", char_start=4, char_end=5
+        ),
+    ]
+
+    actions = plan_tutor_canvas_actions(
+        tutor=tutor,
+        question_anchors=anchors,
+        canvas_events=[],
+        turn_id="TURN-current-only",
+        canonical_answer="n + 5",
+        fallback_labels=_fallback_labels(),
+        wrong_attempt_count=0,
+        student_response="5 stays fixed",
+    )
+
+    assert all(action.text != "n → changes" for action in actions)
+    assert any(action.text == "5 → stays fixed" for action in actions)
+
+
 def test_canvas_action_rejects_unconfirmed_target_and_answer_reveal_text() -> None:
     tutor = _tutor_result(
         TutorMistakeClassification(status="no_mistake", confidence=0.9),
@@ -465,7 +508,7 @@ def test_partial_choice_selection_gets_a_stable_option_action() -> None:
     ]
 
 
-def test_fallback_turn_labels_every_confirmed_expression_component() -> None:
+def test_historical_confirmations_do_not_create_new_canvas_labels() -> None:
     tutor = _tutor_result(
         TutorMistakeClassification(status="no_mistake", confidence=0.9),
         [],
@@ -501,14 +544,7 @@ def test_fallback_turn_labels_every_confirmed_expression_component() -> None:
         student_response="",
     )
 
-    assert [(action.target_object_id, action.text) for action in actions] == [
-        ("Q-T01-002:QTOKEN:1", "m → changes"),
-        ("Q-T01-002:QTOKEN:3", "7 → stays fixed"),
-        ("Q-T01-002:QTOKEN:2", "+ → addition"),
-        ("TUTOR_ANCHOR:CONFIRMED:Q-T01-002:1", "m → changes"),
-        ("TUTOR_ANCHOR:CONFIRMED:Q-T01-002:2", "7 → stays fixed"),
-        ("TUTOR_ANCHOR:CONFIRMED:Q-T01-002:3", "+ → addition"),
-    ]
+    assert actions == []
 
 
 def test_fallback_turn_does_not_repeat_an_active_confirmation_label() -> None:
@@ -561,7 +597,7 @@ def test_fallback_turn_does_not_repeat_an_active_confirmation_label() -> None:
     assert actions == []
 
 
-def test_fallback_turn_handles_non_expression_canonical_answers() -> None:
+def test_historical_non_expression_confirmations_do_not_create_labels() -> None:
     tutor = _tutor_result(
         TutorMistakeClassification(status="no_mistake", confidence=0.9),
         [],
@@ -607,10 +643,7 @@ def test_fallback_turn_handles_non_expression_canonical_answers() -> None:
         student_response="",
     )
 
-    assert [(action.target_object_id, action.text) for action in actions] == [
-        ("Q-T01-002:QTOKEN:1", "m → changes"),
-        ("TUTOR_ANCHOR:CONFIRMED:Q-T01-002:1", "m → changes"),
-    ]
+    assert actions == []
 
 
 def test_semantic_canvas_action_contract_rejects_unknown_type() -> None:
