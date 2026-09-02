@@ -442,14 +442,6 @@ def plan_tutor_canvas_actions(
             student_response,
             fallback_labels,
         ),
-        *fallback_confirmation_actions(
-            tutor,
-            question_anchors,
-            canvas_events,
-            turn_id,
-            canonical_answer,
-            fallback_labels,
-        ),
     ]
     action_keys = {
         (action.type, action.target_object_id, action.text)

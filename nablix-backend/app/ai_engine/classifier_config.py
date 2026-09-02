@@ -201,6 +201,7 @@ class CriticalThinkingConfig(StrictSchema):
     wrong_direct_rule_prompt: str
     typed_option_prompt: str
     choice_selection_prompt: str
+    choice_reasoning_prompt: str
     variable_called_fixed_prompt: str
     fixed_value_called_changing_prompt: str
     fixed_value_sign_mismatch_prompt: str

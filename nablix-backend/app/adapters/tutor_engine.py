@@ -95,6 +95,7 @@ class TutorEngineServiceAdapter:
         if context.question is not None and context.correct_answer is not None:
             ai_response = classify_student_response(
                 ClassificationRequest(
+                    experiment_subject_id=context.session_id,
                     question_id=context.question_id,
                     question_type=context.question_type,
                     question=context.question,

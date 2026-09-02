@@ -63,6 +63,18 @@ def _real_png_data_url() -> str:
     return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()
 
 
+def test_canvas_completion_accepts_a_detected_equation_without_final_answer() -> None:
+    ocr = VisionOCRResult(
+        raw_ocr_text="n + 5",
+        detected_equation="n + 5",
+        final_answer=None,
+        confidence=0.98,
+        needs_clarification=False,
+    )
+
+    assert interaction_service._is_complete_correct_canvas(ocr, "n + 5")
+
+
 @pytest.mark.parametrize(
     ("ocr_text", "mathml_operator"),
     [

@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     mathpix_app_key: str = ""
     use_openai_ai_engine: bool = False
     openai_ai_engine_model: str = "gpt-4o-mini"
+    openai_ai_engine_experiment_model: str = ""
+    openai_ai_engine_experiment_percentage: int = Field(default=0, ge=0, le=100)
     openai_request_timeout_seconds: int = 20
     openai_prompt_cache_key_enabled: bool = False
     openai_store_responses: bool = False

@@ -630,4 +630,22 @@ export interface AuthoringApiV3 {
   getScaffolds(topicId: string): Promise<ScaffoldsData>;
   getCoverage(topicId: string): Promise<CoverageData>;
   getPreviewPublish(topicId: string): Promise<PreviewPublishData>;
+
+  /**
+   * The two approval-workflow actions, added 2 Sep 2026 when the backend
+   * shipped them (`POST /authoring/topics/{id}/approve` and `.../return`).
+   *
+   * The comment is OPTIONAL on approve and REQUIRED on return, mirroring the
+   * server's own `ApproveIn` / `ReturnIn` — `ReturnIn.comment` carries
+   * `minLength: 1`, because a reviewer returning work without a reason gives
+   * the author nothing to act on. The UI enforces the same rule so the
+   * approver finds out before the request, not after a 422.
+   *
+   * Neither returns anything the caller needs: the workflow state that results
+   * is re-read from `getPreviewPublish`, so `current_status` and
+   * `available_actions` stay the backend's to decide rather than being
+   * predicted here.
+   */
+  approveTopic(topicId: string, comment?: string): Promise<void>;
+  returnTopic(topicId: string, comment: string): Promise<void>;
 }

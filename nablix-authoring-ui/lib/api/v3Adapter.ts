@@ -61,7 +61,38 @@ export const mockApiV3: AuthoringApiV3 = {
   getScaffolds: () => page<ScaffoldsData>('13_scaffolds_parallel_examples'),
   getCoverage: () => page<CoverageData>('14_coverage_validation'),
   getPreviewPublish: () => page<PreviewPublishData>('15_preview_publish'),
+  approveTopic: (_topicId, comment) => mockWorkflowAction('APPROVE', comment),
+  returnTopic: (_topicId, comment) => mockWorkflowAction('RETURN', comment),
 };
+
+/**
+ * Move the sample's workflow so the buttons visibly do something on mock data.
+ *
+ * The sample is a static import shared by every read, so this mutates the one
+ * `15_preview_publish` payload in place — which is the point: the next
+ * `getPreviewPublish` must observe the change, exactly as it would against the
+ * real backend. Scoped to the workflow block; no other page is touched.
+ *
+ * Deliberately NOT a faithful simulation of the backend's state machine. It
+ * moves the status and offers the actions that plainly follow from it, so the
+ * portal is demoable without the API. The real transitions are the server's.
+ */
+function mockWorkflowAction(action: 'APPROVE' | 'RETURN', comment?: string): Promise<void> {
+  if (action === 'RETURN' && !comment?.trim()) {
+    return Promise.reject(new Error('A comment is required when returning a topic.'));
+  }
+  const res = PAGES['15_preview_publish'] as PageResponse<PreviewPublishData> | undefined;
+  if (!res) return Promise.resolve();
+  const approved = action === 'APPROVE';
+  res.data.workflow = {
+    ...res.data.workflow,
+    current_status: approved ? 'APPROVED' : 'DRAFT',
+    available_actions: approved ? ['PREVIEW', 'PUBLISH'] : ['VALIDATE', 'PREVIEW'],
+    publish_allowed: approved,
+    publish_block_reason: approved ? '' : 'Returned for changes; publish requires APPROVED.',
+  };
+  return Promise.resolve();
+}
 
 /** Endpoint paths are the `suggested_endpoint` values from the contract. */
 export function createHttpApiV3(base: string): AuthoringApiV3 {
@@ -75,6 +106,32 @@ export function createHttpApiV3(base: string): AuthoringApiV3 {
       throw new Error(`Authoring API ${path} returned success=false`);
     }
     return body.data;
+  };
+
+  /**
+   * A workflow action. Unlike `get`, the reply is not read: the resulting
+   * workflow state is re-fetched from the page endpoint so the server stays the
+   * one deciding it.
+   *
+   * The server's message is preferred over the status line when it sends one —
+   * role gating is enforced (a caller without the approver role gets 403
+   * FORBIDDEN with an `error_code`), and "You do not have permission to access
+   * this resource" tells an approver what to do about it in a way that
+   * "Forbidden" does not.
+   */
+  const post = async (path: string, body: Record<string, string>): Promise<void> => {
+    const res = await fetch(`${base}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const detail = await res
+        .json()
+        .then((b: { message?: string; detail?: string }) => b.message ?? b.detail ?? '')
+        .catch(() => '');
+      throw new Error(detail || `Authoring API ${path} failed: ${res.status} ${res.statusText}`);
+    }
   };
 
   const topic = (id: string, section: string) => `/topics/${encodeURIComponent(id)}/${section}`;
@@ -93,6 +150,9 @@ export function createHttpApiV3(base: string): AuthoringApiV3 {
     getScaffolds: (id) => get<ScaffoldsData>(topic(id, 'scaffolds-parallel-examples')),
     getCoverage: (id) => get<CoverageData>(topic(id, 'coverage')),
     getPreviewPublish: (id) => get<PreviewPublishData>(topic(id, 'preview-publish')),
+    approveTopic: (id, comment) =>
+      post(topic(id, 'approve'), comment?.trim() ? { comment: comment.trim() } : {}),
+    returnTopic: (id, comment) => post(topic(id, 'return'), { comment: comment.trim() }),
   };
 }
 
