@@ -1252,11 +1252,15 @@ def operation_with_fixed_value_mentioned(
 ) -> bool:
     """Recognize a phrase such as "add 4" as the fixed amount and operation."""
 
-    operation_words = (
-        ("add", "plus")
-        if operator == "+"
-        else ("subtract", "minus")
-    )
+    operation_words = {
+        "+": ("add", "plus"),
+        "-": ("subtract", "minus"),
+        "×": ("multiply", "multiplication", "times"),
+        "x": ("multiply", "multiplication", "times"),
+        "*": ("multiply", "multiplication", "times"),
+        "÷": ("divide", "division"),
+        "/": ("divide", "division"),
+    }.get(operator, ())
     return any(
         re.search(
             rf"\b{re.escape(word)}\s+{re.escape(fixed_value)}\b",
