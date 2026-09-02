@@ -197,14 +197,17 @@ class CriticalThinkingConfig(StrictSchema):
     distress_message: str
     frustration_acknowledgement: str
     ambiguity_message: str
+    confusion_phrases: list[str]
     wrong_choice_prompt: str
     wrong_direct_rule_prompt: str
     typed_option_prompt: str
     choice_selection_prompt: str
     choice_reasoning_prompt: str
+    choice_reasoning_stuck_prompt: str
     variable_called_fixed_prompt: str
     fixed_value_called_changing_prompt: str
     fixed_value_sign_mismatch_prompt: str
+    operation_direction_mismatch_prompt: str
     operation_called_value_prompt: str
     active_role_before_operation_prompt: str
     single_case_defence_prompt: str

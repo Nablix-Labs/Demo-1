@@ -1245,6 +1245,28 @@ def evidence_source_for_request(request: ClassificationRequest) -> GuidedEvidenc
     }[request.input_source]
 
 
+def operation_with_fixed_value_mentioned(
+    normalized_student_input: str,
+    operator: str,
+    fixed_value: str,
+) -> bool:
+    """Recognize a phrase such as "add 4" as the fixed amount and operation."""
+
+    operation_words = (
+        ("add", "plus")
+        if operator == "+"
+        else ("subtract", "minus")
+    )
+    return any(
+        re.search(
+            rf"\b{re.escape(word)}\s+{re.escape(fixed_value)}\b",
+            normalized_student_input,
+        )
+        is not None
+        for word in operation_words
+    )
+
+
 def deterministic_turn_evidence(
     request: ClassificationRequest,
     rubric: GeneratedQuestionRubric,
@@ -1304,9 +1326,14 @@ def deterministic_turn_evidence(
         and normalized == variable
     ):
         add_claim("CHANGING_VALUE", "DEMONSTRATED", source)
-    if fixed_value in normalized and any(
-        marker in normalized for marker in ("fixed", "constant", "stays", "same", "remains")
-    ):
+    fixed_value_identified = (
+        fixed_value in normalized
+        and any(
+            marker in normalized
+            for marker in ("fixed", "constant", "stays", "same", "remains")
+        )
+    ) or operation_with_fixed_value_mentioned(normalized, operator, fixed_value)
+    if fixed_value_identified:
         add_claim("FIXED_VALUE", "DEMONSTRATED", source)
     operation_words = (
         ("add", "addition", "plus")
@@ -1642,9 +1669,12 @@ def deterministic_teaching_step_evaluation(
         changing_claimed = variable in normalized and any(
             marker in normalized for marker in ("change", "changing", "varies", "variable")
         )
-        fixed_claimed = number in normalized and any(
-            marker in normalized for marker in ("fixed", "stays", "constant", "same")
-        )
+        fixed_claimed = (
+            number in normalized
+            and any(
+                marker in normalized for marker in ("fixed", "stays", "constant", "same")
+            )
+        ) or operation_with_fixed_value_mentioned(normalized, operator, number)
         operation_called_value = (
             any(token in normalized for token in ("+ is", "plus is", "the +", "the plus"))
             and any(token in normalized for token in ("fixed value", "a value", "stays fixed"))
@@ -1798,18 +1828,12 @@ def deterministic_teaching_step_evaluation(
     if operator == "+" and any(
         word in normalized for word in ("minus", "subtract", "subtraction")
     ):
-        message = (
-            "The word in the question means add, not subtract. "
-            "What operation does the sign tell us to use?"
-        )
+        message = rules.guided_learning.critical_thinking.operation_direction_mismatch_prompt
         return _controller_evaluation(request, "WRONG", objective, message, None, rubric)
     if operator == "-" and any(
         word in normalized for word in ("plus", "add", "addition")
     ):
-        message = (
-            "The word in the question means subtract, not add. "
-            "What operation does the sign tell us to use?"
-        )
+        message = rules.guided_learning.critical_thinking.operation_direction_mismatch_prompt
         return _controller_evaluation(request, "WRONG", objective, message, None, rubric)
 
     if step.step_id == "GENERAL_RULE":
@@ -2332,6 +2356,42 @@ def correct_choice_selection_evaluation(
         next_objective=objective,
         tutor_message=rules.guided_learning.critical_thinking.choice_reasoning_prompt,
         tutor_message_voice=rules.guided_learning.critical_thinking.choice_reasoning_prompt,
+    )
+
+
+def choice_reasoning_stuck_evaluation(
+    request: ClassificationRequest,
+    objective: ActiveTeachingObjective,
+    rules: ClassifierRulesConfig,
+) -> GuidedEvaluation | None:
+    """Reduce a choice explanation to a concrete comparison after confusion."""
+
+    if request.question_type != "CHOICE_WITH_EXPLANATION":
+        return None
+    if "ANSWER_SELECTION" not in objective.confirmed_concept_ids:
+        return None
+    if "ANSWER_EXPLANATION" not in objective.missing_concept_ids:
+        return None
+    if selected_general_rule_expression(request) is None:
+        return None
+    normalized = normalize_semantic_answer(request.student_input)
+    if normalized not in {
+        normalize_semantic_answer(phrase)
+        for phrase in rules.guided_learning.critical_thinking.confusion_phrases
+    }:
+        return None
+    message = rules.guided_learning.critical_thinking.choice_reasoning_stuck_prompt
+    return GuidedEvaluation(
+        student_state="STUCK",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=objective.confirmed_concept_ids,
+        contradicted_concept_ids=[],
+        missing_concept_ids=objective.missing_concept_ids,
+        selected_error_code=None,
+        confidence=1.0,
+        next_objective=objective,
+        tutor_message=message,
+        tutor_message_voice=message,
     )
 
 
@@ -2893,6 +2953,32 @@ def classify_guided_learning_response(
             rubric,
             correct_choice,
             objective,
+        )
+    choice_reasoning_stuck = choice_reasoning_stuck_evaluation(
+        request,
+        objective,
+        rules,
+    )
+    if choice_reasoning_stuck is not None:
+        next_objective = normalized_guided_objective(choice_reasoning_stuck, objective)
+        if next_objective is not None:
+            choice_reasoning_stuck = write_deterministic_guided_follow_up(
+                choice_reasoning_stuck,
+                request,
+                rubric,
+                next_objective,
+                openai_client,
+                allowed_errors,
+                guided_tutor_context_for(request, rubric, next_objective),
+                rules,
+            )
+        return build_guided_tutor_response(
+            request,
+            rules,
+            safety_check,
+            rubric,
+            choice_reasoning_stuck,
+            next_objective,
         )
     typed_option = typed_option_text_evaluation(request, objective, rules)
     if typed_option is not None:
@@ -3950,6 +4036,15 @@ def guided_tutor_message_validation_reason(
     if guided_message_asserts_wrong_fixed_amount(message, request):
         return "UNSUPPORTED_FIXED_AMOUNT"
 
+    if guided_message_reveals_fixed_amount_for_mismatched_rule(message, request):
+        return "FIXED_AMOUNT_REVEAL"
+
+    if evaluation.student_state == "STUCK" and not guided_message_keeps_controller_focus(
+        message,
+        controller_prompt,
+    ):
+        return "ACTIVE_PROMPT_DRIFT"
+
     explanation_probe_reason = general_rule_explanation_probe_reason(
         message,
         request,
@@ -4009,6 +4104,46 @@ def guided_message_asserts_wrong_fixed_amount(
         rf"\b{re.escape(attempted_fixed)}\b.*\b(?:stays|fixed|constant|consistent)\b",
     )
     return any(re.search(pattern, normalized) is not None for pattern in assertion_patterns)
+
+
+def guided_message_reveals_fixed_amount_for_mismatched_rule(
+    message: str,
+    request: ClassificationRequest,
+) -> bool:
+    """Keep a correction prompt from naming the amount the learner must inspect."""
+
+    expected = (
+        _expression_parts(request.answer_spec.canonical_answer)
+        if request.answer_spec is not None
+        else None
+    ) or _expression_parts(request.question)
+    attempted = _expression_parts(request.student_input)
+    if expected is None or attempted is None:
+        return False
+    if attempted[0] != expected[0] or attempted[1] != expected[1]:
+        return False
+    if attempted[2] == expected[2]:
+        return False
+    expected_fixed_value = expected[2]
+    return (
+        re.search(
+            rf"\b{re.escape(expected_fixed_value)}\b",
+            normalize_semantic_answer(message),
+        )
+        is not None
+    )
+
+
+def guided_message_keeps_controller_focus(
+    message: str,
+    controller_prompt: str,
+) -> bool:
+    """Require a stuck-turn rewrite to preserve the controller's reduced task."""
+
+    controller_tokens = significant_component_tokens(controller_prompt)
+    if not controller_tokens:
+        return True
+    return len(significant_component_tokens(message).intersection(controller_tokens)) >= 2
 
 
 def guided_message_mislabels_current_role(
