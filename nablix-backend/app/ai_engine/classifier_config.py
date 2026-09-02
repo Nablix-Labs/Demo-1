@@ -194,6 +194,7 @@ class CriticalThinkingConfig(StrictSchema):
 
     distress_phrases: list[str]
     frustration_phrases: list[str]
+    confusion_phrases: list[str]
     distress_message: str
     frustration_acknowledgement: str
     ambiguity_message: str
@@ -202,6 +203,7 @@ class CriticalThinkingConfig(StrictSchema):
     typed_option_prompt: str
     choice_selection_prompt: str
     choice_reasoning_prompt: str
+    choice_reasoning_stuck_prompt: str
     variable_called_fixed_prompt: str
     fixed_value_called_changing_prompt: str
     fixed_value_sign_mismatch_prompt: str

@@ -2426,6 +2426,36 @@ def choice_selection_required_evaluation(
     )
 
 
+def choice_explanation_stuck_evaluation(
+    request: ClassificationRequest,
+    objective: ActiveTeachingObjective,
+    rules: ClassifierRulesConfig,
+) -> GuidedEvaluation | None:
+    """Reduce the load when a learner is stuck after choosing the right option."""
+
+    if (
+        request.question_type != "CHOICE_WITH_EXPLANATION"
+        or "ANSWER_SELECTION" not in objective.confirmed_concept_ids
+        or "ANSWER_EXPLANATION" not in objective.missing_concept_ids
+        or normalize_text(request.student_input)
+        not in rules.guided_learning.critical_thinking.confusion_phrases
+    ):
+        return None
+    message = rules.guided_learning.critical_thinking.choice_reasoning_stuck_prompt
+    return GuidedEvaluation(
+        student_state="STUCK",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=objective.confirmed_concept_ids,
+        contradicted_concept_ids=[],
+        missing_concept_ids=objective.missing_concept_ids,
+        selected_error_code=None,
+        confidence=1.0,
+        next_objective=objective,
+        tutor_message=message,
+        tutor_message_voice=message,
+    )
+
+
 def direct_rule_mismatch(
     request: ClassificationRequest,
 ) -> tuple[tuple[str, str, str], tuple[str, str, str]] | None:
@@ -2991,6 +3021,16 @@ def classify_guided_learning_response(
             safety_check,
             rubric,
             choice_follow_up,
+            objective,
+        )
+    choice_stuck = choice_explanation_stuck_evaluation(request, objective, rules)
+    if choice_stuck is not None:
+        return build_guided_tutor_response(
+            request,
+            rules,
+            safety_check,
+            rubric,
+            choice_stuck,
             objective,
         )
     choice_explanation = deterministic_choice_explanation_evaluation(
