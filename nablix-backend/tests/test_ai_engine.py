@@ -83,6 +83,105 @@ def _topic1_request(student_input: str) -> ClassificationRequest:
     )
 
 
+def _plain_general_rule_request(student_input: str) -> ClassificationRequest:
+    return ClassificationRequest(
+        question_id="Q-T01-001",
+        question_type="SHORT_RESPONSE",
+        question=(
+            "3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number. "
+            "Write the general rule."
+        ),
+        correct_answer="n + 5",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-001",
+            canonical_answer="n + 5",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=False,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        student_input=student_input,
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+    )
+
+
+def _plain_general_rule_rubric() -> GeneratedQuestionRubric:
+    return GeneratedQuestionRubric(
+        question_id="Q-T01-001",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="GENERAL_RULE",
+                description="States the general rule.",
+                required=True,
+            )
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="q-t01-001-general-rule",
+        prompt_version="test",
+    )
+
+
+def test_plain_general_rule_instruction_does_not_create_extra_role_steps() -> None:
+    request = _plain_general_rule_request("n + 5")
+
+    assert [step.step_id for step in classifier.teaching_steps_for(request)] == [
+        "GENERAL_RULE"
+    ]
+
+
+def test_general_rule_operation_reply_stays_on_the_missing_rule() -> None:
+    request = _plain_general_rule_request("addition")
+    rubric = _plain_general_rule_rubric()
+
+    evaluation = classifier.deterministic_teaching_step_evaluation(
+        request,
+        rubric,
+        classifier.initial_guided_objective(rubric),
+        load_classifier_rules(),
+    )
+
+    assert evaluation is not None
+    assert evaluation.student_state == "PARTIAL"
+    assert evaluation.newly_confirmed_concept_ids == []
+    assert "Which amount stays the same?" in evaluation.tutor_message
+
+
+def test_writer_cannot_assert_a_wrong_fixed_amount_from_the_student_rule() -> None:
+    request = _plain_general_rule_request("n + 7")
+    rubric = _plain_general_rule_rubric()
+    objective = classifier.initial_guided_objective(rubric)
+    evaluation = GuidedEvaluation(
+        student_state="WRONG",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=objective.missing_concept_ids,
+        selected_error_code=None,
+        confidence=1.0,
+        next_objective=objective,
+        tutor_message=(
+            "All the examples involve adding 7 to the starting number. "
+            "What stays the same?"
+        ),
+        tutor_message_voice=(
+            "All the examples involve adding 7 to the starting number. "
+            "What stays the same?"
+        ),
+    )
+
+    assert classifier.guided_tutor_message_validation_reason(
+        evaluation,
+        request,
+        rubric,
+        objective,
+        "Which amount stays the same?",
+    ) == "UNSUPPORTED_FIXED_AMOUNT"
+
+
 def test_topic1_role_evidence_preserves_values_and_challenges_operation() -> None:
     request = _topic1_request("m changes, 7 stays fixed, and plus is the fixed value")
     rubric = classifier.rubric_from_authored_answer_parts(

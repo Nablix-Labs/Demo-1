@@ -1081,9 +1081,30 @@ def teaching_steps_for(request: ClassificationRequest) -> list[TeachingStep]:
     operation_prompt = "What operation does the sign tell us to use?"
     rule_prompt = "What general rule represents this situation?"
     requires_operation_step = "operation" in question
-    if "general rule" in question and (
-        "changing" in question or "changes" in question
-    ):
+    requires_role_identification = any(
+        phrase in question
+        for phrase in (
+            "identify the changing",
+            "identify what changes",
+            "state what changes",
+            "what changes and what stays fixed",
+            "what changes and stays fixed",
+            "fixed value",
+            "which value stays fixed",
+        )
+    )
+    requires_defence = any(
+        phrase in question
+        for phrase in (
+            "explain why",
+            "explain briefly",
+            "why does",
+            "works for every",
+            "works in every",
+            "justify",
+        )
+    )
+    if "general rule" in question and requires_role_identification:
         steps = [
             TeachingStep("GENERAL_RULE", rule_prompt),
             TeachingStep("CHANGING_VALUE", changing_prompt),
@@ -1093,9 +1114,15 @@ def teaching_steps_for(request: ClassificationRequest) -> list[TeachingStep]:
             steps.append(TeachingStep("OPERATION", operation_prompt))
         return steps
     if "general rule" in question:
-        return [
-            TeachingStep("GENERAL_RULE", rule_prompt), TeachingStep("DEFENCE", "Try a different starting value: what does the same rule predict?"),
-        ]
+        steps = [TeachingStep("GENERAL_RULE", rule_prompt)]
+        if requires_defence:
+            steps.append(
+                TeachingStep(
+                    "DEFENCE",
+                    "Try a different starting value: what does the same rule predict?",
+                )
+            )
+        return steps
     if all(term in question for term in ("changing", "fixed")):
         steps = [
             TeachingStep("CHANGING_VALUE", changing_prompt),
@@ -1791,6 +1818,35 @@ def deterministic_teaching_step_evaluation(
                 return _controller_evaluation(request, "CORRECT", objective, "Nice work.", step.step_id, rubric)
             message = f"Good. {next_step.prompt}"
             return _controller_evaluation(request, "PARTIAL", objective, message, step.step_id, rubric)
+        if len(steps) == 1 and any(
+            word in normalized
+            for word in (
+                ("add", "addition", "plus")
+                if operator == "+"
+                else ("subtract", "subtraction", "minus")
+            )
+        ):
+            message = rules.guided_learning.critical_thinking.wrong_direct_rule_prompt
+            return _controller_evaluation(request, "PARTIAL", objective, message, None, rubric)
+        if len(steps) == 1 and number in normalized and any(
+            marker in normalized for marker in ("fixed", "constant", "stays", "same", "remains")
+        ):
+            message = (
+                "Yes, that number stays fixed. Use the letter for the starting "
+                "number and write the full rule."
+            )
+            return _controller_evaluation(request, "PARTIAL", objective, message, None, rubric)
+        if len(steps) == 1 and normalized in {
+            "idk",
+            "i dont know",
+            "i don't know",
+            "i dont know what you mean",
+            "i don't know what you mean",
+            "i dont know what u mean",
+            "i don't know what u mean",
+        }:
+            message = rules.guided_learning.critical_thinking.wrong_direct_rule_prompt
+            return _controller_evaluation(request, "STUCK", objective, message, None, rubric)
         typed_rule = re.fullmatch(
             r"\s*(?:(?:it'?s|it is|the rule is)\s*)?[a-z]\s*[+\-×x*]\s*\d+\s*",
             normalized,
@@ -3911,6 +3967,9 @@ def guided_tutor_message_validation_reason(
     if guided_message_acknowledges_non_turn_evidence(message, request, rubric, rules):
         return "STALE_ACKNOWLEDGEMENT"
 
+    if guided_message_asserts_wrong_fixed_amount(message, request):
+        return "UNSUPPORTED_FIXED_AMOUNT"
+
     explanation_probe_reason = general_rule_explanation_probe_reason(
         message,
         request,
@@ -3941,6 +4000,35 @@ def guided_tutor_message_validation_reason(
     if guided_message_mentions_selected_option(normalized_message, request):
         return None
     return "UNRELATED"
+
+
+def guided_message_asserts_wrong_fixed_amount(
+    message: str,
+    request: ClassificationRequest,
+) -> bool:
+    """Reject a writer claim that repeats the learner's incorrect fixed amount."""
+    expected = (
+        _expression_parts(request.answer_spec.canonical_answer)
+        if request.answer_spec is not None
+        else None
+    ) or _expression_parts(request.question)
+    attempted = _expression_parts(request.student_input)
+    if expected is None or attempted is None:
+        return False
+    if attempted[0] != expected[0] or attempted[1] != expected[1]:
+        return False
+    attempted_fixed = attempted[2]
+    if attempted_fixed == expected[2]:
+        return False
+
+    normalized = normalize_semantic_answer(message)
+    assertion_patterns = (
+        rf"\ball\s+(?:the\s+)?examples?\b.*\b{re.escape(attempted_fixed)}\b",
+        rf"\beach\s+(?:example|case)\b.*\b{re.escape(attempted_fixed)}\b",
+        rf"\bevery\s+(?:example|case)\b.*\b{re.escape(attempted_fixed)}\b",
+        rf"\b{re.escape(attempted_fixed)}\b.*\b(?:stays|fixed|constant|consistent)\b",
+    )
+    return any(re.search(pattern, normalized) is not None for pattern in assertion_patterns)
 
 
 def guided_message_mislabels_current_role(
