@@ -31,7 +31,7 @@ guided_learning:
   maximum_recent_history_turns: 6
   tutor_message_similarity_threshold: 0.72
   reasoning_effort: low
-  verbosity: low
+  verbosity: medium
   semantic_confusion_patterns:
     - "\\b(?:this|that|it)\\s+(?:is\\s+)?(?:not|isn't)\\s+(?:clicking|making sense)\\b"
     - "\\bi(?: am|'m)\\s+lost\\b"

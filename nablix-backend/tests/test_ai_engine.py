@@ -8351,6 +8351,7 @@ def test_focused_component_schema_requires_the_requested_component_id() -> None:
 def test_guided_learning_supports_every_authored_answer_verification_method() -> None:
     rules = classifier.load_classifier_rules()
 
+    assert rules.guided_learning.verbosity == "medium"
     assert set(rules.guided_learning.supported_verification_methods) == {
         "EXACT_CHOICE_MATCH",
         "EXACT_NOTATION_MATCH",
