@@ -47,6 +47,7 @@ from typing import Optional
 from id_service import IdService
 from models import (
     Phase,
+    QuestionType,
     QuestionMicroSkillRow,
     QuestionRole,
     QuestionRow,
@@ -132,6 +133,62 @@ class UsagePlan:
     phase: Phase
     role: Optional[QuestionRole] = None
     max_attempts: Optional[int] = None
+
+
+def plan_phases(questions: list[QuestionRow]) -> list["UsagePlan"]:
+    """Decide which phase each question belongs to.
+
+    A heuristic, and openly a placeholder. The roadmap gives CG-012 "phase
+    assignment" but no rule for it, and the reference's distribution -- 22
+    diagnostic, 16 guided, 16 independent across three topics -- is an
+    authoring decision rather than anything derivable from a question.
+
+    What this does instead is respect the constraints and spread the work:
+
+      SINGLE_CHOICE, difficulty 1  -> PHASE_0_DIAGNOSTIC. The diagnostic phase
+                                      accepts only SINGLE_CHOICE, so nothing
+                                      else can go there, and an easy one is
+                                      what a diagnostic wants.
+      everything else              -> PHASE_2_GUIDED_LEARNING, cycling the
+                                      five roles it allows so the set is not
+                                      all CLOSE_PRACTICE.
+      the last two per topic       -> PHASE_3_INDEPENDENT_PRACTICE, where its
+                                      allowed types permit.
+
+    A real curriculum planner should replace this. It is here so the pipeline
+    runs end to end, and it is separated from build_usage_rows precisely so
+    replacing it touches nothing else.
+    """
+    guided_roles = [
+        QuestionRole.CLOSE_PRACTICE,
+        QuestionRole.PARTIAL_APPLICATION,
+        QuestionRole.NEAR_TRANSFER,
+        QuestionRole.MISCONCEPTION_PROBE,
+        QuestionRole.FINAL_GUIDED_CHECK,
+    ]
+    p3_types = set(PHASE_RULES["PHASE_3_INDEPENDENT_PRACTICE"]["allowed_question_types"])
+
+    plans: list[UsagePlan] = []
+    guided_seen = 0
+    # The last two eligible questions become independent practice.
+    eligible_tail = [
+        q.question_id for q in questions if q.question_type.value in p3_types
+    ][-2:]
+
+    for question in questions:
+        if question.question_id in eligible_tail:
+            plans.append(UsagePlan(question.question_id,
+                                   Phase.PHASE_3_INDEPENDENT_PRACTICE))
+        elif question.question_type is QuestionType.SINGLE_CHOICE and question.difficulty == 1:
+            plans.append(UsagePlan(question.question_id, Phase.PHASE_0_DIAGNOSTIC))
+        else:
+            plans.append(UsagePlan(
+                question.question_id,
+                Phase.PHASE_2_GUIDED_LEARNING,
+                guided_roles[guided_seen % len(guided_roles)],
+            ))
+            guided_seen += 1
+    return plans
 
 
 @dataclass
