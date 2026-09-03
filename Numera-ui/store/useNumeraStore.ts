@@ -33,7 +33,6 @@ import {
   isRescueAction, rescueStep, mergeStep, type RescueStep,
 } from '@/lib/rescueActions';
 import { emitRenderAck } from '@/lib/rescueEvents';
-import { canvasRescuePresentationEnabled } from '@/lib/runtimeConfig';
 import type { SupportRung } from '@/lib/supportLadder';
 import { EMPTY_APPLIED, type AppliedState } from '@/lib/responseGate';
 import type { InactivityPolicy } from '@/lib/inactivity';
@@ -1555,11 +1554,6 @@ export const useNumeraStore = create<NumeraState>()(
         // Idempotency: a reconnect or replay must not render the same
         // intervention twice.
         if (seenTutorCanvasActionIds.has(action.action_id)) continue;
-
-        // The presentation is off: leave the two bottom rungs to `guided_rescue`
-        // and RescueNote. Ignored rather than queued — nothing later in this
-        // session will turn the flag on, so queueing would only accumulate.
-        if (!canvasRescuePresentationEnabled && isRescueAction(action)) continue;
 
         if (action.target_kind === 'QUESTION_OPTION' && action.target_object_id) {
           const expectedPrefix = `${s.activeQuestionId}:OPTION:`;

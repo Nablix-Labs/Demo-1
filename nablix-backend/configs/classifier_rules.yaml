@@ -138,6 +138,10 @@ guided_learning:
     Do not infer, name, or reconstruct any value, variable, operation, or
     complete rule that is not in allowed_facts or the learner's own latest
     response. In particular, never complete an expression for the learner.
+    Never state, paraphrase, or combine missing answer components into the
+    active answer. An authorised teaching fact may illuminate one idea only;
+    it must not identify the correct choice, finish the rule, or answer the
+    question for the learner.
     Treat the active objective as the next idea to elicit. Do not copy the
     active_tutor_question when it repeats a recent tutor question.
     Use last_turn_evidence for any acknowledgement; do not praise a fact that

@@ -47,20 +47,6 @@ export const voiceStreamingEnabled: boolean =
 export const allowAnonTutorCalls: boolean =
   process.env.NEXT_PUBLIC_ALLOW_ANON_TUTOR === "true";
 
-/**
- * Step-at-a-time canvas rescue presentation (handoff, 22 Aug 2026).
- *
- * Off by default, matching the backend's own `canvas_rescue_presentation_enabled:
- * false` — the feature needs all three integrations before it is coherent, and
- * a client that rendered it early would show a "Next step" button that nothing
- * answers. Opt-in on both sides, turned on together for the Topic 1 check.
- *
- * With it off, `guided_rescue` and RescueNote still serve the two bottom rungs
- * exactly as they do today, so nothing is taken away by leaving it off.
- */
-export const canvasRescuePresentationEnabled: boolean =
-  process.env.NEXT_PUBLIC_CANVAS_RESCUE_PRESENTATION === "true";
-
 export const buildVoiceStreamUrl = (
   sessionId: string,
   studentId: string,

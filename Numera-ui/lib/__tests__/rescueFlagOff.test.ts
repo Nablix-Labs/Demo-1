@@ -1,26 +1,14 @@
 /**
- * With the presentation flag off, rescue actions must be ignored entirely.
- *
- * Its own file because the flag is read once at module load, so it cannot be
- * varied inside a suite that has already imported the store with it on.
- *
- * The failure this guards against is the quiet one: the backend half gets
- * enabled first, rescue actions start arriving, and a client that half-rendered
- * them would show a walkthrough with a "Next step" button that nothing on the
- * other side has agreed to answer.
+ * Rescue actions are backend-authoritative. A client must render a valid rescue
+ * action whenever it receives one, regardless of its build-time environment.
  */
 
-import { describe, it, expect, vi } from 'vitest';
-
-vi.mock('@/lib/runtimeConfig', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/runtimeConfig')>()),
-  canvasRescuePresentationEnabled: false,
-}));
+import { describe, it, expect } from 'vitest';
 
 const { useNumeraStore } = await import('@/store/useNumeraStore');
 
-describe('canvas rescue presentation disabled', () => {
-  it('ignores rescue actions and leaves the board alone', () => {
+describe('canvas rescue presentation', () => {
+  it('renders a server-authorised rescue action', () => {
     useNumeraStore.setState({
       currentPhase: 'GUIDED_PRACTICE',
       activeQuestionId: 'Q-1',
@@ -44,9 +32,9 @@ describe('canvas rescue presentation disabled', () => {
       return_target_object_id: 'TUTOR_ANCHOR:ORIGINAL:Q-1',
     }]);
     const s = useNumeraStore.getState();
-    expect(s.rescueSteps).toEqual([]);
-    expect(s.tutorElements).toEqual([]);
-    // Not queued either: nothing later in the session turns the flag on.
+    expect(s.rescueSteps).toHaveLength(1);
+    expect(s.rescueSteps[0]?.text).toBe('Start with p, then add 3.');
+    expect(s.tutorElements).toHaveLength(0);
     expect(s.pendingRescueActions).toEqual([]);
   });
 });

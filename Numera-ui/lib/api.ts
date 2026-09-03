@@ -1502,6 +1502,39 @@ export async function sendInteraction(payload: InteractionPayload): Promise<Inte
   }
 }
 
+export interface RescueStepResponse {
+  action: TutorCanvasAction | null;
+  current_step_index: number | null;
+  completed: boolean;
+}
+
+export async function acknowledgeRescueRender(
+  sessionId: string,
+  payload: { action_id: string; status: 'RENDERED'; target_object_id: string },
+): Promise<RescueStepResponse> {
+  const res = await api.post<RescueStepResponse>(`/session/${sessionId}/rescue/render-ack`, {
+    student_id: studentId(),
+    ...payload,
+  });
+  return res.data;
+}
+
+export async function advanceRescue(
+  sessionId: string,
+  payload: {
+    question_id: string;
+    rescue_id: string;
+    current_step_index: number;
+    trigger: 'UI_NEXT_STEP' | 'VOICE_NEXT';
+  },
+): Promise<RescueStepResponse> {
+  const res = await api.post<RescueStepResponse>(`/session/${sessionId}/rescue/advance`, {
+    student_id: studentId(),
+    ...payload,
+  });
+  return res.data;
+}
+
 // ── /hint/request — REMOVED ───────────────────────────────────────────────────
 //
 // The backend deleted this endpoint in the Schema 3.0 refactor on 3 Aug 2026
