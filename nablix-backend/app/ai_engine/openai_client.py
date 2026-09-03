@@ -506,6 +506,35 @@ class OpenAIAIEngineClient:
                 f"invalid scaffold evaluation: {error}",
             ) from error
 
+    def write_scaffold_tutor_message(
+        self,
+        context: ScaffoldEvaluationContext,
+        student_response: str,
+        input_source: InputSource,
+        student_intent: IntentType,
+        evaluation: ScaffoldStepEvaluation,
+        system_prompt: str,
+    ) -> OpenAITutorMessage:
+        content = self._request_guided_json(
+            name="scaffold_tutor_wording",
+            schema=OpenAITutorMessage.model_json_schema(),
+            system_prompt=system_prompt,
+            user_payload={
+                "scaffold": context.model_dump(),
+                "student_response": student_response,
+                "input_source": input_source,
+                "student_intent": student_intent,
+                "scaffold_evaluation": evaluation.model_dump(),
+            },
+        )
+        try:
+            return OpenAITutorMessage.model_validate(content)
+        except ValidationError as error:
+            raise AdapterError(
+                "openai_ai_engine",
+                f"invalid scaffold tutor wording: {error}",
+            ) from error
+
     def generate_explain_again_response(
         self,
         request: ExplainAgainRequest,

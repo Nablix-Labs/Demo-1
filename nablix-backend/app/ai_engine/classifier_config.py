@@ -231,6 +231,7 @@ class GuidedLearningConfig(StrictSchema):
         Annotated[float, Field(ge=0.0, le=1.0)],
     ]
     maximum_retries: int = Field(ge=0)
+    scaffold_evaluation_maximum_retries: int = Field(ge=0)
     stuck_escalation_count: int = Field(ge=1)
     maximum_recent_history_turns: int = Field(ge=0)
     tutor_message_similarity_threshold: float = Field(ge=0.0, le=1.0)
@@ -248,6 +249,7 @@ class GuidedLearningConfig(StrictSchema):
     component_adjudicator_confidence_threshold: float = Field(ge=0.0, le=1.0)
     explain_again_system_prompt: str
     scaffold_evaluator_system_prompt: str
+    scaffold_wording_system_prompt: str
     answer_reveal_retry_feedback: str
     deterministic_follow_up_wording_feedback: str
     reconciliation_message: str

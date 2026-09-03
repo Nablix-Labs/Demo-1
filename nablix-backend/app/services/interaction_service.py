@@ -3994,10 +3994,11 @@ async def _process_interaction(
             scaffold_steps = list(turn_session.scaffold_steps)
             if not scaffold_steps:
                 raise RuntimeError("Active scaffold step lost its prompt.")
-            tutor_message = rules.messages.SCAFFOLD_STEP_RETRY.format(
-                step=scaffold_steps[0]
-            )
-            tutor_message_voice = tutor_message
+            if not get_settings().use_openai_ai_engine:
+                tutor_message = rules.messages.SCAFFOLD_STEP_RETRY.format(
+                    step=scaffold_steps[0]
+                )
+                tutor_message_voice = tutor_message
     conversation_history: list[ConversationMessage] = _updated_conversation_history(
         turn_session.conversation_history,
         student_message,

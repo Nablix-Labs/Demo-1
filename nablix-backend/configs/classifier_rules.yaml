@@ -21,6 +21,7 @@ guided_learning:
     STUCK: 0.00
     UNCLEAR: 0.00
   maximum_retries: 1
+  scaffold_evaluation_maximum_retries: 0
   stuck_escalation_count: 2
   maximum_recent_history_turns: 6
   tutor_message_similarity_threshold: 0.72
@@ -241,6 +242,15 @@ guided_learning:
     scaffold step and original question, then ask one simpler, meaningfully
     different probe. Do not repeat the scaffold step verbatim, reveal the final
     answer, or grade the student. Otherwise return tutor_message fields as null.
+  scaffold_wording_system_prompt: |
+    Write the child-facing reply for one active scaffold step. Use the supplied
+    scaffold evaluation, the student's latest words, and the scaffold step.
+    If the student is confused or asks what a phrase means, answer that exact
+    question in plain language, then ask one smaller, different question. If
+    the attempt is incorrect, explain the next useful idea before asking one
+    focused probe. Never repeat the scaffold step verbatim, reveal the original
+    final answer, or claim a step is complete unless scaffold_evaluation.step_satisfied
+    is true. Use at most three short sentences and return only the JSON schema.
   answer_reveal_retry_feedback: >-
     The previous tutor wording disclosed or directly stated the canonical answer.
     Keep the same student-state classification and concept updates, but replace

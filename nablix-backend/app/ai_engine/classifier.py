@@ -371,7 +371,7 @@ def classify_scaffold_response(
         )
     last_error: AdapterError | None = None
     result: ScaffoldStepEvaluation | None = None
-    for attempt in range(rules.guided_learning.maximum_retries + 1):
+    for attempt in range(rules.guided_learning.scaffold_evaluation_maximum_retries + 1):
         try:
             result = openai_client.evaluate_scaffold_step(
                 context=context,
@@ -383,7 +383,7 @@ def classify_scaffold_response(
         except AdapterError as error:
             last_error = error
             logger.warning(
-                "scaffold_evaluation_retry",
+                "scaffold_evaluation_failed",
                 extra={
                     "question_id": request.question_id,
                     "scaffold_id": context.scaffold_id,
@@ -393,9 +393,33 @@ def classify_scaffold_response(
                 },
             )
     if result is None:
-        raise last_error or AdapterError(
-            "openai_ai_engine",
-            f"Scaffold evaluation failed for {context.step_id}.",
+        message = rules.messages.SCAFFOLD_STEP_RETRY.format(step=context.step_prompt)
+        logger.error(
+            "scaffold_evaluation_controller_fallback",
+            extra={
+                "question_id": request.question_id,
+                "scaffold_id": context.scaffold_id,
+                "step_id": context.step_id,
+                "detail": last_error.detail if last_error is not None else "no result",
+            },
+        )
+        return build_tutor_response(
+            request=request,
+            rules=rules,
+            safety_check=safety_check,
+            decision=TutorDecision(
+                intent=intent,
+                evaluation=None,
+                error_type=None,
+                response_strategy="CLARIFY",
+                hint_level=None,
+                canvas_review=None,
+                reasoning_complete=False,
+            ),
+            answer_reveal_allowed=False,
+            confidence=0.0,
+            tutor_message_override=message,
+            voice_message_override=message,
         )
     satisfied = (
         result.step_satisfied
@@ -407,19 +431,43 @@ def classify_scaffold_response(
         if explanation_requested
         else satisfied and result.original_answer_correct
     )
-    tutor_message_override = (
-        result.tutor_message
-        if explanation_requested
-        and result.tutor_message is not None
-        and result.tutor_message_voice is not None
-        and not message_reveals_answer(
-            result.tutor_message,
-            result.tutor_message_voice,
-            context.canonical_answer,
-            rules,
-        )
-        else None
-    )
+    tutor_message_override: str | None = None
+    tutor_message_voice_override: str | None = None
+    if not satisfied:
+        writer = getattr(openai_client, "write_scaffold_tutor_message", None)
+        if not callable(writer):
+            tutor_message_override = rules.messages.SCAFFOLD_STEP_RETRY.format(
+                step=context.step_prompt
+            )
+            tutor_message_voice_override = tutor_message_override
+        else:
+            try:
+                wording = writer(
+                context=context,
+                student_response=request.student_input,
+                input_source=request.input_source,
+                student_intent=intent,
+                evaluation=result,
+                system_prompt=rules.guided_learning.scaffold_wording_system_prompt,
+                )
+                if not message_reveals_answer(
+                    wording.tutor_message,
+                    wording.tutor_message_voice_optimised,
+                    context.canonical_answer,
+                    rules,
+                ):
+                    tutor_message_override = wording.tutor_message
+                    tutor_message_voice_override = wording.tutor_message_voice_optimised
+            except AdapterError as error:
+                logger.error(
+                    "scaffold_tutor_wording_failed",
+                    extra={
+                        "question_id": request.question_id,
+                        "scaffold_id": context.scaffold_id,
+                        "step_id": context.step_id,
+                        "detail": error.detail,
+                    },
+                )
     logger.info(
         "scaffold_step_evaluated",
         extra={
@@ -464,9 +512,7 @@ def classify_scaffold_response(
         answer_reveal_allowed=False,
         confidence=result.confidence,
         tutor_message_override=tutor_message_override,
-        voice_message_override=(
-            result.tutor_message_voice if tutor_message_override is not None else None
-        ),
+        voice_message_override=tutor_message_voice_override,
     )
     return response.model_copy(
         update={
