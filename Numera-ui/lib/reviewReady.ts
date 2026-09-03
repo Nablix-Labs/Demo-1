@@ -55,3 +55,33 @@ export function isReviewUnavailable(error: unknown): boolean {
     ?.response?.data;
   return body?.error_code === REVIEW_UNAVAILABLE;
 }
+
+/**
+ * Is a read of the session still in flight on arrival at /review?
+ *
+ * Answers the state the screen was missing: not "there is a review" and not
+ * "the review failed", but "we do not know yet". Without it the page fell
+ * through to the legacy worksheet screen on first paint and flashed "You worked
+ * through 0 questions" at a student whose review was seconds away.
+ *
+ * There are TWO reads that can be in flight, and both must hold the screen:
+ * the mount read of a live session, and the restore of an ended one after a
+ * refresh. Covering only the first moves the flash onto the refresh path
+ * instead of removing it.
+ */
+export function reviewReadPending(s: {
+  apiEnabled: boolean;
+  /** A live session this screen can read. */
+  hasReviewSession: boolean;
+  /** Whether the record already in hand carries a usable review. */
+  reviewReady: boolean;
+  sessionId: string | null;
+  hasBackendSession: boolean;
+  endedSessionId: string | null;
+}): boolean {
+  if (!s.apiEnabled) return false;
+  // Mock mode never waits on anything, and neither does a record that already
+  // has the review.
+  if (s.hasReviewSession && !s.reviewReady) return true;
+  return !s.sessionId && !s.hasBackendSession && Boolean(s.endedSessionId);
+}

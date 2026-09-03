@@ -137,8 +137,11 @@ export default function ReviewPage() {
   useEffect(() => {
     if (apiEnabled && reviewSessionId.current && !reviewIsReady(backendSession)) {
       void retryReview();
-    } else {
+    } else if (!(apiEnabled && !sessionId && !backendSession && endedSessionId)) {
       // Nothing to wait for: no session to read, or the review is already here.
+      // The excluded case is the after-refresh restore below, which is also a
+      // read in flight — marking resolved here would let the worksheets flash
+      // on that path instead, which is the same defect one route over.
       setResolved(true);
     }
     // Deliberately mount-only — this is the initial read, and retryReview is
@@ -178,7 +181,10 @@ export default function ReviewPage() {
       // Degrade to the empty state, which is what this screen already shows
       // when there is nothing to review. A session the backend has forgotten
       // (its store is in memory) is not an error the student can act on.
-      .catch(() => { restoring.current = false; });
+      .catch(() => { restoring.current = false; })
+      // Either way the read is over, so the page may stop holding the skeleton
+      // and render whatever it now knows.
+      .finally(() => setResolved(true));
   }, [apiEnabled, sessionId, backendSession, endedSessionId, setBackendSession]);
 
 
