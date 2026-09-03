@@ -397,6 +397,29 @@ def _guided_rescue_message(rescue: GuidedRescue) -> str | None:
     )
 
 
+def _validate_guided_rescue_content(
+    rescue: GuidedRescue,
+    correct_answer: str,
+    rules: ClassifierRulesConfig,
+) -> None:
+    """Reject authored rescue content that exposes the active answer too early."""
+
+    if rescue.rescue_type == "PARALLEL_EXAMPLE":
+        example = rescue.parallel_example
+        steps = (
+            []
+            if example is None
+            else [example.problem, *example.worked_steps, example.final_answer]
+        )
+    else:
+        solved = rescue.tutor_solved
+        steps = [] if solved is None else solved.answer_steps[:-1]
+    if any(contains_answer_reveal(step, correct_answer, rules) for step in steps):
+        raise RuntimeError(
+            "Student Model rescue content reveals the active canonical answer before an authorised final tutor-solved step."
+        )
+
+
 def _tutor_with_guided_rescue(
     tutor: TutorResult,
     event: StudentModelSessionEventResponse,
@@ -3935,6 +3958,11 @@ async def _process_interaction(
     else:
         schema_support_visual_cue = None
         schema_support_steps = []
+    if (
+        schema_support_message is not None
+        and contains_answer_reveal(schema_support_message, session.correct_answer or "", rules)
+    ):
+        raise RuntimeError("Student Model support content reveals the active canonical answer.")
     visual_cue = schema_support_visual_cue or _schema_visual_cue(schema_content_response) or (
         tutor.visual_cue if tutor.visual_cue.show else None
     )
@@ -4287,6 +4315,8 @@ async def _process_interaction(
     )
     canonical_answer = answer_spec.canonical_answer if answer_spec is not None else ""
     guided_rescue = _guided_rescue(schema_content_response)
+    if guided_rescue is not None:
+        _validate_guided_rescue_content(guided_rescue, canonical_answer, rules)
     active_guided_rescue = (
         active_rescue_from(
             turn_session.question_id,
@@ -4460,7 +4490,7 @@ async def _process_interaction(
                 else None
             ),
             "support_served_this_turn": support_served,
-            "support_message": None,
+            "support_message": schema_support_message,
             "wrong_attempt_count": updated_session.wrong_attempt_count,
             "intervention_triggered": (
                 _is_support_failure(tutor)

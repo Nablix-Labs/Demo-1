@@ -16,11 +16,6 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-vi.mock('@/lib/runtimeConfig', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/runtimeConfig')>()),
-  canvasRescuePresentationEnabled: true,
-}));
-
 const sent: unknown[] = [];
 vi.mock('@/lib/rescueEvents', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/rescueEvents')>()),

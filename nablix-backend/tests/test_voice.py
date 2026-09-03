@@ -228,9 +228,9 @@ def test_voice_transcript_routes_through_interaction_flow() -> None:
     body = response.json()
     assert body["session_id"] == session_id
     assert body["student_id"] == "ST011"
-    # The separate hint is not replayed in chat. This response delivers its
-    # own visual cue, which the frontend can render once from the turn field.
-    assert body["support_message"] is None
+    # The delivered hint is a distinct support card as well as contextual input
+    # for the tutor reply, so it remains visible when the transcript is closed.
+    assert body["support_message"] == "Undo the addition first."
     assert body["support_served_this_turn"] == "VISUAL_CUE"
     assert body["message"]
     assert body["message"] != "Undo the addition first."

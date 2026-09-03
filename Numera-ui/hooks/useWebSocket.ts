@@ -34,6 +34,7 @@ import { tutorSay, setStudentWriting, isPenDown } from '@/lib/tutorSpeech';
 import { buildVoiceStreamUrl, voiceStreamingEnabled, allowAnonTutorCalls } from '@/lib/runtimeConfig';
 import {
   ANON_ACCESS_TOKEN, studentId, voiceTurnFailedMessage, transcriptUnclearMessage,
+  acknowledgeRescueRender, advanceRescue,
   type QuestionType,
 } from '@/lib/api';
 import { resetSessionStart } from '@/hooks/useDemoTutor';
@@ -151,24 +152,33 @@ export function useWebSocket(sessionId: string | null) {
     sendControl(type, fields);
   }, [sendControl]);
 
-  /**
-   * Carry rescue events out over the voice socket.
-   *
-   * PROVISIONAL. The handoff fixes the event bodies but not their transport —
-   * there is no `/rescue/advance` endpoint and no agreed frame name — so these
-   * go out under `rescue_step_advance` / `rescue_render_ack` and will be
-   * ignored by a server that does not know them yet. Nothing depends on a
-   * reply: the panel advances only when a new step actually arrives, so an
-   * unrouted event costs the student nothing beyond the step not advancing,
-   * which is the correct behaviour when the backend has not agreed to it.
-   */
+  /** Keep stepwise rescue usable in text and voice modes through its REST API. */
   useEffect(() => {
     registerRescueTransport((event) => {
-      const type = 'event_type' in event ? 'rescue_step_advance' : 'rescue_render_ack';
-      return sendControl(type, event as unknown as Record<string, unknown>);
+      const activeSessionId = useNumeraStore.getState().sessionId;
+      if (!activeSessionId) return false;
+      if ('event_type' in event) {
+        void advanceRescue(activeSessionId, {
+          question_id: event.question_id,
+          rescue_id: event.rescue_id,
+          current_step_index: event.current_step_index,
+          trigger: event.trigger,
+        }).then((response) => {
+          if (response.action) useNumeraStore.getState().applyTutorCanvasActions([response.action]);
+        }).catch((error: unknown) => {
+          console.warn('[rescue] advance request failed', error);
+        });
+      } else {
+        void acknowledgeRescueRender(activeSessionId, event).then((response) => {
+          if (response.action) useNumeraStore.getState().applyTutorCanvasActions([response.action]);
+        }).catch((error: unknown) => {
+          console.warn('[rescue] render acknowledgement failed', error);
+        });
+      }
+      return true;
     });
     return () => registerRescueTransport(null);
-  }, [sendControl]);
+  }, []);
 
   /**
    * Put the student's working in front of the tutor on a voice turn.
