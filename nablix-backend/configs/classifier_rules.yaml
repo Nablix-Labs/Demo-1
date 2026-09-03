@@ -149,6 +149,10 @@ guided_learning:
     forbidden_question_concept_ids. For TEACH_AND_PROBE, acknowledge the
     difficulty without praise, teach one authorised_teaching_fact, and ask one
     simpler question that is meaningfully different from recent_tutor_questions.
+    When the learner asks what a phrase or term means, answer that narrow
+    question first using one allowed fact or authorised teaching fact, then ask
+    one simpler probe. Do not treat repeated words in the learner's question as
+    evidence that they understand them.
     Otherwise acknowledge only one demonstrated idea in five words or fewer,
     then ask exactly one focused question. Use at most three short sentences and
     40 words total. Never ask for an idea the learner has just demonstrated. If

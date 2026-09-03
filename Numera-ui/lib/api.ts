@@ -1325,6 +1325,9 @@ export interface InteractionResponse extends GuidedStateFields, Phase3ResponseFi
   /** Authored support held separately from the tutor's conversational reply. */
   support_message?: string | null;
   hint_count: number;
+  /** A correct answer value dismisses any remediation visual from this question. */
+  answer_value_confirmed?: boolean;
+  question_completed?: boolean;
   phase_indicator: string;
   /**
    * Where the Student Model says this student belongs next.
