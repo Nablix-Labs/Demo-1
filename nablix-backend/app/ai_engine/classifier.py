@@ -206,6 +206,7 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
             rules,
             safety_check,
             openai_client,
+            intent,
         )
 
     evaluation: EvaluationCategory | None = evaluate_answer_attempt(request, intent, rules)
@@ -360,6 +361,7 @@ def classify_scaffold_response(
     rules: ClassifierRulesConfig,
     safety_check: SafetyCheck,
     openai_client: OpenAIAIEngineClient,
+    intent: IntentType,
 ) -> TutorResponse:
     context = request.scaffold_evaluation_context
     if context is None:
@@ -399,7 +401,25 @@ def classify_scaffold_response(
         result.step_satisfied
         and result.confidence >= rules.guided_learning.confidence_threshold
     )
-    original_answer_correct = satisfied and result.original_answer_correct
+    explanation_requested = intent in {"ASKING_QUESTION", "EXPRESSING_CONFUSION"}
+    original_answer_correct = (
+        False
+        if explanation_requested
+        else satisfied and result.original_answer_correct
+    )
+    tutor_message_override = (
+        result.tutor_message
+        if explanation_requested
+        and result.tutor_message is not None
+        and result.tutor_message_voice is not None
+        and not message_reveals_answer(
+            result.tutor_message,
+            result.tutor_message_voice,
+            context.canonical_answer,
+            rules,
+        )
+        else None
+    )
     logger.info(
         "scaffold_step_evaluated",
         extra={
@@ -409,13 +429,29 @@ def classify_scaffold_response(
             "step_satisfied": satisfied,
             "original_answer_correct": original_answer_correct,
             "confidence": result.confidence,
+            "detected_intent": intent,
+            "explanation_requested": explanation_requested,
         },
     )
     decision = TutorDecision(
-        intent="SUBMITTING_ANSWER",
-        evaluation="CORRECT" if satisfied else "INCORRECT",
-        error_type=None if satisfied else "INSUFFICIENT_INFORMATION",
-        response_strategy="CONFIRM_CORRECT" if satisfied else "CLARIFY",
+        intent=intent if explanation_requested else "SUBMITTING_ANSWER",
+        evaluation=(
+            None
+            if explanation_requested
+            else "CORRECT"
+            if satisfied
+            else "INCORRECT"
+        ),
+        error_type=(
+            None
+            if explanation_requested or satisfied
+            else "INSUFFICIENT_INFORMATION"
+        ),
+        response_strategy=(
+            "CLARIFY"
+            if explanation_requested or not satisfied
+            else "CONFIRM_CORRECT"
+        ),
         hint_level=None,
         canvas_review=_canvas_review_for(request, rules, result.confidence),
         reasoning_complete=satisfied,
@@ -427,8 +463,10 @@ def classify_scaffold_response(
         decision=decision,
         answer_reveal_allowed=False,
         confidence=result.confidence,
-        tutor_message_override=None,
-        voice_message_override=None,
+        tutor_message_override=tutor_message_override,
+        voice_message_override=(
+            result.tutor_message_voice if tutor_message_override is not None else None
+        ),
     )
     return response.model_copy(
         update={
@@ -2420,7 +2458,7 @@ def wrong_direct_rule_evaluation(
     objective: ActiveTeachingObjective,
     rules: ClassifierRulesConfig,
 ) -> GuidedEvaluation | None:
-    """Catch a typed rule that contradicts the expressions offered by a choice."""
+    """Catch a learner rule that contradicts the authored algebra rule."""
 
     if direct_rule_mismatch(request, rules) is None:
         return None
@@ -2500,12 +2538,23 @@ def direct_rule_mismatch(
     request: ClassificationRequest,
     rules: ClassifierRulesConfig,
 ) -> tuple[tuple[str, str, str], tuple[str, str, str]] | None:
-    """Return a typed choice-rule mismatch without exposing its correction."""
+    """Return a direct algebra-rule mismatch without exposing its correction."""
 
-    if request.question_type != "CHOICE_WITH_EXPLANATION" or request.answer_spec is None:
+    if request.answer_spec is None:
         return None
     attempted = spoken_expression_parts(request.student_input, rules)
     if attempted is None:
+        return None
+    canonical_expression = _expression_parts(request.answer_spec.canonical_answer)
+    if request.question_type != "CHOICE_WITH_EXPLANATION":
+        if canonical_expression is None or attempted == canonical_expression:
+            return None
+        variable, operator, _ = attempted
+        if (
+            canonical_expression[0] == variable
+            and canonical_expression[1] == operator
+        ):
+            return attempted, canonical_expression
         return None
     candidate_expressions = [
         expression
