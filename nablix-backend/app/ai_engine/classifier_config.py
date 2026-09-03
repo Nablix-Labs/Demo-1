@@ -73,6 +73,7 @@ class StrategyRulesConfig(StrictSchema):
     stuck_scaffold_min_count: int = Field(ge=1)
     scaffold_min_attempt_count: int = Field(ge=1)
     worked_example_min_attempt_count: int = Field(ge=1)
+    scaffold_max_unresolved_turns: int = Field(ge=1)
 
 
 class ScaffoldResponseRulesConfig(StrictSchema):

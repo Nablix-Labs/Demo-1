@@ -43,6 +43,26 @@ def test_guided_partial_answers_do_not_advance_wrong_support() -> None:
     assert not interaction_service._is_support_failure(stuck)
 
 
+def test_unresolved_scaffold_turns_include_wrong_answers_and_confusion() -> None:
+    wrong = TutorResult.model_construct(
+        guided_student_state="WRONG",
+        evaluation="INCORRECT",
+        intent="SUBMITTING_ANSWER",
+    )
+    confusion = wrong.model_copy(
+        update={
+            "guided_student_state": "STUCK",
+            "evaluation": "NO_ATTEMPT",
+            "intent": "EXPRESSING_CONFUSION",
+        }
+    )
+    clarification = confusion.model_copy(update={"intent": "ASKING_QUESTION"})
+
+    assert interaction_service._is_unresolved_scaffold_turn(wrong)
+    assert interaction_service._is_unresolved_scaffold_turn(confusion)
+    assert not interaction_service._is_unresolved_scaffold_turn(clarification)
+
+
 def test_unresolved_partial_does_not_emit_an_incorrect_attempt() -> None:
     rules = load_classifier_rules()
     unresolved = TutorResult.model_construct(
@@ -1774,6 +1794,9 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert wrong_scaffold_step.json()["message"] != (
         "Let’s stay with this step: Which operation should you undo first?"
     )
+    assert (
+        session_service._sessions[session_id].scaffold_failure_count == 1
+    )
 
     next_scaffold_step = client.post(
         "/interaction",
@@ -1801,6 +1824,7 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert next_scaffold_step.json()["scaffold_step_voice"] == (
         "What should you subtract from both sides?"
     )
+    assert session_service._sessions[session_id].scaffold_failure_count == 0
 
     third_scaffold_step = client.post(
         "/interaction",

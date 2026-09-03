@@ -373,6 +373,7 @@ class SessionRecord(BaseModel):
     scaffold_total_steps: int = 0
     delivered_scaffold_step_ids: list[str] = Field(default_factory=list)
     scaffold_expected_response: str | None = None
+    scaffold_failure_count: int = 0
     rescue_mode_active: bool = False
     active_guided_rescue: ActiveGuidedRescue | None = None
     # Kept after the rescue is cleared so a client retrying the final
@@ -418,6 +419,7 @@ class SessionResponse(SessionRecord):
     last_completed_rescue_action_id: str | None = Field(default=None, exclude=True)
     scaffold_steps: list[str] = Field(default_factory=list, exclude=True)
     scaffold_expected_response: str | None = Field(default=None, exclude=True)
+    scaffold_failure_count: int = Field(default=0, exclude=True)
     student_model_event: PublicStudentModelEvent | None = None
     prerequisite_repair_event: StudentModelSessionEventResponse | None = Field(
         default=None,
