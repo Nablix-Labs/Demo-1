@@ -3075,6 +3075,9 @@ def classify_guided_learning_response(
         objective,
     )
     if copied_example is not None:
+        copied_example = naturalize_controller_guided_evaluation(
+            copied_example, request, rubric, objective, openai_client, rules
+        )
         return build_guided_tutor_response(
             request,
             rules,
@@ -3096,6 +3099,9 @@ def classify_guided_learning_response(
             tutor_message=rules.guided_learning.critical_thinking.ambiguity_message,
             tutor_message_voice=rules.guided_learning.critical_thinking.ambiguity_message,
         )
+        ambiguity = naturalize_controller_guided_evaluation(
+            ambiguity, request, rubric, objective, openai_client, rules
+        )
         return build_guided_tutor_response(
             request, rules, safety_check, rubric, ambiguity, objective
         )
@@ -3105,6 +3111,14 @@ def classify_guided_learning_response(
         objective,
     )
     if corrected_source_follow_up is not None:
+        corrected_source_follow_up = naturalize_controller_guided_evaluation(
+            corrected_source_follow_up,
+            request,
+            rubric,
+            objective,
+            openai_client,
+            rules,
+        )
         return build_guided_tutor_response(
             request,
             rules,
@@ -3125,11 +3139,17 @@ def classify_guided_learning_response(
         )
     wrong_choice = wrong_choice_evaluation(request, rubric, objective, rules)
     if wrong_choice is not None:
+        wrong_choice = naturalize_controller_guided_evaluation(
+            wrong_choice, request, rubric, objective, openai_client, rules
+        )
         return build_guided_tutor_response(
             request, rules, safety_check, rubric, wrong_choice, objective
         )
     correct_choice = correct_choice_selection_evaluation(request, objective, rules)
     if correct_choice is not None:
+        correct_choice = naturalize_controller_guided_evaluation(
+            correct_choice, request, rubric, objective, openai_client, rules
+        )
         return build_guided_tutor_response(
             request,
             rules,
@@ -3246,6 +3266,9 @@ def classify_guided_learning_response(
         request.guided_teaching_state,
     )
     if choice_follow_up is not None:
+        choice_follow_up = naturalize_controller_guided_evaluation(
+            choice_follow_up, request, rubric, objective, openai_client, rules
+        )
         return build_guided_tutor_response(
             request,
             rules,
@@ -3639,6 +3662,29 @@ def controller_prompt_for_objective(
         rubric,
         objective,
         "Which part should we look at first?",
+    )
+
+
+def naturalize_controller_guided_evaluation(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+    openai_client: OpenAIAIEngineClient,
+    rules: ClassifierRulesConfig,
+) -> GuidedEvaluation:
+    """Use one model call to phrase a controller-resolved learner turn."""
+
+    target_objective = evaluation.next_objective or objective
+    return write_deterministic_guided_follow_up(
+        evaluation,
+        request,
+        rubric,
+        target_objective,
+        openai_client,
+        [],
+        guided_tutor_context_for(request, rubric, target_objective),
+        rules,
     )
 
 
