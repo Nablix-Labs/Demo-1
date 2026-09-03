@@ -3960,6 +3960,11 @@ async def _process_interaction(
     if scaffold_turn and tutor.scaffold_original_answer_correct:
         scaffold_steps = []
         scaffold_turn_updates = _completed_scaffold_state(turn_session)
+    elif scaffold_turn and tutor.intent in {"ASKING_QUESTION", "EXPRESSING_CONFUSION"}:
+        # The learner asked for help with this step. Preserve the panel while
+        # showing a response tailored to their words; it is not another failed
+        # attempt and must not be replaced with the unchanged step prompt.
+        scaffold_steps = list(turn_session.scaffold_steps)
     elif scaffold_turn:
         expected_scaffold_response = turn_session.scaffold_expected_response
         if expected_scaffold_response is None:

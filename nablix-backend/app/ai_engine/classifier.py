@@ -206,6 +206,7 @@ def classify_student_response(request: ClassificationRequest) -> TutorResponse:
             rules,
             safety_check,
             openai_client,
+            intent,
         )
 
     evaluation: EvaluationCategory | None = evaluate_answer_attempt(request, intent, rules)
@@ -360,6 +361,7 @@ def classify_scaffold_response(
     rules: ClassifierRulesConfig,
     safety_check: SafetyCheck,
     openai_client: OpenAIAIEngineClient,
+    intent: IntentType,
 ) -> TutorResponse:
     context = request.scaffold_evaluation_context
     if context is None:
@@ -399,7 +401,25 @@ def classify_scaffold_response(
         result.step_satisfied
         and result.confidence >= rules.guided_learning.confidence_threshold
     )
-    original_answer_correct = satisfied and result.original_answer_correct
+    explanation_requested = intent in {"ASKING_QUESTION", "EXPRESSING_CONFUSION"}
+    original_answer_correct = (
+        False
+        if explanation_requested
+        else satisfied and result.original_answer_correct
+    )
+    tutor_message_override = (
+        result.tutor_message
+        if explanation_requested
+        and result.tutor_message is not None
+        and result.tutor_message_voice is not None
+        and not message_reveals_answer(
+            result.tutor_message,
+            result.tutor_message_voice,
+            context.canonical_answer,
+            rules,
+        )
+        else None
+    )
     logger.info(
         "scaffold_step_evaluated",
         extra={
@@ -409,13 +429,29 @@ def classify_scaffold_response(
             "step_satisfied": satisfied,
             "original_answer_correct": original_answer_correct,
             "confidence": result.confidence,
+            "detected_intent": intent,
+            "explanation_requested": explanation_requested,
         },
     )
     decision = TutorDecision(
-        intent="SUBMITTING_ANSWER",
-        evaluation="CORRECT" if satisfied else "INCORRECT",
-        error_type=None if satisfied else "INSUFFICIENT_INFORMATION",
-        response_strategy="CONFIRM_CORRECT" if satisfied else "CLARIFY",
+        intent=intent if explanation_requested else "SUBMITTING_ANSWER",
+        evaluation=(
+            None
+            if explanation_requested
+            else "CORRECT"
+            if satisfied
+            else "INCORRECT"
+        ),
+        error_type=(
+            None
+            if explanation_requested or satisfied
+            else "INSUFFICIENT_INFORMATION"
+        ),
+        response_strategy=(
+            "CLARIFY"
+            if explanation_requested or not satisfied
+            else "CONFIRM_CORRECT"
+        ),
         hint_level=None,
         canvas_review=_canvas_review_for(request, rules, result.confidence),
         reasoning_complete=satisfied,
@@ -427,8 +463,10 @@ def classify_scaffold_response(
         decision=decision,
         answer_reveal_allowed=False,
         confidence=result.confidence,
-        tutor_message_override=None,
-        voice_message_override=None,
+        tutor_message_override=tutor_message_override,
+        voice_message_override=(
+            result.tutor_message_voice if tutor_message_override is not None else None
+        ),
     )
     return response.model_copy(
         update={
