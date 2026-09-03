@@ -235,11 +235,86 @@ def test_an_unknown_question_type_is_refused(brief, skills):
 @needs_docs
 @pytest.mark.parametrize("qtype", ["SINGLE_CHOICE", "CHOICE_WITH_EXPLANATION"])
 def test_a_choice_question_without_options_is_refused(brief, skills, qtype):
-    """A choice question with nothing to choose from cannot be answered."""
+    """A choice question with nothing to choose from cannot be answered.
+
+    This is the failure the first live pipeline run actually hit: the model
+    wrote a SINGLE_CHOICE question with no options in the text.
+    """
     payload = _payload()
     payload["questions"][1]["question_type"] = qtype
-    with pytest.raises(QuestionError, match="no visible options"):
+    with pytest.raises(QuestionError, match="fewer than two labelled options"):
         _gen(brief, payload, skills)
+
+
+@needs_docs
+def test_one_labelled_option_is_not_enough(brief, skills):
+    """Detection uses the same regex the answer generator reads options with,
+    so the two cannot disagree about what counts as an option."""
+    payload = _payload()
+    payload["questions"][1] = _q(2, "SINGLE_CHOICE",
+                                 text="Which is right? a) n+5 and nothing else")
+    with pytest.raises(QuestionError, match="fewer than two labelled options"):
+        _gen(brief, payload, skills)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Dropping individual bad questions
+#
+# The first live run failed on one malformed question out of thirteen and
+# lost the whole topic. On a six-topic run that decides whether anything
+# reaches the workbook at all.
+# ──────────────────────────────────────────────────────────────────────
+
+@needs_docs
+def test_by_default_one_bad_question_still_fails_the_batch(brief, skills):
+    """Dropping is opt-in; the strict path is unchanged."""
+    payload = _payload(n=13)
+    payload["questions"][4]["question_type"] = "SINGLE_CHOICE"
+    with pytest.raises(QuestionError):
+        _gen(brief, payload, skills)
+
+
+@needs_docs
+def test_drop_invalid_keeps_the_good_questions(brief, skills):
+    payload = _payload(n=13)
+    payload["questions"][4]["question_type"] = "SINGLE_CHOICE"
+    result = _gen(brief, payload, skills, drop_invalid=True)
+    assert len(result.rows) == 12
+    assert result.is_clean
+
+
+@needs_docs
+def test_dropping_is_reported_not_hidden(brief, skills):
+    payload = _payload(n=13)
+    payload["questions"][4]["question_type"] = "SINGLE_CHOICE"
+    result = _gen(brief, payload, skills, drop_invalid=True)
+    assert any("dropped 1 unusable question" in i.message for i in result.issues)
+
+
+@needs_docs
+def test_ids_stay_contiguous_after_a_drop(brief, skills):
+    """Ids are minted after dropping, so there is no gap to explain."""
+    payload = _payload(n=13)
+    payload["questions"][4]["question_type"] = "SINGLE_CHOICE"
+    rows = _gen(brief, payload, skills, drop_invalid=True).rows
+    assert [r.question_id for r in rows] == [f"Q-T01-{i:03d}" for i in range(1, 13)]
+
+
+@needs_docs
+def test_dropping_cannot_rescue_a_batch_below_the_minimum(brief, skills):
+    """Removing questions does not fix having too few."""
+    payload = _payload(n=9)
+    for i in range(2, 9):
+        payload["questions"][i]["question_type"] = "SINGLE_CHOICE"
+    with pytest.raises(QuestionError):
+        _gen(brief, payload, skills, drop_invalid=True)
+
+
+@needs_docs
+def test_dropping_does_not_rescue_a_batch_level_error(brief, skills):
+    """A count problem has no position, so nothing is droppable."""
+    with pytest.raises(QuestionError, match="at least"):
+        _gen(brief, _payload(n=MIN_QUESTIONS - 1), skills, drop_invalid=True)
 
 
 @needs_docs
@@ -342,3 +417,62 @@ def test_an_api_failure_propagates(brief, skills):
     client = FakeLLMClient([LLMError("the api fell over")])
     with pytest.raises(LLMError, match="fell over"):
         generate_questions(brief, client, micro_skills=skills)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Select-all questions mistyped as SINGLE_CHOICE
+#
+# The six-topic run produced three of these. The answer generator did the
+# right thing and returned "AB" and "ABCD"; the answer key was then refused
+# for not being a single letter, which pointed the blame at the wrong module.
+# There is no multi-select type in the schema, so the question is the bug.
+# ──────────────────────────────────────────────────────────────────────
+
+MULTI_SELECT_TEXT = (
+    "In the term 6xy, which of these are factors of the term?\n"
+    "a) 6\nb) x\nc) y\nd) 6xy\nWrite the letters of all correct options."
+)
+
+
+def test_the_prompt_says_exactly_one_option_is_correct():
+    text = " ".join(SYSTEM_PROMPT.split())
+    assert "SINGLE_CHOICE means EXACTLY ONE option is correct" in text
+    assert "no select-all-that-apply type" in text
+
+
+@pytest.mark.parametrize("text", [
+    MULTI_SELECT_TEXT,
+    "Which of these are terms? a) 4x b) 9 c) + Write the letters of all correct options.",
+    "Pick the factors. a) 3 b) x c) 9. Tick all that apply.",
+    "a) 3 b) x c) 9. Select all the correct answers.",
+])
+def test_a_select_all_question_typed_single_choice_is_refused(brief, skills, text):
+    payload = _payload()
+    payload["questions"][2]["question_type"] = "SINGLE_CHOICE"
+    payload["questions"][2]["question_text"] = text
+    result = _gen(brief, payload, skills=skills, strict=False)
+    assert any("more than one option" in i.message for i in result.errors)
+
+
+@pytest.mark.parametrize("text", [
+    "Which rule describes the pattern? a) Add 2 each time b) Add 3 each time c) Add 5",
+    "What does n stand for? a) One particular answer b) A number that can change",
+    "Which expression represents the length? a) n + 4 b) n - 4 c) 4n",
+    "Write the letter of the correct option. a) 3 b) x",
+])
+def test_an_ordinary_single_choice_question_is_not_caught(brief, skills, text):
+    """A check that fires on good questions costs more than it saves."""
+    payload = _payload()
+    payload["questions"][2]["question_type"] = "SINGLE_CHOICE"
+    payload["questions"][2]["question_text"] = text
+    result = _gen(brief, payload, skills=skills, strict=False)
+    assert not [i for i in result.errors if "more than one option" in i.message]
+
+
+def test_a_select_all_question_is_dropped_rather_than_losing_the_topic(brief, skills):
+    payload = _payload()
+    payload["questions"][2]["question_type"] = "SINGLE_CHOICE"
+    payload["questions"][2]["question_text"] = MULTI_SELECT_TEXT
+    result = _gen(brief, payload, skills=skills, strict=True, drop_invalid=True)
+    assert result.is_clean
+    assert len(result.rows) == len(payload["questions"]) - 1

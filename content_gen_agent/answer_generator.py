@@ -71,6 +71,10 @@ from validation import Severity, ValidationIssue
 # The workbook stores these as pipe-delimited strings.
 LIST_SEPARATOR = " | "
 
+# A MULTI_PART canonical answer joins its parts inside a single cell. Taken
+# from the reference, where all 9 use it: "m; 7; addition".
+MULTI_PART_SEPARATOR = "; "
+
 # Derived from the reference. TRUE_FALSE_WITH_EXPLANATION appears in the enum
 # but in none of the 54 rows, so its mapping is inferred from its shape rather
 # than observed, and is marked as such.
@@ -101,8 +105,23 @@ CANONICAL_MUST_BE_ACCEPTED = {
     "ALGEBRAIC_EXPRESSION", "SINGLE_CHOICE", "CHOICE_WITH_EXPLANATION",
 }
 
-# Types whose answer is an option letter.
-LETTER_ANSWER_TYPES = {"SINGLE_CHOICE"}
+# Question types whose answer is an option letter. Keyed on the QUESTION type,
+# not the answer type, because CHOICE_WITH_EXPLANATION and
+# TRUE_FALSE_WITH_EXPLANATION share one answer_type but not one answer shape:
+# the first stores a letter, the second stores True or False. Keying on
+# answer_type could not tell them apart.
+#
+# CHOICE_WITH_EXPLANATION belongs here on the reference's evidence: all 3 of
+# its rows store the letter alone ("B") and carry the justification in
+# explanation_required, not in canonical_answer. Leaving it out is what let a
+# canonical of "a) n + 4, because it means..." through to the weaker
+# canonical-in-accepted check, which reported a confusing error.
+LETTER_ANSWER_QUESTIONS = {"SINGLE_CHOICE", "CHOICE_WITH_EXPLANATION"}
+
+# Inferred, not observed: no TRUE_FALSE_WITH_EXPLANATION row exists in the
+# reference. Treated as a two-option choice whose options are words.
+TRUE_FALSE_QUESTIONS = {"TRUE_FALSE_WITH_EXPLANATION"}
+TRUE_FALSE_ANSWERS = {"true", "false"}
 
 MIN_WRONG_ANSWERS = 2      # reference minimum
 MIN_ANSWER_STEPS = 2
@@ -158,17 +177,53 @@ Rules, in order of importance:
    topic: "5n" for reading addition as multiplication, not an arbitrary wrong
    number. A wrong answer nobody would produce catches nobody.
 
-5. For a multiple-choice question, the answer is the OPTION LETTER alone.
-   canonical_answer is "B", accepted_answers is ["B"], and
-   common_wrong_answers lists the other letters. Do not restate the option
-   text.
+5. Whenever the student picks a lettered option, the answer is the OPTION
+   LETTER ALONE. That covers SINGLE_CHOICE, CHOICE_WITH_EXPLANATION and
+   TRUE_FALSE_WITH_EXPLANATION alike: canonical_answer is "B", never "B)
+   n + 4" and never "B, because...". Do not restate the option text and do
+   not put the explanation in canonical_answer.
 
-6. answer_steps is the worked reasoning, two to five short numbered steps,
+   For the two ...WITH_EXPLANATION types the student must also justify the
+   choice, but that is recorded by setting explanation_required to true, not
+   by writing the justification into canonical_answer. accepted_answers may
+   hold the letter plus short correct phrasings of the reason:
+
+     "answer_type": "CHOICE_WITH_EXPLANATION",
+     "verification_method": "CHOICE_AND_CONCEPT_MATCH",
+     "canonical_answer": "B",
+     "accepted_answers": ["B", "a x a", "a multiplied by itself"],
+     "common_wrong_answers": ["A", "2a", "a + a"],
+     "explanation_required": true
+
+   For TRUE_FALSE_WITH_EXPLANATION, canonical_answer is "True" or "False".
+
+6. A MULTI_PART_SHORT_RESPONSE question asks for several things at once, so
+   its key has a shape of its own. canonical_answer is every part in the
+   question's own order, joined with "; " in ONE string. It is never blank
+   and never a list:
+
+     "answer_type": "MULTI_PART",
+     "verification_method": "STRUCTURED_TEXT_MATCH",
+     "canonical_answer": "m; 7; addition",
+     "accepted_answers": ["m is the changing quantity", "7 is the fixed value",
+                          "+ is the addition operation"]
+
+   Note what accepted_answers holds here: an acceptable wording of an
+   INDIVIDUAL part, not a rewrite of the whole answer. So for this type
+   canonical_answer will usually not appear in accepted_answers, which is
+   correct and expected.
+
+   Give one part for each thing the question asks. If it asks for the
+   variable, the constant and the operation, canonical_answer has three parts.
+
+7. answer_steps is the worked reasoning, two to five short numbered steps,
    each one action. This is what the tutor walks a stuck student through, so
    it must reach the canonical answer and not skip the step that is hard.
 
-7. answer_type and verification_method are constrained by the question type
-   and are given per question below. Use one of the values offered.
+8. answer_type and verification_method are constrained by the question type.
+   Each question below lists the exact PAIRS it allows. Choose one pair and
+   use both halves of it. Do not mix an answer_type from one pair with a
+   verification_method from another.
 """
 
 
@@ -178,6 +233,26 @@ def allowed_answer_types(question_type: QuestionType) -> list[str]:
 
 def allowed_verifications(answer_type: str) -> list[str]:
     return VERIFICATION_FOR_ANSWER_TYPE.get(answer_type, [])
+
+
+def allowed_pairs(question_type: QuestionType) -> list[tuple[str, str]]:
+    """The answer_type and verification_method combinations this question allows.
+
+    Offering the two fields as separate lists is what produced three failures
+    in the six-topic run. A SHORT_RESPONSE allows two answer types whose
+    verification methods do not overlap at all, so the union of the two lists
+    contains combinations that no answer type accepts. The model picked
+    TEXT_MEANING from one list and EXACT_NOTATION_MATCH from the other -- both
+    offered, the pairing invalid -- and the checker then rejected an answer
+    that had followed the instructions exactly.
+
+    A prompt that permits what the validator forbids is the prompt's bug.
+    """
+    return [
+        (answer_type, verification)
+        for answer_type in allowed_answer_types(question_type)
+        for verification in allowed_verifications(answer_type)
+    ]
 
 
 def build_user_prompt(
@@ -197,16 +272,13 @@ def build_user_prompt(
 
     lines.append("Questions needing an answer key:")
     for question in questions:
-        types = allowed_answer_types(question.question_type)
-        verifications = sorted({
-            v for t in types for v in allowed_verifications(t)
-        })
+        pairs = allowed_pairs(question.question_type)
         lines += [
             "",
             f"  {question.question_id}  [{question.question_type.value}]",
             f"    {question.question_text}",
-            f"    answer_type must be one of: {', '.join(types)}",
-            f"    verification_method must be one of: {', '.join(verifications)}",
+            "    pick ONE answer_type / verification_method pair from this list:",
+            *(f"      {a} + {v}" for a, v in pairs),
         ]
     return "\n".join(lines)
 
@@ -334,16 +406,40 @@ def _check(
                       f"marked wrong")
 
         # -- choice questions: check against the question's own options -
-        if answer_type in LETTER_ANSWER_TYPES:
+        question_type = question.question_type.value
+        if question_type in LETTER_ANSWER_QUESTIONS:
             letters = question_options(question.question_text)
             if not re.fullmatch(r"[A-Ha-h]", canonical.strip()):
+                hint = ""
+                if question_type == "CHOICE_WITH_EXPLANATION":
+                    # The likeliest mistake for this type, and the one the
+                    # six-topic run actually produced.
+                    hint = ("; the explanation belongs in "
+                            "explanation_required, not in canonical_answer")
                 error(where,
                       f"canonical_answer {canonical!r} is not an option letter; "
-                      f"a choice answer is the letter alone")
+                      f"a choice answer is the letter alone{hint}")
             elif letters and canonical.strip().upper() not in letters:
                 error(where,
                       f"canonical_answer {canonical.strip().upper()!r} is not "
                       f"among the options the question offers ({sorted(letters)})")
+
+        elif question_type in TRUE_FALSE_QUESTIONS:
+            if canonical.strip().lower() not in TRUE_FALSE_ANSWERS:
+                error(where,
+                      f"canonical_answer {canonical!r} is not True or False; a "
+                      f"true/false answer is the word alone, with the reasoning "
+                      f"in explanation_required")
+
+        # -- multi-part: one string, one part per thing asked --------------
+        elif answer_type == "MULTI_PART":
+            parts = [p for p in canonical.split(MULTI_PART_SEPARATOR.strip())
+                     if p.strip()]
+            if len(parts) < 2:
+                error(where,
+                      f"canonical_answer {canonical!r} has one part; a "
+                      f"multi-part answer joins each part with "
+                      f"{MULTI_PART_SEPARATOR!r} in one string")
 
         # -- worked steps ----------------------------------------------
         steps = answer.get("answer_steps")

@@ -45,9 +45,11 @@ allowed and produces the same family id.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 
+from answer_generator import question_options
 from id_service import IdError, IdService, slugify
 from llm_client import LLMClient
 from models import (
@@ -121,6 +123,13 @@ Rules, in order of importance:
    For SINGLE_CHOICE and CHOICE_WITH_EXPLANATION, write the options into
    question_text, labelled a), b), c). Wrong options must be plausible: base
    them on the misconceptions listed in the brief, not on absurdities.
+
+   SINGLE_CHOICE means EXACTLY ONE option is correct. There is no
+   select-all-that-apply type, so never write "write the letters of all
+   correct options", "choose all that apply", or any question with two or
+   more correct options. If you want to ask which of several things are
+   terms or factors, ask it as a SHORT_RESPONSE listing them, or as a
+   SINGLE_CHOICE where each option is a complete candidate set.
 
 5. difficulty is 1 or 2. 1 is a direct application of one idea. 2 combines
    two ideas, or applies one in an unfamiliar context. Use both.
@@ -197,23 +206,60 @@ class QuestionSet:
         return not self.errors
 
 
+#: Wordings that ask for more than one option. Taken from the three real
+#: cases plus the usual phrasings around them. Deliberately narrow: it looks
+#: for a plural demand for options, so an ordinary question mentioning
+#: "all the terms" in its stem is not caught.
+MULTI_SELECT_RE = re.compile(
+    r"(?:"
+    r"letters?\s+of\s+all"
+    r"|all\s+(?:that|which)\s+apply"
+    r"|(?:select|choose|write|circle|tick|give|list|state)\s+"
+    r"(?:the\s+)?(?:letters|all\s+(?:the\s+)?(?:correct|right)\s+"
+    r"(?:options?|answers?|letters?))"
+    r"|which\s+(?:two|three|of\s+these\s+are)\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _multi_select_phrase(text: str) -> Optional[str]:
+    """The phrase asking for several options, if the question asks for any."""
+    found = MULTI_SELECT_RE.search(" ".join(text.split()))
+    return found.group(0) if found else None
+
+
 def _check(
     name: str,
     questions: list,
     skill_count: int,
-) -> list[ValidationIssue]:
-    """Everything wrong with the model's questions, in one pass."""
+) -> tuple[list[ValidationIssue], set[int]]:
+    """Everything wrong with the model's questions, in one pass.
+
+    Returns the issues and the 1-based positions of questions that are
+    individually unusable. Tracking positions is what lets a caller drop one
+    bad question instead of discarding the whole batch: a model that writes
+    twelve good questions and one malformed one has still done most of the
+    work, and on a six-topic run that difference decides whether anything
+    reaches the workbook at all.
+    """
     issues: list[ValidationIssue] = []
+    bad: set[int] = set()
 
     def error(field_name: str, message: str) -> None:
         issues.append(ValidationIssue(Severity.ERROR, name, field_name, message))
+        # "questions[4]" -> 4. Batch-level errors have no index and so mark
+        # nothing droppable, which is correct: a count problem is not fixed by
+        # removing a question.
+        if field_name.startswith("questions["):
+            bad.add(int(field_name[len("questions["):-1]))
 
     def warn(field_name: str, message: str) -> None:
         issues.append(ValidationIssue(Severity.WARNING, name, field_name, message))
 
     if not isinstance(questions, list) or not questions:
         error("questions", "model returned no questions")
-        return issues
+        return issues, bad
 
     if len(questions) < MIN_QUESTIONS:
         error("questions", f"only {len(questions)} questions; expected at least {MIN_QUESTIONS}")
@@ -245,10 +291,26 @@ def _check(
             error(where, f"question_type {qtype!r} is not one of {sorted(valid_types)}")
         elif qtype in ("SINGLE_CHOICE", "CHOICE_WITH_EXPLANATION"):
             # A choice question with no options in the text cannot be answered.
-            body = str(text or "").lower()
-            if not any(marker in body for marker in ("a)", "a.", "(a", "option")):
+            # Detected with the same regex the answer generator uses to read
+            # option letters back, so the two cannot disagree about what
+            # counts as an option.
+            if len(question_options(str(text or ""))) < 2:
                 error(where,
-                      f"{qtype} but question_text carries no visible options")
+                      f"{qtype} but question_text carries fewer than two "
+                      f"labelled options; it cannot be answered")
+
+            # Select-all-that-apply, mistyped as a single choice. The
+            # six-topic run produced three of these; the answer generator
+            # correctly returned "AB" and "ABCD" and the answer key was
+            # then refused for not being one letter, which pointed at the
+            # wrong module. The schema has no multi-select type, so the
+            # question is what has to change.
+            phrase = _multi_select_phrase(str(text or ""))
+            if phrase:
+                error(where,
+                      f"{qtype} asks for more than one option ({phrase!r}); "
+                      f"exactly one option must be correct, and there is no "
+                      f"select-all question type")
 
         difficulty = question.get("difficulty")
         if difficulty not in VALID_DIFFICULTIES:
@@ -289,7 +351,7 @@ def _check(
         warn("question_type",
              f"every question is {types.pop()!r}; the reference uses four kinds")
 
-    return issues
+    return issues, bad
 
 
 def generate_questions(
@@ -299,10 +361,22 @@ def generate_questions(
     micro_skills: Optional[list] = None,
     source_provenance_id: Optional[str] = None,
     strict: bool = True,
+    drop_invalid: bool = False,
     id_service: Optional[IdService] = None,
     version: str = DEFAULT_VERSION,
 ) -> QuestionSet:
-    """Generate one topic's questions. Ids are assigned here, not by the model."""
+    """Generate one topic's questions. Ids are assigned here, not by the model.
+
+    `drop_invalid` discards individual malformed questions and keeps the rest,
+    provided enough remain. Without it, one bad question out of thirteen loses
+    all thirteen, and on a six-topic run that decides whether anything reaches
+    the workbook at all. The dropped ones stay in `issues`, so this reports
+    rather than hides.
+
+    It does not rescue a batch-level problem. Too few questions, or a response
+    that is not a list, is not fixed by removing a question, so those still
+    fail.
+    """
     name = brief.source_file_name
     skills = micro_skills or []
 
@@ -313,9 +387,35 @@ def generate_questions(
     )
 
     questions = payload.get("questions")
-    issues = _check(name, questions, len(skills))
-
+    issues, bad_positions = _check(name, questions, len(skills))
     errors = [i for i in issues if i.is_error]
+
+    if errors and drop_invalid and bad_positions:
+        kept = [q for n, q in enumerate(questions, start=1) if n not in bad_positions]
+        # Re-check what survived: dropping may take the batch below the
+        # minimum, and a batch-level error is not cured by dropping.
+        recheck, still_bad = _check(name, kept, len(skills))
+        if not [i for i in recheck if i.is_error]:
+            # The batch recovered, so its issues should not still read as
+            # errors -- is_clean would say False for a set that is now fine.
+            # The detail is kept, downgraded to warnings, because "we dropped
+            # question 5" is far less useful than "we dropped question 5
+            # because it was a choice question with no options".
+            issues = [
+                ValidationIssue(Severity.WARNING, i.source_file_name, i.field,
+                                f"dropped: {i.message}")
+                if i.is_error else i
+                for i in issues
+            ] + [
+                ValidationIssue(
+                    Severity.WARNING, name, "questions",
+                    f"dropped {len(bad_positions)} unusable question(s) at "
+                    f"position(s) {sorted(bad_positions)}; kept {len(kept)}",
+                )
+            ]
+            questions = kept
+            errors = []
+
     if errors and strict:
         raise QuestionError(
             f"{name}: the model's questions cannot be used.\n"
