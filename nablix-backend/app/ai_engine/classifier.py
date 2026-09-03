@@ -371,7 +371,7 @@ def classify_scaffold_response(
         )
     last_error: AdapterError | None = None
     result: ScaffoldStepEvaluation | None = None
-    for attempt in range(rules.guided_learning.maximum_retries + 1):
+    for attempt in range(rules.guided_learning.scaffold_evaluation_maximum_retries + 1):
         try:
             result = openai_client.evaluate_scaffold_step(
                 context=context,
@@ -393,9 +393,22 @@ def classify_scaffold_response(
                 },
             )
     if result is None:
-        raise last_error or AdapterError(
-            "openai_ai_engine",
-            f"Scaffold evaluation failed for {context.step_id}.",
+        logger.error(
+            "scaffold_evaluation_failed",
+            extra={
+                "question_id": request.question_id,
+                "scaffold_id": context.scaffold_id,
+                "step_id": context.step_id,
+                "detail": last_error.detail if last_error is not None else None,
+            },
+        )
+        result = ScaffoldStepEvaluation(
+            step_satisfied=False,
+            original_answer_correct=False,
+            demonstrated_fact=None,
+            confidence=0.0,
+            tutor_message=rules.guided_learning.scaffold_evaluation_failure_message,
+            tutor_message_voice=rules.guided_learning.scaffold_evaluation_failure_message,
         )
     satisfied = (
         result.step_satisfied
@@ -409,10 +422,7 @@ def classify_scaffold_response(
     )
     tutor_message_override = (
         result.tutor_message
-        if explanation_requested
-        and result.tutor_message is not None
-        and result.tutor_message_voice is not None
-        and not message_reveals_answer(
+        if not message_reveals_answer(
             result.tutor_message,
             result.tutor_message_voice,
             context.canonical_answer,
@@ -3310,7 +3320,7 @@ def classify_guided_learning_response(
     validation_feedback: str | None = None
     model_call_count = 0
     guided_tutor_context = guided_tutor_context_for(request, rubric, objective)
-    for attempt in range(rules.guided_learning.maximum_retries + 1):
+    for attempt in range(rules.guided_learning.guided_turn_maximum_retries + 1):
         try:
             model_call_count += 1
             candidate = openai_client.evaluate_guided_turn(
@@ -3416,7 +3426,11 @@ def classify_guided_learning_response(
                 "openai_ai_engine",
                 "Guided turn evaluation failed without a validated response.",
             )
-    remaining_model_calls = max(0, 2 - model_call_count)
+    remaining_model_calls = (
+        0
+        if rules.guided_learning.single_call_enabled
+        else max(0, 2 - model_call_count)
+    )
     adjudication_targets = component_adjudication_targets(
         evaluation,
         objective,
@@ -3527,7 +3541,7 @@ def classify_guided_learning_response(
         )
         is not None
     )
-    if model_call_count < 2 and rewrite_required:
+    if not rules.guided_learning.single_call_enabled and model_call_count < 2 and rewrite_required:
         evaluation = rewrite_invalid_guided_message_once(
             evaluation,
             request,
@@ -3698,6 +3712,18 @@ def write_deterministic_guided_follow_up(
             },
         )
         return rewritten
+    if rules.guided_learning.single_call_enabled:
+        logger.warning(
+            "guided_deterministic_wording_rejected",
+            extra={
+                "question_id": request.question_id,
+                "rejection_reason": rejection_reason,
+                "active_prompt_sha256": hashlib.sha256(
+                    controller_prompt.encode("utf-8")
+                ).hexdigest(),
+            },
+        )
+        return evaluation
     try:
         retry = writer(
             system_prompt=rules.guided_learning.fact_budget_wording_system_prompt,
@@ -6167,7 +6193,10 @@ def openai_model_for_request(
     settings: Settings,
     request: ClassificationRequest,
 ) -> str:
-    """Assign a Guided Practice experiment arm deterministically per session."""
+    """Choose the configured model for Guided Practice before any experiment arm."""
+
+    if request.current_phase == "GUIDED_PRACTICE":
+        return load_classifier_rules().guided_learning.model
 
     candidate = settings.openai_ai_engine_experiment_model.strip()
     percentage = settings.openai_ai_engine_experiment_percentage
@@ -6192,7 +6221,10 @@ def generate_explain_again_response(
 
     rules = load_classifier_rules()
     validate_explain_again_request(request)
-    openai_client = build_openai_ai_engine_client(get_settings())
+    settings = get_settings().model_copy(
+        update={"openai_ai_engine_model": rules.guided_learning.model}
+    )
+    openai_client = build_openai_ai_engine_client(settings)
     if openai_client is None:
         raise AdapterError(
             "openai_ai_engine",
@@ -6202,7 +6234,7 @@ def generate_explain_again_response(
     last_error: AdapterError | None = None
     validation_feedback: str | None = None
     answer_reveal_rejected = False
-    for attempt in range(rules.guided_learning.maximum_retries + 1):
+    for attempt in range(rules.guided_learning.guided_turn_maximum_retries + 1):
         recent_conversation = request.recent_conversation[
             -rules.guided_learning.maximum_recent_history_turns:
         ] if rules.guided_learning.maximum_recent_history_turns > 0 else []

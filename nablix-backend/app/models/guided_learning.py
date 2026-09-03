@@ -426,5 +426,5 @@ class ScaffoldStepEvaluation(GuidedLearningModel):
     original_answer_correct: StrictBool
     demonstrated_fact: str | None
     confidence: float = Field(ge=0.0, le=1.0)
-    tutor_message: str | None = None
-    tutor_message_voice: str | None = None
+    tutor_message: str = Field(min_length=1)
+    tutor_message_voice: str = Field(min_length=1)
