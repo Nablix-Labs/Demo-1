@@ -1064,6 +1064,11 @@ def requires_written_symbolic_rule_evidence(
         return False
     if request.answer_spec is None:
         return False
+    # A canvas-write request confirms a rule that has already been evaluated as
+    # correct. Never let an optimistic model state turn a contradictory typed
+    # expression into a request to write that expression on the canvas.
+    if evaluate_answer_contract(request) == "INCORRECT":
+        return False
     if _expression_parts(request.answer_spec.canonical_answer) is None:
         return False
     return request.canvas_solution_complete_candidate is False
@@ -2417,7 +2422,7 @@ def wrong_direct_rule_evaluation(
 ) -> GuidedEvaluation | None:
     """Catch a typed rule that contradicts the expressions offered by a choice."""
 
-    if direct_rule_mismatch(request) is None:
+    if direct_rule_mismatch(request, rules) is None:
         return None
     message = rules.guided_learning.critical_thinking.wrong_direct_rule_prompt
     return GuidedEvaluation(
@@ -2493,12 +2498,13 @@ def choice_selection_required_evaluation(
 
 def direct_rule_mismatch(
     request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
 ) -> tuple[tuple[str, str, str], tuple[str, str, str]] | None:
     """Return a typed choice-rule mismatch without exposing its correction."""
 
     if request.question_type != "CHOICE_WITH_EXPLANATION" or request.answer_spec is None:
         return None
-    attempted = _expression_parts(request.student_input)
+    attempted = spoken_expression_parts(request.student_input, rules)
     if attempted is None:
         return None
     candidate_expressions = [
@@ -2518,6 +2524,23 @@ def direct_rule_mismatch(
         None,
     )
     return (attempted, expected) if expected is not None else None
+
+
+def spoken_expression_parts(
+    student_input: str,
+    rules: ClassifierRulesConfig,
+) -> tuple[str, str, str] | None:
+    """Parse a compact or spoken learner expression without treating prose as proof."""
+
+    normalized = student_input
+    for spoken_number, value in rules.answer_patterns.spoken_number_values.items():
+        normalized = re.sub(
+            rf"\b{re.escape(spoken_number)}\b",
+            format_number_for_matching(value),
+            normalized,
+            flags=re.IGNORECASE,
+        )
+    return _expression_parts(normalize_compact_spoken_expression(normalized))
 
 
 def guided_tutor_context_for(
@@ -2971,6 +2994,21 @@ def classify_guided_learning_response(
             )
         return build_guided_tutor_response(
             request, rules, safety_check, rubric, confusion, objective
+        )
+    if intent == "ASKING_QUESTION":
+        question_help = explicit_confusion_evaluation(request, objective, rules)
+        question_help = write_deterministic_guided_follow_up(
+            question_help,
+            request,
+            rubric,
+            objective,
+            openai_client,
+            allowed_errors,
+            guided_tutor_context_for(request, rubric, objective),
+            rules,
+        )
+        return build_guided_tutor_response(
+            request, rules, safety_check, rubric, question_help, objective
         )
     copied_example = copied_example_correction(
         request.question,
@@ -3737,7 +3775,7 @@ def guided_fact_budget_context(
             }.get(active_step.step_id)
             if active_fact is not None:
                 allowed_facts.append(active_fact)
-    direct_rule_error = direct_rule_mismatch(request)
+    direct_rule_error = direct_rule_mismatch(request, rules)
     typed_option = typed_option_text_evidence(request)
     role_contradiction = active_role_contradiction(request)
     return {

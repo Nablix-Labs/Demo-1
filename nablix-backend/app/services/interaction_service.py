@@ -14,7 +14,6 @@ from app.adapters.provider import get_adapters
 from app.ai_engine.classifier import (
     ClassificationRequest,
     build_openai_ai_engine_client,
-    build_support_aware_tutor_message,
     classify_student_response,
     contains_answer_reveal,
     detect_student_intent,
@@ -239,39 +238,6 @@ _WRONG_ESCALATION_BY_COUNT: dict[int, WrongEscalationCode] = {
     3: WrongEscalationCode.WRONG_3_VISUAL_CUE,
     4: WrongEscalationCode.WRONG_4_INTERVENTION,
 }
-
-
-def _support_narration_context(
-    support_type: object,
-    support_message: str | None,
-    visual_cue: VisualCue | None,
-    scaffold_steps: list[str],
-    tutor_message: str,
-) -> dict[str, object] | None:
-    if not isinstance(support_type, str):
-        return None
-    if support_type == "HINT" and support_message is not None:
-        return {
-            "support_type": "HINT",
-            "support_text": support_message,
-            "prior_tutor_message": tutor_message,
-            "instruction": "Briefly explain the hint and ask one focused next question.",
-        }
-    if support_type in {"VISUAL_CUE", "HINT_AND_VISUAL_CUE"} and visual_cue is not None:
-        return {
-            "support_type": "VISUAL_CUE",
-            "visual_cue": visual_cue.model_dump(),
-            "prior_tutor_message": tutor_message,
-            "instruction": "Tell the student to look at the visible cue, explain what it shows, and ask one focused next question.",
-        }
-    if support_type == "SCAFFOLD" and scaffold_steps:
-        return {
-            "support_type": "SCAFFOLD",
-            "scaffold_step": scaffold_steps[0],
-            "prior_tutor_message": tutor_message,
-            "instruction": "Introduce the visible scaffold step, explain its purpose, and ask the one focused question in that step.",
-        }
-    return None
 
 
 def _is_complete_correct_canvas(
@@ -3958,6 +3924,15 @@ async def _process_interaction(
     else:
         schema_support_visual_cue = None
         schema_support_steps = []
+    # A correct value closes the current remediation turn. Do not keep an
+    # earlier hint or visual cue on screen as if the learner still needs it.
+    if tutor.answer_value_confirmed or tutor.question_completed:
+        support_payload = None
+        schema_support_message = None
+        schema_support_visual_cue = None
+        schema_support_steps = []
+        schema_support_action = None
+        schema_support_level = None
     if (
         schema_support_message is not None
         and contains_answer_reveal(schema_support_message, session.correct_answer or "", rules)
@@ -3981,34 +3956,6 @@ async def _process_interaction(
     # question display a temperature-specific "falls by 3" prompt.
     tutor_message = tutor.tutor_message
     tutor_message_voice = tutor.tutor_message_voice
-    support_context = _support_narration_context(
-        support_payload.get("support_type") if support_payload is not None else None,
-        schema_support_message,
-        schema_support_visual_cue,
-        schema_support_steps,
-        tutor_message,
-    )
-    if (
-        support_context is not None
-        and not scaffold_turn
-        and not tutor.question_completed
-    ):
-        support_message = build_support_aware_tutor_message(
-            question_id=session.question_id,
-            question=session.current_question,
-            correct_answer=session.correct_answer or "",
-            student_input=student_message,
-            evaluation=tutor.evaluation,
-            error_type=tutor.error_type,
-            response_strategy=tutor.response_strategy,
-            hint_level=tutor.hint_level,
-            conversation_history=turn_session.conversation_history,
-            support_context=support_context,
-            openai_client=build_openai_ai_engine_client(get_settings()),
-        )
-        if support_message is not None:
-            tutor_message = support_message.tutor_message
-            tutor_message_voice = support_message.tutor_message_voice_optimised
     scaffold_turn_updates: dict[str, object] = {}
     if scaffold_turn and tutor.scaffold_original_answer_correct:
         scaffold_steps = []
@@ -4046,31 +3993,6 @@ async def _process_interaction(
                 step=scaffold_steps[0]
             )
             tutor_message_voice = tutor_message
-    if scaffold_turn and scaffold_steps:
-        scaffold_support_context = _support_narration_context(
-            "SCAFFOLD",
-            None,
-            None,
-            scaffold_steps,
-            tutor_message,
-        )
-        if scaffold_support_context is not None:
-            scaffold_message = build_support_aware_tutor_message(
-                question_id=session.question_id,
-                question=session.current_question,
-                correct_answer=session.correct_answer or "",
-                student_input=student_message,
-                evaluation=tutor.evaluation,
-                error_type=tutor.error_type,
-                response_strategy=tutor.response_strategy,
-                hint_level=tutor.hint_level,
-                conversation_history=turn_session.conversation_history,
-                support_context=scaffold_support_context,
-                openai_client=build_openai_ai_engine_client(get_settings()),
-            )
-            if scaffold_message is not None:
-                tutor_message = scaffold_message.tutor_message
-                tutor_message_voice = scaffold_message.tutor_message_voice_optimised
     conversation_history: list[ConversationMessage] = _updated_conversation_history(
         turn_session.conversation_history,
         student_message,
@@ -4307,6 +4229,8 @@ async def _process_interaction(
     )
     if visual_cue is not None:
         state_updates["active_visual_cue"] = visual_cue
+    elif tutor.answer_value_confirmed or tutor.question_completed:
+        state_updates["active_visual_cue"] = None
 
     answer_spec = _active_answer_spec(turn_session)
     tutor_action_anchors = plan_canvas_action_anchors(

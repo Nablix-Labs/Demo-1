@@ -25,6 +25,8 @@ export type SupportPresentation = Pick<
   | 'scaffold_step_text'
   | 'scaffold_step_voice'
   | 'total_scaffold_steps'
+  | 'answer_value_confirmed'
+  | 'question_completed'
 > & {
   conversation_action?: string | null;
   /** Spans of the question the tutor is pointing at (Chirudeva §1). */
@@ -246,6 +248,19 @@ export function applyInteractionSupport(response: SupportPresentation): string {
   // authorised for the active question while its scaffold is open;
   // applyBackendPhase clears it when the question or phase changes.
   if (showCue === true) applyServedCue(cue);
+  if (
+    showCue !== true
+    && (response.answer_value_confirmed === true || response.question_completed === true)
+  ) {
+    useNumeraStore.getState().setVisualCue({
+      show: false,
+      cueId: null,
+      cueType: null,
+      description: null,
+      assetUrl: null,
+      actions: null,
+    });
+  }
 
   // Scaffold visibility follows PERSISTED state (`active_scaffold`), not the
   // per-turn event — handoff item 3. Rendering from the event made the panel
