@@ -56,6 +56,7 @@ import {
   type SubmissionRole,
 } from '@/lib/canvasSubmission';
 import { canvasEvidenceFor } from '@/lib/canvasEvidence';
+import { startPayloadFor } from '@/lib/sessionStart';
 import type { QuestionAnchor } from '@/lib/questionAnchors';
 import { isPhase3 } from '@/lib/phase3';
 
@@ -436,6 +437,13 @@ export async function sendSynchronizedInteraction(
 export async function beginSession(
   conceptId: string,
   mode: 'VOICE' | 'TEXT' = 'TEXT',
+  /**
+   * The Student Model topic id from a `next_topic_handoff`. When present it is
+   * sent as `topic_code` and the concept id is not sent at all — see
+   * startPayloadFor. Callers that have no handoff pass nothing and keep the
+   * concept-id path.
+   */
+  topicCode?: string | null,
 ): Promise<SessionRecord | null> {
   if (!apiEnabled()) return null;
   const store = useNumeraStore.getState();
@@ -443,14 +451,17 @@ export async function beginSession(
   if (store.sessionId) return store.backendSession;
   if (inFlight) return inFlight;
   if (failedConcept === conceptId) return null;
+  // A handoff's topic wins over whatever concept the screen happened to know.
+  // Cleared as soon as it is used: it names ONE session, and a stale one would
+  // send the student back into the topic they just left.
+  const handoffTopic = topicCode ?? store.pendingTopicCode;
 
   inFlight = (async () => {
     try {
-      const rec = await startSession({
-        student_id: studentId(),
-        concept_id: conceptId,
-        interaction_mode: mode,
-      });
+      const rec = await startSession(
+        startPayloadFor(studentId(), conceptId, handoffTopic, mode),
+      );
+      if (handoffTopic) useNumeraStore.getState().setPendingTopicCode(null);
       const s = useNumeraStore.getState();
       s.clearTrail();
       s.setSessionId(rec.session_id);

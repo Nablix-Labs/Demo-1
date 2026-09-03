@@ -790,6 +790,17 @@ export interface NumeraState {
   completePhase: (phase: LearningPhase) => void;
   setEntryTopic: (id: string) => void;
   setCurrentTopic: (id: string) => void;
+  /**
+   * The Student Model topic id the NEXT session must be started with.
+   *
+   * Set from a `next_topic_handoff` when a review completes, read and cleared
+   * by `beginSession`. It exists because the handoff is received on the review
+   * screen and needed on whichever screen the student lands on — passing it
+   * through every entry point's props would mean touching each of them for a
+   * value only one of them ever has.
+   */
+  pendingTopicCode: string | null;
+  setPendingTopicCode: (code: string | null) => void;
   setFlowStage: (stage: FlowStage) => void;
   setMastery: (id: string, value: boolean) => void;
   startChallenge: (problem: string) => void;
@@ -822,7 +833,7 @@ const initial: Omit<
   | 'upsertParticipant' | 'removeParticipant' | 'setParticipantCursor'
   | 'addRemoteItem' | 'toggleLessonLearned' | 'setPracticeDone' | 'setStudentAge' | 'setStudentName'
   | 'completePhase'
-  | 'setEntryTopic' | 'setCurrentTopic' | 'setFlowStage' | 'setMastery'
+  | 'setEntryTopic' | 'setCurrentTopic' | 'setPendingTopicCode' | 'setFlowStage' | 'setMastery'
   | 'startChallenge' | 'endChallenge'
   | 'setReviewStatus' | 'addCommentary' | 'setSpotlight' | 'addBoardItem'
   | 'setPrivateFeedback' | 'reset'
@@ -928,6 +939,7 @@ const initial: Omit<
   phasesDone: [],
   entryTopicId: null,
   currentTopicId: TOPICS[0].id,
+  pendingTopicCode: null,
   flowStage: 'orientation',
   masteryByTopic: {},
   studentAge: 14,
@@ -1765,6 +1777,7 @@ export const useNumeraStore = create<NumeraState>()(
   setEntryTopic: (id) =>
     set({ entryTopicId: id, currentTopicId: id, flowStage: 'orientation' }),
   setCurrentTopic: (currentTopicId) => set({ currentTopicId }),
+  setPendingTopicCode: (pendingTopicCode) => set({ pendingTopicCode }),
   setFlowStage: (flowStage) => set({ flowStage }),
   setMastery: (id, value) =>
     set((s) => ({ masteryByTopic: { ...s.masteryByTopic, [id]: value } })),
@@ -1850,6 +1863,9 @@ export const useNumeraStore = create<NumeraState>()(
         phasesDone: s.phasesDone,
         entryTopicId: s.entryTopicId,
         currentTopicId: s.currentTopicId,
+        // Set on /review from a handoff, read by beginSession on the screen the
+        // student lands on — it has to survive that navigation.
+        pendingTopicCode: s.pendingTopicCode,
         flowStage: s.flowStage,
         masteryByTopic: s.masteryByTopic,
         studentAge: s.studentAge,

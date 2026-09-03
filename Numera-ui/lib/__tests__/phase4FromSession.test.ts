@@ -176,3 +176,74 @@ describe('topic outcome', () => {
     expect(r!.topic_outcome.mastery_status).toBe(OUTCOME_PENDING);
   });
 });
+
+describe('the journey rail lists the whole Phase 3 journey', () => {
+  const insights = { strength_summary: 'ok', next_practice_focus: 'ok' };
+
+  const replay = (n: number) => ({
+    review_item_id: `RI-${n}`,
+    question_id: `Q-${n}`,
+    attempt_id: `A-${n}`,
+    artifact_id: `ART-${n}`,
+    question_text: `Question ${n} text`,
+    replay_steps: [{ sequence_no: 1, tutor_write: 'x', narration: 'y' }],
+  });
+
+  it('uses the backend journey when it is sent, including correct answers', () => {
+    // The rail derived itself from `tutor_replays`, which are the WRONG
+    // attempts only — so a student who answered everything correctly saw an
+    // empty column instead of the questions they got right.
+    const review = phase4FromSession({
+      phase4_review: {
+        tutor_replays: [],
+        student_insights: insights,
+        question_journey: [
+          { question_id: 'Q-1', question_text: 'First', evaluation: 'CORRECT', review_item_id: null },
+          { question_id: 'Q-2', question_text: 'Second', evaluation: 'CORRECT', review_item_id: null },
+        ],
+      },
+    } as never, 'Topic')!;
+    expect(review.question_journey).toHaveLength(2);
+    expect(review.question_journey.map((e) => e.evaluation)).toEqual(['CORRECT', 'CORRECT']);
+    expect(review.question_journey[0].question_text).toBe('First');
+  });
+
+  it('keeps the explicit replay link rather than matching on question_id', () => {
+    const review = phase4FromSession({
+      phase4_review: {
+        tutor_replays: [replay(2)],
+        student_insights: insights,
+        question_journey: [
+          { question_id: 'Q-1', question_text: 'First', evaluation: 'CORRECT', review_item_id: null },
+          { question_id: 'Q-2', question_text: 'Second', evaluation: 'WRONG', review_item_id: 'RI-2' },
+        ],
+      },
+    } as never, 'Topic')!;
+    expect(review.question_journey[0].review_item_id).toBeNull();
+    expect(review.question_journey[1].review_item_id).toBe('RI-2');
+  });
+
+  it('never defaults evaluation to CORRECT', () => {
+    // The backend always sends it; a default would mislabel a wrong answer as
+    // right on the one screen that reports how the student did.
+    const review = phase4FromSession({
+      phase4_review: {
+        tutor_replays: [],
+        student_insights: insights,
+        question_journey: [
+          { question_id: 'Q-1', question_text: 'First', evaluation: 'WRONG', review_item_id: null },
+        ],
+      },
+    } as never, 'Topic')!;
+    expect(review.question_journey[0].evaluation).toBe('WRONG');
+  });
+
+  it('falls back to the replays when the backend sends no journey', () => {
+    const review = phase4FromSession({
+      phase4_review: { tutor_replays: [replay(1)], student_insights: insights },
+    } as never, 'Topic')!;
+    expect(review.question_journey).toHaveLength(1);
+    expect(review.question_journey[0].review_item_id).toBe('RI-1');
+    expect(review.question_journey[0].evaluation).toBe('WRONG');
+  });
+});

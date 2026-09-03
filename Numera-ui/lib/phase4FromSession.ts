@@ -34,6 +34,7 @@
 
 import type {
   Phase4Review, Phase4Replay, Phase4StudentInsights, Phase4ReplayStep,
+  Phase4JourneyEntry,
 } from '@/lib/api';
 
 /** Sanya's engine output, as it sits on the session record. */
@@ -58,6 +59,19 @@ export interface SessionPhase4Review {
    * reading it fixes.
    */
   topic_outcome?: { mastery_status?: string; recommended_next_action?: string } | null;
+  /**
+   * The whole Phase 3 journey, correct answers included.
+   *
+   * `question_text` is required and non-empty on the backend model
+   * (`QuestionJourneyItem`, phase4_review.py:171) and `review_item_id` is the
+   * explicit link to a replay, null when the attempt has none.
+   */
+  question_journey?: Array<{
+    question_id?: string;
+    question_text?: string;
+    evaluation?: string;
+    review_item_id?: string | null;
+  }>;
 }
 
 export interface SessionForPhase4 {
@@ -102,6 +116,35 @@ function toReplay(
 }
 
 /**
+ * The journey rows: the backend's own list when it sent one, the replays when
+ * it did not.
+ *
+ * `evaluation` is never defaulted. The backend always sends it, and a default
+ * of CORRECT would mislabel a wrong answer as right on the one screen that
+ * reports how the student did — so an unrecognised value is carried through as
+ * WRONG, which is the reading that cannot flatter.
+ */
+function journeyFrom(
+  raw: SessionPhase4Review['question_journey'],
+  replays: Phase4Replay[],
+): Phase4JourneyEntry[] {
+  if (raw && raw.length > 0) {
+    return raw.map((item, index) => ({
+      question_id: item.question_id ?? '',
+      question_text: item.question_text?.trim() || `Question ${index + 1}`,
+      evaluation: item.evaluation?.trim().toUpperCase() === 'CORRECT' ? 'CORRECT' : 'WRONG',
+      review_item_id: item.review_item_id ?? null,
+    }));
+  }
+  return replays.map((replay) => ({
+    question_id: replay.question_id,
+    question_text: replay.question_text,
+    evaluation: 'WRONG' as const,
+    review_item_id: replay.review_item_id,
+  }));
+}
+
+/**
  * Returns null when the session carries no review, which is the ordinary case
  * for a topic that has not reached Review — never an error.
  */
@@ -140,26 +183,27 @@ export function phase4FromSession(
       mastery_status: raw.topic_outcome?.mastery_status?.trim() || OUTCOME_PENDING,
       recommended_next_action: raw.topic_outcome?.recommended_next_action?.trim() || 'CONTINUE',
     },
-    // STILL derived from the replays, even though `question_journey` now
-    // arrives beside topic_outcome, and deliberately so.
+    // Taken from the backend, which sends the whole Phase 3 journey.
     //
-    // A journey entry needs `question_text` and a link to its replay. The
-    // backend's QuestionJourneyItem carries neither — it is
-    // (question_id, evaluation, hint_used, independent_success, attempted_at) —
-    // and lib/api.ts:1033 spells out why question_id cannot stand in for the
-    // link: one question can be answered wrong, repaired in Phase 2 and
-    // answered again, so matching on it attaches a single replay to two rows.
+    // This used to be derived from `tutor_replays`, because the two fields a
+    // journey row needs were missing from `QuestionJourneyItem`. Both have
+    // since shipped: `question_text` is required and non-empty
+    // (phase4_review.py:171), and `review_item_id` is an explicit link, null
+    // when an attempt has no replay. So the reason for deriving is gone.
     //
-    // So switching to it today would trade "only the corrected questions are
-    // listed" for "every question is listed, some with no text and some
-    // pointing at the wrong replay". That is worse. Needs question_text and an
-    // explicit review_item_id on QuestionJourneyItem first.
-    question_journey: tutor_replays.map((replay) => ({
-      question_id: replay.question_id,
-      question_text: replay.question_text,
-      evaluation: 'WRONG' as const,
-      review_item_id: replay.review_item_id,
-    })),
+    // It mattered because the replays are the WRONG attempts only. A student
+    // who answered everything correctly produced no replays, so the rail
+    // rendered empty on exactly the run that went best.
+    //
+    // The link stays explicit rather than matched on `question_id`: one
+    // question can be answered wrong, repaired in Phase 2 and answered again,
+    // so an id identifies a question and not an attempt, and matching on it
+    // would attach a single replay to two rows.
+    //
+    // The replay-derived shape is kept as the fallback for a backend that
+    // sends no journey — listing the corrections is incomplete, but it is not
+    // wrong, and it is what this screen showed before.
+    question_journey: journeyFrom(raw?.question_journey, tutor_replays),
     tutor_replays,
     student_insights: {
       strength_summary: insights.strength_summary,

@@ -75,3 +75,37 @@ describe('the two together', () => {
     expect(reviewIsNext(res) && !servedNextQuestion(res, 'Q-T01-005')).toBe(false);
   });
 });
+
+describe('reviewIsNext reads the phase the backend actually moved to', () => {
+  // Manjusha's stall: /canvas/submit answers a completed Phase 3 with
+  // `current_phase: "REVIEW"` and no recommendation at all. Reading only the
+  // recommendation returned false, the auto-exit never fired, and the canvas
+  // locked on "Answer recorded." with no way forward.
+  it('is true when current_phase is REVIEW and nothing is recommended', () => {
+    expect(reviewIsNext({ current_phase: 'REVIEW' })).toBe(true);
+    expect(reviewIsNext({ current_phase: 'REVIEW', recommended_entry_phase: null })).toBe(true);
+  });
+
+  it('is still true on the recommendation alone', () => {
+    expect(reviewIsNext({ recommended_entry_phase: 'REVIEW' })).toBe(true);
+  });
+
+  it('is true when either says REVIEW, whatever the other says', () => {
+    expect(reviewIsNext({
+      current_phase: 'INDEPENDENT_PRACTICE', recommended_entry_phase: 'REVIEW',
+    })).toBe(true);
+    expect(reviewIsNext({
+      current_phase: 'REVIEW', recommended_entry_phase: 'INDEPENDENT_PRACTICE',
+    })).toBe(true);
+  });
+
+  it('is false when neither does', () => {
+    expect(reviewIsNext({
+      current_phase: 'INDEPENDENT_PRACTICE', recommended_entry_phase: 'INDEPENDENT_PRACTICE',
+    })).toBe(false);
+  });
+
+  it('trims and case-folds both', () => {
+    expect(reviewIsNext({ current_phase: ' review ' })).toBe(true);
+  });
+});

@@ -26,10 +26,11 @@ import { demoFor, type DemoWorksheet } from '@/lib/demoContent';
 import { cn } from '@/lib/cn';
 import {
   sessionTopicTitle, completeReview, studentId, getSession,
-  type FiveCategorySummary, type QuestionOutcome,
+  type FiveCategorySummary, type QuestionOutcome, type NextTopicHandoff,
 } from '@/lib/api';
 import { reviewIsReady, isReviewUnavailable } from '@/lib/reviewReady';
 import { phase4FromSession, type SessionForPhase4 } from '@/lib/phase4FromSession';
+import { handoffDestination } from '@/lib/usePhaseRouting';
 import { reviewSource } from '@/lib/reviewContent';
 import { speakTutor, stopTutorSpeech } from '@/lib/tts';
 import Phase4Review from '@/components/Phase4/Phase4Review';
@@ -103,6 +104,16 @@ export default function ReviewPage() {
   // student is offered a retry rather than an apology.
   const [reviewBlocked, setReviewBlocked] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  /**
+   * Has the first read of the session finished, either way?
+   *
+   * On first paint `phase4` is null and `reviewBlocked` is false, so neither
+   * gate below catches — and the page fell through to the legacy worksheet UI,
+   * which flashed "You worked through 0 questions" before the mount read
+   * resolved. The mount read does rescue it; the defect is the gap before that,
+   * and the missing state is "in flight, not yet known".
+   */
+  const [resolved, setResolved] = useState(false);
   const retryReview = useCallback(async () => {
     const id = reviewSessionId.current;
     if (!id) return;
@@ -117,13 +128,19 @@ export default function ReviewPage() {
       setReviewBlocked(isReviewUnavailable(err));
     } finally {
       setRetrying(false);
+      setResolved(true);
     }
   }, []);
 
   // Ask once on arrival: a student routed here by the backend has not been
   // through the practice screen's readiness check.
   useEffect(() => {
-    if (apiEnabled && reviewSessionId.current && !reviewIsReady(backendSession)) void retryReview();
+    if (apiEnabled && reviewSessionId.current && !reviewIsReady(backendSession)) {
+      void retryReview();
+    } else {
+      // Nothing to wait for: no session to read, or the review is already here.
+      setResolved(true);
+    }
     // Deliberately mount-only — this is the initial read, and retryReview is
     // the button for every read after it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -185,12 +202,17 @@ export default function ReviewPage() {
    *
    * Returns false when the student should stay put.
    */
-  const reportReviewFinished = useCallback(async (): Promise<boolean> => {
-    if (!apiEnabled) return true;
+  const reportReviewFinished = useCallback(async (): Promise<NextTopicHandoff | null> => {
+    if (!apiEnabled) return null;
     const plan = planReviewCompletion(reviewSessionId.current, () => `REVIEW-COMPLETE-${Date.now()}`);
-    if (!plan.send) return true;
-    await completeReview(reviewSessionId.current!, studentId(), plan.turnId);
-    return true;
+    if (!plan.send) return null;
+    const res = await completeReview(reviewSessionId.current!, studentId(), plan.turnId);
+    // `completeReview` answers null on failure by design, so a bookkeeping
+    // problem cannot trap the student on this screen. That is deliberate and
+    // stays — but the caller must still know, or the retry it offers is a
+    // button for a failure it never sees.
+    if (res === null) throw new Error('review/complete did not land');
+    return res.next_topic_handoff ?? null;
   }, [apiEnabled]);
 
   const [leaving, setLeaving] = useState(false);
@@ -205,12 +227,32 @@ export default function ReviewPage() {
     // Neither step may fail silently — see runReviewFinish. Retrying is safe:
     // planReviewCompletion refuses a second REVIEW_COMPLETED for this session,
     // so a retry re-attempts only what did not land.
+    let handoff: NextTopicHandoff | null = null;
     const outcomeOf = await runReviewFinish({
-      reportCompletion: async () => { await reportReviewFinished(); },
+      reportCompletion: async () => { handoff = await reportReviewFinished(); },
       endSession: async () => { if (apiEnabled && sessionId) await end(); },
     });
     setLeaving(false);
     if (outcomeOf.ok) {
+      // The backend decides what comes next. `decideReview` walks a hardcoded
+      // TOPICS table, which handed the student a topic the Student Model had
+      // already completed — so it reopened in REVIEW and they came straight
+      // back here, every time. It is kept only for mock mode and for a genuinely
+      // absent handoff, which means the curriculum has ended.
+      const next = handoffDestination(handoff);
+      if (next) {
+        resetSessionStart();
+        const store = useNumeraStore.getState();
+        store.clearSessionId();
+        store.setEndedSessionId(null);
+        store.completePhase('review');
+        // Unlock the gate for the phase the backend is sending them to, or
+        // PhaseGate bounces them straight back out of it.
+        store.setCurrentTopic(next.topicId);
+        store.setPendingTopicCode(next.topicId);
+        goStage(next.unlock, next.topicId);
+        return;
+      }
       decideReview(outcome);
       return;
     }
@@ -296,6 +338,34 @@ export default function ReviewPage() {
 
   // Phase 4 (§8). Takes precedence over everything below: when the backend has
   // produced a real review, no fallback is relevant.
+  // In flight. Returns EARLY rather than falling through: below this point the
+  // legacy worksheet screen renders, and on a live session it renders demo
+  // content — which is what flashed "You worked through 0 questions" at a
+  // student whose review was still being read.
+  if (apiEnabled && !phase4 && !resolved) {
+    return (
+      <PhaseGate phase="review">
+        <PageShell title="Review &amp; feedback" subtitle={subtitle}>
+          <div
+            role="status"
+            aria-busy="true"
+            className="rounded-lg border border-muted-gray bg-white px-6 py-8 flex flex-col gap-3"
+          >
+            <div className="flex items-center gap-2 text-[13px] font-semibold text-ink">
+              <span className="w-3.5 h-3.5 rounded-full border-2 border-muted-gray border-t-focus-navy animate-spin" />
+              Preparing your review…
+            </div>
+            <div className="flex flex-col gap-2" aria-hidden="true">
+              <div className="h-3 w-2/3 rounded bg-reading-surface" />
+              <div className="h-3 w-1/2 rounded bg-reading-surface" />
+              <div className="h-3 w-3/5 rounded bg-reading-surface" />
+            </div>
+          </div>
+        </PageShell>
+      </PhaseGate>
+    );
+  }
+
   if (phase4) {
     return (
       <PhaseGate phase="review">

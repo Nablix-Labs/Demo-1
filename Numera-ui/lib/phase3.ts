@@ -177,11 +177,27 @@ export function phase3Notice(res: Phase3ResponseFields | null | undefined): stri
  * Paired with `servedNextQuestion` at the call site, never alone. Acting on
  * this field while a fresh question is arriving would end a session the
  * student is still working in, and ending a session is not undoable.
+ *
+ * ── Why both fields, not just the recommendation (3 Sep 2026) ──────────────
+ * This read `recommended_entry_phase` alone, which is a recommendation about
+ * where the student belongs NEXT. But a completed Phase 3 is answered by
+ * `/canvas/submit` with `current_phase: "REVIEW"` and no recommendation at
+ * all — the backend has already moved them, so it recommends nothing. So the
+ * one reply that means "Phase 3 is over" returned false here: the auto-exit
+ * never fired and the canvas locked on "Answer recorded." with nothing to
+ * press. Either field naming REVIEW is the backend saying review is next; the
+ * recommendation is a prediction, the current phase is a fact, and the fact
+ * was the half being ignored.
  */
 export function reviewIsNext(
-  res: { recommended_entry_phase?: string | null } | null | undefined,
+  res: {
+    current_phase?: string | null;
+    recommended_entry_phase?: string | null;
+  } | null | undefined,
 ): boolean {
-  return res?.recommended_entry_phase?.trim().toUpperCase() === 'REVIEW';
+  const current = res?.current_phase?.trim().toUpperCase();
+  const recommended = res?.recommended_entry_phase?.trim().toUpperCase();
+  return current === 'REVIEW' || recommended === 'REVIEW';
 }
 
 /**

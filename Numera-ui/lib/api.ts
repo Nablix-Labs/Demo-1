@@ -538,7 +538,48 @@ export interface SessionRecord {
   mode: string;
   canvas_submissions: CanvasSubmissionResult[];
   inactivity_policy?: InactivityPolicyResponse;
+  /**
+   * Whether the Phase 4 review has been generated yet.
+   *
+   * PENDING does NOT arrive on a 200 from `GET /session/{id}` — an
+   * unmaterialized review raises 503 PHASE4_REVIEW_UNAVAILABLE there instead,
+   * which is what `isReviewUnavailable` already detects. It is visible on
+   * `/session/start`, `/interaction` and `/canvas/submit`, which answer 200
+   * with a null review. There is no background worker: re-reading the session
+   * is what triggers another attempt, so the 503 is the retry trigger and this
+   * field is a status, not something to poll on.
+   */
+  review_materialization_state?: ReviewMaterializationState | null;
+  /** The generated review, once it exists. Read by lib/phase4FromSession.ts. */
+  phase4_review?: unknown | null;
+  /** Where the student goes after this topic. See NextTopicHandoff. */
+  next_topic_handoff?: NextTopicHandoff | null;
 }
+
+/**
+ * Where the backend says the student goes after finishing this topic.
+ *
+ * Returned by `POST /session/{id}/review/complete`, and present on the session
+ * record. This is the ONLY authority on what comes next: the client used to
+ * pick the next topic out of a hardcoded table, which handed the student a
+ * topic the Student Model had already completed and reopened it in REVIEW —
+ * the same review, forever.
+ *
+ * `topic_id` is a topic CODE (e.g. "ALG-ORI-02"), which is why it is sent as
+ * `topic_code` on the next `/session/start` and never as `concept_id`: the
+ * backend resolves a concept id through a map holding one entry, so sending it
+ * as one is a 422.
+ */
+export interface NextTopicHandoff {
+  source_session_id: string;
+  student_model_request_id: string;
+  /** A topic code, e.g. "ALG-ORI-02". */
+  topic_id: string;
+  /** A Student Model phase, e.g. "PHASE_0_DIAGNOSTIC". */
+  entry_phase: string;
+}
+
+export type ReviewMaterializationState = 'PENDING' | 'READY';
 
 export interface InactivityPolicyResponse {
   initial_idle_threshold_ms: number;
@@ -556,7 +597,19 @@ export interface NudgeDelivery {
 // ── /session/start ────────────────────────────────────────────────────────────
 export interface StartSessionPayload {
   student_id: string;
-  concept_id: string;
+  /**
+   * The RAG/Qdrant key. Optional since the backend made it so: a topic the
+   * `student_model_topic_codes` map has never heard of cannot be started this
+   * way, and that map holds one entry.
+   */
+  concept_id?: string;
+  /**
+   * The Student Model topic id, e.g. "ALG-ORI-02". When sent it IS the topic —
+   * no lookup — so a new topic never needs a backend deploy
+   * (`session_service.py:502`). This is what a `NextTopicHandoff.topic_id`
+   * must be sent as; sending it as `concept_id` is a 422.
+   */
+  topic_code?: string;
   interaction_mode: InteractionMode;
 }
 

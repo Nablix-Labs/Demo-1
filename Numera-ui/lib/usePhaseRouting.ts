@@ -80,6 +80,26 @@ export function landingRoute(
   };
 }
 
+/**
+ * Where a `next_topic_handoff` sends the student.
+ *
+ * Deliberately `landingRoute`, not a new mapping. The Student Model phase names
+ * on the handoff are the same ones `last_journey_state` carries, and there are
+ * already two maps between those and this app's routes; a third would be a
+ * third thing to keep in step, and the one most likely to be missed when a
+ * phase is added.
+ *
+ * Null when there is nothing to route to, so the caller keeps whatever it would
+ * have done — which for a finished curriculum is the completion screen.
+ */
+export function handoffDestination(
+  handoff: { topic_id?: string; entry_phase?: string } | null | undefined,
+): { topicId: string; href: string; unlock: FlowStage } | null {
+  const topicId = handoff?.topic_id?.trim();
+  if (!topicId) return null;
+  return { topicId, ...landingRoute(handoff?.entry_phase, topicId) };
+}
+
 const apiEnabled = Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
 export function usePhaseRouting(): void {
