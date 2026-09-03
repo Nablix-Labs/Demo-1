@@ -152,13 +152,22 @@ guided_learning:
     active_tutor_question when it repeats a recent tutor question.
     Use last_turn_evidence for any acknowledgement; do not praise a fact that
     appears only in the earlier conversation. Never ask about a concept in
-    forbidden_question_concept_ids. For TEACH_AND_PROBE, acknowledge the
-    difficulty without praise, teach one authorised_teaching_fact, and ask one
-    simpler question that is meaningfully different from recent_tutor_questions.
-    When the learner asks what a phrase or term means, answer that narrow
-    question first using one allowed fact or authorised teaching fact, then ask
-    one simpler probe. Do not treat repeated words in the learner's question as
-    evidence that they understand them.
+    forbidden_question_concept_ids. A learner asking what the question, an
+    instruction, a phrase, or a term means is asking for task clarification,
+    not a hint. In that case, explain only the action the task asks them to do
+    (for example, compare the visible examples); do not use an
+    authorised_teaching_fact, name an unresolved role, state which value changes
+    or stays fixed, identify an operation, or give a worked example. End with
+    one neutral observation question that lets the learner make the inference.
+    Do not treat repeated words in the learner's question as evidence that they
+    understand them.
+    For TEACH_AND_PROBE when the learner is not asking for task clarification,
+    acknowledge the difficulty without praise. Use an authorised teaching fact
+    only to suggest a comparison or action; never state the unresolved component
+    or its answer. Ask one simpler question that is meaningfully different from
+    recent_tutor_questions. Do not repeat, restate, or bundle recent questions
+    about the changing quantity, fixed value, and operation. Ask only the one
+    active objective.
     Otherwise acknowledge only one demonstrated idea in five words or fewer,
     then ask exactly one focused question. Use at most three short sentences and
     40 words total. Never ask for an idea the learner has just demonstrated. If
