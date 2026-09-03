@@ -284,6 +284,11 @@ def _is_support_failure(tutor: TutorResult) -> bool:
     return _is_wrong_evaluation(tutor)
 
 
+def _is_unresolved_scaffold_turn(tutor: TutorResult) -> bool:
+    """Return whether a scaffold step needs a more supportive representation."""
+    return tutor.intent != "ASKING_QUESTION"
+
+
 def _guided_attempt_event_type(
     tutor: TutorResult,
     rules: ClassifierRulesConfig,
@@ -546,6 +551,7 @@ async def process_answer_with_session_event(
     ):
         return student, tutor.model_copy(update={"attempt_increment": 0}), None, None, session
     scaffold_turn = session.current_scaffold_step_id is not None
+    rules = load_classifier_rules()
     wrong_attempt_count = (
         session.wrong_attempt_count + 1
         if not scaffold_turn and _is_support_failure(tutor)
@@ -553,11 +559,44 @@ async def process_answer_with_session_event(
     )
     if not scaffold_turn:
         tutor = _deterministic_wrong_tutor_result(tutor, wrong_attempt_count)
-    rules = load_classifier_rules()
+    scaffold_step_satisfied = (
+        scaffold_turn
+        and session.scaffold_expected_response is not None
+        and _scaffold_response_is_correct(
+            context.message,
+            session.scaffold_expected_response,
+            tutor.evaluation,
+            session.correct_answer or "",
+            rules,
+        )
+    )
+    next_scaffold_failure_count = (
+        session.scaffold_failure_count + 1
+        if (
+            scaffold_turn
+            and not scaffold_step_satisfied
+            and _is_unresolved_scaffold_turn(tutor)
+        )
+        else session.scaffold_failure_count
+    )
+    atomic_guided_events_enabled = (
+        get_settings().student_model_atomic_guided_events_enabled
+    )
+    scaffold_rescue_escalation = (
+        atomic_guided_events_enabled
+        and session.current_phase == "GUIDED_PRACTICE"
+        and scaffold_turn
+        and next_scaffold_failure_count
+        >= rules.strategy_rules.scaffold_max_unresolved_turns
+    )
     schema_managed = session.current_phase in {
         "GUIDED_PRACTICE",
         "INDEPENDENT_PRACTICE",
-    } and (not scaffold_turn or tutor.scaffold_original_answer_correct)
+    } and (
+        not scaffold_turn
+        or tutor.scaffold_original_answer_correct
+        or scaffold_rescue_escalation
+    )
     event_type = _guided_attempt_event_type(tutor, rules)
     response_is_wrong = _is_support_failure(tutor)
 
@@ -565,9 +604,6 @@ async def process_answer_with_session_event(
         session.wrong_attempt_count + 1
         if response_is_wrong
         else session.wrong_attempt_count
-    )
-    atomic_guided_events_enabled = (
-        get_settings().student_model_atomic_guided_events_enabled
     )
     wrong_four_escalation = (
         atomic_guided_events_enabled
@@ -581,7 +617,11 @@ async def process_answer_with_session_event(
         and session.current_phase == "GUIDED_PRACTICE"
         and tutor.intent == "EXPRESSING_CONFUSION"
     )
-    support_escalation = wrong_four_escalation or confusion_support_request
+    support_escalation = (
+        wrong_four_escalation
+        or scaffold_rescue_escalation
+        or confusion_support_request
+    )
     if not schema_managed or (event_type is None and not support_escalation):
         return student, tutor, None, None, session
 
@@ -603,7 +643,11 @@ async def process_answer_with_session_event(
             "MAXIMUM_GUIDED_SUPPORT_PARALLEL",
             "MAXIMUM_GUIDED_SUPPORT_REQUIRED",
         ]
-        if confusion_support_request:
+        if scaffold_rescue_escalation and highest_guided_support == "PARALLEL_EXAMPLE":
+            escalation_type = "MAXIMUM_GUIDED_SUPPORT_REQUIRED"
+        elif scaffold_rescue_escalation and highest_guided_support == "SCAFFOLD":
+            escalation_type = "MAXIMUM_GUIDED_SUPPORT_PARALLEL"
+        elif confusion_support_request:
             escalation_type = (
                 "GUIDED_STUCK_SUPPORT_REQUIRED"
                 if next_stuck_count >= rules.strategy_rules.stuck_scaffold_min_count
@@ -622,6 +666,7 @@ async def process_answer_with_session_event(
                 "event_type": escalation_type,
                 "detected_intent": tutor.intent,
                 "next_stuck_count": next_stuck_count,
+                "next_scaffold_failure_count": next_scaffold_failure_count,
                 "highest_guided_support": highest_guided_support,
             },
         )
@@ -3960,7 +4005,11 @@ async def _process_interaction(
     tutor_message = tutor.tutor_message
     tutor_message_voice = tutor.tutor_message_voice
     scaffold_turn_updates: dict[str, object] = {}
-    if scaffold_turn and tutor.scaffold_original_answer_correct:
+    rescue_selected = _guided_rescue(schema_content_response) is not None
+    if scaffold_turn and rescue_selected:
+        scaffold_steps = []
+        scaffold_turn_updates = _completed_scaffold_state(turn_session)
+    elif scaffold_turn and tutor.scaffold_original_answer_correct:
         scaffold_steps = []
         scaffold_turn_updates = _completed_scaffold_state(turn_session)
     elif scaffold_turn and tutor.intent in {"ASKING_QUESTION", "EXPRESSING_CONFUSION"}:
@@ -4100,6 +4149,16 @@ async def _process_interaction(
             else 0
             if tutor.guided_student_state == "CORRECT"
             else session.wrong_attempt_count
+        ),
+        "scaffold_failure_count": (
+            0
+            if schema_question_changed
+            or rescue_selected
+            or (scaffold_turn and tutor.scaffold_original_answer_correct)
+            or bool(scaffold_turn_updates)
+            else session.scaffold_failure_count + 1
+            if scaffold_turn and _is_unresolved_scaffold_turn(tutor)
+            else session.scaffold_failure_count
         ),
         # A misconception belongs to the answer that demonstrated it. Keeping
         # the previous code when the current evaluation returns none makes a

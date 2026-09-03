@@ -482,6 +482,7 @@ strategy_rules:
   stuck_scaffold_min_count: 2
   scaffold_min_attempt_count: 3
   worked_example_min_attempt_count: 4
+  scaffold_max_unresolved_turns: 2
 independent_practice:
   answer_recorded_message: "Answer recorded."
   rescue_required_message: "We'll review this one before a fresh independent check."
