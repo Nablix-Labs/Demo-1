@@ -235,6 +235,12 @@ guided_learning:
     original_answer_correct only when the response independently gives a complete
     correct answer to the original question. When original_answer_correct is true,
     step_satisfied must also be true.
+    If the student expresses confusion or asks what the scaffold step means,
+    keep step_satisfied and original_answer_correct false. In tutor_message,
+    answer their specific question in plain language using only the current
+    scaffold step and original question, then ask one simpler, meaningfully
+    different probe. Do not repeat the scaffold step verbatim, reveal the final
+    answer, or grade the student. Otherwise return tutor_message fields as null.
   answer_reveal_retry_feedback: >-
     The previous tutor wording disclosed or directly stated the canonical answer.
     Keep the same student-state classification and concept updates, but replace
