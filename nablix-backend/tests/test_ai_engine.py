@@ -4685,6 +4685,7 @@ def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> 
         store_responses=False,
         retry_count=0,
         guided_reasoning_effort="low",
+        guided_model_supports_reasoning_effort=False,
         guided_verbosity="low",
     )
     disabled_client.generate_tutor_turn(
@@ -4717,6 +4718,7 @@ def test_openai_request_uses_prompt_cache_key_only_when_enabled(monkeypatch) -> 
         store_responses=True,
         retry_count=0,
         guided_reasoning_effort="low",
+        guided_model_supports_reasoning_effort=False,
         guided_verbosity="low",
     )
     enabled_client.generate_tutor_turn(
@@ -8306,6 +8308,7 @@ def test_guided_rubric_uses_phase_prompt_and_specialized_contract(
         store_responses=False,
         retry_count=0,
         guided_reasoning_effort="low",
+        guided_model_supports_reasoning_effort=False,
         guided_verbosity="low",
     )
     system_prompt = "Compact rubric prompt."
@@ -8330,7 +8333,7 @@ def test_guided_rubric_uses_phase_prompt_and_specialized_contract(
     assert messages[0] == {"role": "system", "content": system_prompt}
     assert messages[-1]["role"] == "user"
     assert len(messages) == 2
-    assert request_bodies[0]["reasoning"] == {"effort": "low"}
+    assert "reasoning" not in request_bodies[0]
     assert request_bodies[0]["text"]["verbosity"] == "low"
 
 

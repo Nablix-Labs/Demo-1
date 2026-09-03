@@ -92,6 +92,7 @@ def _client() -> openai_client.OpenAIAIEngineClient:
         store_responses=False,
         retry_count=0,
         guided_reasoning_effort="low",
+        guided_model_supports_reasoning_effort=False,
         guided_verbosity="low",
     )
 

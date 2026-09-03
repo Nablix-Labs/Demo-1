@@ -6231,6 +6231,9 @@ def build_openai_ai_engine_client(settings: Settings) -> OpenAIAIEngineClient | 
         store_responses=settings.openai_store_responses,
         retry_count=settings.adapter_request_retry_count,
         guided_reasoning_effort=rules.guided_learning.reasoning_effort,
+        guided_model_supports_reasoning_effort=(
+            rules.guided_learning.model_supports_reasoning_effort
+        ),
         guided_verbosity=rules.guided_learning.verbosity,
     )
 
