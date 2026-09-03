@@ -2420,7 +2420,7 @@ def wrong_direct_rule_evaluation(
     objective: ActiveTeachingObjective,
     rules: ClassifierRulesConfig,
 ) -> GuidedEvaluation | None:
-    """Catch a typed rule that contradicts the expressions offered by a choice."""
+    """Catch a learner rule that contradicts the authored algebra rule."""
 
     if direct_rule_mismatch(request, rules) is None:
         return None
@@ -2500,12 +2500,23 @@ def direct_rule_mismatch(
     request: ClassificationRequest,
     rules: ClassifierRulesConfig,
 ) -> tuple[tuple[str, str, str], tuple[str, str, str]] | None:
-    """Return a typed choice-rule mismatch without exposing its correction."""
+    """Return a direct algebra-rule mismatch without exposing its correction."""
 
-    if request.question_type != "CHOICE_WITH_EXPLANATION" or request.answer_spec is None:
+    if request.answer_spec is None:
         return None
     attempted = spoken_expression_parts(request.student_input, rules)
     if attempted is None:
+        return None
+    canonical_expression = _expression_parts(request.answer_spec.canonical_answer)
+    if request.question_type != "CHOICE_WITH_EXPLANATION":
+        if canonical_expression is None or attempted == canonical_expression:
+            return None
+        variable, operator, _ = attempted
+        if (
+            canonical_expression[0] == variable
+            and canonical_expression[1] == operator
+        ):
+            return attempted, canonical_expression
         return None
     candidate_expressions = [
         expression
