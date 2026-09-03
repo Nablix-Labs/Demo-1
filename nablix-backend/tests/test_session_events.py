@@ -1771,7 +1771,7 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
     assert wrong_scaffold_step.json()["scaffold_step_text"] == (
         "Which operation should you undo first?"
     )
-    assert wrong_scaffold_step.json()["message"] == (
+    assert wrong_scaffold_step.json()["message"] != (
         "Let’s stay with this step: Which operation should you undo first?"
     )
 

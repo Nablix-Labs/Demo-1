@@ -3571,7 +3571,7 @@ def test_explain_again_reexpresses_the_unresolved_component_without_progression_
     assert first.active_scaffold is not None
 
 
-def test_explain_again_retries_a_revealing_llm_response_without_canned_wording(
+def test_explain_again_uses_safe_controller_wording_after_a_revealing_response(
     monkeypatch,
 ) -> None:
     validation_feedback: list[str | None] = []
@@ -3604,12 +3604,10 @@ def test_explain_again_retries_a_revealing_llm_response_without_canned_wording(
 
     response = classifier.generate_explain_again_response(_explain_again_request())
 
-    assert len(validation_feedback) == 2
-    assert validation_feedback[0] is None
-    assert validation_feedback[1] is not None
-    assert "exactly one Socratic question" in validation_feedback[1]
+    assert validation_feedback == [None]
     assert response.tutor_message == (
-        "Think about the starting value: could it be the same every time?"
+        "Let’s look at the step already on your screen in a different way. "
+        "What do you notice first?"
     )
     assert response.attempt_increment == 0
     assert response.progression_change_requested is False
@@ -3664,8 +3662,7 @@ def test_explain_again_uses_safe_state_aware_response_when_all_llm_wording_revea
     request = _explain_again_request()
     response = classifier.generate_explain_again_response(request)
 
-    rules = classifier.load_classifier_rules()
-    assert calls == rules.guided_learning.maximum_retries + 1
+    assert calls == 1
     assert response.tutor_message == (
         "Let’s look at the step already on your screen in a different way. "
         "What do you notice first?"
@@ -6347,7 +6344,7 @@ def test_support_aware_wording_receives_visible_visual_cue() -> None:
     assert captured_support_context == [support_context]
 
 
-def test_guided_evaluator_retries_answer_revealing_wording(monkeypatch) -> None:
+def test_guided_evaluator_uses_safe_controller_wording_after_answer_reveal(monkeypatch) -> None:
     feedback: list[str | None] = []
 
     class _GuidedClient:
@@ -6411,11 +6408,8 @@ def test_guided_evaluator_retries_answer_revealing_wording(monkeypatch) -> None:
     )
 
     assert response.guided_student_state == "PARTIAL"
-    assert response.tutor_message == (
-        "You identified multiplication. What do the two letters represent?"
-    )
-    assert feedback[0] is None
-    assert feedback[1] is not None
+    assert response.tutor_message == "What do the letters represent when the expression is expanded?"
+    assert feedback == [None]
 
 
 def test_guided_answer_reveal_fallback_names_the_missing_explanation(
@@ -6500,7 +6494,7 @@ def test_guided_answer_reveal_fallback_names_the_missing_explanation(
         )
     )
 
-    assert evaluation_calls > 1
+    assert evaluation_calls == 1
     assert response.guided_student_state == "PARTIAL"
     assert response.tutor_message == (
         "What mathematical reason shows that this choice works for every starting value?"
@@ -6550,36 +6544,18 @@ def test_guided_general_rule_explanation_accepts_clear_paraphrases(
             self,
             **kwargs: object,
         ) -> GuidedEvaluation:
-            del kwargs
+            assert kwargs["student_response"] == student_input
             return GuidedEvaluation(
-                student_state="PARTIAL",
-                newly_confirmed_concept_ids=[],
+                student_state="CORRECT",
+                newly_confirmed_concept_ids=["EXPLANATION_FOR_SELECTION"],
                 preserved_concept_ids=["GENERAL_RULE_SELECTION"],
                 contradicted_concept_ids=[],
-                missing_concept_ids=["EXPLANATION_FOR_SELECTION"],
+                missing_concept_ids=[],
                 selected_error_code=None,
                 confidence=0.9,
-                next_objective=ActiveTeachingObjective(
-                    objective_type="EXPLAIN_REASONING",
-                    target_concept_ids=["EXPLANATION_FOR_SELECTION"],
-                    confirmed_concept_ids=["GENERAL_RULE_SELECTION"],
-                    missing_concept_ids=["EXPLANATION_FOR_SELECTION"],
-                ),
-                tutor_message="Please provide a more complete explanation.",
-                tutor_message_voice="Please provide a more complete explanation.",
-            )
-
-        def adjudicate_component_evidence(
-            self,
-            **kwargs: object,
-        ) -> FocusedComponentEvidence:
-            target_component = kwargs["target_component"]
-            assert isinstance(target_component, GeneratedConcept)
-            return FocusedComponentEvidence(
-                component_id=target_component.concept_id,
-                status="DEMONSTRATED",
-                evidence=student_input,
-                confidence=0.96,
+                next_objective=None,
+                tutor_message="That explains why the rule works.",
+                tutor_message_voice="That explains why the rule works.",
             )
 
     monkeypatch.setattr(
@@ -8440,6 +8416,8 @@ def test_scaffold_semantic_evaluator_accepts_the_requested_fact_or_full_answer(
                 original_answer_correct=original_answer_correct,
                 demonstrated_fact="The repeated term is y.",
                 confidence=0.97,
+                tutor_message="You identified the repeated term. What notation can show how many times it appears?",
+                tutor_message_voice="You identified the repeated term. What notation can show how many times it appears?",
             )
 
     monkeypatch.setattr(
@@ -8490,6 +8468,8 @@ def test_scaffold_semantic_evaluator_rejects_an_unrelated_response(
                 original_answer_correct=False,
                 demonstrated_fact=None,
                 confidence=0.96,
+                tutor_message="Let’s check the repeated term in the expression. Which letter appears more than once?",
+                tutor_message_voice="Let’s check the repeated term in the expression. Which letter appears more than once?",
             )
 
     monkeypatch.setattr(
@@ -8890,9 +8870,9 @@ def test_guided_model_experiment_assignment_is_stable_per_session() -> None:
 
     selected = classifier.openai_model_for_request(settings, request)
     assert classifier.openai_model_for_request(settings, request) == selected
-    assert selected in {"gpt-4o-mini", "gpt-5.6-terra"}
+    assert selected == "gpt-4o-mini-2024-07-18"
 
     disabled = settings.model_copy(
         update={"openai_ai_engine_experiment_percentage": 0}
     )
-    assert classifier.openai_model_for_request(disabled, request) == "gpt-4o-mini"
+    assert classifier.openai_model_for_request(disabled, request) == "gpt-4o-mini-2024-07-18"

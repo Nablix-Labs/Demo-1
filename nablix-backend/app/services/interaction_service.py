@@ -3229,7 +3229,10 @@ async def _explain_again_interaction_response(
             detail="EXPLAIN_AGAIN requires the active Guided Practice answer contract.",
         )
     rules = load_classifier_rules()
-    openai_client = build_openai_ai_engine_client(get_settings())
+    settings = get_settings().model_copy(
+        update={"openai_ai_engine_model": rules.guided_learning.model}
+    )
+    openai_client = build_openai_ai_engine_client(settings)
     if openai_client is None:
         raise AdapterError(
             "openai_ai_engine",
@@ -3994,10 +3997,6 @@ async def _process_interaction(
             scaffold_steps = list(turn_session.scaffold_steps)
             if not scaffold_steps:
                 raise RuntimeError("Active scaffold step lost its prompt.")
-            tutor_message = rules.messages.SCAFFOLD_STEP_RETRY.format(
-                step=scaffold_steps[0]
-            )
-            tutor_message_voice = tutor_message
     conversation_history: list[ConversationMessage] = _updated_conversation_history(
         turn_session.conversation_history,
         student_message,

@@ -220,6 +220,11 @@ class CriticalThinkingConfig(StrictSchema):
 
 
 class GuidedLearningConfig(StrictSchema):
+    model: str
+    single_call_enabled: StrictBool
+    guided_turn_maximum_retries: int = Field(ge=0)
+    scaffold_evaluation_maximum_retries: int = Field(ge=0)
+    scaffold_evaluation_failure_message: str
     minimum_voice_transcript_confidence: float = Field(ge=0.0, le=1.0)
     minimum_ocr_confidence: float = Field(ge=0.0, le=1.0)
     canvas_rescue_presentation_enabled: StrictBool
