@@ -117,10 +117,14 @@ def test_the_prompt_ties_wrong_answers_to_misconceptions():
 
 
 def test_the_prompt_offers_only_the_permitted_values_per_question():
-    """The model picks from a list rather than inventing an enum value."""
+    """The model picks from a list rather than inventing an enum value.
+
+    This used to offer answer_type and verification_method as two separate
+    lists. That was safe for SINGLE_CHOICE, which has one of each, but not for
+    SHORT_RESPONSE, so both are now offered as pairs.
+    """
     prompt = build_user_prompt([_q(1, QuestionType.SINGLE_CHOICE)])
-    assert "answer_type must be one of: SINGLE_CHOICE" in prompt
-    assert "verification_method must be one of: EXACT_CHOICE_MATCH" in prompt
+    assert "SINGLE_CHOICE + EXACT_CHOICE_MATCH" in prompt
 
 
 def test_misconceptions_reach_the_prompt():
@@ -423,3 +427,153 @@ def test_the_reference_never_overlaps_accepted_and_wrong():
         if split(row["accepted_answers"]) & split(row["common_wrong_answers"]):
             offenders.append(row["answer_spec_id"])
     assert offenders == [], offenders
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The six-topic run: 20 answer-key errors, three of them ours
+#
+# Every failure below is reproduced from a real run of all six topics, where
+# 5 of 6 topics lost their whole answer key. The pattern was that the prompt
+# explained two of the five question types it has to serve.
+# ──────────────────────────────────────────────────────────────────────
+
+def _multi_part_q(i=1):
+    return _q(i, QuestionType.MULTI_PART_SHORT_RESPONSE,
+              text="In m + 7, identify the changing quantity, the fixed "
+                   "value and the operation.")
+
+
+def _multi_part_a(qid="Q-T01-001", **kw):
+    base = dict(
+        answer_type="MULTI_PART",
+        verification_method="STRUCTURED_TEXT_MATCH",
+        canonical_answer="m; 7; addition",
+        accepted_answers=["m is the changing quantity", "7 is the fixed value",
+                          "+ is the addition operation"],
+        common_wrong_answers=["7 is the changing quantity", "m is fixed"],
+        answer_steps=["Find the letter.", "Find the number.", "Name the sign."],
+    )
+    base.update(kw)
+    return _a(qid, **base)
+
+
+# -- cause 1: the prompt never described MULTI_PART --------------------
+
+def test_the_prompt_shows_how_a_multi_part_answer_is_stored():
+    """12 of 12 MULTI_PART answers failed because this was never explained."""
+    text = _prompt_text()
+    assert "MULTI_PART_SHORT_RESPONSE" in text
+    assert '"m; 7; addition"' in text
+    assert "It is never blank and never a list" in text
+
+
+def test_the_prompt_warns_that_multi_part_canonical_is_not_in_accepted():
+    """Otherwise rule 3 ('be generous') reads as contradicting the format."""
+    text = _prompt_text()
+    assert "an acceptable wording of an INDIVIDUAL part" in text
+    assert "will usually not appear in accepted_answers" in text
+
+
+def test_a_multi_part_answer_in_the_reference_shape_is_accepted():
+    result = _gen([_multi_part_q()], [_multi_part_a()])
+    assert result.is_clean
+    assert result.rows[0].canonical_answer == "m; 7; addition"
+
+
+def test_a_multi_part_canonical_with_one_part_is_refused():
+    """The failure mode was an empty or single-value canonical."""
+    issues = _check("T01", [_multi_part_a(canonical_answer="m")],
+                    {"Q-T01-001": _multi_part_q()})
+    assert any("has one part" in i.message for i in issues if i.is_error)
+
+
+def test_multi_part_canonical_is_not_required_to_be_among_accepted():
+    """The reference does this in 8 of its 9 rows; enforcing it would be wrong."""
+    assert "MULTI_PART" not in CANONICAL_MUST_BE_ACCEPTED
+    assert _gen([_multi_part_q()], [_multi_part_a()]).is_clean
+
+
+# -- cause 2: the prompt offered pairs the checker rejects -------------
+
+def test_answer_type_and_verification_are_offered_as_pairs():
+    """The old prompt printed two independent lists. For SHORT_RESPONSE the
+    union contained TEXT_MEANING + EXACT_NOTATION_MATCH, which no answer type
+    accepts, so the model could follow the instructions and still fail."""
+    prompt = build_user_prompt([_q(1, QuestionType.SHORT_RESPONSE)])
+    assert "ALGEBRAIC_EXPRESSION + SYMBOLIC_EQUIVALENCE" in prompt
+    assert "TEXT_MEANING + CONCEPT_TEXT_MATCH" in prompt
+    assert "TEXT_MEANING + EXACT_NOTATION_MATCH" not in prompt
+
+
+def test_every_offered_pair_would_pass_the_checker():
+    """The property that matters: the prompt cannot permit a rejected answer."""
+    from answer_generator import allowed_pairs
+    for qtype in QuestionType:
+        for answer_type, verification in allowed_pairs(qtype):
+            assert verification in VERIFICATION_FOR_ANSWER_TYPE[answer_type], (
+                f"{qtype.value} offers {answer_type} + {verification}, "
+                f"which the checker rejects"
+            )
+
+
+def test_the_prompt_says_to_use_both_halves_of_one_pair():
+    assert "Choose one pair and use both halves of it" in _prompt_text()
+
+
+# -- cause 3: the explanation types store the choice alone -------------
+
+def _choice_q(i=1):
+    return _q(i, QuestionType.CHOICE_WITH_EXPLANATION,
+              text="Which statement is correct? a) a2 means 2a. "
+                   "b) a2 means a x a. Explain briefly.")
+
+
+def test_choice_with_explanation_stores_the_letter_alone():
+    """All 3 reference rows store 'B' and carry the reason in
+    explanation_required, not in canonical_answer."""
+    result = _gen([_choice_q()], [_a(
+        answer_type="CHOICE_WITH_EXPLANATION",
+        verification_method="CHOICE_AND_CONCEPT_MATCH",
+        canonical_answer="B",
+        accepted_answers=["B", "a multiplied by itself"],
+        common_wrong_answers=["A", "2a"],
+        explanation_required=True,
+    )])
+    assert result.is_clean
+
+
+def test_an_explanation_inside_canonical_is_refused_with_a_useful_message():
+    """What the run produced: 'a) n + 4, because it means...'."""
+    issues = _check("T01", [_a(
+        answer_type="CHOICE_WITH_EXPLANATION",
+        verification_method="CHOICE_AND_CONCEPT_MATCH",
+        canonical_answer="a) n + 4, because it means a number n with 4 added",
+        accepted_answers=["a) n + 4, because it means a number n with 4 added"],
+        common_wrong_answers=["b) n - 4", "c) 4n"],
+    )], {"Q-T01-001": _choice_q()})
+    messages = " ".join(i.message for i in issues if i.is_error)
+    assert "is not an option letter" in messages
+    assert "explanation_required" in messages, "must say where it belongs"
+
+
+def test_true_false_stores_the_word_not_a_letter():
+    q = _q(1, QuestionType.TRUE_FALSE_WITH_EXPLANATION,
+           text="True or false: every expression needs an equals sign. Explain.")
+    good = _a(answer_type="CHOICE_WITH_EXPLANATION",
+              verification_method="CHOICE_AND_CONCEPT_MATCH",
+              canonical_answer="False", accepted_answers=["False"],
+              common_wrong_answers=["True", "Sometimes"],
+              explanation_required=True)
+    assert _gen([q], [good]).is_clean
+
+    bad = dict(good, canonical_answer="False, because expressions describe "
+                                      "quantities like n + 4")
+    issues = _check("T01", [bad], {"Q-T01-001": q})
+    assert any("is not True or False" in i.message for i in issues if i.is_error)
+
+
+def test_the_prompt_covers_all_five_question_types():
+    """The root cause: five supported types, two explained."""
+    text = _prompt_text()
+    for question_type in QuestionType:
+        assert question_type.value in text, f"{question_type.value} unexplained"

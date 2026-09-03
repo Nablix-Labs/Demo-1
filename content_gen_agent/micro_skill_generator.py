@@ -100,15 +100,27 @@ Rules:
        of that earlier skill in this list. It must be smaller than this
        skill's own position.
      - on an earlier topic, set "prerequisite_micro_skill_id" to one of the
-       ids listed as available below.
+       ids listed as available below, COPIED EXACTLY. Never invent an id and
+       never write one in your own naming style. If no ids are listed below,
+       there are no earlier topics, so this field must be null on every skill.
      - set both to null only for genuinely foundational skills.
-   Set at most one of the two. Most skills have a prerequisite; a list where
-   nothing depends on anything is almost certainly wrong.
+   A skill records ONE prerequisite, so exactly one of these two fields may be
+   filled in and the other must be null. Never set both, even if the skill
+   genuinely builds on two things: choose the nearer one. In practice that is
+   almost always the within-topic position -- a skill only depends on an
+   earlier topic when it opens a topic and has no earlier skill of its own to
+   build on. Most skills have a prerequisite; a list where nothing depends on
+   anything is almost certainly wrong.
 
-5. assessment_priority is "HIGH" or "MEDIUM". HIGH is a skill the topic's
-   learning goal directly requires. MEDIUM supports it but a student could
-   meet the goal without demonstrating it separately. Use both; they are not
-   all HIGH.
+5. assessment_priority is REQUIRED on every skill and must be exactly "HIGH"
+   or "MEDIUM". Do not omit it and do not use any other word. HIGH is a skill
+   the topic's learning goal directly requires. MEDIUM supports it but a
+   student could meet the goal without demonstrating it separately. Use both;
+   they are not all HIGH.
+
+Every skill must carry all five keys: skill_name, description,
+prerequisite_position, prerequisite_micro_skill_id, assessment_priority. Use
+null where a field does not apply rather than leaving it out.
 
 6. Cover the topic's included scope and nothing outside it. Do not invent
    skills for the excluded scope. The misconceptions listed in the brief tell
@@ -264,12 +276,127 @@ def _check(
     return issues
 
 
+#: What a skill falls back to when the model omits the priority entirely.
+#: HIGH rather than MEDIUM because the failure modes are not symmetric: a skill
+#: wrongly marked HIGH gets assessed when it need not be, which wastes a
+#: question. Wrongly marked MEDIUM, it can be skipped, and a skill the learning
+#: goal actually requires goes unassessed. The reference is 16 HIGH to 6 MEDIUM,
+#: so HIGH is also the likelier answer.
+FALLBACK_PRIORITY = AssessmentPriority.HIGH
+
+#: Marks a warning that describes something _repair changed, so the pipeline can
+#: surface repairs without matching on the wording of each message.
+REPAIR_PREFIX = "repaired: "
+
+
+def _repair(
+    name: str,
+    skills: list,
+    known_ids: set[str],
+) -> tuple[list, list[ValidationIssue]]:
+    """Fix the field-level mistakes that are safe to fix, and say what was fixed.
+
+    Micro-skills cannot use the drop-one-and-continue approach the questions
+    take, because the skills form a dependency graph addressed by position:
+    remove the third skill and every prerequisite_position above two now points
+    at the wrong skill. So the recovery here is narrower, and repairs a field
+    rather than removing a row.
+
+    Only two repairs, both of which fall back to something safe rather than
+    inventing content:
+
+      * a missing or unrecognised assessment_priority becomes HIGH
+      * a prerequisite_micro_skill_id that was never offered becomes null,
+        which costs the graph one edge and keeps the skill itself
+
+    Both are reported as warnings. A repair nobody is told about is worse than
+    the failure, because the row looks authored rather than guessed.
+
+    Everything else -- too few skills, a duplicate name, an empty description,
+    a prerequisite_position pointing forwards -- is left for _check to reject.
+    Those are not field-level slips; they mean the model misread the task.
+    """
+    notes: list[ValidationIssue] = []
+
+    def note(field_name: str, message: str) -> None:
+        # The prefix is how a caller tells a repair apart from the ordinary
+        # warnings _check produces, without matching on the wording.
+        notes.append(
+            ValidationIssue(Severity.WARNING, name, field_name,
+                            f"{REPAIR_PREFIX}{message}")
+        )
+
+    repaired: list = []
+    for position, skill in enumerate(skills, start=1):
+        if not isinstance(skill, dict):
+            repaired.append(skill)
+            continue
+
+        skill = dict(skill)
+        where = f"micro_skills[{position}]"
+
+        priority = skill.get("assessment_priority")
+        if priority not in {p.value for p in AssessmentPriority}:
+            skill["assessment_priority"] = FALLBACK_PRIORITY.value
+            note(where, f"assessment_priority was {priority!r}; defaulted to "
+                        f"{FALLBACK_PRIORITY.value}")
+
+        pos = skill.get("prerequisite_position")
+        ext = skill.get("prerequisite_micro_skill_id")
+
+        # A row holds one prerequisite, so only one of these can survive.
+        # "Valid" is checked here rather than trusted, because dropping the
+        # good one and keeping a broken one would turn an ambiguity into a
+        # wrong dependency, which is worse than the failure being repaired.
+        pos_ok = (
+            isinstance(pos, int) and not isinstance(pos, bool)
+            and 1 <= pos < position
+        )
+        ext_ok = (
+            isinstance(ext, str) and bool(MICRO_SKILL_ID_RE.match(ext))
+            and ext in known_ids
+        )
+
+        if pos is not None and ext is not None:
+            # Both set. The reference resolves this: 16 of its 22 skills depend
+            # on one in the same topic, only 3 on an earlier topic, and those 3
+            # are all a topic's opening skills, where no within-topic skill
+            # exists to point at yet. So the position is the more likely
+            # intent -- but only when the position itself is usable.
+            if pos_ok:
+                skill["prerequisite_micro_skill_id"] = None
+                note(where, f"set both prerequisites; kept "
+                            f"prerequisite_position {pos} (the same topic is "
+                            f"the nearer dependency) and cleared "
+                            f"prerequisite_micro_skill_id {ext!r}")
+            elif ext_ok:
+                skill["prerequisite_position"] = None
+                note(where, f"set both prerequisites, and prerequisite_position "
+                            f"{pos!r} is not usable; kept "
+                            f"prerequisite_micro_skill_id {ext!r}")
+            # Neither usable: not a slip. _check reports both problems.
+
+        elif ext is not None and not ext_ok:
+            skill["prerequisite_micro_skill_id"] = None
+            if not known_ids:
+                note(where, f"prerequisite_micro_skill_id {ext!r} was invented "
+                            f"-- no earlier topics exist to depend on; cleared")
+            else:
+                note(where, f"prerequisite_micro_skill_id {ext!r} was not "
+                            f"offered as available; cleared")
+
+        repaired.append(skill)
+
+    return repaired, notes
+
+
 def generate_micro_skills(
     brief: NormalizedTopicBrief,
     client: LLMClient,
     *,
     available_prerequisites: Optional[list[MicroSkillRow]] = None,
     strict: bool = True,
+    repair: bool = False,
     id_service: Optional[IdService] = None,
     version: str = DEFAULT_VERSION,
 ) -> MicroSkillSet:
@@ -285,7 +412,15 @@ def generate_micro_skills(
     )
 
     skills = payload.get("micro_skills")
-    issues = _check(name, skills, known_ids)
+
+    # Repair before checking, so a repaired field does not also get reported as
+    # an error. The raw payload is kept on the result either way, so what the
+    # model actually said is never lost.
+    notes: list[ValidationIssue] = []
+    if repair and isinstance(skills, list) and skills:
+        skills, notes = _repair(name, skills, known_ids)
+
+    issues = notes + _check(name, skills, known_ids)
 
     errors = [i for i in issues if i.is_error]
     if errors and strict:

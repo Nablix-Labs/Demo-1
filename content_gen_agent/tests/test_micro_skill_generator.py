@@ -115,6 +115,19 @@ def test_the_prompt_explains_the_dependency_encoding():
     assert "must be smaller than this skill's own position" in text
 
 
+def test_the_prompt_forbids_inventing_a_prerequisite_id():
+    """A real run produced 'ms_arith_basic_compare' for a topic with no
+    predecessors. The prompt never said the field must be null when nothing
+    is offered, so the model filled it in rather than leaving it out."""
+    text = _prompt_text()
+    assert "Never invent an id" in text
+    assert "this field must be null on every skill" in text
+
+
+def test_the_prompt_says_the_priority_is_required():
+    assert "assessment_priority is REQUIRED on every skill" in _prompt_text()
+
+
 @needs_docs
 def test_the_prompt_carries_scope_and_misconceptions(brief):
     prompt = build_user_prompt(brief)
@@ -295,6 +308,203 @@ def test_uniform_priority_warns_but_proceeds(brief):
     """16 HIGH to 6 MEDIUM in the reference. All-HIGH loses the distinction."""
     result = _gen(brief, _payload(priority="HIGH"))
     assert result.is_clean
+    assert any("every skill is" in i.message for i in result.issues)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# repair=True: the two field-level slips that need not lose the topic
+#
+# These come from a real run. The model omitted assessment_priority on one
+# skill and invented 'ms_arith_basic_compare' as a prerequisite id on Topic 1,
+# where no earlier topics exist. Both failed the whole six-topic run before
+# any topic was written, which is far more damage than either mistake causes.
+# ──────────────────────────────────────────────────────────────────────
+
+@needs_docs
+def test_a_missing_priority_is_repaired_rather_than_losing_the_topic(brief):
+    payload = _payload()
+    del payload["micro_skills"][1]["assessment_priority"]
+
+    result = _gen(brief, payload, repair=True)
+
+    assert result.is_clean
+    assert len(result.rows) == 7, "the other six skills are untouched"
+    assert result.rows[1].assessment_priority is AssessmentPriority.HIGH
+
+
+@needs_docs
+def test_an_unrecognised_priority_is_repaired_too(brief):
+    """URGENT is not a near-miss to be mapped; it is unreadable, so it defaults."""
+    payload = _payload()
+    payload["micro_skills"][1]["assessment_priority"] = "URGENT"
+    result = _gen(brief, payload, repair=True)
+    assert result.is_clean
+    assert result.rows[1].assessment_priority is AssessmentPriority.HIGH
+
+
+@needs_docs
+def test_an_invented_prerequisite_id_is_cleared_not_kept(brief):
+    """An id in the model's own naming style points at nothing that exists."""
+    payload = _payload(link=False)
+    payload["micro_skills"][3]["prerequisite_micro_skill_id"] = "ms_arith_basic_compare"
+
+    result = _gen(brief, payload, repair=True)
+
+    assert result.is_clean
+    assert result.rows[3].prerequisite_micro_skill_id is None
+    assert len(result.rows) == 7
+
+
+@needs_docs
+def test_a_repair_is_always_reported(brief):
+    """A silent repair is worse than the failure: the row looks authored."""
+    from micro_skill_generator import REPAIR_PREFIX
+
+    payload = _payload()
+    del payload["micro_skills"][1]["assessment_priority"]
+    payload["micro_skills"][2]["prerequisite_micro_skill_id"] = "ms_made_up"
+
+    result = _gen(brief, payload, repair=True)
+    repairs = [i for i in result.issues if i.message.startswith(REPAIR_PREFIX)]
+
+    assert len(repairs) == 2
+    assert all(not i.is_error for i in repairs)
+    assert any("defaulted to HIGH" in i.message for i in repairs)
+    assert any("ms_made_up" in i.message for i in repairs)
+
+
+@needs_docs
+def test_the_repair_message_says_why_the_id_was_impossible(brief):
+    """On topic 1 nothing was offered, so the id cannot have been a typo."""
+    payload = _payload(link=False)
+    payload["micro_skills"][2]["prerequisite_micro_skill_id"] = "ms_made_up"
+    result = _gen(brief, payload, repair=True)
+    assert any("no earlier topics exist" in i.message for i in result.issues)
+
+
+@needs_docs
+def test_clearing_an_invented_id_keeps_a_valid_position(brief):
+    """Setting both is ambiguous, but the position is the checkable one."""
+    payload = _payload()
+    payload["micro_skills"][3]["prerequisite_micro_skill_id"] = "ms_made_up"
+
+    result = _gen(brief, payload, repair=True)
+
+    assert result.is_clean
+    assert result.rows[3].prerequisite_micro_skill_id == result.rows[2].micro_skill_id
+
+
+@needs_docs
+def test_both_prerequisites_set_keeps_the_within_topic_one(brief, briefs):
+    """From the six-topic run: once real ids were offered, the model filled in
+    both fields at once. A row holds one prerequisite, so one has to go.
+
+    The reference decides which: 16 of its 22 skills depend on one in the same
+    topic and only 3 on an earlier topic, and all 3 of those open a topic,
+    where no within-topic skill exists yet. So the position wins.
+    """
+    earlier = _gen(briefs[0], _payload()).rows
+    payload = _payload()
+    payload["micro_skills"][3]["prerequisite_micro_skill_id"] = earlier[0].micro_skill_id
+
+    result = generate_micro_skills(
+        briefs[1], FakeLLMClient([payload]),
+        available_prerequisites=earlier, repair=True,
+    )
+
+    assert result.is_clean
+    assert result.rows[3].prerequisite_micro_skill_id == result.rows[2].micro_skill_id
+    assert any("kept prerequisite_position" in i.message for i in result.issues)
+
+
+@needs_docs
+def test_both_set_keeps_the_offered_id_when_the_position_is_broken(brief, briefs):
+    """Preferring the position blindly would swap an ambiguity for a wrong
+    dependency, which is worse than the failure being repaired."""
+    earlier = _gen(briefs[0], _payload()).rows
+    payload = _payload()
+    payload["micro_skills"][3]["prerequisite_position"] = 99
+    payload["micro_skills"][3]["prerequisite_micro_skill_id"] = earlier[0].micro_skill_id
+
+    result = generate_micro_skills(
+        briefs[1], FakeLLMClient([payload]),
+        available_prerequisites=earlier, repair=True,
+    )
+
+    assert result.is_clean
+    assert result.rows[3].prerequisite_micro_skill_id == earlier[0].micro_skill_id
+
+
+@needs_docs
+def test_both_set_and_neither_usable_is_still_refused(brief):
+    """Repair picks between two candidates. It does not invent a third."""
+    payload = _payload()
+    payload["micro_skills"][3]["prerequisite_position"] = 99
+    payload["micro_skills"][3]["prerequisite_micro_skill_id"] = "ms_made_up"
+    with pytest.raises(MicroSkillError):
+        _gen(brief, payload, repair=True)
+
+
+@needs_docs
+def test_a_forward_position_alone_is_not_quietly_swapped_for_nothing(brief):
+    """Only the both-set case is ambiguous. One bad field is just bad."""
+    payload = _payload()
+    payload["micro_skills"][3]["prerequisite_position"] = 7
+    with pytest.raises(MicroSkillError, match="later skill"):
+        _gen(brief, payload, repair=True)
+
+
+def test_the_prompt_says_only_one_prerequisite_field_may_be_filled():
+    text = _prompt_text()
+    assert "exactly one of these two fields may be filled in" in text
+    assert "Never set both" in text
+
+
+@needs_docs
+def test_repair_is_off_by_default(brief):
+    """A caller has to ask. Generators stay strict unless told otherwise."""
+    payload = _payload()
+    del payload["micro_skills"][1]["assessment_priority"]
+    with pytest.raises(MicroSkillError, match="not HIGH or MEDIUM"):
+        _gen(brief, payload)
+
+
+@needs_docs
+@pytest.mark.parametrize("break_it, expected", [
+    (lambda s: s.__setitem__("description", "  "), "description"),
+    (lambda s: s.__setitem__("prerequisite_position", 99), "outside the list"),
+    (lambda s: s.__setitem__("skill_name", "Do thing 1"), "duplicate"),
+])
+def test_repair_does_not_rescue_a_model_that_misread_the_task(brief, break_it, expected):
+    """Repair fixes slips in a field. It must not paper over a wrong answer."""
+    payload = _payload()
+    break_it(payload["micro_skills"][2])
+    with pytest.raises(MicroSkillError, match=expected):
+        _gen(brief, payload, repair=True)
+
+
+@needs_docs
+def test_repair_cannot_rescue_too_few_skills(brief):
+    """Nothing field-level can add a skill that was never generated."""
+    with pytest.raises(MicroSkillError, match="expected at least"):
+        _gen(brief, _payload(n=MIN_SKILLS - 1), repair=True)
+
+
+@needs_docs
+def test_the_raw_payload_still_holds_what_the_model_said(brief):
+    """Repair must not erase the evidence of what actually came back."""
+    payload = _payload()
+    payload["micro_skills"][1]["assessment_priority"] = "URGENT"
+    result = _gen(brief, payload, repair=True)
+    assert result.raw_response["micro_skills"][1]["assessment_priority"] == "URGENT"
+
+
+@needs_docs
+def test_a_repaired_run_still_warns_about_uniform_priority(brief):
+    """The checks run on the repaired list, so defaults count toward them."""
+    payload = _payload(priority="HIGH")
+    del payload["micro_skills"][1]["assessment_priority"]
+    result = _gen(brief, payload, repair=True)
     assert any("every skill is" in i.message for i in result.issues)
 
 
