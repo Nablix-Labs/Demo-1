@@ -221,6 +221,7 @@ class CriticalThinkingConfig(StrictSchema):
 
 class GuidedLearningConfig(StrictSchema):
     model: str
+    model_supports_reasoning_effort: StrictBool
     single_call_enabled: StrictBool
     guided_turn_maximum_retries: int = Field(ge=0)
     scaffold_evaluation_maximum_retries: int = Field(ge=0)

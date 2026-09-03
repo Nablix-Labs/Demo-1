@@ -4,6 +4,7 @@ confidence:
   standard_response: 0.95
 guided_learning:
   model: "gpt-4o-mini-2024-07-18"
+  model_supports_reasoning_effort: false
   single_call_enabled: true
   guided_turn_maximum_retries: 0
   scaffold_evaluation_maximum_retries: 0

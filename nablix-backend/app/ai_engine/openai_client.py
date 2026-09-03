@@ -228,6 +228,7 @@ class OpenAIAIEngineClient:
         store_responses: bool,
         retry_count: int,
         guided_reasoning_effort: str,
+        guided_model_supports_reasoning_effort: bool,
         guided_verbosity: str,
     ) -> None:
         self._api_key = api_key
@@ -237,6 +238,7 @@ class OpenAIAIEngineClient:
         self._store_responses = store_responses
         self._retry_count = retry_count
         self._guided_reasoning_effort = guided_reasoning_effort
+        self._guided_model_supports_reasoning_effort = guided_model_supports_reasoning_effort
         self._guided_verbosity = guided_verbosity
 
     def generate_tutor_turn(
@@ -553,7 +555,6 @@ class OpenAIAIEngineClient:
             "model": self._model,
             "input": messages,
             "store": self._store_responses,
-            "reasoning": {"effort": self._guided_reasoning_effort},
             "text": {
                 "verbosity": self._guided_verbosity,
                 "format": {
@@ -564,6 +565,8 @@ class OpenAIAIEngineClient:
                 }
             },
         }
+        if self._guided_model_supports_reasoning_effort:
+            request_body["reasoning"] = {"effort": self._guided_reasoning_effort}
         if self._prompt_cache_key_enabled:
             prompt_version = session_context.get(
                 "prompt_version",
