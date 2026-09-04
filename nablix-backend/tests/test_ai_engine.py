@@ -8377,9 +8377,13 @@ def test_guided_rubric_uses_phase_prompt_and_specialized_contract(
     assert len(request_bodies) == 1
     messages = request_bodies[0]["input"]
     assert isinstance(messages, list)
-    assert messages[0] == {"role": "system", "content": system_prompt}
+    registry = load_prompt_registry()
+    assert messages[0] == {"role": "system", "content": registry.layer_1_core}
+    assert messages[1]["role"] == "system"
+    assert "PHASE 2" in messages[1]["content"]
+    assert messages[2] == {"role": "system", "content": system_prompt}
     assert messages[-1]["role"] == "user"
-    assert len(messages) == 2
+    assert len(messages) == 4
     assert "reasoning" not in request_bodies[0]
     assert request_bodies[0]["text"]["verbosity"] == "low"
 

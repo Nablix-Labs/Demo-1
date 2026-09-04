@@ -3,6 +3,7 @@ import json
 import pytest
 
 from app.ai_engine import openai_client
+from app.ai_engine.prompt_registry import load_prompt_registry
 from app.ai_engine.schemas import (
     ExplainAgainConversationMessage,
     ExplainAgainRequest,
@@ -144,6 +145,15 @@ def test_generate_explain_again_uses_strict_state_preserving_contract(
         "role": "assistant",
         "content": "Think about multiplication.",
     } in request_bodies[0]["input"]
+    registry = load_prompt_registry()
+    messages = request_bodies[0]["input"]
+    assert messages[0] == {"role": "system", "content": registry.layer_1_core}
+    assert messages[1]["role"] == "system"
+    assert "PHASE 2" in messages[1]["content"]
+    assert messages[2] == {
+        "role": "system",
+        "content": "Rephrase the active objective without changing pedagogical state.",
+    }
     user_payload = json.loads(user_messages[-1]["content"])
     assert user_payload["component"] == "explain_again_response"
     assert user_payload["first_unresolved_concept_id"] == "PRODUCT_MEANING"
