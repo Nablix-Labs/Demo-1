@@ -284,8 +284,44 @@ const CONFIRMED_X = 0.06;
  */
 const RESCUE_X = 0.44;
 const RESCUE_FIRST_Y = 0.14;
-const RESCUE_GAP = 0.09;
+/**
+ * Row spacing. Wide enough for a wrapped step, not just a one-line one.
+ *
+ * 0.09 held one line. Bounding the column (RESCUE_RIGHT) means a sentence now
+ * wraps rather than running off, so a row is up to three lines tall — at
+ * RESCUE_SIZE that is ~67px against the 62px this used to allow, and rows
+ * collided. 0.11 is ~76px on a 692px canvas, which clears three.
+ */
+const RESCUE_GAP = 0.11;
 const RESCUE_LAST_Y = 0.68;
+/**
+ * The right-hand limit for rescue ink.
+ *
+ * The support lane is fixed over the canvas and holds the rescue panel itself,
+ * so ink that runs past this is drawn UNDER the panel and clipped mid-word.
+ * Measured live on 4 Sep at 1200×692: the lane's left edge sat at 0.70 of the
+ * canvas, and a step at the old unbounded width ran to 1137px against a panel
+ * starting at 912px.
+ *
+ * The older note in this file put the cards at 0.58. That was conservative and
+ * is kept as the safer number wherever the lane might be wider; 0.70 is what
+ * was actually measured, and the gap between them is the margin this leaves.
+ *
+ * Independent of which side the lane is on. When the tutor panel moves the lane
+ * to the left it occupies roughly [0, 0.30], which is already clear of
+ * RESCUE_X — so the right-hand bound is the only one that ever binds.
+ */
+const RESCUE_RIGHT = 0.70;
+/** Column width available to a rescue step. */
+export const RESCUE_WRAP_WIDTH = RESCUE_RIGHT - RESCUE_X;
+/**
+ * Ink size for a rescue step.
+ *
+ * Smaller than the 24 used for a short annotation, because these are sentences
+ * wrapped into a narrow column: at 24 the sample step took four lines and
+ * overran its row. At 18 it takes two.
+ */
+const RESCUE_SIZE = 18;
 
 /** A rescue mark, identified by the suffix `actionMarks` gives it. */
 export const RESCUE_SUFFIX = ':rescue';
@@ -444,7 +480,10 @@ export function actionMarks(
       y: target.at.y,
       text: stepText,
       color: INK,
-      size: 24,
+      size: RESCUE_SIZE,
+      // Bounded to its column, so the sentence wraps instead of running under
+      // the support lane and being clipped by the rescue panel itself.
+      wrapWidth: RESCUE_WRAP_WIDTH,
       // The reveal is the one line in a walkthrough the student is meant to
       // land on, so it is the one line set apart.
       fontStyle: reveal ? 'bold' : undefined,

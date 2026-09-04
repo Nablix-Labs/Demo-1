@@ -159,6 +159,17 @@ export interface TutorElement {
   points?: number[];                                  // normalised x,y pairs
   text?: string; tex?: string;                        // text / KaTeX content
   fontStyle?: string;                                 // e.g. 'bold' — text only
+  /**
+   * Wrap width for a text mark, as a fraction of canvas width.
+   *
+   * Absent means "one line, however long it runs", which is right for a short
+   * annotation sitting beside the thing it labels. It is wrong for an authored
+   * rescue step: those are whole sentences, and a single line ran out of its
+   * column and under the support lane, where the panel clipped it mid-word
+   * (measured 4 Sep: ink 667→1137px, panel edge at 912). Setting this bounds
+   * the mark to its column and wraps instead.
+   */
+  wrapWidth?: number;
   color?: string; strokeWidth?: number; size?: number;
 }
 

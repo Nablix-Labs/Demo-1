@@ -76,6 +76,34 @@ export default function TutorLayer({ width, height }: { width: number; height: n
         // typing; clipping by measured width lets each letter appear under the
         // nib as it is written. (See the `x` note in the file header: no
         // offsetX, so the mark occupies [x, x+width].)
+        // A bounded mark wraps, and wrapping and the nib-reveal are mutually
+        // exclusive: the reveal clips a single advancing line horizontally, and
+        // on wrapped text that clip would hide every line but the first.
+        //
+        // So a wrapped mark appears as a whole once its turn comes. That is the
+        // right trade for what actually carries this: an authored rescue step is
+        // a sentence the student reads, not a nib movement they watch, and it is
+        // spoken aloud as it lands (lib/rescueSpeech) — the narration is the
+        // thing that unfolds in time here, not the ink.
+        if (el.wrapWidth) {
+          if (p <= 0) return null;
+          return (
+            <Text
+              key={el.id}
+              x={left}
+              y={top}
+              text={content}
+              width={el.wrapWidth * width}
+              wrap="word"
+              lineHeight={1.25}
+              fontSize={fontSize}
+              fontFamily={tutorFontFamily()}
+              fontStyle={el.fontStyle}
+              fill={color}
+              offsetY={fontSize / 2}
+            />
+          );
+        }
         const { advance, overhangLeft, overhangRight } = measureTutorTextBounds(content, fontSize);
         const inked = advance * p;
         if (inked <= 0) return null;
