@@ -8415,6 +8415,15 @@ def test_guided_learning_supports_every_authored_answer_verification_method() ->
     }
 
 
+def test_guided_evaluator_prompt_includes_clarification_and_nonrepetition_rules() -> None:
+    prompt = load_classifier_rules().guided_learning.evaluator_system_prompt
+
+    assert "task clarification, not a hint" in prompt
+    assert "unresolved role" in prompt
+    assert "duplicate-question check" in prompt
+    assert "learner just demonstrated" in prompt
+
+
 def test_guided_learning_rejects_an_unknown_verification_contract(
     monkeypatch,
 ) -> None:
