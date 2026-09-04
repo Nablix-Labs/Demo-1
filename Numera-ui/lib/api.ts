@@ -1134,6 +1134,48 @@ export interface Phase4FirstError {
   student_page_no?: number | null;
 }
 
+/**
+ * One element of a replay step's board (PR #257).
+ *
+ * A CLOSED set, discriminated on `kind`, which is the whole point: an
+ * open-ended one would put layout decisions back on the client, and the client
+ * would be inferring what the tutor meant from prose. The renderer draws the
+ * kinds it knows and skips the ones it does not, so the backend can add kinds
+ * without a frontend release.
+ *
+ * Field shapes mirror the pydantic models exactly — `arrow_label` is required
+ * on a value row, a brace always carries `labels` as a LIST even when there is
+ * one, and `tone` is a single literal on each of struck and boxed rather than a
+ * free choice. Widening any of those here would let a payload type-check on the
+ * client that the backend would have rejected.
+ */
+export type Phase4BoardElement =
+  /** The pattern itself: values across, with one shared caption under the arrows. */
+  | { kind: 'value_row'; values: string[]; arrow_label: string }
+  /**
+   * A brace under the row above it.
+   *
+   * `over` names WHAT it spans — the value row, or the brace already under it,
+   * which is how the design stacks "+4 +4 +4" and then "stays the same"
+   * beneath it. `labels` aligns to the row's columns when the counts match and
+   * spans the whole brace otherwise.
+   */
+  | { kind: 'brace'; over: 'value_row' | 'brace'; labels: string[] }
+  /** A compact line of notation. */
+  | { kind: 'expression'; text: string }
+  /** A caption for the notation beside it. */
+  | { kind: 'label'; text: string }
+  /** The learner's incorrect expression, crossed out. Only ever `error`. */
+  | { kind: 'struck'; text: string; tone: 'error' }
+  /** The corrected rule. Only ever `correct`. */
+  | { kind: 'boxed'; text: string; tone: 'correct' }
+  /** One short substituted check, e.g. "Try n = 6: 6 + 4 = 10". */
+  | { kind: 'example'; text: string };
+
+export interface Phase4Board {
+  elements: Phase4BoardElement[];
+}
+
 export interface Phase4ReplayStep {
   sequence_no: number;
   /** Spoken. */
@@ -1156,6 +1198,14 @@ export interface Phase4ReplayStep {
    * bar renders without one instead of inventing a duration.
    */
   duration_ms?: number | null;
+  /**
+   * The visual explanation for this step (PR #257).
+   *
+   * Optional, and its absence is not a degraded state: without it the step
+   * renders as the handwritten `tutor_write` line exactly as before. With it,
+   * narration is deliberately short and the board carries the mathematics.
+   */
+  board?: Phase4Board | null;
 }
 
 export interface Phase4Replay {

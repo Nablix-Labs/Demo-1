@@ -30,6 +30,8 @@ import { boardDraw } from '@/lib/phase4Board';
 import { loadWorkArtifactPdf, type PdfOutcome } from '@/lib/workArtifactPdf';
 import { openingPageNo } from '@/lib/phase4Review';
 import { stagesFrom, totalDurationMs, elapsedMsAt, clock } from '@/lib/phase4Stages';
+import { usesBoards } from '@/lib/phase4BoardLayout';
+import ReplayBoard from './ReplayBoard';
 import { cn } from '@/lib/cn';
 import type { Phase4Replay, SchemaWorkedExampleStep } from '@/lib/api';
 
@@ -93,6 +95,19 @@ export default function TutorStage({
     [replay],
   );
 
+  /**
+   * Structured board, or the handwriting canvas?
+   *
+   * Decided once per REPLAY, never per step. Switching surfaces partway through
+   * one explanation would swap the whole centre panel mid-sentence; a step
+   * inside a boarded replay that carries no board of its own shows its
+   * `tutor_write` as a heading on the same surface instead.
+   *
+   * When no step has a board this is false and NOTHING below changes — the
+   * canvas, the draw effect and the ink reveal all run exactly as they did
+   * before PR #257, which is the fallback Sanya asked us to preserve.
+   */
+  const boarded = useMemo(() => usesBoards(replay.replay_steps), [replay]);
   // What the board currently holds, so a forward step can append one line while
   // any other move rebuilds. Reset per replay — a new replay starts from blank.
   const drawnIndex = useRef(-1);
@@ -100,6 +115,10 @@ export default function TutorStage({
 
   const draw = useCallback(
     (_step: SchemaWorkedExampleStep, index: number) => {
+      // A boarded replay has no canvas mounted, so drawing to it would put ink
+      // on a surface nobody is looking at — and leave it in the store for
+      // whatever mounts the tutor layer next.
+      if (boarded) return;
       const { mode, elements } = boardDraw(drawnIndex.current, index, replay.replay_steps);
       drawnIndex.current = index;
       if (!elements.length) return;
@@ -110,7 +129,7 @@ export default function TutorStage({
         elements,
       });
     },
-    [applyCanvasDraw, replay],
+    [applyCanvasDraw, replay, boarded],
   );
 
   const { index, steps, finished, paused, setPaused, stepBy } = useWorkedExamplePlayer({
@@ -142,6 +161,8 @@ export default function TutorStage({
   const played = totalMs !== null && elapsedMs !== null
     ? elapsedMs / totalMs
     : steps.length > 1 ? Math.max(0, index) / (steps.length - 1) : 0;
+
+  const currentStep = replay.replay_steps[Math.max(0, Math.min(index, replay.replay_steps.length - 1))];
 
   const changeSpeed = useCallback(() => {
     const next = SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.length];
@@ -264,9 +285,19 @@ export default function TutorStage({
 
       {/* Board + the student's own work beside it */}
       <div className="flex-1 min-h-0 flex">
-        {/* The tutor writes here. Dominant by design (§8.4). */}
-        <div className="flex-1 min-w-0 relative bg-white">
-          <DrawingCanvas tutorOnly />
+        {/* The tutor works here. Dominant by design (§8.4). */}
+        <div className="flex-1 min-w-0 relative bg-white flex flex-col">
+          {boarded ? (
+            <ReplayBoard
+              // Remount per step so the board is rebuilt rather than diffed
+              // element-by-element into the previous step's shape.
+              key={currentStep?.sequence_no ?? index}
+              elements={currentStep?.board?.elements ?? []}
+              fallbackText={currentStep?.tutor_write}
+            />
+          ) : (
+            <DrawingCanvas tutorOnly />
+          )}
         </div>
 
         {/* §8.4 "student's original submitted work" + "page selector when the

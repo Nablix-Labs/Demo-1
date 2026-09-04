@@ -63,10 +63,54 @@ export const PHASE_4_DEMO: Phase4Review = {
         student_page_no: 1,
       },
       replay_steps: [
-        { sequence_no: 1, stage_label: 'Spot the pattern', duration_ms: 21000, narration: 'Let us look at what changes and what stays the same.', tutor_write: 'What changes?' },
-        { sequence_no: 2, stage_label: 'Spot the pattern', duration_ms: 24000, narration: 'The starting number changes each time — 3, then 9, then 14.', tutor_write: '3, 9, 14  →  changes' },
-        { sequence_no: 3, stage_label: 'Find the error', duration_ms: 33000, narration: 'The four never changes, and neither does the operation.', tutor_write: '+ 4  →  stays the same' },
-        { sequence_no: 4, stage_label: 'Build the rule', duration_ms: 30000, narration: 'So we add four to a starting number we can call n.', tutor_write: 'Rule:  n + 4' },
+        // Boards from PR #257. Narration is short on purpose now: the board
+        // carries the mathematics, and these fixtures follow that instruction
+        // so the screen is reviewed the way real payloads will render.
+        {
+          sequence_no: 1, stage_label: 'Spot the pattern', duration_ms: 21000,
+          narration: 'Look at how each number changes.',
+          tutor_write: 'What changes?',
+          board: {
+            elements: [
+              { kind: 'value_row', values: ['2', '5', '8'], arrow_label: 'changes' },
+            ],
+          },
+        },
+        {
+          sequence_no: 2, stage_label: 'Spot the pattern', duration_ms: 24000,
+          narration: 'Each one goes up by the same four.',
+          tutor_write: '+ 4 each time',
+          board: {
+            elements: [
+              { kind: 'value_row', values: ['2', '5', '8'], arrow_label: 'changes' },
+              { kind: 'brace', over: 'value_row', labels: ['+ 4', '+ 4', '+ 4'] },
+              { kind: 'brace', over: 'brace', labels: ['stays the same'] },
+            ],
+          },
+        },
+        {
+          sequence_no: 3, stage_label: 'Find the error', duration_ms: 33000,
+          narration: 'Multiplying changes the size instead.',
+          tutor_write: 'Not n × 4',
+          board: {
+            elements: [
+              { kind: 'struck', text: 'n × 4', tone: 'error' },
+              { kind: 'label', text: 'multiplying changes the size' },
+            ],
+          },
+        },
+        {
+          sequence_no: 4, stage_label: 'Build the rule', duration_ms: 30000,
+          narration: 'So the rule adds four to any starting number.',
+          tutor_write: 'Rule:  n + 4',
+          board: {
+            elements: [
+              { kind: 'struck', text: 'n × 4', tone: 'error' },
+              { kind: 'boxed', text: 'Rule:  n + 4', tone: 'correct' },
+              { kind: 'example', text: 'Try n = 6:\n6 + 4 = 10' },
+            ],
+          },
+        },
       ],
       work_artifact: {
         artifact_id: 'ART-P3-000122',
