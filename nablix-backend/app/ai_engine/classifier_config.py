@@ -259,8 +259,6 @@ class GuidedLearningConfig(StrictSchema):
     answer_reveal_retry_feedback: str
     deterministic_follow_up_wording_feedback: str
     reconciliation_message: str
-    general_rule_fixed_value_prompt: str
-    general_rule_changing_value_prompt: str
     allowed_student_states: list[GuidedStudentState]
     supported_verification_methods: list[str]
     multi_component_question_types: list[QuestionType]

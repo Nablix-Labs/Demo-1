@@ -2611,7 +2611,14 @@ def guided_tutor_context_for(
 
     teaching_steps = teaching_steps_for(request)
     active_step = active_teaching_step(request)
-    active_question = (
+    persisted_state = request.guided_teaching_state
+    prior_probe = (
+        persisted_state.last_reasoning_probe
+        if persisted_state is not None
+        and persisted_state.question_id == request.question_id
+        else None
+    )
+    active_question = prior_probe or (
         active_step.prompt
         if active_step is not None
         else focused_unresolved_prompt(
@@ -2625,7 +2632,6 @@ def guided_tutor_context_for(
     current_support = (
         phase_context.current_support if phase_context is not None else None
     )
-    persisted_state = request.guided_teaching_state
     selected_option_id = (
         typed_choice_selection(request)
         or (
@@ -2654,7 +2660,7 @@ def guided_tutor_context_for(
         f"{', '.join(objective.confirmed_concept_ids) or 'none'}. "
         "Missing concepts: "
         f"{', '.join(objective.missing_concept_ids) or 'none'}. "
-        f"Active question: {active_question} "
+        f"Previous tutor focus: {active_question} "
         "If active support is present, explain that exact support in plain language "
         "before asking one focused question about it. "
         "The backend owns progression and support selection; do not advance "
@@ -3285,33 +3291,6 @@ def classify_guided_learning_response(
             choice_follow_up,
             objective,
         )
-    choice_explanation = deterministic_choice_explanation_evaluation(
-        request,
-        rubric,
-        objective,
-        rules,
-    )
-    if deterministic_resolution_enabled and choice_explanation is not None:
-        next_objective = normalized_guided_objective(choice_explanation, objective)
-        if next_objective is not None:
-            choice_explanation = write_deterministic_guided_follow_up(
-                choice_explanation,
-                request,
-                rubric,
-                next_objective,
-                openai_client,
-                allowed_errors,
-                guided_tutor_context_for(request, rubric, next_objective),
-                rules,
-            )
-        return build_guided_tutor_response(
-            request,
-            rules,
-            safety_check,
-            rubric,
-            choice_explanation,
-            next_objective,
-        )
     controller_evaluation = (
         None
         if (
@@ -3379,12 +3358,6 @@ def classify_guided_learning_response(
                 candidate,
                 rubric,
                 request.student_input,
-            )
-            candidate = apply_general_rule_explanation_progress(
-                candidate,
-                request,
-                rubric,
-                objective,
             )
             raw_student_state = candidate.student_state
             raw_confidence = candidate.confidence
@@ -3542,12 +3515,6 @@ def classify_guided_learning_response(
             allowed_errors,
             rules,
         )
-    evaluation = apply_general_rule_explanation_progress(
-        evaluation,
-        request,
-        rubric,
-        objective,
-    )
     if (
         evaluation.student_state == "PARTIAL"
         and not evaluation.newly_confirmed_concept_ids
@@ -3653,23 +3620,6 @@ def controller_prompt_for_objective(
 
     rules = load_classifier_rules()
     missing_ids = set(objective.missing_concept_ids)
-    if (
-        request.question_type == "CHOICE_WITH_EXPLANATION"
-        and "ANSWER_SELECTION" not in missing_ids
-        and "ANSWER_EXPLANATION" in missing_ids
-    ):
-        general_rule_evidence = general_rule_explanation_evidence(request)
-        if general_rule_evidence == (True, False):
-            expression = selected_general_rule_expression(request)
-            if expression is not None:
-                return rules.guided_learning.general_rule_fixed_value_prompt.format(
-                    variable=expression.group(1)
-                )
-        if general_rule_evidence == (False, True):
-            return rules.guided_learning.general_rule_changing_value_prompt
-        return (
-            "Why does the option you chose work for every case in the question?"
-        )
     for teaching_step in teaching_steps_for(request):
         component_id = _component_for_step(request, rubric, teaching_step.step_id)
         if component_id in missing_ids:
@@ -4422,14 +4372,6 @@ def guided_tutor_message_validation_reason(
     ):
         return "ACTIVE_PROMPT_DRIFT"
 
-    explanation_probe_reason = general_rule_explanation_probe_reason(
-        message,
-        request,
-        objective,
-    )
-    if explanation_probe_reason is not None:
-        return explanation_probe_reason
-
     normalized_message = normalize_semantic_answer(message)
 
     if (
@@ -4606,33 +4548,6 @@ def guided_message_acknowledges_non_turn_evidence(
         ):
             return True
     return False
-
-
-def general_rule_explanation_probe_reason(
-    message: str,
-    request: ClassificationRequest,
-    objective: ActiveTeachingObjective,
-) -> str | None:
-    """Keep a general-rule explanation on the one fact the learner still needs."""
-
-    if (
-        request.question_type != "CHOICE_WITH_EXPLANATION"
-        or "ANSWER_SELECTION" not in objective.confirmed_concept_ids
-        or "ANSWER_EXPLANATION" not in objective.missing_concept_ids
-    ):
-        return None
-    evidence = general_rule_explanation_evidence(request)
-    if evidence is None:
-        return None
-    normalized_message = normalize_semantic_answer(message)
-    changing_identified, fixed_identified = evidence
-    if changing_identified and not fixed_identified:
-        if not re.search(r"\b(?:fixed|constant|same|stay|stays|remains)\b", normalized_message):
-            return "WRONG_EXPLANATION_PROBE"
-    if fixed_identified and not changing_identified:
-        if not re.search(r"\b(?:change|changes|changing|variable|vary|varies)\b", normalized_message):
-            return "WRONG_EXPLANATION_PROBE"
-    return None
 
 
 def active_support_context_tokens(request: ClassificationRequest) -> set[str]:
@@ -5358,113 +5273,6 @@ def selected_general_rule_expression(
     )
     return _GENERAL_RULE_EXPRESSION_RE.search(
         (selected_option_text or request.question).casefold()
-    )
-
-
-def deterministic_choice_explanation_evaluation(
-    request: ClassificationRequest,
-    rubric: GeneratedQuestionRubric,
-    objective: ActiveTeachingObjective,
-    rules: ClassifierRulesConfig,
-) -> GuidedEvaluation | None:
-    """Keep a selected general-rule choice on its changing-then-fixed path."""
-
-    if request.question_type != "CHOICE_WITH_EXPLANATION":
-        return None
-    if "ANSWER_SELECTION" not in objective.confirmed_concept_ids:
-        return None
-    if "ANSWER_EXPLANATION" not in objective.missing_concept_ids:
-        return None
-    evidence = general_rule_explanation_evidence(request)
-    if evidence is None:
-        return None
-    changing_identified, fixed_identified = evidence
-    if not changing_identified and not fixed_identified:
-        return None
-    if changing_identified and fixed_identified:
-        return GuidedEvaluation(
-            student_state="CORRECT",
-            newly_confirmed_concept_ids=["ANSWER_EXPLANATION"],
-            preserved_concept_ids=objective.confirmed_concept_ids,
-            contradicted_concept_ids=[],
-            missing_concept_ids=[],
-            selected_error_code=None,
-            confidence=1.0,
-            next_objective=None,
-            tutor_message=rules.messages.CORRECT,
-            tutor_message_voice=rules.messages.CORRECT,
-        )
-    expression = selected_general_rule_expression(request)
-    if changing_identified and expression is not None:
-        message = rules.guided_learning.general_rule_fixed_value_prompt.format(
-            variable=expression.group(1)
-        )
-    elif fixed_identified:
-        message = rules.guided_learning.general_rule_changing_value_prompt
-    else:
-        return None
-    return GuidedEvaluation(
-        student_state="PARTIAL",
-        newly_confirmed_concept_ids=[],
-        preserved_concept_ids=objective.confirmed_concept_ids,
-        contradicted_concept_ids=[],
-        missing_concept_ids=objective.missing_concept_ids,
-        selected_error_code=None,
-        confidence=1.0,
-        next_objective=objective,
-        tutor_message=message,
-        tutor_message_voice=message,
-    )
-
-
-def apply_general_rule_explanation_progress(
-    evaluation: GuidedEvaluation,
-    request: ClassificationRequest,
-    rubric: GeneratedQuestionRubric,
-    objective: ActiveTeachingObjective,
-) -> GuidedEvaluation:
-    """Keep a general-rule explanation on the changing-then-fixed teaching path."""
-
-    evidence = general_rule_explanation_evidence(request)
-    if evidence is None:
-        return evaluation
-    changing_identified, fixed_identified = evidence
-    explanation_ids = {
-        component.concept_id
-        for component in rubric.required_concepts
-        if component.required and "explanation" in component.concept_id.casefold()
-    }
-    selection_confirmed = "ANSWER_SELECTION" in {
-        *objective.confirmed_concept_ids,
-        *evaluation.newly_confirmed_concept_ids,
-        *evaluation.preserved_concept_ids,
-    }
-    if not explanation_ids or not selection_confirmed:
-        return evaluation
-
-    newly_confirmed_ids = set(evaluation.newly_confirmed_concept_ids)
-    missing_ids = set(evaluation.missing_concept_ids)
-    if changing_identified and fixed_identified:
-        newly_confirmed_ids.update(explanation_ids)
-        missing_ids.difference_update(explanation_ids)
-        return evaluation.model_copy(
-            update={
-                "student_state": "CORRECT",
-                "newly_confirmed_concept_ids": sorted(newly_confirmed_ids),
-                "missing_concept_ids": sorted(missing_ids),
-            }
-        )
-
-    # Naming only one part is useful evidence, but not the full explanation.
-    # Do not let a broad LLM interpretation skip the remaining fixed/changing cue.
-    newly_confirmed_ids.difference_update(explanation_ids)
-    missing_ids.update(explanation_ids)
-    return evaluation.model_copy(
-        update={
-            "student_state": "PARTIAL",
-            "newly_confirmed_concept_ids": sorted(newly_confirmed_ids),
-            "missing_concept_ids": sorted(missing_ids),
-        }
     )
 
 
