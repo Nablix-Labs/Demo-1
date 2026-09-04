@@ -13,8 +13,10 @@ from pydantic import Field, StrictBool, ValidationError
 from app.ai_engine.prompt_registry import (
     OpenAITutorPromptMetadata,
     Trigger,
+    build_semi_static_block,
     build_openai_tutor_messages,
     build_openai_tutor_prompt_metadata,
+    load_prompt_registry,
     sha256_text,
 )
 from app.ai_engine.schemas import (
@@ -534,6 +536,9 @@ class OpenAIAIEngineClient:
         system_prompt: str,
         user_payload: dict[str, object],
     ) -> dict[str, object]:
+        phase: LearningPhase = "GUIDED_PRACTICE"
+        registry = load_prompt_registry()
+        phase_block = build_semi_static_block(phase, [])
         recent_conversation = _guided_conversation_history(user_payload)
         session_context = {
             key: value
@@ -547,6 +552,8 @@ class OpenAIAIEngineClient:
             ensure_ascii=False,
         )
         messages = [
+            {"role": "system", "content": registry.layer_1_core},
+            {"role": "system", "content": phase_block},
             {"role": "system", "content": system_prompt},
             *[message.model_dump() for message in recent_conversation],
             {"role": "user", "content": request_content},
@@ -565,15 +572,24 @@ class OpenAIAIEngineClient:
                 }
             },
         }
+        prompt_version = session_context.get(
+            "prompt_version",
+            session_context.get("evaluator_prompt_version", "unversioned"),
+        )
         if self._guided_model_supports_reasoning_effort:
             request_body["reasoning"] = {"effort": self._guided_reasoning_effort}
         if self._prompt_cache_key_enabled:
-            prompt_version = session_context.get(
-                "prompt_version",
-                session_context.get("evaluator_prompt_version", "unversioned"),
-            )
             request_body["prompt_cache_key"] = sha256_text(
-                f"{name}:{prompt_version}:{sha256_text(system_prompt)}"
+                ":".join(
+                    [
+                        name,
+                        str(prompt_version),
+                        phase,
+                        sha256_text(registry.layer_1_core),
+                        sha256_text(phase_block),
+                        sha256_text(system_prompt),
+                    ]
+                )
             )
         response, latency_ms = self._post_with_retries(request_body)
         if response.status_code != 200:
@@ -594,6 +610,10 @@ class OpenAIAIEngineClient:
                         else None
                     ),
                     "model": self._model,
+                    "prompt_version": prompt_version,
+                    "phase": phase,
+                    "layer1_sha256": sha256_text(registry.layer_1_core),
+                    "phase_prompt_sha256": sha256_text(phase_block),
                     "prompt_sha256": sha256_text(system_prompt),
                     "input_tokens": usage.input_tokens,
                     "output_tokens": usage.output_tokens,
