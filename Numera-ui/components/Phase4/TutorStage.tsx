@@ -20,15 +20,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import {
-  Play, Pause, RotateCcw, ChevronLeft, ChevronRight, Maximize2, Minimize2,
+  Play, Pause, RotateCcw, RotateCw, Maximize2, Minimize2,
+  Volume2, VolumeX, Captions, Radio, Check, Lock,
 } from 'lucide-react';
-import { Chip } from '@/components/PageShell';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useWorkedExamplePlayer } from '@/hooks/useWorkedExamplePlayer';
-import { setTutorSpeechRate } from '@/lib/tts';
+import { setTutorSpeechRate, stopTutorSpeech } from '@/lib/tts';
 import { boardDraw } from '@/lib/phase4Board';
 import { loadWorkArtifactPdf, type PdfOutcome } from '@/lib/workArtifactPdf';
 import { openingPageNo } from '@/lib/phase4Review';
+import { stagesFrom, totalDurationMs, elapsedMsAt, clock } from '@/lib/phase4Stages';
 import { cn } from '@/lib/cn';
 import type { Phase4Replay, SchemaWorkedExampleStep } from '@/lib/api';
 
@@ -56,18 +57,9 @@ const PDF_MESSAGE: Record<Exclude<PdfOutcome, { kind: 'ready' }>['kind'] | 'load
 export default function TutorStage({
   replay,
   progressLabel,
-  onPrevReplay,
-  onNextReplay,
-  hasPrevReplay,
-  nextLabel,
 }: {
   replay: Phase4Replay;
   progressLabel: string | null;
-  onPrevReplay: () => void;
-  onNextReplay: () => void;
-  hasPrevReplay: boolean;
-  /** What the forward control does next — the last replay leads to the summary. */
-  nextLabel: string;
 }) {
   const applyCanvasDraw = useNumeraStore((s) => s.applyCanvasDraw);
   const clearTutorMarks = useNumeraStore((s) => s.clearTutorMarks);
@@ -75,6 +67,8 @@ export default function TutorStage({
   const [pageNo, setPageNo] = useState(() => openingPageNo(replay));
   const [speed, setSpeed] = useState(1);
   const [fullscreen, setFullscreen] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [captions, setCaptions] = useState(false);
 
   // Opening on the page the first error is on (§7.5). Re-run per replay: the
   // student moving to the next correction should land on its page, not stay on
@@ -119,12 +113,35 @@ export default function TutorStage({
     [applyCanvasDraw, replay],
   );
 
-  const { index, steps, finished, paused, setPaused, stepBy, restart } = useWorkedExamplePlayer({
+  const { index, steps, finished, paused, setPaused, stepBy } = useWorkedExamplePlayer({
     exampleId: replay.review_item_id,
     steps: playerSteps,
     draw,
     onClear: clearTutorMarks,
   });
+
+  /**
+   * The stage strip, and the timeline behind the scrubber.
+   *
+   * Both are null-tolerant by design: `stagesFrom` falls back to numbered steps
+   * when the backend has authored no stage labels, and `totalDurationMs`
+   * returns null unless EVERY step is timed — a partially timed replay would
+   * produce a clock that runs out while the tutor is still talking, which is
+   * worse than showing no clock at all.
+   */
+  const stages = useMemo(
+    () => stagesFrom(replay.replay_steps, index),
+    [replay, index],
+  );
+  const totalMs = useMemo(() => totalDurationMs(replay.replay_steps), [replay]);
+  const elapsedMs = useMemo(
+    () => (totalMs === null ? null : elapsedMsAt(replay.replay_steps, index)),
+    [replay, index, totalMs],
+  );
+  /** Fraction played. Falls back to step position when the replay is untimed. */
+  const played = totalMs !== null && elapsedMs !== null
+    ? elapsedMs / totalMs
+    : steps.length > 1 ? Math.max(0, index) / (steps.length - 1) : 0;
 
   const changeSpeed = useCallback(() => {
     const next = SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.length];
@@ -137,8 +154,28 @@ export default function TutorStage({
   // would otherwise find the next phase's tutor slowed down too.
   useEffect(() => () => setTutorSpeechRate(1), []);
 
-  const { pdf_url: pdfUrl, page_count: pageCount } = replay.work_artifact;
-  const stepPosition = Math.min(Math.max(index, 0) + 1, steps.length);
+  // Muting stops the voice outright rather than turning its volume down: the
+  // tutor speaks through TTS, which has no volume of its own, and a "muted"
+  // control that still talked would be the worst of both.
+  useEffect(() => {
+    if (muted) stopTutorSpeech();
+  }, [muted, index]);
+
+  const {
+    pdf_url: pdfUrl,
+    page_count: pageCount,
+    snapshot_image_url: snapshotUrl,
+    error_regions: errorRegions,
+  } = replay.work_artifact;
+  /**
+   * The flat image is preferred for this panel, the PDF is the record.
+   *
+   * A PDF in a 210px column renders as an unreadable page of an embedded
+   * viewer; the snapshot is the student's own answer at a size they can
+   * actually see, which is what the panel is for. The PDF path stays for every
+   * session where no snapshot was captured.
+   */
+  const useSnapshot = Boolean(snapshotUrl?.trim());
 
   // Five named states, not one boolean: an approver has to be able to tell "you
   // may not read this" from "there is nothing here" from "what came back was not
@@ -187,11 +224,26 @@ export default function TutorStage({
       style={fullscreen ? { boxShadow: '0 10px 34px rgba(11,16,32,0.28)' } : undefined}
     >
       {/* Header — what is being reviewed, and how far through */}
-      <header className="flex items-center gap-3 px-4 py-2.5 border-b border-muted-gray bg-reading-surface">
-        <Chip tone="solid">Tutor live review</Chip>
-        <span className="text-[12px] text-slate-blue truncate flex-1 min-w-0">
-          {progressLabel ?? 'Review'} · Step {stepPosition} of {steps.length}
+      <header className="flex items-center gap-3 px-4 py-2.5 border-b border-muted-gray bg-white">
+        <h2 className="text-[14px] font-semibold text-ink flex-shrink-0">Tutor live review</h2>
+        {/* "Live" describes the tutor writing and speaking as you watch, which
+            is what this stage does — the steps are authored, but the
+            explanation is performed here rather than played back as video.
+            Whether it should ever mean STREAMED from the backend is an open
+            question with Chirudeva; nothing here claims a socket. */}
+        <span className="flex-shrink-0 rounded-full bg-focus-navy px-2.5 py-1 text-[11px] font-semibold text-white">
+          Live
         </span>
+        <span className="text-[12px] text-slate-blue truncate flex-1 min-w-0">
+          {paused ? 'Paused' : 'Tutor is explaining in real time'}
+          {progressLabel ? ` · ${progressLabel}` : ''}
+        </span>
+        <Radio
+          size={16}
+          strokeWidth={1.9}
+          aria-hidden
+          className={cn('flex-shrink-0', paused ? 'text-muted-gray' : 'text-focus-navy animate-pulse')}
+        />
         <button
           onClick={() => setFullscreen((v) => !v)}
           title={fullscreen ? 'Exit fullscreen' : 'Fullscreen tutor review'}
@@ -220,12 +272,15 @@ export default function TutorStage({
         {/* §8.4 "student's original submitted work" + "page selector when the
             student work had multiple pages". Locked: this is a record of what
             was submitted, and Phase 3 has already closed. */}
-        <div className="w-[210px] flex-shrink-0 border-l border-muted-gray bg-reading-surface flex flex-col">
-          <div className="px-3 py-2.5 flex items-baseline justify-between gap-2 border-b border-muted-gray">
-            <span className="text-[10px] tracking-widest uppercase text-slate-blue">Your work</span>
+        <div className="w-[228px] flex-shrink-0 border-l border-muted-gray bg-reading-surface flex flex-col">
+          <div className="px-3 py-2.5 flex items-center justify-between gap-2 border-b border-muted-gray">
+            <span className="text-[12.5px] font-semibold text-ink">Your work</span>
             {/* Named as locked because it is: Phase 3 has closed and this is the
                 record of what was submitted, not something to revise now. */}
-            <span className="text-[10px] text-slate-blue/70">Locked</span>
+            <span className="inline-flex items-center gap-1 text-[10.5px] text-slate-blue/80">
+              <Lock size={11} strokeWidth={2} aria-hidden />
+              Locked
+            </span>
           </div>
           <div className="flex-1 min-h-0 p-2.5">
             {/* The work is stored as one combined PDF, not as page images
@@ -234,7 +289,36 @@ export default function TutorStage({
                 fragment is how every browser's built-in viewer takes a page;
                 `toolbar=0` hides its chrome, which would otherwise put a second
                 set of page controls inside a 210px column. */}
-            {!pdfUrl ? (
+            {useSnapshot ? (
+              /* The snapshot, with the error ringed where the backend located
+                 it. The regions are 0–1 fractions of this box, so the ring
+                 tracks the image at whatever size the column renders it —
+                 pixel coordinates would drift the moment the panel resized. */
+              <div className="relative w-full h-full rounded-lg border border-muted-gray bg-white overflow-hidden">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={snapshotUrl as string}
+                  alt="A snapshot of the answer you submitted for this question"
+                  className="w-full h-full object-contain"
+                />
+                {(errorRegions ?? []).map((region, i) => (
+                  <span
+                    key={i}
+                    aria-hidden
+                    className={cn(
+                      'absolute rounded-[50%] border-2 pointer-events-none',
+                      region.tone === 'note' ? 'border-sky-500/80' : 'border-red-500/80',
+                    )}
+                    style={{
+                      left: `${region.x * 100}%`,
+                      top: `${region.y * 100}%`,
+                      width: `${region.w * 100}%`,
+                      height: `${region.h * 100}%`,
+                    }}
+                  />
+                ))}
+              </div>
+            ) : !pdfUrl ? (
               <p className="text-[11.5px] text-slate-blue leading-relaxed">
                 Your original work is not available for this question.
               </p>
@@ -253,7 +337,13 @@ export default function TutorStage({
           </div>
           {/* Only when there is more than one page — a selector over a single
               page is a control that cannot do anything. */}
-          {pageCount > 1 && (
+          <p className="px-3 pb-3 text-[11px] text-slate-blue leading-relaxed">
+            This is a snapshot of your original answer. It will remain locked.
+          </p>
+          {/* Only when there is more than one page AND the pages are what is
+              being shown — the snapshot is a single image, so a page selector
+              over it would move nothing. */}
+          {!useSnapshot && pageCount > 1 && (
             <div className="flex items-center justify-center gap-1 p-2 border-t border-muted-gray">
               {Array.from({ length: pageCount }, (_, i) => i + 1).map((n) => (
                 <button
@@ -276,44 +366,144 @@ export default function TutorStage({
       </div>
 
       {/* §8.5 player controls */}
-      <div className="flex items-center gap-2 px-3 py-2.5 border-t border-muted-gray bg-reading-surface">
+      <div className="flex items-center gap-2 px-3 py-2.5 border-t border-muted-gray bg-white">
         <button
           onClick={() => setPaused(!paused)}
           aria-label={paused ? 'Play' : 'Pause'}
-          className="w-9 h-9 rounded-full bg-focus-navy text-white flex items-center justify-center hover:opacity-80 transition-opacity"
+          className="w-10 h-10 rounded-full bg-focus-navy text-white flex items-center justify-center hover:opacity-85 transition-opacity"
         >
-          {paused ? <Play size={15} strokeWidth={2.2} /> : <Pause size={15} strokeWidth={2.2} />}
+          {paused ? <Play size={16} strokeWidth={2.2} /> : <Pause size={16} strokeWidth={2.2} />}
         </button>
-        <button onClick={restart} title="Replay this explanation" aria-label="Replay this explanation" className={ctrl}>
+
+        {/* Back and forward move a STEP, and say so.
+            The design shows -10s/+10s, which needs a real audio timeline to be
+            honest — seeking ten seconds into a step-paced narration would land
+            between two steps with nothing to show. When every step carries a
+            duration these become time seeks; until then they move one step and
+            are labelled that way. */}
+        <button onClick={() => stepBy(-1)} disabled={index <= 0} title="Previous step" aria-label="Previous step" className={ctrl}>
           <RotateCcw size={15} strokeWidth={1.9} />
         </button>
-        <button onClick={() => stepBy(-1)} disabled={index <= 0} title="Previous step" aria-label="Previous step" className={ctrl}>
-          <ChevronLeft size={16} strokeWidth={1.9} />
-        </button>
         <button onClick={() => stepBy(1)} disabled={finished || index >= steps.length - 1} title="Next step" aria-label="Next step" className={ctrl}>
-          <ChevronRight size={16} strokeWidth={1.9} />
+          <RotateCw size={15} strokeWidth={1.9} />
         </button>
+
+        {/* The clock only appears when the backend timed the steps. Counting a
+            made-up one would run out while the tutor was still talking. */}
+        {totalMs !== null && elapsedMs !== null && (
+          <span className="ml-1 flex-shrink-0 text-[11.5px] tabular-nums text-slate-blue">
+            {clock(elapsedMs)} / {clock(totalMs)}
+          </span>
+        )}
+
+        {/* Progress, not a scrubber: it reports where the explanation has got
+            to and is not draggable, because dragging implies a seek this
+            player cannot perform without per-step timings. Stepping is how you
+            move, and those controls are right there. */}
+        <div
+          role="progressbar"
+          aria-label="Explanation progress"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(played * 100)}
+          className="flex-1 min-w-[60px] h-1.5 rounded-full bg-muted-gray overflow-hidden"
+        >
+          <div
+            className="h-full rounded-full bg-focus-navy transition-[width] duration-300"
+            style={{ width: `${Math.min(100, Math.max(0, played * 100))}%` }}
+          />
+        </div>
 
         <button
           onClick={changeSpeed}
           title="Playback speed"
-          className="ml-1 rounded-md border border-muted-gray px-2.5 py-1.5 text-[12px] font-semibold text-slate-blue hover:text-ink transition-colors"
+          className="flex-shrink-0 rounded-md border border-muted-gray px-2.5 py-1.5 text-[12px] font-semibold text-slate-blue hover:text-ink transition-colors"
         >
           {speed}×
         </button>
-
-        <div className="ml-auto flex items-center gap-2">
-          <button onClick={onPrevReplay} disabled={!hasPrevReplay} className={navBtn}>
-            <ChevronLeft size={14} strokeWidth={1.9} /> Previous
-          </button>
-          <button
-            onClick={onNextReplay}
-            className="inline-flex items-center gap-1.5 rounded-md bg-focus-navy px-4 py-2 text-[12.5px] font-semibold text-white hover:opacity-80 transition-opacity"
-          >
-            {nextLabel} <ChevronRight size={14} strokeWidth={1.9} />
-          </button>
-        </div>
+        <button
+          onClick={() => setMuted((v) => !v)}
+          title={muted ? 'Unmute the tutor' : 'Mute the tutor'}
+          aria-label={muted ? 'Unmute the tutor' : 'Mute the tutor'}
+          aria-pressed={muted}
+          className={ctrl}
+        >
+          {muted ? <VolumeX size={15} strokeWidth={1.9} /> : <Volume2 size={15} strokeWidth={1.9} />}
+        </button>
+        {/* Captions show the narration as text. Not a media track — the tutor
+            speaks from `narration`, so the caption IS that string, which is
+            also why it is always available rather than depending on a backend
+            cue list. */}
+        <button
+          onClick={() => setCaptions((v) => !v)}
+          title={captions ? 'Hide captions' : 'Show captions'}
+          aria-label={captions ? 'Hide captions' : 'Show captions'}
+          aria-pressed={captions}
+          className={cn(ctrl, captions && 'border-focus-navy text-focus-navy')}
+        >
+          <Captions size={15} strokeWidth={1.9} />
+        </button>
+        <button
+          onClick={() => setFullscreen((v) => !v)}
+          title={fullscreen ? 'Exit fullscreen' : 'Fullscreen tutor review'}
+          aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen tutor review'}
+          className={ctrl}
+        >
+          {fullscreen ? <Minimize2 size={15} strokeWidth={1.8} /> : <Maximize2 size={15} strokeWidth={1.8} />}
+        </button>
       </div>
+
+      {/* The narration in writing, for anyone who cannot hear it or would
+          rather read along. Sits above the stage strip so it is next to the
+          board it describes. */}
+      {captions && (
+        <p
+          aria-live="polite"
+          className="px-4 py-2.5 border-t border-muted-gray bg-ink/[0.03] text-[12.5px] text-ink leading-relaxed"
+        >
+          {steps[Math.max(0, Math.min(index, steps.length - 1))]?.narration_text ?? ''}
+        </p>
+      )}
+
+      {/* The stage strip. Named stages when the backend authored them,
+          numbered steps otherwise — never five invented names over a replay
+          that does not have five stages (see lib/phase4Stages). */}
+      {stages.length > 1 && (
+        <ol className="flex items-center gap-1 px-3 py-2.5 border-t border-muted-gray bg-reading-surface overflow-x-auto">
+          {stages.map((stage, i) => (
+            <li key={`${stage.label}-${stage.startIndex}`} className="flex items-center gap-1 flex-shrink-0">
+              {i > 0 && <span aria-hidden className="w-6 border-t border-dotted border-muted-gray" />}
+              <span
+                aria-current={stage.current ? 'step' : undefined}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[11.5px] transition-colors',
+                  stage.current
+                    ? 'bg-focus-navy/10 font-semibold text-focus-navy'
+                    : stage.done
+                      ? 'text-emerald-600'
+                      : 'text-slate-blue',
+                )}
+              >
+                <span
+                  aria-hidden
+                  className={cn(
+                    'w-5 h-5 rounded-full flex items-center justify-center text-[10.5px] font-semibold',
+                    stage.current
+                      ? 'bg-focus-navy text-white'
+                      : stage.done
+                        ? 'bg-emerald-500 text-white'
+                        : 'bg-muted-gray text-slate-blue',
+                  )}
+                >
+                  {stage.done ? <Check size={11} strokeWidth={2.6} /> : i + 1}
+                </span>
+                {stage.label}
+              </span>
+            </li>
+          ))}
+        </ol>
+      )}
+
     </section>
   );
 }
@@ -322,6 +512,3 @@ const ctrl =
   'w-9 h-9 rounded-full border border-muted-gray text-slate-blue flex items-center justify-center ' +
   'hover:text-ink hover:border-slate-blue disabled:opacity-30 disabled:hover:border-muted-gray transition-colors';
 
-const navBtn =
-  'inline-flex items-center gap-1 text-[12.5px] font-semibold text-slate-blue hover:text-ink ' +
-  'disabled:opacity-30 disabled:hover:text-slate-blue transition-colors';

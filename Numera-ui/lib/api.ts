@@ -1092,10 +1092,44 @@ export interface Phase4WorkArtifact {
   artifact_id: string;
   page_count: number;
   pdf_url: string;
+  /**
+   * A flat image of the submitted work, for the inline "Your work" panel.
+   *
+   * Optional, and NOT a replacement for the PDF: the PDF is the record and the
+   * thing worth downloading, this is what fits a 210px column. Absent means the
+   * panel falls back to the PDF viewer exactly as before.
+   */
+  snapshot_image_url?: string | null;
+  /**
+   * Where on that image the error is, as 0–1 fractions of the image box.
+   *
+   * Normalised rather than pixels so the highlight survives whatever size the
+   * panel renders at. Empty or absent means no highlight — never a guessed one.
+   */
+  error_regions?: Phase4ErrorRegion[] | null;
+}
+
+/** A highlighted region of the student's work. Fractions of the image, 0–1. */
+export interface Phase4ErrorRegion {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  tone?: 'error' | 'note' | null;
 }
 
 export interface Phase4FirstError {
   summary: string;
+  /**
+   * WHY the error is an error, as opposed to what it was.
+   *
+   * A different sentence from `summary` and shown as its own card: "used n x 4
+   * instead of adding 4" describes the mistake, "multiplication changes the
+   * size, we need the pattern to increase by the same amount" explains it.
+   * Optional — the card is hidden when the backend has nothing to say, rather
+   * than printing a heading over nothing.
+   */
+  why_it_matters?: string | null;
   /** Which page of the student's work the error is on. Null = not page-located. */
   student_page_no?: number | null;
 }
@@ -1106,6 +1140,22 @@ export interface Phase4ReplayStep {
   narration: string;
   /** Written onto the tutor board. */
   tutor_write: string;
+  /**
+   * The named stage this step belongs to ("Spot the pattern", "Find the
+   * error"), for the stepper under the board.
+   *
+   * Optional. Without it the stepper falls back to numbered steps rather than
+   * asserting five named stages that may not match what this replay actually
+   * does — see lib/phase4Stages.
+   */
+  stage_label?: string | null;
+  /**
+   * How long this step runs, for the time readout and scrubber.
+   *
+   * Absent on every step means the transport has no timeline to show, and the
+   * bar renders without one instead of inventing a duration.
+   */
+  duration_ms?: number | null;
 }
 
 export interface Phase4Replay {
@@ -1135,12 +1185,25 @@ export interface Phase4StudentInsights {
   personalised_notes: string[];
 }
 
-export type Phase4Evaluation = 'CORRECT' | 'INCORRECT' | 'WRONG';
+/**
+ * `PARTIAL` is a real third state, not a nicety — the rail shows three statuses
+ * with three colours and a legend. It is never inferred: a middle state derived
+ * from a score the client does not have would be the client re-marking work.
+ */
+export type Phase4Evaluation = 'CORRECT' | 'PARTIAL' | 'INCORRECT' | 'WRONG';
 
 /** One question from the Phase 3 journey, for the left rail. */
 export interface Phase4JourneyEntry {
   question_id: string;
   question_text: string;
+  /**
+   * What the question TESTS, in two to four words ("Add a fixed number").
+   *
+   * The rail row is too narrow for the prompt, and truncating it yields "Which
+   * is the general rul...", which is not a skill name. Optional: without it the
+   * row falls back to the question text, which is what shipped before.
+   */
+  skill_label?: string | null;
   evaluation: Phase4Evaluation;
   /**
    * The replay this question owns, or null when there is none.
@@ -1157,13 +1220,43 @@ export interface Phase4Review {
   student_id: string;
   topic_id: string;
   topic_title: string;
-  topic_outcome: { mastery_status: string; recommended_next_action: string };
+  topic_outcome: {
+    mastery_status: string;
+    recommended_next_action: string;
+    /**
+     * The encouraging sentence on the "Next action" card.
+     *
+     * `recommended_next_action` is a short label for the header chip
+     * ("Complete topic"); this is the personalised line beneath it. Optional —
+     * the card falls back to the label alone.
+     */
+    next_action_message?: string | null;
+  };
   question_journey: Phase4JourneyEntry[];
   /** Wrong Phase 3 submissions only (§3). Empty is normal, not an error (§8.8). */
   tutor_replays: Phase4Replay[];
   student_insights: Phase4StudentInsights;
   /** §5.8 `key_takeaways_json`. Falls back to `personalised_notes` — see keyTakeaways(). */
   key_takeaways?: string[];
+  /**
+   * A repeated mistake, asserted by the Student Model with a count.
+   *
+   * Optional and nullable BY DESIGN, like the insight summaries beside it
+   * (§7.6C): a single isolated occurrence must produce nothing rather than a
+   * claim. The client cannot compute it — it only ever receives this session's
+   * wrong submissions, and deciding two errors are the SAME error is not a
+   * string comparison. Absent falls back to `learning_pattern_summary` prose.
+   */
+  error_pattern?: Phase4ErrorPattern | null;
+}
+
+export interface Phase4ErrorPattern {
+  /** The mistake itself, e.g. "n x 4". Shown to the student. */
+  signature: string;
+  /** How many OTHER questions it appeared in. */
+  occurrence_count: number;
+  /** For linking only — never rendered (§8.9, §9.3). */
+  question_ids?: string[];
 }
 
 /** POST /session/end — student_id must own the session (else 404). */

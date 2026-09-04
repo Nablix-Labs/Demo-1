@@ -16,11 +16,13 @@
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
-import Phase4Review from '@/components/Phase4/Phase4Review';
+import Phase4Review, { Phase4HeaderActions } from '@/components/Phase4/Phase4Review';
+import { skipsReplay } from '@/lib/phase4Review';
 import { PHASE_4_DEMO } from '@/lib/phase4Demo';
 
 export default function Phase4DevScreen() {
   const [allCorrect, setAllCorrect] = useState(false);
+  const [phase4Index, setPhase4Index] = useState<number | null>(null);
 
   const review = useMemo(() => (
     allCorrect
@@ -42,6 +44,11 @@ export default function Phase4DevScreen() {
       : PHASE_4_DEMO
   ), [allCorrect]);
 
+  // Same rule as the live route: -1 when there is nothing to correct (§8.8),
+  // resolved from the fixture rather than defaulted to the first replay.
+  const replayIndex = phase4Index ?? (skipsReplay(review) ? -1 : 0);
+  const setReplayIndex = setPhase4Index;
+
   return (
     // `w-full` because the focus-route frame sizes this to its content
     // otherwise, and the review is a full-width three-pane layout.
@@ -60,10 +67,22 @@ export default function Phase4DevScreen() {
         <span className="ml-auto">Fixture only. No backend endpoint exists yet.</span>
       </div>
 
+      {/* The header actions render on the live route inside PageShell; here
+          they sit above the panes so the fixture exercises them too. */}
+      <div className="px-4 py-2 border-b border-muted-gray flex justify-end">
+        <Phase4HeaderActions
+          review={review}
+          replayIndex={replayIndex}
+          onEnd={() => undefined}
+        />
+      </div>
+
       <div className="flex-1 min-h-0">
         <Phase4Review
           key={allCorrect ? 'all-correct' : 'with-replays'}
           review={review}
+          replayIndex={replayIndex}
+          onReplayIndexChange={setReplayIndex}
           onEnd={() => undefined}
         />
       </div>

@@ -33,7 +33,8 @@ import { phase4FromSession, type SessionForPhase4 } from '@/lib/phase4FromSessio
 import { handoffDestination } from '@/lib/usePhaseRouting';
 import { reviewSource } from '@/lib/reviewContent';
 import { speakTutor, stopTutorSpeech } from '@/lib/tts';
-import Phase4Review from '@/components/Phase4/Phase4Review';
+import Phase4Review, { Phase4HeaderActions } from '@/components/Phase4/Phase4Review';
+import { skipsReplay } from '@/lib/phase4Review';
 
 /** Real session outcomes rendered through the same worksheet layout. */
 function outcomeWorksheets(outcomes: QuestionOutcome[]): DemoWorksheet[] {
@@ -311,6 +312,41 @@ export default function ReviewPage() {
     topicLabel || 'This topic',
   );
 
+  /**
+   * Which Phase 4 replay is on the board; -1 is the Learning Summary.
+   *
+   * Held here rather than inside Phase4Review because the header lives in the
+   * page shell and reports "Review progress 2 of 3" from the same number.
+   *
+   * `null` means "not decided yet" — the opening position depends on whether
+   * there are any replays at all (§8.8: no wrong answers goes straight to the
+   * summary), and `phase4` is not available on the first render. Resolving it
+   * to 0 in the meantime would flash the first replay at a student who had
+   * nothing to correct.
+   */
+  const [phase4Index, setPhase4Index] = useState<number | null>(null);
+  const replayIndex = phase4Index ?? (phase4 && skipsReplay(phase4) ? -1 : 0);
+  const setReplayIndex = setPhase4Index;
+
+  /**
+   * Leave Phase 4.
+   *
+   * One function for both exits — "End review" in the header and the summary's
+   * own control — because they are the same act, and two copies is how one of
+   * them ends up skipping `completePhase` and leaving the journey half
+   * advanced.
+   *
+   * §6.9 makes routing the backend's decision and `recommended_next_action`
+   * carries it, but the specification never enumerates its values
+   * (START_NEXT_TOPIC is the only one shown, in an example). Until Chirudeva
+   * confirms the vocabulary this takes the existing pass route rather than
+   * branching on a string we would be guessing at.
+   */
+  const finishPhase4 = useCallback(() => {
+    completePhase('review');
+    void finishReview('pass');
+  }, [completePhase, finishReview]);
+
   const total = WORKSHEETS.length;
   const done = i >= total;                 // past the last sheet → final summary
   const ws = WORKSHEETS[Math.min(i, total - 1)];
@@ -375,19 +411,23 @@ export default function ReviewPage() {
   if (phase4) {
     return (
       <PhaseGate phase="review">
-        <PageShell title="Review &amp; feedback" subtitle={phase4.topic_title} wide>
+        <PageShell
+          title="Phase 4 — Review &amp; feedback"
+          subtitle={phase4.topic_title}
+          wide
+          action={
+            <Phase4HeaderActions
+              review={phase4}
+              replayIndex={replayIndex}
+              onEnd={finishPhase4}
+            />
+          }
+        >
           <Phase4Review
             review={phase4}
-            onEnd={() => {
-              completePhase('review');
-              // §6.9 makes routing the backend's decision, and
-              // `recommended_next_action` carries it — but the specification
-              // never enumerates its values (START_NEXT_TOPIC is the only one
-              // shown, in an example). Until Chiru confirms the vocabulary,
-              // this takes the existing pass route rather than branching on a
-              // string we would be guessing at.
-              void finishReview('pass');
-            }}
+            replayIndex={replayIndex}
+            onReplayIndexChange={setReplayIndex}
+            onEnd={finishPhase4}
           />
           {leaveError && (
             <div role="alert" className="mt-4 flex flex-wrap items-center gap-3">

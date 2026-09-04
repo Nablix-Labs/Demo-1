@@ -14,12 +14,10 @@
  *   several            → replays in order, then the summary
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect } from 'react';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { stopTutorSpeech } from '@/lib/tts';
-import {
-  journeyRows, reviewProgressLabel, replayAt, skipsReplay,
-} from '@/lib/phase4Review';
+import { journeyRows, reviewProgressLabel, replayAt, humanLabel } from '@/lib/phase4Review';
 import ReviewRail from './ReviewRail';
 import TutorStage from './TutorStage';
 import FeedbackRail from './FeedbackRail';
@@ -40,16 +38,25 @@ const PHASE_4 = 'PHASE_4_REVIEW';
 export default function Phase4Review({
   review,
   onEnd,
+  replayIndex,
+  onReplayIndexChange,
 }: {
   review: Phase4ReviewPayload;
   /** Leave the review — the backend's recommended_next_action is the label. */
   onEnd: () => void;
+  /**
+   * Which replay is on the board; -1 is the Learning Summary.
+   *
+   * Controlled by the route rather than held here, because the header lives in
+   * the page shell and shows "Review progress 2 of 3" — two copies of this
+   * number would be two things to keep in step, and the one on screen would be
+   * the one that drifted.
+   */
+  replayIndex: number;
+  onReplayIndexChange: (next: number) => void;
 }) {
   const setCurrentPhase = useNumeraStore((s) => s.setCurrentPhase);
   const clearTutorMarks = useNumeraStore((s) => s.clearTutorMarks);
-
-  // Straight to the summary when nothing went wrong (§8.8).
-  const [replayIndex, setReplayIndex] = useState(() => (skipsReplay(review) ? -1 : 0));
 
   useEffect(() => {
     setCurrentPhase(PHASE_4);
@@ -69,23 +76,24 @@ export default function Phase4Review({
     // The player narrates on mount; a replay left talking underneath the next
     // one is two tutor voices at once.
     stopTutorSpeech();
-    setReplayIndex(next);
-  }, []);
+    onReplayIndexChange(next);
+  }, [onReplayIndexChange]);
 
   return (
-    // No heading of its own: the topic title is already in the page header on
-    // the live route, and a second one directly beneath it reads as two pages.
+    // No heading of its own: the topic title and the review chips are in the
+    // page header on the live route, and a second title directly beneath it
+    // reads as two pages.
     <div className="flex flex-col h-full min-h-0">
       <div className="flex-1 min-h-0 flex gap-4 items-start">
         {/* Left — the Phase 3 journey. Omitted entirely when there is nothing
             to correct, so the summary is not sitting beside an empty column. */}
         {rows.length > 0 && (
-          <div className="w-[210px] flex-shrink-0 overflow-y-auto max-h-full">
+          <div className="w-[262px] flex-shrink-0 overflow-y-auto max-h-full">
             <ReviewRail rows={rows} activeReplayIndex={replayIndex} onSelect={goTo} />
           </div>
         )}
 
-        {/* Centre — dominant */}
+        {/* Centre — dominant (§8.4) */}
         <div className="flex-1 min-w-0 h-full min-h-[520px] flex">
           {replay ? (
             <TutorStage
@@ -94,10 +102,6 @@ export default function Phase4Review({
               key={replay.review_item_id}
               replay={replay}
               progressLabel={reviewProgressLabel(replayIndex, total)}
-              hasPrevReplay={replayIndex > 0}
-              onPrevReplay={() => goTo(replayIndex - 1)}
-              onNextReplay={() => goTo(replayIndex + 1 < total ? replayIndex + 1 : -1)}
-              nextLabel={replayIndex + 1 < total ? 'Next review' : 'Learning summary'}
             />
           ) : (
             <div className="flex-1 min-w-0 overflow-y-auto">
@@ -106,15 +110,93 @@ export default function Phase4Review({
           )}
         </div>
 
-        {/* Right — compact feedback. Hidden on the summary, which says all of
-            this at length; repeating it beside itself is the overcrowding §8.4
-            asks us to avoid. */}
+        {/* Right — feedback, and the control that moves the review on. The
+            forward action lives here rather than in the transport bar because
+            it advances the REVIEW, not the playback: putting it beside pause
+            and speed invited it being read as "next step". */}
         {replay && (
-          <div className="w-[280px] flex-shrink-0 overflow-y-auto max-h-full">
-            <FeedbackRail review={review} replay={replay} />
+          <div className="w-[300px] flex-shrink-0 overflow-y-auto max-h-full">
+            <FeedbackRail
+              review={review}
+              replay={replay}
+              onContinue={() => goTo(replayIndex + 1 < total ? replayIndex + 1 : -1)}
+              continueLabel={replayIndex + 1 < total ? 'Continue review' : 'Learning summary'}
+            />
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The chips and the way out, for the page header.
+ *
+ * Exported separately rather than rendered inside the review because the route
+ * owns the header (PageShell) — putting a second bar of its own directly under
+ * it is the two-headings problem this component's own note warns about.
+ */
+export function Phase4HeaderActions({
+  review,
+  replayIndex,
+  onEnd,
+}: {
+  review: Phase4ReviewPayload;
+  /** -1 once the student has reached the summary. */
+  replayIndex: number;
+  onEnd: () => void;
+}) {
+  const total = review.tutor_replays.length;
+  // Counted over the REPLAYS, not the journey: "2 of 3" over eight questions
+  // would tell a student who got six right that they have six corrections to
+  // sit through. On the summary the review is finished, so it reads full.
+  const done = replayIndex < 0 ? total : Math.min(replayIndex + 1, total);
+  const fraction = total > 0 ? done / total : 1;
+
+  return (
+    <div className="flex items-center gap-2.5 flex-wrap justify-end">
+      {total > 0 && (
+        <div className="rounded-xl border border-muted-gray bg-white px-3.5 py-2 min-w-[150px]">
+          <div className="text-[11px] text-slate-blue">Review progress</div>
+          <div className="text-[13px] font-semibold text-ink">{done} of {total}</div>
+          <div
+            role="progressbar"
+            aria-label="Review progress"
+            aria-valuemin={0}
+            aria-valuemax={total}
+            aria-valuenow={done}
+            className="mt-1.5 h-1.5 rounded-full bg-muted-gray overflow-hidden"
+          >
+            <div
+              className="h-full rounded-full bg-focus-navy transition-[width] duration-300"
+              style={{ width: `${fraction * 100}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      <HeaderChip label="Mastery" value={humanLabel(review.topic_outcome.mastery_status)} />
+      <HeaderChip label="Next step" value={humanLabel(review.topic_outcome.recommended_next_action)} />
+
+      <button
+        onClick={onEnd}
+        className="rounded-xl bg-focus-navy px-5 py-2.5 text-[13px] font-semibold text-white
+                   hover:opacity-85 transition-opacity"
+      >
+        End review
+      </button>
+    </div>
+  );
+}
+
+function HeaderChip({ label, value }: { label: string; value: string }) {
+  // Nothing to say is rendered as nothing, not as an empty chip: a labelled box
+  // with a blank value reads as a value that failed to load.
+  if (!value?.trim()) return null;
+  return (
+    <div className="rounded-xl border border-muted-gray bg-white px-3.5 py-2">
+      <div className="text-[11px] text-slate-blue">{label}</div>
+      <div className="text-[13px] font-semibold text-ink">{value}</div>
     </div>
   );
 }

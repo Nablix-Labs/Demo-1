@@ -32,16 +32,21 @@ export const PHASE_4_DEMO: Phase4Review = {
   topic_outcome: {
     mastery_status: 'NEARLY_MASTERED',
     recommended_next_action: 'COMPLETE_TOPIC',
+    next_action_message:
+      'Great progress! You are nearly there. Complete the remaining question to finish this topic.',
   },
 
   question_journey: [
-    { question_id: 'Q-T01-001', question_text: 'Find a rule for 2 + 4, 5 + 4, 8 + 4.', evaluation: 'CORRECT', review_item_id: null },
-    { question_id: 'Q-T01-002', question_text: 'Find a rule for 3 + 4, 9 + 4, 14 + 4.', evaluation: 'WRONG', review_item_id: 'REV-001' },
-    { question_id: 'Q-T01-003', question_text: 'A temperature t falls by 3. Write the new temperature.', evaluation: 'WRONG', review_item_id: 'REV-002' },
+    { question_id: 'Q-T01-001', question_text: 'Find a rule for 2 + 4, 5 + 4, 8 + 4.', skill_label: 'Add a fixed number', evaluation: 'CORRECT', review_item_id: null },
+    // The third state: answered in part. No replay — a partial answer is not a
+    // wrong submission, and §3 gives replays to wrong submissions only.
+    { question_id: 'Q-T01-005', question_text: 'Find a rule for 6 + 4, 11 + 4.', skill_label: 'Add a fixed number', evaluation: 'PARTIAL', review_item_id: null },
+    { question_id: 'Q-T01-002', question_text: 'Find a rule for 3 + 4, 9 + 4, 14 + 4.', skill_label: 'Find a rule', evaluation: 'WRONG', review_item_id: 'REV-001' },
+    { question_id: 'Q-T01-003', question_text: 'A temperature t falls by 3. Write the new temperature.', skill_label: 'Multiply pattern', evaluation: 'WRONG', review_item_id: 'REV-002' },
     // The post-repair attempt at the same question. Correct, so no replay —
     // but it is what recent_improvement_summary below is built from.
-    { question_id: 'Q-T01-003', question_text: 'A temperature t falls by 3. Write the new temperature.', evaluation: 'CORRECT', review_item_id: null },
-    { question_id: 'Q-T01-004', question_text: 'Find a rule for 10 + 4, 15 + 4, 20 + 4.', evaluation: 'CORRECT', review_item_id: null },
+    { question_id: 'Q-T01-003', question_text: 'A temperature t falls by 3. Write the new temperature.', skill_label: 'Write an expression', evaluation: 'CORRECT', review_item_id: null },
+    { question_id: 'Q-T01-004', question_text: 'Find a rule for 10 + 4, 15 + 4, 20 + 4.', skill_label: 'Add a fixed number', evaluation: 'CORRECT', review_item_id: null },
   ],
 
   tutor_replays: [
@@ -53,15 +58,28 @@ export const PHASE_4_DEMO: Phase4Review = {
       question_text: 'Find a rule for 3 + 4, 9 + 4, 14 + 4. Write your answer using a letter.',
       first_error: {
         summary: 'The first error was treating the 4 as something to multiply by.',
+        why_it_matters:
+          'Multiplication changes the size. We need the pattern to increase by the same amount.',
         student_page_no: 1,
       },
       replay_steps: [
-        { sequence_no: 1, narration: 'Let us look at what changes and what stays the same.', tutor_write: 'What changes?' },
-        { sequence_no: 2, narration: 'The starting number changes each time — 3, then 9, then 14.', tutor_write: '3, 9, 14  →  changes' },
-        { sequence_no: 3, narration: 'The four never changes, and neither does the operation.', tutor_write: '+ 4  →  stays the same' },
-        { sequence_no: 4, narration: 'So we add four to a starting number we can call n.', tutor_write: 'Rule:  n + 4' },
+        { sequence_no: 1, stage_label: 'Spot the pattern', duration_ms: 21000, narration: 'Let us look at what changes and what stays the same.', tutor_write: 'What changes?' },
+        { sequence_no: 2, stage_label: 'Spot the pattern', duration_ms: 24000, narration: 'The starting number changes each time — 3, then 9, then 14.', tutor_write: '3, 9, 14  →  changes' },
+        { sequence_no: 3, stage_label: 'Find the error', duration_ms: 33000, narration: 'The four never changes, and neither does the operation.', tutor_write: '+ 4  →  stays the same' },
+        { sequence_no: 4, stage_label: 'Build the rule', duration_ms: 30000, narration: 'So we add four to a starting number we can call n.', tutor_write: 'Rule:  n + 4' },
       ],
-      work_artifact: { artifact_id: 'ART-P3-000122', page_count: 1, pdf_url: NO_PDF },
+      work_artifact: {
+        artifact_id: 'ART-P3-000122',
+        page_count: 1,
+        pdf_url: NO_PDF,
+        // A stand-in for the flat snapshot the backend does not send yet, so
+        // the panel and its error ring can be seen and reviewed. Inline SVG
+        // rather than a checked-in binary: a few hundred bytes, and obviously
+        // a fixture rather than a real student's handwriting.
+        snapshot_image_url: 'data:image/svg+xml;utf8,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%20200%20150%22%3E%3Crect%20width=%22200%22%20height=%22150%22%20fill=%22white%22/%3E%3Cg%20stroke=%22%23c8d0dd%22%20stroke-width=%220.6%22%3E%3Cline%20x1=%220%22%20y1=%2238%22%20x2=%22200%22%20y2=%2238%22/%3E%3Cline%20x1=%220%22%20y1=%2276%22%20x2=%22200%22%20y2=%2276%22/%3E%3Cline%20x1=%220%22%20y1=%22114%22%20x2=%22200%22%20y2=%22114%22/%3E%3C/g%3E%3Ctext%20x=%2222%22%20y=%2230%22%20font-family=%22cursive%22%20font-size=%2214%22%20fill=%22%231e2a3a%22%3EFind%20a%20rule%3C/text%3E%3Ctext%20x=%2258%22%20y=%2288%22%20font-family=%22cursive%22%20font-size=%2226%22%20fill=%22%231e2a3a%22%3En%20%C3%97%204%3C/text%3E%3C/svg%3E',
+        // The wrong expression, ringed where it sits on the page.
+        error_regions: [{ x: 0.24, y: 0.38, w: 0.46, h: 0.26, tone: 'error' as const }],
+      },
     },
     {
       review_item_id: 'REV-002',
@@ -71,8 +89,13 @@ export const PHASE_4_DEMO: Phase4Review = {
       question_text: 'A temperature t falls by 3 degrees. Write the new temperature.',
       first_error: {
         summary: 'The first error started when "falls by 3" was treated as addition.',
+        why_it_matters:
+          'A fall makes the value smaller. Adding would move the temperature the wrong way.',
         student_page_no: 2,
       },
+      // Deliberately UNTIMED and unlabelled, so the fixture exercises the
+      // fallbacks: this replay must render numbered steps and no clock, beside
+      // one that renders named stages and a clock.
       replay_steps: [
         { sequence_no: 1, narration: 'You correctly started with t as the original temperature.', tutor_write: 'Start:  t' },
         { sequence_no: 2, narration: 'The word falls tells us the value goes down, not up.', tutor_write: 'falls by 3  →  subtract 3' },
@@ -94,5 +117,11 @@ export const PHASE_4_DEMO: Phase4Review = {
       'Adding 4 each time gives n + 4, not 4n.',
       'You corrected this idea on the later independent question.',
     ],
+  },
+
+  error_pattern: {
+    signature: 'n × 4',
+    occurrence_count: 2,
+    question_ids: ['Q-T01-002', 'Q-T01-003'],
   },
 };

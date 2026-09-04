@@ -1,25 +1,48 @@
 'use client';
 
 /**
- * The Phase 3 question journey (§8.4, Left Pane).
+ * The Phase 3 journey, one row per question.
  *
- * One bordered container with divided rows, which is how every list in this app
- * is built (the worksheet recap on this same route, the topic list, the history
- * screen). Five separately-bordered cards floating in a column reads as five
- * unrelated objects; this reads as one list of one student's questions.
+ * §8.4: a correct question "may show completion status but do not launch a
+ * Tutor Replay", so a row without a replay is a plain <div> — not focusable,
+ * not pressable, no hover. A control that looks live and does nothing is worse
+ * than no control, and this list is mostly such rows for a student who did
+ * well.
  *
- * A correct question is a row, not a button: §8.4 says correct questions "may
- * show completion status but do not launch a Tutor Replay", and a control that
- * looks pressable and does nothing is worse than no control.
- *
- * No question ids and no micro-skill ids, per §8.9 and §9.3. The 18 Aug mockup
- * has both on every card; that divergence is raised with Sanya rather than
- * settled here.
+ * The number in the circle is the question's POSITION, never its id (§8.9,
+ * §9.3). It is coloured by status so the rail can be read at a glance without
+ * matching each row against the legend at the bottom.
  */
 
-import { Check, X } from 'lucide-react';
 import { cn } from '@/lib/cn';
-import type { JourneyRow } from '@/lib/phase4Review';
+import { STATUS_LABEL, type JourneyRow, type JourneyStatus } from '@/lib/phase4Review';
+
+/**
+ * Status colours, defined once.
+ *
+ * Colour is never the only carrier: every row also prints the status word, and
+ * the legend names all three. A student who cannot separate the amber from the
+ * red still reads "Partial" and "Needs review".
+ */
+const STATUS: Record<JourneyStatus, { dot: string; text: string; badge: string }> = {
+  correct: {
+    dot: 'bg-emerald-500',
+    text: 'text-emerald-600',
+    badge: 'bg-emerald-500 text-white',
+  },
+  partial: {
+    dot: 'bg-amber-500',
+    text: 'text-amber-600',
+    badge: 'bg-amber-500 text-white',
+  },
+  'needs-review': {
+    dot: 'bg-red-500',
+    text: 'text-red-600',
+    badge: 'bg-red-500 text-white',
+  },
+};
+
+const ORDER: JourneyStatus[] = ['correct', 'partial', 'needs-review'];
 
 export default function ReviewRail({
   rows,
@@ -31,80 +54,94 @@ export default function ReviewRail({
   activeReplayIndex: number | null;
   onSelect: (replayIndex: number) => void;
 }) {
-  // A topic answered correctly throughout has no journey rows — Phase 4 only
-  // lists the questions that produced a replay. Rendering the heading over an
-  // empty bordered box announces a section and then shows nothing, which reads
-  // as a failure to load rather than as "there was nothing to correct".
+  // Nothing to correct means no rail at all. A heading over an empty bordered
+  // box announces a section and then shows nothing, which reads as a failure to
+  // load rather than as "there was nothing to correct".
   if (rows.length === 0) return null;
 
   return (
-    <nav aria-label="Questions in independent practice">
-      <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-2.5">
-        Independent practice
-      </div>
+    <nav aria-label="Questions in independent practice" className="flex flex-col gap-3">
+      <h2 className="text-[13px] font-semibold text-ink px-0.5">
+        Questions in independent practice
+      </h2>
 
-      <div className="rounded-lg border border-muted-gray bg-white divide-y divide-muted-gray overflow-hidden">
+      <ol className="flex flex-col gap-2">
         {rows.map((row, i) => {
           const replayable = row.replayIndex !== null;
           const active = replayable && row.replayIndex === activeReplayIndex;
+          const tone = STATUS[row.status];
 
           const body = (
             <>
               <span
+                aria-hidden="true"
                 className={cn(
-                  'flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center',
-                  row.status === 'correct'
-                    ? 'bg-focus-navy text-white'
-                    : 'border border-muted-gray text-slate-blue',
+                  'flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center',
+                  'text-[12.5px] font-semibold',
+                  tone.badge,
                 )}
               >
-                {row.status === 'correct'
-                  ? <Check size={13} strokeWidth={2.4} />
-                  : <X size={13} strokeWidth={2.4} />}
+                {i + 1}
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block text-[12.5px] font-semibold text-ink leading-tight">
                   {row.label}
                 </span>
-                {/* The question itself, so the list is navigable by what was
-                    asked rather than by a number the student never saw. */}
-                <span className="block text-[11.5px] text-slate-blue truncate mt-0.5 font-[Cambria_Math,Georgia,serif]">
-                  {row.questionText}
+                {/* What the question TESTS, not the prompt — the row is far too
+                    narrow for the prompt, and a truncated one reads as
+                    "Which is the general rul…", which names nothing. Falls
+                    back to the question text when the backend has authored no
+                    label (lib/phase4Review). */}
+                <span className="block text-[11.5px] text-slate-blue truncate mt-0.5">
+                  {row.skillLabel}
                 </span>
+              </span>
+              <span className={cn('flex-shrink-0 flex items-center gap-1.5 text-[11px] font-medium', tone.text)}>
+                <span aria-hidden="true" className={cn('w-2 h-2 rounded-full', tone.dot)} />
+                {STATUS_LABEL[row.status]}
               </span>
             </>
           );
 
-          const shell = 'w-full flex items-center gap-3 px-4 py-3 text-left';
+          const shell =
+            'w-full flex items-center gap-2.5 rounded-xl border bg-white px-3 py-2.5 text-left';
 
-          return replayable ? (
-            <button
-              key={i}
-              onClick={() => onSelect(row.replayIndex as number)}
-              aria-current={active ? 'true' : undefined}
-              className={cn(
-                shell,
-                'transition-colors',
-                active ? 'bg-reading-surface' : 'hover:bg-reading-surface',
+          return (
+            <li key={i}>
+              {replayable ? (
+                <button
+                  onClick={() => onSelect(row.replayIndex as number)}
+                  aria-current={active ? 'true' : undefined}
+                  className={cn(
+                    shell,
+                    'transition-colors',
+                    active
+                      ? 'border-focus-navy ring-1 ring-focus-navy/25 bg-focus-navy/[0.04]'
+                      : 'border-muted-gray hover:border-slate-blue/50',
+                  )}
+                >
+                  {body}
+                </button>
+              ) : (
+                // Deliberately not a button: §8.4 forbids launching a replay
+                // from a correct question, so there is nothing to press.
+                <div className={cn(shell, 'border-muted-gray cursor-default')}>{body}</div>
               )}
-            >
-              {/* The active marker is a rule down the edge rather than a border
-                  round the row: a box inside a divided list breaks the list. */}
-              <span
-                aria-hidden="true"
-                className={cn('-ml-4 mr-0 w-[3px] self-stretch rounded-r', active ? 'bg-focus-navy' : 'bg-transparent')}
-              />
-              {body}
-            </button>
-          ) : (
-            // Deliberately a <div>: not focusable, not pressable, no hover.
-            <div key={i} className={cn(shell, 'cursor-default')}>
-              <span aria-hidden="true" className="-ml-4 mr-0 w-[3px] self-stretch" />
-              {body}
-            </div>
+            </li>
           );
         })}
-      </div>
+      </ol>
+
+      {/* The legend earns its place: three colours are only readable as a scale
+          once something names them in order. */}
+      <ul className="flex items-center gap-3 px-0.5 pt-1">
+        {ORDER.map((status) => (
+          <li key={status} className="flex items-center gap-1.5 text-[10.5px] text-slate-blue">
+            <span aria-hidden="true" className={cn('w-2 h-2 rounded-full', STATUS[status].dot)} />
+            {STATUS_LABEL[status]}
+          </li>
+        ))}
+      </ul>
     </nav>
   );
 }

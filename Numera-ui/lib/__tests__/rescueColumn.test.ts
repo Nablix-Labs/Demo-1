@@ -17,6 +17,13 @@ import type { TutorCanvasAction } from '@/store/useNumeraStore';
 /** The measured left edge of the support lane, as a fraction of canvas width. */
 const LANE_LEFT = 0.70;
 
+/** `rescueSlot` returns the target union; every rescue slot is a positioned one. */
+const slotAt = (stepIndex: number) => {
+  const target = rescueSlot(stepIndex);
+  if (target.kind !== 'rescue-slot') throw new Error('rescueSlot returned a non-slot target');
+  return target.at;
+};
+
 const action = (over: Partial<TutorCanvasAction> = {}): TutorCanvasAction => ({
   action_id: 'A1',
   type: 'TUTOR_SOLVED_STEP',
@@ -56,13 +63,13 @@ describe('a rescue step on the canvas', () => {
     // Three lines at size 18 and line-height 1.25 is ~67px; the gap has to
     // clear that, or step 2 is drawn through step 1.
     const canvasHeight = 692;
-    const gap = (rescueSlot(2).at.y - rescueSlot(1).at.y) * canvasHeight;
+    const gap = (slotAt(2).y - slotAt(1).y) * canvasHeight;
     expect(gap).toBeGreaterThan(18 * 1.25 * 3);
   });
 
   it('still stacks by authored index, not by occupancy', () => {
     // Unchanged by this work, and worth holding: step 3 belongs on row 3 even
     // when a reconnect lost rows 1 and 2.
-    expect(rescueSlot(3).at.y).toBeGreaterThan(rescueSlot(1).at.y);
+    expect(slotAt(3).y).toBeGreaterThan(slotAt(1).y);
   });
 });

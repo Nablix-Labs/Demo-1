@@ -21,11 +21,41 @@
 
 import type { Phase4Replay, Phase4Review } from '@/lib/api';
 
-export type JourneyStatus = 'correct' | 'incorrect';
+/**
+ * Three states, not two.
+ *
+ * The rail carries a legend — Correct / Partial / Needs review — so `partial`
+ * has to survive as its own value rather than collapsing into one of its
+ * neighbours. It is read straight from the backend's evaluation and never
+ * inferred: a middle state derived from a score the client does not hold would
+ * be the client re-marking work it did not mark.
+ */
+export type JourneyStatus = 'correct' | 'partial' | 'needs-review';
+
+/** What the student reads beside the dot. */
+export const STATUS_LABEL: Record<JourneyStatus, string> = {
+  correct: 'Correct',
+  partial: 'Partial',
+  'needs-review': 'Needs review',
+};
+
+function statusOf(evaluation: string): JourneyStatus {
+  if (evaluation === 'CORRECT') return 'correct';
+  if (evaluation === 'PARTIAL') return 'partial';
+  return 'needs-review';
+}
 
 export interface JourneyRow {
   /** "Question 3" — position in the Phase 3 journey, never the backend id. */
   label: string;
+  /**
+   * What the question tests ("Add a fixed number"), for the rail row.
+   *
+   * Falls back to the question text when the backend has not authored one, so
+   * the row still says something rather than going blank — but the two are
+   * different things and the fallback is visibly the longer of them.
+   */
+  skillLabel: string;
   questionText: string;
   status: JourneyStatus;
   /**
@@ -52,8 +82,9 @@ export function journeyRows(review: Phase4Review): JourneyRow[] {
 
   return review.question_journey.map((entry, i) => ({
     label: `Question ${i + 1}`,
+    skillLabel: entry.skill_label?.trim() || entry.question_text,
     questionText: entry.question_text,
-    status: entry.evaluation === 'CORRECT' ? 'correct' : 'incorrect',
+    status: statusOf(entry.evaluation),
     replayIndex: entry.review_item_id != null
       ? replayIndexById.get(entry.review_item_id) ?? null
       : null,
@@ -103,4 +134,46 @@ export function openingPageNo(replay: Phase4Replay): number {
   if (typeof wanted !== 'number') return 1;
   if (wanted < 1 || wanted > replay.work_artifact.page_count) return 1;
   return wanted;
+}
+
+/**
+ * "This "n × 4" error has appeared in 2 other questions."
+ *
+ * Built here rather than in JSX so the pluralisation and the null cases are
+ * testable. Null whenever the engine did not assert a countable pattern — the
+ * caller then falls back to `learning_pattern_summary` prose, and to nothing at
+ * all if that is absent too (§7.6C: a single occurrence is not a pattern).
+ *
+ * A count of zero returns null rather than "0 other questions": that is an
+ * engine that found no repeat, and printing it as a finding turns an absence
+ * into a claim.
+ */
+export function patternSentence(review: Phase4Review): string | null {
+  const pattern = review.error_pattern;
+  const signature = pattern?.signature?.trim();
+  if (!signature) return null;
+  const count = pattern?.occurrence_count;
+  if (typeof count !== 'number' || !Number.isFinite(count) || count < 1) return null;
+  const questions = count === 1 ? '1 other question' : `${count} other questions`;
+  return `This “${signature}” error has appeared in ${questions}.`;
+}
+
+/**
+ * `NEARLY_MASTERED` → `Nearly mastered`, for the header chips.
+ *
+ * Presentation only, and deliberately narrow: it lower-cases and de-underscores
+ * a SCREAMING_SNAKE token and nothing else. A value that is already a sentence
+ * passes through untouched, so when the backend starts sending human strings
+ * this quietly stops doing anything rather than mangling them.
+ *
+ * It maps no enum to a nicer word — there is no lookup table here on purpose.
+ * Sanya renames these without notice, and a table would turn an unknown value
+ * into a blank chip; this turns it into a readable one.
+ */
+export function humanLabel(value: string | null | undefined): string {
+  const raw = value?.trim();
+  if (!raw) return '';
+  if (!/^[A-Z0-9_]+$/.test(raw)) return raw;
+  const words = raw.toLowerCase().split('_').filter(Boolean).join(' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
