@@ -94,10 +94,6 @@ export default function RescueSteps() {
   // `total_steps` is nullable, so the count alone left a walkthrough of
   // unstated length with no last step: "Next step" forever and no way back.
   const final = isFinalStep(current) || completed;
-  // Outstanding only for this rescue, and only until the step it asked for
-  // arrives. Anything else — a new rescue, a step that went backwards — clears
-  // it rather than leaving the student holding a dead button.
-  const pending = advancePending(awaiting, current);
   /**
    * Only for the step the student actually pressed on.
    *
@@ -110,6 +106,15 @@ export default function RescueSteps() {
    * successfully appeared.
    */
   const failedToSend = advanceFailed(advanceFailure, current);
+  // Outstanding only for this rescue, and only until the step it asked for
+  // arrives. Anything else — a new rescue, a step that went backwards — clears
+  // it rather than leaving the student holding a dead button.
+  // Cancelled by a recorded failure. Verified in the browser on 4 Sep against
+  // the deployed build: the advance 409'd, the catch recorded the failure, and
+  // the button still read "Waiting for the next step…" and stayed disabled —
+  // the exact symptom the failure reporting was added to remove. Recording a
+  // failure has to RELEASE the latch, not merely sit beside it.
+  const pending = advancePending(awaiting, current) && !failedToSend;
 
   const onNext = () => {
     if (!sessionId || !activeQuestionId) return;
@@ -129,8 +134,15 @@ export default function RescueSteps() {
     // "Waiting for the next step…" for the rest of the question. The other
     // half — a request that left and was rejected — arrives later, through the
     // transport, as `rescueAdvanceFailure`.
-    if (sent) setAwaiting({ rescueId: current.rescueId, step: current.stepIndex + 1 });
-    else noteAdvanceFailed({ rescueId: current.rescueId, step: current.stepIndex });
+    if (sent) {
+      // A fresh attempt clears the last one's failure, or the notice would sit
+      // under a press that is currently in flight and the latch it releases
+      // would leave the button live while a request is outstanding.
+      noteAdvanceFailed(null);
+      setAwaiting({ rescueId: current.rescueId, step: current.stepIndex + 1 });
+    } else {
+      noteAdvanceFailed({ rescueId: current.rescueId, step: current.stepIndex });
+    }
   };
 
   const onReturn = () => {

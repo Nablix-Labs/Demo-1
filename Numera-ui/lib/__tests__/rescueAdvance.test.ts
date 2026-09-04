@@ -97,3 +97,31 @@ describe('the advance frame itself', () => {
     warn.mockRestore();
   });
 });
+
+describe('a failure releases the button', () => {
+  // Found in the browser on 4 Sep against the deployed build, not by the unit
+  // tests above: the advance 409'd, the catch recorded the failure, and the
+  // button still read "Waiting for the next step…" and stayed disabled. The two
+  // latches were both correct in isolation and wrong together — recording a
+  // failure has to CANCEL the outstanding wait, not merely sit beside it.
+  const cancelled = (
+    awaiting: { rescueId: string; step: number } | null,
+    failure: { rescueId: string; step: number } | null,
+    current: { rescueId: string; stepIndex: number },
+  ) => advancePending(awaiting, current) && !advanceFailed(failure, current);
+
+  it('stops waiting once the press is known to have failed', () => {
+    expect(cancelled({ rescueId: 'R1', step: 2 }, { rescueId: 'R1', step: 1 }, at('R1', 1)))
+      .toBe(false);
+  });
+
+  it('keeps waiting while the press is still outstanding', () => {
+    expect(cancelled({ rescueId: 'R1', step: 2 }, null, at('R1', 1))).toBe(true);
+  });
+
+  it('keeps waiting when the failure belongs to a different step', () => {
+    // Failed on step 1, pressed again on step 2 and that one is in flight.
+    expect(cancelled({ rescueId: 'R1', step: 3 }, { rescueId: 'R1', step: 1 }, at('R1', 2)))
+      .toBe(true);
+  });
+});

@@ -735,8 +735,8 @@ export interface NumeraState {
   setGuidedRescue: (rescue: GuidedRescuePayload | null) => void;
   /** Drop the step-at-a-time rescue (the student returned, or it was replaced). */
   clearRescueSteps: () => void;
-  /** An advance request that never landed, so the button can recover. */
-  noteRescueAdvanceFailed: (at: { rescueId: string; step: number }) => void;
+  /** An advance request that never landed, so the button can recover. Null clears it. */
+  noteRescueAdvanceFailed: (at: { rescueId: string; step: number } | null) => void;
   /** The backend says this rescue is finished; offer the way back. */
   noteRescueCompleted: () => void;
   setVisualCueVisible: (v: boolean) => void;
