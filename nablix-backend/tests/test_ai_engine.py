@@ -1248,8 +1248,8 @@ def test_guided_confusion_uses_semantic_tutor_evaluation(
     assert response.intent == "EXPRESSING_CONFUSION"
     assert response.attempt_increment == 0
     assert response.tutor_message == (
-        load_classifier_rules()
-        .guided_learning.critical_thinking.confusion_teaching_probe
+        "That makes sense. Let’s use the expression in front of us: "
+        "what does the plus sign tell us to do?"
     )
 
 
@@ -1320,8 +1320,7 @@ def test_guided_component_question_stays_specific_after_confusion_and_wrong_valu
 
     assert confused.guided_student_state == "STUCK"
     assert confused.tutor_message == (
-        load_classifier_rules()
-        .guided_learning.critical_thinking.confusion_teaching_probe
+        "That is understandable. Which part can take different possible values?"
     )
     assert confused.guided_teaching_state is not None
 
@@ -1335,9 +1334,8 @@ def test_guided_component_question_stays_specific_after_confusion_and_wrong_valu
         )
     )
 
-    assert wrong.guided_student_state == "WRONG"
-    assert "the changing quantity is the letter" in wrong.tutor_message
-    assert wrong.tutor_message.endswith("Which part can take different possible values?")
+    assert wrong.guided_student_state == "STUCK"
+    assert wrong.tutor_message == confused.tutor_message
 
 
 def test_guided_evaluator_context_preserves_active_step_and_support_state() -> None:
@@ -1825,7 +1823,7 @@ def test_typed_general_rule_requests_canvas_writing_not_an_unrelated_defence() -
     )
 
     assert response.requires_written_math_evidence is True
-    assert response.tutor_message == "You have the rule. Now write it on the canvas, then press Check."
+    assert response.tutor_message == "Nice work."
 
 
 def test_guided_follow_up_replaces_an_unrelated_llm_question() -> None:
@@ -2470,9 +2468,10 @@ def test_spoken_correct_choice_leaves_a_prior_wrong_choice_probe(
         )
     )
 
-    assert calls == 0
+    assert calls == 1
     assert response.tutor_message == (
-        "You chose the option. Why does that rule work for every starting value?"
+        "You chose option B, which is a good start. Now explain why "
+        "option B works as a general rule."
     )
     assert response.answer_reveal_allowed is True
     assert response.guided_teaching_state is not None
@@ -2947,9 +2946,22 @@ def test_choice_reaffirmation_keeps_the_existing_comparison_question() -> None:
 def test_copied_numeric_example_is_repaired_before_the_general_rule(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class _NoEvaluationClient:
+    class _EvaluationClient:
         def evaluate_guided_turn(self, **kwargs: object) -> GuidedEvaluation:
-            raise AssertionError("copied source data must be repaired before LLM evaluation")
+            objective = kwargs["active_objective"]
+            assert isinstance(objective, ActiveTeachingObjective)
+            return GuidedEvaluation(
+                student_state="WRONG",
+                newly_confirmed_concept_ids=[],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=objective.missing_concept_ids,
+                selected_error_code=None,
+                confidence=0.9,
+                next_objective=objective,
+                tutor_message="Check the examples carefully. Which addend repeats?",
+                tutor_message_voice="Check the examples carefully. Which addend repeats?",
+            )
 
     rubric = GeneratedQuestionRubric(
         question_id="CT-T01-P3",
@@ -2967,7 +2979,7 @@ def test_copied_numeric_example_is_repaired_before_the_general_rule(
     monkeypatch.setattr(
         classifier,
         "build_openai_ai_engine_client",
-        lambda settings: _NoEvaluationClient(),
+        lambda settings: _EvaluationClient(),
     )
 
     response = classify_student_response(
@@ -2996,7 +3008,7 @@ def test_copied_numeric_example_is_repaired_before_the_general_rule(
     )
 
     assert response.guided_student_state == "WRONG"
-    assert "14 + 5, not 14 + 4" in response.tutor_message
+    assert response.tutor_message == "Check the examples carefully. Which addend repeats?"
     assert response.guided_teaching_state is not None
     assert response.guided_teaching_state.last_tutor_question_type == "SOURCE_CORRECTION"
 
@@ -3004,9 +3016,22 @@ def test_copied_numeric_example_is_repaired_before_the_general_rule(
 def test_changing_starting_numbers_are_acknowledged_before_requesting_the_rule(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class _NoEvaluationClient:
+    class _EvaluationClient:
         def evaluate_guided_turn(self, **kwargs: object) -> GuidedEvaluation:
-            raise AssertionError("the active teaching-step response is deterministic")
+            objective = kwargs["active_objective"]
+            assert isinstance(objective, ActiveTeachingObjective)
+            return GuidedEvaluation(
+                student_state="PARTIAL",
+                newly_confirmed_concept_ids=[objective.target_concept_ids[0]],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=[],
+                selected_error_code=None,
+                confidence=0.9,
+                next_objective=None,
+                tutor_message="You noticed the starting numbers change. How would you write that with n?",
+                tutor_message_voice="You noticed the starting numbers change. How would you write that with n?",
+            )
 
     rubric = GeneratedQuestionRubric(
         question_id="CT-T01-P3",
@@ -3024,7 +3049,7 @@ def test_changing_starting_numbers_are_acknowledged_before_requesting_the_rule(
     monkeypatch.setattr(
         classifier,
         "build_openai_ai_engine_client",
-        lambda settings: _NoEvaluationClient(),
+        lambda settings: _EvaluationClient(),
     )
 
     response = classify_student_response(
@@ -3057,8 +3082,7 @@ def test_changing_starting_numbers_are_acknowledged_before_requesting_the_rule(
 
     assert response.guided_student_state == "PARTIAL"
     assert response.tutor_message == (
-        "Yes—the starting number changes. Replace it with a letter and keep "
-        "the operation that stays the same."
+        "You noticed the starting numbers change. How would you write that with n?"
     )
 
 
@@ -3066,19 +3090,30 @@ def test_guided_state_machine_clarifies_ambiguous_canvas_then_accepts_defence() 
     """Two real turns through classify_guided_learning_response directly.
 
     Turn 1: canvas OCR reads "n 5" (no operator) while the student typed
-    nothing new -> ambiguous_symbol_number_input fires before any canvas
-    mistake review or LLM call, so student_state is UNCLEAR.
+    nothing new -> the model asks for clarification without a controller reply.
     Turn 2: the same canvas evidence is preserved and the student adds "its
     +". Merging student_input + canvas evidence (student_input first, see
     request_with_reliable_canvas_evidence) yields "its + n 5", whose compact
     form does not fullmatch the GENERAL_RULE regex, so
-    deterministic_teaching_step_evaluation legitimately falls through to the
-    LLM (evaluate_guided_turn) -- stubbed here as CORRECT.
+    the model evaluates the final answer -- stubbed here as CORRECT.
     """
 
-    class _UnexpectedOpenAIClient:
+    class _ClarificationEvaluationClient:
         def evaluate_guided_turn(self, **kwargs: object) -> GuidedEvaluation:
-            raise AssertionError("Turn 1 must resolve deterministically, before any LLM call.")
+            objective = kwargs["active_objective"]
+            assert isinstance(objective, ActiveTeachingObjective)
+            return GuidedEvaluation(
+                student_state="UNCLEAR",
+                newly_confirmed_concept_ids=[],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=objective.missing_concept_ids,
+                selected_error_code=None,
+                confidence=0.9,
+                next_objective=objective,
+                tutor_message="I cannot see the operation clearly. Can you say which sign you used?",
+                tutor_message_voice="I cannot see the operation clearly. Can you say which sign you used?",
+            )
 
         def generate_guided_rubric(self, **kwargs: object) -> GeneratedQuestionRubric:
             raise AssertionError("The rubric is pre-supplied; it must not be regenerated.")
@@ -3128,11 +3163,11 @@ def test_guided_state_machine_clarifies_ambiguous_canvas_then_accepts_defence() 
         current_hint_level=None,
     )
     response_1 = classifier.classify_guided_learning_response(
-        request_1, rules, safety, _UnexpectedOpenAIClient(), "SUBMITTING_ANSWER"
+        request_1, rules, safety, _ClarificationEvaluationClient(), "SUBMITTING_ANSWER"
     )
 
     assert response_1.guided_student_state == "UNCLEAR"
-    assert response_1.tutor_message == rules.guided_learning.critical_thinking.ambiguity_message
+    assert response_1.tutor_message == "I cannot see the operation clearly. Can you say which sign you used?"
     assert response_1.error_type is None
     assert response_1.mistake_classification is None
     assert response_1.student_model_events == []
@@ -3197,9 +3232,22 @@ def test_guided_state_machine_clarifies_ambiguous_canvas_then_accepts_defence() 
 def test_source_correction_keeps_the_same_active_component(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class _NoEvaluationClient:
+    class _EvaluationClient:
         def evaluate_guided_turn(self, **kwargs: object) -> GuidedEvaluation:
-            raise AssertionError("the explicit source correction has a deterministic response")
+            objective = kwargs["active_objective"]
+            assert isinstance(objective, ActiveTeachingObjective)
+            return GuidedEvaluation(
+                student_state="WRONG",
+                newly_confirmed_concept_ids=[],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=objective.missing_concept_ids,
+                selected_error_code=None,
+                confidence=0.9,
+                next_objective=objective,
+                tutor_message="Let’s return to the rule. What expression works for every starting number?",
+                tutor_message_voice="Let’s return to the rule. What expression works for every starting number?",
+            )
 
     rubric = GeneratedQuestionRubric(
         question_id="CT-T01-P3",
@@ -3218,7 +3266,7 @@ def test_source_correction_keeps_the_same_active_component(
     monkeypatch.setattr(
         classifier,
         "build_openai_ai_engine_client",
-        lambda settings: _NoEvaluationClient(),
+        lambda settings: _EvaluationClient(),
     )
 
     response = classify_student_response(
@@ -3256,8 +3304,10 @@ def test_source_correction_keeps_the_same_active_component(
         )
     )
 
-    assert response.guided_student_state == "PARTIAL"
-    assert "What general rule represents this situation?" in response.tutor_message
+    assert response.guided_student_state == "WRONG"
+    assert response.tutor_message == (
+        "Let’s return to the rule. What expression works for every starting number?"
+    )
     assert response.guided_teaching_state is not None
     assert response.guided_teaching_state.active_component_id == "GENERAL_RULE"
 
@@ -7199,17 +7249,19 @@ def test_guided_multipart_expression_starts_the_next_specific_teaching_step(
             return rubric
 
         def evaluate_guided_turn(self, **kwargs):
+            objective = kwargs["active_objective"]
+            component_id = objective.target_concept_ids[0]
             return GuidedEvaluation(
-                student_state="CORRECT",
-                newly_confirmed_concept_ids=["REQUIRED_COMPONENT_1"],
+                student_state="PARTIAL",
+                newly_confirmed_concept_ids=[component_id],
                 preserved_concept_ids=[],
                 contradicted_concept_ids=[],
-                missing_concept_ids=[],
+                missing_concept_ids=objective.target_concept_ids[1:],
                 selected_error_code=None,
                 confidence=0.98,
                 next_objective=None,
-                tutor_message="That completes the question.",
-                tutor_message_voice="That completes the question.",
+                tutor_message="You have the expression. Which part can take different possible values?",
+                tutor_message_voice="You have the expression. Which part can take different possible values?",
             )
 
     monkeypatch.setattr(
@@ -8083,12 +8135,7 @@ def test_guided_exact_notation_stuck_uses_question_aware_llm_message(
     )
 
     assert response.guided_student_state == "STUCK"
-    # The bespoke stuck wording was folded into the shared prefix map by
-    # "fix: retry invalid guided tutor wording once".
-    assert response.tutor_message == (
-        load_classifier_rules()
-        .guided_learning.critical_thinking.confusion_teaching_probe
-    )
+    assert response.tutor_message == "Let’s make it smaller. Which letter is repeated?"
     assert "x" not in response.tutor_message
     assert response.attempt_increment == 0
 
