@@ -97,6 +97,34 @@ def _response_body() -> dict[str, object]:
                         "sequence_no": 3,
                         "narration": "So the rule subtracts three from the starting value.",
                         "tutor_write": "t - 3",
+                        "board": {
+                            "elements": [
+                                {
+                                    "kind": "value_row",
+                                    "values": ["8", "5", "2"],
+                                    "arrow_label": "changes",
+                                },
+                                {
+                                    "kind": "brace",
+                                    "over": "value_row",
+                                    "labels": ["subtract 3"],
+                                },
+                                {
+                                    "kind": "struck",
+                                    "text": "t + 3",
+                                    "tone": "error",
+                                },
+                                {
+                                    "kind": "boxed",
+                                    "text": "Rule: t - 3",
+                                    "tone": "correct",
+                                },
+                                {
+                                    "kind": "example",
+                                    "text": "Try t = 8: 8 - 3 = 5",
+                                },
+                            ]
+                        },
                     },
                 ],
             }
@@ -158,6 +186,15 @@ def test_phase4_review_generates_exact_replay_contract(monkeypatch: pytest.Monke
     assert [replay.attempt_id for replay in result.tutor_replays] == ["ATTEMPT-021"]
     assert result.tutor_replays[0].first_error.student_page_no == 1
     assert len(result.student_insights.personalised_notes) == 3
+    board = result.tutor_replays[0].replay_steps[2].board
+    assert board is not None
+    assert [element.kind for element in board.elements] == [
+        "value_row",
+        "brace",
+        "struck",
+        "boxed",
+        "example",
+    ]
 
 
 def test_phase4_schema_is_openai_strict_and_keeps_nullable_fields() -> None:

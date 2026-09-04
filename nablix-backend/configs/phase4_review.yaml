@@ -10,6 +10,17 @@ generation_instructions: >-
   evidence or alter backend decisions. Use confirmed recurrence clearly, limited
   recurrence cautiously, and omit an isolated pattern. Create exactly one actionable
   next practice focus and three to five concise, non-duplicative personalised notes.
+  For every replay step, return a compact structured board plan as well as concise
+  narration. Use the board to show the mathematical relationship, not to repeat
+  paragraphs of explanation. Prefer a concrete worked or equivalent numerical
+  example where one helps reveal the learner's misconception. Use value_row and
+  brace for a visible pattern, expression and label for a compact notation
+  explanation, struck only for the learner's incorrect expression, boxed only for
+  the corrected rule, and example for one short substituted check. Do not invent
+  values, student work, or a misconception. Keep narration to one or two short
+  sentences and tutor_write to a short board heading; the board elements carry the
+  visual explanation. The canonical answer may appear only within replay steps,
+  including their board elements.
 stricter_guardrail_instruction: >-
   Return only the supplied replay items in their original order. Remove every internal
   identifier, URL, error code, misconception ID, count, routing claim, mastery claim,
