@@ -3034,11 +3034,19 @@ def classify_guided_learning_response(
     objective = objective_for_rubric(request.active_teaching_objective, rubric)
     objective = objective_with_persisted_choice_selection(request, rubric, objective)
     objective = objective_with_persisted_component_evidence(request, rubric, objective)
-    objective = objective_with_turn_evidence(request, rubric, objective, rules)
-    affect = affect_evaluation(request, objective, rules)
+    deterministic_resolution_enabled = (
+        rules.guided_learning.deterministic_turn_resolution_enabled
+    )
+    if deterministic_resolution_enabled:
+        objective = objective_with_turn_evidence(request, rubric, objective, rules)
+    affect = (
+        affect_evaluation(request, objective, rules)
+        if deterministic_resolution_enabled
+        else None
+    )
     if affect is not None:
         return build_guided_tutor_response(request, rules, safety_check, rubric, affect, objective)
-    if intent == "EXPRESSING_CONFUSION":
+    if deterministic_resolution_enabled and intent == "EXPRESSING_CONFUSION":
         confusion = explicit_confusion_evaluation(request, objective, rules)
         if context.consecutive_stuck_count + 1 < rules.strategy_rules.stuck_scaffold_min_count:
             confusion = write_deterministic_guided_follow_up(
@@ -3054,7 +3062,7 @@ def classify_guided_learning_response(
         return build_guided_tutor_response(
             request, rules, safety_check, rubric, confusion, objective
         )
-    if intent == "ASKING_QUESTION":
+    if deterministic_resolution_enabled and intent == "ASKING_QUESTION":
         question_help = explicit_confusion_evaluation(request, objective, rules)
         question_help = write_deterministic_guided_follow_up(
             question_help,
@@ -3074,7 +3082,7 @@ def classify_guided_learning_response(
         request.student_input,
         objective,
     )
-    if copied_example is not None:
+    if deterministic_resolution_enabled and copied_example is not None:
         copied_example = naturalize_controller_guided_evaluation(
             copied_example, request, rubric, objective, openai_client, rules
         )
@@ -3086,7 +3094,7 @@ def classify_guided_learning_response(
             copied_example,
             objective,
         )
-    if ambiguous_symbol_number_input(request.student_input):
+    if deterministic_resolution_enabled and ambiguous_symbol_number_input(request.student_input):
         ambiguity = GuidedEvaluation(
             student_state="UNCLEAR",
             newly_confirmed_concept_ids=[],
@@ -3110,7 +3118,7 @@ def classify_guided_learning_response(
         rubric,
         objective,
     )
-    if corrected_source_follow_up is not None:
+    if deterministic_resolution_enabled and corrected_source_follow_up is not None:
         corrected_source_follow_up = naturalize_controller_guided_evaluation(
             corrected_source_follow_up,
             request,
@@ -3128,7 +3136,7 @@ def classify_guided_learning_response(
             objective,
         )
     completed_evidence = completed_evidence_evaluation(objective)
-    if completed_evidence is not None:
+    if deterministic_resolution_enabled and completed_evidence is not None:
         return build_guided_tutor_response(
             request,
             rules,
@@ -3138,7 +3146,7 @@ def classify_guided_learning_response(
             None,
         )
     wrong_choice = wrong_choice_evaluation(request, rubric, objective, rules)
-    if wrong_choice is not None:
+    if deterministic_resolution_enabled and wrong_choice is not None:
         wrong_choice = naturalize_controller_guided_evaluation(
             wrong_choice, request, rubric, objective, openai_client, rules
         )
@@ -3146,7 +3154,7 @@ def classify_guided_learning_response(
             request, rules, safety_check, rubric, wrong_choice, objective
         )
     correct_choice = correct_choice_selection_evaluation(request, objective, rules)
-    if correct_choice is not None:
+    if deterministic_resolution_enabled and correct_choice is not None:
         correct_choice = naturalize_controller_guided_evaluation(
             correct_choice, request, rubric, objective, openai_client, rules
         )
@@ -3163,7 +3171,7 @@ def classify_guided_learning_response(
         objective,
         rules,
     )
-    if choice_reasoning_stuck is not None:
+    if deterministic_resolution_enabled and choice_reasoning_stuck is not None:
         next_objective = normalized_guided_objective(choice_reasoning_stuck, objective)
         if next_objective is not None:
             choice_reasoning_stuck = write_deterministic_guided_follow_up(
@@ -3185,7 +3193,7 @@ def classify_guided_learning_response(
             next_objective,
         )
     typed_option = typed_option_text_evaluation(request, objective, rules)
-    if typed_option is not None:
+    if deterministic_resolution_enabled and typed_option is not None:
         next_objective = normalized_guided_objective(typed_option, objective)
         if next_objective is not None:
             typed_option = write_deterministic_guided_follow_up(
@@ -3212,7 +3220,7 @@ def classify_guided_learning_response(
         objective,
         rules,
     )
-    if wrong_direct_rule is not None:
+    if deterministic_resolution_enabled and wrong_direct_rule is not None:
         next_objective = normalized_guided_objective(wrong_direct_rule, objective)
         if next_objective is not None:
             wrong_direct_rule = write_deterministic_guided_follow_up(
@@ -3238,7 +3246,7 @@ def classify_guided_learning_response(
         objective,
         rules,
     )
-    if selection_required is not None:
+    if deterministic_resolution_enabled and selection_required is not None:
         next_objective = normalized_guided_objective(selection_required, objective)
         if next_objective is not None:
             selection_required = write_deterministic_guided_follow_up(
@@ -3265,7 +3273,7 @@ def classify_guided_learning_response(
         objective,
         request.guided_teaching_state,
     )
-    if choice_follow_up is not None:
+    if deterministic_resolution_enabled and choice_follow_up is not None:
         choice_follow_up = naturalize_controller_guided_evaluation(
             choice_follow_up, request, rubric, objective, openai_client, rules
         )
@@ -3283,7 +3291,7 @@ def classify_guided_learning_response(
         objective,
         rules,
     )
-    if choice_explanation is not None:
+    if deterministic_resolution_enabled and choice_explanation is not None:
         next_objective = normalized_guided_objective(choice_explanation, objective)
         if next_objective is not None:
             choice_explanation = write_deterministic_guided_follow_up(
@@ -3306,7 +3314,10 @@ def classify_guided_learning_response(
         )
     controller_evaluation = (
         None
-        if is_authoritative_guided_completion(request)
+        if (
+            is_authoritative_guided_completion(request)
+            or not deterministic_resolution_enabled
+        )
         else deterministic_teaching_step_evaluation(
             request,
             rubric,
@@ -3551,7 +3562,11 @@ def classify_guided_learning_response(
     if is_authoritative_guided_completion(request):
         evaluation = authoritative_guided_completion(evaluation, rules)
     next_objective = normalized_guided_objective(evaluation, objective)
-    rewrite_candidate = remove_unsupported_guided_praise(evaluation, request)
+    rewrite_candidate = (
+        remove_unsupported_guided_praise(evaluation, request)
+        if deterministic_resolution_enabled
+        else evaluation
+    )
     rewrite_required = (
         rewrite_candidate.student_state != "CORRECT"
         and next_objective is not None
@@ -3578,12 +3593,13 @@ def classify_guided_learning_response(
         model_call_count += 1
     else:
         evaluation = rewrite_candidate
-    evaluation = align_guided_follow_up(
-        evaluation,
-        request,
-        rubric,
-        next_objective,
-    )
+    if deterministic_resolution_enabled:
+        evaluation = align_guided_follow_up(
+            evaluation,
+            request,
+            rubric,
+            next_objective,
+        )
     logger.info(
         "guided_state_evaluated",
         extra={
@@ -5822,6 +5838,16 @@ def validate_guided_evaluation(
             "Guided evaluation must return non-empty text and voice messages.",
         )
     if not remaining:
+        completion_message = (
+            rules.messages.CORRECT
+            if rules.guided_learning.deterministic_turn_resolution_enabled
+            else evaluation.tutor_message
+        )
+        completion_voice = (
+            rules.messages.CORRECT
+            if rules.guided_learning.deterministic_turn_resolution_enabled
+            else evaluation.tutor_message_voice
+        )
         return evaluation.model_copy(
             update={
                 "student_state": "CORRECT",
@@ -5831,8 +5857,8 @@ def validate_guided_evaluation(
                 "missing_concept_ids": [],
                 "selected_error_code": None,
                 "next_objective": None,
-                "tutor_message": rules.messages.CORRECT,
-                "tutor_message_voice": rules.messages.CORRECT,
+                "tutor_message": completion_message,
+                "tutor_message_voice": completion_voice,
             }
         )
     if evaluation.student_state == "CORRECT" and remaining:
@@ -6171,9 +6197,7 @@ def build_guided_tutor_response(
         request,
         rules,
     )
-    message = write_instruction or (
-        rules.guided_learning.critical_thinking.written_rule_prompt
-    )
+    message = write_instruction or evaluation.tutor_message
     return guarded_response.model_copy(
         update={
             "evaluation": "PARTIALLY_CORRECT",

@@ -6,6 +6,7 @@ guided_learning:
   model: "gpt-4o-mini-2024-07-18"
   model_supports_reasoning_effort: false
   single_call_enabled: true
+  deterministic_turn_resolution_enabled: false
   guided_turn_maximum_retries: 0
   scaffold_evaluation_maximum_retries: 0
   scaffold_evaluation_failure_message: "Let’s slow down and look at this step together. What part would you like me to explain?"
