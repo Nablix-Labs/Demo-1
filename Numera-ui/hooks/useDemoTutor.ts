@@ -38,6 +38,7 @@ import { selectedOptionText } from '@/lib/selectedOption';
 import {
   applyInteractionSupport, acceptResponse, authorisedHint, applyServedCue,
 } from '@/lib/interactionPresentation';
+import { opensRescue } from '@/lib/rescueTranscript';
 import { revealDecision } from '@/lib/revealBeforeClear';
 import { refreshedRecord } from '@/lib/sessionRecordRefresh';
 import { sessionEndSummary, storeEndedSession } from '@/lib/sessionEnd';
@@ -694,13 +695,29 @@ export function useDemoTutor() {
         // so the cue and scaffold have to be on screen before that line is
         // shown or spoken — otherwise it points at nothing.
         const spoken = withTransitionVoice(entering, applyInteractionSupport(res));
-        if (entering) {
+        /**
+         * One child-facing message on the turn a rescue opens.
+         *
+         * This turn had been producing up to three bubbles — the phase line,
+         * the authorised hint and the tutor's reply — and on a rescue turn the
+         * hint is the rung the rescue was escalated PAST, so the chat coaches
+         * the student through the question while the panel beside it works the
+         * question for them. The trail still records everything; it is the
+         * child-facing chat that says one thing.
+         */
+        const rescueTurn = opensRescue(res);
+        if (entering && !rescueTurn) {
           addTranscriptMessage({ role: 'ai', text: entering.text });
+          addTrailEntry({ kind: 'tutor', text: entering.text, meta: 'phase change' });
+        } else if (entering) {
           addTrailEntry({ kind: 'tutor', text: entering.text, meta: 'phase change' });
         }
         // A hint the backend authorised is shown and spoken WITHOUT the student
-        // having to ask for it, before the tutor's own correction.
-        const hint = presentAuthorisedHint(res, addTranscriptMessage, addTrailEntry);
+        // having to ask for it, before the tutor's own correction — except when
+        // a rescue is opening, which supersedes it.
+        const hint = rescueTurn
+          ? null
+          : presentAuthorisedHint(res, addTranscriptMessage, addTrailEntry);
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message });
         // The phase is NOT set here. syncBackendSession above owns it, and it
@@ -800,8 +817,12 @@ export function useDemoTutor() {
       // why assuming otherwise reported accepted work as a failure.
       const view = canvasSubmissionView(res);
       if (view.ocr) addTrailEntry({ kind: 'canvas', ...view.ocr });
-      if (entering) {
+      // One child-facing message on a rescue turn — see the answer path.
+      const rescueTurn = opensRescue(res);
+      if (entering && !rescueTurn) {
         addTranscriptMessage({ role: 'ai', text: entering.text });
+        addTrailEntry({ kind: 'tutor', text: entering.text, meta: 'phase change' });
+      } else if (entering) {
         addTrailEntry({ kind: 'tutor', text: entering.text, meta: 'phase change' });
       }
       const tutorMessage = res.message?.trim() || view.tutorText;
@@ -1224,11 +1245,17 @@ export function useDemoTutor() {
         const entering = phaseAnnouncement(res, useNumeraStore.getState().currentPhase);
         // Support first — see the answer path above.
         const spoken = withTransitionVoice(entering, applyInteractionSupport(res));
-        if (entering) {
+        // One child-facing message on a rescue turn — see the answer path.
+        const rescueTurn = opensRescue(res);
+        if (entering && !rescueTurn) {
           addTranscriptMessage({ role: 'ai', text: entering.text });
           addTrailEntry({ kind: 'tutor', text: entering.text, meta: 'phase change' });
+        } else if (entering) {
+          addTrailEntry({ kind: 'tutor', text: entering.text, meta: 'phase change' });
         }
-        const voiceHint = presentAuthorisedHint(res, addTranscriptMessage, addTrailEntry);
+        const voiceHint = rescueTurn
+          ? null
+          : presentAuthorisedHint(res, addTranscriptMessage, addTrailEntry);
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message });
         if (res.ocr) {

@@ -25,6 +25,7 @@ import { ArrowLeft, ChevronRight } from 'lucide-react';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { isPhase3 } from '@/lib/phase3';
 import { rescuePresentation, visibleSteps, fullyRevealed } from '@/lib/guidedRescue';
+import { legacyRescueVisible } from '@/lib/rescueMode';
 import StickyNote from '@/components/StickyNote';
 
 const TITLE = {
@@ -36,6 +37,16 @@ export default function RescueNote() {
   const rescue = useNumeraStore((s) => s.guidedRescue);
   const setRescue = useNumeraStore((s) => s.setGuidedRescue);
   const currentPhase = useNumeraStore((s) => s.currentPhase);
+  /**
+   * Whether this card is the one that may speak for the rescue rung.
+   *
+   * It is not, once a stepwise step exists — that is the contract the backend
+   * is moving to, and this payload carries every step INCLUDING the answer. So
+   * the two on screen together do not merely duplicate the panel: this one
+   * hands over the answer the stepwise walkthrough is deliberately releasing a
+   * step at a time. Two panels for one rescue is Chirudeva's 4 Sep report.
+   */
+  const mayRender = useNumeraStore(legacyRescueVisible);
   const view = rescuePresentation(rescue);
 
   // One step visible to begin with: the card opens showing the tutor starting
@@ -47,8 +58,11 @@ export default function RescueNote() {
   useEffect(() => setRevealed(1), [key]);
 
   if (!view) return null;
+  if (!mayRender) return null;
   // Phase 3 is answered alone (spec §3.2) — the rescue rungs are support, and
-  // support does not appear during an independent attempt.
+  // support does not appear during an independent attempt. `mayRender` covers
+  // this too; kept because it is this component's own rule and reads at the
+  // point it applies.
   if (isPhase3(currentPhase)) return null;
 
   const shown = visibleSteps(view.steps, revealed);

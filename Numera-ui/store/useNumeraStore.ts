@@ -474,6 +474,30 @@ export interface NumeraState {
   /** Where "Return to original" should send focus, from the active rescue. */
   rescueReturnTarget: string | null;
   /**
+   * A "Next step" that did not reach the backend, and the step it was pressed on.
+   *
+   * Here rather than in the component because the failure is ASYNCHRONOUS. The
+   * transport reports success the moment the POST is fired, so the component's
+   * own latch could only ever record "there was no transport at all" — an
+   * advance that left, was rejected, and never came back left the button reading
+   * "Waiting for the next step…" for the rest of the question, which is the
+   * unresponsive state the panel is written to avoid.
+   *
+   * Keyed to the rescue and step so a stale failure cannot attach itself to a
+   * step that did arrive.
+   */
+  rescueAdvanceFailure: { rescueId: string; step: number } | null;
+  /**
+   * The backend has said this rescue has no further steps.
+   *
+   * `RescueStepResponse.completed` has existed since the endpoint shipped and
+   * was read by nothing. Without it the end of a walkthrough could only be
+   * INFERRED, from `step_index === total_steps` — and `total_steps` is nullable,
+   * so a rescue whose length the backend did not state had no last step at all:
+   * the panel kept offering "Next step" forever and never offered the way back.
+   */
+  rescueCompleted: boolean;
+  /**
    * Rescue actions whose target was not resolvable yet.
    *
    * Queued, not dropped (handoff §4). The ordinary rule for a semantic action
@@ -711,6 +735,10 @@ export interface NumeraState {
   setGuidedRescue: (rescue: GuidedRescuePayload | null) => void;
   /** Drop the step-at-a-time rescue (the student returned, or it was replaced). */
   clearRescueSteps: () => void;
+  /** An advance request that never landed, so the button can recover. */
+  noteRescueAdvanceFailed: (at: { rescueId: string; step: number }) => void;
+  /** The backend says this rescue is finished; offer the way back. */
+  noteRescueCompleted: () => void;
   setVisualCueVisible: (v: boolean) => void;
   setActiveScaffold: (s: ActiveScaffold | null) => void;
 
@@ -819,7 +847,7 @@ const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
   | 'setQuestionText' | 'setQuestionAnchors' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'setEndedSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'noteTutorLineage' | 'markTutorTurnFailed'
-  | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue' | 'setVisibleHint' | 'setWriteInstruction' | 'setGuidedRescue' | 'clearRescueSteps'
+  | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue' | 'setVisibleHint' | 'setWriteInstruction' | 'setGuidedRescue' | 'clearRescueSteps' | 'noteRescueAdvanceFailed' | 'noteRescueCompleted'
   | 'setSupportShown' | 'setLastHintText' | 'lockPhase3Attempt'
   | 'setPendingTutorSpeech' | 'claimPendingTutorSpeech' | 'setQuestionProgress' | 'setAppliedResponse' | 'setInactivityPolicy'
   | 'addTranscriptMessage' | 'removeTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript' | 'commitPartialTranscript'
@@ -885,6 +913,8 @@ const initial: Omit<
   guidedRescue: null as GuidedRescuePayload | null,
   rescueSteps: [] as RescueStep[],
   rescueReturnTarget: null as string | null,
+  rescueAdvanceFailure: null as { rescueId: string; step: number } | null,
+  rescueCompleted: false,
   pendingRescueActions: [] as TutorCanvasAction[],
   visualCueVisible: false,
   visualCueId: null as string | null,
@@ -1063,6 +1093,8 @@ export const useNumeraStore = create<NumeraState>()(
               rescueSteps: [],
               rescueReturnTarget: null,
               pendingRescueActions: [],
+              rescueAdvanceFailure: null,
+              rescueCompleted: false,
               // So does an instruction to write: it was about evidence for the
               // step the student was on, not for this one.
               writeInstruction: null,
@@ -1206,6 +1238,8 @@ export const useNumeraStore = create<NumeraState>()(
         rescueSteps: [],
         rescueReturnTarget: null,
         pendingRescueActions: [],
+        rescueAdvanceFailure: null,
+        rescueCompleted: false,
         // Exact mark id, not a prefix: `startsWith` made action ids `a1` and
         // `a10` collide, and it also stripped non-rescue marks belonging to the
         // same action.
@@ -1214,6 +1248,13 @@ export const useNumeraStore = create<NumeraState>()(
         ),
       };
     }),
+
+  noteRescueAdvanceFailed: (at) => set({ rescueAdvanceFailure: at }),
+
+  // Only ever set true here, and cleared wherever a rescue is torn down or
+  // replaced — a completion belongs to the walkthrough it ended, and carrying
+  // it into the next one would open that one with its way out already showing.
+  noteRescueCompleted: () => set({ rescueCompleted: true }),
 
   setVisualCueVisible: (visualCueVisible) => set({ visualCueVisible }),
 
@@ -1553,6 +1594,21 @@ export const useNumeraStore = create<NumeraState>()(
       let rescueSteps = s.rescueSteps;
       let rescueReturnTarget = s.rescueReturnTarget;
       const context = eventContext(s);
+      /**
+       * The rungs above the rescue, taken down when one OPENS.
+       *
+       * A rescue is the bottom of the ladder: reaching it means the hint, the
+       * cue and the scaffold have all already failed this student. Left on
+       * screen they are three competing instructions beside the one thing the
+       * tutor is now actually doing — Chirudeva, 4 Sep: "clear/hide lower-rung
+       * scaffold and visual-cue cards for that active question".
+       *
+       * Accumulated rather than applied, because this is inside `set` and these
+       * are ordinary fields on the same object. Empty on every turn that is not
+       * the first step of a new rescue, so a walkthrough's second step cannot
+       * re-clear a rung the student picked up in between.
+       */
+      let clearedRungs: Partial<NumeraState> = {};
 
       // Retry whatever was waiting for the board to catch up, oldest first, so
       // a queued step still renders before the step that follows it.
@@ -1663,6 +1719,25 @@ export const useNumeraStore = create<NumeraState>()(
             // would otherwise carry A's target into B's "Return to original".
             rescueReturnTarget = null;
           }
+          // Is this the first step of this rescue? Asked before the merge, so
+          // the answer is about the board the student was looking at.
+          if (!rescueSteps.some((prev) => prev.rescueId === step.rescueId)) {
+            clearedRungs = {
+              // A fresh walkthrough is not finished and has no failed press
+              // behind it, whatever the one it replaced had.
+              rescueAdvanceFailure: null,
+              rescueCompleted: false,
+              visibleHint: null,
+              writeInstruction: null,
+              activeScaffold: null,
+              visualCueVisible: false,
+              visualCueId: null,
+              visualCueType: null,
+              visualCueDescription: null,
+              visualCueAssetUrl: null,
+              visualCueActions: null,
+            };
+          }
           rescueSteps = mergeStep(rescueSteps, step);
           if (step.returnTargetObjectId) rescueReturnTarget = step.returnTargetObjectId;
           acks.push({ actionId: step.actionId, targetObjectId: step.anchorId });
@@ -1705,6 +1780,7 @@ export const useNumeraStore = create<NumeraState>()(
       return {
         canvasEvents, questionAnchors, tutorOptionActionIds, tutorElements, writeAffordance,
         rescueSteps, rescueReturnTarget, pendingRescueActions: stillPending,
+        ...clearedRungs,
       };
     }),
 

@@ -23,6 +23,7 @@ import {
   isPhase3, phase3AttemptClosed, phase3Locked, phase3LockTarget, phase3Notice, OCR_UNCLEAR, ANSWER_RECORDED,
   reviewIsNext, servedNextQuestion,
 } from '@/lib/phase3';
+import { rescueBlocksSubmission } from '@/lib/rescueMode';
 import { optionsMissing } from '@/lib/questionOptions';
 import QuestionDisplay from '@/components/QuestionDisplay';
 import StickyNote from '@/components/StickyNote';
@@ -152,6 +153,17 @@ export default function PracticePage() {
    * practice screen is the demo everyone shows.
    */
   const silent = tutor.apiEnabled && isPhase3(currentPhase);
+  /**
+   * A rescue is on screen, so a spoken answer must not be submitted either.
+   *
+   * The same reason the chat box is held back: a voice turn goes to
+   * `/interaction`, which evaluates it against the ORIGINAL question and
+   * re-opens the scaffold the rescue was escalated past. Voice is the easier
+   * one to get wrong, because a student reading a walkthrough aloud, or saying
+   * "oh, I see" to themselves, is not answering anything — and the turn machine
+   * cannot tell that from an answer.
+   */
+  const rescueOn = useNumeraStore(rescueBlocksSubmission);
   /** The accepted attempt is frozen: no more ink, no more choices, no support. */
   const locked = silent && phase3Locked(phase3LockedQuestionId, activeQuestionId);
 
@@ -165,13 +177,15 @@ export default function PracticePage() {
       // transcript they could not see — so in Phase 3 the turn is simply not
       // sent. The canvas (or an approved choice) is the only answer channel.
       if (silent) return;
+      // Reading the walkthrough out loud is not an answer. See `rescueOn`.
+      if (rescueOn) return;
       void submitVoiceTurn(
         transcript,
         { concept_id: DEMO_CONCEPT_ID, current_phase: PHASE, hint_count: 0 },
         confidence
       );
     },
-    [submitVoiceTurn, PHASE, silent]
+    [submitVoiceTurn, PHASE, silent, rescueOn]
   );
   const voice = useVoiceTurn({ onTurnEnd });
 

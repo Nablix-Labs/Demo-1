@@ -3,6 +3,7 @@ import type { QuestionAnchor } from '@/lib/questionAnchors';
 import { cueAssetUrl } from '@/lib/cueAsset';
 import type { GuidedRescuePayload } from '@/lib/guidedRescue';
 import { writePrompt } from '@/lib/writtenEvidence';
+import { opensRescue } from '@/lib/rescueTranscript';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import type { TutorCanvasAction } from '@/store/useNumeraStore';
 import {
@@ -180,6 +181,16 @@ function deliversSupport(response: SupportPresentation): boolean {
 }
 
 export function applyInteractionSupport(response: SupportPresentation): string {
+  /**
+   * This turn puts a rescue on screen, so the chat says one thing only.
+   *
+   * The hint card is already handled — `applyTutorCanvasActions` clears the
+   * rungs when a rescue opens, and it runs after the hint is set. The SCAFFOLD
+   * is not: it is applied from persisted state further down, AFTER the actions,
+   * so on a turn carrying both it would re-open the scaffold the rescue was
+   * escalated past and add its step to the transcript as a second bubble.
+   */
+  const rescueTurn = opensRescue(response as { tutor_canvas_actions?: TutorCanvasAction[] | null });
   // Support is separate from the tutor's actual response. Keeping it apart
   // prevents a generic content hint from replacing a question-aware correction
   // in the chat, while preserving it for the existing Need help? control.
@@ -269,7 +280,7 @@ export function applyInteractionSupport(response: SupportPresentation): string {
   const persisted = response.active_scaffold ?? (response as InteractionResponse).active_scaffold;
   if (persisted !== undefined) {
     const store = useNumeraStore.getState();
-    if (!scaffoldVisible({ ...response, active_scaffold: persisted })) {
+    if (rescueTurn || !scaffoldVisible({ ...response, active_scaffold: persisted })) {
       store.setActiveScaffold(null);
       return response.message;
     }
@@ -285,7 +296,7 @@ export function applyInteractionSupport(response: SupportPresentation): string {
   }
 
   // Pre-contract backend: the per-turn booleans are all we have.
-  if (response.show_scaffold_panel === undefined) {
+  if (rescueTurn || response.show_scaffold_panel === undefined) {
     return response.message;
   }
   const scaffold = activeScaffold(response as InteractionResponse);

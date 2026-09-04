@@ -164,9 +164,32 @@ export function useWebSocket(sessionId: string | null) {
           current_step_index: event.current_step_index,
           trigger: event.trigger,
         }).then((response) => {
-          if (response.action) useNumeraStore.getState().applyTutorCanvasActions([response.action]);
+          const store = useNumeraStore.getState();
+          if (response.action) store.applyTutorCanvasActions([response.action]);
+          // `completed` has been on this response since the endpoint shipped
+          // and was read by nothing. It is the backend's own word that the
+          // walkthrough is over, and without it the end could only be inferred
+          // from `step_index === total_steps` — which is unknowable whenever
+          // `total_steps` is null.
+          //
+          // With a final step attached, the panel shows it and swaps Next for
+          // "Return to original": yanking the card away while the student is
+          // still reading the last thing the tutor said would be a worse end
+          // than no end. With nothing attached there is nothing left to read,
+          // so the rescue closes here and normal input comes back with it.
+          if (response.completed) {
+            if (response.action) store.noteRescueCompleted();
+            else store.clearRescueSteps();
+          }
         }).catch((error: unknown) => {
           console.warn('[rescue] advance request failed', error);
+          // The button is waiting on this. Reported so it can say so and let
+          // the student try again, instead of reading "Waiting for the next
+          // step…" for the rest of the question.
+          useNumeraStore.getState().noteRescueAdvanceFailed({
+            rescueId: event.rescue_id,
+            step: event.current_step_index,
+          });
         });
       } else {
         void acknowledgeRescueRender(activeSessionId, event).then((response) => {

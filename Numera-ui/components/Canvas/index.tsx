@@ -15,6 +15,7 @@ import dynamic from 'next/dynamic';
 import { useShallow } from 'zustand/react/shallow';
 import { useNumeraStore, type CanvasExporter } from '@/store/useNumeraStore';
 import { isPhase3 } from '@/lib/phase3';
+import { rescueActive } from '@/lib/rescueMode';
 import { useAuthStore, isConsentActive } from '@/store/useAuthStore';
 import type { SchemaQuestionOption } from '@/lib/api';
 import { useDemoTutor } from '@/hooks/useDemoTutor';
@@ -65,6 +66,13 @@ export default function CanvasStage() {
   // from the phase rather than the route — the phase is what decides whether
   // the tutor is allowed to be helping right now.
   const silentPhase3 = isPhase3(useNumeraStore((s) => s.currentPhase));
+  // A rescue is exclusive: it is the bottom of the ladder, so the scaffold it
+  // was escalated PAST must not sit beside it. Hidden here as well as cleared
+  // in the store, because `applyInteractionSupport` sets the scaffold from
+  // persisted state AFTER it applies the rescue actions — so on a turn that
+  // carries both, the store's clear is immediately overwritten and the render
+  // gate is the only thing left holding the rule.
+  const rescueOn = useNumeraStore(rescueActive);
   const visualCueType = useNumeraStore((s) => s.visualCueType);
   const visualCueDescription = useNumeraStore((s) => s.visualCueDescription);
   const setVisualCueVisible = useNumeraStore((s) => s.setVisualCueVisible);
@@ -241,7 +249,7 @@ export default function CanvasStage() {
           one line of it. A question that wrapped to two lines, or carried
           multiple-choice options, was covered by the card that was supposed to
           be helping with it (Manjusha, 10 Aug). */}
-      {!silentPhase3 && activeScaffold && (
+      {!silentPhase3 && !rescueOn && activeScaffold && (
         <div className="mt-3 w-[min(560px,100%)]">
           <ScaffoldPanel scaffold={activeScaffold} />
         </div>
