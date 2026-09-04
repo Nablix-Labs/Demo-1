@@ -12,10 +12,18 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import AdapterError
 from app.core.logger import logger
 from app.models.phase4_review import (
+    BraceBoardElement,
+    BoxedBoardElement,
+    ExampleBoardElement,
+    ExpressionBoardElement,
+    LabelBoardElement,
     Phase4ReviewRequest,
     Phase4ReviewResponse,
     StudentInsights,
+    StruckBoardElement,
     TutorReplay,
+    TutorReplayBoard,
+    ValueRowBoardElement,
 )
 
 
@@ -94,6 +102,32 @@ def build_openai_phase4_review_client(settings: Settings) -> OpenAIAIEngineClien
     )
 
 
+def board_element_text(board: TutorReplayBoard | None) -> list[str]:
+    """Return every learner-visible label from one structured replay board."""
+
+    if board is None:
+        return []
+    text: list[str] = []
+    for element in board.elements:
+        if isinstance(
+            element,
+            (
+                ExpressionBoardElement,
+                LabelBoardElement,
+                StruckBoardElement,
+                BoxedBoardElement,
+                ExampleBoardElement,
+            ),
+        ):
+            text.append(element.text)
+        elif isinstance(element, ValueRowBoardElement):
+            text.extend(element.values)
+            text.append(element.arrow_label)
+        elif isinstance(element, BraceBoardElement):
+            text.extend(element.labels)
+    return text
+
+
 def _student_facing_text(response: Phase4ReviewResponse) -> list[str]:
     insights: StudentInsights = response.student_insights
     return [
@@ -107,7 +141,12 @@ def _student_facing_text(response: Phase4ReviewResponse) -> list[str]:
             text
             for replay in response.tutor_replays
             for step in replay.replay_steps
-            for text in (replay.first_error.summary, step.narration, step.tutor_write)
+            for text in (
+                replay.first_error.summary,
+                step.narration,
+                step.tutor_write,
+                *board_element_text(step.board),
+            )
         ],
     ]
 

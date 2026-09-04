@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
@@ -116,10 +116,66 @@ class FirstError(StrictSchema):
     student_page_no: int | None = Field(default=None, ge=1)
 
 
+class ValueRowBoardElement(StrictSchema):
+    kind: Literal["value_row"]
+    values: list[str] = Field(min_length=2, max_length=6)
+    arrow_label: str = Field(min_length=1, max_length=48)
+
+
+class BraceBoardElement(StrictSchema):
+    kind: Literal["brace"]
+    over: Literal["value_row", "brace"]
+    labels: list[str] = Field(min_length=1, max_length=6)
+
+
+class ExpressionBoardElement(StrictSchema):
+    kind: Literal["expression"]
+    text: str = Field(min_length=1, max_length=80)
+
+
+class LabelBoardElement(StrictSchema):
+    kind: Literal["label"]
+    text: str = Field(min_length=1, max_length=100)
+
+
+class StruckBoardElement(StrictSchema):
+    kind: Literal["struck"]
+    text: str = Field(min_length=1, max_length=80)
+    tone: Literal["error"]
+
+
+class BoxedBoardElement(StrictSchema):
+    kind: Literal["boxed"]
+    text: str = Field(min_length=1, max_length=100)
+    tone: Literal["correct"]
+
+
+class ExampleBoardElement(StrictSchema):
+    kind: Literal["example"]
+    text: str = Field(min_length=1, max_length=120)
+
+
+TutorReplayBoardElement = Annotated[
+    ValueRowBoardElement
+    | BraceBoardElement
+    | ExpressionBoardElement
+    | LabelBoardElement
+    | StruckBoardElement
+    | BoxedBoardElement
+    | ExampleBoardElement,
+    Field(discriminator="kind"),
+]
+
+
+class TutorReplayBoard(StrictSchema):
+    elements: list[TutorReplayBoardElement] = Field(min_length=1, max_length=12)
+
+
 class TutorReplayStep(StrictSchema):
     sequence_no: int = Field(ge=1)
     narration: str = Field(min_length=1)
     tutor_write: str = Field(min_length=1)
+    board: TutorReplayBoard | None = None
 
 
 class TutorReplay(StrictSchema):
