@@ -11,6 +11,7 @@ from app.core.logger import logger
 from app.models.phase4_review import (
     DetectedError,
     FinalIndependentResult,
+    JourneyQuestion,
     Phase4ReviewRequest,
     ReplayItem,
     TopicInfo,
@@ -163,4 +164,15 @@ def build_phase4_review_request(
         ),
         replay_items=replay_items,
         whole_topic_evidence=_whole_topic_evidence(history),
+        # Every Phase 3 attempt with question text, so the tutor can label the
+        # correct rows too -- replay_items only ever holds the wrong ones.
+        journey_questions=[
+            JourneyQuestion(
+                question_usage_id=attempt.question_usage_id,
+                attempt_id=attempt.attempt_id,
+                question_text=attempt.question_text,
+            )
+            for attempt in history.attempts
+            if attempt.phase == PHASE_3 and attempt.question_text
+        ],
     )

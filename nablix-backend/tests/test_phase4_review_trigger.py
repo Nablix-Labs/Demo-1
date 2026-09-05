@@ -10,7 +10,9 @@ from app.core.exceptions import AdapterError, AdapterRequestRejected
 from app.models.phase4_review import (
     FirstError,
     Phase4ReviewResponse,
+    QuestionSkillLabel,
     StudentInsights,
+    TopicOutcome,
     TutorReplay,
     TutorReplayStep,
 )
@@ -50,6 +52,18 @@ def _review() -> Phase4ReviewResponse:
                 ],
             )
         ],
+        skill_labels=[
+            QuestionSkillLabel(
+                question_usage_id="QU-T01-005-P3",
+                attempt_id="A1",
+                skill_label="Subtract a fixed number",
+            )
+        ],
+        topic_outcome=TopicOutcome(
+            mastery_status="GENERATED_AND_DISCARDED",
+            recommended_next_action="GENERATED_AND_DISCARDED",
+            next_action_message="Great progress. Finish the last question to complete this topic.",
+        ),
         student_insights=StudentInsights(
             strength_summary="You chose the right starting value.",
             development_summary="Check whether the amount goes up or down.",
@@ -122,12 +136,22 @@ def test_deterministic_fields_are_forwarded_not_generated(
     assert result.topic_outcome is not None
     assert result.topic_outcome.mastery_status
     assert result.topic_outcome.recommended_next_action
+    # Merged, not replaced: the Student Model's two decisions survive the
+    # generated outcome, and only the generated message is taken from it.
+    assert result.topic_outcome.mastery_status != "GENERATED_AND_DISCARDED"
+    assert result.topic_outcome.recommended_next_action != "GENERATED_AND_DISCARDED"
+    assert result.topic_outcome.next_action_message == (
+        "Great progress. Finish the last question to complete this topic."
+    )
 
     assert result.question_journey is not None
     assert len(result.question_journey) == 1
     assert result.question_journey[0].question_id == "Q-T01-005"
     assert result.question_journey[0].evaluation == "INCORRECT"
     assert result.question_journey[0].attempted_at == "2026-08-17T10:15:23Z"
+    # Merged on the (question_usage_id, attempt_id) pair, not question_id:
+    # attempt_id sequences restart per question, so question_id would collide.
+    assert result.question_journey[0].skill_label == "Subtract a fixed number"
 
 
 def test_entering_review_generates_the_tutor_review(

@@ -327,3 +327,26 @@ def test_topic_info_gap_degrades_to_no_review() -> None:
         build_phase4_review_request(
             _live_capture(), [], "MASTERED", "START_REVIEW"
         )
+
+
+def test_journey_questions_cover_correct_attempts_not_just_replays() -> None:
+    """replay_items holds only wrong attempts, so a correct question has no text
+    for the tutor to label unless journey_questions carries it."""
+
+    correct = _attempt("A2", "CORRECT").model_copy(
+        update={"question_usage_id": "QU-T01-009-P3", "question_id": "Q-T01-009"}
+    )
+    history = TopicEventHistoryResponse(
+        topic_id="ALG-ORI-01",
+        student_id="ST001",
+        topic_info=TOPIC_INFO,
+        attempts=[_attempt("A1", "INCORRECT"), correct],
+    )
+
+    request = build_phase4_review_request(history, [_attempt("A1", "INCORRECT")], "M", "N")
+
+    assert len(request.replay_items) == 1
+    assert {(q.question_usage_id, q.attempt_id) for q in request.journey_questions} == {
+        ("QU-T01-005-P3", "A1"),
+        ("QU-T01-009-P3", "A2"),
+    }

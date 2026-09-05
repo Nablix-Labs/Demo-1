@@ -19,6 +19,10 @@ class TopicInfo(StrictSchema):
 class TopicOutcome(StrictSchema):
     mastery_status: str = Field(min_length=1)
     recommended_next_action: str = Field(min_length=1)
+    # Generated, unlike the two above, which are Student Model decisions. Only
+    # this field is taken from the response when the two are merged in
+    # generate_phase4_review_for; null when the model has nothing to add.
+    next_action_message: str | None = None
 
 
 class WorkArtifact(StrictSchema):
@@ -86,11 +90,26 @@ class WholeTopicEvidence(StrictSchema):
         return self
 
 
+class JourneyQuestion(StrictSchema):
+    """One Phase 3 attempt's question text, for labelling the review rail.
+
+    Identity is the (question_usage_id, attempt_id) pair, never question_id
+    alone: attempt_id sequences restart per question, and one question can be
+    attempted more than once, so question_id does not identify a rail row.
+    """
+
+    question_usage_id: str | None = None
+    attempt_id: str = Field(min_length=1)
+    question_text: str = Field(min_length=1)
+
+
 class Phase4ReviewRequest(StrictSchema):
     topic_info: TopicInfo
     topic_outcome: TopicOutcome
     replay_items: list[ReplayItem]
     whole_topic_evidence: WholeTopicEvidence
+    # Every Phase 3 attempt, not just the replayable wrong ones.
+    journey_questions: list[JourneyQuestion] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_unique_replay_items(self) -> "Phase4ReviewRequest":
@@ -114,6 +133,9 @@ class Phase4ReviewRequest(StrictSchema):
 class FirstError(StrictSchema):
     summary: str = Field(min_length=1)
     student_page_no: int | None = Field(default=None, ge=1)
+    # Why the error is an error, as opposed to summary's description of what it
+    # was. Null when there is nothing conceptual to add beyond the summary.
+    why_it_matters: str | None = None
 
 
 class ValueRowBoardElement(StrictSchema):
@@ -176,6 +198,9 @@ class TutorReplayStep(StrictSchema):
     narration: str = Field(min_length=1)
     tutor_write: str = Field(min_length=1)
     board: TutorReplayBoard | None = None
+    # Per-replay, not a fixed review-level list: a hardcoded stepper lies about
+    # where the student is when a replay has three steps or seven.
+    stage_label: str | None = Field(default=None, max_length=40)
 
 
 class TutorReplay(StrictSchema):
@@ -230,6 +255,18 @@ class QuestionJourneyItem(StrictSchema):
     question_usage_id: str | None = None
     # Null when this attempt has no replay (correct, or no work artifact).
     review_item_id: str | None = None
+    # Merged from the generated skill_labels; null when the model returned no
+    # label for this attempt, or when question_usage_id is null so the pair
+    # cannot be matched.
+    skill_label: str | None = None
+
+
+class QuestionSkillLabel(StrictSchema):
+    """A student-facing name for what one journey question tests."""
+
+    question_usage_id: str | None = None
+    attempt_id: str = Field(min_length=1)
+    skill_label: str = Field(min_length=1, max_length=40)
 
 
 class Phase4ReviewResponse(StrictSchema):
@@ -240,3 +277,5 @@ class Phase4ReviewResponse(StrictSchema):
     # generate_phase4_review_for in session_service.py).
     topic_outcome: TopicOutcome | None = None
     question_journey: list[QuestionJourneyItem] | None = None
+    # Merged into question_journey rows after generation, on the attempt pair.
+    skill_labels: list[QuestionSkillLabel] | None = None

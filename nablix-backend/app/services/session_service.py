@@ -916,6 +916,11 @@ async def generate_phase4_review_for(
         (item.question_usage_id, item.attempt_id): item.review_item_id
         for item in request.replay_items
     }
+    # Same identity, same reason: question_id repeats across attempts.
+    skill_label_by_attempt = {
+        (label.question_usage_id, label.attempt_id): label.skill_label
+        for label in (review.skill_labels or [])
+    }
     review = review.model_copy(
         update={
             "tutor_replays": [
@@ -929,7 +934,18 @@ async def generate_phase4_review_for(
                 else replay
                 for replay in review.tutor_replays
             ],
-            "topic_outcome": request.topic_outcome,
+            # Merge, not replace: mastery_status and recommended_next_action stay
+            # the Student Model's, but next_action_message is generated, so
+            # forwarding the request wholesale would discard it.
+            "topic_outcome": request.topic_outcome.model_copy(
+                update={
+                    "next_action_message": (
+                        review.topic_outcome.next_action_message
+                        if review.topic_outcome is not None
+                        else None
+                    )
+                }
+            ),
             "question_journey": [
                 QuestionJourneyItem(
                     question_id=attempt.question_id,
@@ -941,6 +957,9 @@ async def generate_phase4_review_for(
                     attempt_id=attempt.attempt_id,
                     question_usage_id=attempt.question_usage_id,
                     review_item_id=review_item_id_by_attempt.get(
+                        (attempt.question_usage_id, attempt.attempt_id)
+                    ),
+                    skill_label=skill_label_by_attempt.get(
                         (attempt.question_usage_id, attempt.attempt_id)
                     ),
                 )

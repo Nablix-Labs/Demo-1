@@ -75,6 +75,9 @@ def build_openai_phase4_review_context(
             for item in request.replay_items
         ],
         "whole_topic_evidence": request.whole_topic_evidence.model_dump(),
+        "journey_questions": [
+            question.model_dump() for question in request.journey_questions
+        ],
     }
 
 
@@ -130,7 +133,10 @@ def board_element_text(board: TutorReplayBoard | None) -> list[str]:
 
 def _student_facing_text(response: Phase4ReviewResponse) -> list[str]:
     insights: StudentInsights = response.student_insights
+    outcome = response.topic_outcome
     return [
+        (outcome.next_action_message or "") if outcome is not None else "",
+        *[label.skill_label for label in (response.skill_labels or [])],
         insights.strength_summary,
         insights.development_summary,
         insights.learning_pattern_summary or "",
@@ -143,8 +149,10 @@ def _student_facing_text(response: Phase4ReviewResponse) -> list[str]:
             for step in replay.replay_steps
             for text in (
                 replay.first_error.summary,
+                replay.first_error.why_it_matters or "",
                 step.narration,
                 step.tutor_write,
+                step.stage_label or "",
                 *board_element_text(step.board),
             )
         ],
@@ -199,6 +207,34 @@ def _validate_pattern_and_improvement(
         )
 
 
+def _validate_skill_labels(
+    request: Phase4ReviewRequest,
+    response: Phase4ReviewResponse,
+) -> None:
+    """A label must name a real attempt, and each attempt at most once.
+
+    The pair, never attempt_id alone: sequences restart per question, so two
+    attempts on two questions legitimately share one.
+    """
+
+    known = {
+        (question.question_usage_id, question.attempt_id)
+        for question in request.journey_questions
+    }
+    seen: set[tuple[str | None, str]] = set()
+    for label in response.skill_labels or []:
+        key = (label.question_usage_id, label.attempt_id)
+        if key not in known:
+            raise Phase4ReviewValidationError(
+                f"skill_label names an attempt that is not in the journey: {key}"
+            )
+        if key in seen:
+            raise Phase4ReviewValidationError(
+                f"skill_labels contains more than one label for attempt {key}"
+            )
+        seen.add(key)
+
+
 def _validate_student_language(
     request: Phase4ReviewRequest,
     response: Phase4ReviewResponse,
@@ -230,6 +266,7 @@ def validate_phase4_review_response(
     _validate_replay_identity(request, response)
     _validate_first_error_pages(request, response)
     _validate_pattern_and_improvement(request, response.student_insights, config)
+    _validate_skill_labels(request, response)
     _validate_student_language(request, response, config)
 
 
