@@ -50,6 +50,13 @@ def _request_body() -> dict[str, object]:
                 ],
             }
         ],
+        "journey_questions": [
+            {
+                "question_usage_id": "QU-T01-005-P3",
+                "attempt_id": "ATTEMPT-021",
+                "question_text": "A temperature starts at t and falls by 3 degrees.",
+            }
+        ],
         "whole_topic_evidence": {
             "strong_micro_skill_ids": ["T01.M1"],
             "developing_micro_skill_ids": ["T01.M3"],
@@ -81,22 +88,26 @@ def _response_body() -> dict[str, object]:
                 "first_error": {
                     "summary": "The first error was treating a fall as an increase.",
                     "student_page_no": 1,
+                    "why_it_matters": "Adding moves the value the wrong way, so the rule describes a rise instead of a fall.",
                 },
                 "replay_steps": [
                     {
                         "sequence_no": 1,
                         "narration": "You correctly began with the starting temperature.",
                         "tutor_write": "Start: t",
+                        "stage_label": "Spot the pattern",
                     },
                     {
                         "sequence_no": 2,
                         "narration": "A fall means the value decreases by three.",
                         "tutor_write": "falls by 3 → subtract 3",
+                        "stage_label": "Find the error",
                     },
                     {
                         "sequence_no": 3,
                         "narration": "So the rule subtracts three from the starting value.",
                         "tutor_write": "t - 3",
+                        "stage_label": "Build the rule",
                         "board": {
                             "elements": [
                                 {
@@ -271,3 +282,81 @@ def test_phase4_review_rejects_isolated_pattern(monkeypatch: pytest.MonkeyPatch)
 
     with pytest.raises(phase4_review.Phase4ReviewValidationError, match="repeated misconception"):
         phase4_review.generate_phase4_review(Phase4ReviewRequest.model_validate(body))
+
+
+@pytest.mark.parametrize(
+    ("field_path", "leaked_text"),
+    [
+        ("why_it_matters", "This repeats the MIS-T01-DIRECTION-LANGUAGE misconception."),
+        ("stage_label", "Review ART-P3-000124"),
+    ],
+)
+def test_phase4_review_rejects_internal_ids_in_new_prose(
+    monkeypatch: pytest.MonkeyPatch,
+    field_path: str,
+    leaked_text: str,
+) -> None:
+    """why_it_matters and stage_label are student-facing, so the leak guardrail
+    must see them. Without them in _student_facing_text this passes silently."""
+
+    invalid_response = _response_body()
+    replays = invalid_response["tutor_replays"]
+    assert isinstance(replays, list)
+    if field_path == "why_it_matters":
+        replays[0]["first_error"][field_path] = leaked_text
+    else:
+        replays[0]["replay_steps"][0][field_path] = leaked_text
+
+    class FakeClient:
+        def generate_phase4_review(
+            self,
+            context: dict[str, object],
+            schema: dict[str, object],
+        ) -> dict[str, object]:
+            return invalid_response
+
+    monkeypatch.setattr(
+        phase4_review,
+        "build_openai_phase4_review_client",
+        lambda settings: FakeClient(),
+    )
+
+    with pytest.raises(
+        phase4_review.Phase4ReviewValidationError, match="prohibited internal reference"
+    ):
+        phase4_review.generate_phase4_review(Phase4ReviewRequest.model_validate(_request_body()))
+
+
+def test_phase4_review_rejects_skill_label_for_unknown_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A label must name a real journey attempt by its (question_usage_id,
+    attempt_id) pair -- attempt_id alone repeats across questions."""
+
+    invalid_response = _response_body()
+    invalid_response["skill_labels"] = [
+        {
+            "question_usage_id": "QU-T01-999-P3",
+            "attempt_id": "ATTEMPT-021",
+            "skill_label": "Subtract a fixed number",
+        }
+    ]
+
+    class FakeClient:
+        def generate_phase4_review(
+            self,
+            context: dict[str, object],
+            schema: dict[str, object],
+        ) -> dict[str, object]:
+            return invalid_response
+
+    monkeypatch.setattr(
+        phase4_review,
+        "build_openai_phase4_review_client",
+        lambda settings: FakeClient(),
+    )
+
+    with pytest.raises(
+        phase4_review.Phase4ReviewValidationError, match="not in the journey"
+    ):
+        phase4_review.generate_phase4_review(Phase4ReviewRequest.model_validate(_request_body()))

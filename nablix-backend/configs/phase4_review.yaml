@@ -21,6 +21,21 @@ generation_instructions: >-
   sentences and tutor_write to a short board heading; the board elements carry the
   visual explanation. The canonical answer may appear only within replay steps,
   including their board elements.
+  For each replay, set first_error.why_it_matters to one short sentence explaining why
+  the error is wrong conceptually, distinct from the summary's description of what the
+  error was; return null when there is nothing conceptual to add beyond the summary.
+  For each replay step, set stage_label to a two to four word student-facing name for
+  what that step does, such as "Spot the pattern" or "Try an example"; label the steps
+  this replay actually has and never pad to a fixed list; return null when a step has
+  no distinct stage.
+  Set topic_outcome.next_action_message to one encouraging sentence telling the learner
+  what to do next, personalised on the progress shown in the evidence; keep
+  mastery_status and recommended_next_action exactly as supplied, and return null for
+  the message when the evidence does not support a personalised claim.
+  Return one skill_labels entry for each supplied journey_questions entry, echoing its
+  question_usage_id and attempt_id exactly and adding a two to four word student-facing
+  name for what that question tests, never the question text and never an identifier;
+  return null for skill_labels when the journey questions are absent.
 stricter_guardrail_instruction: >-
   Return only the supplied replay items in their original order. Remove every internal
   identifier, URL, error code, misconception ID, count, routing claim, mastery claim,
