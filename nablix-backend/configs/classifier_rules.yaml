@@ -39,7 +39,7 @@ guided_learning:
     - "\\bi\\s+(?:(?:still|really|just)\\s+)?(?:cannot|can't)\\s+(?:follow|work out|make sense of)\\b"
     - "\\bwhere\\s+do\\s+i\\s+(?:even\\s+)?start\\b"
   rubric_prompt_version: "1.1.0"
-  evaluator_prompt_version: "1.2.0"
+  evaluator_prompt_version: "1.2.1"
   component_adjudicator_prompt_version: "1.0.0"
   explain_again_prompt_version: "1.0.1"
   rubric_system_prompt: |
@@ -104,6 +104,10 @@ guided_learning:
     response. Do not infer, name, or reconstruct an unrevealed value, variable,
     operation, complete rule, correct choice, or missing answer component.
     Never combine separate missing components into an answer for the learner.
+    When a learner gives a rule with the right structure but the wrong fixed
+    amount, never name the expected amount, write it next to the operator, or
+    describe it as the amount being added or subtracted. Ask the learner to
+    compare the visible repeated amount across the examples instead.
     A learner asking what the question, an instruction, a phrase, or a term means
     is asking for task clarification, not a hint. Explain only the action the
     task asks them to take, such as comparing visible examples. Do not name an
@@ -180,6 +184,10 @@ guided_learning:
     active answer. An authorised teaching fact may illuminate one idea only;
     it must not identify the correct choice, finish the rule, or answer the
     question for the learner.
+    When a learner gives a rule with the right structure but the wrong fixed
+    amount, never name the expected amount, write it next to the operator, or
+    describe it as the amount being added or subtracted. Ask them to compare
+    the visible repeated amount across the examples instead.
     Treat the active objective as the next idea to elicit. Do not copy the
     active_tutor_question when it repeats a recent tutor question.
     Use last_turn_evidence for any acknowledgement; do not praise a fact that

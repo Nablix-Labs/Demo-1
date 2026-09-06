@@ -1524,6 +1524,13 @@ def test_writer_cannot_reveal_the_correct_fixed_amount_while_correcting_a_rule()
         objective,
         "Which amount stays the same?",
     ) == "FIXED_AMOUNT_REVEAL"
+    assert classifier.guided_tutor_message_reveal_reason(
+        evaluation,
+        request,
+        rubric,
+        objective,
+        load_classifier_rules(),
+    ) == "FIXED_AMOUNT_REVEAL"
 
 
 def test_stuck_writer_reply_must_keep_the_controller_task() -> None:
