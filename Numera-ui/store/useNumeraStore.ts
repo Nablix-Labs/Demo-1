@@ -34,6 +34,7 @@ import {
 } from '@/lib/rescueActions';
 import { emitRenderAck } from '@/lib/rescueEvents';
 import type { SupportRung } from '@/lib/supportLadder';
+import { withRung, type DeckRung } from '@/lib/supportDeck';
 import { EMPTY_APPLIED, type AppliedState } from '@/lib/responseGate';
 import type { InactivityPolicy } from '@/lib/inactivity';
 import {
@@ -543,6 +544,19 @@ export interface NumeraState {
   supportShown: SupportRung | null;
   lastHintText: string | null;
   /**
+   * The order support was offered in — an index, never the content.
+   *
+   * `lib/supportDeck` filters this against what is actually live, so this may
+   * safely name a rung the backend has since cleared. Storing order here and
+   * deriving membership there is what stops a cleared rung outliving its
+   * content, which a parallel copy of the content could not guarantee.
+   */
+  supportDeck: DeckRung[];
+  /** The chip the student opened. Null means "show the latest". */
+  openedRung: DeckRung | null;
+  /** The student closed the card. The chips stay; nothing is deleted. */
+  deckCollapsed: boolean;
+  /**
    * The question whose Phase 3 attempt has been accepted and locked.
    *
    * Keyed by question id, not a flag: the lock must survive a reconnect and a
@@ -744,6 +758,10 @@ export interface NumeraState {
   setVisibleHint: (hint: string | null) => void;
   setWriteInstruction: (instruction: string | null) => void;
   setGuidedRescue: (rescue: GuidedRescuePayload | null) => void;
+  /** Open an earlier rung from the strip, or null to go back to the latest. */
+  openSupportRung: (rung: DeckRung | null) => void;
+  /** Close the visible card. The rung stays in the deck as a chip. */
+  collapseSupportDeck: () => void;
   /** Drop the step-at-a-time rescue (the student returned, or it was replaced). */
   clearRescueSteps: () => void;
   /** An advance request that never landed, so the button can recover. Null clears it. */
@@ -858,7 +876,7 @@ const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
   | 'setQuestionText' | 'setQuestionAnchors' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'setEndedSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'noteTutorLineage' | 'markTutorTurnFailed'
-  | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue' | 'setVisibleHint' | 'setWriteInstruction' | 'setGuidedRescue' | 'clearRescueSteps' | 'noteRescueAdvanceFailed' | 'noteRescueCompleted'
+  | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue' | 'setVisibleHint' | 'setWriteInstruction' | 'setGuidedRescue' | 'openSupportRung' | 'collapseSupportDeck' | 'clearRescueSteps' | 'noteRescueAdvanceFailed' | 'noteRescueCompleted'
   | 'setSupportShown' | 'setLastHintText' | 'lockPhase3Attempt'
   | 'setPendingTutorSpeech' | 'claimPendingTutorSpeech' | 'setQuestionProgress' | 'setAppliedResponse' | 'setInactivityPolicy'
   | 'addTranscriptMessage' | 'removeTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript' | 'commitPartialTranscript'
@@ -935,6 +953,9 @@ const initial: Omit<
   visualCueActions: null as Array<Record<string, unknown>> | null,
   supportShown: null as SupportRung | null,
   lastHintText: null as string | null,
+  supportDeck: [] as DeckRung[],
+  openedRung: null as DeckRung | null,
+  deckCollapsed: false,
   phase3LockedQuestionId: null as string | null,
   endedSessionId: null as string | null,
   pendingTutorSpeech: null as string | null,
@@ -1094,6 +1115,10 @@ export const useNumeraStore = create<NumeraState>()(
               visualCueActions: null,
               supportShown: null,
               lastHintText: null,
+              // The deck is scoped to a question, like every rung it indexes.
+              supportDeck: [] as DeckRung[],
+              openedRung: null as DeckRung | null,
+              deckCollapsed: false,
               // A hint is about the question it was given on. Left up, it would
               // sit beside the next question nudging the wrong step.
               visibleHint: null,
@@ -1233,11 +1258,38 @@ export const useNumeraStore = create<NumeraState>()(
 
   markTutorTurnFailed: () => set({ tutorTurnFailed: true }),
 
-  setVisibleHint: (visibleHint) => set({ visibleHint }),
+  // Setting a hint records its arrival in the deck. Clearing one does NOT
+  // remove it: `deckRungs` derives membership from live content, so a cleared
+  // hint drops out on the next read with nothing having to remember.
+  setVisibleHint: (visibleHint) =>
+    set((s) => ({
+      visibleHint,
+      supportDeck: visibleHint ? withRung(s.supportDeck, 'HINT') : s.supportDeck,
+      // A new offer is the answer to whatever the student just did, so it takes
+      // the view back from any chip they were reading.
+      openedRung: visibleHint ? null : s.openedRung,
+      deckCollapsed: visibleHint ? false : s.deckCollapsed,
+    })),
 
   setWriteInstruction: (writeInstruction) => set({ writeInstruction }),
 
-  setGuidedRescue: (guidedRescue) => set({ guidedRescue }),
+  // Opening a chip necessarily un-collapses: the student is asking to see it.
+  openSupportRung: (openedRung) => set({ openedRung, deckCollapsed: false }),
+
+  collapseSupportDeck: () => set({ deckCollapsed: true }),
+
+  setGuidedRescue: (guidedRescue) =>
+    set((s) => ({
+      guidedRescue,
+      supportDeck: guidedRescue
+        ? withRung(
+            s.supportDeck,
+            guidedRescue.rescue_type === 'PARALLEL_EXAMPLE' ? 'PARALLEL_EXAMPLE' : 'TUTOR_SOLVED',
+          )
+        : s.supportDeck,
+      openedRung: guidedRescue ? null : s.openedRung,
+      deckCollapsed: guidedRescue ? false : s.deckCollapsed,
+    })),
 
   // The steps leave the screen; their marks go with them, and the ids are
   // released so the same rescue can be served again later without every action
@@ -1297,15 +1349,23 @@ export const useNumeraStore = create<NumeraState>()(
       visualCueDescription: description,
       visualCueAssetUrl: assetUrl,
       visualCueActions: actions,
-      // The cue REPLACES the hint (Sanya, 13 Aug 2026: "i think it should be
-      // replaced after cue appears"). The ladder escalates hint → hint → cue,
-      // so a cue means the hints did not land — leaving them stacked above it
-      // gives the student three cards to read at the moment they are already
-      // stuck, and the newest support is the one meant to be acted on.
+      // The cue SUPERSEDES the hint rather than deleting it (Sanya, 13 Aug
+      // 2026: "i think it should be replaced after cue appears"). The ladder
+      // escalates hint → hint → cue, so a cue means the hints did not land, and
+      // three cards to read is the last thing an already-stuck student needs —
+      // the newest support is the one meant to be acted on.
       //
-      // Only on the way UP: hiding a cue must not also clear a hint that is
-      // still the active support.
-      ...(show ? { visibleHint: null } : {}),
+      // It used to clear `visibleHint` outright, which met that requirement by
+      // making the hint unrecoverable. Now the cue simply becomes the latest
+      // rung and the hint collapses to a chip: same one-card screen, and the
+      // student can still re-read what they were given (Manjusha, 5 Sep).
+      ...(show
+        ? {
+            supportDeck: withRung(s.supportDeck, 'VISUAL_CUE'),
+            openedRung: null as DeckRung | null,
+            deckCollapsed: false,
+          }
+        : {}),
       canvasEvents: appendCanvasEvent(s.canvasEvents, {
         actor: 'SYSTEM_SUPPORT',
         action_type: show ? 'SHOW_CUE' : 'HIDE_CUE',
@@ -1738,15 +1798,15 @@ export const useNumeraStore = create<NumeraState>()(
               // behind it, whatever the one it replaced had.
               rescueAdvanceFailure: null,
               rescueCompleted: false,
-              visibleHint: null,
+              // The INSTRUCTIONS stand down: a walkthrough replaces the task,
+              // so a write prompt and a guided step beside it are two demands
+              // competing with the one thing the tutor is actually doing.
               writeInstruction: null,
               activeScaffold: null,
-              visualCueVisible: false,
-              visualCueId: null,
-              visualCueType: null,
-              visualCueDescription: null,
-              visualCueAssetUrl: null,
-              visualCueActions: null,
+              // The OFFERS do not. They used to be cleared here, which is why a
+              // student sent to a walkthrough could never re-read the hint that
+              // preceded it. The rescue becomes the latest rung and they
+              // collapse to chips — one card on screen, nothing lost.
             };
           }
           rescueSteps = mergeStep(rescueSteps, step);
@@ -1791,6 +1851,21 @@ export const useNumeraStore = create<NumeraState>()(
       return {
         canvasEvents, questionAnchors, tutorOptionActionIds, tutorElements, writeAffordance,
         rescueSteps, rescueReturnTarget, pendingRescueActions: stillPending,
+        // The walkthrough becomes the latest rung. Read off the step that is
+        // actually current, so a PARALLEL rescue is chipped "A similar one" and
+        // never "Let me show you".
+        ...(rescueSteps.length > 0
+          ? {
+              supportDeck: withRung(
+                s.supportDeck,
+                rescueSteps[rescueSteps.length - 1].mode === 'PARALLEL'
+                  ? 'PARALLEL_EXAMPLE'
+                  : 'TUTOR_SOLVED',
+              ),
+              openedRung: null as DeckRung | null,
+              deckCollapsed: false,
+            }
+          : {}),
         ...clearedRungs,
       };
     }),

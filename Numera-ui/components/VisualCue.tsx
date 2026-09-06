@@ -25,7 +25,7 @@ import StickyNote from '@/components/StickyNote';
 
 export default function VisualCue() {
   const visible = useNumeraStore((s) => s.visualCueVisible);
-  const setVisible = useNumeraStore((s) => s.setVisualCueVisible);
+  const collapseSupportDeck = useNumeraStore((s) => s.collapseSupportDeck);
   const cueId = useNumeraStore((s) => s.visualCueId);
   const cueType = useNumeraStore((s) => s.visualCueType);
   const description = useNumeraStore((s) => s.visualCueDescription);
@@ -80,9 +80,12 @@ export default function VisualCue() {
       aria-label={label}
     >
       <div className="relative">
+        {/* Closes the card; does not hide the cue. `setVisible(false)` would
+            take it out of the deck entirely, and the point of the deck is that
+            nothing the tutor offered becomes unrecoverable. */}
         <button
-          onClick={() => setVisible(false)}
-          aria-label={`Dismiss ${label.toLowerCase()}`}
+          onClick={collapseSupportDeck}
+          aria-label={`Hide ${label.toLowerCase()}`}
           className="absolute -right-1 -top-1 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-white/70 text-[#8A6407] shadow-sm hover:bg-white"
         >
           <X size={13} strokeWidth={2.2} />

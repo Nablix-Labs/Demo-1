@@ -14,6 +14,7 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
+import { visibleRung, collapsedRungs } from '@/lib/supportDeck';
 import { applyInteractionSupport } from '@/lib/interactionPresentation';
 import { useNumeraStore } from '@/store/useNumeraStore';
 
@@ -106,10 +107,16 @@ describe('an authorised hint', () => {
 });
 
 describe('the ladder', () => {
-  it('replaces the hint when the cue arrives', () => {
+  it('supersedes the hint when the cue arrives, without destroying it', () => {
     // Sanya, 13 Aug 2026: "i think it should be replaced after cue appears".
     // A cue means the hints did not land, so stacking all three leaves the
     // student reading the most at the moment they are most stuck.
+    //
+    // This used to be met by clearing `visibleHint`, which also made the hint
+    // unrecoverable. The requirement is about what is ON SCREEN, and the deck
+    // meets it without the deletion: the cue becomes the visible rung and the
+    // hint collapses to a chip (Manjusha, 5 Sep — "the rear should be stacked,
+    // if the student wants to see he can click and see").
     applyInteractionSupport(turn());
     applyInteractionSupport(turn({
       conversation_action: 'SHOW_VISUAL_CUE',
@@ -117,8 +124,12 @@ describe('the ladder', () => {
       show_visual_cue: true,
       visual_cue: { show: true, cue_id: 'VC-T01-ADD-NOT-MULTIPLY', description: 'Look at the +5' },
     }));
-    expect(state().visibleHint).toBeNull();
     expect(state().visualCueVisible).toBe(true);
+    // One card on screen — the cue.
+    expect(visibleRung(state() as never)).toBe('VISUAL_CUE');
+    // And the hint is still reachable rather than gone.
+    expect(state().visibleHint).toBe('What happens to the +5 each time?');
+    expect(collapsedRungs(state() as never)).toEqual(['HINT']);
   });
 
   it('does not clear the hint when a cue is dismissed', () => {

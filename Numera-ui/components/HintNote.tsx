@@ -26,7 +26,7 @@ import StickyNote from '@/components/StickyNote';
 
 export default function HintNote() {
   const hint = useNumeraStore((s) => s.visibleHint);
-  const setVisibleHint = useNumeraStore((s) => s.setVisibleHint);
+  const collapseSupportDeck = useNumeraStore((s) => s.collapseSupportDeck);
   const currentPhase = useNumeraStore((s) => s.currentPhase);
 
   // Small entrance, matching VisualCue so two cards in the lane animate alike.
@@ -55,9 +55,12 @@ export default function HintNote() {
       }}
       aria-label="Hint"
     >
+      {/* Closes the card; does not delete the hint. It used to call
+          setVisibleHint(null), which is why a dismissed hint could never be
+          read again — the deck keeps it as a chip instead (Manjusha, 5 Sep). */}
       <button
-        onClick={() => setVisibleHint(null)}
-        aria-label="Dismiss hint"
+        onClick={collapseSupportDeck}
+        aria-label="Hide hint"
         className="absolute -right-1 -top-1 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-white/70 text-[#8A6407] shadow-sm hover:bg-white"
       >
         <X size={13} strokeWidth={2.2} />

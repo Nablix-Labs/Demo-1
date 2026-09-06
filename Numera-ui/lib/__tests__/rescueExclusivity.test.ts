@@ -18,6 +18,8 @@ vi.mock('@/lib/rescueEvents', async (importOriginal) => ({
   emitRenderAck: () => true,
 }));
 
+import { visibleRung, collapsedRungs } from '@/lib/supportDeck';
+
 const { useNumeraStore } = await import('@/store/useNumeraStore');
 type Action = Parameters<ReturnType<typeof useNumeraStore.getState>['applyTutorCanvasActions']>[0][number];
 
@@ -85,13 +87,28 @@ beforeEach(() => {
 });
 
 describe('opening a rescue', () => {
-  it('takes down every rung above it', () => {
+  it('takes down the INSTRUCTIONS above it', () => {
+    // A walkthrough replaces the task, so a write prompt and a guided step
+    // beside it are two demands competing with the one thing the tutor is
+    // actually doing.
     rungsUp();
     apply(step(1));
-    expect(rungs()).toEqual({
-      hint: null, write: null, scaffold: null,
-      cueVisible: false, cueId: null, cueDescription: null,
-    });
+    expect(rungs().write).toBeNull();
+    expect(rungs().scaffold).toBeNull();
+  });
+
+  it('demotes the OFFERS rather than destroying them', () => {
+    // These used to be cleared here too, which is why a student sent to a
+    // walkthrough could never re-read the hint that preceded it. Only one card
+    // is on screen — the rescue — but the earlier rungs are chips now
+    // (Manjusha, 5 Sep).
+    rungsUp();
+    apply(step(1));
+    expect(rungs().hint).toBe('Try grouping the like terms.');
+    expect(rungs().cueVisible).toBe(true);
+    const s = useNumeraStore.getState() as never;
+    expect(visibleRung(s)).toBe('TUTOR_SOLVED');
+    expect(collapsedRungs(s)).toEqual(['HINT', 'VISUAL_CUE']);
   });
 
   it('leaves the rungs alone on the second step of the same rescue', () => {
@@ -105,11 +122,14 @@ describe('opening a rescue', () => {
     expect(rungs().scaffold).not.toBeNull();
   });
 
-  it('clears again when a DIFFERENT rescue supersedes the first', () => {
+  it('stands the instructions down again when a DIFFERENT rescue supersedes the first', () => {
     apply(step(1));
     rungsUp();
     apply(step(1, 'R2'));
-    expect(rungs().hint).toBeNull();
+    expect(rungs().scaffold).toBeNull();
+    expect(rungs().write).toBeNull();
+    // The offers survive the swap, as they survive the first rescue.
+    expect(rungs().hint).toBe('Try grouping the like terms.');
     expect(useNumeraStore.getState().rescueSteps.map((s) => s.rescueId)).toEqual(['R2']);
   });
 

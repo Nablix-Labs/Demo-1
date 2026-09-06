@@ -206,14 +206,23 @@ click away in the strip.
 Manjusha's second ask. The guided step currently renders as another card
 competing with the support notes for the same attention.
 
-The change is a treatment, not a rebuild: give the guided step a visual identity
-as an **instruction** rather than a sticky note, so "what to do" and "help
-available" stop reading as the same kind of object. The step counter stays; the
-no-next-button contract stays (the backend releases the next step on the next
-turn, `ScaffoldPanel.tsx:8-22`).
+**Correction after reading the code: `ScaffoldPanel` is already an instruction,
+not a sticky note.** It renders as a bordered white panel with the learning-blue
+rule and a compass icon (`ScaffoldPanel.tsx:31-46`) — visually nothing like the
+`StickyNote` cards the deck holds. The design above assumed otherwise; that
+assumption was wrong, so the restyle it proposed would have been change for its
+own sake.
 
-Deliberately modest, and flagged for Manjusha to look at on the dev screen
-before it goes further. Restyling it blind is how it ends up wrong twice.
+What is left of this ask is genuinely a matter of taste — how much room the
+guided step should take, and how it sits against the question above it — and
+that needs Manjusha's eye rather than a guess. **So the panel is unchanged, and
+it renders on `/dev-screens/support-deck` beside the deck so she can say what
+she wants tightened.** The step counter and the no-next-button contract stay
+either way (the backend releases the next step on the next turn,
+`ScaffoldPanel.tsx:8-22`).
+
+This item is therefore **not done**, deliberately. Restyling it blind is how it
+ends up wrong twice.
 
 ---
 

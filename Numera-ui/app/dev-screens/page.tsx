@@ -58,6 +58,12 @@ const SCREENS: Screen[] = [
   { path: '/notifications', label: 'Notifications', group: 'Library' },
   { path: '/help', label: 'Help', group: 'Library' },
   { path: '/flagged', label: 'Flagged', group: 'Library' },
+
+  // Screens whose backend half does not exist yet, driven by fixtures so they
+  // can be reviewed and demoed without a session, a login or the VM.
+  { path: '/dev-screens/phase4', label: 'Phase 4 review', group: 'Fixtures' },
+  { path: '/dev-screens/support-deck', label: 'Phase 2 support deck', group: 'Fixtures' },
+  { path: '/dev-screens/intervention', label: 'Phase 3 intervention input', group: 'Fixtures' },
 ];
 
 const VIEWPORTS = {
