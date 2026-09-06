@@ -60,6 +60,7 @@ import { canvasEvidenceFor } from '@/lib/canvasEvidence';
 import { startPayloadFor } from '@/lib/sessionStart';
 import type { QuestionAnchor } from '@/lib/questionAnchors';
 import { isPhase3 } from '@/lib/phase3';
+import { resumesCheckpoint } from '@/lib/phase3Routing';
 
 const apiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
@@ -358,6 +359,25 @@ export function syncBackendSession(response: {
   );
   if (reveal) window.setTimeout(applyPhase, holdMs);
   else applyPhase();
+
+  // A checkpoint re-serve hands the SAME question back to be answered again.
+  //
+  // Phase 3's lock is keyed by question id, and applyBackendPhase only clears
+  // it when the question CHANGES — which is right for every other case, and
+  // exactly wrong for this one. The repeated-failure spec (5 Sep 2026, §9)
+  // preserves the checkpoint question's `question_id` AND `question_usage_id`
+  // through Repair #1, Repair #2 and prerequisite remediation, so a student
+  // returning from guided repair meets an id they have already answered: the
+  // lock holds, the canvas stays frozen on "Answer recorded.", and there is
+  // nothing to press. Same dead end as the 4 Sep stranding bug.
+  //
+  // Since the ids are identical by design, no id comparison can tell a
+  // re-serve from a duplicate reply. The backend's own `payload_type` is the
+  // only thing that can, so it is what unlocks. A duplicate carries no
+  // RESUME_SAME_INDEPENDENT_QUESTION and still changes nothing.
+  if (resumesCheckpoint(response)) {
+    useNumeraStore.getState().lockPhase3Attempt(null);
+  }
   if (response.question_number !== undefined) {
     store.setQuestionNumber(response.question_number);
   }
