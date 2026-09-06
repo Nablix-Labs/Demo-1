@@ -18,6 +18,7 @@
  * and no second opinion about it.
  */
 
+import { useShallow } from 'zustand/react/shallow';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { visibleRung, collapsedRungs, rungLabel, type DeckRung } from '@/lib/supportDeck';
 import HintNote from '@/components/HintNote';
@@ -48,8 +49,16 @@ function Card({ rung }: { rung: DeckRung }) {
 }
 
 export default function SupportDeck() {
+  // `visibleRung` returns a string or null, so Object.is settles it.
   const showing = useNumeraStore(visibleRung);
-  const earlier = useNumeraStore(collapsedRungs);
+  // `collapsedRungs` builds a NEW array on every call, and zustand v5 compares
+  // snapshots with Object.is — so selecting it bare made every read look like a
+  // change, which is an unbounded re-render loop and React error #185
+  // ("Maximum update depth exceeded"). It took the whole guided screen down
+  // through the error boundary, for three testers, within an hour of shipping.
+  // useShallow is what the rest of this codebase already uses for object and
+  // array selectors, for exactly this reason.
+  const earlier = useNumeraStore(useShallow(collapsedRungs));
   const openSupportRung = useNumeraStore((s) => s.openSupportRung);
 
   if (!showing && earlier.length === 0) return null;

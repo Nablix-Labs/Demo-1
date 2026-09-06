@@ -17,6 +17,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useShallow } from 'zustand/react/shallow';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { deckRungs, visibleRung, collapsedRungs } from '@/lib/supportDeck';
 import SupportDeck from '@/components/SupportDeck';
@@ -83,9 +84,11 @@ export default function SupportDeckDevScreen() {
     }
   }, [on]);
 
-  const rungs = useNumeraStore(deckRungs);
+  // useShallow for the two array selectors — see SupportDeck for what selecting
+  // them bare does.
+  const rungs = useNumeraStore(useShallow(deckRungs));
   const showing = useNumeraStore(visibleRung);
-  const earlier = useNumeraStore(collapsedRungs);
+  const earlier = useNumeraStore(useShallow(collapsedRungs));
   const flip = (k: Toggle) => setOn((p) => ({ ...p, [k]: !p[k] }));
 
   return (
