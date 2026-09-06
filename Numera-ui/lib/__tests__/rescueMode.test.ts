@@ -8,8 +8,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   rescueActive, legacyRescueVisible, currentRescueStep, rescueBlocksSubmission,
+  panelCarriesStepText,
   type RescueModeState,
 } from '@/lib/rescueMode';
+import { writesToStudentCanvas } from '@/lib/rescueActions';
 import type { RescueStep } from '@/lib/rescueActions';
 import type { GuidedRescuePayload } from '@/lib/guidedRescue';
 
@@ -123,5 +125,46 @@ describe('normal submission during a rescue', () => {
 
   it('is allowed again once the rescue is cleared', () => {
     expect(rescueBlocksSubmission(state())).toBe(false);
+  });
+});
+
+describe('panelCarriesStepText — who owns the words', () => {
+  // The bug: one TUTOR_SOLVED_STEP action was rendered on two surfaces at once.
+  // The store writes action.text onto the tutor layer (actionMarks, the
+  // rescue-slot branch) AND hands the same text to the panel via rescueStep, so
+  // the current step appeared as ink on the canvas and again in the sticky note
+  // — "its writing twice" (Manjusha, 6 Sep).
+  const modeStep = (mode: 'PARALLEL' | 'TUTOR_SOLVED') =>
+    ({ actionId: 'A1', rescueId: 'R1', mode, stepIndex: 1 } as RescueStep);
+
+  it('leaves the words to the canvas for a tutor-solved step', () => {
+    // writesToStudentCanvas is true here, so the canvas already has them.
+    expect(panelCarriesStepText(modeStep('TUTOR_SOLVED'))).toBe(false);
+  });
+
+  it('keeps them in the panel for a parallel example', () => {
+    // A parallel example is a DIFFERENT problem and is deliberately never
+    // written onto the page the student is working on, so the panel is its only
+    // surface. Dropping the text here would leave a step counter and nothing
+    // to read — a worse bug than the one being fixed.
+    expect(panelCarriesStepText(modeStep('PARALLEL'))).toBe(true);
+  });
+
+  it('says no when there is no step at all', () => {
+    expect(panelCarriesStepText(null)).toBe(false);
+    expect(panelCarriesStepText(undefined)).toBe(false);
+  });
+
+  it('agrees with writesToStudentCanvas for every mode', () => {
+    // The two must never disagree about which surface is carrying the words.
+    // Asserted against the canvas's own predicate rather than restating the
+    // rule, so a change to one that is not made to the other fails here.
+    (['PARALLEL', 'TUTOR_SOLVED'] as const).forEach((mode) => {
+      const action = {
+        type: mode === 'PARALLEL' ? 'SHOW_PARALLEL' : 'TUTOR_SOLVED_STEP',
+        presentation_mode: mode,
+      } as never;
+      expect(panelCarriesStepText(modeStep(mode))).toBe(!writesToStudentCanvas(action));
+    });
   });
 });

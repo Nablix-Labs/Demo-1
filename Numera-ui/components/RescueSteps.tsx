@@ -29,7 +29,7 @@ import { ArrowLeft, ChevronRight } from 'lucide-react';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { isPhase3 } from '@/lib/phase3';
 import { isFinalStep } from '@/lib/rescueActions';
-import { advanceFailed, advancePending } from '@/lib/rescueMode';
+import { advanceFailed, advancePending, panelCarriesStepText } from '@/lib/rescueMode';
 import { emitRescueAdvance } from '@/lib/rescueEvents';
 import { findReturnSurfaces, returnToQuestion } from '@/lib/rescueReturn';
 import { nextUnspokenStep, speakRescueStep } from '@/lib/rescueSpeech';
@@ -181,17 +181,35 @@ export default function RescueSteps() {
             step onto the tutor layer as it arrives (see `writesToStudentCanvas`
             and `actionMarks`), which is the tutor working DOWN the page beside
             the student — so the worked column accumulates where it belongs,
-            on the canvas, while the panel says the one thing to do now. */}
-        <p
-          key={current.actionId}
-          className={
-            current.answerReveal
-              ? 'mt-2 text-[15px] font-semibold leading-snug text-slate-900'
-              : 'mt-2 text-[15px] leading-snug text-slate-700'
-          }
-        >
-          {current.text}
-        </p>
+            on the canvas, while the panel says the one thing to do now.
+
+            Which is exactly why the text below is conditional. For a
+            TUTOR_SOLVED step the canvas ALREADY carries these words, so
+            printing them here too put the same sentence on screen twice —
+            "its writing twice" (Manjusha, 6 Sep). The panel is then the
+            control surface: which step this is, and how to move on.
+
+            A PARALLEL step is the opposite case and must keep its text. A
+            parallel example is a DIFFERENT problem, so it is deliberately
+            never written to the page the student is working on
+            (`writesToStudentCanvas` returns false for it) — the panel is the
+            only surface it has, and dropping the text here would leave the
+            student a card with a step counter and nothing to read.
+
+            Keyed off the same fact the canvas branches on, rather than a new
+            flag, so the two cannot disagree about who is carrying the words. */}
+        {panelCarriesStepText(current) && (
+          <p
+            key={current.actionId}
+            className={
+              current.answerReveal
+                ? 'mt-2 text-[15px] font-semibold leading-snug text-slate-900'
+                : 'mt-2 text-[15px] leading-snug text-slate-700'
+            }
+          >
+            {current.text}
+          </p>
+        )}
 
         <p className="mt-2 text-xs text-slate-500">
           {current.totalSteps === null

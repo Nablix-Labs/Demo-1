@@ -74,6 +74,35 @@ export function legacyRescueVisible(state: RescueModeState): boolean {
 }
 
 /**
+ * Does the PANEL carry this step's words, or is the canvas already doing it?
+ *
+ * One `TUTOR_SOLVED_STEP` action was rendered on two surfaces at once: the
+ * store writes `action.text` onto the tutor layer via `actionMarks`
+ * (useNumeraStore, the `rescue-slot` branch) AND hands the same text to the
+ * panel through `rescueStep`. So the current step appeared as ink on the canvas
+ * and again in the sticky note — "its writing twice" (Manjusha, 6 Sep).
+ *
+ * The split is not new information: `writesToStudentCanvas` already decides
+ * which steps reach the page, and `mode` carries the same fact onto the step.
+ *
+ *   TUTOR_SOLVED — the tutor is working down the student's own page, so the
+ *   words are on the canvas. The panel is the control surface: which step this
+ *   is, and how to move on.
+ *
+ *   PARALLEL — a different problem, deliberately never written onto the page
+ *   the student is working on. The panel is its only surface, so it must keep
+ *   the text; dropping it would leave a card with a step counter and nothing
+ *   to read.
+ *
+ * Keyed off `mode` rather than a new flag so the panel and the canvas cannot
+ * disagree about which of them is carrying the words.
+ */
+export function panelCarriesStepText(step: RescueStep | null | undefined): boolean {
+  if (!step) return false;
+  return step.mode === 'PARALLEL';
+}
+
+/**
  * The step the student is looking at, or null.
  *
  * The last one to arrive, which is the one the backend considers current — the
