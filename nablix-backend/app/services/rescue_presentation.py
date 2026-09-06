@@ -54,7 +54,7 @@ def active_rescue_from(
         steps=steps,
         return_target_object_id=f"TUTOR_ANCHOR:QUESTION:{question_id}",
         final_reveal_approved=rescue.rescue_type == "TUTOR_SOLVED",
-        pending_phase3_transition=rescue.rescue_type == "TUTOR_SOLVED",
+        pending_phase3_transition=False,
     )
 
 

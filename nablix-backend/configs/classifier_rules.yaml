@@ -17,8 +17,8 @@ guided_learning:
     parallel_step_suffix: " Look at this similar example."
     parallel_final_suffix: " Now return to the original question and try it."
     tutor_solved_step_suffix: " When you are ready, continue to the next step."
-    tutor_solved_final_suffix: " Now try the original question with this idea."
-    tutor_solved_return_focus_text: "Try the original question with this idea."
+    tutor_solved_final_suffix: " Now write your rule on the canvas, then press Check."
+    tutor_solved_return_focus_text: "Write your rule on the canvas, then press Check."
   evaluation_mode: LLM_STATE_MACHINE
   confidence_threshold: 0.75
   state_confidence_thresholds:
