@@ -3368,16 +3368,18 @@ def classify_guided_learning_response(
                 allowed_errors,
                 rules,
             )
-            if (
-                evaluation.student_state != "CORRECT"
-                and guided_message_reveals_undemonstrated_answer(
-                    evaluation.tutor_message,
-                    evaluation.tutor_message_voice,
-                    request,
+            reveal_reason = (
+                guided_tutor_message_reveal_reason(
                     evaluation,
+                    request,
+                    rubric,
+                    objective,
                     rules,
                 )
-            ):
+                if evaluation.student_state != "CORRECT"
+                else None
+            )
+            if reveal_reason is not None:
                 validation_feedback = (
                     rules.guided_learning.answer_reveal_retry_feedback
                 )
@@ -3387,6 +3389,7 @@ def classify_guided_learning_response(
                         "question_id": request.question_id,
                         "attempt": attempt + 1,
                         "student_state": evaluation.student_state,
+                        "reveal_reason": reveal_reason,
                     },
                 )
                 rejected_evaluation = evaluation
@@ -4309,8 +4312,7 @@ def guided_tutor_message_validation_reason(
     """Return the precise reason a guided message cannot be shown unchanged."""
 
     message = evaluation.tutor_message.strip()
-    voice_message = evaluation.tutor_message_voice.strip()
-    if message == "" or voice_message == "":
+    if message == "" or evaluation.tutor_message_voice.strip() == "":
         return "EMPTY"
 
     rules = load_classifier_rules()
@@ -4325,30 +4327,15 @@ def guided_tutor_message_validation_reason(
             },
         )
         return "NEAR_DUPLICATE"
-    if guided_message_reveals_undemonstrated_answer(
-        message,
-        voice_message,
-        request,
+    reveal_reason = guided_tutor_message_reveal_reason(
         evaluation,
+        request,
+        rubric,
+        objective,
         rules,
-    ):
-        return "ANSWER_REVEAL"
-
-    if guided_message_reveals_active_unresolved_teaching_step(
-        message,
-        request,
-        rubric,
-        objective,
-    ):
-        return "ACTIVE_STEP_REVEAL"
-
-    if guided_message_reveals_multiple_unresolved_teaching_steps(
-        message,
-        request,
-        rubric,
-        objective,
-    ):
-        return "ANSWER_REVEAL"
+    )
+    if reveal_reason is not None:
+        return reveal_reason
 
     if guided_message_mislabels_current_role(
         message,
@@ -4362,9 +4349,6 @@ def guided_tutor_message_validation_reason(
 
     if guided_message_asserts_wrong_fixed_amount(message, request):
         return "UNSUPPORTED_FIXED_AMOUNT"
-
-    if guided_message_reveals_fixed_amount_for_mismatched_rule(message, request):
-        return "FIXED_AMOUNT_REVEAL"
 
     if evaluation.student_state == "STUCK" and not guided_message_keeps_controller_focus(
         message,
@@ -4401,6 +4385,44 @@ def guided_tutor_message_validation_reason(
     if guided_message_mentions_selected_option(normalized_message, request):
         return None
     return "UNRELATED"
+
+
+def guided_tutor_message_reveal_reason(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+    rules: ClassifierRulesConfig,
+) -> str | None:
+    """Return a reveal reason for a reply that cannot be shown to the learner."""
+
+    message = evaluation.tutor_message.strip()
+    voice_message = evaluation.tutor_message_voice.strip()
+    if guided_message_reveals_undemonstrated_answer(
+        message,
+        voice_message,
+        request,
+        evaluation,
+        rules,
+    ):
+        return "ANSWER_REVEAL"
+    if guided_message_reveals_active_unresolved_teaching_step(
+        message,
+        request,
+        rubric,
+        objective,
+    ):
+        return "ACTIVE_STEP_REVEAL"
+    if guided_message_reveals_multiple_unresolved_teaching_steps(
+        message,
+        request,
+        rubric,
+        objective,
+    ):
+        return "ANSWER_REVEAL"
+    if guided_message_reveals_fixed_amount_for_mismatched_rule(message, request):
+        return "FIXED_AMOUNT_REVEAL"
+    return None
 
 
 def maximum_recent_tutor_message_similarity(
