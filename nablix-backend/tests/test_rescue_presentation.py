@@ -388,7 +388,9 @@ def _drive_to_final(session_id: str, active: ActiveGuidedRescue) -> ActiveGuided
     return current
 
 
-def test_final_tutor_solved_acknowledgement_sends_one_phase3_event(monkeypatch) -> None:
+def test_final_tutor_solved_acknowledgement_returns_to_the_original_question(
+    monkeypatch,
+) -> None:
     active = _tutor_solved_active()
     session_id = _seed_session(active)
     stub = _stub_adapters(monkeypatch, _phase3_response())
@@ -397,38 +399,28 @@ def test_final_tutor_solved_acknowledgement_sends_one_phase3_event(monkeypatch) 
     result = _ack(session_id, final)
 
     assert result.completed is True
-    assert [event.event_type for event in stub.events] == [
-        "INDEPENDENT_QUESTION_SET_REQUESTED"
-    ]
-    assert stub.events[0].request_id == final.current_action_id
+    assert stub.events == []
     session = session_service._sessions[session_id]
     assert session.active_guided_rescue is None
-    assert session.current_phase == "INDEPENDENT_PRACTICE"
+    assert session.current_phase == "GUIDED_PRACTICE"
     assert session.question_id == "Q-T02-004"
 
-    # Replay after completion neither 409s nor sends a second event.
+    # Replay after completion is idempotent and does not advance the question.
     assert _ack(session_id, final).completed is True
-    assert len(stub.events) == 1
+    assert stub.events == []
 
 
-def test_failed_final_transition_stays_retryable(monkeypatch) -> None:
+def test_final_tutor_solved_acknowledgement_does_not_depend_on_student_model(
+    monkeypatch,
+) -> None:
     active = _tutor_solved_active()
     session_id = _seed_session(active)
     stub = _stub_adapters(monkeypatch, RuntimeError("student model down"))
     final = _drive_to_final(session_id, active)
 
-    with pytest.raises(HTTPException) as failure:
-        _ack(session_id, final)
-
-    assert failure.value.status_code == 503
-    pending = session_service._sessions[session_id].active_guided_rescue
-    assert pending is not None
-    assert pending.is_final_step
-    assert final.current_action_id in pending.rendered_action_ids
-
-    stub._response = _phase3_response()
     assert _ack(session_id, final).completed is True
     assert session_service._sessions[session_id].active_guided_rescue is None
+    assert stub.events == []
 
 
 def test_snapshots_restore_rescue_state() -> None:

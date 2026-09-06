@@ -193,7 +193,12 @@ export function useWebSocket(sessionId: string | null) {
         });
       } else {
         void acknowledgeRescueRender(activeSessionId, event).then((response) => {
-          if (response.action) useNumeraStore.getState().applyTutorCanvasActions([response.action]);
+          const store = useNumeraStore.getState();
+          if (response.action) store.applyTutorCanvasActions([response.action]);
+          // The final Tutor-Solved mark is already on the board when this
+          // acknowledgement returns. Keep its Return-to-original control on
+          // screen so the student can write their own answer and submit it.
+          if (response.completed) store.noteRescueCompleted();
         }).catch((error: unknown) => {
           console.warn('[rescue] render acknowledgement failed', error);
         });
