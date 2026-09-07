@@ -35,6 +35,7 @@ import {
 import { emitRenderAck } from '@/lib/rescueEvents';
 import type { SupportRung } from '@/lib/supportLadder';
 import { withRung, type DeckRung } from '@/lib/supportDeck';
+import type { InterventionInputRequest } from '@/lib/phase3Routing';
 import { EMPTY_APPLIED, type AppliedState } from '@/lib/responseGate';
 import type { InactivityPolicy } from '@/lib/inactivity';
 import {
@@ -565,6 +566,34 @@ export interface NumeraState {
    */
   phase3LockedQuestionId: string | null;
   /**
+   * The difficulty popup the backend is asking for, or null.
+   *
+   * Held in the store rather than derived at render time because the reply that
+   * raises it is the only one that carries it: Chirudeva, 7 Sep — "Once input
+   * is in, intervention_input_request disappears rather than turning into a
+   * flag you have to check." A student who is mid-answer when it arrives, or
+   * who is on a screen that re-renders from a later reply, must still be asked.
+   */
+  interventionRequest: InterventionInputRequest | null;
+  /**
+   * Where the intervention stands, as its own state rather than as something
+   * inferred from whether a request is present.
+   *
+   * Two cases make the inference wrong, and both are live:
+   *
+   *   COLLECTING with no request — the topic can be paused by `status` alone,
+   *   on a reply whose payload has already dropped the §11 block. Read as
+   *   "no intervention" the student would be handed a question the backend is
+   *   409ing every answer to. The popup falls back to the six spec codes, so it
+   *   is still answerable with nothing but this flag.
+   *
+   *   AWAITING_REVIEW — after submitting, `intervention_required` stays true
+   *   (Chirudeva, 7 Sep) and the request disappears. The pause outlives the
+   *   popup (§11), so one flag would either reopen the popup at a student who
+   *   has just filled it in, or drop the pause the moment they did.
+   */
+  interventionStage: 'NONE' | 'COLLECTING' | 'AWAITING_REVIEW';
+  /**
    * A tutor line that has been shown but not yet spoken.
    *
    * Set when one screen hands the student to another: the phase-entry line
@@ -784,6 +813,16 @@ export interface NumeraState {
   setInactivityPolicy: (p: InactivityPolicy | null) => void;
   setLastHintText: (text: string | null) => void;
   lockPhase3Attempt: (questionId: string | null) => void;
+  /**
+   * Record where the intervention stands, from the backend's own destination.
+   *
+   * One setter for both fields so they cannot disagree — the two states are
+   * mutually exclusive, and setting them separately is how a popup ends up open
+   * over a paused screen.
+   */
+  setInterventionState: (
+    next: { stage: 'NONE' | 'COLLECTING' | 'AWAITING_REVIEW'; request?: InterventionInputRequest | null },
+  ) => void;
   /** Queue a line for the next screen to speak. */
   setPendingTutorSpeech: (text: string | null) => void;
   /** Take the queued line, clearing it — so two mounts cannot speak it twice. */
@@ -877,7 +916,7 @@ const initial: Omit<
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
   | 'setQuestionText' | 'setQuestionAnchors' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'setEndedSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'noteTutorLineage' | 'markTutorTurnFailed'
   | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue' | 'setVisibleHint' | 'setWriteInstruction' | 'setGuidedRescue' | 'openSupportRung' | 'collapseSupportDeck' | 'clearRescueSteps' | 'noteRescueAdvanceFailed' | 'noteRescueCompleted'
-  | 'setSupportShown' | 'setLastHintText' | 'lockPhase3Attempt'
+  | 'setSupportShown' | 'setLastHintText' | 'lockPhase3Attempt' | 'setInterventionState'
   | 'setPendingTutorSpeech' | 'claimPendingTutorSpeech' | 'setQuestionProgress' | 'setAppliedResponse' | 'setInactivityPolicy'
   | 'addTranscriptMessage' | 'removeTranscriptMessage' | 'setTranscript' | 'updatePartialTranscript' | 'commitPartialTranscript'
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
@@ -957,6 +996,8 @@ const initial: Omit<
   openedRung: null as DeckRung | null,
   deckCollapsed: false,
   phase3LockedQuestionId: null as string | null,
+  interventionRequest: null as InterventionInputRequest | null,
+  interventionStage: 'NONE' as 'NONE' | 'COLLECTING' | 'AWAITING_REVIEW',
   endedSessionId: null as string | null,
   pendingTutorSpeech: null as string | null,
   appliedResponse: EMPTY_APPLIED,
@@ -1031,7 +1072,15 @@ export const useNumeraStore = create<NumeraState>()(
   // its session and freeze the FIRST question of the next one, because a lock
   // held with no active question yet reads as locked by design.
   setSessionId: (id) =>
-    set({ sessionId: id, appliedResponse: EMPTY_APPLIED, phase3LockedQuestionId: null }),
+    set({
+      sessionId: id,
+      appliedResponse: EMPTY_APPLIED,
+      phase3LockedQuestionId: null,
+      // Belongs to the session it was raised in. Carried over, a paused screen
+      // would greet a student who has opened a different topic entirely.
+      interventionRequest: null,
+      interventionStage: 'NONE' as const,
+    }),
   setSessionState: (sessionState) => set({ sessionState }),
   setActiveSlide: (activeSlide) => set({ activeSlide }),
   setTotalSlides: (totalSlides) => set({ totalSlides }),
@@ -1384,6 +1433,15 @@ export const useNumeraStore = create<NumeraState>()(
   // Idempotent by construction: locking the same question twice is the same
   // state, which is what makes a duplicate reply harmless.
   lockPhase3Attempt: (phase3LockedQuestionId) => set({ phase3LockedQuestionId }),
+
+  // The request is only ever meaningful while collecting. Dropping it on the
+  // other two stages is what stops a stale case id being submitted against a
+  // pause that has already moved on.
+  setInterventionState: ({ stage, request }) =>
+    set({
+      interventionStage: stage,
+      interventionRequest: stage === 'COLLECTING' ? request ?? null : null,
+    }),
 
   setPendingTutorSpeech: (pendingTutorSpeech) => set({ pendingTutorSpeech }),
 

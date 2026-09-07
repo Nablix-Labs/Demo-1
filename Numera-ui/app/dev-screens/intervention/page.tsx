@@ -22,6 +22,7 @@ import Link from 'next/link';
 import InterventionInputModal, {
   type InterventionInputSubmission,
 } from '@/components/InterventionInputModal';
+import InterventionPaused from '@/components/InterventionPaused';
 import type { InterventionInputRequest } from '@/lib/phase3Routing';
 
 /** TC-33, verbatim. */
@@ -74,6 +75,12 @@ export default function InterventionDevScreen() {
           <p className="text-[13px] font-semibold text-ink mb-1">
             Recorded. The topic stays paused — §11: submitting does not resume learning.
           </p>
+          {/* The screen the student actually lands on. Reviewed here beside the
+              payload so the wording is judged in the state it appears in, not
+              read out of a component file. */}
+          <div className="mb-4">
+            <InterventionPaused />
+          </div>
           <p className="text-[12px] text-slate-blue mb-3">
             This is the payload that would go to the event endpoint:
           </p>

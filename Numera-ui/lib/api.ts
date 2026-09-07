@@ -153,6 +153,13 @@ export interface ApiError {
     | 'HTTP_ERROR'
     | 'INTERNAL_ERROR'
     | 'JOURNEY_VERSION_CONFLICT'
+    // The topic is paused awaiting a human review of an intervention case, and
+    // this was a learning action (an answer, a canvas check, orientation,
+    // rescue, review). Every one of them 409s until the case is resolved;
+    // INTERVENTION_INPUT_SUBMITTED and plain reads are the exceptions. Not a
+    // fault and not something the student can retry away — see
+    // isInterventionPausedError.
+    | 'INTERVENTION_REQUIRED'
     // The bearer we sent was rejected — either by this backend or by a service it
     // calls on our behalf (e.g. student_model). Observed 2026-07-26 on the first
     // CORRECT_ATTEMPT of a session: the backend posts a progress event to
@@ -242,6 +249,22 @@ export function isStaleSessionError(err: unknown): boolean {
   return /session/i.test(res?.data?.message ?? '');
 }
 
+/**
+ * Is this "the topic is paused for a human to look at"?
+ *
+ * Distinguished by `error_code`, never by the 409 alone: /interaction already
+ * returns 409 for a stale turn, a journey-version conflict and a service
+ * contract failure, and each of those means something completely different to
+ * the student. Getting it wrong here is not cosmetic — the generic 409 copy
+ * tells them to ask the team to reset the topic, which for a paused student is
+ * both wrong and the opposite of what is happening (someone is already looking
+ * at it).
+ */
+export function isInterventionPausedError(err: unknown): boolean {
+  const res = (err as { response?: { status?: number; data?: Partial<ApiError> } })?.response;
+  return res?.status === 409 && res?.data?.error_code === 'INTERVENTION_REQUIRED';
+}
+
 export function studentFacingError(err: unknown): string | null {
   const res = (err as { response?: { status?: number; data?: Partial<ApiError> } })?.response;
   // 409 on a session call means the Student Model already has this topic part
@@ -250,6 +273,12 @@ export function studentFacingError(err: unknown): string | null {
   // network and sending the student off retrying forever.
   const backendMessage = typeof res?.data?.message === 'string' ? res.data.message.trim() : '';
   const code = res?.data?.error_code;
+  if (code === 'INTERVENTION_REQUIRED') {
+    // Said as a fact about the lesson, not as an error about the student. They
+    // have just failed the same question four times and been round two topics;
+    // "something went wrong" would read as one more thing they did.
+    return 'Your teacher is taking a look at this topic for you. You can\u2019t carry on with it just yet.';
+  }
   if (code === 'JOURNEY_VERSION_CONFLICT') {
     return 'Two submissions arrived together. Your work is safe—please press Check once more.';
   }
@@ -350,6 +379,12 @@ export type InteractionType =
   | 'HELP_REQUEST'
   | 'SUPPORT_REPLAY'
   | 'CANVAS_SUBMISSION'
+  // The student's own account of what is hard, after automated remediation has
+  // run out (Phase 3 repeated-failure spec §11, TC-36). Not an attempt and not
+  // an answer: it records evidence for the human who reviews the case, and
+  // explicitly does NOT resume the student. Rides /interaction rather than an
+  // endpoint of its own — Chirudeva, 7 Sep: "There is no separate endpoint."
+  | 'INTERVENTION_INPUT_SUBMITTED'
   | 'SESSION_START'
   | 'SESSION_END';
 
@@ -1381,6 +1416,31 @@ export interface InteractionPayload {
   previous_tutor_turn_id?: string | null;
   /** Always true for a submitted voice turn — only final transcripts are sent. */
   transcript_final?: boolean;
+
+  // ── INTERVENTION_INPUT_SUBMITTED only (spec §11, TC-36) ───────────────────
+  // Optional because every other interaction type omits them, and the backend
+  // accepts `input_source: CHOICE` without a `selected_option_id` for this type
+  // alone — the choices here are reason codes, not a question's options.
+  /** The case being answered. Cannot be invented; it comes from the request. */
+  intervention_id?: string;
+  /**
+   * Checked against the active case rather than trusted (409 on a mismatch, not
+   * a silent overwrite), so both are echoed back exactly as they arrived.
+   */
+  topic_id?: string;
+  micro_skill_id?: string;
+  /**
+   * At least one, from the six §11 codes. An empty list is a 422 — the spec
+   * requires a selection — and anything outside the six is a 422 as well, which
+   * is why the fallback list in lib/phase3Routing is those exact codes.
+   */
+  selected_reason_codes?: string[];
+  /** `audio_ref` is always null: nothing in this app can produce one. */
+  voice_input?: {
+    provided: boolean;
+    audio_ref: null;
+    transcript: string | null;
+  };
 }
 
 /** Supporting picture the backend asks the frontend to show (e.g. an equation
@@ -1699,6 +1759,58 @@ export async function sendInteraction(payload: InteractionPayload): Promise<Inte
     }
     throw error;
   }
+}
+
+/**
+ * Send the student's account of what they are finding difficult (TC-36).
+ *
+ * Everything the backend needs to identify the case is echoed from the reply
+ * that raised it — the intervention id, topic and micro-skill are validated
+ * server-side, so a stale popup is refused rather than filed against the wrong
+ * case.
+ *
+ * Submitting does NOT resume learning. The reply comes back with
+ * `next_action: AWAIT_INTERVENTION_REVIEW`, and the caller closes the popup
+ * onto the paused state rather than back onto the question — §11 is explicit
+ * that the pause outlives the input.
+ *
+ * REST only. This must never ride a `tutor_response` voice frame:
+ * lib/voiceSupportFrame.ts is a hand-maintained allow-list that silently drops
+ * fields it has not been told about, and has produced three REST-fine /
+ * voice-broken bugs already.
+ */
+export async function submitInterventionInput(payload: {
+  session_id: string;
+  student_id: string;
+  turn_id: string;
+  current_phase: string;
+  concept_id: string;
+  question_id: string;
+  hint_count: number;
+  intervention_id: string;
+  /**
+   * Echoed back only when the backend told us what they are.
+   *
+   * Both are validated against the active case rather than trusted — a mismatch
+   * is a 409 — so a guess is strictly worse than an omission: it turns a
+   * resolvable case into a blocked student. The frontend has no honest source
+   * for `micro_skill_id` (nothing on the session record or the §11 request
+   * carries it today), and its idea of the current topic comes from navigation
+   * state that has a demo default in it. So these ride along when
+   * `intervention_input_request` carries them and are left to the backend's own
+   * lookup when it does not. See the ask in BACKEND-ASKS-PHASE3-REMEDIATION.
+   */
+  topic_id?: string;
+  micro_skill_id?: string;
+  selected_reason_codes: string[];
+  voice_input: { provided: boolean; audio_ref: null; transcript: string | null };
+}): Promise<InteractionResponse> {
+  const res = await api.post<InteractionResponse>('/interaction', {
+    ...payload,
+    interaction_type: 'INTERVENTION_INPUT_SUBMITTED',
+    input_source: 'CHOICE',
+  } satisfies InteractionPayload);
+  return res.data;
 }
 
 export interface RescueStepResponse {
