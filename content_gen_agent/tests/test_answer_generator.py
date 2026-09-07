@@ -184,6 +184,65 @@ def test_the_overlap_check_ignores_spacing_and_case():
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Operators the model spells two ways
+# ──────────────────────────────────────────────────────────────────────
+
+def test_a_unicode_minus_is_the_same_answer_as_a_hyphen():
+    """The bug that lost Q-T04-034 in the run of 7 September.
+
+    The canonical answer was written with U+2212 MINUS SIGN and the accepted
+    answers with an ASCII hyphen. Identical to any reader, unequal as strings,
+    reported as 'canonical_answer is not among accepted_answers'. It read like
+    a model mistake and was not one.
+    """
+    result = _gen([_q()], [_a(canonical_answer="x − 6",
+                              accepted_answers=["x-6"],
+                              common_wrong_answers=["6-x", "x+6"])])
+    assert result.is_clean
+    assert result.rows[0].canonical_answer == "x − 6"
+
+
+@pytest.mark.parametrize("canonical, accepted", [
+    ("x − 6", "x-6"),      # MINUS SIGN
+    ("x – 6", "x-6"),      # EN DASH
+    ("x — 6", "x-6"),      # EM DASH
+    ("3 × n", "3*n"),      # MULTIPLICATION SIGN
+    ("3 ÷ n", "3/n"),      # DIVISION SIGN
+])
+def test_both_spellings_of_an_operator_are_one_form(canonical, accepted):
+    result = _gen([_q()], [_a(canonical_answer=canonical,
+                              accepted_answers=[accepted],
+                              common_wrong_answers=["nonsense", "rubbish"])])
+    assert result.is_clean, [str(i) for i in result.issues]
+
+
+def test_the_overlap_check_also_sees_through_operator_spelling():
+    """The fix has to cut both ways.
+
+    If it only relaxed the canonical check it would let through a key where
+    the same answer is accepted in one spelling and wrong in the other, which
+    is the contradiction the overlap rule exists to catch.
+    """
+    with pytest.raises(AnswerError, match="both accepted and wrong"):
+        _gen([_q()], [_a(accepted_answers=["x-6"],
+                         common_wrong_answers=["x − 6", "x+6"])])
+
+
+def test_written_answers_keep_the_character_the_model_used():
+    """Normalising is for comparing, not for storing.
+
+    The platform imports these strings, so rewriting a minus sign the reviewer
+    can see into one they did not choose would be us editing content under the
+    cover of a validation fix.
+    """
+    result = _gen([_q()], [_a(canonical_answer="x − 6",
+                              accepted_answers=["x − 6", "x-6"],
+                              common_wrong_answers=["6-x", "x+6"])])
+    assert "−" in result.rows[0].canonical_answer
+    assert "−" in result.rows[0].accepted_answers
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Type and verification constraints
 # ──────────────────────────────────────────────────────────────────────
 
@@ -300,10 +359,16 @@ def test_an_empty_step_is_refused():
         _gen([_q()], [_a(answer_steps=["Compare.", "   "])])
 
 
-def test_a_question_with_no_key_is_refused():
-    """Silently skipping a question would leave it unmarkable."""
-    with pytest.raises(AnswerError, match="no answer key for"):
-        _gen([_q(1), _q(2)], [_a("Q-T01-001")])
+def test_a_question_with_no_key_is_named_individually():
+    """One error per missing question, keyed on its id, so each is
+    droppable. As one batch-level complaint this was unrecoverable and cost
+    Topic 1 all 56 of its questions on a six-topic run.
+    """
+    issues = _check("T01", [_a("Q-T01-001")],
+                    {"Q-T01-001": _q(1), "Q-T01-002": _q(2)})
+    missing = [i for i in issues if i.field == "Q-T01-002"]
+    assert len(missing) == 1
+    assert "no answer key for this question" in missing[0].message
 
 
 def test_two_keys_for_one_question_is_refused():
@@ -312,8 +377,9 @@ def test_two_keys_for_one_question_is_refused():
 
 
 def test_a_key_for_an_unknown_question_is_refused():
+    # retry off: the point here is the unknown id, not the recovery path.
     with pytest.raises(AnswerError, match="no such question"):
-        _gen([_q()], [_a("Q-T01-999")])
+        _gen([_q()], [_a("Q-T01-999")], retry=False)
 
 
 def test_a_non_boolean_explanation_flag_is_refused():
@@ -577,3 +643,197 @@ def test_the_prompt_covers_all_five_question_types():
     text = _prompt_text()
     for question_type in QuestionType:
         assert question_type.value in text, f"{question_type.value} unexplained"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The second six-topic run: 38 of 116 keys lost
+#
+# T04 lost all 18 of its keys over one bad answer, T05 all 20 over four. The
+# four in T05 were "a)", "b)", "c)" -- the right letter with the bracket the
+# question itself had taught the model to use.
+# ──────────────────────────────────────────────────────────────────────
+
+from answer_generator import normalise_choice   # noqa: E402
+
+
+@pytest.mark.parametrize("given, expected", [
+    ("c)", "c"), ("a)", "a"), ("B)", "B"),
+    ("c.", "c"), ("c:", "c"), (" c) ", "c"),
+    ("c", "c"), ("B", "B"),
+])
+def test_the_label_punctuation_comes_off_a_choice_answer(given, expected):
+    assert normalise_choice(given) == expected
+
+
+def _choice_question(i=1):
+    return _q(i, QuestionType.SINGLE_CHOICE,
+              text="In the term 2ab, which is the coefficient?\n"
+                   "a) 2\nb) a\nc) b\nChoose a), b) or c).")
+
+
+def test_a_bracketed_choice_answer_is_accepted():
+    """Exactly what T05 returned, including the bracket in EVERY list. An
+    earlier version of this test wrote both "a)" and "a" into accepted, which
+    hid the fact that only the canonical was being normalised."""
+    result = _gen([_choice_question()], [_a(
+        answer_type="SINGLE_CHOICE", verification_method="EXACT_CHOICE_MATCH",
+        canonical_answer="a)", accepted_answers=["a)"],
+        common_wrong_answers=["b)", "c)"],
+    )])
+    assert result.is_clean
+
+
+def test_the_bracket_is_stripped_from_every_list_not_just_the_canonical():
+    """The workbook must hold 'a', not 'a)', or every reader has to strip it,
+    and the canonical would not match its own accepted list."""
+    row = _gen([_choice_question()], [_a(
+        answer_type="SINGLE_CHOICE", verification_method="EXACT_CHOICE_MATCH",
+        canonical_answer="a)", accepted_answers=["a)"],
+        common_wrong_answers=["b)", "c)"],
+    )]).rows[0]
+    assert row.canonical_answer == "a"
+    assert row.accepted_answers == "a"
+    assert row.common_wrong_answers == "b | c"
+
+
+def test_normalising_happens_before_the_canonical_in_accepted_check():
+    """Order matters. That check runs first, so 'a)' against accepted ['a']
+    would fail there with a message about the wrong thing entirely."""
+    result = _gen([_choice_question()], [_a(
+        answer_type="SINGLE_CHOICE", verification_method="EXACT_CHOICE_MATCH",
+        canonical_answer="a)", accepted_answers=["a"],
+        common_wrong_answers=["b", "c"],
+    )])
+    assert result.is_clean
+
+
+def test_a_letter_that_is_not_an_option_is_still_refused():
+    """Normalising must not weaken the real check."""
+    issues = _check("T01", [_a(
+        answer_type="SINGLE_CHOICE", verification_method="EXACT_CHOICE_MATCH",
+        canonical_answer="g)", accepted_answers=["g)"],
+        common_wrong_answers=["a", "b"],
+    )], {"Q-T01-001": _choice_question()})
+    assert any("not among the options" in i.message for i in issues if i.is_error)
+
+
+# -- dropping a question with its answer -------------------------------
+
+def test_one_bad_answer_no_longer_costs_the_whole_topic():
+    questions = [_q(i) for i in range(1, 11)]
+    answers = [_a(f"Q-T01-{i:03d}") for i in range(1, 11)]
+    answers[3]["common_wrong_answers"] = []          # unusable, on its own
+
+    result = generate_answers(
+        questions, FakeLLMClient([{"answers": answers}]), "T01",
+        drop_invalid=True,
+    )
+
+    assert result.is_clean
+    assert len(result.rows) == 9
+    assert result.dropped_question_ids == {"Q-T01-004"}
+
+
+def test_the_dropped_question_is_named_so_the_caller_can_remove_it():
+    """Dropping only the answer would leave a question in the bank that looks
+    complete and has no key. They go together or not at all."""
+    questions = [_q(i) for i in range(1, 11)]
+    answers = [_a(f"Q-T01-{i:03d}") for i in range(1, 11)]
+    answers[3]["common_wrong_answers"] = []
+
+    result = generate_answers(
+        questions, FakeLLMClient([{"answers": answers}]), "T01",
+        drop_invalid=True)
+
+    assert "Q-T01-004" not in {r.question_id for r in result.rows}
+    assert any("dropped 1 question(s)" in i.message for i in result.issues)
+    assert any("dropped: " in i.message for i in result.issues), "and why"
+
+
+def test_dropping_most_of_a_topic_keeps_what_is_left():
+    """There used to be a 70% keep-floor here, from when a TOPIC was the unit
+    and a partial one was an unusable stump. Coverage is now planned and
+    reported per micro-skill, so the run names exactly which skills are short
+    and exits non-zero. Refusing five sound answers to avoid shipping
+    something already described precisely would lose work for nothing.
+    """
+    questions = [_q(i) for i in range(1, 11)]
+    answers = [_a(f"Q-T01-{i:03d}") for i in range(1, 11)]
+    for a in answers[:5]:
+        a["common_wrong_answers"] = []
+
+    result = generate_answers(questions, FakeLLMClient([{"answers": answers}]),
+                              "T01", drop_invalid=True, retry=False)
+
+    assert result.is_clean
+    assert len(result.rows) == 5
+    assert len(result.dropped_question_ids) == 5
+
+
+def test_nothing_usable_at_all_still_fails():
+    """The one genuinely fatal case, same as every other generator."""
+    questions = [_q(i) for i in range(1, 4)]
+    answers = [_a(f"Q-T01-{i:03d}", common_wrong_answers=[]) for i in range(1, 4)]
+
+    with pytest.raises(AnswerError):
+        generate_answers(questions, FakeLLMClient([{"answers": answers}]),
+                         "T01", drop_invalid=True, retry=False)
+
+
+def test_a_partial_response_is_retried_for_the_questions_it_skipped():
+    """The answer key is asked for a whole topic at once -- 56 to 70
+    questions -- so a partial response is common. Losing the topic over it
+    is not."""
+    questions = [_q(i) for i in range(1, 11)]
+    first = [_a(f"Q-T01-{i:03d}") for i in range(1, 8)]     # three missing
+    second = [_a(f"Q-T01-{i:03d}") for i in range(8, 11)]
+
+    result = generate_answers(
+        questions,
+        FakeLLMClient([{"answers": first}, {"answers": second}]),
+        "T01", drop_invalid=True,
+    )
+
+    assert result.is_clean
+    assert len(result.rows) == 10
+    assert any("asking again for the 3 it skipped" in i.message
+               for i in result.issues)
+    assert any("retry supplied 3 more" in i.message for i in result.issues)
+
+
+def test_what_the_retry_still_misses_is_dropped_with_its_question():
+    questions = [_q(i) for i in range(1, 11)]
+    first = [_a(f"Q-T01-{i:03d}") for i in range(1, 10)]    # one missing
+    result = generate_answers(
+        questions,
+        FakeLLMClient([{"answers": first}, {"answers": []}]),
+        "T01", drop_invalid=True,
+    )
+    assert result.is_clean
+    assert result.dropped_question_ids == {"Q-T01-010"}
+    assert len(result.rows) == 9
+
+
+def test_the_retry_can_be_turned_off():
+    questions = [_q(i) for i in range(1, 11)]
+    answers = [_a(f"Q-T01-{i:03d}") for i in range(1, 10)]
+    result = generate_answers(questions, FakeLLMClient([{"answers": answers}]),
+                              "T01", drop_invalid=True, retry=False)
+    assert result.dropped_question_ids == {"Q-T01-010"}
+
+
+def test_drop_invalid_is_off_by_default():
+    questions = [_q(i) for i in range(1, 11)]
+    answers = [_a(f"Q-T01-{i:03d}") for i in range(1, 11)]
+    answers[3]["common_wrong_answers"] = []
+    with pytest.raises(AnswerError):
+        generate_answers(questions, FakeLLMClient([{"answers": answers}]), "T01")
+
+
+def test_nothing_is_dropped_from_a_clean_batch():
+    questions = [_q(i) for i in range(1, 11)]
+    answers = [_a(f"Q-T01-{i:03d}") for i in range(1, 11)]
+    result = generate_answers(questions, FakeLLMClient([{"answers": answers}]),
+                              "T01", drop_invalid=True)
+    assert result.dropped_question_ids == set()
+    assert len(result.rows) == 10

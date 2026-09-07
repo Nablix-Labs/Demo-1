@@ -46,42 +46,35 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from table_schemas import TABLE_SCHEMAS
+from table_schemas import TABLE_SCHEMAS, export_name
 
 # Sheets present in the reference that are not generated content.
 NON_GENERATED_SHEETS = (
     "README",
-    "Orientation_Video_Scenes",
-    "Orientation_Support_Cards",
 )
 
 # Export order, taken from the reference workbook. Not dependency order.
-REFERENCE_SHEET_ORDER = (
-    "Topics",
-    "Micro_Skills",
-    "Questions",
-    "Question_Usage",
-    "Question_MicroSkills",
-    "Worked_Example_MicroSkills",
-    "Worked_Example_Steps",
-    "Answer_Specs",
-    "Error_Types",
-    "Misconceptions",
-    "Misconception_Errors",
-    "Misconception_MicroSkills",
-    "Hints",
-    "Misconception_Hints",
-    "Visual_Cues",
-    "Worked_Examples",
-    "Misconception_VisualCues",
-    "Scaffolds",
-    "Scaffold_Steps",
-    "Question_Scaffolds",
-    "Parallel_Examples",
-    "Source_Provenance",
-    "Question_Error_Map",
-    "Topic_Scope",
-)
+# Export order, taken from the platform's own template, which is alphabetical
+# by the exported (snake_case) name. The older reference used a grouped order;
+# matching the template means verify_written compares like with like.
+#
+# "Topics" is ours and has no sheet in the template. It sits where its export
+# name sorts. See KNOWN_EXTRA_SHEETS in workbook_writer.
+REFERENCE_SHEET_ORDER = tuple(sorted(
+    (
+        "Answer_Specs", "Error_Types", "Hints", "Micro_Skills",
+        "Misconception_Errors", "Misconception_Hints",
+        "Misconception_MicroSkills", "Misconception_VisualCues",
+        "Misconceptions", "Orientation_Support_Cards",
+        "Orientation_Video_Scenes", "Orientation_Videos", "Parallel_Examples",
+        "Question_Error_Map", "Question_MicroSkills", "Question_Scaffolds",
+        "Question_Usage", "Questions", "Scaffold_Steps", "Scaffolds",
+        "Source_Provenance", "Topic_Scope", "Topics", "Visual_Cues",
+        "Worked_Example_MicroSkills", "Worked_Example_Steps",
+        "Worked_Examples",
+    ),
+    key=export_name,
+))
 
 HEADER_FILL = "FF1B2A4A"
 HEADER_FONT_COLOUR = "FFFFFFFF"
@@ -150,7 +143,10 @@ def build_empty_workbook(
 
     for sheet_name in order:
         columns = TABLE_SCHEMAS[sheet_name]["columns"]
-        ws = wb.create_sheet(title=sheet_name)
+        # The sheet carries the platform's name, not ours. Internally the
+        # TitleCase name is an identifier used in a few hundred places; on
+        # the wire it has to be what the importer expects.
+        ws = wb.create_sheet(title=export_name(sheet_name))
         ws.append(list(columns))
         for idx, header in enumerate(columns, start=1):
             cell = ws.cell(row=1, column=idx)

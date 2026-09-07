@@ -135,60 +135,20 @@ class UsagePlan:
     max_attempts: Optional[int] = None
 
 
-def plan_phases(questions: list[QuestionRow]) -> list["UsagePlan"]:
-    """Decide which phase each question belongs to.
-
-    A heuristic, and openly a placeholder. The roadmap gives CG-012 "phase
-    assignment" but no rule for it, and the reference's distribution -- 22
-    diagnostic, 16 guided, 16 independent across three topics -- is an
-    authoring decision rather than anything derivable from a question.
-
-    What this does instead is respect the constraints and spread the work:
-
-      SINGLE_CHOICE, difficulty 1  -> PHASE_0_DIAGNOSTIC. The diagnostic phase
-                                      accepts only SINGLE_CHOICE, so nothing
-                                      else can go there, and an easy one is
-                                      what a diagnostic wants.
-      everything else              -> PHASE_2_GUIDED_LEARNING, cycling the
-                                      five roles it allows so the set is not
-                                      all CLOSE_PRACTICE.
-      the last two per topic       -> PHASE_3_INDEPENDENT_PRACTICE, where its
-                                      allowed types permit.
-
-    A real curriculum planner should replace this. It is here so the pipeline
-    runs end to end, and it is separated from build_usage_rows precisely so
-    replacing it touches nothing else.
-    """
-    guided_roles = [
-        QuestionRole.CLOSE_PRACTICE,
-        QuestionRole.PARTIAL_APPLICATION,
-        QuestionRole.NEAR_TRANSFER,
-        QuestionRole.MISCONCEPTION_PROBE,
-        QuestionRole.FINAL_GUIDED_CHECK,
-    ]
-    p3_types = set(PHASE_RULES["PHASE_3_INDEPENDENT_PRACTICE"]["allowed_question_types"])
-
-    plans: list[UsagePlan] = []
-    guided_seen = 0
-    # The last two eligible questions become independent practice.
-    eligible_tail = [
-        q.question_id for q in questions if q.question_type.value in p3_types
-    ][-2:]
-
-    for question in questions:
-        if question.question_id in eligible_tail:
-            plans.append(UsagePlan(question.question_id,
-                                   Phase.PHASE_3_INDEPENDENT_PRACTICE))
-        elif question.question_type is QuestionType.SINGLE_CHOICE and question.difficulty == 1:
-            plans.append(UsagePlan(question.question_id, Phase.PHASE_0_DIAGNOSTIC))
-        else:
-            plans.append(UsagePlan(
-                question.question_id,
-                Phase.PHASE_2_GUIDED_LEARNING,
-                guided_roles[guided_seen % len(guided_roles)],
-            ))
-            guided_seen += 1
-    return plans
+# plan_phases used to live here.
+#
+# It guessed a question's phase from its type and difficulty, because CG-011
+# generated questions for a topic and nothing recorded which phase any of them
+# belonged to. That guess is what produced 7 diagnostics across six topics,
+# with three topics having none: the heuristic could only put a question in
+# Phase 0 if it happened to be an easy multiple choice, and a run that wrote
+# few of those had almost no diagnostics.
+#
+# Under the reviewed design the phase is an INPUT. coverage_plan states what
+# each micro-skill needs and skill_question_generator asks for exactly that,
+# so there is nothing left to infer. The function is gone rather than
+# deprecated, because a heuristic left in the codebase is a heuristic someone
+# will call.
 
 
 @dataclass
@@ -329,16 +289,36 @@ def build_skill_map(
                   f"primary skill {chosen!r} is not one of this question's skills")
             continue
 
-        weights = split_weights(len(unique))
-        for skill_id, weight in zip(unique, weights):
-            rows.append(
-                QuestionMicroSkillRow(
-                    question_id=question_id,
-                    micro_skill_id=skill_id,
-                    weight=weight,
-                    is_primary=(skill_id == chosen),
-                )
+        # One mapping only, at full weight. The revised design drops secondary
+        # mappings entirely: a question's evidence updates ONE micro-skill, the
+        # one it was written to assess.
+        #
+        # The reason is not tidiness. Under fractional weights a question about
+        # powers gave partial credit to the prerequisite skill it happened to
+        # use along the way, so a student could look competent at a skill they
+        # were never actually asked about. Prerequisite relationships belong in
+        # the Micro_Skills prerequisite chain, and a suspected weakness there
+        # gets tested by that skill's own questions.
+        #
+        # The skills that are dropped here are not lost information -- they are
+        # what `skill_links` still records -- they simply no longer produce
+        # Student Model evidence.
+        if len(unique) > 1:
+            issues.append(ValidationIssue(
+                Severity.WARNING, name, question_id,
+                f"exercises {len(unique)} skills; mapped to {chosen} alone, "
+                f"as only the assessed skill takes evidence "
+                f"(not mapped: {', '.join(s for s in unique if s != chosen)})",
+            ))
+
+        rows.append(
+            QuestionMicroSkillRow(
+                question_id=question_id,
+                micro_skill_id=chosen,
+                weight=1.0,
+                is_primary=True,
             )
+        )
 
     return rows, issues
 

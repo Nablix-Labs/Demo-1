@@ -43,7 +43,7 @@ from typing import Iterable, Mapping, Optional, Sequence
 
 from openpyxl import load_workbook
 
-from table_schemas import TABLE_SCHEMAS
+from table_schemas import TABLE_SCHEMAS, export_name
 from workbook_builder import (
     REFERENCE_SHEET_ORDER,
     WorkbookStructureError,
@@ -56,6 +56,10 @@ from workbook_builder import (
 # rejected, so a future generator returning a list does not silently write
 # "['a', 'b']" into a cell.
 LIST_SEPARATOR = " | "
+
+#: Sheets we write that the platform's template does not contain. See the
+#: reasoning in verify_written.
+KNOWN_EXTRA_SHEETS = ("topics",)
 
 
 class WorkbookWriteError(Exception):
@@ -138,7 +142,9 @@ def write_workbook(
 
     workbook = load_workbook(destination)
     for sheet, rows in rows_by_sheet.items():
-        worksheet = workbook[sheet]
+        # Callers name sheets by the internal identifier; the file carries
+        # the platform's name.
+        worksheet = workbook[export_name(sheet)]
         for row in rows:
             worksheet.append(serialise_row(row, sheet))
     workbook.save(destination)
@@ -156,12 +162,29 @@ def verify_written(
     knows what the reference looks like.
     """
     if reference_path is None:
-        from sources import REFERENCE_WORKBOOK
+        # The SCHEMA TEMPLATE, not the reference workbook. The two now
+        # disagree about structure and only the template matches what the
+        # platform will import. The reference is still the better guide to
+        # what good CONTENT looks like, which is a different question.
+        from sources import SCHEMA_TEMPLATE
 
-        reference_path = REFERENCE_WORKBOOK
+        reference_path = SCHEMA_TEMPLATE
     if reference_path is None:
-        return ["no reference workbook available to compare against"]
-    return compare_to_reference(path, reference_path)
+        return ["no schema template available to compare against"]
+
+    problems = compare_to_reference(path, reference_path)
+
+    # One sheet we add on purpose. The platform's export has no topics table,
+    # yet six of its own tables carry a topic_id, so the topic record must
+    # live somewhere the export does not reach. Dropping ours would silently
+    # lose the learning goal and core message, which come straight from the
+    # topic documents, so it is written and excused here rather than removed.
+    # Named individually, not a blanket exemption: any OTHER unexpected sheet
+    # still fails, because that would mean a generator inventing a table.
+    return [
+        problem for problem in problems
+        if problem not in {f"unexpected sheet: {s}" for s in KNOWN_EXTRA_SHEETS}
+    ]
 
 
 def row_counts(path: str | Path) -> dict[str, int]:
@@ -185,7 +208,7 @@ def summarise(path: str | Path) -> str:
         "",
     ]
     for sheet in REFERENCE_SHEET_ORDER:
-        count = counts.get(sheet, 0)
+        count = counts.get(export_name(sheet), 0)
         marker = f"{count:>5}" if count else "    -"
         lines.append(f"  {marker}  {sheet}")
     return "\n".join(lines)

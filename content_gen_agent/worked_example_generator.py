@@ -67,7 +67,7 @@ from usage_generator import split_weights
 from validation import Severity, ValidationIssue
 
 DEFAULT_VERSION = "1.1"
-DEFAULT_STATUS = WorkedExampleStatus.APPROVED
+DEFAULT_STATUS = WorkedExampleStatus.GENERATED
 DEFAULT_PHASE = WorkedExamplePhase.PHASE_1_ORIENTATION
 
 # The reference's three examples run 7, 8 and 7 steps.

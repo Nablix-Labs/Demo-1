@@ -27,6 +27,8 @@ WHY THIS STRUCTURE?
     deterministic validator can check referential integrity automatically
 """
 
+import re
+
 # ──────────────────────────────────────────────────────────────────────
 # DEPENDENCY ORDER 
 # This is the order tables must be GENERATED in, because later tables
@@ -232,7 +234,7 @@ TABLE_SCHEMAS = {
             "problem_statement": {"type": "str", "nullable": False},
             "final_answer":      {"type": "str", "nullable": False},
             "status":            {"type": "str", "nullable": False,
-                                  "enum": ["DRAFT", "APPROVED"]},
+                                  "enum": ["DRAFT", "GENERATED", "PENDING_REVIEW", "APPROVED"]},
             "version":           {"type": "str", "nullable": False},
         },
         "foreign_keys": {
@@ -317,7 +319,7 @@ TABLE_SCHEMAS = {
                                      "description": "Groups questions testing the same task pattern"},
             "source_provenance_id": {"type": "str", "nullable": False},
             "status":               {"type": "str", "nullable": False,
-                                     "enum": ["DRAFT", "APPROVED"]},
+                                     "enum": ["DRAFT", "GENERATED", "PENDING_REVIEW", "APPROVED"]},
             "version":              {"type": "str", "nullable": False},
         },
         "foreign_keys": {
@@ -484,7 +486,7 @@ TABLE_SCHEMAS = {
     "Misconceptions": {
         "columns": [
             "misconception_id", "name", "description",
-            "diagnosis_rule", "active", "version",
+            "diagnosis_rule", "active", "version", "display_order",
         ],
         "column_details": {
             "misconception_id": {"type": "str", "nullable": False, "unique": True,
@@ -495,6 +497,8 @@ TABLE_SCHEMAS = {
                                  "description": "When to trigger this misconception diagnosis"},
             "active":           {"type": "bool", "nullable": False},
             "version":          {"type": "str", "nullable": False},
+            # Added by the platform export. Display ordering, 1..n.
+            "display_order":    {"type": "int", "nullable": True},
         },
         "foreign_keys": {},
         "notes": "Underlying conceptual model explaining one or more errors.",
@@ -547,17 +551,22 @@ TABLE_SCHEMAS = {
 
     "Question_Error_Map": {
         "columns": [
-            "question_id", "response_pattern", "error_code",
+            "question_id", "response_pattern", "error_code", "micro_skill_id",
         ],
         "column_details": {
             "question_id":       {"type": "str", "nullable": False},
             "response_pattern":  {"type": "str", "nullable": False,
                                   "description": "The specific wrong answer string a student might type"},
             "error_code":        {"type": "str", "nullable": False},
+            # Added by the platform export. Which skill the wrong answer
+            # implicates. Under the reviewed design a question maps to exactly
+            # one micro-skill, so this always matches that one.
+            "micro_skill_id":    {"type": "str", "nullable": True},
         },
         "foreign_keys": {
             "question_id": ("Questions", "question_id"),
             "error_code": ("Error_Types", "error_code"),
+            "micro_skill_id": ("Micro_Skills", "micro_skill_id"),
         },
         "notes": "Question-specific deterministic patterns only. Must not contain correct answers.",
         "reference_row_count": 82,
@@ -611,7 +620,7 @@ TABLE_SCHEMAS = {
             "image_generation_prompt", "negative_prompt",
             "tutor_explanation_template", "retrieval_text",
             "retrieval_keywords", "asset_url", "embedding_status",
-            "review_status", "version",
+            "review_status", "version", "actions",
         ],
         "column_details": {
             "visual_cue_id":              {"type": "str", "nullable": False, "unique": True,
@@ -628,6 +637,9 @@ TABLE_SCHEMAS = {
                                            "description": "Blank until asset pipeline runs"},
             "embedding_status":           {"type": "str", "nullable": False,
                                            "enum": ["PENDING", "COMPLETED"]},
+            # Added by the platform export. Empty in all 14 template rows, so
+            # there is no example of what belongs in it.
+            "actions":                    {"type": "str", "nullable": True},
             "review_status":              {"type": "str", "nullable": False,
                                            "enum": ["APPROVED", "PENDING_REVIEW"],
                                            "description": "Must be unapproved on generation"},
@@ -871,3 +883,144 @@ if __name__ == "__main__":
 
     print(f"\nTotals: {total_cols} columns, {total_fks} foreign keys, {total_ref_rows} reference rows")
     print("\nAll checks passed.")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# ORIENTATION (Phase 1)
+#
+# Present in the platform's export, absent from the older reference. Not
+# generated by this agent: orientation_videos carries an asset_url pointing at
+# produced video files in blob storage, so these are authored elsewhere.
+#
+# They are declared here anyway so the workbook we write has all 26 sheets
+# with correct headers. A sheet that is empty is a visible gap; a sheet that
+# is missing looks like an oversight, and the platform importing our file
+# would find its shape short by three tables.
+#
+# The review asks for a teaching exposure per micro-skill, but these tables
+# key to topic_id -- 3 videos for 22 micro-skills. See QUESTIONS-FOR-MANJUSHA.
+# ──────────────────────────────────────────────────────────────────────
+
+ORIENTATION_SCHEMAS = {
+    "Orientation_Videos": {
+        "columns": [
+            "video_id", "topic_id", "video_title", "phase", "duration_sec",
+            "asset_url", "version", "status",
+        ],
+        "column_details": {
+            "video_id":     {"type": "str", "nullable": False, "unique": True,
+                             "id_pattern": "VID-KS3-T{topic_code_num}-ORI"},
+            "topic_id":     {"type": "str", "nullable": False},
+            "video_title":  {"type": "str", "nullable": False},
+            "phase":        {"type": "str", "nullable": False,
+                             "enum": ["PHASE_1_ORIENTATION"]},
+            "duration_sec": {"type": "int", "nullable": False},
+            "asset_url":    {"type": "str", "nullable": True,
+                             "description": "Produced video in blob storage, not generated"},
+            "version":      {"type": "str", "nullable": False},
+            "status":       {"type": "str", "nullable": False,
+                             "enum": ["DRAFT", "GENERATED", "PENDING_REVIEW", "APPROVED"]},
+        },
+        "foreign_keys": {"topic_id": ("Topics", "topic_id")},
+        "notes": "Authored elsewhere. Written empty by this agent.",
+        "reference_row_count": 3,
+    },
+
+    "Orientation_Video_Scenes": {
+        "columns": [
+            "scene_id", "video_id", "scene_no", "scene_title", "duration_sec",
+            "visual_action", "narration_text", "on_screen_text", "direction",
+            "status",
+        ],
+        "column_details": {
+            "scene_id":       {"type": "str", "nullable": False, "unique": True,
+                               "id_pattern": "SCN-T{topic_code_num}-{nn}"},
+            "video_id":       {"type": "str", "nullable": False},
+            "scene_no":       {"type": "int", "nullable": False},
+            "scene_title":    {"type": "str", "nullable": False},
+            "duration_sec":   {"type": "int", "nullable": False},
+            "visual_action":  {"type": "str", "nullable": False},
+            "narration_text": {"type": "str", "nullable": False},
+            "on_screen_text": {"type": "str", "nullable": True},
+            "direction":      {"type": "str", "nullable": True},
+            "status":         {"type": "str", "nullable": False,
+                               "enum": ["DRAFT", "GENERATED", "PENDING_REVIEW", "APPROVED"]},
+        },
+        "foreign_keys": {"video_id": ("Orientation_Videos", "video_id")},
+        "notes": "Scene-by-scene script for an orientation video.",
+        "reference_row_count": 14,
+    },
+
+    "Orientation_Support_Cards": {
+        "columns": [
+            "support_card_id", "topic_id", "card_title", "visual_content",
+            "narration_or_text", "restriction", "status", "version",
+        ],
+        "column_details": {
+            "support_card_id":   {"type": "str", "nullable": False, "unique": True,
+                                  "id_pattern": "CARD-T{topic_code_num}-{DESCRIPTIVE-NAME}"},
+            "topic_id":          {"type": "str", "nullable": False},
+            "card_title":        {"type": "str", "nullable": False},
+            "visual_content":    {"type": "str", "nullable": False},
+            "narration_or_text": {"type": "str", "nullable": False},
+            "restriction":       {"type": "str", "nullable": True,
+                                  "description": "What this card must not introduce"},
+            "status":            {"type": "str", "nullable": False,
+                                  "enum": ["DRAFT", "GENERATED", "PENDING_REVIEW", "APPROVED"]},
+            "version":           {"type": "str", "nullable": False},
+        },
+        "foreign_keys": {"topic_id": ("Topics", "topic_id")},
+        "notes": (
+            "A question may reference one of these. The review flagged "
+            "Q-T02-015 for citing a card that did not exist; the card does "
+            "exist, our workbook simply had no table to hold it."
+        ),
+        "reference_row_count": 1,
+    },
+}
+
+TABLE_SCHEMAS.update(ORIENTATION_SCHEMAS)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# EXPORT NAMES
+# ──────────────────────────────────────────────────────────────────────
+# The platform's sheet names are snake_case; ours are TitleCase and appear in
+# a few hundred places across the code and tests. Rather than rename
+# everything, the internal name stays an identifier and the export name is
+# derived when the file is written -- the same separation already used for
+# column order, where a model declares its fields readably and the sheet has
+# its own order.
+#
+# Derived by rule rather than a hand-written map of 27 pairs, because a map
+# is a place for a typo to hide. verified_export_names() checks the rule
+# against the template.
+
+def export_name(internal: str) -> str:
+    """The sheet name the platform expects: Question_MicroSkills -> question_micro_skills."""
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", internal).lower()
+
+
+def verified_export_names() -> tuple[dict[str, str], list[str]]:
+    """Every internal name mapped to the template, and any that do not resolve.
+
+    `Topics` is expected in the unresolved list: the platform export has no
+    topics sheet, though six of its tables reference topic_id. We keep
+    generating it rather than silently dropping the learning goal and core
+    message. See QUESTIONS-FOR-MANJUSHA.
+    """
+    from openpyxl import load_workbook
+
+    from sources import SCHEMA_TEMPLATE
+    if SCHEMA_TEMPLATE is None:
+        return {}, []
+
+    available = set(load_workbook(SCHEMA_TEMPLATE).sheetnames)
+    mapped, unresolved = {}, []
+    for internal in TABLE_SCHEMAS:
+        name = export_name(internal)
+        if name in available:
+            mapped[internal] = name
+        else:
+            unresolved.append(internal)
+    return mapped, unresolved

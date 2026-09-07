@@ -16,7 +16,7 @@ from openpyxl import load_workbook
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from table_schemas import TABLE_SCHEMAS          # noqa: E402
+from table_schemas import TABLE_SCHEMAS, export_name          # noqa: E402
 from workbook_builder import (                   # noqa: E402
     HEADER_FILL,
     NON_GENERATED_SHEETS,
@@ -27,7 +27,7 @@ from workbook_builder import (                   # noqa: E402
     read_structure,
 )
 
-from sources import REFERENCE_WORKBOOK    # noqa: E402
+from sources import SCHEMA_TEMPLATE    # noqa: E402
 
 
 @pytest.fixture
@@ -39,10 +39,10 @@ def built(tmp_path):
 # Structure
 # ──────────────────────────────────────────────────────────────────────
 
-def test_writes_all_24_sheets_in_reference_order(built):
+def test_writes_all_27_sheets_in_template_order(built):
     wb = load_workbook(built)
-    assert wb.sheetnames == list(REFERENCE_SHEET_ORDER)
-    assert len(wb.sheetnames) == 24
+    assert wb.sheetnames == [export_name(s) for s in REFERENCE_SHEET_ORDER]
+    assert len(wb.sheetnames) == 27
 
 
 def test_reference_order_covers_every_schema_exactly_once():
@@ -57,7 +57,7 @@ def test_default_sheet_is_removed(built):
 def test_every_sheet_has_its_header_row_and_nothing_else(built):
     wb = load_workbook(built)
     for name in REFERENCE_SHEET_ORDER:
-        ws = wb[name]
+        ws = wb[export_name(name)]
         assert ws.max_row == 1, f"{name} has data rows"
         header = [c.value for c in ws[1]]
         assert header == list(TABLE_SCHEMAS[name]["columns"]), name
@@ -65,7 +65,7 @@ def test_every_sheet_has_its_header_row_and_nothing_else(built):
 
 def test_header_styling_matches_the_reference(built):
     wb = load_workbook(built)
-    cell = wb["Questions"]["A1"]
+    cell = wb["questions"]["A1"]
     assert cell.font.bold is True
     assert cell.font.color.rgb == "FFFFFFFF"
     assert cell.fill.fgColor.rgb == HEADER_FILL
@@ -78,12 +78,12 @@ def test_overwrites_cleanly(tmp_path):
     path = tmp_path / "empty.xlsx"
     build_empty_workbook(path)
     wb = load_workbook(path)
-    wb["Topics"].append(["junk"])
+    wb["topics"].append(["junk"])
     wb.save(path)
-    assert load_workbook(path)["Topics"].max_row == 2
+    assert load_workbook(path)["topics"].max_row == 2
 
     build_empty_workbook(path)
-    assert load_workbook(path)["Topics"].max_row == 1
+    assert load_workbook(path)["topics"].max_row == 1
 
 
 def test_creates_missing_directories(tmp_path):
@@ -98,7 +98,7 @@ def test_creates_missing_directories(tmp_path):
 def test_custom_order_is_honoured(tmp_path):
     order = list(reversed(REFERENCE_SHEET_ORDER))
     built = build_empty_workbook(tmp_path / "rev.xlsx", sheet_order=order)
-    assert load_workbook(built).sheetnames == order
+    assert load_workbook(built).sheetnames == [export_name(s) for s in order]
 
 
 def test_order_missing_a_table_is_rejected(tmp_path):
@@ -126,27 +126,42 @@ def test_duplicate_sheet_is_rejected(tmp_path):
 # ──────────────────────────────────────────────────────────────────────
 
 @pytest.mark.skipif(
-    REFERENCE_WORKBOOK is None,
+    SCHEMA_TEMPLATE is None,
     reason="reference workbook not available",
 )
 def test_generated_structure_matches_the_reference(built):
-    problems = compare_to_reference(built, REFERENCE_WORKBOOK)
+    problems = compare_to_reference(built, SCHEMA_TEMPLATE)
+    problems = [p for p in problems if p != "unexpected sheet: topics"]
     assert not problems, "\n".join(problems)
 
 
 @pytest.mark.skipif(
-    REFERENCE_WORKBOOK is None,
+    SCHEMA_TEMPLATE is None,
     reason="reference workbook not available",
 )
-def test_only_the_three_media_sheets_are_out_of_scope():
-    """If the reference gains a sheet, this fails and we notice."""
-    ref = read_structure(REFERENCE_WORKBOOK)
-    extra = set(ref) - set(TABLE_SCHEMAS)
-    assert extra == set(NON_GENERATED_SHEETS), extra
+def test_the_template_has_no_sheet_we_do_not_know_about():
+    """If the platform adds a table, this fails and we notice.
+
+    Compared on exported names, since that is what the template holds. The
+    three orientation tables used to be the odd ones out; they now have
+    schemas and are written empty, so nothing should be left over.
+    """
+    ref = read_structure(SCHEMA_TEMPLATE)
+    known = {export_name(name) for name in TABLE_SCHEMAS}
+    extra = set(ref) - known - set(NON_GENERATED_SHEETS)
+    assert extra == set(), extra
+
+
+def test_we_write_exactly_one_sheet_the_template_lacks():
+    """`topics` is deliberate; anything else would be a generator inventing a
+    table. See verify_written."""
+    ref = read_structure(SCHEMA_TEMPLATE)
+    ours = {export_name(name) for name in TABLE_SCHEMAS}
+    assert ours - set(ref) == {"topics"}
 
 
 @pytest.mark.skipif(
-    REFERENCE_WORKBOOK is None,
+    SCHEMA_TEMPLATE is None,
     reason="reference workbook not available",
 )
 def test_comparison_actually_detects_a_difference(tmp_path):
@@ -154,5 +169,5 @@ def test_comparison_actually_detects_a_difference(tmp_path):
     order = list(REFERENCE_SHEET_ORDER)
     order[0], order[1] = order[1], order[0]
     swapped = build_empty_workbook(tmp_path / "swapped.xlsx", sheet_order=order)
-    problems = compare_to_reference(swapped, REFERENCE_WORKBOOK)
+    problems = compare_to_reference(swapped, SCHEMA_TEMPLATE)
     assert any("order differs" in p for p in problems), problems
