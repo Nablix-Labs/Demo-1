@@ -88,6 +88,10 @@ InteractionType = Literal[
     "SUPPORT_REPLAY",
     "CLARIFICATION",
     "CLARIFICATION_REQUEST",
+    # Spec §11: the student's answer to "What are you finding difficult?".
+    # Not an attempt -- it grades nothing, advances nothing and must never
+    # resume the paused topic.
+    "INTERVENTION_INPUT_SUBMITTED",
     "SESSION_START",
     "SESSION_END",
 ]
