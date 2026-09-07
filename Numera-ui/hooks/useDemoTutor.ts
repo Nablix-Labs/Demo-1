@@ -18,6 +18,7 @@ import {
   getSession,
   submitCanvas,
   sendInteraction,
+  submitInterventionInput as postInterventionInput,
   endSession,
   studentId,
   questionProgress,
@@ -61,6 +62,7 @@ import { startPayloadFor } from '@/lib/sessionStart';
 import type { QuestionAnchor } from '@/lib/questionAnchors';
 import { isPhase3 } from '@/lib/phase3';
 import { resumesCheckpoint } from '@/lib/phase3Routing';
+import type { InterventionInputSubmission } from '@/components/InterventionInputModal';
 
 const apiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
@@ -1445,6 +1447,24 @@ export function useDemoTutor() {
     }
   }, [sessionId, addTranscriptMessage, addTrailEntry]);
 
+  const submitInterventionInput = useCallback(async (
+    interventionId: string,
+    input: InterventionInputSubmission,
+  ): Promise<void> => {
+    const state = useNumeraStore.getState();
+    if (!apiEnabled() || !sessionId) throw new Error('Intervention input requires an active session.');
+    const response = await postInterventionInput(
+      sessionId,
+      state.currentPhase,
+      state.activeConceptId,
+      interventionId,
+      input.selected_reason_codes,
+      input.voice_input,
+    );
+    if (isStaleTurnResponse(response)) throw new Error('Intervention input returned a stale turn.');
+    syncBackendSession(response);
+  }, [sessionId]);
+
   /**
    * End the session and capture what the Review screen needs.
    *
@@ -1484,6 +1504,7 @@ export function useDemoTutor() {
     submitVoiceTurn,
     selectOption,
     submitTeachBack,
+    submitInterventionInput,
     hint,
     explainAgain,
     explainAgainPending,

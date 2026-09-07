@@ -6,6 +6,7 @@ rename that strands the frontend fails here rather than in a browser.
 """
 
 import asyncio
+from copy import deepcopy
 
 import pytest
 from fastapi import HTTPException
@@ -124,6 +125,65 @@ def _request(session: SessionRecord) -> dict[str, object]:
             "transcript": "I cannot choose the operation.",
         },
     }
+
+
+def test_tc26_addendum_contract_normalizes_without_breaking_legacy_payloads() -> None:
+    source = _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+    question = source["phase_payload"]["question_set"]["questions"][0]
+    source["journey_state"]["phase_3_independent_practice"].update({
+        "current_question_id": question["question_id"],
+        "return_checkpoint": None,
+    })
+    source["journey_state"]["return_checkpoint"] = {
+        "topic_id": source["journey_state"]["topic_id"],
+        "phase": "PHASE_3_INDEPENDENT_PRACTICE",
+        "phase_visit_no": 3,
+        "question_position_no": 3,
+        "micro_skill_id": question["micro_skill_mappings"][0]["micro_skill_id"],
+        "checkpoint_question_id": question["question_id"],
+        "resume_policy": "SAME_QUESTION_AT_CHECKPOINT",
+    }
+    source["phase_payload"]["payload_type"] = "RESUME_SAME_INDEPENDENT_QUESTION"
+    source["routing"].pop("return_question_id", None)
+    source["routing"]["resume_question_id"] = question["question_id"]
+    source["routing"]["resume_policy"] = "SAME_QUESTION_AT_CHECKPOINT"
+
+    resumed = StudentModelSessionEventResponse.model_validate(source)
+    projected = session_service._project_for_frontend(resumed)
+    assert projected.phase_payload is not None
+    assert projected.phase_payload.payload_type == "RESUME_SAME_INDEPENDENT_QUESTION"
+    assert projected.routing.return_question_id == question["question_id"]
+    assert resumed.journey_state.return_checkpoint is not None
+
+    for reason_code in (
+        "POST_PREREQUISITE_VERIFICATION_FAILED",
+        "NO_PREREQUISITE_ROUTE_AVAILABLE",
+        "EARLIEST_TOPIC_NO_BACKWARD_ROUTE",
+    ):
+        intervention_source = deepcopy(source)
+        intervention_source["journey_state"]["intervention"] = {
+            "intervention_id": f"INT-{reason_code}",
+            "scope": "TOPIC",
+            "topic_id": source["journey_state"]["topic_id"],
+            "trigger_micro_skill_ids": [question["micro_skill_mappings"][0]["micro_skill_id"]],
+            "reason_code": reason_code,
+            "student_input_status": "REQUIRED",
+        }
+        intervention_source["phase_payload"] = {
+            "phase": "PHASE_3_INDEPENDENT_PRACTICE",
+            "payload_type": "INTERVENTION_INPUT_REQUIRED",
+            "intervention_input_request": {
+                "intervention_id": f"INT-{reason_code}",
+            },
+        }
+        intervention_source["routing"]["reason_code"] = reason_code
+        intervention_source["routing"]["next_action"] = "COLLECT_INTERVENTION_INPUT"
+        intervention_source["status"]["intervention_required"] = True
+        intervention = StudentModelSessionEventResponse.model_validate(intervention_source)
+        request = session_service._project_for_frontend(intervention).phase_payload
+        assert request is not None
+        assert request.intervention_input_request is not None
+        assert request.intervention_input_request.selection_options
 
 
 def _popup(payload: dict[str, object] | None) -> dict[str, object] | None:

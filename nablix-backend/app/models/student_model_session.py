@@ -177,10 +177,20 @@ class StudentModelRouting(BaseModel):
     # frozen checkpoint, which carries the same two facts.
     return_topic_id: str | None = None
     return_question_id: str | None = None
+    resume_question_id: str | None = None
+    resume_policy: str | None = None
+    return_resume_policy: str | None = None
     prerequisite_check_required: bool
     prerequisite_micro_skill_ids: list[str]
     content_gap_detected: bool
     missing_micro_skill_ids: list[str]
+
+    @model_validator(mode="after")
+    def normalize_checkpoint_return(self) -> "StudentModelRouting":
+        return self.model_copy(update={
+            "return_question_id": self.return_question_id or self.resume_question_id,
+            "resume_policy": self.resume_policy or self.return_resume_policy,
+        })
 
 
 class StudentModelStatus(BaseModel):
@@ -232,6 +242,7 @@ class StudentModelJourneyState(BaseModel):
     review: JourneyPhaseState
     version: int
     updated_at: str
+    return_checkpoint: Phase3Checkpoint | None = None
     intervention: StudentModelIntervention | None = None
 
 

@@ -26,11 +26,13 @@ import {
 import { rescueBlocksSubmission } from '@/lib/rescueMode';
 import { optionsMissing } from '@/lib/questionOptions';
 import QuestionDisplay from '@/components/QuestionDisplay';
+import InterventionInputModal from '@/components/InterventionInputModal';
 import StickyNote from '@/components/StickyNote';
 import PhaseGate from '@/components/PhaseGate';
 import Toolbar from '@/components/Canvas/Toolbar';
 import { speakTutor } from '@/lib/tts';
 import { cn } from '@/lib/cn';
+import { phase3Destination, phase3SourceFrom } from '@/lib/phase3Routing';
 
 const DrawingCanvas = dynamic(() => import('@/components/Canvas/DrawingCanvas'), { ssr: false });
 
@@ -56,8 +58,13 @@ export default function PracticePage() {
   const selectedOptionId = useNumeraStore((s) => s.selectedOptionId);
   const setSelectedOption = useNumeraStore((s) => s.setSelectedOption);
   const lockPhase3Attempt = useNumeraStore((s) => s.lockPhase3Attempt);
+  const backendSession = useNumeraStore((s) => s.backendSession);
   const { goStage } = useFlowNav();
   const tutor = useDemoTutor();
+  const phase3Route = phase3Destination(phase3SourceFrom(backendSession ? {
+    student_model_event: backendSession.student_model_event,
+    routing: backendSession.routing,
+  } : null));
 
   // "Review with tutor": confirm the backend is actually in Review with a
   // review to show, then move to /review. Disabled while in flight; on failure
@@ -74,6 +81,7 @@ export default function PracticePage() {
   // this reads the session and navigates only if it is genuinely ready.
   const [ending, setEnding] = useState(false);
   const [endError, setEndError] = useState<string | null>(null);
+  const [interventionSubmitted, setInterventionSubmitted] = useState(false);
   /**
    * This screen has handed the student over to review, and must never open
    * another session.
@@ -528,6 +536,24 @@ export default function PracticePage() {
           backgroundSize: '28px 28px',
         }}
       >
+        {phase3Route.kind === 'COLLECT_INTERVENTION' && !interventionSubmitted && (
+          <InterventionInputModal
+            request={phase3Route.request}
+            onSubmit={async (input) => {
+              const interventionId = phase3Route.request?.intervention_id?.trim();
+              if (!interventionId) throw new Error('Intervention request is missing its id.');
+              await tutor.submitInterventionInput(interventionId, input);
+              setInterventionSubmitted(true);
+            }}
+          />
+        )}
+        {(phase3Route.kind === 'AWAIT_INTERVENTION_REVIEW' || interventionSubmitted) && (
+          <div className="absolute inset-0 z-[90] flex items-center justify-center bg-white/90 p-6">
+            <p role="status" className="max-w-md text-center text-[15px] font-semibold text-ink">
+              Your answers were saved. Learning is paused while your teacher reviews them.
+            </p>
+          </div>
+        )}
         <div className="absolute inset-0 z-[1]">
           {/* Locked, not hidden: the student sees exactly what was submitted
               and cannot revise it afterwards (§3.3). */}

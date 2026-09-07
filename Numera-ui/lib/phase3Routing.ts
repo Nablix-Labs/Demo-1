@@ -30,15 +30,8 @@
  * Less than the spec implies. The tutor backend projects the Student Model
  * event through `PublicStudentModelEvent`
  * (nablix-backend/app/models/student_model_session.py:261), which is
- * `extra="forbid"` and carries only schema_version, request_id, processed_at,
- * journey_state (narrowed to `topic_id`) and phase_payload. `routing` and
- * `status` exist on the internal model and are NOT forwarded.
- *
- * So `payload_type` is the one signal we can rely on today, and `routing` is
- * read opportunistically for when that projection is widened. Everything is
- * optional and an unrecognised value degrades to UNKNOWN — a missing backend
- * field has become a live outage here before, and the repair chain adds
- * fourteen new reason codes to drift.
+ * `extra="forbid"`; it now forwards the narrow routing and status blocks used
+ * here. Everything remains optional so an older response degrades to UNKNOWN.
  */
 
 /** The destinations this module can recognise. */
@@ -99,12 +92,11 @@ export interface Phase3RoutingSource {
       payload_type?: string | null;
       intervention_input_request?: InterventionInputRequest | null;
     } | null;
+    status?: {
+      intervention_required?: boolean | null;
+      status_code?: string | null;
+    } | null;
   } | null;
-  /**
-   * Not forwarded by the tutor backend today (see the header). Read anyway, so
-   * that widening `PublicStudentModelEvent` is the only change needed to light
-   * up the destinations `payload_type` alone cannot express.
-   */
   routing?: {
     next_action?: string | null;
     reason_code?: string | null;
@@ -119,6 +111,15 @@ export interface Phase3RoutingSource {
   } | null;
   /** Repair cycle for display, where the backend surfaces it. */
   phase_2_guided_learning?: { repair_cycle_no?: number | null } | null;
+}
+
+/** Adapt the backend's split public projection to the routing parser. */
+export function phase3SourceFrom(src: Phase3RoutingSource | null | undefined): Phase3RoutingSource | null {
+  if (!src) return null;
+  return {
+    ...src,
+    status: src.student_model_event?.status ?? src.status,
+  };
 }
 
 function norm(v: string | null | undefined): string | null {

@@ -19,6 +19,7 @@ import type { CanvasEvent } from '@/lib/canvasMemory';
 import { useAuthStore } from '@/store/useAuthStore';
 import { allowAnonTutorCalls } from '@/lib/runtimeConfig';
 import type { Phase3ResponseFields } from '@/lib/phase3';
+import type { InterventionInputRequest } from '@/lib/phase3Routing';
 import { recordDebugCall } from '@/lib/debugJson';
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
@@ -153,6 +154,7 @@ export interface ApiError {
     | 'HTTP_ERROR'
     | 'INTERNAL_ERROR'
     | 'JOURNEY_VERSION_CONFLICT'
+    | 'INTERVENTION_REQUIRED'
     // The bearer we sent was rejected — either by this backend or by a service it
     // calls on our behalf (e.g. student_model). Observed 2026-07-26 on the first
     // CORRECT_ATTEMPT of a session: the backend posts a progress event to
@@ -253,6 +255,9 @@ export function studentFacingError(err: unknown): string | null {
   if (code === 'JOURNEY_VERSION_CONFLICT') {
     return 'Two submissions arrived together. Your work is safe—please press Check once more.';
   }
+  if (code === 'INTERVENTION_REQUIRED') {
+    return 'Learning is paused while your teacher reviews what you found difficult.';
+  }
   if (res?.status === 409) {
     // Not every 409 is the resume case. On 2026-07-29 a guided-practice turn
     // came back 409 "Student Model did not return metadata for
@@ -351,7 +356,8 @@ export type InteractionType =
   | 'SUPPORT_REPLAY'
   | 'CANVAS_SUBMISSION'
   | 'SESSION_START'
-  | 'SESSION_END';
+  | 'SESSION_END'
+  | 'INTERVENTION_INPUT_SUBMITTED';
 
 // ── Session record (returned by /session/start and GET /session/{id}) ─────────
 export interface VoiceState {
@@ -451,12 +457,29 @@ export interface SchemaPhasePayload {
   question_set: SchemaQuestionSet | null;
   orientation_bundle: SchemaOrientationBundle | null;
   review_summary?: Record<string, unknown> | null;
+  intervention_input_request?: InterventionInputRequest | null;
+}
+
+export interface StudentModelRouting {
+  next_action?: string | null;
+  reason_code?: string | null;
+  next_topic_id?: string | null;
+  next_topic_entry_phase?: string | null;
+  return_topic_id?: string | null;
+  return_question_id?: string | null;
+}
+
+export interface StudentModelStatus {
+  intervention_required?: boolean | null;
+  status_code?: string | null;
 }
 
 export interface StudentModelEvent {
   phase_payload: SchemaPhasePayload | null;
   /** Workbook topic this session runs on, e.g. 'ALG-ORI-02'. */
   journey_state: { topic_id: string };
+  routing?: StudentModelRouting | null;
+  status?: StudentModelStatus | null;
 }
 
 /** Flattened learner state the backend projects from the journey. */
@@ -554,6 +577,7 @@ export interface SessionRecord {
   phase4_review?: unknown | null;
   /** Where the student goes after this topic. See NextTopicHandoff. */
   next_topic_handoff?: NextTopicHandoff | null;
+  routing?: StudentModelRouting | null;
 }
 
 /**
@@ -1381,6 +1405,15 @@ export interface InteractionPayload {
   previous_tutor_turn_id?: string | null;
   /** Always true for a submitted voice turn — only final transcripts are sent. */
   transcript_final?: boolean;
+  intervention_id?: string;
+  topic_id?: string;
+  micro_skill_id?: string;
+  selected_reason_codes?: string[];
+  voice_input?: {
+    provided: boolean;
+    audio_ref: string | null;
+    transcript: string | null;
+  };
 }
 
 /** Supporting picture the backend asks the frontend to show (e.g. an equation
@@ -1575,6 +1608,7 @@ export interface InteractionResponse extends GuidedStateFields, Phase3ResponseFi
    */
   student_model_event?: StudentModelEvent | null;
   student_model_state?: StudentModelState | null;
+  routing?: StudentModelRouting | null;
   /** Backend's next conversational move (ASK_QUESTION, ADVANCE_TO_NEXT_QUESTION, …). */
   conversation_action?: string;
   /** Whether another student response is expected after this reply. */
@@ -1699,6 +1733,30 @@ export async function sendInteraction(payload: InteractionPayload): Promise<Inte
     }
     throw error;
   }
+}
+
+export async function submitInterventionInput(
+  sessionId: string,
+  currentPhase: string,
+  conceptId: string,
+  interventionId: string,
+  selectedReasonCodes: string[],
+  voiceInput: { provided: boolean; audio_ref: string | null; transcript: string | null },
+): Promise<InteractionResult> {
+  return sendInteraction({
+    session_id: sessionId,
+    student_id: studentId(),
+    interaction_type: 'INTERVENTION_INPUT_SUBMITTED',
+    input_source: 'CHOICE',
+    current_phase: currentPhase,
+    concept_id: conceptId,
+    question_id: 'INTERVENTION',
+    hint_count: 0,
+    turn_id: crypto.randomUUID(),
+    intervention_id: interventionId,
+    selected_reason_codes: selectedReasonCodes,
+    voice_input: voiceInput,
+  });
 }
 
 export interface RescueStepResponse {

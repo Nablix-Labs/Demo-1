@@ -47,7 +47,9 @@ class Phase3Checkpoint(BaseModel):
     phase_visit_no: int = Field(ge=1)
     question_position_no: int = Field(ge=1)
     checkpoint_question_id: NonEmptyText
-    question_usage_id: NonEmptyText
+    question_usage_id: NonEmptyText | None = None
+    phase: Literal["PHASE_3_INDEPENDENT_PRACTICE"] | None = None
+    resume_policy: Literal["SAME_QUESTION_AT_CHECKPOINT"] | None = None
 
 
 class InterventionVoiceInput(BaseModel):
@@ -77,17 +79,68 @@ class InterventionFeedback(BaseModel):
         return sorted(set(values))
 
 
+class InterventionStudentInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    selected_reason_codes: list[InterventionReason] = Field(min_length=1)
+    voice_input_provided: bool
+    voice_audio_ref: NonEmptyText | None
+    voice_transcript: NonEmptyText | None
+    submitted_at: NonEmptyText
+
+    @field_validator("selected_reason_codes")
+    @classmethod
+    def normalize_reasons(cls, values: list[InterventionReason]) -> list[InterventionReason]:
+        return sorted(set(values))
+
+
+InterventionReasonCode = Literal[
+    "AUTOMATED_REMEDIATION_EXHAUSTED",
+    "POST_PREREQUISITE_VERIFICATION_FAILED",
+    "NO_PREREQUISITE_ROUTE_AVAILABLE",
+    "EARLIEST_TOPIC_NO_BACKWARD_ROUTE",
+]
+
+
 class StudentModelIntervention(BaseModel):
     """The authoritative case, as Student Model reports it. Never public."""
 
     model_config = ConfigDict(extra="forbid")
 
     intervention_id: NonEmptyText
-    topic_id: NonEmptyText
-    micro_skill_id: NonEmptyText
-    reason_code: Literal["AUTOMATED_REMEDIATION_EXHAUSTED"]
-    state: Literal["ACTIVE", "RESOLVED"]
+    scope: Literal["TOPIC"] | None = None
+    topic_id: NonEmptyText | None = None
+    trigger_micro_skill_ids: list[NonEmptyText] = Field(default_factory=list)
+    micro_skill_id: NonEmptyText | None = None
+    reason_code: InterventionReasonCode | None = None
+    status: Literal["ACTIVE", "AWAITING_REVIEW", "RESOLVED"] | None = None
+    state: Literal["ACTIVE", "RESOLVED"] | None = None
+    student_input_status: Literal["REQUIRED", "COLLECTED"] | None = None
+    student_input: InterventionStudentInput | None = None
     feedback: InterventionFeedback | None = None
+
+    @property
+    def is_active(self) -> bool:
+        return (self.status or self.state) != "RESOLVED"
+
+    @property
+    def effective_micro_skill_id(self) -> str | None:
+        return self.trigger_micro_skill_ids[0] if self.trigger_micro_skill_ids else self.micro_skill_id
+
+    @property
+    def effective_feedback(self) -> InterventionFeedback | None:
+        if self.feedback is not None:
+            return self.feedback
+        if self.student_input is None:
+            return None
+        return InterventionFeedback(
+            selected_reason_codes=self.student_input.selected_reason_codes,
+            voice_input=InterventionVoiceInput(
+                provided=self.student_input.voice_input_provided,
+                audio_ref=self.student_input.voice_audio_ref,
+                transcript=self.student_input.voice_transcript,
+            ),
+        )
 
 
 class InterventionSelectionOption(BaseModel):
@@ -103,7 +156,7 @@ class InterventionInputRequest(BaseModel):
     selection_required: bool = True
     voice_input_enabled: bool = True
     voice_input_required: bool = False
-    selection_options: list[InterventionSelectionOption]
+    selection_options: list[InterventionSelectionOption] = Field(default_factory=list)
 
 
 def intervention_input_request(state: StudentModelIntervention) -> InterventionInputRequest:

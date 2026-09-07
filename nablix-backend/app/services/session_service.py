@@ -438,19 +438,23 @@ def _project_for_frontend(
     """
 
     phase3 = event.journey_state.phase_3_independent_practice
-    checkpoint = phase3.return_checkpoint
+    checkpoint = event.journey_state.return_checkpoint or phase3.return_checkpoint
     payload = event.phase_payload
     routing_updates: dict[str, object] = {}
     status_updates: dict[str, object] = {}
     intervention = event.journey_state.intervention
 
-    if intervention is not None and intervention.state == "ACTIVE":
+    if intervention is not None and intervention.is_active:
         # §11/§12: ask once, then hold. Submitting must not resume the student,
         # and the popup must not reopen on top of the paused screen (TC-36).
-        awaiting_review = intervention.feedback is not None
+        awaiting_review = intervention.effective_feedback is not None
         payload = (
             None
             if awaiting_review
+            else payload
+            if payload is not None
+            and payload.intervention_input_request is not None
+            and payload.intervention_input_request.selection_options
             else StudentModelPhasePayload(
                 phase="PHASE_3_INDEPENDENT_PRACTICE",
                 payload_type="INTERVENTION_INPUT_REQUIRED",
@@ -466,6 +470,10 @@ def _project_for_frontend(
         and payload.phase == "PHASE_3_INDEPENDENT_PRACTICE"
         and payload.question_set is not None
         and payload.question_set.questions
+        and payload.payload_type not in {
+            "FRESH_INDEPENDENT_QUESTION",
+            "RESUME_SAME_INDEPENDENT_QUESTION",
+        }
     ):
         # The repair chain preserves question_id and question_usage_id, so a
         # re-serve and a duplicate reply are identical on the wire. This is the
@@ -508,15 +516,23 @@ def _project_for_frontend(
 
 def _authoritative_intervention(event: StudentModelSessionEventResponse) -> StudentModelIntervention | None:
     state = event.journey_state.intervention
-    if event.routing.reason_code == "AUTOMATED_REMEDIATION_EXHAUSTED" and (
-        state is None or state.state != "ACTIVE"
+    if event.routing.reason_code in {
+        "AUTOMATED_REMEDIATION_EXHAUSTED",
+        "NO_PREREQUISITE_ROUTE_AVAILABLE",
+        "EARLIEST_TOPIC_NO_BACKWARD_ROUTE",
+    } and (
+        state is None or not state.is_active
     ):
         raise HTTPException(status_code=503, detail="Student Model terminal intervention is missing active case context.")
     if state is not None and (
-        state.topic_id != event.journey_state.topic_id
-        or (state.state == "ACTIVE" and event.journey_state.current_phase != "PHASE_3_INDEPENDENT_PRACTICE")
+        (state.topic_id is not None and state.topic_id != event.journey_state.topic_id)
+        or (state.is_active and event.journey_state.current_phase != "PHASE_3_INDEPENDENT_PRACTICE")
     ):
         raise HTTPException(status_code=503, detail="Student Model intervention does not match the topic or Phase 3 journey.")
+    if state is not None and state.is_active and state.effective_feedback is None and (
+        state.topic_id is None or state.effective_micro_skill_id is None
+    ):
+        raise HTTPException(status_code=503, detail="Student Model active intervention is missing topic or micro-skill context.")
     return state
 
 
@@ -671,7 +687,7 @@ async def start_session(
         access_token,
     )
     intervention = _authoritative_intervention(event)
-    if (intervention is not None and intervention.state == "ACTIVE") or (
+    if (intervention is not None and intervention.is_active) or (
         event.routing.content_gap_detected and event.phase_payload is None
     ):
         phase = PHASE_FROM_STUDENT_MODEL[event.journey_state.current_phase]
@@ -961,13 +977,19 @@ def _question_updates(
                 ),
             )
     current = questions[question_index]
-    checkpoint = event.journey_state.phase_3_independent_practice.return_checkpoint
+    checkpoint = (
+        event.journey_state.return_checkpoint
+        or event.journey_state.phase_3_independent_practice.return_checkpoint
+    )
     checkpoint_position: int | None = None
     if checkpoint is not None and payload.phase == "PHASE_3_INDEPENDENT_PRACTICE":
         if current.question_id == checkpoint.checkpoint_question_id:
             if (
                 checkpoint.topic_id != event.journey_state.topic_id
-                or current.question_usage_id != checkpoint.question_usage_id
+                or (
+                    checkpoint.question_usage_id is not None
+                    and current.question_usage_id != checkpoint.question_usage_id
+                )
                 or checkpoint.micro_skill_id not in {
                     mapping.micro_skill_id for mapping in current.micro_skill_mappings
                 }
@@ -1299,9 +1321,9 @@ async def _apply_schema_event(
         intervention.intervention_id != session.intervention.intervention_id
     ):
         raise HTTPException(status_code=503, detail="Student Model changed the unresolved intervention identity.")
-    if intervention is not None and intervention.state == "ACTIVE":
-        stored = session.intervention.feedback if session.intervention is not None else None
-        if stored is not None and intervention.feedback != stored:
+    if intervention is not None and intervention.is_active:
+        stored = session.intervention.effective_feedback if session.intervention is not None else None
+        if stored is not None and intervention.effective_feedback != stored:
             raise HTTPException(status_code=503, detail="Student Model discarded accepted intervention feedback.")
         event = _project_for_frontend(event)
         updated = session.model_copy(update={
@@ -1329,12 +1351,15 @@ async def _apply_schema_event(
         session.student_model_event.journey_state.phase_3_independent_practice
         if session.student_model_event is not None else None
     )
-    previous_checkpoint = previous_phase3.return_checkpoint if previous_phase3 is not None else None
+    previous_checkpoint = (
+        session.student_model_event.journey_state.return_checkpoint
+        or (previous_phase3.return_checkpoint if previous_phase3 is not None else None)
+    ) if session.student_model_event is not None else None
     incoming_phase3 = event.journey_state.phase_3_independent_practice
     if (
         previous_checkpoint is not None
         and previous_checkpoint.micro_skill_id not in incoming_phase3.verified_micro_skill_ids
-        and incoming_phase3.return_checkpoint != previous_checkpoint
+        and (event.journey_state.return_checkpoint or incoming_phase3.return_checkpoint) != previous_checkpoint
         and intervention is None
     ):
         raise HTTPException(status_code=503, detail="Student Model replaced an unresolved Phase 3 checkpoint.")
@@ -1402,7 +1427,7 @@ async def _apply_schema_event(
         else []
     )
     if payload is not None and payload.phase == "PHASE_3_INDEPENDENT_PRACTICE" and payload.question_set is not None:
-        checkpoint = event.journey_state.phase_3_independent_practice.return_checkpoint
+        checkpoint = event.journey_state.return_checkpoint or event.journey_state.phase_3_independent_practice.return_checkpoint
         checkpoint_return = (
             checkpoint is not None
             and checkpoint == previous_checkpoint
@@ -2099,16 +2124,16 @@ async def submit_intervention_input(
     # this session's interaction lock. Taking it again here deadlocks.
     session = _get_owned_session(session_id, student_id)
     active = session.intervention
-    if active is None or active.state != "ACTIVE" or (
+    if active is None or not active.is_active or (
         (intervention_id is not None and active.intervention_id != intervention_id)
         or (topic_id is not None and active.topic_id != topic_id)
-        or (micro_skill_id is not None and active.micro_skill_id != micro_skill_id)
+        or (micro_skill_id is not None and active.effective_micro_skill_id != micro_skill_id)
     ):
         raise HTTPException(status_code=409, detail="Feedback must match the active intervention, topic and micro-skill.")
     identity = json.dumps([student_id, active.topic_id, active.intervention_id])
     request_id = f"INTERVENTION_INPUT_SUBMITTED:{uuid5(NAMESPACE_URL, identity)}"
-    if active.feedback is not None:
-        if active.feedback != feedback:
+    if active.effective_feedback is not None:
+        if active.effective_feedback != feedback:
             raise HTTPException(status_code=409, detail="Intervention feedback was already submitted with different evidence.")
         return session
     stored_event = session.student_model_event
@@ -2124,7 +2149,7 @@ async def submit_intervention_input(
             student_id=session.student_id,
             topic_id=active.topic_id,
             intervention_id=active.intervention_id,
-            micro_skill_id=active.micro_skill_id,
+            micro_skill_id=active.effective_micro_skill_id,
             source_turn_id=request_id,
             expected_journey_version=stored_event.journey_state.version,
             timestamp=_schema_timestamp(),
@@ -2136,14 +2161,17 @@ async def submit_intervention_input(
     response = await get_adapters().student_model.send_session_event(pending, access_token)
     receipt = _authoritative_intervention(response)
     if receipt is None or (
-        receipt.state != "ACTIVE"
+        not receipt.is_active
         or receipt.intervention_id != active.intervention_id
-        or receipt.topic_id != active.topic_id
-        or receipt.micro_skill_id != active.micro_skill_id
-        or receipt.feedback is None
+        or (receipt.topic_id is not None and receipt.topic_id != active.topic_id)
+        or (
+            receipt.effective_micro_skill_id is not None
+            and receipt.effective_micro_skill_id != active.effective_micro_skill_id
+        )
+        or receipt.effective_feedback is None
     ):
         raise HTTPException(status_code=503, detail="Student Model did not acknowledge feedback against the active intervention.")
-    if receipt.feedback != feedback:
+    if receipt.effective_feedback != feedback:
         raise HTTPException(status_code=409, detail="Intervention feedback was already submitted with different evidence.")
     non_learning_fields = {
         "intervention", "version", "updated_at", "last_activity_at",

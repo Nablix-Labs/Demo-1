@@ -780,7 +780,7 @@ async def process_answer_with_session_event(
         )
 
     intervention = _authoritative_intervention(response)
-    if intervention is not None and intervention.state == "ACTIVE":
+    if intervention is not None and intervention.is_active:
         updated_session = await _apply_schema_event(session, response)
         return student, tutor, response, response, updated_session
 
