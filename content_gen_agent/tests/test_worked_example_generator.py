@@ -170,7 +170,7 @@ def test_the_example_carries_the_topic_and_defaults(brief, skills):
     example = _gen(brief, _payload(), skills).example
     assert example.topic_id == brief.topic_id
     assert example.phase is WorkedExamplePhase.PHASE_1_ORIENTATION
-    assert example.status is WorkedExampleStatus.APPROVED
+    assert example.status is WorkedExampleStatus.GENERATED
     assert example.version == "1.1"
 
 

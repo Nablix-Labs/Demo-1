@@ -163,7 +163,9 @@ def test_rows_carry_the_topic_provenance_and_defaults(brief, skills):
     row = _gen(brief, _payload(), skills).rows[0]
     assert row.topic_id == brief.topic_id
     assert row.source_provenance_id == "SRC-NABLIX-T01-001"
-    assert row.status is QuestionStatus.APPROVED
+    # Not APPROVED. That is a claim the maths is right, which only CG-020's
+    # structural checks and CG-021's QA pass can earn.
+    assert row.status is QuestionStatus.GENERATED
     assert row.version == "1.0"
 
 
@@ -325,7 +327,7 @@ def test_a_choice_question_with_options_is_accepted(brief, skills):
 
 
 @needs_docs
-@pytest.mark.parametrize("bad", [0, 3, "hard", None])
+@pytest.mark.parametrize("bad", [0, 4, "hard", None])
 def test_an_invalid_difficulty_is_refused(brief, skills, bad):
     payload = _payload()
     payload["questions"][0]["difficulty"] = bad
@@ -476,3 +478,219 @@ def test_a_select_all_question_is_dropped_rather_than_losing_the_topic(brief, sk
     result = _gen(brief, payload, skills=skills, strict=True, drop_invalid=True)
     assert result.is_clean
     assert len(result.rows) == len(payload["questions"]) - 1
+
+
+# ──────────────────────────────────────────────────────────────────────
+# A multi-part question labelled SHORT_RESPONSE
+#
+# From the second six-topic run. Q-T04-006 asked for three separate things
+# and was typed SHORT_RESPONSE, so the answer generator reached for
+# MULTI_PART, which that type forbids, and T04 lost all 18 of its keys.
+# ──────────────────────────────────────────────────────────────────────
+
+from question_generator import multi_part_shape   # noqa: E402
+
+REAL_T04_TEXT = (
+    "In the expression n + 4, write down:\n"
+    "- the letter used,\n"
+    "- the number used,\n"
+    "- the operation symbol used."
+)
+
+
+@pytest.mark.parametrize("text", [
+    REAL_T04_TEXT,
+    "In m + 7, identify the changing quantity, the fixed value and the operation.",
+    "For Total = n + 4, identify the variable, constant and operator, and explain each.",
+    "State the following:\n(a) the coefficient\n(b) the variable",
+])
+def test_a_multi_part_shape_is_recognised(text):
+    assert multi_part_shape(text) is not None
+
+
+@pytest.mark.parametrize("text", [
+    "Write the general rule for 3+5, 9+5, 14+5 using n.",
+    "In the expression 2x + 7, what are the two terms? List them separated by a comma.",
+    "Explain in words why the letter n in the rule n + 10 is not one fixed answer.",
+    "The rule is C = 4n, where n is hours. Explain what it tells you about 1, 2 and 5 hours.",
+    "Identify the variable in n + 4.",
+    "Given the sequence 2, 5, 8, 11, state the next term.",
+    "Write down the rule that works for every step, using n for the step number.",
+])
+def test_a_single_answer_question_is_not_recognised_as_multi_part(text):
+    """A false positive would retype a good question and produce a
+    semicolon-joined answer for something with one answer."""
+    assert multi_part_shape(text) is None
+
+
+@needs_docs
+def test_a_mislabelled_multi_part_question_is_retyped_not_dropped(brief, skills):
+    """The question is good. Only the label is wrong, so dropping it would
+    throw away real content to fix a one-word mistake."""
+    payload = _payload()
+    payload["questions"][2]["question_type"] = "SHORT_RESPONSE"
+    payload["questions"][2]["question_text"] = REAL_T04_TEXT
+
+    result = _gen(brief, payload, skills=skills)
+
+    assert result.is_clean
+    assert len(result.rows) == len(payload["questions"]), "nothing was dropped"
+    assert result.rows[2].question_type.value == "MULTI_PART_SHORT_RESPONSE"
+
+
+@needs_docs
+def test_the_retype_is_always_reported(brief, skills):
+    """A silent retype would hide that the prompt is mislabelling questions,
+    which is the thing that actually needs fixing."""
+    payload = _payload()
+    payload["questions"][2]["question_type"] = "SHORT_RESPONSE"
+    payload["questions"][2]["question_text"] = REAL_T04_TEXT
+
+    result = _gen(brief, payload, skills=skills)
+    note = next(i for i in result.issues if "retyped" in i.message)
+
+    assert not note.is_error
+    assert "MULTI_PART_SHORT_RESPONSE" in note.message
+    assert "list of parts" in note.message, "and why"
+
+
+@needs_docs
+def test_an_ordinary_short_response_is_left_alone(brief, skills):
+    result = _gen(brief, _payload(), skills=skills)
+    assert not [i for i in result.issues if "retyped" in i.message]
+    assert all(r.question_type.value == "SHORT_RESPONSE" for r in result.rows)
+
+
+@needs_docs
+def test_a_question_already_typed_multi_part_is_not_touched(brief, skills):
+    payload = _payload()
+    payload["questions"][2]["question_type"] = "MULTI_PART_SHORT_RESPONSE"
+    payload["questions"][2]["question_text"] = REAL_T04_TEXT
+    result = _gen(brief, payload, skills=skills)
+    assert not [i for i in result.issues if "retyped" in i.message]
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The question mix
+#
+# Multiple choice went 52% (reference) -> 25% -> 11% across two runs, taking
+# the share of the bank markable by exact comparison from 76% to 39%. Nothing
+# caught it because every individual question was fine; only the proportions
+# were wrong.
+# ──────────────────────────────────────────────────────────────────────
+
+from question_generator import MIN_CHOICE_SHARE   # noqa: E402
+
+
+def test_the_prompt_states_the_reference_mix():
+    text = " ".join(SYSTEM_PROMPT.split())
+    assert "USE ROUGHLY THIS MIX" in text
+    assert "AT LEAST A THIRD of your questions must be SINGLE_CHOICE" in text
+
+
+def test_the_prompt_explains_why_the_mix_matters():
+    """A rule with no reason behind it gets dropped the moment it is
+    inconvenient. The cost is real: a model call per answer, sometimes wrong."""
+    text = " ".join(SYSTEM_PROMPT.split())
+    assert "costs a model call every time" in text
+    assert "An option letter is a string comparison" in text
+
+
+def test_the_prompt_no_longer_offers_short_response_as_the_escape_hatch():
+    """The old wording said to ask it as a SHORT_RESPONSE, which is exactly
+    the drift it then produced."""
+    text = " ".join(SYSTEM_PROMPT.split())
+    assert "keep it SINGLE_CHOICE and make each option a complete candidate set" in text
+
+
+@needs_docs
+def test_a_bank_with_too_few_choice_questions_warns(brief, skills):
+    """The 11% run. Every question was individually valid."""
+    payload = _payload(n=12)
+    for i, q in enumerate(payload["questions"]):
+        q["question_type"] = "SINGLE_CHOICE" if i == 0 else "SHORT_RESPONSE"
+        if i == 0:
+            q["question_text"] = "Which is the rule? a) n+5 b) 5n c) n-5"
+
+    result = _gen(brief, payload, skills=skills)
+
+    assert result.is_clean, "a warning, not a refusal"
+    warning = next(i for i in result.issues if "SINGLE_CHOICE" in i.message
+                   and "reference is about half" in i.message)
+    assert "1 of 12" in warning.message
+    assert "8%" in warning.message
+
+
+@needs_docs
+def test_a_bank_matching_the_reference_mix_does_not_warn(brief, skills):
+    payload = _payload(n=12)
+    for i, q in enumerate(payload["questions"]):
+        if i < 6:
+            q["question_type"] = "SINGLE_CHOICE"
+            q["question_text"] = f"Which rule is right {i}? a) n+5 b) 5n c) n-5"
+        else:
+            q["question_type"] = "SHORT_RESPONSE"
+
+    result = _gen(brief, payload, skills=skills)
+    assert not [i for i in result.issues if "reference is about half" in i.message]
+
+
+@needs_docs
+def test_the_floor_sits_below_the_target_not_at_it(brief, skills):
+    """A topic whose content genuinely suits written answers should not be
+    nagged for coming in a little under half."""
+    assert MIN_CHOICE_SHARE < 0.5
+    payload = _payload(n=12)
+    for i, q in enumerate(payload["questions"]):
+        if i < 5:                       # 5/12 = 42%, under half, over the floor
+            q["question_type"] = "SINGLE_CHOICE"
+            q["question_text"] = f"Which rule is right {i}? a) n+5 b) 5n c) n-5"
+        else:
+            q["question_type"] = "SHORT_RESPONSE"
+    result = _gen(brief, payload, skills=skills)
+    assert not [i for i in result.issues if "reference is about half" in i.message]
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The reviewed spec: difficulty 3, and nothing claiming to be APPROVED
+# ──────────────────────────────────────────────────────────────────────
+
+@needs_docs
+def test_difficulty_three_is_accepted(brief, skills):
+    """New in the review. The approved reference uses only 1 and 2, so this
+    rule comes from the document rather than from the data."""
+    payload = _payload()
+    payload["questions"][0]["difficulty"] = 3
+    result = _gen(brief, payload, skills)
+    assert result.is_clean
+    assert result.rows[0].difficulty == 3
+
+
+@needs_docs
+def test_all_three_difficulties_survive_to_the_rows(brief, skills):
+    payload = _payload(n=9)
+    for i, q in enumerate(payload["questions"]):
+        q["difficulty"] = (i % 3) + 1
+    result = _gen(brief, payload, skills)
+    assert {r.difficulty for r in result.rows} == {1, 2, 3}
+
+
+def test_the_prompt_defines_all_three_difficulty_levels():
+    text = " ".join(SYSTEM_PROMPT.split())
+    assert "difficulty is 1, 2 or 3" in text
+    assert "COGNITIVE DEMAND, not bigger numbers" in text
+    assert "Use all three." in text
+
+
+def test_the_prompt_warns_against_bigger_numbers_as_difficulty():
+    """The failure mode the review names explicitly."""
+    assert "Substituting n = 47 instead of n = 4 is the same question" in \
+        " ".join(SYSTEM_PROMPT.split())
+
+
+@needs_docs
+def test_generated_questions_are_not_marked_approved(brief, skills):
+    """Nothing the agent produces may claim review it has not had."""
+    result = _gen(brief, _payload(), skills)
+    assert all(r.status.value == "GENERATED" for r in result.rows)
+    assert not any(r.status.value == "APPROVED" for r in result.rows)

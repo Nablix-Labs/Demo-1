@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from models import (                                 # noqa: E402
     Phase,
+    QuestionMicroSkillRow,
     QuestionRole,
     QuestionRow,
     QuestionStatus,
@@ -96,9 +97,9 @@ def test_splitting_across_no_skills_is_refused():
 
 def test_the_first_listed_skill_is_primary_by_default():
     """CG-011 asks the model to list the main skill first."""
-    rows, issues = build_skill_map({"Q-1": ["T01.M2", "T01.M5"]})
-    assert issues == []
-    assert [r.is_primary for r in rows] == [True, False]
+    rows, _ = build_skill_map({"Q-1": ["T01.M2", "T01.M5"]})
+    assert [r.micro_skill_id for r in rows] == ["T01.M2"]
+    assert [r.is_primary for r in rows] == [True]
 
 
 def test_the_primary_can_be_named_explicitly():
@@ -128,16 +129,17 @@ def test_a_repeated_skill_is_refused():
 
 def test_the_invariants_are_checked_on_the_built_rows_not_assumed():
     """The reference violates one of them, so trusting the build is not enough."""
-    rows, _ = build_skill_map({"Q-1": ["T01.M1", "T01.M2"]})
+    rows, _ = build_skill_map({"Q-1": ["T01.M1"], "Q-2": ["T01.M2"]})
     assert check_skill_map(rows) == []
 
-    rows[1].is_primary = True                       # two primaries
+    rows.append(QuestionMicroSkillRow(question_id="Q-1", micro_skill_id="T01.M2",
+                                      weight=1.0, is_primary=True))
     problems = check_skill_map(rows)
     assert any("2 primary skills" in i.message for i in problems)
 
 
 def test_weights_that_do_not_sum_are_caught_by_the_check():
-    rows, _ = build_skill_map({"Q-1": ["T01.M1", "T01.M2"]})
+    rows, _ = build_skill_map({"Q-1": ["T01.M1"]})
     rows[0].weight = 0.9
     assert any("not 1.00" in i.message for i in check_skill_map(rows))
 
@@ -258,7 +260,7 @@ def test_a_clean_build_produces_both_tables():
     )
     assert result.is_clean
     assert len(result.usage) == 1
-    assert len(result.skill_map) == 2
+    assert len(result.skill_map) == 1, "one mapping per question under the new design"
 
 
 def test_strict_raises_and_names_the_problem():
@@ -344,3 +346,54 @@ def test_every_reference_question_has_weights_summing_to_one():
 
     bad = {q: round(t, 3) for q, t in grouped.items() if abs(t - 1.0) > 1e-6}
     assert bad == {}, bad
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The revised mapping design: one skill, primary, full weight
+#
+# Under fractional weights a question about powers gave partial credit to a
+# prerequisite it merely used along the way, so a student could look
+# competent at a skill they were never asked about. Evidence now updates only
+# the skill the question was written to assess.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_a_question_maps_to_exactly_one_micro_skill():
+    rows, _ = build_skill_map({"Q-1": ["T01.M2", "T01.M5", "T01.M7"]})
+    assert len(rows) == 1
+
+
+def test_the_single_mapping_is_primary_at_full_weight():
+    rows, _ = build_skill_map({"Q-1": ["T01.M2", "T01.M5"]})
+    assert rows[0].is_primary is True
+    assert rows[0].weight == 1.0
+
+
+def test_no_secondary_mapping_is_ever_produced():
+    rows, _ = build_skill_map(
+        {"Q-1": ["T01.M1", "T01.M2"], "Q-2": ["T01.M3", "T01.M4", "T01.M5"]},
+    )
+    assert not [r for r in rows if not r.is_primary]
+    assert {r.weight for r in rows} == {1.0}
+
+
+def test_dropping_the_other_skills_is_reported():
+    """Silently discarding what the model said would hide a question that is
+    assessing something other than what it was written for."""
+    _, issues = build_skill_map({"Q-1": ["T01.M2", "T01.M5"]}, topic_code="T01")
+    note = next(i for i in issues if i.field == "Q-1")
+    assert not note.is_error
+    assert "mapped to T01.M2 alone" in note.message
+    assert "T01.M5" in note.message, "the dropped skill has to be named"
+
+
+def test_a_single_skill_question_produces_no_note():
+    """The common case under the new design should be silent."""
+    _, issues = build_skill_map({"Q-1": ["T01.M2"]}, topic_code="T01")
+    assert issues == []
+
+
+def test_the_named_primary_still_wins_over_the_first_listed():
+    rows, _ = build_skill_map(
+        {"Q-1": ["T01.M2", "T01.M5"]}, primary={"Q-1": "T01.M5"},
+    )
+    assert [r.micro_skill_id for r in rows] == ["T01.M5"]
