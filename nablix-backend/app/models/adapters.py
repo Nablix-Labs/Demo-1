@@ -20,6 +20,7 @@ from app.models.guided_learning import (
     GeneratedQuestionRubric,
     GuidedStudentState,
     ScaffoldEvaluationContext,
+    StudentContribution,
     TutorCanvasAction,
 )
 
@@ -275,6 +276,7 @@ class TutorResult(BaseModel):
     answer_value_confirmed: bool = False
     reasoning_complete: bool = False
     guided_student_state: GuidedStudentState | None = None
+    contribution: StudentContribution | None = None
     selected_error_code: str | None = None
     generated_question_rubric: GeneratedQuestionRubric | None = None
     active_teaching_objective: ActiveTeachingObjective | None = None

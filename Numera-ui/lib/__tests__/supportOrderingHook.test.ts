@@ -220,9 +220,9 @@ describe('every reply path shows support before the message', () => {
     await act(async () => { await tutor?.answer('12 + 5', CTX); });
 
     const said = useNumeraStore.getState().transcript.filter((m) => m.role === 'ai').map((m) => m.text);
-    expect(said[0]).toContain('Is it addition or multiplication?');
-    expect(said[1]).toBe('Not quite — think about what changes each time.');
-    // Still available for the Need help? replay.
+    expect(said).toEqual(['Not quite — think about what changes each time.']);
+    // The support remains available in its designated surface and is spoken
+    // with this reply, rather than becoming a duplicate chat message.
     expect(useNumeraStore.getState().lastHintText).toContain('addition or multiplication');
   });
 

@@ -12,6 +12,7 @@ from app.models.guided_learning import (
     GeneratedQuestionRubric,
     GuidedStudentState,
     GuidedTeachingState,
+    StudentContribution,
     TutorCanvasAction,
 )
 
@@ -323,6 +324,7 @@ class TutorResponse(StrictSchema):
     generated_question_rubric: GeneratedQuestionRubric | None = None
     active_teaching_objective: ActiveTeachingObjective | None = None
     guided_teaching_state: GuidedTeachingState | None = None
+    contribution: StudentContribution | None = None
     scaffold_original_answer_correct: StrictBool = False
     independent_outcome: IndependentOutcome | None = None
     independent_success: StrictBool | None = None

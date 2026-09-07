@@ -117,7 +117,7 @@ def guided_evaluation_schema() -> dict[str, object]:
     required = schema.get("required")
     if not isinstance(properties, dict) or not isinstance(required, list):
         raise AdapterError("openai_ai_engine", "Guided evaluation schema is malformed.")
-    schema["required"] = [*required, "write_instruction", "canvas_intentions"]
+    schema["required"] = [*required, "write_instruction", "canvas_intentions", "contribution"]
     return schema
 
 
@@ -494,7 +494,10 @@ class OpenAIAIEngineClient:
     ) -> ScaffoldStepEvaluation:
         content = self._request_guided_json(
             name="scaffold_step_evaluation",
-            schema=ScaffoldStepEvaluation.model_json_schema(),
+            schema={
+                **ScaffoldStepEvaluation.model_json_schema(),
+                "required": list(ScaffoldStepEvaluation.model_fields),
+            },
             system_prompt=system_prompt,
             user_payload={
                 "scaffold": context.model_dump(),

@@ -279,6 +279,7 @@ def tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:
         answer_value_confirmed=response.answer_value_confirmed,
         reasoning_complete=response.reasoning_complete,
         guided_student_state=response.guided_student_state,
+        contribution=response.contribution,
         selected_error_code=response.selected_error_code,
         generated_question_rubric=response.generated_question_rubric,
         active_teaching_objective=response.active_teaching_objective,

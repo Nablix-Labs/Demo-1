@@ -144,6 +144,8 @@ class GuidedTeachingState(GuidedLearningModel):
     demonstrated_reasoning_ids: list[str] = Field(default_factory=list)
     evidence_ledger: list[GuidedEvidenceClaim] = Field(default_factory=list)
     last_turn_evidence: list[GuidedEvidenceClaim] = Field(default_factory=list)
+    identified_difficulty: str | None = None
+    explained_ideas: list[str] = Field(default_factory=list)
 
 
 class GuidedTeachingPlanStep(GuidedLearningModel):
@@ -387,7 +389,43 @@ def inactivity_policy() -> InactivityPolicy:
     )
 
 
+class StudentContribution(GuidedLearningModel):
+    """Semantic assessment of this turn, not of accumulated lesson evidence."""
+
+    kind: Literal[
+        "MATHEMATICAL_ATTEMPT", "ACKNOWLEDGEMENT", "EXPLANATION_REQUEST",
+        "UNCLEAR_INPUT", "EXPRESSED_DIFFICULTY",
+    ]
+    assessment: Literal["NOT_ASSESSED", "CORRECT", "INCORRECT", "INCOMPLETE"]
+    error_category: Literal[
+        "CALCULATION", "OPERATION_SIGN", "VARIABLE_CONSTANT",
+        "EXPRESSION_STRUCTURE", "REASONING", "OTHER",
+    ] | None
+    error_description: str | None = Field(max_length=240)
+    identified_difficulty: str | None = Field(max_length=240)
+    learner_question: str | None = Field(max_length=240)
+    explained_idea: str | None = Field(max_length=240)
+    generated_support_text: str | None = Field(max_length=280)
+    support_relevance: Literal["NOT_NEEDED", "MATCHED", "UNMAPPED", "MISMATCHED"]
+
+    @model_validator(mode="after")
+    def validate_assessment(self) -> StudentContribution:
+        if self.kind != "MATHEMATICAL_ATTEMPT" and self.assessment != "NOT_ASSESSED":
+            raise ValueError("Only an understood mathematical attempt may be assessed.")
+        if self.assessment == "INCORRECT":
+            if self.error_category is None or not self.error_description:
+                raise ValueError("An incorrect attempt requires a specific mathematical error.")
+            if self.support_relevance == "NOT_NEEDED":
+                raise ValueError("An incorrect attempt must enter support selection.")
+            if self.generated_support_text is not None and self.support_relevance not in {"UNMAPPED", "MISMATCHED"}:
+                raise ValueError("Generated support is only permitted when authored support is unavailable or mismatched.")
+        elif self.error_category is not None or self.support_relevance != "NOT_NEEDED" or self.generated_support_text is not None:
+            raise ValueError("A turn without an incorrect claim cannot request corrective support.")
+        return self
+
+
 class GuidedEvaluation(GuidedLearningModel):
+    contribution: StudentContribution | None = None
     student_state: GuidedStudentState
     newly_confirmed_concept_ids: list[str]
     preserved_concept_ids: list[str]
@@ -422,6 +460,7 @@ class ScaffoldEvaluationContext(GuidedLearningModel):
 
 
 class ScaffoldStepEvaluation(GuidedLearningModel):
+    contribution: StudentContribution | None = None
     step_satisfied: StrictBool
     original_answer_correct: StrictBool
     demonstrated_fact: str | None
