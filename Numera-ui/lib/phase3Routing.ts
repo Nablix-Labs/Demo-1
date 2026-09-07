@@ -25,13 +25,29 @@
  * the checkpoint, which must hand the canvas back. `payload_type` is the only
  * thing that tells them apart, so it is what this reads.
  *
- * ── What actually reaches the browser ──────────────────────────────────────
+ * ── Where each signal actually lives ───────────────────────────────────────
  *
- * Less than the spec implies. The tutor backend projects the Student Model
- * event through `PublicStudentModelEvent`
- * (nablix-backend/app/models/student_model_session.py:261), which is
- * `extra="forbid"`; it now forwards the narrow routing and status blocks used
- * here. Everything remains optional so an older response degrades to UNKNOWN.
+ * All three now arrive (Chirudeva, 7 Sep 2026), but not in one place, so this
+ * reads both:
+ *
+ *   `payload_type`  on `student_model_event.phase_payload`. The only one that
+ *                   ever survived the public projection, and still the one
+ *                   consulted first.
+ *   `routing`       published TWICE — on `student_model_event` as asked, and
+ *                   again at the response root, because the root is where this
+ *                   module was already reading it.
+ *   `status`        on `student_model_event` ONLY. The root name is taken:
+ *                   `SessionRecord.status` is "started" and
+ *                   `InteractionResponse.status` is DUPLICATE_TURN and friends,
+ *                   so overloading it would have broken every existing caller.
+ *
+ * Root wins where both carry `routing`, and they are the same object by
+ * construction. Reading both is not belt-and-braces: `status` has exactly one
+ * home, and a build that reads it at the root would silently never see it.
+ *
+ * Everything stays optional and an unrecognised value degrades to UNKNOWN — a
+ * missing backend field has become a live outage here before, and the repair
+ * chain adds fourteen new reason codes to drift.
  */
 
 /** The destinations this module can recognise. */
@@ -76,6 +92,15 @@ export interface InterventionInputRequest {
   voice_input_enabled?: boolean | null;
   voice_input_required?: boolean | null;
   selection_options?: InterventionSelectionOption[] | null;
+  /**
+   * The case's own topic and micro-skill, if the backend names them.
+   *
+   * Not in the §11 shape as written, and read here because the submission is
+   * validated against both (409 on a mismatch) and the frontend cannot derive
+   * either one honestly. Absent, they are simply not sent.
+   */
+  topic_id?: string | null;
+  micro_skill_id?: string | null;
 }
 
 /**
@@ -86,45 +111,64 @@ export interface InterventionInputRequest {
  * record — three shapes that carry the student model event in the same place
  * and have drifted from each other before.
  */
+export interface Phase3Routing {
+  next_action?: string | null;
+  reason_code?: string | null;
+  next_topic_id?: string | null;
+  next_topic_entry_phase?: string | null;
+  return_topic_id?: string | null;
+  return_question_id?: string | null;
+}
+
+export interface Phase3Status {
+  intervention_required?: boolean | null;
+  status_code?: string | null;
+}
+
 export interface Phase3RoutingSource {
   student_model_event?: {
     phase_payload?: {
       payload_type?: string | null;
       intervention_input_request?: InterventionInputRequest | null;
     } | null;
-    status?: {
-      intervention_required?: boolean | null;
-      status_code?: string | null;
-    } | null;
+    /** The event's own copy. Identical to the root one by construction. */
+    routing?: Phase3Routing | null;
+    /** `status` has no root form — this is its only home. */
+    status?: Phase3Status | null;
   } | null;
-  routing?: {
-    next_action?: string | null;
-    reason_code?: string | null;
-    next_topic_id?: string | null;
-    next_topic_entry_phase?: string | null;
-    return_topic_id?: string | null;
-    return_question_id?: string | null;
-  } | null;
-  status?: {
-    intervention_required?: boolean | null;
-    status_code?: string | null;
-  } | null;
+  /** The root copy, which is where this module already read it. */
+  routing?: Phase3Routing | null;
+  /**
+   * Never sent at the root today — `SessionRecord.status` and
+   * `InteractionResponse.status` already own that name and mean something else
+   * entirely. Kept on the type so that if a differently-named root block ever
+   * lands, one line here is the whole change.
+   */
+  status?: Phase3Status | null;
   /** Repair cycle for display, where the backend surfaces it. */
   phase_2_guided_learning?: { repair_cycle_no?: number | null } | null;
-}
-
-/** Adapt the backend's split public projection to the routing parser. */
-export function phase3SourceFrom(src: Phase3RoutingSource | null | undefined): Phase3RoutingSource | null {
-  if (!src) return null;
-  return {
-    ...src,
-    status: src.student_model_event?.status ?? src.status,
-  };
 }
 
 function norm(v: string | null | undefined): string | null {
   const t = v?.trim().toUpperCase();
   return t ? t : null;
+}
+
+/**
+ * The routing block, from whichever of its two homes carries it.
+ *
+ * Root first because that is where an interaction and a session reply publish
+ * it; the event's copy is what a stored session record hands back. They agree
+ * where both exist, so the order only decides which object is returned, never
+ * which destination.
+ */
+export function phase3Routing(src: Phase3RoutingSource | null | undefined): Phase3Routing | null {
+  return src?.routing ?? src?.student_model_event?.routing ?? null;
+}
+
+/** The status block. Published on the event only — see the header. */
+export function phase3Status(src: Phase3RoutingSource | null | undefined): Phase3Status | null {
+  return src?.student_model_event?.status ?? src?.status ?? null;
 }
 
 /**
@@ -138,7 +182,8 @@ function norm(v: string | null | undefined): string | null {
  */
 export function phase3Destination(src: Phase3RoutingSource | null | undefined): Phase3Destination {
   const payload = src?.student_model_event?.phase_payload ?? null;
-  const routing = src?.routing ?? null;
+  const routing = phase3Routing(src);
+  const status = phase3Status(src);
   const payloadType = norm(payload?.payload_type);
   const nextAction = norm(routing?.next_action);
 
@@ -148,8 +193,7 @@ export function phase3Destination(src: Phase3RoutingSource | null | undefined): 
   if (
     payloadType === 'INTERVENTION_INPUT_REQUIRED'
     || nextAction === 'COLLECT_INTERVENTION_INPUT'
-    || (src?.status?.intervention_required === true
-      && norm(routing?.next_action) !== 'AWAIT_INTERVENTION_REVIEW')
+    || (status?.intervention_required === true && nextAction !== 'AWAIT_INTERVENTION_REVIEW')
   ) {
     return { kind: 'COLLECT_INTERVENTION', request: payload?.intervention_input_request ?? null };
   }

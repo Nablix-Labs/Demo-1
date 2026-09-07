@@ -139,6 +139,13 @@ describe('every submission hands the floor back', () => {
   });
 
   it('hands back after every reply it speaks', () => {
-    expect(count('takeFloorForReply()')).toBe(count('closeMicForSubmission()'));
+    // submitInterventionInput is the exemption, and it is exempt because it
+    // speaks nothing. It is not a turn in the lesson: it files what the student
+    // says is hard on a topic the backend has already paused, and §11 is
+    // explicit that it resumes no learning. It closes the mic (the popup does
+    // its own listening, and two open mics is the bug) and reopens it on
+    // failure, so both invariants above still bind it — but taking a reply
+    // floor for a reply that is never spoken would hold the floor forever.
+    expect(count('takeFloorForReply()')).toBe(count('closeMicForSubmission()') - 1);
   });
 });
