@@ -389,6 +389,15 @@ def inactivity_policy() -> InactivityPolicy:
     )
 
 
+class GuidedComparisonRow(GuidedLearningModel):
+    expression: str = Field(min_length=1, max_length=120)
+    annotation: str = Field(min_length=1, max_length=180)
+
+
+class GuidedWorkedPresentation(GuidedLearningModel):
+    steps: list[GuidedComparisonRow] = Field(min_length=2, max_length=6)
+
+
 class StudentContribution(GuidedLearningModel):
     """Semantic assessment of this turn, not of accumulated lesson evidence."""
 
@@ -406,10 +415,15 @@ class StudentContribution(GuidedLearningModel):
     learner_question: str | None = Field(max_length=240)
     explained_idea: str | None = Field(max_length=240)
     generated_support_text: str | None = Field(max_length=280)
+    generated_visual_rows: list[GuidedComparisonRow] | None = Field(default=None, min_length=2, max_length=4)
     support_relevance: Literal["NOT_NEEDED", "MATCHED", "UNMAPPED", "MISMATCHED"]
 
     @model_validator(mode="after")
     def validate_assessment(self) -> StudentContribution:
+        if self.generated_visual_rows is not None and (
+            self.assessment != "INCORRECT" or self.support_relevance not in {"UNMAPPED", "MISMATCHED"}
+        ):
+            raise ValueError("Generated comparison rows require an incorrect attempt with unavailable or mismatched support.")
         if self.kind != "MATHEMATICAL_ATTEMPT" and self.assessment != "NOT_ASSESSED":
             raise ValueError("Only an understood mathematical attempt may be assessed.")
         if self.assessment == "INCORRECT":
@@ -457,6 +471,7 @@ class ScaffoldEvaluationContext(GuidedLearningModel):
     step_prompt: str
     expected_response_criterion: str
     completed_step_ids: list[str]
+    next_step_prompt: str | None = None
 
 
 class ScaffoldStepEvaluation(GuidedLearningModel):

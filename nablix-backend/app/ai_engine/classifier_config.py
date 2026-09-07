@@ -226,6 +226,7 @@ class GuidedLearningConfig(StrictSchema):
     single_call_enabled: StrictBool
     response_aware_enabled: StrictBool
     response_aware_system_prompt: str
+    response_aware_worked_prompt: str
     deterministic_turn_resolution_enabled: StrictBool
     guided_turn_maximum_retries: int = Field(ge=0)
     scaffold_evaluation_maximum_retries: int = Field(ge=0)

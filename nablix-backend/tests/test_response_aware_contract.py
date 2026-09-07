@@ -4,14 +4,18 @@ These tests validate the service contract, not the quality of live interpretatio
 """
 import pytest
 
-from app.ai_engine.classifier import normalized_guided_objective, validate_guided_evaluation
+from app.ai_engine.classifier import validate_guided_evaluation
 from app.ai_engine.classifier_config import load_classifier_rules
 from app.core.exceptions import AdapterError
 from app.models.adapters import TutorResult
 from app.models.guided_learning import (
     ActiveTeachingObjective, GeneratedConcept, GeneratedQuestionRubric,
     GuidedEvaluation, StudentContribution,
+    GuidedRescue, TutorSolved, GuidedWorkedPresentation,
 )
+from app.models.session import SessionRecord
+from app.services import interaction_service
+from app.services.rescue_presentation import active_rescue_from
 from app.services.interaction_service import (
     _guided_attempt_event_type, _is_support_failure, _is_unresolved_scaffold_turn,
 )
@@ -117,9 +121,59 @@ def test_incorrect_expression_keeps_valid_evidence_and_moves_to_an_unresolved_co
         tutor_message_voice="Compare the number after the plus sign in 3 plus 5, 9 plus 5, and 14 plus 5.",
     )
 
-    objective = normalized_guided_objective(evaluation, previous)
+    rules = load_classifier_rules()
+    rules = rules.model_copy(update={"guided_learning": rules.guided_learning.model_copy(
+        update={"response_aware_enabled": True},
+    )})
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-001", required_concepts=[
+            GeneratedConcept(concept_id="ANSWER_SELECTION", description="Uses the variable", required=True),
+            GeneratedConcept(concept_id="FIXED_AMOUNT", description="Matches the repeated amount", required=True),
+        ], completion_rule="ALL_REQUIRED_CONCEPTS", cache_key="replay", prompt_version="replay",
+    )
+    validated = validate_guided_evaluation(
+        evaluation, rubric, previous, [{"error_code": "ERROR_FIXED_AMOUNT"}], rules,
+    )
+    objective = validated.next_objective
 
     assert objective is not None
     assert objective.confirmed_concept_ids == ["ANSWER_SELECTION"]
     assert objective.missing_concept_ids == ["FIXED_AMOUNT"]
     assert objective.target_concept_ids == ["FIXED_AMOUNT"]
+
+
+def test_generated_walkthrough_is_persistable_and_rejects_early_reveal(monkeypatch: pytest.MonkeyPatch) -> None:
+    rules = load_classifier_rules()
+    rules = rules.model_copy(update={"guided_learning": rules.guided_learning.model_copy(
+        update={"response_aware_enabled": True},
+    )})
+    rescue = GuidedRescue(
+        rescue_type="TUTOR_SOLVED", micro_skill_id="T01.M1", parallel_example=None,
+        tutor_solved=TutorSolved(explanation="Combine the parts.", final_answer="n + 5",
+                                 answer_steps=["Compare the examples.", "n + 5"]),
+    )
+    active = active_rescue_from("Q-T01-001", rescue, "n + 5", "TEST-WORKED")
+    session = SessionRecord.model_construct(question_id="Q-T01-001", current_question="3 + 5, 9 + 5, 14 + 5")
+    presentation = GuidedWorkedPresentation.model_validate({"steps": [
+        {"expression": "3 + 5, 9 + 5, 14 + 5", "annotation": "The first numbers differ while the added amount repeats."},
+        {"expression": "n + 5", "annotation": "The letter represents each starting number and five is added."},
+    ]})
+
+    class PresentationClient:
+        def write_guided_worked_presentation(self, support: dict[str, object], system_prompt: str) -> GuidedWorkedPresentation:
+            assert support["authorised_support"] == rescue.model_dump()
+            assert system_prompt == rules.guided_learning.response_aware_worked_prompt
+            return presentation
+
+    monkeypatch.setattr(interaction_service, "build_openai_ai_engine_client", lambda settings: PresentationClient())
+    updated = interaction_service._response_aware_worked_rescue(session, active, rescue, "n + 5", rules)
+    assert updated is not None
+    assert updated.steps[-1] == "n + 5\nThe letter represents each starting number and five is added."
+    assert updated.current_step_index == 1
+    assert len(updated.steps) == 2
+    presentation = GuidedWorkedPresentation.model_validate({"steps": [
+        {"expression": "n + 5", "annotation": "This is the answer."},
+        {"expression": "n + 5", "annotation": "Five is added to the starting value."},
+    ]})
+    with pytest.raises(AdapterError, match="before authorisation"):
+        interaction_service._response_aware_worked_rescue(session, active, rescue, "n + 5", rules)

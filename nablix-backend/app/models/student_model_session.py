@@ -3,6 +3,8 @@ from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.models.guided_learning import GuidedComparisonRow
+
 
 
 StudentModelPhase = Literal[
@@ -317,6 +319,8 @@ class GuidedAttemptEvent(MutatingSessionEventBase):
     support_used: SupportUsed | None = None
     error_code: str | None = None
     generated_support_text: str | None = Field(default=None, min_length=1, max_length=280)
+    support_relevance: Literal["MATCHED", "UNMAPPED", "MISMATCHED"] | None = None
+    generated_visual_rows: list[GuidedComparisonRow] | None = None
 
 
 class GuidedSupportEvent(MutatingSessionEventBase):

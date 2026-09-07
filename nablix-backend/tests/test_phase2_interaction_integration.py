@@ -5,6 +5,8 @@ from fastapi.testclient import TestClient
 
 from app.adapters import provider
 from app.adapters.student_model import StudentModelServiceAdapter
+from app.adapters.tutor_engine import TutorEngineServiceAdapter
+from app.models.adapters import TutorEngineRequest, TutorResult
 from app.ai_engine import classifier
 from app.ai_engine.schemas import (
     ExplainAgainRequest,
@@ -241,28 +243,18 @@ def test_text_duplicate_and_stale_turns_do_not_mutate_state() -> None:
     assert stored.json()["attempt_count"] == first_body["attempt_count"]
 
 
-def test_duplicate_turn_repeats_the_response_without_new_openai_work(
+def test_duplicate_turn_repeats_the_response_without_new_tutor_work(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
 
-    class _CountingClient:
-        def build_tutor_message(self, **kwargs: object) -> OpenAITutorMessage:
-            del kwargs
-            calls.append("build_tutor_message")
-            return OpenAITutorMessage(
-                tutor_message="Look at the support shown and try the next step.",
-                tutor_message_voice_optimised=(
-                    "Look at the support shown and try the next step."
-                ),
-                confidence=0.9,
-            )
+    original = TutorEngineServiceAdapter._respond
 
-    monkeypatch.setattr(
-        interaction_service,
-        "build_openai_ai_engine_client",
-        lambda settings: _CountingClient(),
-    )
+    def counted_response(adapter: TutorEngineServiceAdapter, request: TutorEngineRequest) -> TutorResult:
+        calls.append("tutor_response")
+        return original(adapter, request)
+
+    monkeypatch.setattr(TutorEngineServiceAdapter, "_respond", counted_response)
 
     student_id = "ST152"
     session = _start(student_id)
@@ -277,7 +269,8 @@ def test_duplicate_turn_repeats_the_response_without_new_openai_work(
     first = client.post("/interaction", json=request)
     assert first.status_code == 200, first.text
     calls_after_first = len(calls)
-    # Keeps the comparison below honest: the first turn really does call OpenAI.
+    # Observe the active tutor entry point; the retired support writer is no
+    # longer called by ordinary turns, and this suite deliberately uses no API.
     assert calls_after_first > 0
 
     duplicate = client.post("/interaction", json=request)

@@ -426,6 +426,8 @@ def classify_scaffold_response(
     contribution = result.contribution if rules.guided_learning.response_aware_enabled else None
     if rules.guided_learning.response_aware_enabled and contribution is None:
         raise AdapterError("openai_ai_engine", "Scaffold evaluation is missing its contribution assessment.")
+    if contribution is not None and result.confidence < rules.guided_learning.confidence_threshold:
+        raise AdapterError("openai_ai_engine", "Scaffold contribution confidence is below the configured threshold.")
     explanation_requested = (
         contribution.assessment == "NOT_ASSESSED"
         if contribution is not None
@@ -449,6 +451,8 @@ def classify_scaffold_response(
         )
         else None
     )
+    if contribution is not None and tutor_message_override is None:
+        raise AdapterError("openai_ai_engine", "Scaffold response reveals the active answer before authorisation.")
     logger.info(
         "scaffold_step_evaluated",
         extra={
@@ -3477,6 +3481,10 @@ def classify_guided_learning_response(
                 "Guided turn evaluation failed without a validated response.",
             )
     if rules.guided_learning.response_aware_enabled:
+        logger.info("response_aware_model_calls", extra={
+            "question_id": request.question_id, "model_call_count": model_call_count,
+            "component": "guided_turn_evaluation",
+        })
         return build_guided_tutor_response(
             request, rules, safety_check, rubric, evaluation,
             evaluation.next_objective,
@@ -4479,6 +4487,11 @@ def guided_tutor_message_reveal_reason(
         )
     ):
         return "GENERATED_SUPPORT_REVEAL"
+    if evaluation.contribution is not None:
+        for row in evaluation.contribution.generated_visual_rows or []:
+            row_text = f"{row.expression} {row.annotation}"
+            if contains_answer_reveal(row_text, request.correct_answer, rules) or guided_message_reveals_fixed_amount_for_mismatched_rule(row_text, request):
+                return "GENERATED_VISUAL_REVEAL"
     return None
 
 
@@ -5672,6 +5685,8 @@ def validate_response_aware_evidence(
     allowed_codes = {item.get("error_code") for item in allowed_errors}
     if evaluation.selected_error_code is not None and evaluation.selected_error_code not in allowed_codes:
         raise AdapterError("openai_ai_engine", "Contribution selected an error code outside the supplied catalog.")
+    if contribution.support_relevance == "MATCHED" and evaluation.selected_error_code is None:
+        raise AdapterError("openai_ai_engine", "Matched support requires a supplied error code.")
     if contribution.assessment == "NOT_ASSESSED":
         if new_ids or contradicted or evaluation.selected_error_code is not None:
             raise AdapterError("openai_ai_engine", "A non-attempt cannot add mathematical evidence or an error code.")
@@ -5692,13 +5707,14 @@ def validate_response_aware_evidence(
     if incorrect and not missing:
         raise AdapterError("openai_ai_engine", "An incorrect attempt cannot simultaneously complete all required evidence.")
     selected = evaluation.next_objective
+    target_ids = [
+        concept_id for concept_id in (selected or objective).target_concept_ids
+        if concept_id in missing
+    ]
     next_objective = None if not missing else (selected or objective).model_copy(update={
         "confirmed_concept_ids": sorted(confirmed),
         "missing_concept_ids": sorted(missing),
-        "target_concept_ids": [
-            concept_id for concept_id in (selected or objective).target_concept_ids
-            if concept_id in missing
-        ],
+        "target_concept_ids": target_ids or sorted(contradicted & missing) or sorted(missing),
     })
     return evaluation.model_copy(update={
         "student_state": "WRONG" if incorrect else "CORRECT" if not missing else "PARTIAL",
@@ -6019,6 +6035,11 @@ def build_guided_tutor_response(
             "answer_assessment": contribution.assessment if contribution else None,
             "error_category": contribution.error_category if contribution else None,
             "support_relevance": contribution.support_relevance if contribution else None,
+            "prompt_similarity": round(maximum_recent_tutor_message_similarity(evaluation.tutor_message, request), 3),
+            "repeated_question": maximum_recent_tutor_message_similarity(evaluation.tutor_message, request)
+                >= rules.guided_learning.tutor_message_similarity_threshold,
+            "clarification_requested": bool(contribution and contribution.learner_question),
+            "explanation_recorded": bool(contribution and contribution.explained_idea),
             "current_evidence_ids": evaluation.newly_confirmed_concept_ids,
             "contradicted_evidence_ids": evaluation.contradicted_concept_ids,
             "question_id": request.question_id,

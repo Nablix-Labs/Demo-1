@@ -1,0 +1,89 @@
+cases:
+  - id: contextual_yes
+    question: "Is 2 + 3 equal to 5?"
+    answer: "yes"
+    prior: "Is 2 + 3 equal to 5?"
+    input: "yes"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: CORRECT
+  - id: m7_wrong_role
+    question: "In m + 7, identify the changing part and the fixed value."
+    answer: "m changes and 7 is fixed"
+    prior: "Which part of m + 7 can take different values?"
+    input: "7 changes and m is fixed"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: INCORRECT
+  - id: repeated_wrong_amount
+    question: "3 + 5, 9 + 5, 14 + 5. Use n for the starting number. Write the general rule."
+    answer: "n + 5"
+    prior: "You used n for the starting number. Compare the amount after the plus sign in the examples with your n+6."
+    input: "I said already, the fixed amount is 6"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: INCORRECT
+  - id: acknowledgement
+    question: "3 + 5, 9 + 5, 14 + 5. Use n for the starting number. Write the general rule."
+    answer: "n + 5"
+    prior: "Take your time and compare the examples."
+    input: "okay"
+    source: TEXT
+    kind: ACKNOWLEDGEMENT
+    assessment: NOT_ASSESSED
+  - id: explanation
+    question: "3 + 5, 9 + 5, 14 + 5. Use n for the starting number. Write the general rule."
+    answer: "n + 5"
+    prior: "Write a general rule."
+    input: "What does general rule mean?"
+    source: TEXT
+    kind: EXPLANATION_REQUEST
+    assessment: NOT_ASSESSED
+  - id: transcription
+    question: "3 + 5, 9 + 5, 14 + 5. Use n for the starting number. Write the general rule."
+    answer: "n + 5"
+    prior: "Which amount repeats in these examples?"
+    input: "the centus six"
+    source: VOICE
+    kind: UNCLEAR_INPUT
+    assessment: NOT_ASSESSED
+  - id: wrong_expression
+    question: "3 + 5, 9 + 5, 14 + 5. Use n for the starting number. Write the general rule."
+    answer: "n + 5"
+    prior: "Write your general rule."
+    input: "okay, its n+6"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: INCORRECT
+  - id: mixed_question
+    question: "3 + 5, 9 + 5, 14 + 5. Use n for the starting number. Write the general rule."
+    answer: "n + 5"
+    prior: "Compare your rule with the examples."
+    input: "Why is my n+6 wrong?"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: INCORRECT
+  - id: partial
+    question: "3 + 5, 9 + 5, 14 + 5. Use n for the starting number. Write the general rule."
+    answer: "n + 5"
+    prior: "What do you notice?"
+    input: "n is the changing starting number"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: INCOMPLETE
+  - id: difficulty
+    question: "Explain the expression m + 7."
+    answer: "a changing quantity m with seven added"
+    prior: "What does this expression represent?"
+    input: "I don't understand what represents means"
+    source: VOICE
+    kind: null
+    assessment: NOT_ASSESSED
+  - id: correct_expression
+    question: "3 + 5, 9 + 5, 14 + 5. Use n for the starting number. Write the general rule."
+    answer: "n + 5"
+    prior: "Write your general rule."
+    input: "n+5"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: CORRECT

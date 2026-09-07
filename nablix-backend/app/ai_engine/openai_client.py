@@ -44,6 +44,7 @@ from app.models.guided_learning import (
     ScaffoldEvaluationContext,
     ScaffoldStepEvaluation,
     GuidedTutorContext,
+    GuidedWorkedPresentation,
 )
 from app.models.student_model_session import AnswerSpec, QuestionType
 
@@ -365,6 +366,20 @@ class OpenAIAIEngineClient:
                 "prompt_version": prompt_version,
             }
         )
+
+    def write_guided_worked_presentation(
+        self, support: dict[str, object], system_prompt: str,
+    ) -> GuidedWorkedPresentation:
+        content = self._request_guided_json(
+            name="guided_worked_presentation",
+            schema=GuidedWorkedPresentation.model_json_schema(),
+            system_prompt=system_prompt,
+            user_payload=support,
+        )
+        try:
+            return GuidedWorkedPresentation.model_validate(content)
+        except ValidationError as error:
+            raise AdapterError("openai_ai_engine", f"Invalid worked presentation: {error}") from error
 
     def evaluate_guided_turn(
         self,
