@@ -14,6 +14,7 @@ from app.models.adapters import (
 )
 from app.models.canvas import CanvasQuestionMemory, CanvasSubmissionRecord
 from app.models.phase4_review import Phase4ReviewResponse
+from app.models.remediation import InterventionFeedback, StudentModelIntervention
 from app.models.fields import (
     ConceptId,
     InputSource,
@@ -36,7 +37,9 @@ from app.models.guided_learning import (
     inactivity_policy,
 )
 from app.models.student_model_session import (
+    InterventionInputSubmittedEvent,
     PublicStudentModelEvent,
+    PublicStudentModelRouting,
     StudentModelPhase,
     QuestionType,
     StudentModelCoreState,
@@ -409,10 +412,29 @@ class SessionRecord(BaseModel):
     next_topic_handoff: NextTopicHandoff | None = None
     final_turn_receipt: FinalTurnReceipt | None = None
     session_summary: SessionSummary | None = None
+    # Internal only. Everything the browser routes on is projected onto
+    # student_model_event (payload_type, intervention_input_request, routing,
+    # status) so there is one vocabulary, not two.
+    intervention: StudentModelIntervention | None = None
+    pending_intervention_input: InterventionInputSubmittedEvent | None = None
+    content_gap_detected: bool = False
 
 
 class SessionResponse(SessionRecord):
     model_config = ConfigDict(from_attributes=True)
+
+    # Numera-ui/lib/phase3Routing.ts reads `routing` here, at the root, beside
+    # student_model_event -- not only inside it. `status` cannot join it: the
+    # name is already taken by the session's own status.
+    routing: PublicStudentModelRouting | None = None
+    intervention: StudentModelIntervention | None = Field(default=None, exclude=True)
+    pending_intervention_input: InterventionInputSubmittedEvent | None = Field(default=None, exclude=True)
+
+    @model_validator(mode="after")
+    def publish_routing(self) -> "SessionResponse":
+        if self.routing is None and self.student_model_event is not None:
+            object.__setattr__(self, "routing", self.student_model_event.routing)
+        return self
 
     correct_answer: str | None = Field(default=None, exclude=True)
     active_guided_rescue: ActiveGuidedRescue | None = Field(default=None, exclude=True)

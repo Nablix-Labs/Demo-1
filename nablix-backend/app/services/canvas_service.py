@@ -66,6 +66,8 @@ from app.services.interaction_service import (
 )
 from app.services.session_service import (
     _get_owned_session,
+    require_learning_active,
+    intervention_response_updates,
     cache_interaction_response,
     final_turn_receipt_for,
     interaction_payload_fingerprint_for,
@@ -301,8 +303,10 @@ async def submit_canvas(
                     "status": "DUPLICATE_TURN",
                     "attempt_increment": 0,
                     "retry_safe": True,
+                    **intervention_response_updates(session),
                 }
             )
+    require_learning_active(session)
     validate_canvas_payload(request.strokes, request.canvas_events)
     session = await _initialize_restored_schema_phase(
         session,

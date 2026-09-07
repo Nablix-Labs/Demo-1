@@ -3,12 +3,8 @@
 /**
  * /dev-screens/intervention — the Phase 3 difficulty popup on a fixture.
  *
- * The backend half does not reach the browser yet: `intervention_input_request`
- * would be dropped by `PublicStudentModelEvent`, which is `extra="forbid"` and
- * carries no such field (nablix-backend/app/models/student_model_session.py:246).
- * So this is how the popup is reviewed and demoed until that projection is
- * widened — same arrangement as /dev-screens/phase4, and under /dev-screens,
- * which AppFrame already treats as pre-auth and full-bleed.
+ * The live practice screen now mounts this component from the backend's public
+ * Phase 3 projection. This fixture remains the quickest isolated UI check.
  *
  * Two fixtures because the difference is invisible from inside the component
  * and is exactly what §11 turns on:

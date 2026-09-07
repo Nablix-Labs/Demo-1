@@ -27,6 +27,7 @@ from app.models.fields import (
     TurnId,
 )
 from app.models.question_anchor import QuestionTextAnchor
+from app.models.remediation import InterventionReason, InterventionVoiceInput
 from app.models.guided_learning import (
     ActiveScaffold,
     GuidedRescue,
@@ -47,6 +48,7 @@ from app.models.session import (
 )
 from app.models.student_model_session import (
     PublicStudentModelEvent,
+    PublicStudentModelRouting,
     QuestionType,
     StudentModelCoreState,
     SupportUsed,
@@ -92,6 +94,14 @@ class InteractionRequest(BaseModel):
     conversation_history: list[ConversationMessage] = Field(default_factory=list)
     idle_duration_ms: int | None = Field(default=None, ge=0)
     nudge_id: TurnId | None = None
+    # INTERVENTION_INPUT_SUBMITTED only (spec §11, TC-36). topic_id and
+    # micro_skill_id are echoed back from the active case; the backend checks
+    # them rather than trusting them.
+    intervention_id: str | None = None
+    topic_id: str | None = None
+    micro_skill_id: str | None = None
+    selected_reason_codes: list[InterventionReason] | None = None
+    voice_input: InterventionVoiceInput | None = None
     timestamp: str | None = None
 
     @model_validator(mode="after")
@@ -109,6 +119,16 @@ class InteractionRequest(BaseModel):
             raise ValueError("nudge_id is required for NUDGE_PRESENTED.")
         if self.interaction_type == "OPTION_SELECTED" and self.selected_option_id is None:
             raise ValueError("selected_option_id is required for OPTION_SELECTED.")
+        # §11 requires at least one selection, and the codes are the only
+        # thing a reviewer can act on -- so an empty list is a validation
+        # error, not an empty case note.
+        if (self.interaction_type == "INTERVENTION_INPUT_SUBMITTED") != bool(
+            self.selected_reason_codes
+        ):
+            raise ValueError(
+                "selected_reason_codes is required for, and only for, "
+                "INTERVENTION_INPUT_SUBMITTED."
+            )
         if self.interaction_type == "TEACH_BACK_SUBMISSION" and self.text_input is None:
             raise ValueError("text_input is required for TEACH_BACK_SUBMISSION.")
         if self.interaction_type in system_interactions and self.previous_tutor_turn_id is None:
@@ -117,7 +137,13 @@ class InteractionRequest(BaseModel):
             )
         if self.interaction_type == "CLARIFICATION_REQUEST" and self.input_source != "VOICE":
             raise ValueError("CLARIFICATION_REQUEST is only valid for VOICE input.")
-        if self.input_source == "CHOICE" and self.selected_option_id is None:
+        if (
+            self.input_source == "CHOICE"
+            and self.selected_option_id is None
+            # The §11 popup is CHOICE input whose choices are reason codes,
+            # not a question's options (TC-36).
+            and self.interaction_type != "INTERVENTION_INPUT_SUBMITTED"
+        ):
             raise ValueError("selected_option_id is required for CHOICE input.")
         return self
 
@@ -182,6 +208,9 @@ class InteractionResponse(BaseModel):
     session_summary: SessionSummary | None
     debug: dict[str, object] | None = None
     student_model_event: PublicStudentModelEvent | None = None
+    # Read at the root by Numera-ui/lib/phase3Routing.ts. Withheld on silent
+    # Phase 3 turns for the same reason routing_reason_code is.
+    routing: PublicStudentModelRouting | None = None
     student_model_state: StudentModelCoreState | None = None
     guided_student_state: GuidedStudentState | None = None
     active_teaching_objective: ActiveTeachingObjective | None = None
@@ -204,6 +233,7 @@ class InteractionResponse(BaseModel):
     consecutive_stuck_count: int = Field(default=0, ge=0)
     wrong_attempt_count: int = Field(default=0, ge=0)
     intervention_triggered: bool = False
+    content_gap_detected: bool = False
     active_scaffold: ActiveScaffold | None = None
     guided_rescue: GuidedRescue | None = None
     prerequisite_repair: PrerequisiteRepair | None = None
