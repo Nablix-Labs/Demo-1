@@ -3423,6 +3423,7 @@ def classify_guided_learning_response(
                 rules,
             )
             if rules.guided_learning.production_boundary_enabled:
+                evaluation = redact_untrusted_response_aware_fields(evaluation)
                 evaluation = write_redacted_response_aware_message(
                     evaluation,
                     request,
@@ -3978,6 +3979,28 @@ def write_redacted_response_aware_message(
     if rejection is not None:
         raise AdapterError("openai_ai_engine", f"Redacted tutor wording rejected: {rejection}.")
     return rewritten
+
+
+def redact_untrusted_response_aware_fields(
+    evaluation: GuidedEvaluation,
+) -> GuidedEvaluation:
+    """Remove evaluator prose before it can enter the learner-facing path."""
+
+    contribution = evaluation.contribution
+    if contribution is None:
+        return evaluation
+    explained_idea = (
+        contribution.explained_idea
+        if contribution.kind == "EXPLANATION_REQUEST"
+        else None
+    )
+    redacted_contribution = contribution.model_copy(update={
+        "error_description": None,
+        "explained_idea": explained_idea,
+        "generated_support_text": None,
+        "generated_visual_rows": None,
+    })
+    return evaluation.model_copy(update={"contribution": redacted_contribution})
 
 
 def guided_fact_budget_context(
@@ -4633,7 +4656,10 @@ def guided_message_reveals_active_roles(
 ) -> bool:
     """Keep role teaching from silently supplying unresolved active-expression facts."""
 
-    expression = _expression_parts(request.question)
+    canonical_answer = (
+        request.answer_spec.canonical_answer if request.answer_spec is not None else ""
+    )
+    expression = _expression_parts(canonical_answer) or _expression_parts(request.question)
     if expression is None:
         return False
     variable, _, fixed_value = expression

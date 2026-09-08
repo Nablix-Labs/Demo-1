@@ -55,6 +55,7 @@ from app.models.guided_learning import (
     ScaffoldEvaluationContext,
     ScaffoldStepEvaluation,
     GuidedCanvasEvidence,
+    StudentContribution,
 )
 
 
@@ -1531,6 +1532,59 @@ def test_writer_cannot_reveal_the_correct_fixed_amount_while_correcting_a_rule()
         objective,
         load_classifier_rules(),
     ) == "FIXED_AMOUNT_REVEAL"
+
+
+def test_production_boundary_rejects_unresolved_expression_roles_from_answer_contract() -> None:
+    request = _topic1_request("7 changes")
+    objective = ActiveTeachingObjective(
+        objective_type="EXPLAIN_CONCEPT",
+        target_concept_ids=["GENERAL_RULE"],
+        confirmed_concept_ids=[],
+        missing_concept_ids=["GENERAL_RULE"],
+    )
+
+    assert classifier.guided_message_reveals_active_roles(
+        "m changes while 7 stays the same.", request, objective,
+    )
+
+
+def test_production_boundary_discards_evaluator_generated_prose() -> None:
+    contribution = StudentContribution(
+        kind="MATHEMATICAL_ATTEMPT",
+        assessment="INCORRECT",
+        error_category="VARIABLE_CONSTANT",
+        error_description="m changes and 7 is fixed.",
+        identified_difficulty=None,
+        learner_question=None,
+        explained_idea="m changes and 7 is fixed.",
+        generated_support_text="m changes and 7 is fixed.",
+        generated_visual_rows=[
+            {"expression": "m + 7", "annotation": "m changes."},
+            {"expression": "m + 7", "annotation": "7 is fixed."},
+        ],
+        support_relevance="UNMAPPED",
+    )
+    evaluation = GuidedEvaluation(
+        contribution=contribution,
+        student_state="WRONG",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=["GENERAL_RULE"],
+        selected_error_code=None,
+        confidence=0.9,
+        next_objective=None,
+        tutor_message="unused",
+        tutor_message_voice="unused",
+    )
+
+    redacted = classifier.redact_untrusted_response_aware_fields(evaluation)
+
+    assert redacted.contribution is not None
+    assert redacted.contribution.error_description is None
+    assert redacted.contribution.explained_idea is None
+    assert redacted.contribution.generated_support_text is None
+    assert redacted.contribution.generated_visual_rows is None
 
 
 def test_stuck_writer_reply_must_keep_the_controller_task() -> None:
