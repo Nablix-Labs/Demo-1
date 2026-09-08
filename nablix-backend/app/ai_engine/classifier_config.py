@@ -225,6 +225,8 @@ class GuidedLearningConfig(StrictSchema):
     model_supports_reasoning_effort: StrictBool
     single_call_enabled: StrictBool
     response_aware_enabled: StrictBool
+    production_boundary_enabled: StrictBool
+    response_aware_writer_system_prompt: str
     response_aware_system_prompt: str
     response_aware_scaffold_prompt: str
     response_aware_worked_prompt: str

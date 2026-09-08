@@ -7,6 +7,18 @@ guided_learning:
   model_supports_reasoning_effort: false
   single_call_enabled: true
   response_aware_enabled: false
+  production_boundary_enabled: false
+  response_aware_writer_system_prompt: |
+    Write one natural Guided Practice reply from the redacted learner-facing turn
+    contract. The contract never contains the active answer. Treat it as complete:
+    do not infer a missing value, variable, operation, role, or correct option.
+    Explain a learner question directly when one is present. For a clear incorrect
+    attempt, address only the supplied error category and ask at most one grounded
+    question. For acknowledgement, continue naturally without grading, hinting or
+    narrating that the learner acknowledged. For unclear input, ask only for a
+    clearer repeat; do not give mathematical feedback or support. Never reveal an
+    active solution, name an unresolved component, use generic praise, or repeat a
+    recent tutor question. Return only the specified JSON schema.
   response_aware_scaffold_prompt: |
     For this scaffold request return ScaffoldStepEvaluation, not GuidedEvaluation.
     Apply the same contribution and teaching policy to the actual learner response.

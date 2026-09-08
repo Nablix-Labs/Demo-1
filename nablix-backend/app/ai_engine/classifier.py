@@ -3375,6 +3375,9 @@ def classify_guided_learning_response(
     model_call_count = 0
     guided_tutor_context = guided_tutor_context_for(request, rubric, objective)
     maximum_turn_retries = (
+        0
+        if rules.guided_learning.production_boundary_enabled
+        else
         rules.guided_learning.response_aware_turn_maximum_retries
         if rules.guided_learning.response_aware_enabled
         else rules.guided_learning.guided_turn_maximum_retries
@@ -3419,6 +3422,15 @@ def classify_guided_learning_response(
                 allowed_errors,
                 rules,
             )
+            if rules.guided_learning.production_boundary_enabled:
+                evaluation = write_redacted_response_aware_message(
+                    evaluation,
+                    request,
+                    rubric,
+                    objective,
+                    openai_client,
+                    rules,
+                )
             contribution_rejection = (
                 response_aware_contribution_rejection_reason(evaluation, request, rules)
                 if rules.guided_learning.response_aware_enabled
@@ -3886,6 +3898,56 @@ def write_deterministic_guided_follow_up(
         "openai_ai_engine",
         f"Guided wording remained invalid after one retry: {retry_reason}.",
     )
+
+
+def write_redacted_response_aware_message(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+    openai_client: OpenAIAIEngineClient,
+    rules: ClassifierRulesConfig,
+) -> GuidedEvaluation:
+    """Write from validated learner-visible state, never from the canonical answer."""
+
+    contribution = evaluation.contribution
+    if contribution is None:
+        raise AdapterError("openai_ai_engine", "Response-aware wording requires a validated contribution.")
+    writer = openai_client.write_guided_fact_budget_message
+    context = {
+        "question": request.question,
+        "student_response": request.student_input,
+        "contribution_kind": contribution.kind,
+        "assessment": contribution.assessment,
+        "error_category": contribution.error_category,
+        "learner_question": contribution.learner_question,
+        "identified_difficulty": contribution.identified_difficulty,
+        "explained_idea": contribution.explained_idea,
+        "demonstrated_concept_ids": evaluation.newly_confirmed_concept_ids,
+        "remaining_concept_ids": objective.missing_concept_ids,
+        "authorised_support": support_context_text(
+            request.phase_2_prompt_context.current_support
+        ) if request.phase_2_prompt_context and request.phase_2_prompt_context.current_support else None,
+        "recent_tutor_questions": [
+            message.content for message in request.conversation_history[-4:]
+            if message.role == "assistant"
+        ],
+        "answer_reveal_allowed": False,
+    }
+    message = writer(
+        system_prompt=rules.guided_learning.response_aware_writer_system_prompt,
+        wording_context=context,
+    )
+    rewritten = evaluation.model_copy(update={
+        "tutor_message": message.tutor_message,
+        "tutor_message_voice": message.tutor_message_voice_optimised,
+    })
+    rejection = response_aware_message_rejection_reason(
+        rewritten, request, rubric, objective, rules,
+    )
+    if rejection is not None:
+        raise AdapterError("openai_ai_engine", f"Redacted tutor wording rejected: {rejection}.")
+    return rewritten
 
 
 def guided_fact_budget_context(
