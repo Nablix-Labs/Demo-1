@@ -8865,9 +8865,9 @@ def test_guided_model_experiment_assignment_is_stable_per_session() -> None:
 
     selected = classifier.openai_model_for_request(settings, request)
     assert classifier.openai_model_for_request(settings, request) == selected
-    assert selected == "gpt-4o-mini-2024-07-18"
+    assert selected == load_classifier_rules().guided_learning.model
 
     disabled = settings.model_copy(
         update={"openai_ai_engine_experiment_percentage": 0}
     )
-    assert classifier.openai_model_for_request(disabled, request) == "gpt-4o-mini-2024-07-18"
+    assert classifier.openai_model_for_request(disabled, request) == load_classifier_rules().guided_learning.model

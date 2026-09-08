@@ -3,8 +3,8 @@ confidence:
   safety_response: 0.99
   standard_response: 0.95
 guided_learning:
-  model: "gpt-4o-mini-2024-07-18"
-  model_supports_reasoning_effort: false
+  model: "gpt-5.6-terra"
+  model_supports_reasoning_effort: true
   assessment_model: "gpt-5.6-terra"
   assessment_model_supports_reasoning_effort: true
   assessment_reasoning_effort: "low"
