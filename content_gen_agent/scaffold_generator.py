@@ -57,6 +57,13 @@ from validation import Severity, ValidationIssue
 #: exactly 4.
 MIN_STEPS, MAX_STEPS = 3, 5
 
+#: What the approved content actually does. All 12 of its scaffolds have four
+#: steps -- not an average, the same number every time. Offering "3 to 5" and
+#: nothing else got 5 in every scaffold of the 9 September run, which is the
+#: same failure as the optional third hint: a range is read as a licence to
+#: take its ceiling.
+TYPICAL_STEPS = 4
+
 #: Only one scaffold per question in the template, so there is nothing to
 #: rank. Kept explicit because the column exists and would otherwise be blank.
 DEFAULT_PRIORITY = 1
@@ -96,8 +103,16 @@ no markdown.
   ]
 }}
 
-One scaffold per micro-skill listed below. Between {MIN_STEPS} and {MAX_STEPS}
-steps each.
+One scaffold per micro-skill listed below.
+
+HOW MANY STEPS. Every scaffold in the approved content has exactly FOUR. Not
+a range they happened to land in: all twelve of them, four steps each. Write
+{TYPICAL_STEPS} unless the method genuinely has fewer or more parts, in which
+case {MIN_STEPS} to {MAX_STEPS} is allowed.
+
+Do not reach for {MAX_STEPS} because it is permitted. A step that exists to
+fill the count is a step the student has to read and gets nothing from, and
+the last one usually turns into "now write the answer", which is not a step.
 
 Rules:
 

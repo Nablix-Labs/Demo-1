@@ -37,6 +37,7 @@ from scaffold_generator import (                    # noqa: E402
     MAX_STEPS,
     MIN_STEPS,
     SYSTEM_PROMPT,
+    TYPICAL_STEPS,
     ScaffoldError,
     build_user_prompt,
     generate_scaffolds,
@@ -124,6 +125,28 @@ def _prompt_text() -> str:
 # ──────────────────────────────────────────────────────────────────────
 # The prompt
 # ──────────────────────────────────────────────────────────────────────
+
+def test_the_prompt_anchors_on_the_number_the_reference_actually_uses():
+    """All 12 approved scaffolds have exactly four steps -- not an average,
+    the same number every time. Offering "3 to 5" and nothing else got 5 in
+    every scaffold of the 9 September run: a range is read as a licence to
+    take its ceiling, the same failure as the optional third hint."""
+    text = _prompt_text()
+    assert "exactly FOUR" in text
+    assert f"Write {TYPICAL_STEPS} unless" in text
+    assert f"Do not reach for {MAX_STEPS} because it is permitted" in text
+
+
+def test_the_typical_count_sits_inside_the_permitted_range():
+    assert MIN_STEPS <= TYPICAL_STEPS <= MAX_STEPS
+
+
+def test_the_range_is_still_allowed():
+    """Anchoring is not narrowing. A method with three parts should get three
+    steps, not a padded fourth."""
+    text = _prompt_text()
+    assert f"{MIN_STEPS} to {MAX_STEPS} is allowed" in text
+
 
 def test_the_prompt_says_a_scaffold_breaks_thinking_into_steps():
     """Not: solve it and show the answer."""

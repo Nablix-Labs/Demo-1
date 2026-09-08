@@ -78,6 +78,12 @@ LEVEL_FOR_HINT_TYPE = {
 #: "The Third one is optional" -- and the template only has 4 of them.
 REQUIRED_HINT_TYPES = (HintType.ATTENTION, HintType.CONCEPT_REMINDER)
 
+#: How often a PARTIAL_STEP hint is warranted, above which the run says so.
+#: The approved content gives one to 4 misconceptions in 25, which is 16 per
+#: cent; the threshold is set above that rather than at it, because the point
+#: is to catch "nearly all of them", not to police a target.
+MAX_PARTIAL_STEP_SHARE = 0.4
+
 #: Every cue in the template repeats this. It is a house style for the image
 #: model, not a judgement, so it is not asked for on every call.
 NEGATIVE_PROMPT = (
@@ -106,12 +112,28 @@ object and nothing else. No prose, no markdown.
     {"misconception_id": "MIS-T01-ADD-AS-MULTIPLY",
      "hint_type": "CONCEPT_REMINDER",
      "content": "Adding the same amount every time is repeated addition, not multiplication by that amount."}
+  ],
+  "needs_partial_step": [
+    {"misconception_id": "MIS-T01-WRITE-TERM-BACKWARDS",
+     "content": "Start by writing the number that stays the same: + 4.",
+     "why": "The student knows a letter varies but still cannot start writing
+             the expression, so pointing at the idea again changes nothing."}
   ]
 }
 
-Every misconception below needs at least an ATTENTION hint and a
-CONCEPT_REMINDER hint. A PARTIAL_STEP hint is optional; add one only where a
-student would still be stuck after the first two.
+"hints" holds EXACTLY TWO hints for every misconception: one ATTENTION and
+one CONCEPT_REMINDER. Never put a PARTIAL_STEP hint in "hints".
+
+"needs_partial_step" is a SEPARATE and SHORT list, for the few misconceptions
+where a student who has read both hints would still not know what to do next.
+In the approved content, 4 misconceptions out of 25 have one. If you are
+listing most of them here, you are giving away part of the answer by default,
+which is the one thing this level must not become.
+
+Before adding to it, ask: after the CONCEPT_REMINDER, does the student now
+know what to do and merely have to do it? If yes, they do not need this.
+"why" must name what they would still not know. "It might help" is not a
+reason.
 
 THE THREE LEVELS GIVE AWAY DIFFERENT AMOUNTS. That is the whole point, because
 the tutor escalates through them:
@@ -201,7 +223,25 @@ def generate_hints(
         HINT_SYSTEM_PROMPT, build_hint_prompt(misconceptions),
         purpose=f"CG-017 hints for {topic_code}",
     )
-    entries = payload.get("hints")
+
+    # The two required hints come from "hints"; the optional third comes from
+    # a separate list. Splitting the response is the whole fix.
+    #
+    # The prompt used to say "a PARTIAL_STEP hint is optional; add one only
+    # where a student would still be stuck". On 9 September 22 misconceptions
+    # out of 22 got one. Manjusha's guidance was explicit -- "The Third one is
+    # optional" -- and the approved content uses it 4 times in 25.
+    #
+    # A permission written into prose is read as a default. This is the third
+    # time on this project: "leave it out if it does not match" gave us an
+    # empty error map for a whole topic. Latitude in a prompt gets used in
+    # full. So the third level now costs the model an extra, separate act
+    # with a reason attached, rather than being one more row in a list it is
+    # already writing.
+    entries = list(payload.get("hints") or [])
+    for extra in (payload.get("needs_partial_step") or []):
+        if isinstance(extra, dict):
+            entries.append({**extra, "hint_type": HintType.PARTIAL_STEP.value})
 
     def drop(where: str, message: str) -> None:
         issues.append(ValidationIssue(
@@ -254,6 +294,24 @@ def generate_hints(
         links.append(MisconceptionHintRow(
             misconception_id=misconception_id, hint_id=hint_id,
             sequence_order=level,
+        ))
+
+    # -- escalation must stay rare -------------------------------------
+    #
+    # Reported rather than enforced. Dropping the surplus would mean choosing
+    # which misconceptions lose their third hint on no evidence, which is
+    # worse than saying the number is wrong. If this warning keeps firing the
+    # answer is another structural change, not a stricter sentence.
+    with_partial = sum(1 for m in known
+                       if (m, HintType.PARTIAL_STEP) in seen)
+    if with_partial > len(known) * MAX_PARTIAL_STEP_SHARE:
+        issues.append(ValidationIssue(
+            Severity.WARNING, name, "needs_partial_step",
+            f"{with_partial} of {len(known)} misconceptions were given a "
+            f"PARTIAL_STEP hint; the approved content gives one to about "
+            f"{MAX_PARTIAL_STEP_SHARE:.0%}. This level touches the answer, so "
+            f"giving it to most beliefs makes the tutor hand out part of the "
+            f"answer by default",
         ))
 
     # -- the review's minimum ------------------------------------------

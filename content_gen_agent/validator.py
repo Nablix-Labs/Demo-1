@@ -33,13 +33,23 @@ the report enumerates all 17 and is honest about 5 of them. CG-021 is where
 the rest belongs, and a workbook that passes everything here can still teach
 a student something false. That is why nothing is marked APPROVED.
 
-Four rules are ours, not the spec's
+Some rules are ours, not the spec's
 ------------------------------------
 
-COVERAGE_PLAN, UNREACHABLE_ROW and NOTHING_APPROVED came out of CG-019 and the
-content review. They are not in section 12.1 and they are kept because they
-catch real things: COVERAGE_PLAN found the three short micro-skills in the run
-of 7 September. They are marked as local so nobody mistakes them for the spec.
+Everything in LOCAL_RULES was added after a real run produced something the
+specification's seventeen would have let through:
+
+    COVERAGE_PLAN               26 of 53 micro-skills with no primary
+                                question, which was the content review's
+                                headline finding
+    UNREACHABLE_ROW             rows written that nothing can ever reach
+    NOTHING_APPROVED            generated content claiming to be reviewed
+    NO_DELIBERATION_IN_CONTENT  the model's working-out left in a field the
+                                platform imports
+    STANDARD_NOTATION           an answer key accepting both 4b and b4
+
+They are marked local so nobody mistakes them for section 12.1, and they are
+skipped when validating a workbook we did not write.
 """
 
 from __future__ import annotations
@@ -188,6 +198,9 @@ RULES: dict[str, Rule] = {rule.code: rule for rule in [
          FULL, from_spec=False),
     Rule("NO_DELIBERATION_IN_CONTENT",
          "No row contains the model's working-out rather than its answer.",
+         FULL, from_spec=False),
+    Rule("STANDARD_NOTATION",
+         "No answer key accepts a variable written before its coefficient.",
          FULL, from_spec=False),
 ]}
 
@@ -960,9 +973,15 @@ def check_unreachable_row(tables) -> list[Finding]:
 #: Each pattern is anchored so ordinary prose does not trip it: "wait" needs
 #: its comma, "(incorrect)" its brackets. A question may legitimately say
 #: "wait at the bus stop".
+#: The bracketed form was too tight at first. It required the brackets to hold
+#: nothing but the word, so it caught "(incorrect)" on 8 September and missed
+#: "(incorrect variant not accepted)" on 9 September -- the same annotation,
+#: sitting in the same field, doing the same damage. Now any bracket
+#: containing the word counts.
 DELIBERATION_RE = re.compile(
     r"(?:"
-    r"\(\s*(?:in)?correct\s*\)"
+    r"\([^)]*\b(?:in)?correct\b[^)]*\)"
+    r"|\([^)]*\bnot accepted\b[^)]*\)"
     r"|\bwait\s*,"
     r"|\brecheck\b"
     r"|\blet me (?:re)?(?:check|think|reconsider)"
@@ -1014,6 +1033,51 @@ def check_no_deliberation_in_content(tables) -> list[Finding]:
     return findings
 
 
+#: "b4" -- a single variable with digits after it.
+REVERSED_NOTATION_RE = re.compile(r"^([a-z])(\d+)$")
+
+
+def check_standard_notation(tables) -> list[Finding]:
+    """An answer key that accepts the coefficient written after the variable.
+
+    In standard algebraic notation the coefficient comes first: 4b, not b4.
+    "b4" reads as a two-digit numeral, and a marker that accepts it teaches a
+    student the convention does not matter.
+
+    The run of 9 September accepted BOTH forms in ten answer keys -- 'b4'
+    alongside '4b', 'x5' alongside '5x'. Listing both is the model hedging,
+    and one of the two is wrong. That pairing is the condition checked here,
+    because it is unambiguous: a lone "b4" might conceivably be a variable
+    name, but "4b or b4, either is fine" cannot be right.
+
+    The semantic reviewer found six of the ten. This finds all ten, free, on
+    every run.
+    """
+    findings: list[Finding] = []
+    for row in tables.get("Answer_Specs", []):
+        accepted = _split(row.get("accepted_answers"))
+        forms = {_normalise(a) for a in accepted}
+        forms.add(_normalise(row.get("canonical_answer")))
+
+        for entry in accepted:
+            match = REVERSED_NOTATION_RE.match(_normalise(entry))
+            if not match:
+                continue
+            letter, digits = match.group(1), match.group(2)
+            if f"{digits}{letter}" not in forms:
+                continue
+            findings.append(_fail(
+                "STANDARD_NOTATION", "Answer_Specs",
+                _text(row.get("answer_spec_id")),
+                f"accepts {entry!r} as well as {(digits + letter)!r}; the "
+                f"coefficient belongs before the variable",
+                f"Remove {entry!r} from accepted_answers. A marker that takes "
+                f"both teaches the convention does not matter",
+            ))
+            break
+    return findings
+
+
 def check_nothing_approved(tables) -> list[Finding]:
     """Nothing this pipeline produces has been read by a person, so nothing
     may claim it has."""
@@ -1056,6 +1120,7 @@ CHECKS = {
     "UNREACHABLE_ROW": check_unreachable_row,
     "NOTHING_APPROVED": check_nothing_approved,
     "NO_DELIBERATION_IN_CONTENT": check_no_deliberation_in_content,
+    "STANDARD_NOTATION": check_standard_notation,
 }
 
 
@@ -1080,7 +1145,10 @@ def declared_limits() -> list[Finding]:
 #: seven-question plan, and it is approved content, which is the one thing we
 #: are never allowed to claim. Running them against it would report 24
 #: failures that are all correct behaviour by the other party.
-ONLY_FOR_GENERATED = frozenset({"COVERAGE_PLAN", "NOTHING_APPROVED"})
+ONLY_FOR_GENERATED = frozenset({
+    "COVERAGE_PLAN", "NOTHING_APPROVED", "NO_DELIBERATION_IN_CONTENT",
+    "STANDARD_NOTATION",
+})
 
 
 def validate_tables(tables: dict[str, list[dict]], *,
