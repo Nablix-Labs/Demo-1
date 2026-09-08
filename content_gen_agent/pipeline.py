@@ -16,22 +16,32 @@ Order is fixed by real dependencies, not preference:
     usage and skill mapping   CG-012    needs the questions
     answer key                CG-013    needs the questions
     worked example            CG-014    needs the micro-skills
+    errors and misconceptions CG-015    needs the micro-skills
+    the mapping tables        CG-016    needs the answers and the errors
+    hints, cues, examples     CG-017    needs the misconceptions
+    scaffolds                 CG-018    needs the guided questions and hints
     write the workbook        CG-022
+    validate the file         CG-020    reads the file, not the generators
+    semantic review           CG-021    optional, --qa
 
 Micro-skills are generated for every topic before anything else, because the
 dependency graph crosses topics: T02.M1 depends on T01.M6, so a topic cannot
-be generated until its predecessors exist.
+be generated until its predecessors exist. They are held back from the
+workbook until their topic package succeeds, so a topic that fails late does
+not leave its skills pointing at a topic row that was never written.
 
 What this does not do
 ----------------------
 
-No validation. CG-020 owns the 17 blocking checks, and it is not built. A row
-that would fail one is still written, deliberately: the file is for looking at,
-and a row you cannot see is a row you cannot judge.
+It does not refuse to write a workbook that fails validation. The
+specification calls that batch GENERATION_FAILED, and the exit code says so,
+but the file is still written: a run that produces nothing to look at is a run
+nobody can diagnose. Nothing written here is ever marked APPROVED, so a file
+on disk is not a file anyone may import.
 
-Sheets from M4 -- errors, misconceptions, hints, scaffolds -- have no generator
-yet. They are written empty rather than omitted, so the gaps are visible in the
-file rather than being mistaken for a complete workbook.
+The three Orientation sheets have no generator. They are written empty rather
+than omitted, so the gap is visible in the file rather than being mistaken for
+a complete workbook.
 """
 
 from __future__ import annotations
@@ -53,10 +63,13 @@ from mapping_generator import (
     direct_failures,
     generate_question_error_map,
     generate_related_skills,
+    unmapped_by_question,
 )
 from docx_parser import parse_all_topic_documents
-from integrity import check_workbook
-from integrity import summarise as summarise_problems
+from qa_reviewer import review_workbook
+from qa_reviewer import summarise as summarise_qa
+from validator import validate
+from validator import summarise as summarise_validation
 from id_service import IdService
 from llm_client import default_client, is_configured
 from micro_skill_generator import REPAIR_PREFIX, generate_all_micro_skills
@@ -132,6 +145,7 @@ def run(
     limit: Optional[int] = None,
     strict: bool = True,
     verbose: bool = True,
+    qa_parts: Optional[list[str]] = None,
 ) -> int:
     """Generate everything and write the workbook. Returns an exit code."""
     def say(message: str = "") -> None:
@@ -335,9 +349,31 @@ def run(
             _report(say, map_issues)
             rows["Question_Error_Map"].extend(error_map)
 
+            # Coverage as one number, not as N warnings. On 7 September the
+            # per-question warnings were suppressed entirely and a topic with
+            # zero diagnosis read the same as a topic with full diagnosis.
+            # A count cannot be filtered away by accident.
+            undiagnosed = unmapped_by_question(error_map, answers.rows)
+            answered = len(answers.rows)
+            blank = sum(
+                1 for question_id, gap in undiagnosed.items()
+                if len(gap) == len({
+                    w.strip() for a in answers.rows
+                    if a.question_id == question_id
+                    for w in str(a.common_wrong_answers or "").split("|")
+                    if w.strip()
+                })
+            )
             say(f"  {len(linked)} misconception-error links, "
                 f"{len(broken) + len(related)} skill links, "
                 f"{len(error_map)} wrong answers mapped")
+            say(f"  diagnosis: {answered - blank}/{answered} question(s) can "
+                f"be diagnosed"
+                + (f", {len(undiagnosed) - blank} only partly" if
+                   len(undiagnosed) - blank else ""))
+            if blank:
+                say(f"    {blank} question(s) have NO diagnosis: a student "
+                    f"who gets one wrong is told nothing")
 
             # CG-017. Five tables, three calls: both joins are derived.
             say("    hints, visual cues, parallel examples...")
@@ -411,11 +447,46 @@ def run(
     # combination is below the minimum, generation should be marked
     # incomplete". Exiting 0 here would let a partial bank travel as a
     # finished one.
-    # CG-019. The file is what the platform imports, so it is checked as a
+    # CG-020. The file is what the platform imports, so it is validated as a
     # file rather than trusted from the generators that wrote it.
-    problems = check_workbook(destination)
+    #
+    # The specification says a batch with blocking errors is GENERATION_FAILED
+    # and nothing is imported. We still WRITE the workbook, deliberately: a
+    # run that produces nothing to look at is a run nobody can diagnose, and
+    # that is how debugging got slow before. Nothing is hidden by doing so --
+    # every blocking failure is printed and the exit code is non-zero -- and
+    # nothing this pipeline writes is marked APPROVED, so a file on disk is
+    # not a file anyone may import.
+    report = validate(destination)
     say()
-    say(summarise_problems(problems))
+    say(summarise_validation(report))
+
+    if report.blocking:
+        say(f"\nGENERATION_FAILED: {len(report.blocking)} blocking check(s). "
+            f"The workbook is written and reviewable, but must not be "
+            f"imported.")
+        say(f"  Full report: python validator.py {destination} --json")
+
+    # CG-021. Off by default: a full pass is about 80 more requests, and the
+    # deterministic checks above are free. It is asked for when the workbook
+    # is going to a person, which is when a second opinion on the answer keys
+    # is worth paying for.
+    qa_report = None
+    if qa_parts:
+        say("\nSemantic QA review...")
+        try:
+            qa_report = review_workbook(destination, client, progress=say,
+                                        parts=qa_parts)
+        except Exception as exc:                          # noqa: BLE001
+            say(f"  the review could not be completed: {exc}")
+            say("  the deterministic checks above still stand")
+        else:
+            say()
+            say(summarise_qa(qa_report))
+            if qa_report.blocking:
+                say(f"\n{len(qa_report.blocking)} answer(s) reported "
+                    f"mathematically wrong. A review verdict is evidence, not "
+                    f"proof; read each one before changing anything.")
 
     if incomplete:
         say(f"\n{len(incomplete)} micro-skill(s) below the coverage minimum:")
@@ -425,7 +496,9 @@ def run(
             "INCOMPLETE.")
 
     say(f"\nDone in {time.time() - started:.1f}s")
-    return 1 if (structure or failures or incomplete or problems) else 0
+    qa_blocked = bool(qa_report and qa_report.blocking)
+    return 1 if (structure or failures or incomplete or report.blocking
+                 or qa_blocked) else 0
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -445,6 +518,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="keep going when a generator rejects a model response, instead "
              "of stopping at the first problem",
     )
+    parser.add_argument(
+        "--qa", nargs="*", metavar="PART",
+        choices=["answer keys", "questions", "support"],
+        help="run the CG-021 semantic review after generating. With no "
+             "argument runs all three parts; otherwise name the ones you "
+             "want, e.g. --qa 'answer keys'. Costs about 80 extra requests "
+             "on a six-topic workbook.",
+    )
     parser.add_argument("--quiet", action="store_true", help="print only the summary")
     args = parser.parse_args(argv)
 
@@ -461,6 +542,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         limit=args.topics,
         strict=not args.continue_on_error,
         verbose=not args.quiet,
+        # "--qa" with no values means all parts; absent means none.
+        qa_parts=(args.qa or ["answer keys", "questions", "support"])
+        if args.qa is not None else None,
     )
 
 

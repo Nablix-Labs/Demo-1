@@ -195,17 +195,67 @@ Rules:
 2. Copy response_pattern exactly as it is given. It is what the student
    actually types, so an approximation will never match.
 
-3. Different wrong answers usually show DIFFERENT errors. Two options in the
+   MANY WRONG ANSWERS ARE OPTION LETTERS. A letter is not a mistake. What
+   shows the error is what that option SAYS, which is given to you in
+   brackets after the letter. Diagnose the option's content and return the
+   LETTER as response_pattern, because the letter is what the student types.
+
+     wrong: B   (option B says: 3 divided by y)
+       -> {"response_pattern": "B", "error_code": "ERR-T01-DIV-FOR-MULT"}
+
+   A question where every wrong answer is a letter still needs mapping. Do
+   not skip it because the letters look meaningless; look at what they say.
+
+3. EVERY QUESTION NEEDS AT LEAST ONE MAPPING. A question whose wrong answers
+   are all unmapped is a question where a student makes a mistake and the
+   tutor has nothing to say. Returning an empty list, or leaving whole
+   questions out, is the one outcome that is never right: if you genuinely
+   cannot match one wrong answer, match the others.
+
+4. Different wrong answers usually show DIFFERENT errors. Two options in the
    same question landing on the same code is possible, but if every wrong
    answer in a question gets the same code you have probably not looked at
    what distinguishes them. Do not force unrelated mistakes into one generic
    error to simplify the work.
 
-4. A wrong answer shows the error a student who made THAT mistake would have.
+5. A wrong answer shows the error a student who made THAT mistake would have.
    "5n" where the rule adds 5 shows multiplication read for addition. The same
    student writing "n5" shows a missing operator. They are not the same error
    even though both are wrong.
 """
+
+
+#: A wrong answer that is nothing but an option letter.
+BARE_LETTER_RE = re.compile(r"^[A-Ha-h]$")
+
+#: "b) 3 divided by y" -> ("b", "3 divided by y"), up to the next option.
+OPTION_TEXT_RE = re.compile(
+    r"(?:^|[\s(])([A-Ha-h])[).:]\s*(.+?)(?=(?:[\s(][A-Ha-h][).:])|$)",
+    re.DOTALL,
+)
+
+
+def option_texts(question_text: str) -> dict[str, str]:
+    """What each lettered option actually says, keyed by upper-case letter.
+
+    The reason this exists: for a choice question the wrong answers are stored
+    as option letters, and a letter is not a mistake. "B" demonstrates nothing
+    on its own -- what demonstrates an error is whatever option B says.
+
+    Asking a model to diagnose a bare letter makes it hunt through the
+    question text for the option, and on the run of 7 September T01 gave up
+    and returned nothing at all: 69 per cent of its wrong answers were bare
+    letters, the highest of the six topics, and it produced zero mappings.
+    Resolving the letter here means the model is shown the thing it is
+    actually being asked about.
+    """
+    found: dict[str, str] = {}
+    for match in OPTION_TEXT_RE.finditer(" ".join(str(question_text or "").split())):
+        letter = match.group(1).upper()
+        text = match.group(2).strip()
+        if text and letter not in found:
+            found[letter] = text
+    return found
 
 
 def build_error_map_prompt(
@@ -213,7 +263,11 @@ def build_error_map_prompt(
     questions,
     error_types: list[ErrorTypeRow],
 ) -> str:
-    """Every wrong answer that needs labelling, and the codes available."""
+    """Every wrong answer that needs labelling, and the codes available.
+
+    A wrong answer that is a bare option letter is shown with what that
+    option says, so the model diagnoses the mistake rather than the label.
+    """
     by_id = {q.question_id: q for q in questions}
     lines = ["Error codes for this topic. Use only these, copied exactly:"]
     lines += [
@@ -230,13 +284,17 @@ def build_error_map_prompt(
                  if w.strip()]
         if not wrong:
             continue
+        options = option_texts(question.question_text)
         lines += [
             "",
             f"  {answer.question_id}  [{question.question_type.value}]",
             f"    {' '.join(str(question.question_text).split())[:300]}",
             f"    correct answer: {answer.canonical_answer}",
         ]
-        lines += [f"    wrong: {w}" for w in wrong]
+        for w in wrong:
+            said = options.get(w.upper()) if BARE_LETTER_RE.match(w) else None
+            lines.append(f"    wrong: {w}"
+                         + (f"   (option {w.upper()} says: {said})" if said else ""))
 
     return "\n".join(lines)
 
@@ -329,42 +387,64 @@ def _check_error_map(
         seen.add(pair)
 
     # -- coverage, which the review asks for explicitly ----------------
-    mapped = {p for p in seen}
-    for question_id, wrong in wrong_by_question.items():
+    #
+    # Both cases are reported. The earlier version warned only when EVERY
+    # wrong answer went unmapped, so on 7 September the 134 questions with no
+    # diagnosis produced a warning each and the 97 with partial cover produced
+    # nothing at all. A question where two of five mistakes are diagnosed is
+    # three mistakes the tutor cannot respond to.
+    mapped = set(seen)
+    for question_id, wrong in sorted(wrong_by_question.items()):
         unmapped = {w for w in wrong if (question_id, w) not in mapped}
-        if unmapped and len(unmapped) == len(wrong):
+        if not unmapped:
+            continue
+        if len(unmapped) == len(wrong):
             warn(question_id,
                  f"none of its {len(wrong)} wrong answer(s) is mapped to an "
                  f"error, so a student who makes one gets no diagnosis")
+        else:
+            warn(question_id,
+                 f"{len(unmapped)} of its {len(wrong)} wrong answer(s) are "
+                 f"unmapped, so those mistakes get no diagnosis")
 
     return issues, bad
 
 
-def generate_question_error_map(
+def unmapped_by_question(rows, answers) -> dict[str, set[str]]:
+    """Which wrong answers still have no error, per question.
+
+    Used to decide whether a retry is worth making and what to put in it.
+    """
+    mapped: dict[str, set[str]] = {}
+    for row in rows:
+        mapped.setdefault(row.question_id, set()).add(row.response_pattern.strip())
+
+    missing: dict[str, set[str]] = {}
+    for answer in answers:
+        wrong = {w.strip() for w in
+                 str(answer.common_wrong_answers or "").split("|") if w.strip()}
+        gap = wrong - mapped.get(answer.question_id, set())
+        if gap:
+            missing[answer.question_id] = gap
+    return missing
+
+
+def _map_once(
     answers,
     questions,
-    error_types: list[ErrorTypeRow],
-    client: LLMClient,
-    topic_code: str,
-    *,
-    skill_of_question: Optional[dict[str, str]] = None,
-    strict: bool = True,
+    error_types,
+    client,
+    topic_code,
+    name,
+    known,
+    skill_of_question,
+    purpose,
 ) -> tuple[list[QuestionErrorMapRow], list[ValidationIssue], dict]:
-    """Label each question's wrong answers with the error it shows."""
-    name = f"{topic_code} error map"
-    known = {row.error_code for row in error_types}
-    skill_of_question = skill_of_question or {}
-
-    if not known:
-        raise MappingError(
-            f"{topic_code}: cannot map wrong answers with no error types to "
-            f"map them to"
-        )
-
+    """One call, checked and turned into rows."""
     payload = client.complete_json(
         ERROR_MAP_SYSTEM_PROMPT,
         build_error_map_prompt(answers, questions, error_types),
-        purpose=f"CG-016 error map for {topic_code}",
+        purpose=purpose,
     )
     entries = payload.get("mappings")
     issues, bad = _check_error_map(name, entries, answers, known)
@@ -382,18 +462,6 @@ def generate_question_error_map(
         for i in issues
     ]
 
-    # No error is raised for an empty result. _check_error_map already warns
-    # for every question whose wrong answers went unmapped, so an empty map
-    # produces one warning per question rather than one silence -- and an
-    # empty error map costs diagnoses without corrupting anything, which is
-    # not the same kind of problem as a wrong mapping.
-    errors = [i for i in issues if i.is_error]
-    if errors and strict:
-        raise MappingError(
-            f"{topic_code}: the error map cannot be used.\n"
-            + "\n".join(f"  {i}" for i in errors)
-        )
-
     rows = [
         QuestionErrorMapRow(
             question_id=e["question_id"],
@@ -405,6 +473,96 @@ def generate_question_error_map(
         )
         for e in usable
     ]
+    return rows, issues, payload
+
+
+def generate_question_error_map(
+    answers,
+    questions,
+    error_types: list[ErrorTypeRow],
+    client: LLMClient,
+    topic_code: str,
+    *,
+    skill_of_question: Optional[dict[str, str]] = None,
+    strict: bool = True,
+    retry: bool = True,
+) -> tuple[list[QuestionErrorMapRow], list[ValidationIssue], dict]:
+    """Label each question's wrong answers with the error it shows.
+
+    A question left with no diagnosis at all is asked about again. On the run
+    of 7 September the first call for T01 returned an empty list and that was
+    the end of it: 69 questions, zero mappings, and the pipeline moved on. A
+    second pass costs one request and is the difference between a topic whose
+    mistakes can be diagnosed and one whose cannot.
+
+    Only the questions that came back with nothing go into the retry. Asking
+    again about work already done wastes tokens and invites the model to
+    contradict its first answer.
+    """
+    name = f"{topic_code} error map"
+    known = {row.error_code for row in error_types}
+    skill_of_question = skill_of_question or {}
+
+    if not known:
+        raise MappingError(
+            f"{topic_code}: cannot map wrong answers with no error types to "
+            f"map them to"
+        )
+
+    rows, issues, payload = _map_once(
+        answers, questions, error_types, client, topic_code, name, known,
+        skill_of_question, f"CG-016 error map for {topic_code}",
+    )
+
+    if retry:
+        missing = unmapped_by_question(rows, answers)
+        # Only the questions with NOTHING. A partially mapped question has a
+        # diagnosis for at least one mistake, which is worth a warning but not
+        # worth a second request.
+        blank = {
+            question_id for question_id, gap in missing.items()
+            if len(gap) == len({
+                w.strip() for a in answers if a.question_id == question_id
+                for w in str(a.common_wrong_answers or "").split("|") if w.strip()
+            })
+        }
+        if blank:
+            issues.append(ValidationIssue(
+                Severity.WARNING, name, "mappings",
+                f"{len(blank)} question(s) came back with no diagnosis at "
+                f"all; asking again for those only",
+            ))
+            again_answers = [a for a in answers if a.question_id in blank]
+            again_questions = [q for q in questions if q.question_id in blank]
+            try:
+                more, more_issues, _ = _map_once(
+                    again_answers, again_questions, error_types, client,
+                    topic_code, name, known, skill_of_question,
+                    f"CG-016 error map retry for {topic_code}",
+                )
+            except Exception as exc:                      # noqa: BLE001
+                # A failed retry leaves the first pass intact. It was never
+                # going to make things worse than the gap it was fixing.
+                issues.append(ValidationIssue(
+                    Severity.WARNING, name, "mappings",
+                    f"the retry failed ({exc}); keeping the first pass",
+                ))
+            else:
+                rows.extend(more)
+                # The first pass's coverage warnings are now stale for
+                # anything the retry filled in, so they are replaced wholesale
+                # rather than added to.
+                issues = [i for i in issues if i.field not in blank]
+                issues.extend(i for i in more_issues if i.field in blank
+                              or i.field == "mappings")
+
+    errors = [i for i in issues if i.is_error]
+    if errors and strict:
+        raise MappingError(
+            f"{topic_code}: the error map cannot be used.\n"
+            + "\n".join(f"  {i}" for i in errors)
+        )
+
     return rows, issues, payload
 
 
