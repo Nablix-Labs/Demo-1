@@ -71,6 +71,101 @@ def _gen_hints(payload, misconceptions=None, **kw):
 
 
 # ──────────────────────────────────────────────────────────────────────
+# The third hint level, which must stay rare
+# ──────────────────────────────────────────────────────────────────────
+
+def test_a_partial_step_hint_comes_from_the_separate_list():
+    """The fix for 22 of 22 misconceptions getting one on 9 September.
+
+    The prompt used to say "a PARTIAL_STEP hint is optional; add one only
+    where a student would still be stuck". A permission written into prose is
+    read as a default, so the third level now costs the model a separate act
+    with a reason attached rather than one more row in a list it is already
+    writing.
+    """
+    hints, _links, _issues = _gen_hints({
+        "hints": _both(),
+        "needs_partial_step": [{
+            "misconception_id": MID,
+            "content": "Start by writing the part that stays the same: + 4.",
+            "why": "After the reminder the student still cannot begin.",
+        }],
+    })
+    partial = [h for h in hints if h.hint_type.value == "PARTIAL_STEP"]
+    assert len(partial) == 1
+    assert partial[0].hint_level == 3
+    assert "stays the same" in partial[0].content
+
+
+def test_no_partial_step_list_means_no_third_hint():
+    """The default path produces two. That is the point."""
+    hints, _links, _issues = _gen_hints({"hints": _both()})
+    assert {h.hint_type.value for h in hints} == {"ATTENTION", "CONCEPT_REMINDER"}
+
+
+def test_the_prompt_forbids_a_partial_step_in_the_main_list():
+    text = " ".join(HINT_SYSTEM_PROMPT.split())
+    assert "Never put a PARTIAL_STEP hint in \"hints\"" in text
+    assert "EXACTLY TWO hints for every misconception" in text
+
+
+def test_the_prompt_states_how_often_the_approved_content_uses_it():
+    """A proportion is checkable; "optional" is not."""
+    text = " ".join(HINT_SYSTEM_PROMPT.split())
+    assert "4 misconceptions out of 25" in text
+    assert "\"It might help\" is not a reason" in text
+
+
+def test_giving_nearly_every_misconception_a_third_hint_is_reported():
+    """Reported, not enforced. Dropping the surplus would mean choosing which
+    beliefs lose their third hint on no evidence."""
+    misconceptions = [_misconception(f"MIS-T01-{i}", f"Belief {i}")
+                      for i in range(4)]
+    _hints, _links, issues = _gen_hints(
+        {
+            "hints": [h for m in misconceptions
+                      for h in _both(m.misconception_id)],
+            "needs_partial_step": [
+                {"misconception_id": m.misconception_id,
+                 "content": "Start it off.", "why": "stuck"}
+                for m in misconceptions
+            ],
+        },
+        misconceptions=misconceptions,
+    )
+    warning = next(i for i in issues if "PARTIAL_STEP hint" in i.message)
+    assert not warning.is_error
+    assert "4 of 4" in warning.message
+
+
+def test_a_reasonable_share_of_third_hints_is_not_reported():
+    misconceptions = [_misconception(f"MIS-T01-{i}", f"Belief {i}")
+                      for i in range(5)]
+    _hints, _links, issues = _gen_hints(
+        {
+            "hints": [h for m in misconceptions
+                      for h in _both(m.misconception_id)],
+            "needs_partial_step": [
+                {"misconception_id": "MIS-T01-0", "content": "Start it off.",
+                 "why": "stuck"},
+            ],
+        },
+        misconceptions=misconceptions,
+    )
+    assert not [i for i in issues if "PARTIAL_STEP hint" in i.message]
+
+
+def test_a_partial_step_for_an_unknown_misconception_is_still_refused():
+    """The separate list is not a way round the checks."""
+    _hints, _links, issues = _gen_hints({
+        "hints": _both(),
+        "needs_partial_step": [{"misconception_id": "MIS-T01-GHOST",
+                                "content": "Start it off.", "why": "stuck"}],
+    })
+    assert any("does not exist" in i.message for i in issues)
+
+
+# ──────────────────────────────────────────────────────────────────────
 # The derivations
 # ──────────────────────────────────────────────────────────────────────
 

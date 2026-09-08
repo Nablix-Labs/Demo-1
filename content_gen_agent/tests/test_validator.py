@@ -658,6 +658,17 @@ def test_ordinary_wording_is_not_mistaken_for_deliberation(innocent):
     assert not findings_for(tables, "NO_DELIBERATION_IN_CONTENT")
 
 
+def test_an_annotation_inside_brackets_is_caught_however_it_is_worded():
+    """The first version required the brackets to hold nothing but the word,
+    so it caught '(incorrect)' on 8 September and missed '(incorrect variant
+    not accepted)' on 9 September. Same annotation, same field, same damage."""
+    tables = clean_tables()
+    tables["Answer_Specs"][0]["accepted_answers"] = (
+        "n+5 | 5+n | n-5 (incorrect variant not accepted)"
+    )
+    assert findings_for(tables, "NO_DELIBERATION_IN_CONTENT")
+
+
 def test_the_check_covers_every_field_a_student_reads_or_is_marked_against():
     from validator import DELIBERATION_FIELDS
 
@@ -672,6 +683,55 @@ def test_one_finding_per_row_however_many_fields_leaked():
     tables["Answer_Specs"][0]["accepted_answers"] = "n+5 | 5+n (incorrect)"
     tables["Answer_Specs"][0]["answer_steps"] = "1. Wait, recheck this."
     assert len(findings_for(tables, "NO_DELIBERATION_IN_CONTENT")) == 1
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The coefficient goes before the variable
+# ──────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("accepted", [
+    "4b | b4",                      # seen in ANS-T01-038
+    "5x | x5",                      # ANS-T02-046
+    "7y | y7 | 6k | k6 | t^3",      # ANS-T02-048
+])
+def test_accepting_both_orders_of_a_coefficient_is_caught(accepted):
+    """Ten answer keys did this on 9 September. Listing both is the model
+    hedging, and one of the two is wrong: 'b4' reads as a two-digit numeral."""
+    tables = clean_tables()
+    tables["Answer_Specs"][0]["canonical_answer"] = accepted.split("|")[0].strip()
+    tables["Answer_Specs"][0]["accepted_answers"] = accepted
+    tables["Answer_Specs"][0]["common_wrong_answers"] = "nonsense | rubbish"
+    assert findings_for(tables, "STANDARD_NOTATION")
+
+
+def test_the_reversed_form_is_caught_against_the_canonical_too():
+    """The correct form need not be in the accepted list; being the canonical
+    answer is enough to show which way round it should be."""
+    tables = clean_tables()
+    tables["Answer_Specs"][0]["canonical_answer"] = "4b"
+    tables["Answer_Specs"][0]["accepted_answers"] = "b4"
+    tables["Answer_Specs"][0]["common_wrong_answers"] = "nonsense | rubbish"
+    assert findings_for(tables, "STANDARD_NOTATION")
+
+
+@pytest.mark.parametrize("accepted", [
+    "4b | 4 x b | four b",          # only the right way round
+    "n+5 | 5+n",                    # no coefficient at all
+    "x5y | 5xy",                    # not a bare letter-then-digits
+    "b4b | 4b",                     # not a bare letter-then-digits either
+])
+def test_a_key_that_only_uses_standard_order_is_left_alone(accepted):
+    tables = clean_tables()
+    tables["Answer_Specs"][0]["canonical_answer"] = accepted.split("|")[0].strip()
+    tables["Answer_Specs"][0]["accepted_answers"] = accepted
+    tables["Answer_Specs"][0]["common_wrong_answers"] = "nonsense | rubbish"
+    assert not findings_for(tables, "STANDARD_NOTATION")
+
+
+def test_the_notation_rule_is_ours_and_not_run_against_approved_content():
+    """The reference is approved by people. Telling them their notation is
+    wrong is not this module's job."""
+    assert "STANDARD_NOTATION" in v.ONLY_FOR_GENERATED
 
 
 # ──────────────────────────────────────────────────────────────────────

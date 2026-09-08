@@ -149,6 +149,40 @@ def test_every_measure_actually_measures_something(name):
     assert measure.reference != {} and measure.reference != []
 
 
+def test_a_per_topic_average_ignores_topics_the_table_does_not_cover():
+    """The bug this caught in the run of 9 September.
+
+    The reference has no Topic_Scope rows for topic 1 at all. Dividing 27 rows
+    by 3 topics gave 9 per topic when it is 13.5 across the two it covers, and
+    our scope reported 41% adrift when for those two topics it matches
+    exactly. A comparison that manufactures a difference out of a gap in the
+    reference sends someone to fix content that was already right.
+    """
+    reference = tables(Topics=[{"topic_id": "T1"}, {"topic_id": "T2"},
+                               {"topic_id": "T3"}])
+    reference["Topic_Scope"] = [{"topic_id": "T2", "scope_type": "INCLUDED"},
+                                {"topic_id": "T2", "scope_type": "EXCLUDED"},
+                                {"topic_id": "T3", "scope_type": "INCLUDED"},
+                                {"topic_id": "T3", "scope_type": "EXCLUDED"}]
+    generated = tables(Topics=reference["Topics"])
+    generated["Topic_Scope"] = reference["Topic_Scope"] + [
+        {"topic_id": "T1", "scope_type": "INCLUDED"},
+        {"topic_id": "T1", "scope_type": "EXCLUDED"},
+    ]
+    assert rc.m_scope_items_per_topic(reference) == 2.0
+    assert rc.m_scope_items_per_topic(generated) == 2.0
+
+    comparison = rc.compare_tables(reference, generated)
+    assert status_of(comparison, "scope items per topic") == rc.MATCH
+
+
+def test_a_per_topic_average_falls_back_when_there_is_no_topic_column():
+    """Error_Types carries no topic_id. Falling back to the workbook's topic
+    count is right there, because both sides cover the same topics."""
+    data = tables(Error_Types=[{"error_code": f"E{i}"} for i in range(6)])
+    assert rc.m_errors_per_topic(data) == 6.0
+
+
 def test_every_recorded_decision_names_a_real_measure():
     """A decision under a name no measure produces is a decision that never
     applies, and nothing would fail to tell you."""

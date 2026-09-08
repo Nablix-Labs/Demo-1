@@ -204,6 +204,26 @@ def _share(counts: Counter, total: int) -> dict:
     return {k: round(v / total, 2) for k, v in sorted(counts.items())} if total else {}
 
 
+def _per_topic(tables: dict, table: str) -> Optional[float]:
+    """Rows per topic, counting only the topics that table actually covers.
+
+    Dividing by every topic in the workbook looks right and is not. The
+    reference has no Topic_Scope rows for topic 1 at all, so 27 rows over 3
+    topics reads as 9 per topic when it is really 13.5 across the two it
+    covers. That made our scope look 41% adrift when, for the two topics both
+    sides cover, it matches exactly: 13 against 13 and 14 against 14.
+
+    A comparison that manufactures a difference out of a gap in the reference
+    sends someone to fix content that was already right.
+    """
+    rows = tables.get(table, [])
+    if not rows:
+        return None
+    topics = {_text(r.get("topic_id")) for r in rows if _text(r.get("topic_id"))}
+    divisor = len(topics) or len(tables.get("Topics", []))
+    return _ratio(len(rows), divisor)
+
+
 # ──────────────────────────────────────────────────────────────────────
 # The measures
 # ──────────────────────────────────────────────────────────────────────
@@ -251,8 +271,7 @@ def m_steps_per_worked_example(tables) -> Optional[float]:
 
 
 def m_worked_examples_per_topic(tables) -> Optional[float]:
-    return _ratio(len(tables.get("Worked_Examples", [])),
-                  len(tables.get("Topics", [])))
+    return _per_topic(tables, "Worked_Examples")
 
 
 def m_hints_per_misconception(tables) -> Optional[float]:
@@ -276,8 +295,7 @@ def m_error_patterns_per_question(tables) -> Optional[float]:
 
 
 def m_scope_items_per_topic(tables) -> Optional[float]:
-    return _ratio(len(tables.get("Topic_Scope", [])),
-                  len(tables.get("Topics", [])))
+    return _per_topic(tables, "Topic_Scope")
 
 
 def m_scope_has_both_kinds(tables) -> bool:
@@ -286,8 +304,9 @@ def m_scope_has_both_kinds(tables) -> bool:
 
 
 def m_errors_per_topic(tables) -> Optional[float]:
-    return _ratio(len(tables.get("Error_Types", [])),
-                  len(tables.get("Topics", [])))
+    # Error_Types carries no topic_id, so this falls back to the workbook's
+    # topic count -- which is right, because both sides cover the same three.
+    return _per_topic(tables, "Error_Types")
 
 
 def m_support_allowed_by_phase(tables) -> dict:
