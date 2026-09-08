@@ -56,6 +56,9 @@ def openai_strict_schema(schema: dict[str, object]) -> dict[str, object]:
     """Return an OpenAI-compatible strict schema without changing its caller."""
 
     normalized = deepcopy(schema)
+    definitions = normalized.get("$defs")
+    if isinstance(definitions, dict) and "StudentContribution" in definitions:
+        definitions["StudentContribution"] = contribution_output_schema(definitions["StudentContribution"])
 
     def normalize(node: object) -> None:
         if isinstance(node, list):
@@ -73,6 +76,45 @@ def openai_strict_schema(schema: dict[str, object]) -> dict[str, object]:
 
     normalize(normalized)
     return normalized
+
+
+def contribution_output_schema(contribution_schema: dict[str, object]) -> dict[str, object]:
+    """Make incompatible support/assessment combinations impossible in output.
+
+    These are the existing contract invariants, not rules for interpreting a
+    learner. The model still chooses the contribution and the mathematical error.
+    """
+    base = deepcopy(contribution_schema)
+    variants: list[dict[str, object]] = []
+    combinations = [
+        (["ACKNOWLEDGEMENT", "EXPLANATION_REQUEST", "UNCLEAR_INPUT", "EXPRESSED_DIFFICULTY"],
+         ["NOT_ASSESSED"], ["NOT_NEEDED"]),
+        (["MATHEMATICAL_ATTEMPT"], ["CORRECT", "INCOMPLETE"], ["NOT_NEEDED"]),
+        (["MATHEMATICAL_ATTEMPT"], ["INCORRECT"], ["MATCHED"]),
+        (["MATHEMATICAL_ATTEMPT"], ["INCORRECT"], ["UNMAPPED", "MISMATCHED"]),
+    ]
+    for kinds, assessments, relevance in combinations:
+        if not set(relevance).issubset(base["properties"]["support_relevance"]["enum"]):
+            continue
+        variant = deepcopy(base)
+        properties = variant["properties"]
+        properties["kind"] = {"type": "string", "enum": kinds}
+        properties["assessment"] = {"type": "string", "enum": assessments}
+        properties["support_relevance"] = {"type": "string", "enum": relevance}
+        incorrect = assessments == ["INCORRECT"]
+        for field in ("error_category", "error_description"):
+            properties[field] = ({**properties[field], **properties[field]["anyOf"][0]}
+                                 if incorrect else {"type": "null"})
+            properties[field].pop("anyOf", None)
+        for field in ("generated_support_text", "generated_visual_rows"):
+            properties[field] = (
+                {**properties[field], **properties[field]["anyOf"][0]}
+                if relevance == ["UNMAPPED", "MISMATCHED"] else {"type": "null"}
+            )
+            properties[field].pop("anyOf", None)
+            properties[field].pop("default", None)
+        variants.append(variant)
+    return {"anyOf": variants}
 
 
 def _guided_conversation_history(
@@ -398,9 +440,16 @@ class OpenAIAIEngineClient:
         evaluator_prompt_version: str,
         system_prompt: str,
     ) -> GuidedEvaluation:
+        schema = guided_evaluation_schema()
+        permitted_codes = [item["error_code"] for item in allowed_error_codes if isinstance(item.get("error_code"), str)]
+        schema["properties"]["selected_error_code"]["enum"] = [None, *permitted_codes]
+        if not permitted_codes:
+            schema["$defs"]["StudentContribution"]["properties"]["support_relevance"]["enum"] = [
+                "NOT_NEEDED", "UNMAPPED", "MISMATCHED",
+            ]
         content = self._request_guided_json(
             name="guided_turn_evaluation",
-            schema=guided_evaluation_schema(),
+            schema=schema,
             system_prompt=system_prompt,
             user_payload={
                 "question_type": question_type,

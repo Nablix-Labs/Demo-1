@@ -4,8 +4,10 @@ These tests validate the service contract, not the quality of live interpretatio
 """
 import pytest
 
-from app.ai_engine.classifier import validate_guided_evaluation
+from app.ai_engine.classifier import ClassificationRequest, build_guided_tutor_response, validate_guided_evaluation
 from app.ai_engine.classifier_config import load_classifier_rules
+from app.ai_engine.openai_client import guided_evaluation_schema, openai_strict_schema
+from app.ai_engine.schemas import SafetyCheck
 from app.core.exceptions import AdapterError
 from app.models.adapters import TutorResult
 from app.models.guided_learning import (
@@ -14,6 +16,7 @@ from app.models.guided_learning import (
     GuidedRescue, TutorSolved, GuidedWorkedPresentation,
 )
 from app.models.session import SessionRecord
+from app.models.student_model_session import AnswerSpec
 from app.services import interaction_service
 from app.services.rescue_presentation import active_rescue_from
 from app.services.interaction_service import (
@@ -42,7 +45,8 @@ def test_non_attempt_preserves_prior_evidence_without_support(kind: str) -> None
     contribution = StudentContribution.model_validate({
         "kind": kind, "assessment": "NOT_ASSESSED", "error_category": None,
         "error_description": None, "identified_difficulty": None, "learner_question": None,
-        "explained_idea": None, "generated_support_text": None, "support_relevance": "NOT_NEEDED",
+        "explained_idea": "general rule" if kind == "EXPLANATION_REQUEST" else None,
+        "generated_support_text": None, "support_relevance": "NOT_NEEDED",
     })
     candidate = GuidedEvaluation(
         contribution=contribution, student_state="PARTIAL",
@@ -177,3 +181,89 @@ def test_generated_walkthrough_is_persistable_and_rejects_early_reveal(monkeypat
     ]})
     with pytest.raises(AdapterError, match="before authorisation"):
         interaction_service._response_aware_worked_rescue(session, active, rescue, "n + 5", rules)
+
+
+def test_strict_output_cannot_mix_correctness_and_corrective_support() -> None:
+    original = guided_evaluation_schema()
+    schema = openai_strict_schema(original)
+    assert "properties" in original["$defs"]["StudentContribution"]
+    variants = schema["$defs"]["StudentContribution"]["anyOf"]
+    assert len(variants) == 4
+    for variant in variants:
+        props = variant["properties"]
+        assessments = props["assessment"]["enum"]
+        if "INCORRECT" not in assessments:
+            assert props["support_relevance"]["enum"] == ["NOT_NEEDED"]
+            assert props["generated_support_text"]["type"] == "null"
+            assert props["generated_visual_rows"]["type"] == "null"
+        elif props["support_relevance"]["enum"] == ["MATCHED"]:
+            assert props["generated_support_text"]["type"] == "null"
+        else:
+            assert props["generated_support_text"]["type"] == "string"
+            assert props["generated_visual_rows"]["type"] == "array"
+            assert props["generated_visual_rows"]["minItems"] == 2
+    original["$defs"]["StudentContribution"]["properties"]["support_relevance"]["enum"] = [
+        "NOT_NEEDED", "UNMAPPED", "MISMATCHED",
+    ]
+    without_catalog = openai_strict_schema(original)
+    assert len(without_catalog["$defs"]["StudentContribution"]["anyOf"]) == 3
+
+
+def test_model_evidence_survives_wrong_rule_then_correct_rule_canvas_handoff() -> None:
+    rules = load_classifier_rules()
+    rules = rules.model_copy(update={"guided_learning": rules.guided_learning.model_copy(
+        update={"response_aware_enabled": True},
+    )})
+    ids = ["CHANGING_VALUE", "OPERATION", "FIXED_VALUE"]
+    rubric = GeneratedQuestionRubric(
+        question_id="REPLAY", required_concepts=[
+            GeneratedConcept(concept_id=concept_id, description=concept_id, required=True) for concept_id in ids
+        ], completion_rule="ALL_REQUIRED_CONCEPTS", cache_key="replay", prompt_version="replay",
+    )
+    request = ClassificationRequest(
+        question_id="REPLAY", question_type="SHORT_RESPONSE",
+        question="3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number. Write the general rule.",
+        correct_answer="n + 5", student_input="its n+6", current_phase="GUIDED_PRACTICE",
+        input_source="TEXT", transcript_confidence=None, attempt_count=0, current_hint_level=None,
+        answer_spec=AnswerSpec(answer_spec_id="REPLAY", canonical_answer="n + 5", accepted_answers=[],
+                               verification_method="STRUCTURED_TEXT_MATCH", explanation_required=False),
+    )
+    objective = ActiveTeachingObjective(objective_type="EXPLAIN_CONCEPT", target_concept_ids=["FIXED_VALUE"],
+                                        confirmed_concept_ids=ids[:2], missing_concept_ids=["FIXED_VALUE"])
+    incorrect = GuidedEvaluation(
+        contribution=StudentContribution(kind="MATHEMATICAL_ATTEMPT", assessment="INCORRECT",
+            error_category="VARIABLE_CONSTANT", error_description="Repeated amount is incorrect.",
+            identified_difficulty=None, learner_question=None, explained_idea=None,
+            generated_support_text=None, support_relevance="MATCHED"),
+        student_state="WRONG", newly_confirmed_concept_ids=ids[:2], preserved_concept_ids=[],
+        contradicted_concept_ids=["FIXED_VALUE"], missing_concept_ids=["FIXED_VALUE"],
+        selected_error_code="FIXED_AMOUNT", confidence=0.98, next_objective=objective,
+        tutor_message="Compare your added amount with the amount after the plus sign in each example.",
+        tutor_message_voice="Compare your added amount with the amount after the plus sign in each example.",
+    )
+    safety = SafetyCheck(passed=True, flag_type=None, action_taken=None)
+    wrong = build_guided_tutor_response(request, rules, safety, rubric, incorrect, objective)
+    state = wrong.guided_teaching_state
+    assert state is not None
+    assert state.active_component_id == "FIXED_VALUE"
+    assert {claim.concept_id for claim in state.last_turn_evidence} == set(ids)
+    assert state.confirmed_component_ids == ids[:2]
+    request = request.model_copy(update={"student_input": "n+5", "guided_teaching_state": state,
+                                         "active_teaching_objective": objective})
+    correct = incorrect.model_copy(update={
+        "contribution": StudentContribution(kind="MATHEMATICAL_ATTEMPT", assessment="CORRECT",
+            error_category=None, error_description=None, identified_difficulty=None, learner_question=None,
+            explained_idea=None, generated_support_text=None, support_relevance="NOT_NEEDED"),
+        "student_state": "CORRECT", "newly_confirmed_concept_ids": ["FIXED_VALUE"],
+        "preserved_concept_ids": ids[:2], "contradicted_concept_ids": [], "missing_concept_ids": [],
+        "selected_error_code": None, "next_objective": None,
+        "tutor_message": "Your rule matches the examples. Write it on the canvas, then press Check.",
+        "tutor_message_voice": "Your rule matches the examples. Write it on the canvas, then press Check.",
+    })
+    result = build_guided_tutor_response(request, rules, safety, rubric, correct, None)
+    assert result.requires_written_math_evidence
+    assert not result.question_completed
+    assert result.guided_teaching_state is not None
+    assert set(result.guided_teaching_state.confirmed_component_ids) == set(ids)
+    assert all(claim.status == "DEMONSTRATED" for claim in result.guided_teaching_state.evidence_ledger)
+    assert result.tutor_message == correct.tutor_message

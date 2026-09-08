@@ -226,9 +226,11 @@ class GuidedLearningConfig(StrictSchema):
     single_call_enabled: StrictBool
     response_aware_enabled: StrictBool
     response_aware_system_prompt: str
+    response_aware_scaffold_prompt: str
     response_aware_worked_prompt: str
     deterministic_turn_resolution_enabled: StrictBool
     guided_turn_maximum_retries: int = Field(ge=0)
+    response_aware_turn_maximum_retries: int = Field(ge=0)
     scaffold_evaluation_maximum_retries: int = Field(ge=0)
     scaffold_evaluation_failure_message: str
     minimum_voice_transcript_confidence: float = Field(ge=0.0, le=1.0)
@@ -245,6 +247,10 @@ class GuidedLearningConfig(StrictSchema):
     stuck_escalation_count: int = Field(ge=1)
     maximum_recent_history_turns: int = Field(ge=0)
     tutor_message_similarity_threshold: float = Field(ge=0.0, le=1.0)
+    response_aware_reply_rejection_patterns: list[str]
+    response_aware_explanation_question_overlap: float = Field(ge=0.0, le=1.0)
+    response_aware_quality_retry_feedback: str
+    response_aware_contribution_retry_feedback: str
     reasoning_effort: Literal["none", "minimal", "low", "medium", "high"]
     verbosity: Literal["low", "medium", "high"]
     semantic_confusion_patterns: list[str]

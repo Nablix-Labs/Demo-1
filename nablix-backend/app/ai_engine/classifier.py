@@ -381,9 +381,10 @@ def classify_scaffold_response(
                 student_response=request.student_input,
                 input_source=request.input_source,
                 system_prompt=(
-                    rules.guided_learning.scaffold_evaluator_system_prompt
-                    + ("\n" + rules.guided_learning.response_aware_system_prompt
-                       if rules.guided_learning.response_aware_enabled else "")
+                    (rules.guided_learning.response_aware_system_prompt + "\n"
+                     + rules.guided_learning.response_aware_scaffold_prompt)
+                    if rules.guided_learning.response_aware_enabled
+                    else rules.guided_learning.scaffold_evaluator_system_prompt
                 ),
             )
             break
@@ -426,8 +427,6 @@ def classify_scaffold_response(
     contribution = result.contribution if rules.guided_learning.response_aware_enabled else None
     if rules.guided_learning.response_aware_enabled and contribution is None:
         raise AdapterError("openai_ai_engine", "Scaffold evaluation is missing its contribution assessment.")
-    if contribution is not None and result.confidence < rules.guided_learning.confidence_threshold:
-        raise AdapterError("openai_ai_engine", "Scaffold contribution confidence is below the configured threshold.")
     explanation_requested = (
         contribution.assessment == "NOT_ASSESSED"
         if contribution is not None
@@ -2648,7 +2647,12 @@ def guided_tutor_context_for(
         and persisted_state.question_id == request.question_id
         else None
     )
-    active_question = prior_probe or (
+    recent_tutor_question = next(
+        (message.content for message in reversed(request.conversation_history)
+         if message.role == "assistant"),
+        None,
+    )
+    active_question = prior_probe or recent_tutor_question or (
         active_step.prompt
         if active_step is not None
         else focused_unresolved_prompt(
@@ -3073,7 +3077,8 @@ def classify_guided_learning_response(
         openai_client=openai_client,
     )
     objective = objective_for_rubric(request.active_teaching_objective, rubric)
-    objective = objective_with_persisted_choice_selection(request, rubric, objective)
+    if not rules.guided_learning.response_aware_enabled:
+        objective = objective_with_persisted_choice_selection(request, rubric, objective)
     objective = objective_with_persisted_component_evidence(request, rubric, objective)
     deterministic_resolution_enabled = (
         rules.guided_learning.deterministic_turn_resolution_enabled
@@ -3369,14 +3374,20 @@ def classify_guided_learning_response(
     validation_feedback: str | None = None
     model_call_count = 0
     guided_tutor_context = guided_tutor_context_for(request, rubric, objective)
-    for attempt in range(rules.guided_learning.guided_turn_maximum_retries + 1):
+    maximum_turn_retries = (
+        rules.guided_learning.response_aware_turn_maximum_retries
+        if rules.guided_learning.response_aware_enabled
+        else rules.guided_learning.guided_turn_maximum_retries
+    )
+    for attempt in range(maximum_turn_retries + 1):
         try:
             model_call_count += 1
             candidate = openai_client.evaluate_guided_turn(
                 question_type=request.question_type,
                 question=request.question,
                 answer_spec=request.answer_spec,
-                deterministic_evaluation=evaluate_answer_contract(request),
+                deterministic_evaluation=(None if rules.guided_learning.response_aware_enabled
+                                          else evaluate_answer_contract(request)),
                 generated_rubric=rubric,
                 active_objective=objective,
                 guided_tutor_context=guided_tutor_context,
@@ -3389,9 +3400,9 @@ def classify_guided_learning_response(
                 validation_feedback=validation_feedback,
                 evaluator_prompt_version=rules.guided_learning.evaluator_prompt_version,
                 system_prompt=(
-                    rules.guided_learning.evaluator_system_prompt
-                    + ("\n" + rules.guided_learning.response_aware_system_prompt
-                       if rules.guided_learning.response_aware_enabled else "")
+                    rules.guided_learning.response_aware_system_prompt
+                    if rules.guided_learning.response_aware_enabled
+                    else rules.guided_learning.evaluator_system_prompt
                 ),
             )
             candidate = candidate if rules.guided_learning.response_aware_enabled else merge_authored_component_evidence(
@@ -3408,8 +3419,21 @@ def classify_guided_learning_response(
                 allowed_errors,
                 rules,
             )
-            reveal_reason = (
-                guided_tutor_message_reveal_reason(
+            contribution_rejection = (
+                response_aware_contribution_rejection_reason(evaluation, request, rules)
+                if rules.guided_learning.response_aware_enabled
+                else None
+            )
+            message_rejection = contribution_rejection or (
+                response_aware_message_rejection_reason(
+                    evaluation,
+                    request,
+                    rubric,
+                    objective,
+                    rules,
+                )
+                if rules.guided_learning.response_aware_enabled
+                else guided_tutor_message_reveal_reason(
                     evaluation,
                     request,
                     rubric,
@@ -3419,20 +3443,28 @@ def classify_guided_learning_response(
                 if evaluation.student_state != "CORRECT"
                 else None
             )
-            if reveal_reason is not None:
+            if message_rejection is not None:
                 validation_feedback = (
                     rules.guided_learning.answer_reveal_retry_feedback
+                    if message_rejection.endswith("REVEAL")
+                    else rules.guided_learning.response_aware_contribution_retry_feedback
+                    if contribution_rejection is not None
+                    else rules.guided_learning.response_aware_quality_retry_feedback
                 )
                 logger.warning(
-                    "guided_answer_reveal_retry",
+                    "guided_response_aware_retry",
                     extra={
                         "question_id": request.question_id,
                         "attempt": attempt + 1,
                         "student_state": evaluation.student_state,
-                        "reveal_reason": reveal_reason,
+                        "rejection_reason": message_rejection,
                     },
                 )
                 rejected_evaluation = evaluation
+                last_error = AdapterError(
+                    "openai_ai_engine",
+                    f"Guided wording rejected: {message_rejection}.",
+                )
                 evaluation = None
                 continue
             break
@@ -4473,6 +4505,8 @@ def guided_tutor_message_reveal_reason(
         objective,
     ):
         return "ANSWER_REVEAL"
+    if guided_message_reveals_active_roles(message, request, objective):
+        return "ACTIVE_ROLE_REVEAL"
     if guided_message_reveals_fixed_amount_for_mismatched_rule(message, request):
         return "FIXED_AMOUNT_REVEAL"
     generated_support = (
@@ -4485,13 +4519,113 @@ def guided_tutor_message_reveal_reason(
         or guided_message_reveals_fixed_amount_for_mismatched_rule(
             generated_support, request
         )
+        or guided_message_reveals_active_roles(generated_support, request, objective)
     ):
         return "GENERATED_SUPPORT_REVEAL"
     if evaluation.contribution is not None:
         for row in evaluation.contribution.generated_visual_rows or []:
             row_text = f"{row.expression} {row.annotation}"
-            if contains_answer_reveal(row_text, request.correct_answer, rules) or guided_message_reveals_fixed_amount_for_mismatched_rule(row_text, request):
+            if (
+                contains_answer_reveal(row_text, request.correct_answer, rules)
+                or guided_message_reveals_fixed_amount_for_mismatched_rule(row_text, request)
+                or guided_message_reveals_active_roles(row_text, request, objective)
+            ):
                 return "GENERATED_VISUAL_REVEAL"
+    return None
+
+
+def guided_message_reveals_active_roles(
+    message: str,
+    request: ClassificationRequest,
+    objective: ActiveTeachingObjective,
+) -> bool:
+    """Keep role teaching from silently supplying unresolved active-expression facts."""
+
+    expression = _expression_parts(request.question)
+    if expression is None:
+        return False
+    variable, _, fixed_value = expression
+    missing = set(objective.missing_concept_ids)
+    checks: list[str] = []
+    if "CHANGING_VALUE" in missing:
+        checks.extend((
+            rf"\b{re.escape(variable)}\b.{{0,40}}\b(?:changes|change|varies|vary|variable)\b",
+            rf"\b(?:changes|change|varies|vary|variable)\b.{{0,40}}\b{re.escape(variable)}\b",
+        ))
+    if "FIXED_VALUE" in missing:
+        checks.extend((
+            rf"\b{re.escape(fixed_value)}\b.{{0,40}}\b(?:fixed|stays the same|constant)\b",
+            rf"\b(?:fixed|stays the same|constant)\b.{{0,40}}\b{re.escape(fixed_value)}\b",
+        ))
+    normalized = normalize_semantic_answer(message)
+    return any(re.search(pattern, normalized) is not None for pattern in checks)
+
+
+def response_aware_contribution_rejection_reason(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+    rules: ClassifierRulesConfig,
+) -> str | None:
+    """Ensure semantic fields describe the learner's actual contribution."""
+
+    contribution = evaluation.contribution
+    if contribution is None or contribution.kind != "EXPLANATION_REQUEST":
+        return None
+    learner_question = contribution.learner_question
+    if not learner_question_matches_input(
+        learner_question,
+        request.student_input,
+        rules.guided_learning.response_aware_explanation_question_overlap,
+    ):
+        return "INVENTED_LEARNER_QUESTION"
+    return None
+
+
+def learner_question_matches_input(
+    learner_question: str | None,
+    student_input: str,
+    minimum_overlap: float,
+) -> bool:
+    """Require a model-labelled learner question to be grounded in the current turn."""
+
+    if learner_question is None:
+        return False
+    question_tokens = significant_component_tokens(learner_question)
+    input_tokens = significant_component_tokens(student_input)
+    if not question_tokens or not input_tokens:
+        return False
+    return len(question_tokens & input_tokens) / len(question_tokens) >= minimum_overlap
+
+
+def response_aware_message_rejection_reason(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+    rules: ClassifierRulesConfig,
+) -> str | None:
+    """Reject unsafe or mechanically phrased model wording before it reaches a learner."""
+
+    if evaluation.student_state != "CORRECT":
+        reveal_reason = guided_tutor_message_reveal_reason(
+            evaluation,
+            request,
+            rubric,
+            objective,
+            rules,
+        )
+        if reveal_reason is not None:
+            return reveal_reason
+    message = evaluation.tutor_message.strip()
+    if message == "" or evaluation.tutor_message_voice.strip() == "":
+        return "EMPTY_WORDING"
+    if maximum_recent_tutor_message_similarity(message, request) >= rules.guided_learning.tutor_message_similarity_threshold:
+        return "NEAR_DUPLICATE_WORDING"
+    if any(
+        re.search(pattern, message) is not None
+        for pattern in rules.guided_learning.response_aware_reply_rejection_patterns
+    ):
+        return "GENERIC_OR_UNGROUNDED_WORDING"
     return None
 
 
@@ -5675,8 +5809,6 @@ def validate_response_aware_evidence(
     contribution = evaluation.contribution
     if contribution is None:
         raise AdapterError("openai_ai_engine", "Guided evaluation is missing its contribution assessment.")
-    if evaluation.confidence < rules.guided_learning.confidence_threshold:
-        raise AdapterError("openai_ai_engine", "Contribution assessment confidence is below the configured threshold.")
     known_ids = {concept.concept_id for concept in rubric.required_concepts}
     new_ids = set(evaluation.newly_confirmed_concept_ids)
     contradicted = set(evaluation.contradicted_concept_ids)
@@ -5690,6 +5822,8 @@ def validate_response_aware_evidence(
     if contribution.assessment == "NOT_ASSESSED":
         if new_ids or contradicted or evaluation.selected_error_code is not None:
             raise AdapterError("openai_ai_engine", "A non-attempt cannot add mathematical evidence or an error code.")
+        if contribution.kind == "EXPLANATION_REQUEST" and not contribution.explained_idea:
+            raise AdapterError("openai_ai_engine", "An explanation request must record the idea explained to the learner.")
         return evaluation.model_copy(update={
             "student_state": "UNCLEAR" if contribution.kind == "UNCLEAR_INPUT" else "STUCK",
             "preserved_concept_ids": objective.confirmed_concept_ids,
@@ -6177,9 +6311,36 @@ def build_guided_tutor_response(
     )
     if contribution is not None and response.guided_teaching_state is not None:
         previous = request.guided_teaching_state
+        previous_matches = previous is not None and previous.question_id == request.question_id
         previous_ideas = previous.explained_ideas if previous is not None and previous.question_id == request.question_id else []
         explained = contribution.explained_idea
+        current_claims = [
+            GuidedEvidenceClaim(concept_id=concept_id, status=status, source=evidence_source_for_request(request))
+            for status, concept_ids in (
+                ("DEMONSTRATED", evaluation.newly_confirmed_concept_ids),
+                ("CONTRADICTED", evaluation.contradicted_concept_ids),
+            )
+            for concept_id in concept_ids
+        ]
+        ledger = {claim.concept_id: claim for claim in (
+            [*previous.evidence_ledger, *current_claims] if previous_matches else current_claims
+        )}
+        chosen_component = objective.target_concept_ids[0] if objective and objective.target_concept_ids else None
+        steps = teaching_steps_for(request)
+        step_components = {step.step_id: _component_for_step(request, rubric, step.step_id) for step in steps}
+        completed_steps = [step.step_id for step in steps
+                           if step_components[step.step_id] in response.guided_teaching_state.confirmed_component_ids]
+        chosen_step_index = next((index for index, step in enumerate(steps)
+                                  if step_components[step.step_id] == chosen_component), None) if chosen_component else None
         response = response.model_copy(update={"guided_teaching_state": response.guided_teaching_state.model_copy(update={
+            "last_turn_evidence": current_claims,
+            "evidence_ledger": list(ledger.values()),
+            "completed_step_ids": completed_steps,
+            "current_step_index": chosen_step_index,
+            "active_step_id": steps[chosen_step_index].step_id if chosen_step_index is not None else None,
+            "active_component_id": chosen_component,
+            "last_reasoning_probe": evaluation.tutor_message,
+            "demonstrated_reasoning_ids": previous.demonstrated_reasoning_ids if previous_matches else [],
             "identified_difficulty": contribution.identified_difficulty or (
                 previous.identified_difficulty if previous is not None and previous.question_id == request.question_id else None
             ),
@@ -6187,10 +6348,10 @@ def build_guided_tutor_response(
                 -rules.guided_learning.maximum_recent_history_turns:
             ],
         })})
-    guarded_response = apply_answer_reveal_guardrail(
-        response,
-        request.correct_answer,
-        rules,
+    # Response-aware wording has already passed evidence-aware reveal validation.
+    # The legacy guard would replace a valid acknowledgement with canned wording.
+    guarded_response = response if contribution is not None else apply_answer_reveal_guardrail(
+        response, request.correct_answer, rules,
     )
     if not requires_written_symbolic_rule_evidence(request, state):
         return guarded_response
@@ -6212,8 +6373,8 @@ def build_guided_tutor_response(
             "answer_value_confirmed": True,
             "reasoning_complete": False,
             "guided_student_state": "PARTIAL",
-            "active_teaching_objective": request.active_teaching_objective,
-            "guided_teaching_state": request.guided_teaching_state,
+            "active_teaching_objective": guarded_response.active_teaching_objective if contribution else request.active_teaching_objective,
+            "guided_teaching_state": guarded_response.guided_teaching_state if contribution else request.guided_teaching_state,
             "requires_written_math_evidence": True,
             "write_instruction": write_instruction,
         }
