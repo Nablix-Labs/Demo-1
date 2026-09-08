@@ -223,6 +223,9 @@ class CriticalThinkingConfig(StrictSchema):
 class GuidedLearningConfig(StrictSchema):
     model: str
     model_supports_reasoning_effort: StrictBool
+    assessment_model: str
+    assessment_model_supports_reasoning_effort: StrictBool
+    assessment_reasoning_effort: Literal["none", "minimal", "low", "medium", "high"]
     single_call_enabled: StrictBool
     response_aware_enabled: StrictBool
     production_boundary_enabled: StrictBool

@@ -3388,7 +3388,12 @@ def classify_guided_learning_response(
         try:
             model_call_count += 1
             if rules.guided_learning.production_boundary_enabled:
-                candidate = openai_client.evaluate_guided_assessment(
+                assessment_client = openai_client.with_guided_model(
+                    rules.guided_learning.assessment_model,
+                    rules.guided_learning.assessment_reasoning_effort,
+                    rules.guided_learning.assessment_model_supports_reasoning_effort,
+                )
+                candidate = assessment_client.evaluate_guided_assessment(
                     question_type=request.question_type,
                     question=request.question,
                     answer_spec=request.answer_spec,

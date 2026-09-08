@@ -293,6 +293,24 @@ class OpenAIAIEngineClient:
         self._guided_model_supports_reasoning_effort = guided_model_supports_reasoning_effort
         self._guided_verbosity = guided_verbosity
 
+    def with_guided_model(
+        self,
+        model: str,
+        reasoning_effort: str,
+        supports_reasoning_effort: bool,
+    ) -> OpenAIAIEngineClient:
+        return OpenAIAIEngineClient(
+            api_key=self._api_key,
+            model=model,
+            timeout_seconds=self._timeout_seconds,
+            prompt_cache_key_enabled=self._prompt_cache_key_enabled,
+            store_responses=self._store_responses,
+            retry_count=self._retry_count,
+            guided_reasoning_effort=reasoning_effort,
+            guided_model_supports_reasoning_effort=supports_reasoning_effort,
+            guided_verbosity=self._guided_verbosity,
+        )
+
     def generate_tutor_turn(
         self,
         question: str,

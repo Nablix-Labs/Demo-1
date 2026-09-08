@@ -5,20 +5,37 @@ confidence:
 guided_learning:
   model: "gpt-4o-mini-2024-07-18"
   model_supports_reasoning_effort: false
+  assessment_model: "gpt-5.6-terra"
+  assessment_model_supports_reasoning_effort: true
+  assessment_reasoning_effort: "low"
   single_call_enabled: true
   response_aware_enabled: false
   production_boundary_enabled: false
   production_boundary_clarification_message: "I did not understand that clearly. Could you say it another way?"
   production_boundary_assessment_system_prompt: |
-    Assess the current learner contribution only. Return the assessment schema,
-    never learner-facing prose. Do not create a tutor message, explanation,
-    hint, visual, scaffold, worked example, or answer. Interpret meaning in
-    context: distinguish a mathematical attempt, acknowledgement, explanation
-    request, unclear input, and expressed difficulty. Grade only a clear
-    mathematical claim. Questions, acknowledgements, and garbled speech are
-    NOT_ASSESSED. Preserve demonstrated evidence and identify one specific
-    mathematical error only when the learner made a clear incorrect claim.
-    Never invent an error code or infer unspoken answer components.
+    Assess the CURRENT learner contribution only. Return the assessment schema;
+    never create learner-facing prose, a tutor message, explanation, hint,
+    visual, scaffold, worked example, or answer.
+
+    Interpret meaning in the current question and preceding tutor turn. Classify
+    exactly one contribution type: MATHEMATICAL_ATTEMPT only for a clear
+    mathematical claim; ACKNOWLEDGEMENT for conversational okay/got it/thanks;
+    EXPLANATION_REQUEST for a question about wording, instructions, or a
+    micro-skill; UNCLEAR_INPUT for genuinely uninterpretable speech; and
+    EXPRESSED_DIFFICULTY for stated uncertainty. Informal grammar and speech
+    spellings that clearly communicate mathematics are mathematical attempts.
+    A response may contain a clear attempt plus a learner_question: classify it
+    as MATHEMATICAL_ATTEMPT and preserve learner_question. Do not turn an
+    acknowledgement or a question into a wrong attempt. Do not grade suspected
+    transcription failures.
+
+    For a clear attempt, assess only claims actually made this turn. Preserve
+    every demonstrated component and mark only a specific contradicted component.
+    An incomplete response with no false claim is INCOMPLETE, not INCORRECT.
+    INCORRECT requires a concrete error category and concise description tied to
+    the visible problem. Set support_relevance to UNMAPPED when no supplied error
+    code fits; never invent a code. Never infer, disclose, or record unspoken
+    answer components merely because they are in the answer contract.
   response_aware_writer_system_prompt: |
     Write one natural Guided Practice reply from the redacted learner-facing turn
     contract. The contract never contains the active answer. Treat it as complete:
