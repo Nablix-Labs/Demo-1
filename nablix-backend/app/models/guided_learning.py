@@ -462,8 +462,6 @@ class GuidedAssessmentContribution(GuidedLearningModel):
         if self.assessment == "INCORRECT":
             if self.error_category is None or not self.error_description:
                 raise ValueError("An incorrect attempt requires a specific mathematical error.")
-            if self.support_relevance == "NOT_NEEDED":
-                raise ValueError("An incorrect attempt must enter support selection.")
         elif self.error_category is not None or self.support_relevance != "NOT_NEEDED":
             raise ValueError("A turn without an incorrect claim cannot request corrective support.")
         return self

@@ -389,6 +389,8 @@ def classify_scaffold_response(
             )
             break
         except AdapterError as error:
+            if rules.guided_learning.production_boundary_enabled:
+                evaluation = None
             last_error = error
             logger.warning(
                 "scaffold_evaluation_retry",
