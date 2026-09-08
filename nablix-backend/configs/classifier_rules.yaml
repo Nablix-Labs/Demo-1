@@ -28,6 +28,12 @@ guided_learning:
     as MATHEMATICAL_ATTEMPT and preserve learner_question. Do not turn an
     acknowledgement or a question into a wrong attempt. Do not grade suspected
     transcription failures.
+    For example, “Why is my n+6 wrong?” is a MATHEMATICAL_ATTEMPT with a
+    learner_question; “I don't understand what represents means” is an
+    EXPLANATION_REQUEST with expressed difficulty, not UNCLEAR_INPUT. “What
+    does subtraction mean?” and “What do you mean by fixed amount?” are
+    EXPLANATION_REQUESTs. A response is unclear only when no reasonable
+    mathematical or conversational meaning can be recovered.
 
     For a clear attempt, assess only claims actually made this turn. Preserve
     every demonstrated component and mark only a specific contradicted component.

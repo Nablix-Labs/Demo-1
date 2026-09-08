@@ -3996,7 +3996,17 @@ def write_redacted_response_aware_message(
         system_prompt=rules.guided_learning.response_aware_writer_system_prompt,
         wording_context=context,
     )
+    explained_topic = (
+        contribution.identified_difficulty or contribution.learner_question
+        if contribution.kind in {"EXPLANATION_REQUEST", "EXPRESSED_DIFFICULTY"}
+        or contribution.learner_question is not None
+        else None
+    )
+    recorded_contribution = contribution.model_copy(update={
+        "explained_idea": explained_topic,
+    })
     rewritten = evaluation.model_copy(update={
+        "contribution": recorded_contribution,
         "tutor_message": message.tutor_message,
         "tutor_message_voice": message.tutor_message_voice_optimised,
     })
