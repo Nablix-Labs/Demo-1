@@ -438,6 +438,51 @@ class StudentContribution(GuidedLearningModel):
         return self
 
 
+class GuidedAssessmentContribution(GuidedLearningModel):
+    """Internal semantic result returned before any learner-facing wording exists."""
+
+    kind: Literal[
+        "MATHEMATICAL_ATTEMPT", "ACKNOWLEDGEMENT", "EXPLANATION_REQUEST",
+        "UNCLEAR_INPUT", "EXPRESSED_DIFFICULTY",
+    ]
+    assessment: Literal["NOT_ASSESSED", "CORRECT", "INCORRECT", "INCOMPLETE"]
+    error_category: Literal[
+        "CALCULATION", "OPERATION_SIGN", "VARIABLE_CONSTANT",
+        "EXPRESSION_STRUCTURE", "REASONING", "OTHER",
+    ] | None
+    error_description: str | None = Field(max_length=240)
+    identified_difficulty: str | None = Field(max_length=240)
+    learner_question: str | None = Field(max_length=240)
+    support_relevance: Literal["NOT_NEEDED", "MATCHED", "UNMAPPED", "MISMATCHED"]
+
+    @model_validator(mode="after")
+    def validate_assessment(self) -> GuidedAssessmentContribution:
+        if self.kind != "MATHEMATICAL_ATTEMPT" and self.assessment != "NOT_ASSESSED":
+            raise ValueError("Only an understood mathematical attempt may be assessed.")
+        if self.assessment == "INCORRECT":
+            if self.error_category is None or not self.error_description:
+                raise ValueError("An incorrect attempt requires a specific mathematical error.")
+            if self.support_relevance == "NOT_NEEDED":
+                raise ValueError("An incorrect attempt must enter support selection.")
+        elif self.error_category is not None or self.support_relevance != "NOT_NEEDED":
+            raise ValueError("A turn without an incorrect claim cannot request corrective support.")
+        return self
+
+
+class GuidedAssessment(GuidedLearningModel):
+    """Answer-safe model output used to build an internal GuidedEvaluation."""
+
+    contribution: GuidedAssessmentContribution
+    student_state: GuidedStudentState
+    newly_confirmed_concept_ids: list[str]
+    preserved_concept_ids: list[str]
+    contradicted_concept_ids: list[str]
+    missing_concept_ids: list[str]
+    selected_error_code: str | None
+    confidence: float = Field(ge=0.0, le=1.0)
+    next_objective: ActiveTeachingObjective | None
+
+
 class GuidedEvaluation(GuidedLearningModel):
     contribution: StudentContribution | None = None
     student_state: GuidedStudentState

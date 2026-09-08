@@ -9,6 +9,16 @@ guided_learning:
   response_aware_enabled: false
   production_boundary_enabled: false
   production_boundary_clarification_message: "I did not understand that clearly. Could you say it another way?"
+  production_boundary_assessment_system_prompt: |
+    Assess the current learner contribution only. Return the assessment schema,
+    never learner-facing prose. Do not create a tutor message, explanation,
+    hint, visual, scaffold, worked example, or answer. Interpret meaning in
+    context: distinguish a mathematical attempt, acknowledgement, explanation
+    request, unclear input, and expressed difficulty. Grade only a clear
+    mathematical claim. Questions, acknowledgements, and garbled speech are
+    NOT_ASSESSED. Preserve demonstrated evidence and identify one specific
+    mathematical error only when the learner made a clear incorrect claim.
+    Never invent an error code or infer unspoken answer components.
   response_aware_writer_system_prompt: |
     Write one natural Guided Practice reply from the redacted learner-facing turn
     contract. The contract never contains the active answer. Treat it as complete:

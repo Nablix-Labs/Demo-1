@@ -40,6 +40,7 @@ from app.models.guided_learning import (
     FocusedComponentEvidence,
     GeneratedConcept,
     GeneratedQuestionRubric,
+    GuidedAssessment,
     GuidedEvaluation,
     ScaffoldEvaluationContext,
     ScaffoldStepEvaluation,
@@ -162,6 +163,12 @@ def guided_evaluation_schema() -> dict[str, object]:
         raise AdapterError("openai_ai_engine", "Guided evaluation schema is malformed.")
     schema["required"] = [*required, "write_instruction", "canvas_intentions", "contribution"]
     return schema
+
+
+def guided_assessment_schema() -> dict[str, object]:
+    """Return the production evaluator schema without learner-facing fields."""
+
+    return GuidedAssessment.model_json_schema()
 
 
 def build_explain_again_initial_payload(
@@ -477,6 +484,71 @@ class OpenAIAIEngineClient:
             raise AdapterError(
                 "openai_ai_engine",
                 f"invalid guided evaluation: {error}",
+            ) from error
+
+    def evaluate_guided_assessment(
+        self,
+        question_type: QuestionType | None,
+        question: str,
+        answer_spec: AnswerSpec,
+        generated_rubric: GeneratedQuestionRubric,
+        active_objective: ActiveTeachingObjective,
+        guided_tutor_context: GuidedTutorContext,
+        student_response: str,
+        input_source: InputSource,
+        allowed_error_codes: list[dict[str, object]],
+        recent_conversation: list[ConversationMessage],
+        evaluator_prompt_version: str,
+        system_prompt: str,
+    ) -> GuidedEvaluation:
+        schema = guided_assessment_schema()
+        permitted_codes = [item["error_code"] for item in allowed_error_codes if isinstance(item.get("error_code"), str)]
+        schema["properties"]["selected_error_code"]["enum"] = [None, *permitted_codes]
+        if not permitted_codes:
+            schema["$defs"]["GuidedAssessmentContribution"]["properties"]["support_relevance"]["enum"] = [
+                "NOT_NEEDED", "UNMAPPED", "MISMATCHED",
+            ]
+        content = self._request_guided_json(
+            name="guided_turn_assessment",
+            schema=schema,
+            system_prompt=system_prompt,
+            user_payload={
+                "question_type": question_type,
+                "question": question,
+                "answer_spec": answer_spec.model_dump(),
+                "generated_rubric": generated_rubric.model_dump(),
+                "active_objective": active_objective.model_dump(),
+                "guided_tutor_context": guided_tutor_context.model_dump(),
+                "student_response": student_response,
+                "input_source": input_source,
+                "allowed_error_codes": allowed_error_codes,
+                "recent_conversation": [message.model_dump() for message in recent_conversation],
+                "evaluator_prompt_version": evaluator_prompt_version,
+            },
+        )
+        try:
+            assessment = GuidedAssessment.model_validate(content)
+            contribution = assessment.contribution.model_dump()
+            contribution["explained_idea"] = None
+            contribution["generated_support_text"] = None
+            contribution["generated_visual_rows"] = None
+            return GuidedEvaluation(
+                contribution=contribution,
+                student_state=assessment.student_state,
+                newly_confirmed_concept_ids=assessment.newly_confirmed_concept_ids,
+                preserved_concept_ids=assessment.preserved_concept_ids,
+                contradicted_concept_ids=assessment.contradicted_concept_ids,
+                missing_concept_ids=assessment.missing_concept_ids,
+                selected_error_code=assessment.selected_error_code,
+                confidence=assessment.confidence,
+                next_objective=assessment.next_objective,
+                tutor_message="Internal assessment completed.",
+                tutor_message_voice="Internal assessment completed.",
+            )
+        except ValidationError as error:
+            raise AdapterError(
+                "openai_ai_engine",
+                f"invalid guided assessment: {error}",
             ) from error
 
     def write_guided_fact_budget_message(

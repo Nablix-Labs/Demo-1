@@ -3385,29 +3385,47 @@ def classify_guided_learning_response(
     for attempt in range(maximum_turn_retries + 1):
         try:
             model_call_count += 1
-            candidate = openai_client.evaluate_guided_turn(
-                question_type=request.question_type,
-                question=request.question,
-                answer_spec=request.answer_spec,
-                deterministic_evaluation=(None if rules.guided_learning.response_aware_enabled
-                                          else evaluate_answer_contract(request)),
-                generated_rubric=rubric,
-                active_objective=objective,
-                guided_tutor_context=guided_tutor_context,
-                student_response=request.student_input,
-                input_source=request.input_source,
-                allowed_error_codes=allowed_errors,
-                recent_conversation=request.conversation_history[
-                    -rules.guided_learning.maximum_recent_history_turns:
-                ],
-                validation_feedback=validation_feedback,
-                evaluator_prompt_version=rules.guided_learning.evaluator_prompt_version,
-                system_prompt=(
-                    rules.guided_learning.response_aware_system_prompt
-                    if rules.guided_learning.response_aware_enabled
-                    else rules.guided_learning.evaluator_system_prompt
-                ),
-            )
+            if rules.guided_learning.production_boundary_enabled:
+                candidate = openai_client.evaluate_guided_assessment(
+                    question_type=request.question_type,
+                    question=request.question,
+                    answer_spec=request.answer_spec,
+                    generated_rubric=rubric,
+                    active_objective=objective,
+                    guided_tutor_context=guided_tutor_context,
+                    student_response=request.student_input,
+                    input_source=request.input_source,
+                    allowed_error_codes=allowed_errors,
+                    recent_conversation=request.conversation_history[
+                        -rules.guided_learning.maximum_recent_history_turns:
+                    ],
+                    evaluator_prompt_version=rules.guided_learning.evaluator_prompt_version,
+                    system_prompt=rules.guided_learning.production_boundary_assessment_system_prompt,
+                )
+            else:
+                candidate = openai_client.evaluate_guided_turn(
+                    question_type=request.question_type,
+                    question=request.question,
+                    answer_spec=request.answer_spec,
+                    deterministic_evaluation=(None if rules.guided_learning.response_aware_enabled
+                                              else evaluate_answer_contract(request)),
+                    generated_rubric=rubric,
+                    active_objective=objective,
+                    guided_tutor_context=guided_tutor_context,
+                    student_response=request.student_input,
+                    input_source=request.input_source,
+                    allowed_error_codes=allowed_errors,
+                    recent_conversation=request.conversation_history[
+                        -rules.guided_learning.maximum_recent_history_turns:
+                    ],
+                    validation_feedback=validation_feedback,
+                    evaluator_prompt_version=rules.guided_learning.evaluator_prompt_version,
+                    system_prompt=(
+                        rules.guided_learning.response_aware_system_prompt
+                        if rules.guided_learning.response_aware_enabled
+                        else rules.guided_learning.evaluator_system_prompt
+                    ),
+                )
             candidate = candidate if rules.guided_learning.response_aware_enabled else merge_authored_component_evidence(
                 candidate,
                 rubric,
