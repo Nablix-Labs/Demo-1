@@ -4639,12 +4639,15 @@ def guided_message_reveals_active_roles(
     variable, _, fixed_value = expression
     missing = set(objective.missing_concept_ids)
     checks: list[str] = []
-    if "CHANGING_VALUE" in missing:
+    role_objective_is_explicit = bool(
+        missing.intersection({"CHANGING_VALUE", "FIXED_VALUE"})
+    )
+    if not role_objective_is_explicit or "CHANGING_VALUE" in missing:
         checks.extend((
             rf"\b{re.escape(variable)}\b.{{0,40}}\b(?:changes|change|varies|vary|variable)\b",
             rf"\b(?:changes|change|varies|vary|variable)\b.{{0,40}}\b{re.escape(variable)}\b",
         ))
-    if "FIXED_VALUE" in missing:
+    if not role_objective_is_explicit or "FIXED_VALUE" in missing:
         checks.extend((
             rf"\b{re.escape(fixed_value)}\b.{{0,40}}\b(?:fixed|stays the same|constant)\b",
             rf"\b(?:fixed|stays the same|constant)\b.{{0,40}}\b{re.escape(fixed_value)}\b",
