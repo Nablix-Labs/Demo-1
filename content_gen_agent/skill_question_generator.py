@@ -107,13 +107,26 @@ def allowed_types(phase: Phase) -> list[str]:
 #: Wordings the review bans from Phase 3. Each one asks for prose a marker has
 #: to interpret, which is not answerable on a canvas and not markable without
 #: a model call, and Phase 3 runs with no support at all.
+#: Two phrasings were added after the smoke run of 8 September, where the
+#: semantic reviewer caught Phase 3 questions this pattern had let through:
+#:
+#:    "Write a SINGLE sentence in words that..."   the adjective list had
+#:                                                 "short" but not "single"
+#:    "DESCRIBE THIS IN one sentence"              "describe" was only
+#:                                                 followed by why/how/what/in
+#:
+#: Both are the same demand in different clothes. The adjective is now any
+#: word, and the sentence-asking verbs are grouped rather than listed one at a
+#: time, so the next synonym does not need its own line.
 PROSE_RE = re.compile(
     r"(?:"
     r"in your own words"
     r"|explain (?:in|why|how|what|briefly)"
     r"|describe (?:why|how|what|in)"
     r"|say (?:why|how|what) "
-    r"|write (?:a|one|two|1|2)(?:\s+or\s+(?:two|three|2|3))?\s+(?:short\s+)?(?:sentence|sentences|phrase|phrases)"
+    r"|(?:write|describe|give|state|put)\b[^.?!]{0,40}?\b"
+    r"(?:a|an|one|two|1|2)(?:\s+or\s+(?:two|three|2|3))?\s+(?:\w+\s+){0,2}"
+    r"(?:sentence|sentences|phrase|phrases)"
     r"|tell (?:me|us) (?:why|how|what)"
     r"|justify your"
     r"|give a reason"

@@ -24,6 +24,8 @@ from mapping_generator import (                     # noqa: E402
     MappingError,
     build_error_map_prompt,
     build_misconception_errors,
+    option_texts,
+    unmapped_by_question,
     direct_failures,
     generate_question_error_map,
 )
@@ -248,6 +250,181 @@ def test_the_prompt_says_it_is_labelling_not_inventing():
     ones. A second, different set would be unreconcilable with the first."""
     text = " ".join(ERROR_MAP_SYSTEM_PROMPT.split())
     assert "You are NOT inventing wrong answers" in text
+
+
+# ──────────────────────────────────────────────────────────────────────
+# A letter is not a mistake
+# ──────────────────────────────────────────────────────────────────────
+
+CHOICE_TEXT = ("Which rule works? a) n + 5 b) 5n c) n - 5")
+
+
+def test_option_texts_reads_what_each_option_says():
+    assert option_texts(CHOICE_TEXT) == {
+        "A": "n + 5", "B": "5n", "C": "n - 5",
+    }
+
+
+def test_option_texts_survives_options_on_their_own_lines():
+    text = "Pick one.\n\na) Replace x with 5.\n\nb) Solve for x.\n\nc) Do nothing."
+    assert option_texts(text)["B"] == "Solve for x."
+
+
+def test_option_texts_is_empty_for_a_question_with_no_options():
+    assert option_texts("Write the rule for 3+5, 9+5 using n.") == {}
+
+
+def test_a_bare_letter_is_shown_with_what_the_option_says():
+    """The root cause of T01's empty map on 7 September.
+
+    69 per cent of its wrong answers were bare option letters, the highest of
+    the six topics, and it returned no mappings at all. A model asked which
+    error 'B' demonstrates has to go hunting for option B; shown what B says,
+    it has the mistake in front of it.
+    """
+    prompt = build_error_map_prompt(
+        [_answer(wrong="B | c")],
+        [_question(text=CHOICE_TEXT)],
+        [_error("ERR-T01-A")],
+    )
+    assert "(option B says: 5n)" in prompt
+    assert "(option C says: n - 5)" in prompt
+
+
+def test_a_substantive_wrong_answer_is_left_alone():
+    """Only bare letters need resolving; '5n' already says what it is."""
+    prompt = build_error_map_prompt(
+        [_answer(wrong="5n")], [_question(text=CHOICE_TEXT)],
+        [_error("ERR-T01-A")],
+    )
+    assert "wrong: 5n" in prompt
+    assert "option" not in prompt.split("wrong: 5n")[1].split("\n")[0]
+
+
+def test_the_prompt_says_a_letter_is_not_a_mistake():
+    text = " ".join(ERROR_MAP_SYSTEM_PROMPT.split())
+    assert "A letter is not a mistake" in text
+    assert "EVERY QUESTION NEEDS AT LEAST ONE MAPPING" in text
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Coverage: the warning that was never raised
+# ──────────────────────────────────────────────────────────────────────
+
+def test_a_partly_mapped_question_is_warned_about():
+    """The gap that produced no warning at all on 7 September.
+
+    97 questions had some wrong answers mapped and some not. The old check
+    only fired when EVERY wrong answer was unmapped, so those were silent.
+    """
+    result = _gen_map(_map_payload(_m(pattern="5n")),
+                      answers=[_answer(wrong="5n | n-5")], retry=False)
+    warning = next(i for i in result[1] if "unmapped" in i.message)
+    assert not warning.is_error
+    assert "1 of its 2" in warning.message
+
+
+def test_a_fully_mapped_question_is_not_warned_about():
+    result = _gen_map(_map_payload(_m(pattern="5n"), _m(pattern="n-5")),
+                      answers=[_answer(wrong="5n | n-5")], retry=False)
+    assert not [i for i in result[1] if "unmapped" in i.message]
+
+
+def test_unmapped_by_question_names_what_is_missing():
+    rows, _, _ = _gen_map(_map_payload(_m(pattern="5n")),
+                          answers=[_answer(wrong="5n | n-5")], retry=False)
+    assert unmapped_by_question(rows, [_answer(wrong="5n | n-5")]) == {
+        "Q-T01-001": {"n-5"},
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The retry
+# ──────────────────────────────────────────────────────────────────────
+
+def _gen_map_scripted(payloads, answers=None, questions=None, errors=None, **kw):
+    answers = answers or [_answer()]
+    questions = questions or [_question()]
+    errors = errors or [_error("ERR-T01-A"), _error("ERR-T01-B")]
+    client = FakeLLMClient(list(payloads))
+    result = generate_question_error_map(
+        answers, questions, errors, client, "T01", **kw,
+    )
+    return result, client
+
+
+def test_a_question_with_nothing_is_asked_about_again():
+    """One extra request is the difference between a topic whose mistakes can
+    be diagnosed and T01, which had 69 questions and zero mappings."""
+    (rows, issues, _), client = _gen_map_scripted(
+        [_map_payload(), _map_payload(_m(pattern="5n"))],
+    )
+    assert len(client.calls) == 2
+    assert [r.response_pattern for r in rows] == ["5n"]
+
+
+def test_the_retry_asks_only_about_the_questions_that_came_back_empty():
+    """Asking again about finished work wastes tokens and invites the model to
+    contradict its first answer."""
+    answers = [_answer(1, wrong="5n"), _answer(2, wrong="n-5")]
+    questions = [_question(1), _question(2)]
+    (_, _, _), client = _gen_map_scripted(
+        [_map_payload(_m("Q-T01-001", "5n")),
+         _map_payload(_m("Q-T01-002", "n-5"))],
+        answers=answers, questions=questions,
+    )
+    retry_prompt = client.calls[1]["user"]
+    assert "Q-T01-002" in retry_prompt
+    assert "Q-T01-001" not in retry_prompt
+
+
+def test_no_retry_happens_when_everything_is_mapped():
+    (_, _, _), client = _gen_map_scripted([_map_payload(_m(pattern="5n"))],
+                                          answers=[_answer(wrong="5n")])
+    assert len(client.calls) == 1
+
+
+def test_a_partly_mapped_question_does_not_trigger_a_retry():
+    """It has a diagnosis for at least one mistake. Worth a warning, not
+    worth a request."""
+    (_, _, _), client = _gen_map_scripted(
+        [_map_payload(_m(pattern="5n"))], answers=[_answer(wrong="5n | n-5")],
+    )
+    assert len(client.calls) == 1
+
+
+def test_a_failed_retry_keeps_the_first_pass():
+    """The retry exists to fill a gap. Failing to fill it must not also
+    destroy what was already there."""
+    answers = [_answer(1, wrong="5n"), _answer(2, wrong="n-5")]
+    questions = [_question(1), _question(2)]
+    (rows, issues, _), client = _gen_map_scripted(
+        [_map_payload(_m("Q-T01-001", "5n")), LLMError("upstream is down")],
+        answers=answers, questions=questions,
+    )
+    assert [r.response_pattern for r in rows] == ["5n"]
+    assert any("the retry failed" in i.message for i in issues)
+
+
+def test_the_retry_can_be_turned_off():
+    (_, _, _), client = _gen_map_scripted([_map_payload()], retry=False)
+    assert len(client.calls) == 1
+
+
+def test_a_retry_that_fills_the_gap_clears_the_stale_warning():
+    """A warning that a question has no diagnosis must not survive the retry
+    that gave it one."""
+    (rows, issues, _), _ = _gen_map_scripted(
+        [_map_payload(), _map_payload(_m(pattern="5n"))],
+        answers=[_answer(wrong="5n")],
+    )
+    assert rows
+    assert not [i for i in issues
+                if "no diagnosis" in i.message and i.field == "Q-T01-001"]
+
+
+def test_the_prompt_states_the_job_is_labelling():
+    text = " ".join(ERROR_MAP_SYSTEM_PROMPT.split())
     assert "Your only job is to say which error each one demonstrates" in text
 
 
