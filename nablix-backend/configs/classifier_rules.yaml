@@ -8,6 +8,7 @@ guided_learning:
   single_call_enabled: true
   response_aware_enabled: false
   production_boundary_enabled: false
+  production_boundary_clarification_message: "I did not understand that clearly. Could you say it another way?"
   response_aware_writer_system_prompt: |
     Write one natural Guided Practice reply from the redacted learner-facing turn
     contract. The contract never contains the active answer. Treat it as complete:

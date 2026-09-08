@@ -826,6 +826,7 @@ async def process_answer_with_session_event(
                 generated_support_text=(
                     tutor.contribution.generated_support_text
                     if tutor.contribution is not None
+                    and not rules.guided_learning.production_boundary_enabled
                     and tutor.contribution.support_relevance in {"UNMAPPED", "MISMATCHED"}
                     else None
                 ),
@@ -837,6 +838,7 @@ async def process_answer_with_session_event(
                 generated_visual_rows=(
                     tutor.contribution.generated_visual_rows
                     if tutor.contribution is not None and event_type == "INCORRECT_ATTEMPT"
+                    and not rules.guided_learning.production_boundary_enabled
                     else None
                 ),
             ),

@@ -226,6 +226,7 @@ class GuidedLearningConfig(StrictSchema):
     single_call_enabled: StrictBool
     response_aware_enabled: StrictBool
     production_boundary_enabled: StrictBool
+    production_boundary_clarification_message: str
     response_aware_writer_system_prompt: str
     response_aware_system_prompt: str
     response_aware_scaffold_prompt: str
