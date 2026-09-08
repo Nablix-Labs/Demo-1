@@ -3431,6 +3431,8 @@ def classify_guided_learning_response(
                 rubric,
                 request.student_input,
             )
+            if rules.guided_learning.production_boundary_enabled:
+                candidate = normalize_production_assessment(candidate)
             raw_student_state = candidate.student_state
             raw_confidence = candidate.confidence
             evaluation = validate_guided_evaluation(
@@ -5960,7 +5962,11 @@ def validate_response_aware_evidence(
     if contribution.assessment == "NOT_ASSESSED":
         if new_ids or contradicted or evaluation.selected_error_code is not None:
             raise AdapterError("openai_ai_engine", "A non-attempt cannot add mathematical evidence or an error code.")
-        if contribution.kind == "EXPLANATION_REQUEST" and not contribution.explained_idea:
+        if (
+            contribution.kind == "EXPLANATION_REQUEST"
+            and not contribution.explained_idea
+            and not rules.guided_learning.production_boundary_enabled
+        ):
             raise AdapterError("openai_ai_engine", "An explanation request must record the idea explained to the learner.")
         return evaluation.model_copy(update={
             "student_state": "UNCLEAR" if contribution.kind == "UNCLEAR_INPUT" else "STUCK",
@@ -5994,6 +6000,32 @@ def validate_response_aware_evidence(
         "missing_concept_ids": sorted(missing),
         "next_objective": next_objective,
     })
+
+
+def normalize_production_assessment(evaluation: GuidedEvaluation) -> GuidedEvaluation:
+    """Keep assessment metadata from changing learner state outside its meaning."""
+
+    contribution = evaluation.contribution
+    if contribution is None:
+        return evaluation
+    if contribution.assessment == "NOT_ASSESSED":
+        normalized_contribution = contribution.model_copy(update={
+            "error_category": None,
+            "error_description": None,
+            "support_relevance": "NOT_NEEDED",
+        })
+        return evaluation.model_copy(update={
+            "contribution": normalized_contribution,
+            "newly_confirmed_concept_ids": [],
+            "contradicted_concept_ids": [],
+            "selected_error_code": None,
+        })
+    if contribution.assessment == "INCORRECT" and contribution.support_relevance == "NOT_NEEDED":
+        normalized_contribution = contribution.model_copy(update={
+            "support_relevance": "UNMAPPED",
+        })
+        return evaluation.model_copy(update={"contribution": normalized_contribution})
+    return evaluation
 
 
 def validate_guided_evaluation(
