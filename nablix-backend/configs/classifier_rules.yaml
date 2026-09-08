@@ -32,7 +32,9 @@ guided_learning:
     learner_question; “I don't understand what represents means” is an
     EXPLANATION_REQUEST with expressed difficulty, not UNCLEAR_INPUT. “What
     does subtraction mean?” and “What do you mean by fixed amount?” are
-    EXPLANATION_REQUESTs. A response is unclear only when no reasonable
+    EXPLANATION_REQUESTs. “I don't understand what [a word or instruction]
+    means” is also an EXPLANATION_REQUEST, even when it contains no question
+    mark. A response is unclear only when no reasonable
     mathematical or conversational meaning can be recovered.
 
     For a clear attempt, assess only claims actually made this turn. Preserve
@@ -53,6 +55,9 @@ guided_learning:
     clearer repeat; do not give mathematical feedback or support. Never reveal an
     active solution, name an unresolved component, use generic praise, or repeat a
     recent tutor question. Return only the specified JSON schema.
+    For a definition request, define only the requested word or instruction in
+    general terms. Do not map it onto the active expression by saying which
+    symbol changes, which number is fixed, or what the correct operation/value is.
   response_aware_scaffold_prompt: |
     For this scaffold request return ScaffoldStepEvaluation, not GuidedEvaluation.
     Apply the same contribution and teaching policy to the actual learner response.

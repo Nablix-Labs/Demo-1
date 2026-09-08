@@ -3384,6 +3384,10 @@ def classify_guided_learning_response(
         if rules.guided_learning.response_aware_enabled
         else rules.guided_learning.guided_turn_maximum_retries
     )
+    response_aware_mode_enabled = (
+        rules.guided_learning.response_aware_enabled
+        or rules.guided_learning.production_boundary_enabled
+    )
     for attempt in range(maximum_turn_retries + 1):
         try:
             model_call_count += 1
@@ -3433,7 +3437,7 @@ def classify_guided_learning_response(
                         else rules.guided_learning.evaluator_system_prompt
                     ),
                 )
-            candidate = candidate if rules.guided_learning.response_aware_enabled else merge_authored_component_evidence(
+            candidate = candidate if response_aware_mode_enabled else merge_authored_component_evidence(
                 candidate,
                 rubric,
                 request.student_input,
@@ -3461,7 +3465,7 @@ def classify_guided_learning_response(
                 )
             contribution_rejection = (
                 response_aware_contribution_rejection_reason(evaluation, request, rules)
-                if rules.guided_learning.response_aware_enabled
+                if response_aware_mode_enabled
                 else None
             )
             message_rejection = contribution_rejection or (
@@ -3472,7 +3476,7 @@ def classify_guided_learning_response(
                     objective,
                     rules,
                 )
-                if rules.guided_learning.response_aware_enabled
+                if response_aware_mode_enabled
                 else guided_tutor_message_reveal_reason(
                     evaluation,
                     request,

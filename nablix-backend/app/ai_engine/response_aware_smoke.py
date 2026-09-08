@@ -107,7 +107,10 @@ def replay_failures(case: ReplayCase, result: TutorResponse, forbidden_reply: li
 def main() -> None:
     rules = load_classifier_rules()
     rules = rules.model_copy(update={"guided_learning": rules.guided_learning.model_copy(
-        update={"response_aware_enabled": True},
+        update={
+            "response_aware_enabled": True,
+            "production_boundary_enabled": True,
+        },
     )})
     settings = get_settings().model_copy(update={
         "use_openai_ai_engine": True, "openai_ai_engine_model": rules.guided_learning.model,
