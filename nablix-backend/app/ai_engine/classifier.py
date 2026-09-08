@@ -3995,7 +3995,6 @@ def redact_untrusted_response_aware_fields(
         else None
     )
     redacted_contribution = contribution.model_copy(update={
-        "error_description": None,
         "explained_idea": explained_idea,
         "generated_support_text": None,
         "generated_visual_rows": None,

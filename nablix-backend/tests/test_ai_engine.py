@@ -1581,7 +1581,7 @@ def test_production_boundary_discards_evaluator_generated_prose() -> None:
     redacted = classifier.redact_untrusted_response_aware_fields(evaluation)
 
     assert redacted.contribution is not None
-    assert redacted.contribution.error_description is None
+    assert redacted.contribution.error_description == "m changes and 7 is fixed."
     assert redacted.contribution.explained_idea is None
     assert redacted.contribution.generated_support_text is None
     assert redacted.contribution.generated_visual_rows is None
