@@ -230,6 +230,7 @@ class GuidedLearningConfig(StrictSchema):
     response_aware_enabled: StrictBool
     production_boundary_enabled: StrictBool
     production_boundary_clarification_message: str
+    production_boundary_safe_wording_message: str
     production_boundary_assessment_system_prompt: str
     response_aware_writer_system_prompt: str
     response_aware_system_prompt: str
