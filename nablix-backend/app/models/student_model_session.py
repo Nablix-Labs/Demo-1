@@ -207,7 +207,15 @@ class CheckpointRepairState(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     status: str
-    phase_2_repair_count: int = Field(ge=0, le=2)
+    # Defaulted, not required. Student Model creates these entries with
+    # `.setdefault(skill, {})` in two places (apply_independent_retry_success,
+    # apply_checkpoint_escalate_to_intervention) and then writes only `status`,
+    # so an entry legitimately arrives without a count -- reachable whenever a
+    # skill enters retry_required via apply_fresh_question_unavailable, which
+    # creates no repair state at all. Requiring the field made the *whole* event
+    # unparseable and 500'd the turn, which is a far worse answer than reading a
+    # skill that has been through no repair cycle as zero.
+    phase_2_repair_count: int = Field(default=0, ge=0, le=2)
     fresh_retry_question_id: str | None = None
     checkpoint_question_usage_id: str | None = None
 

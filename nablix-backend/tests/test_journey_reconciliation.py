@@ -346,3 +346,75 @@ def test_live_shape_retry_recovers_with_a_fresh_authoritative_question(
               "current_phase": restored["current_phase"]},
     )
     assert recovered.status_code == 200, recovered.json()
+
+
+def test_reconcile_resumes_at_the_effective_phase() -> None:
+    """The ST010 conflict shape: current Phase 3, recommended Phase 2.
+
+    Verified at 14:49:28 UTC. Selecting current_phase here restarted the
+    independent set while an outstanding Phase 2 repair was recommended, so the
+    student was handed a brand-new question instead of the repair they owed.
+    """
+
+    body = _start_session("ST030")
+    session_id = body["session_id"]
+    session = session_service._sessions[session_id]
+    stale_version = session.student_model_event.journey_state.version
+
+    fresh_journey = session.student_model_event.journey_state.model_dump(mode="json")
+    fresh_journey["version"] = stale_version + 3
+    fresh_journey["student_id"] = "ST030"
+    fresh_journey["current_phase"] = "PHASE_3_INDEPENDENT_PRACTICE"
+    fresh_journey["recommended_entry_phase"] = "PHASE_2_GUIDED_LEARNING"
+    fresh_journey["phase_2_guided_learning"] = {
+        "status": "NOT_STARTED",
+        "phase_visit_no": None,
+        "target_micro_skill_ids": ["T01.M5"],
+    }
+    conflict = JourneyVersionConflict({"current_journey_state": fresh_journey})
+
+    asyncio.run(
+        session_service.reconcile_journey_conflict(session_id, "ST030", conflict)
+    )
+
+    recovered = session_service._sessions[session_id]
+    assert recovered.current_phase == "GUIDED_PRACTICE"
+    assert recovered.ui_state == "GUIDED_PRACTICE"
+    assert recovered.recommended_entry_phase == "GUIDED_PRACTICE"
+    # Nothing from the stale version survives, and no work may be submitted
+    # until the client has refreshed.
+    assert recovered.journey_recovery_required is True
+    assert recovered.question_id is None
+    assert recovered.show_canvas is False
+
+
+def test_reconcile_keeps_an_absent_recommendation_absent() -> None:
+    """A null recommendation means "this topic cannot be resumed as learning".
+
+    Student Model sets it deliberately for a topic in prerequisite lookup or
+    paused for intervention. Folding current_phase into the field advertised a
+    recommendation it had withheld, and disagreed with _apply_schema_event, which
+    keeps the null for the same input.
+    """
+
+    body = _start_session("ST031")
+    session_id = body["session_id"]
+    session = session_service._sessions[session_id]
+    stale_version = session.student_model_event.journey_state.version
+
+    fresh_journey = session.student_model_event.journey_state.model_dump(mode="json")
+    fresh_journey["version"] = stale_version + 3
+    fresh_journey["student_id"] = "ST031"
+    fresh_journey["current_phase"] = "PHASE_3_INDEPENDENT_PRACTICE"
+    fresh_journey["recommended_entry_phase"] = None
+    conflict = JourneyVersionConflict({"current_journey_state": fresh_journey})
+
+    asyncio.run(
+        session_service.reconcile_journey_conflict(session_id, "ST031", conflict)
+    )
+
+    recovered = session_service._sessions[session_id]
+    assert recovered.recommended_entry_phase is None
+    # The student still resumes somewhere: absent a recommendation, that is the
+    # current phase.
+    assert recovered.current_phase == "INDEPENDENT_PRACTICE"

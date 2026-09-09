@@ -403,11 +403,13 @@ def _get_owned_session_for_turn(
 def require_learning_active(session: SessionRecord) -> None:
     """Refuse learning work while the authoritative topic intervention is active."""
 
-    if session.pending_guided_progression is not None or session.journey_recovery_required:
-        raise HTTPException(status_code=409, detail={
-            "code": "SESSION_STATE_REFRESH_REQUIRED",
-            "message": "Refresh the session before submitting more work.",
-        })
+    # Intervention first, deliberately. Both conditions can hold at once (a
+    # frozen topic can still hit a version conflict), and an intervention is the
+    # more specific and the less recoverable of the two: refreshing does not
+    # clear it. Reporting SESSION_STATE_REFRESH_REQUIRED first told the student
+    # to refresh and then showed them the intervention anyway -- two
+    # explanations for one state -- and hid the code an intervention-aware
+    # client branches on.
     if session.intervention is not None:
         raise HTTPException(
             status_code=409,
@@ -417,6 +419,11 @@ def require_learning_active(session: SessionRecord) -> None:
                 "intervention": session.intervention.model_dump(mode="json"),
             },
         )
+    if session.pending_guided_progression is not None or session.journey_recovery_required:
+        raise HTTPException(status_code=409, detail={
+            "code": "SESSION_STATE_REFRESH_REQUIRED",
+            "message": "Refresh the session before submitting more work.",
+        })
 
 
 def intervention_response_updates(session: SessionRecord) -> dict[str, object]:
@@ -619,17 +626,27 @@ async def reconcile_journey_conflict(
     # phase_payload must go too: that restore path re-applies the stored event
     # when its payload still carries questions, handing the stale question
     # straight back. Dropping it forces a real question-set request.
+    #
+    # Where the student resumes is the effective phase -- the recommendation when
+    # there is one, else the current phase -- matching Student Model's own
+    # session_open. `recommended_entry_phase` itself is projected separately and
+    # keeps its null: null means "this topic cannot be resumed as a learning
+    # session" (prerequisite lookup, or paused for intervention), so folding
+    # current_phase into it would advertise a recommendation Student Model
+    # deliberately withheld. _apply_schema_event preserves that null too.
+    effective_phase = fresh_journey.recommended_entry_phase or fresh_journey.current_phase
     updated = session.model_copy(
         update={
             "student_model_event": event.model_copy(
                 update={"journey_state": fresh_journey, "phase_payload": None}
             ),
-            "current_phase": PHASE_FROM_STUDENT_MODEL[
-                fresh_journey.recommended_entry_phase or fresh_journey.current_phase],
-            "recommended_entry_phase": PHASE_FROM_STUDENT_MODEL[
-                fresh_journey.recommended_entry_phase or fresh_journey.current_phase],
-            "ui_state": PHASE_FROM_STUDENT_MODEL[
-                fresh_journey.recommended_entry_phase or fresh_journey.current_phase],
+            "current_phase": PHASE_FROM_STUDENT_MODEL[effective_phase],
+            "recommended_entry_phase": (
+                PHASE_FROM_STUDENT_MODEL[fresh_journey.recommended_entry_phase]
+                if fresh_journey.recommended_entry_phase is not None
+                else None
+            ),
+            "ui_state": PHASE_FROM_STUDENT_MODEL[effective_phase],
             "journey_recovery_required": True,
             "pending_guided_progression": None,
             "show_canvas": False,
@@ -1974,11 +1991,41 @@ async def get_session(session_id: str, student_id: str) -> SessionRecord:
     return session
 
 
+PROGRESSION_RETRY_MESSAGE = (
+    "We could not finish moving you on just yet. Your work is saved -- "
+    "reopen the session in a moment to continue."
+)
+
+
 async def resume_guided_progression(session: SessionRecord, access_token: str) -> SessionRecord:
+    """Send the persisted follow-up event and apply its answer.
+
+    The single choke point for both callers -- the answer path via
+    complete_guided_progression, and GET /session via recover_session_for_read --
+    so the recoverable-failure contract is stated once.
+    """
+
     request = session.pending_guided_progression
     if request is None:
         raise RuntimeError("Session has no pending Guided progression event.")
-    response = await get_adapters().student_model.send_session_event(request, access_token)
+    try:
+        response = await get_adapters().student_model.send_session_event(request, access_token)
+    except HTTPException:
+        raise
+    except Exception as error:
+        # A transport failure here is recoverable and must say so. The pending
+        # event is already persisted, so the identical event retries and nothing
+        # is regraded; what the client needs is "try again", not the 500
+        # INTERNAL_ERROR that app/main.py's generic handler would produce for an
+        # unhandled exception. That 500 reached GET /session too -- the one route
+        # the client is told to call to recover -- leaving no way forward at all.
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "PROGRESSION_RETRY_REQUIRED",
+                "message": PROGRESSION_RETRY_MESSAGE,
+            },
+        ) from error
     return await _apply_schema_event(session, response)
 
 
