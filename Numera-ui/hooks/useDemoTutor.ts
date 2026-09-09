@@ -39,6 +39,7 @@ import {
 import {
   requiresSessionRefresh, identityOf, identityMatches, belongsToActiveSession,
 } from '@/lib/sessionRecovery';
+import { isContentGapError, contentGapPaused } from '@/lib/contentGap';
 import { selectedOptionText } from '@/lib/selectedOption';
 import {
   applyInteractionSupport, acceptResponse, authorisedHint, applyServedCue,
@@ -339,6 +340,15 @@ function reportTutorFailure(
   // dedupe below is the only thing that stops a repeated conflict filling the
   // chat with the same line. The copy they get says the session is being
   // brought up to date and pointedly does not ask for a resubmit.
+  // A submission into a gap is refused with 409 CONTENT_GAP. It is the same
+  // paused state as the record's, not a failure: nothing broke and there is
+  // nothing to retry, so the student gets the pause rather than an error.
+  if (isContentGapError(err)) {
+    reportFailure(label, err, { session_id: store.sessionId, paused: 'CONTENT_GAP' });
+    store.setContentGapPaused(true);
+    store.markTutorTurnFailed();
+    return;
+  }
   const recovering = requiresSessionRefresh(err);
   if (recovering) void recoverAfterConflict();
   // Before anything student-facing: the full picture in the console, including
@@ -449,6 +459,16 @@ export function syncBackendSession(response: {
   // applyBackendPhase means the new question can find its own options.
   const refreshed = refreshedRecord(store.backendSession, response);
   if (refreshed) store.setBackendSession(refreshed);
+  /**
+   * The gap is read off the authoritative record, not inferred from a silence.
+   *
+   * Both directions matter. Setting it renders the pause and stops the client
+   * asking for a question the backend has already said it cannot serve — the
+   * ST017 run asked twice. Clearing it is what lets the lesson resume the
+   * moment a question is served again, so a resolved gap needs no reload.
+   */
+  const paused = contentGapPaused(useNumeraStore.getState().backendSession);
+  if (paused !== store.contentGapPaused) store.setContentGapPaused(paused);
   // For a same-question reply, register its target anchors before resolving
   // semantic actions. Otherwise an accepted label such as `m → changes` is
   // dropped simply because this path has not yet received the anchor list.
@@ -939,6 +959,9 @@ export function useDemoTutor() {
     // — so this is not merely a courtesy to the server. Sending here is what
     // graded old ink against a new question in the ST010 run.
     if (useNumeraStore.getState().sessionRecovering) return null;
+    // There is no question to answer. The backend refuses this with 409
+    // CONTENT_GAP, and asking again is what the persisted pause exists to stop.
+    if (useNumeraStore.getState().contentGapPaused) return null;
     if (canvasSubmissionInFlight.current) return null;
     canvasSubmissionInFlight.current = true;
     try {

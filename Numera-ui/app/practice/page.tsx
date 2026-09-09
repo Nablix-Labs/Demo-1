@@ -28,6 +28,7 @@ import { optionsMissing } from '@/lib/questionOptions';
 import QuestionDisplay from '@/components/QuestionDisplay';
 import InterventionInputModal, { type InterventionInputSubmission } from '@/components/InterventionInputModal';
 import InterventionPaused from '@/components/InterventionPaused';
+import ContentGapPaused from '@/components/ContentGapPaused';
 import StickyNote from '@/components/StickyNote';
 import PhaseGate from '@/components/PhaseGate';
 import Toolbar from '@/components/Canvas/Toolbar';
@@ -62,6 +63,8 @@ export default function PracticePage() {
   // selector is safe here — an object or array selector would need useShallow,
   // which is how SupportDeck took the guided screen down on 6 Sep.
   const interventionStage = useNumeraStore((s) => s.interventionStage);
+  const contentGapPaused = useNumeraStore((s) => s.contentGapPaused);
+  const contentGapMessage = useNumeraStore((s) => s.backendSession?.message ?? null);
   const interventionRequest = useNumeraStore((s) => s.interventionRequest);
   const { goStage } = useFlowNav();
   const tutor = useDemoTutor();
@@ -476,6 +479,14 @@ export default function PracticePage() {
       {interventionStage === 'AWAITING_REVIEW' && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-reading-surface/95 p-6">
           <InterventionPaused />
+        </div>
+      )}
+      {/* After the intervention checks, and never at the same time: an open
+          case is the more specific state, and it is the one still asking the
+          student for something. A gap asks for nothing. */}
+      {interventionStage === 'NONE' && contentGapPaused && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-reading-surface/95 p-6">
+          <ContentGapPaused message={contentGapMessage} />
         </div>
       )}
       {/* Header */}
