@@ -36,7 +36,9 @@ import {
   isStaleSessionError,
   isInterventionPausedError,
 } from '@/lib/api';
-import { requiresSessionRefresh, identityOf, identityMatches } from '@/lib/sessionRecovery';
+import {
+  requiresSessionRefresh, identityOf, identityMatches, belongsToActiveSession,
+} from '@/lib/sessionRecovery';
 import { selectedOptionText } from '@/lib/selectedOption';
 import {
   applyInteractionSupport, acceptResponse, authorisedHint, applyServedCue,
@@ -404,6 +406,13 @@ export function syncBackendSession(response: {
   tutor_canvas_actions?: TutorCanvasAction[];
   /** Active-question anchors required to resolve semantic tutor actions. */
   question_anchors?: QuestionAnchor[];
+  /**
+   * Who this reply is about. Optional because not every caller builds a full
+   * record, and a response naming neither is applied rather than dropped — see
+   * `belongsToActiveSession`.
+   */
+  session_id?: string | null;
+  concept_id?: string | null;
 }): void {
   // Text is kept verbatim. This used to strip a leading "solve for x:" because
   // the screens re-added it themselves — which silently mangled any question
@@ -413,6 +422,25 @@ export function syncBackendSession(response: {
   // Whether a null question clears the current one depends on the phase; see
   // applyBackendPhase, which both transports share.
   const store = useNumeraStore.getState();
+  /**
+   * Drop a reply the student has already moved past.
+   *
+   * The topic transition is where this bites: Review completes, the client
+   * opens the next topic, and an in-flight Review reply or a GET for the OLD
+   * session lands afterwards. It carries a real phase and a real question, so
+   * nothing further down can tell it is history — applied, it drags the student
+   * back to a topic they have finished.
+   *
+   * Deliberately here rather than at each call site. This is the one place a
+   * backend phase update is applied, so it is the one place that can be sure.
+   */
+  if (!belongsToActiveSession(response, {
+    sessionId: store.sessionId,
+    topicId: store.activeConceptId || null,
+  })) {
+    console.log('(reply belongs to a session or topic the student has left \u2014 dropped)');
+    return;
+  }
   // Refresh the cached record FIRST when this reply carries a newer question
   // set. Options are looked up out of that record by question id, and it was
   // only ever written at session start and resume — so once the backend issued

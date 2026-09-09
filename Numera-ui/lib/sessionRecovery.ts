@@ -106,3 +106,42 @@ export function identityMatches(before: SubmissionIdentity, after: SubmissionIde
     && before.topicId === after.topicId
     && before.questionId === after.questionId;
 }
+
+/** Blank and whitespace-only ids identify nothing; treat them as absent. */
+function named(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+/**
+ * Does this response still belong to the session and topic on screen?
+ *
+ * The topic transition is where late replies bite. Review completes, the client
+ * opens the next topic, and an in-flight Review reply — or a GET for the OLD
+ * session — lands afterwards. Applied, it drags the student back to a topic
+ * they have finished, and because it carries a real phase and a real question
+ * nothing downstream can tell it is history.
+ *
+ * The turn-ordering guard already in place cannot catch these: it compares
+ * turns WITHIN a session, and a late reply is perfectly ordered by that
+ * measure. It is wrong by identity, not by order.
+ *
+ * Judged only on the fields the response actually carries. A response naming
+ * neither is accepted rather than dropped — a backend that stops sending a
+ * field must degrade, not black out the screen — and so is anything arriving
+ * before a session is active, which is how a session's own first reply lands.
+ */
+export function belongsToActiveSession(
+  res: { session_id?: string | null; concept_id?: string | null },
+  active: { sessionId: string | null; topicId: string | null },
+): boolean {
+  const session = named(res.session_id);
+  const activeSession = named(active.sessionId);
+  if (session && activeSession && session !== activeSession) return false;
+
+  const topic = named(res.concept_id);
+  const activeTopic = named(active.topicId);
+  if (topic && activeTopic && topic !== activeTopic) return false;
+
+  return true;
+}

@@ -3,6 +3,7 @@ import {
   requiresSessionRefresh,
   identityOf,
   identityMatches,
+  belongsToActiveSession,
   type SubmissionIdentity,
 } from '@/lib/sessionRecovery';
 import type { SessionRecord } from '@/lib/api';
@@ -119,5 +120,62 @@ describe('identityMatches', () => {
     // there is nothing to submit ink against.
     const noQuestion: SubmissionIdentity = { ...before, questionId: null };
     expect(identityMatches(noQuestion, { ...noQuestion })).toBe(false);
+  });
+});
+
+/**
+ * A reply that arrives after the student has moved on.
+ *
+ * The topic transition is where this bites: Review completes, the client opens
+ * the next topic, and an in-flight Review reply or a GET for the OLD session
+ * lands afterwards. Applied, it drags the student back to a topic they have
+ * finished — and because it carries a real phase and question, nothing
+ * downstream can tell it is history.
+ *
+ * The turn-ordering guard already in place does not catch this: it compares
+ * turns within a session, and these replies are correct by that measure. They
+ * are wrong by identity, not by order.
+ */
+describe('belongsToActiveSession', () => {
+  const active = { sessionId: 'S2', topicId: 'T02' };
+
+  it('accepts a reply from the session and topic now on screen', () => {
+    expect(belongsToActiveSession({ session_id: 'S2', concept_id: 'T02' }, active)).toBe(true);
+  });
+
+  it('rejects a reply from the session the student has left', () => {
+    expect(belongsToActiveSession({ session_id: 'S1', concept_id: 'T02' }, active)).toBe(false);
+  });
+
+  it('rejects a reply from the topic the student has finished', () => {
+    expect(belongsToActiveSession({ session_id: 'S2', concept_id: 'T01' }, active)).toBe(false);
+  });
+
+  it('accepts a reply that identifies itself only by session', () => {
+    // Not every response carries both. Judging it on what it does say beats
+    // rejecting it for what it omits.
+    expect(belongsToActiveSession({ session_id: 'S2' }, active)).toBe(true);
+  });
+
+  it('rejects on the one field it does carry', () => {
+    expect(belongsToActiveSession({ session_id: 'S1' }, active)).toBe(false);
+  });
+
+  it('accepts a response that identifies itself with neither', () => {
+    // Degrade, do not throw: a backend that stops sending a field must not
+    // black out the screen. There is nothing to compare, so nothing to reject.
+    expect(belongsToActiveSession({}, active)).toBe(true);
+  });
+
+  it('accepts anything before a session is active', () => {
+    // The first reply of a session arrives while the store still holds nulls.
+    expect(belongsToActiveSession(
+      { session_id: 'S1', concept_id: 'T01' },
+      { sessionId: null, topicId: null },
+    )).toBe(true);
+  });
+
+  it('ignores blank identifiers rather than treating them as a mismatch', () => {
+    expect(belongsToActiveSession({ session_id: '', concept_id: '  ' }, active)).toBe(true);
   });
 });
