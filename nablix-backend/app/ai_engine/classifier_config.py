@@ -231,6 +231,8 @@ class GuidedLearningConfig(StrictSchema):
     production_boundary_enabled: StrictBool
     production_boundary_clarification_message: str
     production_boundary_safe_wording_message: str
+    production_boundary_writer_maximum_retries: int = Field(ge=0, le=1)
+    production_boundary_writer_retry_feedback: str
     production_boundary_assessment_system_prompt: str
     response_aware_writer_system_prompt: str
     response_aware_system_prompt: str
