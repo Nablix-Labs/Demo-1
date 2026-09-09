@@ -58,8 +58,11 @@ def openai_strict_schema(schema: dict[str, object]) -> dict[str, object]:
 
     normalized = deepcopy(schema)
     definitions = normalized.get("$defs")
-    if isinstance(definitions, dict) and "StudentContribution" in definitions:
-        definitions["StudentContribution"] = contribution_output_schema(definitions["StudentContribution"])
+    if isinstance(definitions, dict):
+        for definition_name in ("StudentContribution", "GuidedAssessmentContribution"):
+            definition = definitions.get(definition_name)
+            if isinstance(definition, dict):
+                definitions[definition_name] = contribution_output_schema(definition)
 
     def normalize(node: object) -> None:
         if isinstance(node, list):
@@ -68,6 +71,10 @@ def openai_strict_schema(schema: dict[str, object]) -> dict[str, object]:
             return
         if not isinstance(node, dict):
             return
+        variants = node.pop("oneOf", None)
+        if isinstance(variants, list):
+            node.pop("discriminator", None)
+            node["anyOf"] = variants
         for value in node.values():
             normalize(value)
         properties = node.get("properties")
@@ -108,6 +115,8 @@ def contribution_output_schema(contribution_schema: dict[str, object]) -> dict[s
                                  if incorrect else {"type": "null"})
             properties[field].pop("anyOf", None)
         for field in ("generated_support_text", "generated_visual_rows"):
+            if field not in properties:
+                continue
             properties[field] = (
                 {**properties[field], **properties[field]["anyOf"][0]}
                 if relevance == ["UNMAPPED", "MISMATCHED"] else {"type": "null"}
@@ -116,6 +125,20 @@ def contribution_output_schema(contribution_schema: dict[str, object]) -> dict[s
             properties[field].pop("default", None)
         variants.append(variant)
     return {"anyOf": variants}
+
+
+def normalize_assessment_contribution_payload(content: dict[str, object]) -> dict[str, object]:
+    """Discard corrective metadata when a model did not assess an incorrect claim."""
+
+    normalized = deepcopy(content)
+    contribution = normalized.get("contribution")
+    if not isinstance(contribution, dict):
+        return normalized
+    if contribution.get("assessment") != "INCORRECT":
+        contribution["error_category"] = None
+        contribution["error_description"] = None
+        contribution["support_relevance"] = "NOT_NEEDED"
+    return normalized
 
 
 def _guided_conversation_history(
@@ -545,7 +568,9 @@ class OpenAIAIEngineClient:
             },
         )
         try:
-            assessment = GuidedAssessment.model_validate(content)
+            assessment = GuidedAssessment.model_validate(
+                normalize_assessment_contribution_payload(content)
+            )
             contribution = assessment.contribution.model_dump()
             contribution["explained_idea"] = None
             contribution["generated_support_text"] = None
