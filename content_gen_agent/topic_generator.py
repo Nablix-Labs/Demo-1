@@ -189,8 +189,23 @@ def build_user_prompt(doc: ParsedTopicDocument) -> str:
 # Checking the model
 # ──────────────────────────────────────────────────────────────────────
 
+#: A leading bullet the model copied from the document. The scope items are
+#: extracted from bulleted paragraphs, so the bullet is formatting rather than
+#: content -- but a model reading the document sometimes types it back. Topic 2
+#: failed a whole six-topic run on this: every one of its scope items came back
+#: as "- ab as multiplication" against an expected "ab as multiplication", and
+#: the topic, its questions and all its downstream content were lost to a
+#: hyphen.
+BULLET_RE = re.compile(r"^[\s]*[-*\u2022\u2013\u2014]+\s*")
+
+
 def _normalise(text: str) -> str:
-    return re.sub(r"\s+", " ", str(text)).strip().lower()
+    """For comparing a scope item with the document's own wording.
+
+    Strips the bullet as well as case and spacing, because none of the three
+    is part of what the item SAYS.
+    """
+    return re.sub(r"\s+", " ", BULLET_RE.sub("", str(text))).strip().lower()
 
 
 def _check_scope(

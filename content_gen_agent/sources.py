@@ -31,9 +31,26 @@ from typing import Optional
 
 SOURCES_DIR_NAME = "Content Gen- Agent"
 REFERENCE_WORKBOOK_NAME = "Nablix_Topics_1_to_3_Canvas_AnswerSteps.xlsx"
+SCHEMA_TEMPLATE_NAME = "nablix_content_export.xlsx"
 TOPIC_DOC_PATTERN = "Topic_*_Formatted.docx"
 
 ENV_VAR = "NABLIX_CONTENT_SOURCES"
+
+
+def _holds_sources(candidate: Path) -> bool:
+    """True when the directory actually contains inputs, not just the name.
+
+    Matching on the name alone is not enough. An empty directory called
+    "Content Gen- Agent" sitting closer to this file than the real one wins
+    the search and every test that needs an input skips, which reads as a
+    green suite rather than as a missing directory. That happened, so the
+    check is on contents.
+    """
+    return bool(
+        list(candidate.glob(TOPIC_DOC_PATTERN))
+        or (candidate / REFERENCE_WORKBOOK_NAME).is_file()
+        or (candidate / SCHEMA_TEMPLATE_NAME).is_file()
+    )
 
 
 def find_sources_dir() -> Optional[Path]:
@@ -45,18 +62,48 @@ def find_sources_dir() -> Optional[Path]:
 
     for parent in Path(__file__).resolve().parents:
         candidate = parent / SOURCES_DIR_NAME
-        if candidate.is_dir():
+        if candidate.is_dir() and _holds_sources(candidate):
             return candidate
     return None
 
 
 def find_reference_workbook() -> Optional[Path]:
-    """The approved reference workbook, or None if it is not present."""
+    """The approved reference workbook, or None if it is not present.
+
+    Content examples: what a good question, hint or worked example looks like.
+    Its STRUCTURE is now out of date -- see find_schema_template.
+    """
     sources = find_sources_dir()
     if sources is None:
         return None
     workbook = sources / REFERENCE_WORKBOOK_NAME
     return workbook if workbook.is_file() else None
+
+
+def find_schema_template() -> Optional[Path]:
+    """The platform's current export, which defines the SHAPE we must produce.
+
+    Deliberately separate from the reference workbook, because the two now
+    disagree and each is only authoritative about one thing.
+
+    The template is authoritative about structure: sheet names in snake_case,
+    three orientation tables the reference has no equivalent for, and three
+    added columns. That is what the platform will import.
+
+    It is NOT authoritative about content. Its rows still carry up to five
+    micro-skill mappings per question, weights from 0.1 to 1.0, 46 secondary
+    mappings, no difficulty 3, and every question marked APPROVED -- all of
+    which the content review now forbids. It is the old topics 2 and 3 content
+    re-exported under the new schema. Feeding it to a generator as an example
+    would undo the review.
+
+    Shape from here. Rules from the review document.
+    """
+    sources = find_sources_dir()
+    if sources is None:
+        return None
+    template = sources / SCHEMA_TEMPLATE_NAME
+    return template if template.is_file() else None
 
 
 def find_topic_documents() -> list[Path]:
@@ -91,6 +138,7 @@ def describe_sources() -> str:
 
 
 REFERENCE_WORKBOOK = find_reference_workbook()
+SCHEMA_TEMPLATE = find_schema_template()
 
 
 if __name__ == "__main__":

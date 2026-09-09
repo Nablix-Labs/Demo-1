@@ -182,3 +182,83 @@ describe('interventionOptions', () => {
     expect(interventionOptions(junk)).toEqual(DEFAULT_INTERVENTION_OPTIONS);
   });
 });
+
+/**
+ * Where the fields actually landed (Chirudeva's handoff, 7 Sep 2026).
+ *
+ * `routing` is published on the event AND at the root; `status` only on the
+ * event, because `SessionRecord.status` / `InteractionResponse.status` already
+ * own the root name. These cases exist because reading `status` at the root —
+ * which is what the ask asked for — would find nothing and route a paused
+ * student back onto the question.
+ */
+describe('phase3Destination — routing and status in their shipped homes', () => {
+  it('reads routing from the event when the root has none', () => {
+    const d = phase3Destination({
+      student_model_event: {
+        phase_payload: null,
+        routing: { next_action: 'START_PREREQUISITE_ORIENTATION', next_topic_id: 'ALG-KS3-01' },
+      },
+    });
+    expect(d).toEqual({
+      kind: 'GO_TO_PREREQUISITE',
+      topicId: 'ALG-KS3-01',
+      entryPhase: null,
+      returnTopicId: null,
+      returnQuestionId: null,
+    });
+  });
+
+  it('prefers the root copy when both carry routing', () => {
+    const d = phase3Destination({
+      student_model_event: {
+        phase_payload: null,
+        routing: { next_action: 'RETURN_TO_GUIDED_LEARNING' },
+      },
+      routing: { next_action: 'START_REVIEW' },
+    });
+    expect(d.kind).toBe('START_REVIEW');
+  });
+
+  it('TC-33: status on the EVENT opens the popup', () => {
+    const d = phase3Destination({
+      student_model_event: {
+        phase_payload: null,
+        status: { intervention_required: true, status_code: 'INTERVENTION_REQUIRED' },
+      },
+    });
+    expect(d.kind).toBe('COLLECT_INTERVENTION');
+  });
+
+  it('TC-36: intervention_required stays true after submitting, and must NOT reopen', () => {
+    // Chirudeva: "routing.next_action becomes AWAIT_INTERVENTION_REVIEW,
+    // status.intervention_required stays true, phase_payload becomes null."
+    const d = phase3Destination({
+      student_model_event: {
+        phase_payload: null,
+        routing: { next_action: 'AWAIT_INTERVENTION_REVIEW' },
+        status: { intervention_required: true, status_code: 'INTERVENTION_REQUIRED' },
+      },
+      routing: { next_action: 'AWAIT_INTERVENTION_REVIEW' },
+    });
+    expect(d.kind).toBe('AWAIT_INTERVENTION_REVIEW');
+  });
+
+  it('carries the popup content through from the phase payload', () => {
+    const request = {
+      intervention_id: 'INT-T03-001',
+      prompt: 'What are you finding difficult?',
+      selection_required: true,
+      voice_input_enabled: true,
+      voice_input_required: false,
+      selection_options: [{ code: 'DONT_KNOW_HOW_TO_START', label: 'I do not know how to start.' }],
+    };
+    const d = phase3Destination({
+      student_model_event: {
+        phase_payload: { payload_type: 'INTERVENTION_INPUT_REQUIRED', intervention_input_request: request },
+        status: { intervention_required: true },
+      },
+    });
+    expect(d).toEqual({ kind: 'COLLECT_INTERVENTION', request });
+  });
+});

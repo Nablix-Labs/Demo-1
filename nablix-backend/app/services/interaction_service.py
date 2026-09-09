@@ -71,6 +71,7 @@ from app.models.guided_learning import (
 )
 
 from app.models.question_anchor import QuestionTextAnchor
+from app.models.remediation import InterventionFeedback
 from app.models.interaction import (
     InteractionRequest,
     InteractionResponse,
@@ -84,6 +85,7 @@ from app.models.session import (
 )
 from app.models.student_model_session import (
     AnswerSpec,
+    PublicStudentModelRouting,
     GuidedAttemptEvent,
     FreshIndependentQuestionRequestedEvent,
     GuidedQuestionSetRequestedEvent,
@@ -122,7 +124,11 @@ from app.services.session_service import (
     CONTENT_GAP_MESSAGE,
     reconcile_journey_conflict,
     _apply_schema_event,
+    _authoritative_intervention,
     _get_owned_session_for_turn,
+    submit_intervention_input,
+    require_learning_active,
+    intervention_response_updates,
     cache_interaction_response,
     final_turn_receipt_for,
     record_final_turn_receipt,
@@ -220,6 +226,11 @@ _SUPPORT_RANK: tuple[SupportUsed, ...] = (
     "TUTOR_SOLVED",
 )
 _INACTIVITY_MESSAGE = "Are you still with me? Take your time and continue when you're ready."
+# §11: submitting must not resume the student, so the reply says what has
+# happened rather than handing the question back.
+_INTERVENTION_RECEIVED_MESSAGE = (
+    "Thanks for telling me. Your teacher will look at this before you carry on."
+)
 _EXPLICIT_HELP_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"\b(?:give|show|offer)\s+me\s+(?:a\s+)?hint\b|"
     r"\b(?:can|could|may)\s+i\s+(?:have|get)\s+(?:a\s+)?hint\b|"
@@ -549,6 +560,7 @@ async def process_answer_with_session_event(
     """Evaluate one answer and apply its authoritative Schema 3.0 event."""
 
     adapters = get_adapters()
+    require_learning_active(session)
     session = await _initialize_restored_schema_phase(
         session,
         adapters.student_model,
@@ -844,6 +856,11 @@ async def process_answer_with_session_event(
             ),
             access_token,
         )
+
+    intervention = _authoritative_intervention(response)
+    if intervention is not None and intervention.is_active:
+        updated_session = await _apply_schema_event(session, response)
+        return student, tutor, response, response, updated_session
 
     content_response = response
     guided_rescue = _guided_rescue(content_response)
@@ -2153,6 +2170,7 @@ def _duplicate_turn_response(
             "conversation_action": "WAIT_FOR_STUDENT",
             "attempt_increment": 0,
             "retry_safe": True,
+            **intervention_response_updates(session),
         }
     )
 
@@ -2431,6 +2449,12 @@ def _response_from(
     phase3_silent = (
         session.current_phase == "INDEPENDENT_PRACTICE"
         and previous_phase != "GUIDED_PRACTICE"
+        # Silence exists to keep the answer key off a live question. A halted
+        # topic has no question -- the projected payload is the §11 popup or
+        # nothing -- so silencing it would strand the student on a locked
+        # screen with no visible reason, which is the bug this whole change
+        # is about.
+        and session.intervention is None
     )
     # The panel flag and the step it needs are updated by different code paths:
     # `_completed_scaffold_state` clears the ids when a scaffold finishes but
@@ -2503,6 +2527,11 @@ def _response_from(
         recommended_entry_phase=session.recommended_entry_phase,
         session_summary=session_summary,
         student_model_event=None if phase3_silent else session.student_model_event,
+        routing=(
+            None
+            if phase3_silent or stored_event is None
+            else PublicStudentModelRouting.model_validate(stored_event.routing)
+        ),
         student_model_state=None if phase3_silent else session.student_model_state,
         active_teaching_objective=None if phase3_silent else active_objective,
         first_unresolved_concept_id=(
@@ -2520,6 +2549,8 @@ def _response_from(
         question_anchors=[] if phase3_silent else _question_anchors(session),
         wrong_attempt_count=session.wrong_attempt_count,
         intervention_triggered=session.wrong_attempt_count >= 4,
+        intervention=session.intervention,
+        content_gap_detected=session.content_gap_detected,
         routing_reason_code=(
             None
             if phase3_silent
@@ -3497,6 +3528,42 @@ async def _process_interaction(
     duplicate_response = _duplicate_turn_response(request, session)
     if duplicate_response is not None:
         return duplicate_response
+    if request.interaction_type == "INTERVENTION_INPUT_SUBMITTED":
+        # Ahead of require_learning_active on purpose: this is the one thing a
+        # paused student is allowed to send. It grades nothing and resumes
+        # nothing -- the reply just re-renders the now-awaiting-review state.
+        session = await submit_intervention_input(
+            request.session_id,
+            request.student_id,
+            request.intervention_id,
+            InterventionFeedback(
+                selected_reason_codes=request.selected_reason_codes or [],
+                voice_input=request.voice_input,
+            ),
+            access_token,
+            topic_id=request.topic_id,
+            micro_skill_id=request.micro_skill_id,
+        )
+        response = _response_from(
+            session_id=request.session_id,
+            student_id=request.student_id,
+            turn_id=request.turn_id,
+            interaction_type=request.interaction_type,
+            nudge_id=None,
+            session=session,
+            message=_INTERVENTION_RECEIVED_MESSAGE,
+            message_voice=_INTERVENTION_RECEIVED_MESSAGE,
+            visual_cue=None,
+            scaffold_steps=[],
+            session_summary=None,
+            conversation_action="WAIT_FOR_STUDENT",
+            attempt_increment=0,
+            status="processed",
+            retry_safe=True,
+        )
+        response = response.model_copy(update=intervention_response_updates(session))
+        return await _cache_response(request, response)
+    require_learning_active(session)
     if _turn_is_stale(request, session):
         return _stale_turn_response(session)
 

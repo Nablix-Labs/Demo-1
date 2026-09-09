@@ -4,6 +4,12 @@ from typing import Literal, TypeAlias
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.guided_learning import GuidedComparisonRow
+from app.models.remediation import (
+    InterventionFeedback,
+    InterventionInputRequest,
+    Phase3Checkpoint,
+    StudentModelIntervention,
+)
 
 
 
@@ -152,6 +158,9 @@ class StudentModelPhasePayload(BaseModel):
     phase: StudentModelPhase
     payload_type: str
     question_set: QuestionSet | None = None
+    # Derived by the tutor backend, not sent upstream: see
+    # session_service._project_for_frontend.
+    intervention_input_request: InterventionInputRequest | None = None
     orientation_bundle: OrientationBundle | None = None
     support_to_serve: dict[str, object] | None = None
     rescue_to_serve: dict[str, object] | None = None
@@ -164,10 +173,25 @@ class StudentModelRouting(BaseModel):
     next_action: str
     next_topic_id: str | None = None
     next_topic_entry_phase: StudentModelPhase | None = None
+    # Where a prerequisite journey comes back to (TC-31/TC-32). Upstream may
+    # send these; where it doesn't, the tutor backend fills them from the
+    # frozen checkpoint, which carries the same two facts.
+    return_topic_id: str | None = None
+    return_question_id: str | None = None
+    resume_question_id: str | None = None
+    resume_policy: str | None = None
+    return_resume_policy: str | None = None
     prerequisite_check_required: bool
     prerequisite_micro_skill_ids: list[str]
     content_gap_detected: bool
     missing_micro_skill_ids: list[str]
+
+    @model_validator(mode="after")
+    def normalize_checkpoint_return(self) -> "StudentModelRouting":
+        return self.model_copy(update={
+            "return_question_id": self.return_question_id or self.resume_question_id,
+            "resume_policy": self.resume_policy or self.return_resume_policy,
+        })
 
 
 class StudentModelStatus(BaseModel):
@@ -194,6 +218,8 @@ class JourneyPhaseState(BaseModel):
     current_question_id: str | None = None
     current_question_target_micro_skill_ids: list[str] = Field(default_factory=list)
     used_question_ids: list[str] = Field(default_factory=list)
+    return_checkpoint: Phase3Checkpoint | None = None
+    phase2_repair_count: int | None = Field(default=None, ge=0, le=2)
 
 
 class StudentModelJourneyState(BaseModel):
@@ -217,6 +243,8 @@ class StudentModelJourneyState(BaseModel):
     review: JourneyPhaseState
     version: int
     updated_at: str
+    return_checkpoint: Phase3Checkpoint | None = None
+    intervention: StudentModelIntervention | None = None
 
 
 class StudentModelSessionEventResponse(BaseModel):
@@ -252,12 +280,39 @@ class PublicStudentModelPhasePayload(BaseModel):
     payload_type: str
     question_set: PublicQuestionSet | None = None
     orientation_bundle: OrientationBundle | None = None
+    intervention_input_request: InterventionInputRequest | None = None
 
 
 class PublicStudentModelJourney(BaseModel):
     model_config = ConfigDict(from_attributes=True, extra="forbid")
 
     topic_id: str
+
+
+class PublicStudentModelRouting(BaseModel):
+    """Where the student is being sent -- spec §12, the frontend's ask 3.
+
+    Narrowed on purpose: `reason` is free prose written for a human reading a
+    log, so it is not published. Everything here is read by
+    Numera-ui/lib/phase3Routing.ts.
+    """
+
+    model_config = ConfigDict(from_attributes=True, extra="forbid")
+
+    next_action: str
+    reason_code: str
+    next_topic_id: str | None = None
+    next_topic_entry_phase: StudentModelPhase | None = None
+    return_topic_id: str | None = None
+    return_question_id: str | None = None
+    content_gap_detected: bool = False
+
+
+class PublicStudentModelStatus(BaseModel):
+    model_config = ConfigDict(from_attributes=True, extra="forbid")
+
+    intervention_required: bool
+    status_code: str
 
 
 class PublicStudentModelEvent(BaseModel):
@@ -268,6 +323,8 @@ class PublicStudentModelEvent(BaseModel):
     processed_at: str
     journey_state: PublicStudentModelJourney
     phase_payload: PublicStudentModelPhasePayload | None
+    routing: PublicStudentModelRouting
+    status: PublicStudentModelStatus
 
 
 class SessionEventBase(BaseModel):
@@ -289,6 +346,13 @@ class SessionOpenedEvent(SessionEventBase):
 class MutatingSessionEventBase(SessionEventBase):
     source_turn_id: str
     expected_journey_version: int
+
+
+class InterventionInputSubmittedEvent(MutatingSessionEventBase):
+    event_type: Literal["INTERVENTION_INPUT_SUBMITTED"]
+    intervention_id: str
+    micro_skill_id: str
+    feedback: InterventionFeedback
 
 
 class MicroSkillResult(BaseModel):
@@ -401,6 +465,7 @@ class ReviewCompletedEvent(MutatingSessionEventBase):
 
 StudentModelSessionEvent: TypeAlias = (
     SessionOpenedEvent
+    | InterventionInputSubmittedEvent
     | DiagnosticQuestionSetRequestedEvent
     | DiagnosticCompletedEvent
     | WorkedExampleRequestedEvent

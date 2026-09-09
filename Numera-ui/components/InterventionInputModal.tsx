@@ -69,6 +69,20 @@ export default function InterventionInputModal({ request, onSubmit, onDismiss }:
   const prompt = request?.prompt?.trim() || DEFAULT_INTERVENTION_PROMPT;
   const voiceEnabled = request?.voice_input_enabled !== false;
 
+  /**
+   * Mounted yet?
+   *
+   * `useVoiceTurn`'s `supported` reads `window` and `navigator` during render,
+   * so it is false on the server and true in the browser — and this app is a
+   * static export, so that difference is a hydration mismatch: React throws
+   * "the server rendered HTML didn't match the client" and regenerates the
+   * whole tree. Deferring the mic button by one render is the smallest fix that
+   * makes both passes agree, and it is invisible: the popup is opened by a
+   * backend reply, never on first paint.
+   */
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   const [selected, setSelected] = useState<string[]>([]);
   const [transcript, setTranscript] = useState('');
   const [sending, setSending] = useState(false);
@@ -176,7 +190,7 @@ export default function InterventionInputModal({ request, onSubmit, onDismiss }:
               <span className="text-[12.5px] text-slate-blue">
                 Want to say more? This part is optional.
               </span>
-              {voice.supported && (
+              {mounted && voice.supported && (
                 <button
                   type="button"
                   onClick={() => (voice.active ? voice.stop() : voice.start())}

@@ -3,12 +3,8 @@
 /**
  * /dev-screens/intervention — the Phase 3 difficulty popup on a fixture.
  *
- * The backend half does not reach the browser yet: `intervention_input_request`
- * would be dropped by `PublicStudentModelEvent`, which is `extra="forbid"` and
- * carries no such field (nablix-backend/app/models/student_model_session.py:246).
- * So this is how the popup is reviewed and demoed until that projection is
- * widened — same arrangement as /dev-screens/phase4, and under /dev-screens,
- * which AppFrame already treats as pre-auth and full-bleed.
+ * The live practice screen now mounts this component from the backend's public
+ * Phase 3 projection. This fixture remains the quickest isolated UI check.
  *
  * Two fixtures because the difference is invisible from inside the component
  * and is exactly what §11 turns on:
@@ -22,6 +18,7 @@ import Link from 'next/link';
 import InterventionInputModal, {
   type InterventionInputSubmission,
 } from '@/components/InterventionInputModal';
+import InterventionPaused from '@/components/InterventionPaused';
 import type { InterventionInputRequest } from '@/lib/phase3Routing';
 
 /** TC-33, verbatim. */
@@ -74,6 +71,12 @@ export default function InterventionDevScreen() {
           <p className="text-[13px] font-semibold text-ink mb-1">
             Recorded. The topic stays paused — §11: submitting does not resume learning.
           </p>
+          {/* The screen the student actually lands on. Reviewed here beside the
+              payload so the wording is judged in the state it appears in, not
+              read out of a component file. */}
+          <div className="mb-4">
+            <InterventionPaused />
+          </div>
           <p className="text-[12px] text-slate-blue mb-3">
             This is the payload that would go to the event endpoint:
           </p>

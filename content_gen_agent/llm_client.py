@@ -40,6 +40,13 @@ from typing import Any, Optional, Protocol, runtime_checkable
 
 DEFAULT_MODEL = os.getenv("CONTENT_GEN_LLM_MODEL", "gpt-5.1")
 
+#: Seconds to wait for one call before giving up. The SDK's own default is
+#: 600, and with max_retries=2 on top a single stalled request can hang for
+#: half an hour with nothing on screen. That happened on a live run and looked
+#: exactly like a crash. A generation call that has not answered in three
+#: minutes is not going to.
+DEFAULT_TIMEOUT = float(os.getenv("CONTENT_GEN_LLM_TIMEOUT", "180"))
+
 API_KEY_VARS = ("OPENAI_API_KEY", "NABLIX_OPENAI_API_KEY")
 
 
@@ -94,10 +101,12 @@ class OpenAIClient:
         api_key: Optional[str] = None,
         temperature: Optional[float] = None,
         max_retries: int = 2,
+        timeout: float = DEFAULT_TIMEOUT,
     ):
         self.model = model
         self.temperature = temperature
         self.max_retries = max_retries
+        self.timeout = timeout
 
         key = api_key or find_api_key()
         if not key:
@@ -114,7 +123,8 @@ class OpenAIClient:
                 "python3 -m pip install -r requirements.txt"
             ) from exc
 
-        self._client = OpenAI(api_key=key, max_retries=max_retries)
+        self._client = OpenAI(api_key=key, max_retries=max_retries,
+                              timeout=timeout)
 
     def complete_json(
         self,
@@ -141,7 +151,14 @@ class OpenAIClient:
         except Exception as exc:
             # Deliberately does not echo the request, which would put document
             # content and headers into the log.
-            raise LLMError(f"{label}: the API call failed ({type(exc).__name__})") from exc
+            # The exception type is named but the request is not echoed,
+            # which would put document content and headers into the log.
+            kind = type(exc).__name__
+            hint = ""
+            if "Timeout" in kind or "timed out" in str(exc).lower():
+                hint = (f" after {self.timeout:.0f}s; set "
+                        f"CONTENT_GEN_LLM_TIMEOUT to change that")
+            raise LLMError(f"{label}: the API call failed ({kind}){hint}") from exc
 
         content = (response.choices[0].message.content or "").strip()
         if not content:

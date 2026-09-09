@@ -27,7 +27,11 @@ from models import (                                 # noqa: E402
     TopicRow,
     TopicStatus,
 )
-from sources import REFERENCE_WORKBOOK, find_topic_documents   # noqa: E402
+from sources import (                               # noqa: E402
+    REFERENCE_WORKBOOK,
+    SCHEMA_TEMPLATE,
+    find_topic_documents,
+)
 from table_schemas import TABLE_SCHEMAS              # noqa: E402
 from workbook_writer import (                        # noqa: E402
     WorkbookWriteError,
@@ -41,6 +45,9 @@ from workbook_writer import (                        # noqa: E402
 TOPIC_DOCS = find_topic_documents()
 needs_reference = pytest.mark.skipif(
     REFERENCE_WORKBOOK is None, reason="reference workbook not available",
+)
+needs_template = pytest.mark.skipif(
+    SCHEMA_TEMPLATE is None, reason="schema template not available",
 )
 
 
@@ -151,23 +158,23 @@ def written(tmp_path):
 
 def test_every_sheet_exists_even_when_it_has_no_rows(written):
     """Gaps should be visible in the file, not absent from it."""
-    assert len(load_workbook(written).sheetnames) == 24
+    assert len(load_workbook(written).sheetnames) == 27
 
 
 def test_rows_land_in_the_right_sheets(written):
     counts = row_counts(written)
-    assert counts["Topics"] == 1
-    assert counts["Questions"] == 2
-    assert counts["Micro_Skills"] == 0
+    assert counts["topics"] == 1
+    assert counts["questions"] == 2
+    assert counts["micro_skills"] == 0
 
 
 def test_headers_survive_the_data_write(written):
-    ws = load_workbook(written)["Questions"]
+    ws = load_workbook(written)["questions"]
     assert [c.value for c in ws[1]] == TABLE_SCHEMAS["Questions"]["columns"]
 
 
 def test_values_round_trip_through_the_file(written):
-    ws = load_workbook(written)["Questions"]
+    ws = load_workbook(written)["questions"]
     assert [c.value for c in ws[2]][:4] == [
         "Q-T01-001", "ALG-ORI-01", "Write the general rule.", "SHORT_RESPONSE",
     ]
@@ -180,21 +187,27 @@ def test_writing_an_unknown_sheet_is_refused(tmp_path):
 
 def test_the_summary_shows_populated_and_empty_sheets(written):
     text = summarise(written)
-    assert "24 sheets, 2 populated" in text
+    assert "27 sheets, 2 populated" in text
     assert "Questions" in text and "Micro_Skills" in text
+    assert "Orientation_Videos" in text, "declared but empty, so visible"
 
 
 # ──────────────────────────────────────────────────────────────────────
 # The exit condition
 # ──────────────────────────────────────────────────────────────────────
 
-@needs_reference
-def test_the_written_workbook_matches_the_reference_structure(written):
-    """CG-022 exit condition: same sheet names, same column order."""
+@needs_template
+def test_the_written_workbook_matches_the_platform_template(written):
+    """The exit condition, now measured against the platform's own export.
+
+    The older reference workbook no longer has the right shape: it predates
+    the three orientation tables and the three added columns, and its sheets
+    are TitleCase where the platform uses snake_case.
+    """
     assert verify_written(written) == []
 
 
-@needs_reference
+@needs_template
 def test_the_structure_check_can_actually_fail(tmp_path):
     """A check that never fails proves nothing."""
     from workbook_builder import REFERENCE_SHEET_ORDER
@@ -209,7 +222,7 @@ def test_the_structure_check_can_actually_fail(tmp_path):
 # ──────────────────────────────────────────────────────────────────────
 
 @pytest.mark.skipif(not TOPIC_DOCS, reason="topic documents not available")
-@needs_reference
+@needs_template
 def test_the_pipeline_runs_end_to_end_and_writes_a_workbook(tmp_path, monkeypatch):
     """Every generator, in order, with no network.
 
@@ -240,24 +253,52 @@ def test_the_pipeline_runs_end_to_end_and_writes_a_workbook(tmp_path, monkeypatc
             "misconceptions_to_prevent": list(brief.misconceptions_to_prevent),
         }
 
-    def questions_payload(n=10):
-        return {"questions": [
-            {"question_text": f"Question {i}, write the general rule for the case.",
-             "question_type": "SHORT_RESPONSE", "difficulty": 1 if i % 2 else 2,
-             "item_family": f"family {i}", "micro_skill_positions": [1, 2]}
-            for i in range(1, n + 1)
-        ]}
+    def questions_payload():
+        """Seven slots for one micro-skill, as CG-011 now asks for them."""
+        from coverage_plan import plan_for_skill
+        out = []
+        for number, slot in enumerate(plan_for_skill(), start=1):
+            # Only the diagnostic must be SINGLE_CHOICE. Phase 3 is written as
+            # canvas work, which is what the review asks for and also avoids
+            # the "every Phase 3 question is multiple choice" warning.
+            diagnostic = slot.phase.value == "PHASE_0_DIAGNOSTIC"
+            qtype = "SINGLE_CHOICE" if diagnostic else "SHORT_RESPONSE"
+            text = ("Which rule works for every step? a) n + 3 b) 3n c) n - 3"
+                    if diagnostic else
+                    f"Work out the value of the expression for slot {number}.")
+            out.append({"slot": number, "question_type": qtype,
+                        "question_text": text, "item_family": f"FAM-{number}"})
+        return {"questions": out}
 
-    def answers_payload(n=10):
-        return {"answers": [
-            {"question_id": f"Q-T01-{i:03d}", "answer_type": "ALGEBRAIC_EXPRESSION",
-             "canonical_answer": f"n + {i}", "accepted_answers": [f"n+{i}", f"{i}+n"],
-             "common_wrong_answers": [f"{i}n", f"n-{i}"],
-             "verification_method": "SYMBOLIC_EQUIVALENCE", "required_units": None,
-             "explanation_required": False,
-             "answer_steps": ["Compare the cases.", f"Write n + {i}."]}
-            for i in range(1, n + 1)
-        ]}
+    def answers_payload(question_ids):
+        """One answer per question, typed to match the question.
+
+        A diagnostic is SINGLE_CHOICE and its answer is an option letter; the
+        rest are expressions. Getting this wrong is what the answer generator
+        catches, so the scripted data has to be as disciplined as real output.
+        """
+        out = []
+        for i, qid in enumerate(question_ids, start=1):
+            if "-D" in qid:
+                out.append({
+                    "question_id": qid, "answer_type": "SINGLE_CHOICE",
+                    "canonical_answer": "A", "accepted_answers": ["A"],
+                    "common_wrong_answers": ["B", "C"],
+                    "verification_method": "EXACT_CHOICE_MATCH",
+                    "required_units": None, "explanation_required": False,
+                    "answer_steps": ["Read each option.", "Only a) works for every step."],
+                })
+            else:
+                out.append({
+                    "question_id": qid, "answer_type": "ALGEBRAIC_EXPRESSION",
+                    "canonical_answer": f"n + {i}",
+                    "accepted_answers": [f"n+{i}", f"{i}+n"],
+                    "common_wrong_answers": [f"{i}n", f"n-{i}"],
+                    "verification_method": "SYMBOLIC_EQUIVALENCE",
+                    "required_units": None, "explanation_required": False,
+                    "answer_steps": ["Compare the cases.", f"Write n + {i}."],
+                })
+        return {"answers": out}
 
     def example_payload():
         return {
@@ -273,16 +314,138 @@ def test_the_pipeline_runs_end_to_end_and_writes_a_workbook(tmp_path, monkeypatc
             ],
         }
 
+    def errors_payload(n=5):
+        return {"error_types": [
+            {"descriptor": f"ERROR-KIND-{i}", "error_name": f"Error {i}",
+             "description": f"Student writes the wrong thing in way {i}.",
+             "micro_skill_position": (i % 7) + 1,
+             "severity": "HIGH" if i % 2 else "MEDIUM",
+             "detection_method": "SYMBOLIC_PATTERN"}
+            for i in range(1, n + 1)
+        ]}
+
+    def misconceptions_payload(n=3):
+        # Between them these must name every error code, or the generator
+        # warns that an error has nothing to re-teach.
+        rules = [
+            "Trigger after ERR-T01-ERROR-KIND-1 or ERR-T01-ERROR-KIND-2 when repeated.",
+            "Trigger after ERR-T01-ERROR-KIND-3 when repeated.",
+            "Trigger after ERR-T01-ERROR-KIND-4 or ERR-T01-ERROR-KIND-5 when repeated.",
+        ]
+        return {"misconceptions": [
+            {"descriptor": f"BELIEF-KIND-{i}", "name": f"Belief {i}",
+             "description": f"Student believes the wrong thing in way {i}.",
+             "diagnosis_rule": rules[i - 1]}
+            for i in range(1, n + 1)
+        ]}
+
+    def related_skills_payload():
+        """UNDERLYING_GAP / AFFECTED_SKILL. DIRECT_FAILURE is derived, so it
+        must not appear here."""
+        return {"links": [
+            {"misconception_id": "MIS-T01-BELIEF-KIND-1",
+             "micro_skill_id": "T01.M6",
+             "relationship_type": "UNDERLYING_GAP"},
+        ]}
+
+    def error_map_payload(question_ids):
+        """Label one wrong answer per question with an error it shows.
+
+        The pattern has to be copied from the answer key exactly, which is
+        what the generator checks: a paraphrase never matches a real response.
+        """
+        out = []
+        for i, qid in enumerate(question_ids, start=1):
+            pattern = "B" if "-D" in qid else f"{i}n"
+            out.append({"question_id": qid, "response_pattern": pattern,
+                        "error_code": f"ERR-T01-ERROR-KIND-{(i % 5) + 1}"})
+        return {"mappings": out}
+
+    def hints_payload():
+        """Two per misconception. The level and the join are derived."""
+        out = []
+        for i in range(1, 4):
+            mid = f"MIS-T01-BELIEF-KIND-{i}"
+            out += [
+                {"misconception_id": mid, "hint_type": "ATTENTION",
+                 "content": "Look at what changes between the cases."},
+                {"misconception_id": mid, "hint_type": "CONCEPT_REMINDER",
+                 "content": "A letter stands for a number that can change."},
+            ]
+        return {"hints": out}
+
+    def cues_payload():
+        return {"cues": [
+            {"misconception_id": f"MIS-T01-BELIEF-KIND-{i}",
+             "cue_name": f"Cue {i}",
+             "cue_purpose": "Show the contrast between the two readings.",
+             "image_generation_prompt": "Premium 2D educational infographic, 16:9 landscape. Two panels.",
+             "tutor_explanation_template": "Compare the two panels.",
+             "retrieval_text": "Use when a student confuses the two.",
+             "retrieval_keywords": "contrast, two readings"}
+            for i in range(1, 4)
+        ]}
+
+    def examples_payload():
+        return {"examples": [
+            {"misconception_id": f"MIS-T01-BELIEF-KIND-{i}",
+             "problem_statement": f"A robot starts at any position r and moves {i} spaces.",
+             "worked_steps": ["changing value r", f"fixed action +{i}", f"rule r + {i}"],
+             "final_answer": f"r + {i}"}
+            for i in range(1, 4)
+        ]}
+
+    def scaffolds_payload(skill_count=7):
+        """One per skill. Steps route to the hints CG-017 just wrote."""
+        return {"scaffolds": [
+            {"micro_skill_id": f"T01.M{i}",
+             "scaffold_name": f"Walk Through Skill {i}",
+             "trigger_rule": "Activate after hints and cues have not worked.",
+             "completion_rule": "Complete the step unaided afterwards.",
+             "steps": [
+                 {"prompt": "What changes between the cases?",
+                  "partial_content": "case 1 | case 2",
+                  "expected_response": "The starting number",
+                  "next_on_incorrect": "Repeat this stage"},
+                 {"prompt": "What stays the same?",
+                  "partial_content": "+ 4",
+                  "expected_response": "Add 4",
+                  "next_on_incorrect": "Repeat this stage"},
+                 {"prompt": "Put them together as a rule.",
+                  "partial_content": "",
+                  "expected_response": "n + 4",
+                  "next_on_incorrect": "Repeat this stage"},
+             ]}
+            for i in range(1, skill_count + 1)
+        ]}
+
     from brief_mapper import map_all
     brief = map_all()[0]
 
-    # One topic: micro-skills, then topic package, questions, answers, example.
+    # One topic, in pipeline order. Questions are now ONE CALL PER
+    # MICRO-SKILL, so seven skills means seven question calls before the
+    # answer key is asked for.
+    skill_count = 7
+    # Diagnostics get their own id series, so the ids are not one run of
+    # numbers: seven Q-T01-Dnn and forty-two Q-T01-nnn.
+    question_ids = (
+        [f"Q-T01-D{n:02d}" for n in range(1, skill_count + 1)]
+        + [f"Q-T01-{n:03d}" for n in range(1, skill_count * 6 + 1)]
+    )
     scripted = [
         skills_payload(),
         topic_payload(brief),
-        questions_payload(),
-        answers_payload(),
+        *[questions_payload() for _ in range(skill_count)],
+        answers_payload(question_ids),
         example_payload(),
+        errors_payload(),
+        misconceptions_payload(),
+        related_skills_payload(),
+        error_map_payload(question_ids),
+        hints_payload(),
+        cues_payload(),
+        examples_payload(),
+        scaffolds_payload(skill_count),
     ]
     client = FakeLLMClient(scripted)
     monkeypatch.setattr(pipeline, "default_client", lambda: client)
@@ -294,14 +457,34 @@ def test_the_pipeline_runs_end_to_end_and_writes_a_workbook(tmp_path, monkeypatc
     assert out.exists()
 
     counts = row_counts(out)
-    assert counts["Topics"] == 1
-    assert counts["Micro_Skills"] == 7
-    assert counts["Questions"] == 10
-    assert counts["Answer_Specs"] == 10
-    assert counts["Question_Usage"] == 10
-    assert counts["Worked_Examples"] == 1
-    assert counts["Worked_Example_Steps"] == 5
-    assert counts["Topic_Scope"] == len(brief.included_scope) + len(brief.excluded_scope)
+    assert counts["topics"] == 1
+    assert counts["micro_skills"] == 7
+    # Seven skills x seven slots. Coverage is now planned, not incidental.
+    assert counts["questions"] == 49
+    assert counts["answer_specs"] == 49
+    assert counts["question_usage"] == 49
+    assert counts["question_micro_skills"] == 49, "exactly one mapping each"
+    assert counts["worked_examples"] == 1
+    assert counts["worked_example_steps"] == 5
+    assert counts["error_types"] == 5
+    assert counts["misconceptions"] == 3
+    # CG-016. Derived from the diagnosis rules rather than generated, so the
+    # count follows from what CG-015 wrote.
+    assert counts["misconception_errors"] == 5
+    assert counts["misconception_micro_skills"] > 0
+    assert counts["question_error_map"] > 0
+    # CG-017. Two hints per misconception, one cue, one parallel example.
+    assert counts["hints"] == 6
+    assert counts["misconception_hints"] == 6
+    assert counts["visual_cues"] == 3
+    assert counts["misconception_visual_cues"] == 3
+    assert counts["parallel_examples"] == 3
+    # CG-018. One scaffold per skill, three steps each, linked to that
+    # skill's three guided questions.
+    assert counts["scaffolds"] == 7
+    assert counts["scaffold_steps"] == 21
+    assert counts["question_scaffolds"] == 21
+    assert counts["topic_scope"] == len(brief.included_scope) + len(brief.excluded_scope)
     assert verify_written(out) == []
 
 

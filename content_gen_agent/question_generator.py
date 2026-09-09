@@ -61,14 +61,25 @@ from models import (
 from validation import Severity, ValidationIssue
 
 DEFAULT_VERSION = "1.0"
-DEFAULT_STATUS = QuestionStatus.APPROVED
+# Not APPROVED. APPROVED is a claim that the mathematics is right, and no
+# generator can make it: CG-020's structural checks and CG-021's independent
+# QA pass are what earn it. Stamping it here made every generated question
+# look reviewed when none of it had been.
+DEFAULT_STATUS = QuestionStatus.GENERATED
 
 # The reference runs 16 to 21 per topic. The bounds are wider than that
 # because three topics is a thin basis for a hard rule.
 MIN_QUESTIONS = 8
 MAX_QUESTIONS = 30
 
-VALID_DIFFICULTIES = (1, 2)
+#: The reference is 52% SINGLE_CHOICE. This is the floor the prompt states,
+#: set below the target rather than at it: the point is to catch a bank that
+#: has drifted somewhere useless, not to nag about a topic that came in at 45%
+#: because its content genuinely suits written answers.
+MIN_CHOICE_SHARE = 1 / 3
+
+# 3 is new in the reviewed spec; the approved reference uses only 1 and 2.
+VALID_DIFFICULTIES = (1, 2, 3)
 
 # Shortest text that could plausibly be a question. Anything under this is a
 # fragment, not a task.
@@ -127,12 +138,42 @@ Rules, in order of importance:
    SINGLE_CHOICE means EXACTLY ONE option is correct. There is no
    select-all-that-apply type, so never write "write the letters of all
    correct options", "choose all that apply", or any question with two or
-   more correct options. If you want to ask which of several things are
-   terms or factors, ask it as a SHORT_RESPONSE listing them, or as a
-   SINGLE_CHOICE where each option is a complete candidate set.
+   more correct options. To ask which of several things are terms or
+   factors, keep it SINGLE_CHOICE and make each option a complete candidate
+   set: a) 4x only  b) x only  c) both 4x and 9. Only fall back to
+   SHORT_RESPONSE if that genuinely cannot be phrased as one correct option.
 
-5. difficulty is 1 or 2. 1 is a direct application of one idea. 2 combines
-   two ideas, or applies one in an unfamiliar context. Use both.
+   USE ROUGHLY THIS MIX. For a topic of 18 questions the approved reference
+   holds:
+
+     SINGLE_CHOICE                 9   about half of every topic
+     SHORT_RESPONSE                5
+     MULTI_PART_SHORT_RESPONSE     3
+     CHOICE_WITH_EXPLANATION       1
+
+   Scale those to the number of questions you write, and treat the first row
+   as a floor rather than a suggestion: AT LEAST A THIRD of your questions
+   must be SINGLE_CHOICE.
+
+   This matters for a reason that is not visible from one question. A
+   free-text answer can only be marked by judging what the student meant,
+   which the tutor gets wrong sometimes and which costs a model call every
+   time. An option letter is a string comparison. A bank that is mostly
+   free text is slower and less reliable for every student who uses it, so
+   reach for SHORT_RESPONSE when the answer really is prose, not because it
+   is quicker to write.
+
+5. difficulty is 1, 2 or 3, and means COGNITIVE DEMAND, not bigger numbers.
+   Substituting n = 47 instead of n = 4 is the same question.
+
+     1  Direct recognition or application. Familiar representation, usually
+        one obvious step.
+     2  Independent application or interpretation that needs a meaningful
+        choice, or a distinction a common misconception would get wrong.
+     3  Transfer: an unfamiliar representation, multi-step reasoning, or
+        telling apart two ideas that look alike.
+
+   Use all three.
 
 6. item_family is a SHORT UPPERCASE HYPHENATED descriptor of what the
    question is testing, three words or fewer: GENERAL-ADD,
@@ -227,6 +268,88 @@ def _multi_select_phrase(text: str) -> Optional[str]:
     """The phrase asking for several options, if the question asks for any."""
     found = MULTI_SELECT_RE.search(" ".join(text.split()))
     return found.group(0) if found else None
+
+
+#: A stem that introduces a list of separate things to produce, as in
+#: "write down:" followed by bulleted or numbered parts. This is the shape a
+#: real run produced while typed SHORT_RESPONSE.
+LIST_STEM_RE = re.compile(r":\s*$|:\s*[\n\r]", re.MULTILINE)
+LIST_ITEM_RE = re.compile(r"^\s*(?:[-*•]|\(?[a-d][).]|\d+[).])\s+\S", re.MULTILINE)
+
+#: Asking for three or more named things in one sentence, as the reference's
+#: own multi-part questions do: "identify the variable, the constant and the
+#: operation".
+MULTI_ASK_RE = re.compile(
+    r"\b(?:identify|state|name|write down|give|list|find)\b"
+    r"[^.?!]*?,[^.?!]*?\band\b",
+    re.IGNORECASE,
+)
+
+
+def multi_part_shape(text: str) -> Optional[str]:
+    """Why this question looks like it asks for several separate answers.
+
+    A real run produced this, typed SHORT_RESPONSE:
+
+        In the expression n + 4, write down:
+        - the letter used,
+        - the number used,
+        - the operation symbol used.
+
+    That is three answers, so the answer generator reached for MULTI_PART,
+    which SHORT_RESPONSE does not allow, and the topic lost all 18 of its
+    keys. The answer generator was right and the question was mistyped, so
+    the check belongs here.
+
+    Deliberately narrow. It wants either an explicit list of parts, or the
+    "identify A, B and C" phrasing the reference's own multi-part questions
+    use. A question that merely contains a comma is not caught.
+    """
+    body = str(text or "")
+    if LIST_STEM_RE.search(body) and len(LIST_ITEM_RE.findall(body)) >= 2:
+        return "a stem ending in a colon followed by a list of parts"
+    found = MULTI_ASK_RE.search(" ".join(body.split()))
+    if found:
+        return f"asks for three things at once: {found.group(0)[:60]!r}"
+    return None
+
+
+def _retype_multi_part(
+    name: str,
+    questions: list,
+) -> tuple[list, list[ValidationIssue]]:
+    """Relabel a SHORT_RESPONSE question that plainly asks for several answers.
+
+    The question itself is fine. Only its label is wrong, so dropping it would
+    throw away good content to fix a one-word mistake. Retyping keeps it and
+    lets the answer generator use MULTI_PART, which is what it reached for
+    anyway when this happened for real and cost a topic all 18 of its keys.
+
+    Reported as a warning every time. A silent retype would hide the fact that
+    the question prompt is producing mislabelled questions, which is the thing
+    that actually needs fixing.
+    """
+    notes: list[ValidationIssue] = []
+    out: list = []
+
+    for position, question in enumerate(questions, start=1):
+        if not isinstance(question, dict):
+            out.append(question)
+            continue
+
+        if question.get("question_type") == "SHORT_RESPONSE":
+            reason = multi_part_shape(str(question.get("question_text") or ""))
+            if reason:
+                question = dict(question)
+                question["question_type"] = "MULTI_PART_SHORT_RESPONSE"
+                notes.append(ValidationIssue(
+                    Severity.WARNING, name, f"questions[{position}]",
+                    f"retyped SHORT_RESPONSE to MULTI_PART_SHORT_RESPONSE: "
+                    f"{reason}",
+                ))
+        out.append(question)
+
+    return out, notes
 
 
 def _check(
@@ -351,6 +474,23 @@ def _check(
         warn("question_type",
              f"every question is {types.pop()!r}; the reference uses four kinds")
 
+    # The mix drifted from 52% multiple choice in the reference to 25% and
+    # then 11% across two runs, taking the share of the bank that can be
+    # marked by exact comparison from 76% down to 39%. Nothing caught it,
+    # because every individual question was fine. Only the proportions were
+    # wrong, so only a check on the proportions can see it.
+    usable = [q for q in questions if isinstance(q, dict)]
+    if len(usable) >= MIN_QUESTIONS:
+        choice = sum(1 for q in usable if q.get("question_type") == "SINGLE_CHOICE")
+        share = choice / len(usable)
+        if share < MIN_CHOICE_SHARE:
+            warn("question_type",
+                 f"only {choice} of {len(usable)} questions ({share:.0%}) are "
+                 f"SINGLE_CHOICE; the reference is about half. A free-text "
+                 f"answer costs a model call to mark and is sometimes marked "
+                 f"wrong, so a bank this far from the reference is slower and "
+                 f"less reliable for every student")
+
     return issues, bad
 
 
@@ -387,7 +527,13 @@ def generate_questions(
     )
 
     questions = payload.get("questions")
+
+    retyped: list[ValidationIssue] = []
+    if isinstance(questions, list):
+        questions, retyped = _retype_multi_part(name, questions)
+
     issues, bad_positions = _check(name, questions, len(skills))
+    issues = retyped + issues
     errors = [i for i in issues if i.is_error]
 
     if errors and drop_invalid and bad_positions:

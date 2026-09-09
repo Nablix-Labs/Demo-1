@@ -18,6 +18,7 @@ import {
   getSession,
   submitCanvas,
   sendInteraction,
+  submitInterventionInput as postInterventionInput,
   endSession,
   studentId,
   questionProgress,
@@ -33,6 +34,7 @@ import {
   type StudentModelEvent,
   isStaleTurnResponse,
   isStaleSessionError,
+  isInterventionPausedError,
 } from '@/lib/api';
 import { selectedOptionText } from '@/lib/selectedOption';
 import {
@@ -60,7 +62,7 @@ import { canvasEvidenceFor } from '@/lib/canvasEvidence';
 import { startPayloadFor } from '@/lib/sessionStart';
 import type { QuestionAnchor } from '@/lib/questionAnchors';
 import { isPhase3 } from '@/lib/phase3';
-import { resumesCheckpoint } from '@/lib/phase3Routing';
+import { phase3Destination } from '@/lib/phase3Routing';
 
 const apiEnabled = () => Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
@@ -240,6 +242,32 @@ const STILL_FAILING =
  * same three things, and the nudge suppression is the part that is easy to
  * forget on a new one.
  */
+/**
+ * The topic turned out to be paused. Find out where it stands, from the record.
+ *
+ * A 409 INTERVENTION_REQUIRED says a case is open but not which stage it is at
+ * — whether the student has been asked yet, or has already answered. Guessing
+ * either way is a visible mistake: guess "asked" and a student who has just
+ * filled the form is shown it again; guess "answered" and one who never saw it
+ * gets thanked for input they never gave.
+ *
+ * So this does what Chirudeva's handoff says to do — "Read the session and
+ * render the paused state". Reads are never blocked by the pause, the record
+ * carries the same projection as the reply, and `syncBackendSession` is the one
+ * thing that decides the stage. Fire-and-forget: it improves the screen when it
+ * lands and changes nothing if it does not.
+ */
+function refreshInterventionState(): void {
+  const store = useNumeraStore.getState();
+  if (!apiEnabled() || !store.sessionId) return;
+  void getSession(store.sessionId, studentId())
+    .then((rec) => {
+      useNumeraStore.getState().setBackendSession(rec);
+      syncBackendSession(rec);
+    })
+    .catch((err) => console.warn('✗ could not re-read the paused session:', err));
+}
+
 function reportTutorFailure(
   err: unknown,
   fallback: string,
@@ -247,6 +275,15 @@ function reportTutorFailure(
   label = '/interaction',
 ): void {
   const store = useNumeraStore.getState();
+  // A pause is not a failure. Nothing broke, the topic is simply closed to
+  // learning actions until a human looks at it — so the student gets the paused
+  // screen rather than an error, and the chat is left alone.
+  if (isInterventionPausedError(err)) {
+    reportFailure(label, err, { session_id: store.sessionId, paused: 'INTERVENTION_REQUIRED' });
+    refreshInterventionState();
+    store.markTutorTurnFailed();
+    return;
+  }
   // Before anything student-facing: the full picture in the console, including
   // exactly what we sent. A screenshot of the chat says almost nothing; this
   // says who broke and gives the backend's own request_id to grep for.
@@ -373,8 +410,48 @@ export function syncBackendSession(response: {
   // re-serve from a duplicate reply. The backend's own `payload_type` is the
   // only thing that can, so it is what unlocks. A duplicate carries no
   // RESUME_SAME_INDEPENDENT_QUESTION and still changes nothing.
-  if (resumesCheckpoint(response)) {
+  //
+  // Read once, here, because this is the only place both transports land. The
+  // destination is the backend's, never computed — spec §12: "Follow backend
+  // routing and display the destination."
+  const destination = phase3Destination(response);
+  if (destination.kind === 'RESUME_CHECKPOINT') {
     useNumeraStore.getState().lockPhase3Attempt(null);
+  }
+  // Where the intervention stands, from the same read.
+  //
+  // Set only on the destinations that actually SAY something about it. An
+  // ordinary Phase 2 turn is UNKNOWN to this parser, and clearing on UNKNOWN
+  // would take the popup down on the student's very next word — which is
+  // exactly the shape of the field that raised it, since the request arrives
+  // once and then disappears.
+  switch (destination.kind) {
+    case 'COLLECT_INTERVENTION':
+      useNumeraStore.getState().setInterventionState({
+        stage: 'COLLECTING',
+        // May legitimately be null: the topic can be paused by `status` alone,
+        // on a reply whose payload has already dropped the request. The popup
+        // falls back to the six §11 codes, so it is still answerable.
+        request: destination.request,
+      });
+      break;
+    case 'AWAIT_INTERVENTION_REVIEW':
+      useNumeraStore.getState().setInterventionState({ stage: 'AWAITING_REVIEW' });
+      break;
+    // The backend has sent the student somewhere to learn, which it does not do
+    // while a case is open — so the case is resolved. This is the only clear:
+    // nothing on the frontend decides an intervention is over.
+    case 'SERVE_QUESTION':
+    case 'RESUME_CHECKPOINT':
+    case 'GO_TO_GUIDED_REPAIR':
+    case 'GO_TO_PREREQUISITE':
+    case 'START_REVIEW':
+      if (useNumeraStore.getState().interventionStage !== 'NONE') {
+        useNumeraStore.getState().setInterventionState({ stage: 'NONE' });
+      }
+      break;
+    case 'UNKNOWN':
+      break;
   }
   if (response.question_number !== undefined) {
     store.setQuestionNumber(response.question_number);
@@ -1465,6 +1542,81 @@ export function useDemoTutor() {
    * (`phase4_review`, app/models/session.py:294) — it is generated on entering
    * Review, so this response is the only place it appears.
    */
+  /**
+   * Send what the student says is hard, and land them on the paused state.
+   *
+   * Deliberately does NOT go through `sendSynchronizedInteraction`: this is not
+   * a turn in the lesson. It adds no chat message, speaks nothing, takes no
+   * voice floor and expects no teaching in the reply — §11 is explicit that
+   * submitting records evidence and resumes nothing.
+   *
+   * The reply still goes through the shared choke point, because that is what
+   * reads `AWAIT_INTERVENTION_REVIEW` and closes the popup onto the paused
+   * screen. Doing it here instead would be a second opinion about a state the
+   * backend already reports.
+   *
+   * Throws on failure rather than swallowing it: the modal keeps the student's
+   * words on screen and offers the retry, which matters more here than anywhere
+   * else — this is the one thing they have been asked for, and Chirudeva's
+   * handoff says identical retries are idempotent.
+   */
+  const submitInterventionInput = useCallback(async (
+    input: {
+      selected_reason_codes: string[];
+      voice_input: { provided: boolean; audio_ref: null; transcript: string | null };
+    },
+  ): Promise<void> => {
+    const state = useNumeraStore.getState();
+    const request = state.interventionRequest;
+    const interventionId = request?.intervention_id?.trim();
+    if (!apiEnabled() || !sessionId || !interventionId) {
+      // No case id, nothing to file against. Refused loudly rather than sent
+      // half-formed: a submission the backend cannot attach is indistinguishable
+      // to the student from one that worked, and they would be left waiting on
+      // a review that was never opened.
+      throw new Error('No intervention case to submit against.');
+    }
+    // The lesson's mic, not the popup's. The popup has its own `useVoiceTurn`
+    // for dictating the transcript, and if the lesson floor were still open
+    // behind it the two would be listening at once — and the lesson one would
+    // be sending turns into a topic the backend is 409ing.
+    closeMicForSubmission();
+    let res;
+    try {
+      res = await postInterventionInput({
+        session_id: sessionId,
+        student_id: studentId(),
+        turn_id: state.beginSubmissionTurn(),
+        current_phase: state.currentPhase,
+        concept_id: state.activeConceptId,
+        question_id: state.activeQuestionId ?? '',
+        hint_count: state.lastHintText ? 1 : 0,
+        intervention_id: interventionId,
+        ...(request?.topic_id?.trim() ? { topic_id: request.topic_id.trim() } : {}),
+        ...(request?.micro_skill_id?.trim() ? { micro_skill_id: request.micro_skill_id.trim() } : {}),
+        selected_reason_codes: input.selected_reason_codes,
+        voice_input: input.voice_input,
+      });
+    } catch (err) {
+      // Straight back to where they were: popup open, words intact, mic usable.
+      // The floor has to be given back explicitly — a failed submission that
+      // left it held would silently stop the student being heard, which is the
+      // exact failure lib/__tests__/voiceFloor guards against.
+      reopenFloorAfterFailure();
+      throw err;
+    }
+    // The version gate first, then the shared application path — the same two
+    // steps every other reply takes. `syncBackendSession` is what reads the
+    // routing block, so AWAIT_INTERVENTION_REVIEW lands from the backend's own
+    // words rather than from an assumption made here.
+    if (acceptResponse(res)) syncBackendSession(res);
+    // Belt and braces. The reply is specified to carry
+    // AWAIT_INTERVENTION_REVIEW, and acceptResponse acts on it — but if the
+    // routing block is ever missing, the student must still not be shown the
+    // popup they have just answered.
+    useNumeraStore.getState().setInterventionState({ stage: 'AWAITING_REVIEW' });
+  }, [sessionId]);
+
   const end = useCallback(async (): Promise<SessionSummary | null> => {
     if (!apiEnabled() || !sessionId) return null;
     const res = await endSession(sessionId); // propagates network/HTTP failures
@@ -1489,6 +1641,7 @@ export function useDemoTutor() {
     claimInactivityNudge,
     presentInactivityNudge,
     acknowledgeInactivityNudge,
+    submitInterventionInput,
     end,
   };
 }

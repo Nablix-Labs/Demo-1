@@ -292,6 +292,11 @@ class AnswerSet:
     issues: list[ValidationIssue] = field(default_factory=list)
     raw_response: dict = field(default_factory=dict)
 
+    #: Questions dropped because their answer could not be trusted. The
+    #: caller must remove these from the Questions sheet as well, or the
+    #: bank ships a question the tutor has no key for.
+    dropped_question_ids: set = field(default_factory=set)
+
     @property
     def errors(self) -> list[ValidationIssue]:
         return [i for i in self.issues if i.is_error]
@@ -301,9 +306,40 @@ class AnswerSet:
         return not self.errors
 
 
+#: Characters the model uses interchangeably with their ASCII equivalents.
+#:
+#: This is not a guess. Counting the answer fields of one six-topic run: the
+#: MINUS SIGN U+2212 appears in 56 of them and the ASCII hyphen in 19, the
+#: MULTIPLICATION SIGN in 104 and the asterisk in 37, the DIVISION SIGN in 35
+#: and the slash in 18. Both forms of every operator are in use, so a
+#: canonical answer and an accepted answer can be the same answer and differ
+#: by one character nobody can see.
+#:
+#: That is exactly how Q-T04-034 was lost: canonical 'x - 6' written with
+#: U+2212 against accepted answers written with a hyphen, reported as
+#: "canonical_answer is not among accepted_answers", which reads as a model
+#: mistake and was not one.
+#:
+#: The dashes are here without having been seen yet. They are the same class
+#: as the minus sign and a dash is never a distinct operator in an answer.
+EQUIVALENT_CHARACTERS = str.maketrans({
+    "−": "-",   # MINUS SIGN
+    "–": "-",   # EN DASH
+    "—": "-",   # EM DASH
+    "×": "*",   # MULTIPLICATION SIGN
+    "÷": "/",   # DIVISION SIGN
+})
+
+
 def _normalise(value: object) -> str:
-    """Whitespace and case removed, for comparing answer forms."""
-    return "".join(str(value).split()).lower()
+    """Whitespace, case and operator spelling removed, for comparing forms.
+
+    Only ever used to compare one answer against another within the same
+    question. It is not what a student's response is marked against, so
+    treating 3/4 and 3 divided by 4 as one form is what we want here: they
+    cannot be one accepted and the other wrong.
+    """
+    return "".join(str(value).split()).lower().translate(EQUIVALENT_CHARACTERS)
 
 
 def question_options(question_text: str) -> set[str]:
@@ -370,8 +406,26 @@ def _check(
             error(where, "canonical_answer is missing or empty")
             continue
 
+        # Strip the label punctuation now, before anything reads it. Doing it
+        # at the choice check further down would be too late: the
+        # canonical-in-accepted test runs first, and "c)" against an accepted
+        # list of ["c"] would fail there with a misleading message.
+        if question.question_type.value in LETTER_ANSWER_QUESTIONS:
+            canonical = normalise_choice(canonical)
+
         accepted = answer.get("accepted_answers")
         wrong = answer.get("common_wrong_answers")
+
+        # The same punctuation appears in the accepted and wrong lists, since
+        # the model is copying one form throughout. Normalising only the
+        # canonical would leave "a" being compared against ["a)"], which fails
+        # the canonical-in-accepted test for a reason that has nothing to do
+        # with the answer.
+        if question.question_type.value in LETTER_ANSWER_QUESTIONS:
+            if isinstance(accepted, list):
+                accepted = [normalise_choice(a) for a in accepted]
+            if isinstance(wrong, list):
+                wrong = [normalise_choice(w) for w in wrong]
 
         if not isinstance(accepted, list) or not accepted:
             error(where, "accepted_answers is missing or empty")
@@ -453,10 +507,12 @@ def _check(
         if not isinstance(answer.get("explanation_required"), bool):
             error(where, "explanation_required must be true or false")
 
-    missing = set(questions) - seen
-    if missing:
-        error("answers",
-              f"no answer key for {len(missing)} question(s): {sorted(missing)[:5]}")
+    # One error PER missing question, keyed on its id. As a single
+    # batch-level complaint this was unrecoverable: the drop path only blames
+    # errors that name a question, so a partial response lost the whole topic.
+    # It cost Topic 1 all 56 of its questions on a six-topic run.
+    for question_id in sorted(set(questions) - seen):
+        error(question_id, "the model returned no answer key for this question")
 
     return issues
 
@@ -466,6 +522,39 @@ def _numbered(steps: list[str]) -> str:
     return "\n".join(f"{n}. {s.strip()}" for n, s in enumerate(steps, start=1))
 
 
+#: Punctuation a model carries over from the question's own option labels.
+CHOICE_PUNCTUATION = ").:"
+
+
+def normalise_choice(canonical: str) -> str:
+    """Strip the label punctuation off a choice answer: "c)" becomes "c".
+
+    Four answers in one six-topic run came back as "a)", "b)" and "c)", and
+    the whole topic's key was refused because they were not bare letters. The
+    questions themselves end "Choose a), b) or c).", so the model was copying
+    the form the question put in front of it. The letter was never in doubt.
+
+    Rejecting that is pedantry with a real cost, so the bracket is removed
+    here rather than argued about. This runs before validation and before the
+    row is built, so the workbook stores "c" and the check sees "c".
+    """
+    return str(canonical or "").strip().rstrip(CHOICE_PUNCTUATION).strip()
+
+
+# A keep-floor used to live here: below 70% surviving, the whole topic was
+# refused. That made sense when a TOPIC was the unit and a partial one was a
+# stump nobody could use.
+#
+# It is gone because the unit changed. Coverage is now planned and reported
+# per micro-skill, so a topic that keeps 32 of 56 answers is not a mystery --
+# the run names exactly which skills are short and by which slots, and exits
+# non-zero. Refusing 32 sound answers to avoid shipping something the report
+# already describes precisely would lose work for nothing.
+#
+# The one genuinely fatal case is the same as everywhere else in this
+# pipeline: nothing usable at all.
+
+
 def generate_answers(
     questions: list[QuestionRow],
     client: LLMClient,
@@ -473,9 +562,22 @@ def generate_answers(
     *,
     misconceptions: Optional[list[str]] = None,
     strict: bool = True,
+    drop_invalid: bool = False,
+    retry: bool = True,
     id_service: Optional[IdService] = None,
 ) -> AnswerSet:
-    """Generate the answer key for one topic's questions."""
+    """Generate the answer key for one topic's questions.
+
+    With drop_invalid, a question whose answer cannot be trusted is dropped
+    ALONGSIDE its answer, and `dropped_question_ids` names it so the caller
+    can remove it from the Questions sheet too.
+
+    That pairing is the point. Every other generator drops a bad row and moves
+    on, but an answer is not free-standing: dropping only the answer would
+    leave a question in the bank that looks complete and has no key, which the
+    tutor cannot use and nobody would notice. Dropping only the question is
+    equally wrong. They go together or not at all.
+    """
     by_id = {q.question_id: q for q in questions}
     name = f"{topic_code} answers"
 
@@ -487,8 +589,77 @@ def generate_answers(
 
     answers = payload.get("answers")
     issues = _check(name, answers, by_id)
+    dropped: set[str] = set()
+
+    # A partial response is common at this size: the answer key is asked for
+    # every question in a topic at once, which is 56 to 70 of them. Rather
+    # than losing what came back, the questions it skipped are asked for
+    # again, once. Same reasoning as the question generator's retry: a gap is
+    # worth one more call, and only one, because a second attempt is the same
+    # roll of the same dice.
+    answered = {
+        a.get("question_id") for a in (answers or [])
+        if isinstance(a, dict)
+    }
+    outstanding = [q for q in questions if q.question_id not in answered]
+    if outstanding and retry and isinstance(answers, list):
+        # Held aside, not appended: _check runs again below and its result
+        # REPLACES issues, which would silently discard the explanation of
+        # why a retry happened at all.
+        notes = [ValidationIssue(
+            Severity.WARNING, name, "answers",
+            f"the model answered {len(answered)} of {len(questions)} "
+            f"questions; asking again for the {len(outstanding)} it skipped",
+        )]
+        second = client.complete_json(
+            SYSTEM_PROMPT,
+            build_user_prompt(outstanding, misconceptions),
+            purpose=f"CG-013 answer key retry for {topic_code}",
+        )
+        recovered = [
+            a for a in (second.get("answers") or [])
+            if isinstance(a, dict) and a.get("question_id") not in answered
+        ]
+        if recovered:
+            answers = list(answers) + recovered
+            notes.append(ValidationIssue(
+                Severity.WARNING, name, "answers",
+                f"the retry supplied {len(recovered)} more answer(s)",
+            ))
+            issues = _check(name, answers, by_id)
+        issues = notes + issues
 
     errors = [i for i in issues if i.is_error]
+    if errors and drop_invalid and isinstance(answers, list):
+        # Only answers whose problem is their own can be dropped. A
+        # batch-level complaint -- "no answer key for 4 questions" -- names no
+        # single row, so removing rows cannot resolve it.
+        blamed = {i.field for i in errors if i.field in by_id}
+        kept_answers = [
+            a for a in answers
+            if not (isinstance(a, dict) and a.get("question_id") in blamed)
+        ]
+        if blamed and kept_answers:
+            kept_questions = [q for q in questions if q.question_id not in blamed]
+            recheck = _check(name, kept_answers,
+                             {q.question_id: q for q in kept_questions})
+            if not [i for i in recheck if i.is_error]:
+                answers = kept_answers
+                dropped = blamed
+                issues = [
+                    ValidationIssue(Severity.WARNING, i.source_file_name, i.field,
+                                    f"dropped: {i.message}")
+                    for i in errors
+                ] + [i for i in recheck if not i.is_error] + [
+                    ValidationIssue(
+                        Severity.WARNING, name, "answers",
+                        f"dropped {len(dropped)} question(s) whose answer could "
+                        f"not be trusted: {', '.join(sorted(dropped))}; "
+                        f"kept {len(kept_questions)}",
+                    )
+                ]
+                errors = []
+
     if errors and strict:
         raise AnswerError(
             f"{topic_code}: the model's answer key cannot be used.\n"
@@ -503,6 +674,13 @@ def generate_answers(
     rows: list[AnswerSpecRow] = []
     for answer in answers:
         question = by_id[answer["question_id"]]
+        # Whatever the check compared, the sheet stores. Otherwise the
+        # workbook holds "a)" while validation approved "a".
+        clean = (
+            normalise_choice
+            if question.question_type.value in LETTER_ANSWER_QUESTIONS
+            else (lambda v: str(v).strip())
+        )
         rows.append(
             AnswerSpecRow(
                 # Derived from the question, not counted, so the two cannot
@@ -510,12 +688,12 @@ def generate_answers(
                 answer_spec_id=question.answer_spec_id,
                 question_id=question.question_id,
                 answer_type=AnswerType(answer["answer_type"]),
-                canonical_answer=str(answer["canonical_answer"]).strip(),
+                canonical_answer=clean(answer["canonical_answer"]),
                 accepted_answers=LIST_SEPARATOR.join(
-                    str(a).strip() for a in answer["accepted_answers"]
+                    clean(a) for a in answer["accepted_answers"]
                 ),
                 common_wrong_answers=LIST_SEPARATOR.join(
-                    str(w).strip() for w in answer["common_wrong_answers"]
+                    clean(w) for w in answer["common_wrong_answers"]
                 ),
                 verification_method=VerificationMethod(
                     answer["verification_method"]
@@ -526,4 +704,4 @@ def generate_answers(
             )
         )
 
-    return AnswerSet(topic_code, rows, issues, payload)
+    return AnswerSet(topic_code, rows, issues, payload, dropped)

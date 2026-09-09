@@ -26,6 +26,8 @@ import {
 import { rescueBlocksSubmission } from '@/lib/rescueMode';
 import { optionsMissing } from '@/lib/questionOptions';
 import QuestionDisplay from '@/components/QuestionDisplay';
+import InterventionInputModal, { type InterventionInputSubmission } from '@/components/InterventionInputModal';
+import InterventionPaused from '@/components/InterventionPaused';
 import StickyNote from '@/components/StickyNote';
 import PhaseGate from '@/components/PhaseGate';
 import Toolbar from '@/components/Canvas/Toolbar';
@@ -56,6 +58,11 @@ export default function PracticePage() {
   const selectedOptionId = useNumeraStore((s) => s.selectedOptionId);
   const setSelectedOption = useNumeraStore((s) => s.setSelectedOption);
   const lockPhase3Attempt = useNumeraStore((s) => s.lockPhase3Attempt);
+  // Automated remediation has run out (§10/§11). Both are primitives, so a bare
+  // selector is safe here — an object or array selector would need useShallow,
+  // which is how SupportDeck took the guided screen down on 6 Sep.
+  const interventionStage = useNumeraStore((s) => s.interventionStage);
+  const interventionRequest = useNumeraStore((s) => s.interventionRequest);
   const { goStage } = useFlowNav();
   const tutor = useDemoTutor();
 
@@ -383,6 +390,10 @@ export default function PracticePage() {
    */
   const submitAttempt = async (option?: SchemaQuestionOption) => {
     if (inFlight.current || locked) return; // one in-flight submission; none after lock
+    // Paused for a human. Every learning route 409s until the case is resolved
+    // (Chirudeva, 7 Sep), so sending would spend the student's work on a
+    // guaranteed error — and the error copy is not what they need to read.
+    if (interventionStage !== 'NONE') return;
     inFlight.current = true;
     setSubmitting(true);
     setSubmitError(null);
@@ -441,9 +452,32 @@ export default function PracticePage() {
   /** The Toolbar's "Check" — canvas work, or a pick already made. */
   const finish = () => { void submitAttempt(); };
 
+  /**
+   * File what the student says is hard.
+   *
+   * Errors are re-thrown so the modal keeps their words on screen with a retry
+   * — losing a paragraph a struggling student has just dictated is not a
+   * recoverable failure, and identical retries are idempotent server-side.
+   */
+  const sendInterventionInput = async (input: InterventionInputSubmission) => {
+    await tutor.submitInterventionInput(input);
+  };
+
   return (
     <PhaseGate phase="practice">
     <div className="flex-1 min-w-0 flex flex-col bg-white" aria-label="Independent practice">
+      {/* Over everything, because there is nothing underneath to interact with:
+          the backend refuses every learning route while a case is open. The
+          popup comes first — it is the one thing still being asked of the
+          student — and the paused panel takes its place once it is answered. */}
+      {interventionStage === 'COLLECTING' && (
+        <InterventionInputModal request={interventionRequest} onSubmit={sendInterventionInput} />
+      )}
+      {interventionStage === 'AWAITING_REVIEW' && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-reading-surface/95 p-6">
+          <InterventionPaused />
+        </div>
+      )}
       {/* Header */}
       <header className="flex items-center gap-4 px-6 py-3.5 border-b border-muted-gray flex-shrink-0">
         <div className="min-w-0">

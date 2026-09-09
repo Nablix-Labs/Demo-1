@@ -16,27 +16,38 @@ Order is fixed by real dependencies, not preference:
     usage and skill mapping   CG-012    needs the questions
     answer key                CG-013    needs the questions
     worked example            CG-014    needs the micro-skills
+    errors and misconceptions CG-015    needs the micro-skills
+    the mapping tables        CG-016    needs the answers and the errors
+    hints, cues, examples     CG-017    needs the misconceptions
+    scaffolds                 CG-018    needs the guided questions and hints
     write the workbook        CG-022
+    validate the file         CG-020    reads the file, not the generators
+    semantic review           CG-021    optional, --qa
 
 Micro-skills are generated for every topic before anything else, because the
 dependency graph crosses topics: T02.M1 depends on T01.M6, so a topic cannot
-be generated until its predecessors exist.
+be generated until its predecessors exist. They are held back from the
+workbook until their topic package succeeds, so a topic that fails late does
+not leave its skills pointing at a topic row that was never written.
 
 What this does not do
 ----------------------
 
-No validation. CG-020 owns the 17 blocking checks, and it is not built. A row
-that would fail one is still written, deliberately: the file is for looking at,
-and a row you cannot see is a row you cannot judge.
+It does not refuse to write a workbook that fails validation. The
+specification calls that batch GENERATION_FAILED, and the exit code says so,
+but the file is still written: a run that produces nothing to look at is a run
+nobody can diagnose. Nothing written here is ever marked APPROVED, so a file
+on disk is not a file anyone may import.
 
-Sheets from M4 -- errors, misconceptions, hints, scaffolds -- have no generator
-yet. They are written empty rather than omitted, so the gaps are visible in the
-file rather than being mistaken for a complete workbook.
+The three Orientation sheets have no generator. They are written empty rather
+than omitted, so the gap is visible in the file rather than being mistaken for
+a complete workbook.
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import time
 from pathlib import Path
@@ -44,14 +55,28 @@ from typing import Optional
 
 from answer_generator import generate_answers
 from brief_mapper import map_all
+from diagnosis_generator import generate_error_types, generate_misconceptions
+from scaffold_generator import generate_scaffolds, guided_by_skill
+from support_generator import generate_support
+from mapping_generator import (
+    build_misconception_errors,
+    direct_failures,
+    generate_question_error_map,
+    generate_related_skills,
+    unmapped_by_question,
+)
 from docx_parser import parse_all_topic_documents
+from qa_reviewer import review_workbook
+from qa_reviewer import summarise as summarise_qa
+from validator import validate
+from validator import summarise as summarise_validation
 from id_service import IdService
 from llm_client import default_client, is_configured
 from micro_skill_generator import REPAIR_PREFIX, generate_all_micro_skills
-from question_generator import generate_questions
+from skill_question_generator import generate_for_topic
 from reference_check import build_scope_rows
 from topic_generator import generate_topic_package
-from usage_generator import build_usage_and_skills, plan_phases
+from usage_generator import UsagePlan, UsageError, build_usage_rows
 from validation import validate_documents
 from worked_example_generator import generate_worked_example
 from workbook_writer import summarise, verify_written, write_workbook
@@ -62,7 +87,57 @@ GENERATED_SHEETS = (
     "Topics", "Topic_Scope", "Source_Provenance", "Micro_Skills",
     "Questions", "Question_Usage", "Question_MicroSkills", "Answer_Specs",
     "Worked_Examples", "Worked_Example_Steps", "Worked_Example_MicroSkills",
+    "Error_Types", "Misconceptions",
+    "Question_Error_Map", "Misconception_Errors", "Misconception_MicroSkills",
+    "Hints", "Misconception_Hints", "Visual_Cues", "Misconception_VisualCues",
+    "Parallel_Examples",
+    "Scaffolds", "Scaffold_Steps", "Question_Scaffolds",
 )
+
+
+#: How many examples of the same complaint to print before counting the rest.
+MAX_NOTES_PER_KIND = 3
+
+#: The specifics of a warning, so two warnings making the same complaint about
+#: different rows can be recognised as the same complaint.
+_SPECIFICS_RE = re.compile(r"'[^']*'|\"[^\"]*\"|\d+")
+
+
+def _shape(message: str) -> str:
+    """A warning with its particulars removed, for grouping."""
+    return _SPECIFICS_RE.sub("#", message)[:80]
+
+
+def _report(say, issues) -> None:
+    """Surface what a generator recovered from, rather than hiding it.
+
+    A dropped row and a repaired field are both successes, but silent ones,
+    and a table nobody was told was salvaged reads as authored.
+
+    This used to print only warnings whose text contained one of four
+    keywords. That filter was opt-in, so a warning added later was invisible
+    until somebody remembered to add its wording to the list, and nobody did:
+    the run of 7 September reported three problems while suppressing 134
+    warnings saying a question had no diagnosis attached to any of its wrong
+    answers. A third of the bank could not diagnose a mistake and the log
+    said the workbook was fine.
+
+    So the rule is now the other way round. Every warning prints. The only
+    thing suppressed is the fourth and later REPEAT of the same complaint,
+    replaced by a count, because the reason the old filter existed was real:
+    134 near-identical lines bury the three that are different.
+    """
+    groups: dict[str, list] = {}
+    for issue in issues:
+        if not issue.is_error:
+            groups.setdefault(_shape(issue.message), []).append(issue)
+
+    for group in groups.values():
+        for issue in group[:MAX_NOTES_PER_KIND]:
+            say(f"    note: {issue.message}")
+        if len(group) > MAX_NOTES_PER_KIND:
+            say(f"    note: ... and {len(group) - MAX_NOTES_PER_KIND} more of "
+                f"the same ({len(group)} in total)")
 
 
 def run(
@@ -70,6 +145,7 @@ def run(
     limit: Optional[int] = None,
     strict: bool = True,
     verbose: bool = True,
+    qa_parts: Optional[list[str]] = None,
 ) -> int:
     """Generate everything and write the workbook. Returns an exit code."""
     def say(message: str = "") -> None:
@@ -99,12 +175,20 @@ def run(
 
     rows: dict[str, list] = {sheet: [] for sheet in GENERATED_SHEETS}
     failures: list[str] = []
+    #: Skills that did not meet the coverage plan. Not failures -- their
+    #: questions are usable -- but the run must not call itself complete.
+    incomplete: list[str] = []
 
     say("\nGenerating micro-skills for every topic first...")
     say("  (the dependency graph crosses topics, so later ones need earlier ones)")
     skill_sets = generate_all_micro_skills(briefs, client, strict=strict, repair=True)
+    # Held back rather than written now. A topic whose package fails later
+    # never gets a Topics row, and its skills would then point at a topic that
+    # does not exist -- which is exactly what happened to T02 on a six-topic
+    # run: ten micro-skills left dangling by a failure three steps later.
+    skills_by_topic = {}
     for brief, skills in zip(briefs, skill_sets):
-        rows["Micro_Skills"].extend(skills.rows)
+        skills_by_topic[brief.topic_code] = skills.rows
         say(f"  {brief.topic_code}  {len(skills.rows)} skills")
         for issue in skills.issues:
             if issue.message.startswith(REPAIR_PREFIX):
@@ -120,37 +204,91 @@ def run(
                 next(d for d in documents if d.source_file_name == brief.source_file_name),
                 client, strict=strict, id_service=service,
             )
+            # The topic exists, so its skills can be written safely now.
             rows["Topics"].append(package.topic)
+            rows["Micro_Skills"].extend(skills_by_topic[code])
             rows["Source_Provenance"].append(package.source_provenance)
             rows["Topic_Scope"].extend(package.scope_items)
             say(f"  topic, {len(package.scope_items)} scope items, provenance")
 
-            questions = generate_questions(
-                brief, client, micro_skills=skills.rows,
+            # CG-011 rewritten: one call per micro-skill, filling the
+            # coverage plan. Phase and difficulty are inputs here, so
+            # plan_phases and its heuristic are no longer used at all.
+            sets = generate_for_topic(
+                brief, skills.rows, client,
                 source_provenance_id=package.source_provenance.source_provenance_id,
-                strict=strict, drop_invalid=True, id_service=service,
+                strict=strict, id_service=service,
+                progress=say if verbose else None,
             )
-            rows["Questions"].extend(questions.rows)
-            for issue in questions.issues:
-                if not issue.is_error and "dropped" in issue.message:
-                    say(f"  note: {issue.message}")
-            say(f"  {len(questions.rows)} questions")
+            questions = [q for s in sets for q in s.rows]
+            slots = {qid: sl for s in sets for qid, sl in s.slots.items()}
+            skill_map = [m for s in sets for m in s.skill_map]
+            for one in sets:
+                _report(say, one.issues)
 
-            usage = build_usage_and_skills(
-                plan_phases(questions.rows), questions.rows,
-                questions.skill_links, code, strict=strict, id_service=service,
+            short = [s for s in sets if not s.is_complete]
+            incomplete.extend(
+                f"{s.micro_skill_id}: missing {', '.join(str(x) for x in s.missing)}"
+                for s in short
             )
-            rows["Question_Usage"].extend(usage.usage)
-            rows["Question_MicroSkills"].extend(usage.skill_map)
-            say(f"  {len(usage.usage)} usage rows, {len(usage.skill_map)} skill links")
+            say(f"  {len(questions)} questions over {len(sets)} skills"
+                + (f"  ({len(short)} skill(s) below minimum)" if short else ""))
+
+            # The phase of every question is known, so the usage rows are
+            # built from fact rather than from a guess about the question's
+            # shape. This is what the old plan_phases was standing in for.
+            usage_rows, usage_issues = build_usage_rows(
+                [
+                    UsagePlan(q.question_id, slots[q.question_id].phase,
+                              role=slots[q.question_id].role)
+                    for q in questions
+                ],
+                questions, code, service,
+            )
+            usage_errors = [i for i in usage_issues if i.is_error]
+            if usage_errors and strict:
+                raise UsageError(
+                    f"{code}: usage rows could not be built.\n"
+                    + "\n".join(f"  {i}" for i in usage_errors)
+                )
 
             answers = generate_answers(
-                questions.rows, client, code,
+                questions, client, code,
                 misconceptions=brief.misconceptions_to_prevent,
-                strict=strict, id_service=service,
+                strict=strict, drop_invalid=True, id_service=service,
             )
+            _report(say, answers.issues)
+
+            # A question whose answer could not be trusted is removed from
+            # every sheet that refers to it, not just from the answer key.
+            # These rows are held back until now precisely so this is a
+            # filter rather than a retraction: leaving a question in the bank
+            # with no key would look complete and be unusable.
+            gone = answers.dropped_question_ids
+            rows["Questions"].extend(
+                q for q in questions if q.question_id not in gone)
+            rows["Question_Usage"].extend(
+                u for u in usage_rows if u.question_id not in gone)
+            rows["Question_MicroSkills"].extend(
+                m for m in skill_map if m.question_id not in gone)
             rows["Answer_Specs"].extend(answers.rows)
-            say(f"  {len(answers.rows)} answer specs")
+
+            if gone:
+                # Dropping a question can take a slot with it, so coverage is
+                # recomputed against what actually survives rather than what
+                # the generator returned.
+                for one in sets:
+                    lost = [q for q in one.rows if q.question_id in gone]
+                    if lost:
+                        incomplete.append(
+                            f"{one.micro_skill_id}: {len(lost)} question(s) "
+                            f"dropped with their answers"
+                        )
+
+            say(f"  {len(usage_rows) - len(gone)} usage rows, "
+                f"{len(answers.rows)} answer specs"
+                + (f"  ({len(gone)} question(s) dropped with their answers)"
+                   if gone else ""))
 
             example = generate_worked_example(
                 brief, client, micro_skills=skills.rows,
@@ -161,6 +299,118 @@ def run(
                 rows["Worked_Example_Steps"].extend(example.steps)
                 rows["Worked_Example_MicroSkills"].extend(example.skill_map)
                 say(f"  worked example, {len(example.steps)} steps")
+
+            # CG-015. Errors first: a misconception's diagnosis_rule names
+            # error codes in prose, so they have to exist before it is written.
+            error_types = generate_error_types(
+                brief, client, micro_skills=skills.rows,
+                strict=strict, drop_invalid=True, id_service=service,
+            )
+            rows["Error_Types"].extend(error_types.rows)
+            _report(say, error_types.issues)
+            say(f"  {len(error_types.rows)} error types")
+
+            misconceptions = generate_misconceptions(
+                brief, client, error_types=error_types.rows,
+                strict=strict, drop_invalid=True, id_service=service,
+            )
+            rows["Misconceptions"].extend(misconceptions.rows)
+            _report(say, misconceptions.issues)
+            say(f"  {len(misconceptions.rows)} misconceptions")
+
+            # CG-016. Two of these three tables are derived rather than
+            # generated -- see mapping_generator -- so this adds one model
+            # call per topic, not three.
+            linked, link_issues = build_misconception_errors(
+                misconceptions.rows, error_types.rows, f"{code} misconception errors")
+            _report(say, link_issues)
+            rows["Misconception_Errors"].extend(linked)
+
+            broken = direct_failures(linked, error_types.rows)
+            related, related_issues, _ = generate_related_skills(
+                misconceptions.rows, skills.rows, broken, client, code,
+                strict=strict,
+            )
+            _report(say, related_issues)
+            rows["Misconception_MicroSkills"].extend(broken + related)
+
+            # The question's one skill, so the error map never has to ask.
+            skill_of_question = {
+                m.question_id: m.micro_skill_id for m in skill_map
+                if m.question_id not in gone
+            }
+            say("    labelling wrong answers with their errors...")
+            error_map, map_issues, _ = generate_question_error_map(
+                [a for a in answers.rows], 
+                [q for q in questions if q.question_id not in gone],
+                error_types.rows, client, code,
+                skill_of_question=skill_of_question, strict=strict,
+            )
+            _report(say, map_issues)
+            rows["Question_Error_Map"].extend(error_map)
+
+            # Coverage as one number, not as N warnings. On 7 September the
+            # per-question warnings were suppressed entirely and a topic with
+            # zero diagnosis read the same as a topic with full diagnosis.
+            # A count cannot be filtered away by accident.
+            undiagnosed = unmapped_by_question(error_map, answers.rows)
+            answered = len(answers.rows)
+            blank = sum(
+                1 for question_id, gap in undiagnosed.items()
+                if len(gap) == len({
+                    w.strip() for a in answers.rows
+                    if a.question_id == question_id
+                    for w in str(a.common_wrong_answers or "").split("|")
+                    if w.strip()
+                })
+            )
+            say(f"  {len(linked)} misconception-error links, "
+                f"{len(broken) + len(related)} skill links, "
+                f"{len(error_map)} wrong answers mapped")
+            say(f"  diagnosis: {answered - blank}/{answered} question(s) can "
+                f"be diagnosed"
+                + (f", {len(undiagnosed) - blank} only partly" if
+                   len(undiagnosed) - blank else ""))
+            if blank:
+                say(f"    {blank} question(s) have NO diagnosis: a student "
+                    f"who gets one wrong is told nothing")
+
+            # CG-017. Five tables, three calls: both joins are derived.
+            say("    hints, visual cues, parallel examples...")
+            support = generate_support(
+                misconceptions.rows, client, code, brief.topic_id,
+                id_service=service, strict=strict,
+            )
+            _report(say, support.issues)
+            rows["Hints"].extend(support.hints)
+            rows["Misconception_Hints"].extend(support.hint_links)
+            rows["Visual_Cues"].extend(support.visual_cues)
+            rows["Misconception_VisualCues"].extend(support.cue_links)
+            rows["Parallel_Examples"].extend(support.parallel_examples)
+            say(f"  {len(support.hints)} hints, "
+                f"{len(support.visual_cues)} visual cues, "
+                f"{len(support.parallel_examples)} parallel examples")
+
+            # CG-018. One scaffold per skill, serving that skill's guided
+            # questions. Runs after CG-017 because a step falls back to a
+            # hint or a cue, and those ids have to exist to be checked.
+            guided = guided_by_skill(
+                [q for q in questions if q.question_id not in gone],
+                slots, skill_of_question,
+            )
+            if guided:
+                say("    scaffolds...")
+                scaffolding = generate_scaffolds(
+                    skills.rows, guided, support.hints, support.visual_cues,
+                    client, code, id_service=service, strict=strict,
+                )
+                _report(say, scaffolding.issues)
+                rows["Scaffolds"].extend(scaffolding.scaffolds)
+                rows["Scaffold_Steps"].extend(scaffolding.steps)
+                rows["Question_Scaffolds"].extend(scaffolding.links)
+                say(f"  {len(scaffolding.scaffolds)} scaffolds, "
+                    f"{len(scaffolding.steps)} steps, "
+                    f"{len(scaffolding.links)} questions covered")
 
         except Exception as exc:
             # One topic failing should not lose the others, and it should not
@@ -180,19 +430,75 @@ def run(
 
     say()
     if structure:
-        say("Structure does NOT match the reference:")
+        say("Structure does NOT match the platform template:")
         for problem in structure:
             say(f"  {problem}")
     else:
-        say("Structure matches the reference workbook.")
+        say("Structure matches the platform template.")
 
     if failures:
         say(f"\n{len(failures)} topic(s) failed:")
         for failure in failures:
             say(f"  {failure}")
 
+    # A shortfall is not a failure -- the questions that exist are usable and
+    # the workbook is worth looking at -- but the run must not report success.
+    # The review is explicit: "if any required micro-skill/phase/difficulty
+    # combination is below the minimum, generation should be marked
+    # incomplete". Exiting 0 here would let a partial bank travel as a
+    # finished one.
+    # CG-020. The file is what the platform imports, so it is validated as a
+    # file rather than trusted from the generators that wrote it.
+    #
+    # The specification says a batch with blocking errors is GENERATION_FAILED
+    # and nothing is imported. We still WRITE the workbook, deliberately: a
+    # run that produces nothing to look at is a run nobody can diagnose, and
+    # that is how debugging got slow before. Nothing is hidden by doing so --
+    # every blocking failure is printed and the exit code is non-zero -- and
+    # nothing this pipeline writes is marked APPROVED, so a file on disk is
+    # not a file anyone may import.
+    report = validate(destination)
+    say()
+    say(summarise_validation(report))
+
+    if report.blocking:
+        say(f"\nGENERATION_FAILED: {len(report.blocking)} blocking check(s). "
+            f"The workbook is written and reviewable, but must not be "
+            f"imported.")
+        say(f"  Full report: python validator.py {destination} --json")
+
+    # CG-021. Off by default: a full pass is about 80 more requests, and the
+    # deterministic checks above are free. It is asked for when the workbook
+    # is going to a person, which is when a second opinion on the answer keys
+    # is worth paying for.
+    qa_report = None
+    if qa_parts:
+        say("\nSemantic QA review...")
+        try:
+            qa_report = review_workbook(destination, client, progress=say,
+                                        parts=qa_parts)
+        except Exception as exc:                          # noqa: BLE001
+            say(f"  the review could not be completed: {exc}")
+            say("  the deterministic checks above still stand")
+        else:
+            say()
+            say(summarise_qa(qa_report))
+            if qa_report.blocking:
+                say(f"\n{len(qa_report.blocking)} answer(s) reported "
+                    f"mathematically wrong. A review verdict is evidence, not "
+                    f"proof; read each one before changing anything.")
+
+    if incomplete:
+        say(f"\n{len(incomplete)} micro-skill(s) below the coverage minimum:")
+        for gap in incomplete:
+            say(f"  {gap}")
+        say("  The workbook is written and reviewable, but this run is "
+            "INCOMPLETE.")
+
     say(f"\nDone in {time.time() - started:.1f}s")
-    return 1 if (structure or failures) else 0
+    qa_blocked = bool(qa_report and qa_report.blocking)
+    return 1 if (structure or failures or incomplete or report.blocking
+                 or qa_blocked) else 0
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -212,6 +518,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="keep going when a generator rejects a model response, instead "
              "of stopping at the first problem",
     )
+    parser.add_argument(
+        "--qa", nargs="*", metavar="PART",
+        choices=["answer keys", "questions", "support"],
+        help="run the CG-021 semantic review after generating. With no "
+             "argument runs all three parts; otherwise name the ones you "
+             "want, e.g. --qa 'answer keys'. Costs about 80 extra requests "
+             "on a six-topic workbook.",
+    )
     parser.add_argument("--quiet", action="store_true", help="print only the summary")
     args = parser.parse_args(argv)
 
@@ -228,6 +542,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         limit=args.topics,
         strict=not args.continue_on_error,
         verbose=not args.quiet,
+        # "--qa" with no values means all parts; absent means none.
+        qa_parts=(args.qa or ["answer keys", "questions", "support"])
+        if args.qa is not None else None,
     )
 
 

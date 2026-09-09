@@ -400,3 +400,38 @@ def test_a_broken_document_is_refused_before_the_model_is_called(doc):
 @needs_docs
 def test_check_against_document_finds_nothing_wrong_with_a_faithful_response(doc):
     assert check_against_document(doc, faithful(doc)) == []
+
+
+# ──────────────────────────────────────────────────────────────────────
+# A bullet the model copied back
+#
+# Topic 2 lost a whole six-topic run to this: every scope item came back as
+# "- ab as multiplication" against an expected "ab as multiplication". The
+# topic, its 70 questions and all its downstream content were lost to a hyphen.
+# ──────────────────────────────────────────────────────────────────────
+
+from topic_generator import _normalise                # noqa: E402
+
+
+@pytest.mark.parametrize("copied, expected", [
+    ("- ab as multiplication", "ab as multiplication"),
+    ("* 3y as repeated addition", "3y as repeated addition"),
+    ("• fraction bars representing division", "fraction bars representing division"),
+    ("– brackets representing a group", "brackets representing a group"),
+    ("  -   extra spacing  ", "extra spacing"),
+])
+def test_a_leading_bullet_does_not_make_an_item_a_mismatch(copied, expected):
+    """The bullet is formatting. The scope items come from bulleted
+    paragraphs, so it is not part of what the item says."""
+    assert _normalise(copied) == _normalise(expected)
+
+
+def test_a_hyphen_inside_the_text_is_kept():
+    """Only a LEADING bullet is formatting. 'a-b' is content."""
+    assert _normalise("a-b as subtraction") == "a-b as subtraction"
+    assert _normalise("- a-b as subtraction") == "a-b as subtraction"
+
+
+def test_genuinely_different_wording_is_still_a_mismatch():
+    """A check that strips too much would accept anything."""
+    assert _normalise("- ab as multiplication") != _normalise("ab as addition")

@@ -87,6 +87,8 @@ class WorkedExamplePhase(str, Enum):
 
 class WorkedExampleStatus(str, Enum):
     DRAFT = "DRAFT"
+    GENERATED = "GENERATED"
+    PENDING_REVIEW = "PENDING_REVIEW"
     APPROVED = "APPROVED"
 
 class QuestionType(str, Enum):
@@ -98,6 +100,11 @@ class QuestionType(str, Enum):
 
 class QuestionStatus(str, Enum):
     DRAFT = "DRAFT"
+    # Generated but not yet through mathematical QA. Nothing the agent
+    # produces may be APPROVED until the CG-020 and CG-021 checks pass:
+    # APPROVED is a claim about correctness that no generator can make.
+    GENERATED = "GENERATED"
+    PENDING_REVIEW = "PENDING_REVIEW"
     APPROVED = "APPROVED"
 
 class Phase(str, Enum):
@@ -253,7 +260,14 @@ class QuestionRow(BaseModel):
     topic_id: str
     question_text: str
     question_type: QuestionType
-    difficulty: int = Field(ge=1, le=2)
+    # 3 is new in the reviewed spec. The approved reference workbook uses
+    # only 1 and 2, so this range comes from the review, not the data.
+    #   1 direct recognition, familiar representation, one obvious step
+    #   2 independent application needing a meaningful or
+    #     misconception-sensitive choice
+    #   3 transfer, unfamiliar representation, multi-step reasoning
+    # Difficulty is cognitive demand, not bigger numbers.
+    difficulty: int = Field(ge=1, le=3)
     answer_spec_id: str
     item_family_id: str
     source_provenance_id: str
@@ -323,10 +337,18 @@ class MisconceptionMicroSkillRow(BaseModel):
     relationship_type: RelationshipType
 
 class QuestionErrorMapRow(BaseModel):
+    """One row in the Question_Error_Map sheet.
+
+    micro_skill_id is new in the platform export. Under the reviewed design a
+    question maps to exactly one micro-skill, so it is never a choice: it is
+    that question's skill, carried here so the platform can attribute the
+    error without a join.
+    """
     """One row in the Question_Error_Map sheet."""
     question_id: str
     response_pattern: str
     error_code: str
+    micro_skill_id: Optional[str] = None
 
 class HintRow(BaseModel):
     """One row in the Hints sheet."""
