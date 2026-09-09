@@ -149,6 +149,16 @@ def _restore(session: SessionRecord, adapter: _CountingStudentModel) -> None:
     )
 
 
+def _restore_for_read(
+    session: SessionRecord, adapter: _CountingStudentModel
+) -> SessionRecord:
+    return asyncio.run(
+        interaction_service._initialize_restored_schema_phase(
+            session, adapter, "TOKEN", for_read=True
+        )
+    )
+
+
 def test_a_stored_content_gap_is_not_asked_again() -> None:
     adapter = _CountingStudentModel(_content_gap_event())
 
@@ -222,3 +232,64 @@ def test_a_restore_failure_that_is_not_a_content_gap_says_which_check_failed(
     assert record.question_count == 0
     assert record.current_question_id is None
     assert not hasattr(record, "access_token")
+
+
+def test_a_read_renders_the_pause_instead_of_refusing_it() -> None:
+    """GET /session is the one request that has to show the paused state.
+
+    A submission is refused, because there is no question to grade an answer
+    against. A read that raised the same 409 would leave the client unable to
+    render anything at all -- so the paused session is returned, carrying the
+    flags the frontend renders the pause from.
+    """
+
+    session = _restored_phase3_session()
+    session.student_model_event.routing.content_gap_detected = False
+    adapter = _CountingStudentModel(_content_gap_event())
+
+    paused = _restore_for_read(session, adapter)
+
+    assert paused.content_gap_detected is True
+    assert paused.message == session_service.CONTENT_GAP_MESSAGE
+    assert paused.question_id is None
+    assert paused.current_phase == "INDEPENDENT_PRACTICE"
+    assert paused.journey_recovery_required is False
+
+
+def test_a_stored_pause_is_read_back_without_asking_again() -> None:
+    """The gap the stored event already reported answers the read on its own."""
+
+    session = _restored_phase3_session()
+    adapter = _CountingStudentModel(_content_gap_event())
+
+    paused = _restore_for_read(session, adapter)
+
+    assert adapter.requests == [], "the gap was re-requested on a plain read"
+    assert paused is session, "a read with nothing to recover rewrote the session"
+
+
+def test_the_pause_is_persisted_before_a_submission_is_refused() -> None:
+    """Refusing without persisting is what made ST017 ask twice.
+
+    The first fresh-content request answered FRESH_CONTENT_UNAVAILABLE and the
+    turn was refused, but nothing recorded the gap -- so the next turn asked
+    again (journey versions 12 then 13) and got the same answer.
+    """
+
+    session = _restored_phase3_session()
+    session.student_model_event.routing.content_gap_detected = False
+    adapter = _CountingStudentModel(_content_gap_event())
+
+    with pytest.raises(HTTPException) as raised:
+        _restore(session, adapter)
+    assert raised.value.detail["code"] == "CONTENT_GAP"
+    assert adapter.requests == ["INDEPENDENT_QUESTION_SET_REQUESTED"]
+
+    stored = session_service._sessions[session.session_id]
+    assert stored.content_gap_detected is True
+
+    # Second turn: the stored gap now answers on its own.
+    adapter.requests.clear()
+    with pytest.raises(HTTPException):
+        _restore(stored, adapter)
+    assert adapter.requests == [], "the gap was asked a second time"

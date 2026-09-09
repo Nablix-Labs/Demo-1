@@ -16,6 +16,7 @@ from app.models.session import (
     SessionResponse,
     SessionStartRequest,
 )
+from app.services.interaction_service import recover_session_for_read
 from app.services.session_service import (
     complete_diagnostic,
     complete_orientation,
@@ -73,7 +74,7 @@ async def get_session_endpoint(
     student_id: StudentId,
     access_token: AccessToken,
 ) -> SessionRecord:
-    return await get_session(session_id, student_id)
+    return await recover_session_for_read(session_id, student_id, access_token)
 
 
 # Retired (ADR 0004), kept for one release so an older client is told why

@@ -57,6 +57,7 @@ from app.models.student_model_session import (
     DiagnosticResult,
     DiagnosticCompletedEvent,
     IndependentQuestionSetRequestedEvent,
+    GuidedRepairCompletedEvent,
     InterventionInputSubmittedEvent,
     Phase2RepairResult,
     JourneyPhaseState,
@@ -402,6 +403,11 @@ def _get_owned_session_for_turn(
 def require_learning_active(session: SessionRecord) -> None:
     """Refuse learning work while the authoritative topic intervention is active."""
 
+    if session.pending_guided_progression is not None or session.journey_recovery_required:
+        raise HTTPException(status_code=409, detail={
+            "code": "SESSION_STATE_REFRESH_REQUIRED",
+            "message": "Refresh the session before submitting more work.",
+        })
     if session.intervention is not None:
         raise HTTPException(
             status_code=409,
@@ -618,7 +624,21 @@ async def reconcile_journey_conflict(
             "student_model_event": event.model_copy(
                 update={"journey_state": fresh_journey, "phase_payload": None}
             ),
-            "current_phase": PHASE_FROM_STUDENT_MODEL[fresh_journey.current_phase],
+            "current_phase": PHASE_FROM_STUDENT_MODEL[
+                fresh_journey.recommended_entry_phase or fresh_journey.current_phase],
+            "recommended_entry_phase": PHASE_FROM_STUDENT_MODEL[
+                fresh_journey.recommended_entry_phase or fresh_journey.current_phase],
+            "ui_state": PHASE_FROM_STUDENT_MODEL[
+                fresh_journey.recommended_entry_phase or fresh_journey.current_phase],
+            "journey_recovery_required": True,
+            "pending_guided_progression": None,
+            "show_canvas": False,
+            "allow_text_input": False,
+            "allow_voice_input": False,
+            "show_hint_button": False,
+            "show_visual_cue": False,
+            "show_scaffold_panel": False,
+            "active_guided_rescue": None,
             "current_question": None,
             "question_id": None,
             "question_type": None,
@@ -1402,7 +1422,7 @@ async def _apply_schema_event(
         )
 
     next_phase = PHASE_FROM_STUDENT_MODEL[
-        payload.phase if payload is not None else event.journey_state.current_phase
+        payload.phase if payload is not None else (event.journey_state.recommended_entry_phase or event.journey_state.current_phase)
     ]
     transition = resolve_transition(session.current_phase, next_phase)
     if next_phase != session.current_phase and transition is None:
@@ -1471,6 +1491,8 @@ async def _apply_schema_event(
         "intervention": None,
         "pending_intervention_input": None,
         "content_gap_detected": event.routing.content_gap_detected,
+        "journey_recovery_required": False,
+        "pending_guided_progression": None,
         "current_phase": next_phase,
         "ui_state": next_phase,
         "message": event.routing.reason,
@@ -1952,52 +1974,77 @@ async def get_session(session_id: str, student_id: str) -> SessionRecord:
     return session
 
 
+async def resume_guided_progression(session: SessionRecord, access_token: str) -> SessionRecord:
+    request = session.pending_guided_progression
+    if request is None:
+        raise RuntimeError("Session has no pending Guided progression event.")
+    response = await get_adapters().student_model.send_session_event(request, access_token)
+    return await _apply_schema_event(session, response)
+
+
+async def complete_guided_progression(
+    session: SessionRecord,
+    event: StudentModelSessionEventResponse,
+    source_turn_id: str,
+    access_token: str,
+) -> SessionRecord:
+    """Persist the exact follow-up before sending it; recovery never regrades work."""
+    guided = event.journey_state.phase_2_guided_learning
+    phase3 = event.journey_state.phase_3_independent_practice
+    request: GuidedRepairCompletedEvent | IndependentQuestionSetRequestedEvent
+    if phase3.status == "PAUSED_FOR_REPAIR":
+        if len(guided.target_micro_skill_ids) != 1 or guided.repair_cycle_no is None:
+            raise HTTPException(status_code=503, detail="Student Model omitted Guided repair identity.")
+        skill = guided.target_micro_skill_ids[0]
+        repair = phase3.repair_state_by_skill.get(skill)
+        if (repair is None or repair.status not in {
+                "PHASE_2_REPAIR_REQUIRED", "SECOND_PHASE_2_REPAIR_REQUIRED"}
+                or repair.phase_2_repair_count + 1 != guided.repair_cycle_no):
+            raise HTTPException(status_code=503, detail="Student Model returned inconsistent Guided repair state.")
+        request = GuidedRepairCompletedEvent(
+            request_id=_schema_request_id(session, source_turn_id, "GUIDED_REPAIR_COMPLETED"),
+            event_type="GUIDED_REPAIR_COMPLETED", source_turn_id=source_turn_id,
+            expected_journey_version=event.journey_state.version,
+            topic_id=event.journey_state.topic_id, student_id=session.student_id,
+            timestamp=_schema_timestamp(), micro_skill_ids=[skill],
+            repair_cycle_no=guided.repair_cycle_no,
+        )
+    else:
+        if any(skill not in guided.highest_support_used_by_skill for skill in guided.target_micro_skill_ids):
+            raise HTTPException(status_code=503, detail="Student Model omitted highest support for Guided targets.")
+        request = IndependentQuestionSetRequestedEvent(
+            request_id=_schema_request_id(session, source_turn_id, "INDEPENDENT_QUESTION_SET_REQUESTED"),
+            event_type="INDEPENDENT_QUESTION_SET_REQUESTED", source_turn_id=source_turn_id,
+            expected_journey_version=event.journey_state.version,
+            topic_id=event.journey_state.topic_id, student_id=session.student_id,
+            timestamp=_schema_timestamp(),
+            phase2_repair_results=[Phase2RepairResult(
+                micro_skill_id=skill, highest_support_used=guided.highest_support_used_by_skill[skill]
+            ) for skill in guided.target_micro_skill_ids], used_question_ids=guided.used_question_ids,
+        )
+    pending = session.model_copy(update={
+        "student_model_event": event, "pending_guided_progression": request,
+        "current_question": None, "question_id": None, "question_type": None,
+        "correct_answer": None, "active_student_model_question": None,
+        "show_canvas": False, "allow_text_input": False, "allow_voice_input": False,
+        "show_hint_button": False, "show_visual_cue": False, "show_scaffold_panel": False,
+    })
+    await save_session(pending)
+    _sessions[session.session_id] = pending
+    return await resume_guided_progression(pending, access_token)
+
+
 async def _complete_tutor_solved_rescue(
     session: SessionRecord,
     active: ActiveGuidedRescue,
     access_token: str,
 ) -> SessionRecord:
-    """Run the deferred Phase 2 -> Phase 3 transition owed by a Tutor-Solved rescue."""
-
+    if session.pending_guided_progression is not None:
+        return await resume_guided_progression(session, access_token)
     event = session.student_model_event
     if event is None:
         raise RuntimeError("Tutor-Solved rescue completion requires a Student Model event.")
-    guided = event.journey_state.phase_2_guided_learning
-    try:
-        response = await get_adapters().student_model.send_session_event(
-            IndependentQuestionSetRequestedEvent(
-                # The final rescue action id is the idempotency key: a retry of
-                # the same acknowledgement sends exactly the same event.
-                request_id=active.current_action_id,
-                event_type="INDEPENDENT_QUESTION_SET_REQUESTED",
-                source_turn_id=active.current_action_id,
-                expected_journey_version=event.journey_state.version,
-                topic_id=event.journey_state.topic_id,
-                student_id=session.student_id,
-                timestamp=_schema_timestamp(),
-                phase2_repair_results=[
-                    Phase2RepairResult(
-                        micro_skill_id=skill,
-                        highest_support_used=guided.highest_support_used_by_skill.get(
-                            skill,
-                            "TUTOR_SOLVED",
-                        ),
-                    )
-                    for skill in guided.target_micro_skill_ids
-                ],
-                used_question_ids=guided.used_question_ids,
-            ),
-            access_token,
-        )
-    except HTTPException:
-        raise
-    except Exception as error:
-        # The acknowledged rescue stays persisted, so the same ack retries.
-        raise HTTPException(
-            status_code=503,
-            detail="Student Model did not deliver Independent Practice after the rescue.",
-        ) from error
-    return await _apply_schema_event(session, response)
+    return await complete_guided_progression(session, event, active.current_action_id, access_token)
 
 
 async def store_active_rescue(

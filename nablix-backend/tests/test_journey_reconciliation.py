@@ -238,13 +238,18 @@ def test_interaction_409_reconciles_the_session_before_returning(
 def test_live_shape_retry_recovers_with_a_fresh_authoritative_question(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Reproduces the production failure, then proves the retry actually recovers.
+    """Reproduces the production failure, then proves the refresh actually recovers.
 
     Live shape: session cached v8 with Q-T01-009 active; the Student Model was
     already at v11 with current_question_id null and Q-T01-009 in used ids. The
-    first submission 409s. The retry (same turn_id) must not resend Q-T01-009 —
-    _initialize_restored_schema_phase should re-derive the question from the
-    authoritative envelope first.
+    first submission 409s.
+
+    An immediate re-POST is now refused too, and that is the fix rather than a
+    regression. Observed at 14:49:35 UTC: recovery restored a question, and the
+    submission already in flight — carrying ink drawn for Q-T01-005 — was graded
+    against it. Work drawn for one question must not become an answer to
+    another, so the client refreshes first (GET /session, which performs the
+    recovery) and only then submits against the question it was actually given.
     """
 
     body = _start_session("ST025")
@@ -308,15 +313,36 @@ def test_live_shape_retry_recovers_with_a_fresh_authoritative_question(
     assert first.status_code == 409
     assert sent[0][1] == stale_version
 
-    # Same turn_id: the rejected attempt booked nothing, so this is a retry of
-    # the same submission, not a second one.
-    second = client.post("/interaction", json=payload)
+    # No grading until the client has the restored question. Re-POSTing the same
+    # body would submit Q-T01-005's work against whatever recovery selects.
+    blocked = client.post("/interaction", json=payload)
+    assert blocked.status_code == 409, blocked.json()
+    assert blocked.json()["error_code"] == "SESSION_STATE_REFRESH_REQUIRED"
+    assert len(sent) == 1, "a refusal still asked Student Model for something"
 
-    assert second.status_code == 200, second.json()
-    # The retry carried the authoritative version, never the stale one again.
+    # The refresh is what recovers, and it recovers to the effective phase:
+    # current_phase was Phase 3, recommended_entry_phase Phase 2, and Student
+    # Model's own session_open honours the recommendation.
+    refreshed = client.get(
+        f"/session/{session_id}", params={"student_id": "ST025"},
+    )
+    assert refreshed.status_code == 200, refreshed.text
     assert all(version != stale_version for _, version, _ in sent[1:])
-    # It re-derived the question instead of resending the v8 one.
     assert sent[1][0] in {
+        "SESSION_OPENED",
         "GUIDED_QUESTION_SET_REQUESTED",
         "INDEPENDENT_QUESTION_SET_REQUESTED",
     }
+    restored = refreshed.json()
+    assert restored["question_id"] is not None
+    assert restored["question_id"] != body["question_id"], (
+        "recovery handed back the stale question"
+    )
+
+    # Now the client can answer -- against the question it was just given.
+    recovered = client.post(
+        "/interaction",
+        json={**payload, "turn_id": "TURN-ST025-2", "question_id": restored["question_id"],
+              "current_phase": restored["current_phase"]},
+    )
+    assert recovered.status_code == 200, recovered.json()
