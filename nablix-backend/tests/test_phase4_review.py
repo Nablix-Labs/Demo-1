@@ -220,6 +220,7 @@ def test_phase4_schema_is_openai_strict_and_keeps_nullable_fields() -> None:
             return
         if not isinstance(node, dict):
             return
+        assert "oneOf" not in node
         properties = node.get("properties")
         if isinstance(properties, dict):
             assert node["required"] == list(properties)

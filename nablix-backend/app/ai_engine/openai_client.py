@@ -71,6 +71,10 @@ def openai_strict_schema(schema: dict[str, object]) -> dict[str, object]:
             return
         if not isinstance(node, dict):
             return
+        variants = node.pop("oneOf", None)
+        if isinstance(variants, list):
+            node.pop("discriminator", None)
+            node["anyOf"] = variants
         for value in node.values():
             normalize(value)
         properties = node.get("properties")
