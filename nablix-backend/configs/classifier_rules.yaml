@@ -12,7 +12,14 @@ guided_learning:
   response_aware_enabled: false
   production_boundary_enabled: false
   production_boundary_clarification_message: "I did not understand that clearly. Could you say it another way?"
-  production_boundary_safe_wording_message: "Look again at the examples and tell me what you notice."
+  production_boundary_safe_wording_message: "I want to make sure I follow you. Which part of the problem would you like to look at together?"
+  production_boundary_writer_maximum_retries: 1
+  production_boundary_writer_retry_feedback: >-
+    Your previous wording was rejected because it could reveal an unresolved
+    answer. Answer the learner's actual question or respond to their exact
+    mathematical idea using only visible question information and their own
+    words. Do not name, state, complete, or imply any unresolved value,
+    variable, operation, expression, option, or answer component.
   production_boundary_assessment_system_prompt: |
     Assess the CURRENT learner contribution only. Return the assessment schema;
     never create learner-facing prose, a tutor message, explanation, hint,

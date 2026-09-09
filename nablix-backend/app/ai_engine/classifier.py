@@ -4008,10 +4008,6 @@ def write_redacted_response_aware_message(
         ],
         "answer_reveal_allowed": False,
     }
-    message = writer(
-        system_prompt=rules.guided_learning.response_aware_writer_system_prompt,
-        wording_context=context,
-    )
     explained_topic = (
         contribution.identified_difficulty or contribution.learner_question
         if contribution.kind in {"EXPLANATION_REQUEST", "EXPRESSED_DIFFICULTY"}
@@ -4021,17 +4017,36 @@ def write_redacted_response_aware_message(
     recorded_contribution = contribution.model_copy(update={
         "explained_idea": explained_topic,
     })
-    rewritten = evaluation.model_copy(update={
-        "contribution": recorded_contribution,
-        "tutor_message": message.tutor_message,
-        "tutor_message_voice": message.tutor_message_voice_optimised,
-    })
-    rejection = response_aware_message_rejection_reason(
-        rewritten, request, rubric, objective, rules,
-    )
-    if rejection is not None:
-        raise AdapterError("openai_ai_engine", f"Redacted tutor wording rejected: {rejection}.")
-    return rewritten
+    for attempt in range(rules.guided_learning.production_boundary_writer_maximum_retries + 1):
+        message = writer(
+            system_prompt=rules.guided_learning.response_aware_writer_system_prompt,
+            wording_context=context,
+        )
+        rewritten = evaluation.model_copy(update={
+            "contribution": recorded_contribution,
+            "tutor_message": message.tutor_message,
+            "tutor_message_voice": message.tutor_message_voice_optimised,
+        })
+        rejection = response_aware_message_rejection_reason(
+            rewritten, request, rubric, objective, rules,
+        )
+        if rejection is None:
+            return rewritten
+        if attempt >= rules.guided_learning.production_boundary_writer_maximum_retries:
+            raise AdapterError("openai_ai_engine", f"Redacted tutor wording rejected: {rejection}.")
+        logger.warning(
+            "guided_production_boundary_writer_retry",
+            extra={
+                "question_id": request.question_id,
+                "attempt": attempt + 1,
+                "rejection_reason": rejection,
+            },
+        )
+        context = {
+            **context,
+            "writer_validation_feedback": rules.guided_learning.production_boundary_writer_retry_feedback,
+        }
+    raise RuntimeError("Production-boundary writer retry loop exited unexpectedly.")
 
 
 def redact_untrusted_response_aware_fields(
