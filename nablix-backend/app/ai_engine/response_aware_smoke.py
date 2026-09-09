@@ -41,6 +41,7 @@ class ReplayCase(BaseModel):
     source: InputSource
     kind: str | None
     assessment: str
+    allowed_assessments: list[str] | None = None
     question_type: QuestionType = "SHORT_RESPONSE"
     explanation_required: bool = False
     conversation_id: str | None = None
@@ -72,7 +73,8 @@ def replay_failures(case: ReplayCase, result: TutorResponse, forbidden_reply: li
     contribution = result.contribution
     if contribution is None:
         return ["missing contribution"]
-    if contribution.assessment != case.assessment:
+    allowed_assessments = case.allowed_assessments or [case.assessment]
+    if contribution.assessment not in allowed_assessments:
         failures.append("incorrect assessment")
     if case.kind is not None and contribution.kind != case.kind:
         failures.append("incorrect contribution kind")

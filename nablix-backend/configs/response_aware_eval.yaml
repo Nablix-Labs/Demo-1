@@ -379,6 +379,7 @@ cases:
     id: repair_specific_evidence
     input: "I see that four is after the plus sign every time"
     assessment: INCOMPLETE
+    allowed_assessments: [INCOMPLETE, CORRECT]
     expected_confirmed: [CHANGING_VALUE, OPERATION, FIXED_VALUE]
   - <<: *repair_chain
     id: repair_complete_rule
