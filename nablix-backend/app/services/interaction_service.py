@@ -96,6 +96,7 @@ from app.models.student_model_session import (
     JourneyPhaseState,
     QuestionType,
     StudentModelPhasePayload,
+    SessionOpenedEvent,
     StudentModelSessionEventResponse,
     StudentModelQuestion,
     SupportUsed,
@@ -123,6 +124,9 @@ from app.services.phase_transition import (
 from app.services.session_service import (
     CONTENT_GAP_MESSAGE,
     reconcile_journey_conflict,
+    complete_guided_progression,
+    resume_guided_progression,
+    get_session,
     _apply_schema_event,
     _authoritative_intervention,
     _get_owned_session_for_turn,
@@ -948,44 +952,17 @@ async def process_answer_with_session_event(
             or (event_type == "CORRECT_ATTEMPT" and not guided.remaining_micro_skill_ids)
         )
     ):
-        missing_support = [
-            skill
-            for skill in guided.target_micro_skill_ids
-            if skill not in guided.highest_support_used_by_skill
-        ]
-        if missing_support:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Student Model omitted highest support for Phase 2 skills: {missing_support}.",
-            )
-        response = await adapters.student_model.send_session_event(
-            IndependentQuestionSetRequestedEvent(
-                request_id=_schema_interaction_request_id(
-                    session,
-                    context.source_turn_id,
-                    "INDEPENDENT_QUESTION_SET_REQUESTED",
-                ),
-                event_type="INDEPENDENT_QUESTION_SET_REQUESTED",
-                source_turn_id=context.source_turn_id,
-                expected_journey_version=response.journey_state.version,
-                topic_id=response.journey_state.topic_id,
-                student_id=session.student_id,
-                timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                phase2_repair_results=[
-                    Phase2RepairResult(
-                        micro_skill_id=skill,
-                        highest_support_used=guided.highest_support_used_by_skill[skill],
-                    )
-                    for skill in guided.target_micro_skill_ids
-                ],
-                used_question_ids=guided.used_question_ids,
-            ),
-            access_token,
-        )
+        progressed = await complete_guided_progression(
+            session, response, context.source_turn_id, access_token)
+        response = progressed.student_model_event
+        if response is None:
+            raise RuntimeError("Guided progression lost its Student Model response.")
     prerequisite_repair_event: StudentModelSessionEventResponse | None = None
     if (
         session.current_phase == "INDEPENDENT_PRACTICE"
         and not retry_required
+        and not response.routing.content_gap_detected
+        and response.status.status_code != "CONTENT_GAP"
         and event_type == "INCORRECT_ATTEMPT"
         and (
             response.phase_payload is None
@@ -1020,11 +997,15 @@ async def process_answer_with_session_event(
     if (
         session.current_phase == "INDEPENDENT_PRACTICE"
         and retry_required
+        and not response.routing.content_gap_detected
         and response.phase_payload is None
         and response.journey_state.recommended_entry_phase
         == "PHASE_2_GUIDED_LEARNING"
     ):
         prerequisite_repair_event = response
+        targets = response.journey_state.phase_2_guided_learning.target_micro_skill_ids
+        if not targets:
+            raise HTTPException(status_code=503, detail="Student Model omitted Guided repair targets.")
         response = await adapters.student_model.send_session_event(
             GuidedQuestionSetRequestedEvent(
                 request_id=_schema_interaction_request_id(
@@ -1038,7 +1019,7 @@ async def process_answer_with_session_event(
                 topic_id=response.journey_state.topic_id,
                 student_id=session.student_id,
                 timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                target_micro_skill_ids=response.routing.prerequisite_micro_skill_ids,
+                target_micro_skill_ids=targets,
             ),
             access_token,
         )
@@ -1461,16 +1442,56 @@ def _raise_content_gap(
     )
 
 
+async def recover_session_for_read(
+    session_id: str, student_id: str, access_token: str,
+) -> SessionRecord:
+    """Recover only pending work; an ordinary GET never selects new questions."""
+    async with interaction_lock_for(session_id):
+        session = await get_session(session_id, student_id)
+        if session.pending_guided_progression is not None:
+            return await resume_guided_progression(session, access_token)
+        if session.journey_recovery_required:
+            return await _initialize_restored_schema_phase(
+                session, get_adapters().student_model, access_token, for_read=True)
+        return session
+
+
 async def _initialize_restored_schema_phase(
     session: SessionRecord,
     student_model: StudentModelAdapter,
     access_token: str,
+    for_read: bool = False,
 ) -> SessionRecord:
+    """Restore the authoritative question for a phase that lost its cursor.
+
+    `for_read` distinguishes the two callers a content gap has to answer
+    differently. A submission cannot be graded against a question that does not
+    exist, so it is refused with the explicit CONTENT_GAP code; a GET is the one
+    request that is supposed to *show* the pause, so it returns the persisted
+    paused session instead. Either way the gap is persisted first, which is what
+    stops the next call asking for the same missing content again.
+    """
     event = session.student_model_event
     if event is None:
         return session
 
     payload = event.phase_payload
+    if session.journey_recovery_required:
+        phase = event.journey_state.recommended_entry_phase or event.journey_state.current_phase
+        guided = event.journey_state.phase_2_guided_learning
+        if phase != "PHASE_2_GUIDED_LEARNING" or guided.status != "NOT_STARTED":
+            # Deterministic on (session, stale version): a retry after a lost
+            # response re-asks the identical question instead of booking a new
+            # one. SESSION_OPENED is read-only upstream, so a replay is free.
+            response = await student_model.send_session_event(SessionOpenedEvent(
+                request_id=f"{session.session_id}:RECOVER-{event.journey_state.version}",
+                event_type="SESSION_OPENED", topic_id=event.journey_state.topic_id,
+                student_id=session.student_id,
+                timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            ), access_token)
+            if response.status.success is False:
+                raise HTTPException(status_code=503, detail=response.status.intervention_reason)
+            return await _apply_schema_event(session, response)
     if (
         (session.current_question is None or session.question_id is None)
         and payload is not None
@@ -1484,6 +1505,8 @@ async def _initialize_restored_schema_phase(
     if (
         session.current_question is None or session.question_id is None
     ) and event.routing.content_gap_detected:
+        if for_read:
+            return session
         _raise_content_gap(session, event)
 
     if session.current_phase == "GUIDED_PRACTICE":
@@ -1580,7 +1603,13 @@ async def _initialize_restored_schema_phase(
         else response.journey_state.phase_3_independent_practice
     )
     if response.routing.content_gap_detected:
-        _raise_content_gap(session, response)
+        # Persist the pause before answering: the flags now live on the session,
+        # so neither this caller nor the next one re-requests the same content
+        # (the ST017 run asked twice, versions 12 then 13).
+        paused = await _apply_schema_event(session, response)
+        if for_read:
+            return paused
+        _raise_content_gap(paused, response)
     failure_reason = _restore_failure_reason(
         payload, session.current_phase, effective_phase, initialized_state
     )

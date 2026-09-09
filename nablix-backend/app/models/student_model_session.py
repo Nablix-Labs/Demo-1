@@ -203,6 +203,15 @@ class StudentModelStatus(BaseModel):
     operational_errors: list[object]
 
 
+class CheckpointRepairState(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    phase_2_repair_count: int = Field(ge=0, le=2)
+    fresh_retry_question_id: str | None = None
+    checkpoint_question_usage_id: str | None = None
+
+
 class JourneyPhaseState(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -220,6 +229,8 @@ class JourneyPhaseState(BaseModel):
     used_question_ids: list[str] = Field(default_factory=list)
     return_checkpoint: Phase3Checkpoint | None = None
     phase2_repair_count: int | None = Field(default=None, ge=0, le=2)
+    repair_cycle_no: int | None = Field(default=None, ge=1, le=2)
+    repair_state_by_skill: dict[str, CheckpointRepairState] = Field(default_factory=dict)
 
 
 class StudentModelJourneyState(BaseModel):
@@ -430,6 +441,12 @@ class IndependentRetryCompletedEvent(MutatingSessionEventBase):
     error_code: str | None = None
 
 
+class GuidedRepairCompletedEvent(MutatingSessionEventBase):
+    event_type: Literal["GUIDED_REPAIR_COMPLETED"]
+    micro_skill_ids: list[str] = Field(min_length=1, max_length=1)
+    repair_cycle_no: int = Field(ge=1, le=2)
+
+
 class GuidedQuestionSetRequestedEvent(MutatingSessionEventBase):
     event_type: Literal["GUIDED_QUESTION_SET_REQUESTED"]
     target_micro_skill_ids: list[str]
@@ -474,6 +491,7 @@ StudentModelSessionEvent: TypeAlias = (
     | GuidedSupportEvent
     | GuidedPhaseCompletedEvent
     | IndependentRetryCompletedEvent
+    | GuidedRepairCompletedEvent
     | GuidedQuestionSetRequestedEvent
     | IndependentQuestionSetRequestedEvent
     | FreshIndependentQuestionRequestedEvent

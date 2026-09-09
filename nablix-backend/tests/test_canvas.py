@@ -1770,9 +1770,19 @@ def test_tc21_canvas_failure_requests_fresh_content_and_keeps_gap_neutral(
     assert stored.student_model_event.routing.missing_micro_skill_ids == ["T02.M1"]
 
 
-def test_tc20_failed_retry_uses_returned_prerequisites_and_retains_metadata(
+def test_tc20_failed_checkpoint_repairs_the_same_skill_not_a_prerequisite(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The ST010 shape, on the Canvas path that produced it.
+
+    Verified 9 Sep 2026, 14:49:19 UTC: Student Model committed the failed
+    checkpoint with Phase 3 PAUSED_FOR_REPAIR, Phase 2 NOT_STARTED targeting the
+    SAME skill, and an empty routing.prerequisite_micro_skill_ids. The backend
+    asked for repair content using that empty prerequisite list, so Student Model
+    answered GUIDED_NO_TARGETS and the turn 503'd. The authoritative repair
+    target is phase_2_guided_learning.target_micro_skill_ids; prerequisites
+    belong to the later escalation branch, not to a repair cycle.
+    """
     events: list[StudentModelSessionEvent] = []
 
     async def send_session_event(
@@ -1790,14 +1800,32 @@ def test_tc20_failed_retry_uses_returned_prerequisites_and_retains_metadata(
             body["phase_payload"] = None
             body["journey_state"]["recommended_entry_phase"] = "PHASE_2_GUIDED_LEARNING"
             body["journey_state"]["phase_3_independent_practice"].update(
-                {"retry_required_micro_skill_ids": [], "unresolved_micro_skill_ids": ["T02.M1"]}
+                {
+                    "status": "PAUSED_FOR_REPAIR",
+                    "retry_required_micro_skill_ids": ["T02.M1"],
+                    "repair_state_by_skill": {
+                        "T02.M1": {
+                            "status": "PHASE_2_REPAIR_REQUIRED",
+                            "phase_2_repair_count": 0,
+                            "fresh_retry_question_id": "Q-T02-007",
+                            "checkpoint_question_usage_id": "QU-T02-007-P3",
+                        }
+                    },
+                }
             )
+            body["journey_state"]["phase_2_guided_learning"] = {
+                "status": "NOT_STARTED",
+                "phase_visit_no": None,
+                "target_micro_skill_ids": ["T02.M1"],
+                "repair_cycle_no": 1,
+            }
             body["routing"].update(
                 {
                     "reason_code": "FRESH_RETRY_FAILED",
-                    "next_action": "CHECK_PREREQUISITES_AND_RETURN_TO_GUIDED",
-                    "prerequisite_check_required": True,
-                    "prerequisite_micro_skill_ids": ["T02.M2"],
+                    "next_action": "RETURN_TO_GUIDED_LEARNING",
+                    # Empty, exactly as observed. This is what the old wiring sent.
+                    "prerequisite_check_required": False,
+                    "prerequisite_micro_skill_ids": [],
                 }
             )
         else:
@@ -1840,15 +1868,94 @@ def test_tc20_failed_retry_uses_returned_prerequisites_and_retains_metadata(
         "GUIDED_QUESTION_SET_REQUESTED",
     ]
     guided_request = events[-1]
-    assert guided_request.target_micro_skill_ids == ["T02.M2"]
-    body = response.json()
-    assert body["prerequisite_repair"] == {
-        "prerequisite_micro_skill_ids": ["T02.M2"],
-        "reason_code": "FRESH_RETRY_FAILED",
-    }
+    assert guided_request.target_micro_skill_ids == ["T02.M1"], (
+        "repair asked for the wrong skill; prerequisites are not repair targets"
+    )
     stored = session_service._sessions[session_id]
     assert stored.prerequisite_repair_event is not None
-    assert stored.prerequisite_repair_event.routing.prerequisite_micro_skill_ids == ["T02.M2"]
+    assert stored.prerequisite_repair_event.routing.reason_code == "FRESH_RETRY_FAILED"
+    checkpoint_phase3 = (
+        stored.prerequisite_repair_event.journey_state.phase_3_independent_practice
+    )
+    assert checkpoint_phase3.status == "PAUSED_FOR_REPAIR"
+    assert (
+        checkpoint_phase3.repair_state_by_skill["T02.M1"].fresh_retry_question_id
+        == "Q-T02-007"
+    )
+
+
+def test_a_failed_checkpoint_with_no_repair_target_is_refused_not_guessed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No authoritative target means no request: substituting one invents work.
+
+    The empty case is the one the live run hit. Asking anyway (with whatever
+    other list happened to be non-empty, or with the checkpoint itself as Guided
+    content) is what turned a contract gap into a 503 the student saw.
+    """
+    events: list[StudentModelSessionEvent] = []
+
+    async def send_session_event(
+        adapter: StudentModelServiceAdapter,
+        event: StudentModelSessionEvent,
+        access_token: str,
+    ) -> StudentModelSessionEventResponse:
+        del adapter, access_token
+        events.append(event)
+        if event.event_type == "SESSION_OPENED":
+            body = _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+            body["journey_state"]["phase_3_independent_practice"]["retry_required_micro_skill_ids"] = ["T02.M1"]
+        elif event.event_type == "INDEPENDENT_RETRY_COMPLETED":
+            body = _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+            body["phase_payload"] = None
+            body["journey_state"]["recommended_entry_phase"] = "PHASE_2_GUIDED_LEARNING"
+            body["journey_state"]["phase_2_guided_learning"] = {
+                "status": "NOT_STARTED",
+                "phase_visit_no": None,
+                "target_micro_skill_ids": [],
+            }
+            body["routing"].update(
+                {
+                    "reason_code": "FRESH_RETRY_FAILED",
+                    "prerequisite_micro_skill_ids": ["T02.M2"],
+                }
+            )
+        else:
+            body = _session_opened_response("PHASE_2_GUIDED_LEARNING")
+        body["request_id"] = event.request_id
+        return StudentModelSessionEventResponse.model_validate(body)
+
+    async def incorrect_pipeline(
+        context: AdapterContext,
+    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
+        del context
+        return (
+            RAGResult(documents=[], retrieval_confidence=0.0),
+            StudentModelResult(
+                mastery_status="LEARNING_GAP",
+                continuity_status="on_track",
+                recommended_entry_phase="GUIDED_PRACTICE",
+                hint_dependency_score=0.0,
+                intervention_required=True,
+            ),
+            _incorrect_independent_tutor(),
+        )
+
+    monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", send_session_event)
+    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", incorrect_pipeline)
+    session_id = _start_session("ST027")
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST027",
+            "turn_id": "TURN-TC20-EMPTY",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+        },
+    )
+
+    assert response.status_code == 503, response.text
+    assert "GUIDED_QUESTION_SET_REQUESTED" not in [event.event_type for event in events]
 
 
 def test_unified_voice_canvas_validation_advances_for_complete_correct_work() -> None:

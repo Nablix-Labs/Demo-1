@@ -38,6 +38,8 @@ from app.models.guided_learning import (
 )
 from app.models.student_model_session import (
     InterventionInputSubmittedEvent,
+    GuidedRepairCompletedEvent,
+    IndependentQuestionSetRequestedEvent,
     PublicStudentModelEvent,
     PublicStudentModelRouting,
     StudentModelPhase,
@@ -303,6 +305,16 @@ class FinalTurnReceipt(BaseModel):
 
 class SessionRecord(BaseModel):
     """Current mock session state stored by the in-memory registry."""
+
+    # Recovery bookkeeping. Both default, so a snapshot persisted before they
+    # existed restores as "nothing pending, nothing to recover" rather than
+    # failing validation.
+    #
+    # pending_guided_progression is the exact follow-up event owed to Student
+    # Model, stored before it is sent: a retry re-sends this identical event
+    # rather than deciding again from a reply that may never have arrived.
+    pending_guided_progression: GuidedRepairCompletedEvent | IndependentQuestionSetRequestedEvent | None = None
+    journey_recovery_required: bool = False
 
     session_id: SessionId
     student_id: StudentId
