@@ -18,6 +18,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
+import { basePath } from '@/lib/runtimeConfig';
 import {
   useAuthStore,
   ACCOUNT_BLOCKING_PURPOSES,
@@ -280,7 +281,13 @@ function Tile({
       >
         {show ? (
           <iframe
-            src={screen.path}
+            /* An iframe src is a raw URL, not a next/link href, so Next does
+               NOT prefix it with the basePath. On the VM the app is served
+               under /app, so a bare "/login" resolved to https://nablix.ai/login
+               and every tile 404'd — the page itself loaded fine, which is why
+               it read as "dev screens are broken on the deploy". Same rule that
+               already applies to the 3D model and the tutor hand asset. */
+            src={`${basePath}${screen.path}`}
             title={screen.label}
             width={vw}
             height={vh}
@@ -298,8 +305,12 @@ function Tile({
         )}
       </div>
       <figcaption className="mt-2 flex items-baseline gap-2">
+        {/* Prefixed for the same reason as the iframe above: a plain <a href>
+            is not a next/link, so it is not basePath-aware and opened
+            https://nablix.ai/login in a new tab. The <code> beside it keeps the
+            logical route, which is the thing worth reading. */}
         <a
-          href={screen.path}
+          href={`${basePath}${screen.path}`}
           target="_blank"
           rel="noreferrer"
           className="text-[13px] font-medium hover:underline"
