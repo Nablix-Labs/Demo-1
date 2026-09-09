@@ -21,12 +21,18 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
 
+from app.models.remediation import StudentModelIntervention
 from app.models.session import SessionRecord
-from app.models.student_model_session import StudentModelSessionEventResponse
+from app.models.student_model_session import (
+    CheckpointRepairState,
+    GuidedRepairCompletedEvent,
+    StudentModelSessionEventResponse,
+)
 from app.services import session_service
 from tests.test_session_events import _event_response
 
@@ -335,8 +341,14 @@ def test_a_lost_reply_resends_the_identical_event(
     )
     _stub(monkeypatch, stub)
 
-    with pytest.raises(RuntimeError):
+    # A transport failure must reach the client as a recoverable 503, not as the
+    # 500 an unhandled exception would produce. The distinction is the whole
+    # point: the client is told to reopen the session, and 500 INTERNAL_ERROR
+    # reads as a bug to give up on rather than a state to retry.
+    with pytest.raises(HTTPException) as failed:
         _complete(session, event)
+    assert failed.value.status_code == 503
+    assert failed.value.detail["code"] == "PROGRESSION_RETRY_REQUIRED"
 
     # The pending event outlived the failure, and no work may be submitted until
     # it is resolved.
@@ -404,3 +416,159 @@ def test_an_inconsistent_repair_state_is_refused_rather_than_guessed(
 
     assert raised.value.status_code == 503
     assert stub.events == [], "an inconsistent repair was sent anyway"
+
+
+def test_a_repair_state_without_a_count_still_parses() -> None:
+    """Student Model legitimately sends a repair state carrying only `status`.
+
+    Two of its transitions build the entry with `.setdefault(skill, {})` and then
+    write `status` alone. That is reachable whenever a skill enters
+    retry_required through apply_fresh_question_unavailable, which creates no
+    repair state at all -- the ST017 T01.M7 content gap, which becomes a
+    *successful* retry as soon as the missing question is authored.
+
+    Requiring phase_2_repair_count made the whole event unparseable, so the turn
+    500'd on a reply that was perfectly valid upstream.
+    """
+
+    body = _event_response("INDEPENDENT_QUESTION_SET_REQUESTED", "REQ-PARTIAL")
+    body["journey_state"]["phase_3_independent_practice"]["repair_state_by_skill"] = {
+        "T01.M7": {"status": "FRESH_RETRY_COMPLETED"}
+    }
+
+    parsed = StudentModelSessionEventResponse.model_validate(body)
+
+    repair = parsed.journey_state.phase_3_independent_practice.repair_state_by_skill
+    assert repair["T01.M7"].status == "FRESH_RETRY_COMPLETED"
+    # A skill that has been through no repair cycle reads as zero.
+    assert repair["T01.M7"].phase_2_repair_count == 0
+
+
+def test_a_partial_repair_state_cannot_pass_as_a_completed_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defaulting the count must not soften the repair-completion check.
+
+    Reading a missing count as zero is only safe because the *status* still has
+    to say a repair is awaiting completion. A FRESH_RETRY_COMPLETED entry with a
+    defaulted zero must still be refused rather than accepted as cycle 1.
+    """
+
+    event = _guided_completed_event(
+        paused_for_repair=True, repair_count=0, repair_cycle_no=1
+    )
+    repair = event.journey_state.phase_3_independent_practice.repair_state_by_skill
+    repair[REPAIR_SKILL] = CheckpointRepairState.model_validate(
+        {"status": "FRESH_RETRY_COMPLETED"}
+    )
+    session = _session(event)
+    stub = _RecordingStudentModel(_resume_response(event, repair_count=1))
+    _stub(monkeypatch, stub)
+
+    with pytest.raises(HTTPException) as raised:
+        _complete(session, event)
+
+    assert raised.value.status_code == 503
+    assert stub.events == []
+
+
+def test_an_intervention_is_reported_before_a_refresh_is_demanded() -> None:
+    """Both conditions can hold; the intervention is the one that matters.
+
+    A frozen topic can still hit a version conflict, and refreshing does not
+    clear an intervention. Reporting SESSION_STATE_REFRESH_REQUIRED first told
+    the student to refresh and then showed them the intervention anyway, and hid
+    the code an intervention-aware client branches on.
+    """
+
+    event = _guided_completed_event(paused_for_repair=False)
+    session = _session(event)
+    frozen = session.model_copy(
+        update={
+            "journey_recovery_required": True,
+            "intervention": StudentModelIntervention.model_validate(
+                {
+                    "intervention_id": "INT-ALG-KS3-01-T01.M5",
+                    "scope": "TOPIC",
+                    "topic_id": "ALG-KS3-01",
+                    "trigger_micro_skill_ids": ["T01.M5"],
+                    "reason_code": "EARLIEST_TOPIC_NO_BACKWARD_ROUTE",
+                    "student_input_status": "REQUIRED",
+                }
+            ),
+        }
+    )
+
+    with pytest.raises(HTTPException) as raised:
+        session_service.require_learning_active(frozen)
+
+    assert raised.value.detail["code"] == "INTERVENTION_REQUIRED"
+
+    # Without an intervention, the refresh demand still stands.
+    with pytest.raises(HTTPException) as refresh:
+        session_service.require_learning_active(
+            session.model_copy(update={"journey_recovery_required": True})
+        )
+    assert refresh.value.detail["code"] == "SESSION_STATE_REFRESH_REQUIRED"
+
+
+def test_the_recovery_route_returns_a_retryable_503_not_a_500(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /session is the route the client is told to call to recover.
+
+    Proving this at the HTTP boundary rather than at the function, because the
+    defect was what the client received: an unhandled transport error became 500
+    INTERNAL_ERROR on the one request that was supposed to get the student moving
+    again, so the advice in the frontend handoff led nowhere.
+    """
+
+    from fastapi.testclient import TestClient
+
+    from app.adapters.student_model import StudentModelServiceAdapter
+    from app.main import app
+
+    event = _guided_completed_event(
+        paused_for_repair=True, repair_count=0, repair_cycle_no=1
+    )
+    session = _session(event)
+    # The route validates the id format, unlike the direct function calls above.
+    session_service._sessions.pop(session.session_id, None)
+    session = session.model_copy(update={"session_id": f"SESSION{uuid4().hex}"})
+    pending = session.model_copy(
+        update={
+            "pending_guided_progression": GuidedRepairCompletedEvent(
+                request_id=f"{session.session_id}:TURN-1:GUIDED_REPAIR_COMPLETED",
+                event_type="GUIDED_REPAIR_COMPLETED",
+                source_turn_id="TURN-1",
+                expected_journey_version=event.journey_state.version,
+                topic_id=event.journey_state.topic_id,
+                student_id=session.student_id,
+                timestamp="2026-09-09T14:49:19Z",
+                micro_skill_ids=[REPAIR_SKILL],
+                repair_cycle_no=1,
+            )
+        }
+    )
+    session_service._sessions[session.session_id] = pending
+
+    async def unreachable(
+        adapter: StudentModelServiceAdapter, event: object, access_token: str
+    ) -> object:
+        del adapter, event, access_token
+        raise RuntimeError("connection reset before the reply arrived")
+
+    monkeypatch.setattr(
+        StudentModelServiceAdapter, "send_session_event", unreachable
+    )
+    client = TestClient(app, headers={"Authorization": "Bearer test-token"})
+
+    response = client.get(
+        f"/session/{session.session_id}", params={"student_id": "ST010"}
+    )
+
+    assert response.status_code == 503, response.text
+    assert response.json()["error_code"] == "PROGRESSION_RETRY_REQUIRED"
+    # And the pending event is still there, so the retry is the same event.
+    still_pending = session_service._sessions[session.session_id]
+    assert still_pending.pending_guided_progression is not None
