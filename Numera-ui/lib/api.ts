@@ -153,6 +153,13 @@ export interface ApiError {
     | 'HTTP_ERROR'
     | 'INTERNAL_ERROR'
     | 'JOURNEY_VERSION_CONFLICT'
+    // A submission arrived while the session was still marked as needing
+    // recovery from an earlier conflict. The backend refuses it rather than
+    // grading it: recovery is what selects the authoritative question, and work
+    // submitted before that would be marked against a question the student
+    // never saw. The only way forward is GET /session — see the recovery
+    // sequence in docs/ — so this is never a retry.
+    | 'SESSION_STATE_REFRESH_REQUIRED'
     // The topic is paused awaiting a human review of an intervention case, and
     // this was a learning action (an answer, a canvas check, orientation,
     // rescue, review). Every one of them 409s until the case is resolved;
@@ -279,8 +286,24 @@ export function studentFacingError(err: unknown): string | null {
     // "something went wrong" would read as one more thing they did.
     return 'Your teacher is taking a look at this topic for you. You can\u2019t carry on with it just yet.';
   }
-  if (code === 'JOURNEY_VERSION_CONFLICT') {
-    return 'Two submissions arrived together. Your work is safe—please press Check once more.';
+  /**
+   * Both conflicts mean the same thing to the student: wait, don't resubmit.
+   *
+   * The old copy here read "Two submissions arrived together. Your work is
+   * safe—please press Check once more." Both halves were wrong. The cause
+   * observed in ST010 was a partial cross-service completion, not a double
+   * submit; and pressing Check is now actively refused — a re-POST comes back
+   * 409 SESSION_STATE_REFRESH_REQUIRED, because recovery has to pick the
+   * authoritative question before anything can be graded. Copy that asks for a
+   * resubmit walks the student into that refusal.
+   *
+   * So it says only what is true and useful: the work is safe, and the tutor is
+   * catching up. It deliberately does NOT say "try again" — the client
+   * re-enables Check itself once the recovering GET returns a question whose
+   * identity it has checked.
+   */
+  if (code === 'JOURNEY_VERSION_CONFLICT' || code === 'SESSION_STATE_REFRESH_REQUIRED') {
+    return 'Your work is safe. The tutor is bringing this session up to date — just a moment.';
   }
   if (res?.status === 409) {
     // Not every 409 is the resume case. On 2026-07-29 a guided-practice turn

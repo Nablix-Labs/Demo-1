@@ -99,9 +99,61 @@ describe('the cases that were already right stay right', () => {
         message: "{'current_journey_state': {'student_id': 'ST016', 'version': 8}}",
       }),
     );
-    expect(msg).toMatch(/two submissions|press Check/i);
+    expect(msg).toMatch(/up to date|safe/i);
     expect(msg).not.toContain('current_journey_state');
     expect(msg).not.toContain('student_id');
+  });
+});
+
+/**
+ * A conflict must never send the student back to Check.
+ *
+ * The old copy said "Two submissions arrived together. Your work is safe—please
+ * press Check once more." Both halves were wrong. The observed cause was a
+ * partial cross-service completion, not a double submit; and pressing Check is
+ * now REFUSED — the backend answers a re-POST with 409
+ * SESSION_STATE_REFRESH_REQUIRED, because recovery has to pick the
+ * authoritative question first. Copy that asks for a resubmit walks the student
+ * into a refusal and, before the guard existed, into grading their ink against
+ * a question they never saw.
+ */
+describe('conflict copy does not promise resubmission', () => {
+  const conflictCodes = ['JOURNEY_VERSION_CONFLICT', 'SESSION_STATE_REFRESH_REQUIRED'] as const;
+
+  it.each(conflictCodes)('%s never tells the student to submit again', (error_code) => {
+    const msg = studentFacingError(err(409, { error_code }));
+    expect(msg).toBeTruthy();
+    expect(msg).not.toMatch(/press check|try again|once more|resubmit|send it again/i);
+  });
+
+  it.each(conflictCodes)('%s says the work is safe', (error_code) => {
+    expect(studentFacingError(err(409, { error_code }))).toMatch(/safe/i);
+  });
+
+  it('a refresh-required conflict is not mistaken for the resume case', () => {
+    // The generic 409 branch tells the student to ask the team to reset the
+    // topic. That is a dead end here: the session recovers on its own with a
+    // GET, and no human needs to touch it.
+    const msg = studentFacingError(
+      err(409, {
+        error_code: 'SESSION_STATE_REFRESH_REQUIRED',
+        message: 'Refresh the session before submitting more work.',
+      }),
+    );
+    expect(msg).not.toMatch(/ask the team|reset it/i);
+  });
+
+  it('a refresh-required conflict never leaks the backend instruction', () => {
+    // The backend message is an instruction to the CLIENT ("Refresh the session
+    // before submitting more work."), not to the learner — it describes an API
+    // contract a student cannot act on.
+    const msg = studentFacingError(
+      err(409, {
+        error_code: 'SESSION_STATE_REFRESH_REQUIRED',
+        message: 'Refresh the session before submitting more work.',
+      }),
+    );
+    expect(msg).not.toMatch(/refresh the session|submitting more work/i);
   });
 });
 
