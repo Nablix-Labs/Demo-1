@@ -935,6 +935,28 @@ export function useDemoTutor() {
         // POST is still in the history the tutor reasons over.
         useNumeraStore.getState().canvasEvents,
       );
+      /**
+       * The backend rejected this as stale — most often STALE_CANVAS_EVENTS.
+       *
+       * `canvas_events_are_stale` compares every event's question id against
+       * the session's, and it is what stopped the corrupted submission in the
+       * live ST010 run. The guard is correct and stays; the client's part is to
+       * stop being stale. Note it arrives as a 200 STALE_TURN response, not the
+       * 409 the handoff describes, so it is read here rather than caught below.
+       *
+       * The read is the same recovery the conflict path uses, for the same
+       * reason: being told our question identity is stale means the question on
+       * screen may not be the authoritative one, and only a read can say. It
+       * also means no resend — `retry_safe` is false, and resending is exactly
+       * the corrupting submission again.
+       */
+      // Compared directly rather than through `isStaleTurnResponse`: that
+      // predicate narrows an /interaction result, and widening it to take a
+      // canvas result would cost the narrowing everywhere it is used.
+      if (res.status === 'STALE_TURN') {
+        void recoverAfterConflict();
+        return res;
+      }
       // Gated on the submission's OWN id, not the turn id the backend put on
       // the reply — that one belongs to the previous /interaction turn, and the
       // gate was correctly dropping the whole reply as already applied. See
