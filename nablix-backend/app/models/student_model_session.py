@@ -3,6 +3,7 @@ from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.models.guided_learning import GuidedComparisonRow
 from app.models.remediation import (
     InterventionFeedback,
     InterventionInputRequest,
@@ -381,6 +382,9 @@ class GuidedAttemptEvent(MutatingSessionEventBase):
     student_response: str
     support_used: SupportUsed | None = None
     error_code: str | None = None
+    generated_support_text: str | None = Field(default=None, min_length=1, max_length=280)
+    support_relevance: Literal["MATCHED", "UNMAPPED", "MISMATCHED"] | None = None
+    generated_visual_rows: list[GuidedComparisonRow] | None = None
 
 
 class GuidedSupportEvent(MutatingSessionEventBase):
@@ -396,6 +400,7 @@ class GuidedSupportEvent(MutatingSessionEventBase):
     micro_skill_id: str
     triggering_response: str | None = None
     error_code: str | None = None
+    unmapped_error_description: str | None = Field(default=None, min_length=1, max_length=240)
 
     @model_validator(mode="after")
     def validate_wrong_four_evidence(self) -> "GuidedSupportEvent":
@@ -405,7 +410,7 @@ class GuidedSupportEvent(MutatingSessionEventBase):
             return self
         if self.triggering_response is None or not self.triggering_response.strip():
             raise ValueError("triggering_response is required for Wrong 4 escalation.")
-        if self.error_code is None or not self.error_code.strip():
+        if (self.error_code is None or not self.error_code.strip()) and not self.unmapped_error_description:
             raise ValueError("error_code is required for Wrong 4 escalation.")
         return self
 

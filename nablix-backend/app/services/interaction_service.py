@@ -38,6 +38,7 @@ from app.ai_engine.schemas import (
 )
 
 from app.core.config import get_settings
+from app.core.exceptions import AdapterError
 from app.core.logger import logger
 from app.models.adapters import (
     AdapterContext,
@@ -56,6 +57,7 @@ from app.models.adapters import (
 from app.models.canvas_memory import CanvasEvent
 from app.models.fields import Phase
 from app.models.guided_learning import (
+    ActiveGuidedRescue,
     ActiveScaffold,
     EvaluationReasonCode,
     GuidedRescue,
@@ -281,6 +283,8 @@ async def _canvas_evidence_for(request: InteractionRequest) -> CanvasEvidence | 
 
 
 def _is_wrong_evaluation(tutor: TutorResult) -> bool:
+    if tutor.contribution is not None:
+        return tutor.contribution.assessment == "INCORRECT"
     return (
         tutor.guided_student_state == "WRONG"
         or (
@@ -297,7 +301,7 @@ def _is_support_failure(tutor: TutorResult) -> bool:
 
 def _is_unresolved_scaffold_turn(tutor: TutorResult) -> bool:
     """Return whether a scaffold step needs a more supportive representation."""
-    return tutor.intent != "ASKING_QUESTION"
+    return _is_wrong_evaluation(tutor) if tutor.contribution is not None else tutor.intent != "ASKING_QUESTION"
 
 
 def _guided_attempt_event_type(
@@ -305,6 +309,12 @@ def _guided_attempt_event_type(
     rules: ClassifierRulesConfig,
 ) -> Literal["CORRECT_ATTEMPT", "INCORRECT_ATTEMPT"] | None:
     """Map every answer that advances support to an authoritative attempt event."""
+    if tutor.contribution is not None:
+        if tutor.contribution.assessment == "INCORRECT":
+            return "INCORRECT_ATTEMPT"
+        if tutor.contribution.assessment == "CORRECT" and tutor.evaluation == "CORRECT":
+            return "CORRECT_ATTEMPT"
+        return None
     configured_event = (
         rules.guided_learning.llm_state_mapping[tutor.guided_student_state]
         .student_model_event
@@ -400,6 +410,49 @@ def _validate_guided_rescue_content(
         raise RuntimeError(
             "Student Model rescue content reveals the active canonical answer before an authorised final tutor-solved step."
         )
+
+
+def _response_aware_worked_rescue(
+    session: SessionRecord, active: ActiveGuidedRescue | None,
+    rescue: GuidedRescue | None, canonical_answer: str, rules: ClassifierRulesConfig,
+) -> ActiveGuidedRescue | None:
+    if active is None or rescue is None or not rules.guided_learning.response_aware_enabled:
+        return active
+    existing = session.active_guided_rescue
+    if existing is not None and existing.rescue_id == active.rescue_id:
+        return existing
+    client = build_openai_ai_engine_client(get_settings().model_copy(
+        update={"openai_ai_engine_model": rules.guided_learning.model},
+    ))
+    if client is None:
+        raise AdapterError("openai_ai_engine", "Worked presentation requires the configured Guided model.")
+    presentation = client.write_guided_worked_presentation(
+        support={
+            "authorised_support": rescue.model_dump(),
+            "question": session.current_question,
+            "canonical_answer": canonical_answer,
+            "identified_difficulty": (
+                session.guided_teaching_state.identified_difficulty
+                if session.guided_teaching_state is not None else None
+            ),
+        },
+        system_prompt=rules.guided_learning.response_aware_worked_prompt,
+    )
+    steps = [f"{step.expression}\n{step.annotation}" for step in presentation.steps]
+    forbidden_steps = steps if rescue.rescue_type == "PARALLEL_EXAMPLE" else steps[:-1]
+    if any(contains_answer_reveal(step, canonical_answer, rules) for step in forbidden_steps):
+        raise AdapterError("openai_ai_engine", "Worked presentation reveals the active answer before authorisation.")
+    final_answer = (
+        rescue.parallel_example.final_answer
+        if rescue.parallel_example is not None else canonical_answer
+    )
+    if normalize_exact_notation(presentation.steps[-1].expression) != normalize_exact_notation(final_answer):
+        raise AdapterError("openai_ai_engine", "Worked presentation changed the authorised final answer.")
+    logger.info("guided_worked_presentation_generated", extra={
+        "question_id": session.question_id, "rescue_id": active.rescue_id,
+        "step_count": len(steps), "provenance": "GENERATED",
+    })
+    return active.model_copy(update={"steps": steps})
 
 
 def _tutor_with_guided_rescue(
@@ -569,18 +622,18 @@ async def process_answer_with_session_event(
         if not scaffold_turn and _is_support_failure(tutor)
         else session.wrong_attempt_count
     )
-    if not scaffold_turn:
+    if not scaffold_turn and tutor.contribution is None:
         tutor = _deterministic_wrong_tutor_result(tutor, wrong_attempt_count)
     scaffold_step_satisfied = (
         scaffold_turn
         and session.scaffold_expected_response is not None
-        and _scaffold_response_is_correct(
+        and (tutor.evaluation == "CORRECT" if tutor.contribution is not None else _scaffold_response_is_correct(
             context.message,
             session.scaffold_expected_response,
             tutor.evaluation,
             session.correct_answer or "",
             rules,
-        )
+        ))
     )
     next_scaffold_failure_count = (
         session.scaffold_failure_count + 1
@@ -598,6 +651,7 @@ async def process_answer_with_session_event(
         atomic_guided_events_enabled
         and session.current_phase == "GUIDED_PRACTICE"
         and scaffold_turn
+        and _is_unresolved_scaffold_turn(tutor)
         and next_scaffold_failure_count
         >= rules.strategy_rules.scaffold_max_unresolved_turns
     )
@@ -626,6 +680,7 @@ async def process_answer_with_session_event(
     )
     confusion_support_request = (
         schema_managed
+        and tutor.contribution is None
         and session.current_phase == "GUIDED_PRACTICE"
         and tutor.intent == "EXPRESSING_CONFUSION"
     )
@@ -706,10 +761,15 @@ async def process_answer_with_session_event(
                     context.message
                     if escalation_type == "GUIDED_SUPPORT_ESCALATION_REQUIRED"
                     and wrong_four_escalation
-                    and escalation_error_code is not None
+                    and (escalation_error_code is not None or tutor.contribution is not None)
                     else None
                 ),
                 error_code=escalation_error_code,
+                unmapped_error_description=(
+                    tutor.contribution.error_description
+                    if tutor.contribution is not None and escalation_error_code is None
+                    else None
+                ),
             ),
 
 
@@ -775,6 +835,24 @@ async def process_answer_with_session_event(
                     if event_type == "INCORRECT_ATTEMPT"
                     else None
                 ),
+                generated_support_text=(
+                    tutor.contribution.generated_support_text
+                    if tutor.contribution is not None
+                    and not rules.guided_learning.production_boundary_enabled
+                    and tutor.contribution.support_relevance in {"UNMAPPED", "MISMATCHED"}
+                    else None
+                ),
+                support_relevance=(
+                    tutor.contribution.support_relevance
+                    if tutor.contribution is not None and event_type == "INCORRECT_ATTEMPT"
+                    else None
+                ),
+                generated_visual_rows=(
+                    tutor.contribution.generated_visual_rows
+                    if tutor.contribution is not None and event_type == "INCORRECT_ATTEMPT"
+                    and not rules.guided_learning.production_boundary_enabled
+                    else None
+                ),
             ),
             access_token,
         )
@@ -799,6 +877,9 @@ async def process_answer_with_session_event(
             and session.question_id is not None
         )
         else None
+    )
+    active_guided_rescue = _response_aware_worked_rescue(
+        session, active_guided_rescue, guided_rescue, context.correct_answer, rules,
     )
     persisted_rescue_context = (
         rescue_context_for(active_guided_rescue)
@@ -1223,6 +1304,8 @@ def _phase_2_prompt_context(
             "highest_support_used_by_skill": guided.highest_support_used_by_skill,
             "completed_micro_skill_ids": guided.completed_micro_skill_ids,
             "remaining_micro_skill_ids": guided.remaining_micro_skill_ids,
+            "support_catalog": question.tutor_view.support_catalog,
+            "potential_errors": question.tutor_view.potential_errors,
         },
         potential_errors=question.tutor_view.potential_errors,
         support_catalog=question.tutor_view.support_catalog,
@@ -1264,6 +1347,8 @@ def _validated_error_code(
     student_message: str,
     tutor: TutorResult,
 ) -> str | None:
+    if tutor.contribution is not None:
+        return _catalog_error_code(session, tutor.selected_error_code)
     return (
         _db_error_code(session, student_message)
         or _catalog_error_code(session, tutor.selected_error_code)
@@ -1851,6 +1936,7 @@ def _scaffold_evaluation_context(
         step_prompt=session.scaffold_steps[0],
         expected_response_criterion=session.scaffold_expected_response,
         completed_step_ids=session.delivered_scaffold_step_ids,
+        next_step_prompt=_next_scaffold_state(session)[0],
     )
 
 
@@ -3542,7 +3628,11 @@ async def _process_interaction(
                 request.selected_option_id,
             )
 
-    if request.interaction_type == "HELP_REQUEST" or _is_explicit_help_request(request):
+    response_aware = (
+        session.current_phase == "GUIDED_PRACTICE"
+        and load_classifier_rules().guided_learning.response_aware_enabled
+    )
+    if not response_aware and (request.interaction_type == "HELP_REQUEST" or _is_explicit_help_request(request)):
         return await _guided_help_response(request, session)
     if request.interaction_type == "SUPPORT_REPLAY":
         support_message = _active_support_message(session)
@@ -3587,6 +3677,7 @@ async def _process_interaction(
     )
     if (
         request.input_source == "VOICE"
+        and not response_aware
         and request.transcript_confidence is not None
         and request.transcript_confidence
         < rules.guided_learning.minimum_voice_transcript_confidence
@@ -4079,7 +4170,10 @@ async def _process_interaction(
     elif scaffold_turn and tutor.scaffold_original_answer_correct:
         scaffold_steps = []
         scaffold_turn_updates = _completed_scaffold_state(turn_session)
-    elif scaffold_turn and tutor.intent in {"ASKING_QUESTION", "EXPRESSING_CONFUSION"}:
+    elif scaffold_turn and (
+        tutor.intent in {"ASKING_QUESTION", "EXPRESSING_CONFUSION"}
+        or (tutor.contribution is not None and tutor.contribution.assessment == "NOT_ASSESSED")
+    ):
         # The learner asked for help with this step. Preserve the panel while
         # showing a response tailored to their words; it is not another failed
         # attempt and must not be replaced with the unchanged step prompt.
@@ -4088,13 +4182,13 @@ async def _process_interaction(
         expected_scaffold_response = turn_session.scaffold_expected_response
         if expected_scaffold_response is None:
             raise RuntimeError("Active scaffold step lost its expected response.")
-        if _scaffold_response_is_correct(
+        if (tutor.evaluation == "CORRECT" if tutor.contribution is not None else _scaffold_response_is_correct(
             student_message,
             expected_scaffold_response,
             tutor.evaluation,
             turn_session.correct_answer or "",
             rules,
-        ):
+        )):
             next_prompt, scaffold_turn_updates = _next_scaffold_state(turn_session)
             if next_prompt is None:
                 tutor_message = rules.messages.SCAFFOLD_ORIGINAL_RETRY
@@ -4106,8 +4200,9 @@ async def _process_interaction(
                     turn_session.correct_answer,
                     rules,
                 )
-                tutor_message = next_prompt
-                tutor_message_voice = next_prompt
+                if tutor.contribution is None:
+                    tutor_message = next_prompt
+                    tutor_message_voice = next_prompt
                 scaffold_steps = [next_prompt]
         else:
             scaffold_steps = list(turn_session.scaffold_steps)
@@ -4150,6 +4245,19 @@ async def _process_interaction(
             "attempt_count": applied_attempt_count,
         },
     )
+    if tutor.contribution is not None:
+        support_delivered = bool(schema_support_message or schema_steps or visual_cue or rescue_selected)
+        incorrect = tutor.contribution.assessment == "INCORRECT"
+        logger.info("response_aware_support_audit", extra={
+            "session_id": session.session_id, "turn_id": request.turn_id,
+            "question_id": turn_session.question_id,
+            "assessment": tutor.contribution.assessment,
+            "support_delivered": support_delivered,
+            "support_on_non_attempt": support_delivered and not incorrect,
+            "incorrect_without_support": incorrect and not support_delivered,
+            "authored_support_mismatch": tutor.contribution.support_relevance == "MISMATCHED",
+            "attempt_increment": effective_attempt_increment,
+        })
 
     next_hint_count: int = _next_hint_count_from(session)
     conversation_action: ConversationAction = tutor.recommended_conversation_action
@@ -4384,6 +4492,9 @@ async def _process_interaction(
             and turn_session.question_id is not None
         )
         else None
+    )
+    active_guided_rescue = _response_aware_worked_rescue(
+        turn_session, active_guided_rescue, guided_rescue, canonical_answer, rules,
     )
     rescue_context = (
         rescue_context_for(active_guided_rescue)

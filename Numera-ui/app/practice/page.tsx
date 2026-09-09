@@ -660,7 +660,7 @@ export default function PracticePage() {
                 : 'Hands-free voice'}
             </button>
           )}
-          {!silent && mode !== 'quiet' && (
+          {!silent && currentPhase !== 'GUIDED_PRACTICE' && mode !== 'quiet' && (
             <button
               onClick={() => void requestHint()}
               className="rounded-full border border-muted-gray bg-white px-4 py-2 text-[12px] font-semibold text-ink hover:bg-reading-surface transition-colors"

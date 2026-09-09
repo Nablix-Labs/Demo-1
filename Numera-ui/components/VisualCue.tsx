@@ -23,6 +23,18 @@ import { cueLabel } from '@/lib/cueLabel';
 import { showCueDescription } from '@/lib/cueAsset';
 import StickyNote from '@/components/StickyNote';
 
+type ComparisonRow = { expression: string; annotation: string };
+
+function comparisonRows(actions: Array<Record<string, unknown>> | null): ComparisonRow[] {
+  return (actions ?? []).flatMap((action) => {
+    if (action.action !== 'COMPARE_EXPRESSIONS' || !Array.isArray(action.rows)) return [];
+    return action.rows.filter((row): row is ComparisonRow => (
+      typeof row === 'object' && row !== null
+      && typeof row.expression === 'string' && typeof row.annotation === 'string'
+    ));
+  });
+}
+
 export default function VisualCue() {
   const visible = useNumeraStore((s) => s.visualCueVisible);
   const collapseSupportDeck = useNumeraStore((s) => s.collapseSupportDeck);
@@ -30,6 +42,8 @@ export default function VisualCue() {
   const cueType = useNumeraStore((s) => s.visualCueType);
   const description = useNumeraStore((s) => s.visualCueDescription);
   const assetUrl = useNumeraStore((s) => s.visualCueAssetUrl);
+  const actions = useNumeraStore((s) => s.visualCueActions);
+  const rows = comparisonRows(actions);
   const currentPhase = useNumeraStore((s) => s.currentPhase);
   const card = resolveCueCard(cueType);
   // Labelled by what the BACKEND served, not by what the client happens to hold
@@ -61,7 +75,7 @@ export default function VisualCue() {
 
   // Nothing authored and nothing to say — show nothing, rather than a card
   // about an equation the student isn't working on.
-  if (!visible || (!card && !description)) return null;
+  if (!visible || (!card && !description && rows.length === 0)) return null;
   // Phase 3 is answered alone: no visual cues during an independent attempt
   // (Phase 3 spec §3.2). Suppressed at the render rather than at the source so
   // a cue the backend still sends cannot leak onto the screen.
@@ -96,6 +110,18 @@ export default function VisualCue() {
             as the annotation rather than beside it. */}
         <StickyNote tone="amber" label={label} lines={card ? [card.example] : undefined}>
           {card?.caption}
+          {rows.length > 0 ? (
+            <table className="mt-3 w-full rounded-md bg-white/80 text-left" aria-label="Compare these examples">
+              <tbody>
+                {rows.map((row, index) => (
+                  <tr key={index} className="border-b border-amber-200 last:border-0">
+                    <th scope="row" className="p-2 font-mono text-lg font-medium text-indigo-800">{row.expression}</th>
+                    <td className="p-2 text-sm">{row.annotation}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : null}
           {/* The description is the TUTOR'S script, not the student's caption —
               "that text is for the tutor to explain" (Manjusha, 13 Aug 2026).
               With a picture on the card, printing it too makes the student read

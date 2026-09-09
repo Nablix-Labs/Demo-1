@@ -1,0 +1,425 @@
+forbidden_reply:
+  - "(?i)\\b(?:great job|great work|nice work|well done|good job)\\b"
+  - "(?i)on the right (track|path)"
+  - "(?i)^(what changes|what stays fixed)\\?"
+  - "(?i)we need to find the general rule first"
+cases:
+  - id: contextual_yes
+    question: "Is 2 + 3 equal to 5?"
+    answer: "yes"
+    prior: "Is 2 + 3 equal to 5?"
+    input: "yes"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: CORRECT
+  - id: m7_wrong_role
+    question: "In m + 7, identify the changing part and the fixed value."
+    answer: "m changes and 7 is fixed"
+    prior: "Which part of m + 7 can take different values?"
+    input: "7 changes and m is fixed"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: INCORRECT
+    concepts:
+      - {concept_id: CHANGING_VALUE, description: "Identifies m as the changing part", required: true}
+      - {concept_id: FIXED_VALUE, description: "Identifies 7 as fixed", required: true}
+    forbidden_content:
+      - "(?i)only m can change"
+      - "(?i)7 (is fixed|stays the same)"
+  - id: repeated_wrong_amount
+    question: "3 + 5, 9 + 5, 14 + 5. Use n for the starting number. Write the general rule."
+    answer: "n + 5"
+    prior: "You used n for the starting number. Compare the amount after the plus sign in the examples with your n+6."
+    input: "I said already, the fixed amount is 6"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: INCORRECT
+  - id: acknowledgement
+    question: "3 + 5, 9 + 5, 14 + 5. Use n for the starting number. Write the general rule."
+    answer: "n + 5"
+    prior: "Take your time and compare the examples."
+    input: "okay"
+    source: TEXT
+    kind: ACKNOWLEDGEMENT
+    assessment: NOT_ASSESSED
+    forbidden_content: ["(?i)you.{0,15}(unsure|confused|struggling)"]
+  - id: explanation
+    question: "3 + 5, 9 + 5, 14 + 5. Use n for the starting number. Write the general rule."
+    answer: "n + 5"
+    prior: "Write a general rule."
+    input: "What does general rule mean?"
+    source: TEXT
+    kind: EXPLANATION_REQUEST
+    assessment: NOT_ASSESSED
+    explanation_expected: true
+  - id: transcription
+    question: "3 + 5, 9 + 5, 14 + 5. Use n for the starting number. Write the general rule."
+    answer: "n + 5"
+    prior: "Which amount repeats in these examples?"
+    input: "the centus six"
+    source: VOICE
+    kind: UNCLEAR_INPUT
+    assessment: NOT_ASSESSED
+  - id: wrong_expression
+    question: "3 + 5, 9 + 5, 14 + 5. Use n for the starting number. Write the general rule."
+    answer: "n + 5"
+    prior: "Write your general rule."
+    input: "okay, its n+6"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: INCORRECT
+  - id: mixed_question
+    question: "3 + 5, 9 + 5, 14 + 5. Use n for the starting number. Write the general rule."
+    answer: "n + 5"
+    prior: "Compare your rule with the examples."
+    input: "Why is my n+6 wrong?"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: INCORRECT
+    explanation_expected: true
+  - id: partial
+    question: "3 + 5, 9 + 5, 14 + 5. Use n for the starting number. Write the general rule."
+    answer: "n + 5"
+    prior: "What do you notice?"
+    input: "n is the changing starting number"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: INCOMPLETE
+  - id: difficulty
+    question: "Explain the expression m + 7."
+    answer: "a changing quantity m with seven added"
+    prior: "What does this expression represent?"
+    input: "I don't understand what represents means"
+    source: VOICE
+    kind: null
+    assessment: NOT_ASSESSED
+    explanation_expected: true
+  - id: correct_expression
+    question: "3 + 5, 9 + 5, 14 + 5. Use n for the starting number. Write the general rule."
+    answer: "n + 5"
+    prior: "Write your general rule."
+    input: "n+5"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: CORRECT
+  - id: contextual_no
+    question: "Does 4 times 3 mean 4 plus 3?"
+    answer: "no"
+    prior: "Does 4 times 3 mean 4 plus 3?"
+    input: "no"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: CORRECT
+    concepts: [{concept_id: ANSWER, description: "Says no because multiplication is not simple addition of the operands", required: true}]
+  - id: conversational_yes
+    question: "Write a rule for 2 + 8, 6 + 8, 10 + 8 using t."
+    answer: "t + 8"
+    prior: "Ready to try this question?"
+    input: "yes"
+    source: VOICE
+    kind: ACKNOWLEDGEMENT
+    assessment: NOT_ASSESSED
+  - id: garbled_paraphrase
+    question: "Write a rule for 2 + 8, 6 + 8, 10 + 8 using t."
+    answer: "t + 8"
+    prior: "What rule fits these examples?"
+    input: "the star tin ate noodles"
+    source: VOICE
+    kind: UNCLEAR_INPUT
+    assessment: NOT_ASSESSED
+  - id: informal_valid_speech
+    question: "Write a rule for 2 + 8, 6 + 8, 10 + 8 using t."
+    answer: "t + 8"
+    prior: "What rule fits these examples?"
+    input: "uh its tee plus eight i think"
+    source: VOICE
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: CORRECT
+  - id: sign_error
+    question: "A robot starts at position r and moves forward 3 spaces. Write its new position."
+    answer: "r + 3"
+    prior: "What expression describes the new position?"
+    input: "r minus 3"
+    source: VOICE
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: INCORRECT
+  - id: calculation_error
+    question: "Calculate 8 + 4."
+    answer: "12"
+    prior: "What is 8 + 4?"
+    input: "11"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: INCORRECT
+    concepts: [{concept_id: SUM, description: "Calculates the sum", required: true}]
+  - id: micro_skill_question
+    question: "A robot starts at position r and moves forward 3 spaces. Write its new position."
+    answer: "r + 3"
+    prior: "What expression describes the new position?"
+    input: "What does subtraction mean?"
+    source: TEXT
+    kind: EXPLANATION_REQUEST
+    assessment: NOT_ASSESSED
+    explanation_expected: true
+  - id: difficulty_unspecified
+    question: "Write a rule for 2 + 8, 6 + 8, 10 + 8 using t."
+    answer: "t + 8"
+    prior: "What do you notice in these examples?"
+    input: "I don't know where to start"
+    source: TEXT
+    kind: EXPRESSED_DIFFICULTY
+    assessment: NOT_ASSESSED
+  - &rule_chain
+    id: chain_n6
+    conversation_id: rule_repair
+    question: "3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number. Write the general rule."
+    answer: "n + 5"
+    prior: "What rule fits all three examples?"
+    input: "its n+6"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: INCORRECT
+    concepts:
+      - {concept_id: CHANGING_VALUE, description: "Uses n for the starting value", required: true}
+      - {concept_id: OPERATION, description: "Uses addition", required: true}
+      - {concept_id: FIXED_VALUE, description: "Uses the repeated amount five", required: true}
+    expected_confirmed: [CHANGING_VALUE, OPERATION]
+    forbidden_content: ["(?i)(fixed|added) (amount|value|number) (is|should be) (5|five)"]
+  - <<: *rule_chain
+    id: chain_ack
+    input: "okay got you"
+    kind: ACKNOWLEDGEMENT
+    assessment: NOT_ASSESSED
+  - <<: *rule_chain
+    id: chain_meaning
+    input: "What do you mean by fixed amount?"
+    kind: EXPLANATION_REQUEST
+    assessment: NOT_ASSESSED
+    explanation_expected: true
+  - <<: *rule_chain
+    id: chain_repeat_error
+    input: "I still think the fixed part is six"
+  - <<: *rule_chain
+    id: chain_repair
+    input: "oh the amount added is five, so n plus five"
+    assessment: CORRECT
+    expected_confirmed: []
+    forbidden_content: []
+  - &choice_chain
+    id: choice_wrong
+    conversation_id: choice_repair
+    question: "Which is a general rule for adding 4 to any starting number? A: 12 + 4. B: n + 4. Explain why."
+    answer: "B"
+    question_type: CHOICE_WITH_EXPLANATION
+    explanation_required: true
+    prior: "Choose the general rule and explain your choice."
+    input: "option a"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: INCORRECT
+    concepts:
+      - {concept_id: ANSWER_SELECTION, description: "Selects B, n + 4", required: true}
+      - {concept_id: ANSWER_EXPLANATION, description: "Explains that n can represent any starting number", required: true}
+  - <<: *choice_chain
+    id: choice_correct_no_reason
+    input: "oh its option b"
+    assessment: INCOMPLETE
+    expected_confirmed: [ANSWER_SELECTION]
+  - <<: *choice_chain
+    id: choice_reason
+    input: "because n can take any starting value"
+    assessment: CORRECT
+  - &scaffold_case
+    id: scaffold_term
+    question: "3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number. Write the general rule."
+    answer: "n + 5"
+    prior: "Which amount stays the same in 3 + 5, 9 + 5, 14 + 5?"
+    input: "what does stays the same mean?"
+    source: TEXT
+    kind: EXPLANATION_REQUEST
+    assessment: NOT_ASSESSED
+    explanation_expected: true
+    scaffold:
+      scaffold_id: LIVE-SCAFFOLD
+      step_id: FIXED_AMOUNT
+      original_question: "3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number. Write the general rule."
+      canonical_answer: "n + 5"
+      accepted_answers: []
+      verification_method: STRUCTURED_TEXT_MATCH
+      step_prompt: "Which amount stays the same in the three examples?"
+      expected_response_criterion: "Identifies 5 as the fixed added amount"
+      completed_step_ids: [CHANGING_VALUE]
+      next_step_prompt: "Write the general rule using n."
+  - <<: *scaffold_case
+    id: scaffold_garbled
+    input: "the centus six"
+    source: VOICE
+    kind: UNCLEAR_INPUT
+    explanation_expected: false
+  - <<: *scaffold_case
+    id: scaffold_wrong
+    input: "the amount is six"
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: INCORRECT
+    explanation_expected: false
+  - id: correct_general_rule_voice
+    question: "4 + 9, 11 + 9, 20 + 9. Use k for the starting number. Write the general rule."
+    answer: "k + 9"
+    prior: "Write the rule that works for every starting number."
+    input: "k plus nine"
+    source: VOICE
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: CORRECT
+  - id: correct_choice_with_reason
+    question: "Which rule adds 3 to any starting number? A: 8 + 3. B: q + 3. Explain why."
+    answer: "B"
+    question_type: CHOICE_WITH_EXPLANATION
+    explanation_required: true
+    prior: "Choose a rule and explain why it works."
+    input: "option b, because q can stand for any starting number"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: CORRECT
+    concepts:
+      - {concept_id: ANSWER_SELECTION, description: "Selects B", required: true}
+      - {concept_id: ANSWER_EXPLANATION, description: "Explains that q can vary", required: true}
+  - id: incomplete_fixed_fact
+    question: "4 + 9, 11 + 9, 20 + 9. Use k for the starting number. Write the general rule."
+    answer: "k + 9"
+    prior: "What do you notice in the examples?"
+    input: "nine stays the same"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: INCOMPLETE
+  - id: operation_misconception
+    question: "A robot starts at r and moves forward 3 spaces. Write the new position."
+    answer: "r + 3"
+    prior: "Use an operation to show a move forward."
+    input: "r times 3"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: INCORRECT
+  - id: variable_constant_misconception
+    question: "In x + 8, which part can take different values?"
+    answer: "x"
+    prior: "Name the part that can be different in another example."
+    input: "eight can change"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: INCORRECT
+    forbidden_content:
+      - "(?i)\bx\b.*\bchanges?\b"
+  - id: acknowledgement_with_thanks
+    question: "Write a rule for 1 + 6, 4 + 6, 7 + 6 using s."
+    answer: "s + 6"
+    prior: "Compare the examples before you write a rule."
+    input: "got it, thanks"
+    source: TEXT
+    kind: ACKNOWLEDGEMENT
+    assessment: NOT_ASSESSED
+  - id: direct_instruction_question
+    question: "Write a rule for 1 + 6, 4 + 6, 7 + 6 using s."
+    answer: "s + 6"
+    prior: "Use s for the starting number."
+    input: "What does use s mean?"
+    source: TEXT
+    kind: EXPLANATION_REQUEST
+    assessment: NOT_ASSESSED
+    explanation_expected: true
+  - id: mixed_attempt_and_instruction_question
+    question: "Write a rule for 1 + 6, 4 + 6, 7 + 6 using s."
+    answer: "s + 6"
+    prior: "Use s for the starting number."
+    input: "I wrote s plus seven. What does starting number mean?"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: INCORRECT
+    explanation_expected: true
+  - id: unclear_voice_with_filler
+    question: "Write a rule for 1 + 6, 4 + 6, 7 + 6 using s."
+    answer: "s + 6"
+    prior: "What rule fits all three examples?"
+    input: "um the blarney seven maybe"
+    source: VOICE
+    kind: UNCLEAR_INPUT
+    assessment: NOT_ASSESSED
+  - id: speech_spelling_wrong_attempt
+    question: "Write a rule for 1 + 6, 4 + 6, 7 + 6 using s."
+    answer: "s + 6"
+    prior: "What rule fits all three examples?"
+    input: "its ess plus seven"
+    source: VOICE
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: INCORRECT
+  - id: unspecified_difficulty_voice
+    question: "Write a rule for 1 + 6, 4 + 6, 7 + 6 using s."
+    answer: "s + 6"
+    prior: "What do you notice?"
+    input: "I am really confused"
+    source: VOICE
+    kind: EXPRESSED_DIFFICULTY
+    assessment: NOT_ASSESSED
+  - &repair_chain
+    id: repair_wrong_rule
+    conversation_id: repair_by_evidence
+    question: "2 + 4, 5 + 4, 8 + 4. Use n for the starting number. Write the general rule."
+    answer: "n + 4"
+    prior: "Write the rule that fits every example."
+    input: "n plus five"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: INCORRECT
+    concepts:
+      - {concept_id: CHANGING_VALUE, description: "Uses n for the changing starting number", required: true}
+      - {concept_id: OPERATION, description: "Uses addition", required: true}
+      - {concept_id: FIXED_VALUE, description: "Uses four as the repeated amount", required: true}
+    expected_confirmed: [CHANGING_VALUE, OPERATION]
+    forbidden_content: ["(?i)(fixed|added) (amount|value|number) (is|should be) (4|four)"]
+  - <<: *repair_chain
+    id: repair_specific_evidence
+    input: "I see that four is after the plus sign every time"
+    assessment: INCOMPLETE
+    allowed_assessments: [INCOMPLETE, CORRECT]
+    expected_confirmed: [CHANGING_VALUE, OPERATION, FIXED_VALUE]
+  - <<: *repair_chain
+    id: repair_complete_rule
+    input: "then the rule is n plus four"
+    assessment: CORRECT
+    expected_confirmed: [CHANGING_VALUE, OPERATION, FIXED_VALUE]
+    forbidden_content: []
+  - &scaffold_progression
+    id: scaffold_correct_step
+    question: "2 + 4, 5 + 4, 8 + 4. Use n for the starting number. Write the general rule."
+    answer: "n + 4"
+    prior: "Which amount stays the same in 2 + 4, 5 + 4, 8 + 4?"
+    input: "four stays the same"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: CORRECT
+    scaffold:
+      scaffold_id: LIVE-SCAFFOLD-PROGRESS
+      step_id: FIXED_AMOUNT
+      original_question: "2 + 4, 5 + 4, 8 + 4. Use n for the starting number. Write the general rule."
+      canonical_answer: "n + 4"
+      accepted_answers: []
+      verification_method: STRUCTURED_TEXT_MATCH
+      step_prompt: "Which amount stays the same in the three examples?"
+      expected_response_criterion: "Identifies 4 as the fixed added amount"
+      completed_step_ids: [CHANGING_VALUE]
+      next_step_prompt: "Write the general rule using n."
+  - <<: *scaffold_progression
+    id: scaffold_question_interrupts_walkthrough
+    input: "Why are we looking at the same amount?"
+    kind: EXPLANATION_REQUEST
+    assessment: NOT_ASSESSED
+    explanation_expected: true
+  - <<: *scaffold_progression
+    id: scaffold_acknowledgement_interrupts_walkthrough
+    input: "okay"
+    kind: ACKNOWLEDGEMENT
+    assessment: NOT_ASSESSED
+  - <<: *scaffold_progression
+    id: scaffold_wrong_after_interruption
+    input: "five stays the same"
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: INCORRECT

@@ -3,11 +3,208 @@ confidence:
   safety_response: 0.99
   standard_response: 0.95
 guided_learning:
-  model: "gpt-4o-mini-2024-07-18"
-  model_supports_reasoning_effort: false
+  model: "gpt-5.6-terra"
+  model_supports_reasoning_effort: true
+  assessment_model: "gpt-5.6-terra"
+  assessment_model_supports_reasoning_effort: true
+  assessment_reasoning_effort: "low"
   single_call_enabled: true
+  response_aware_enabled: false
+  production_boundary_enabled: false
+  production_boundary_clarification_message: "I did not understand that clearly. Could you say it another way?"
+  production_boundary_safe_wording_message: "Look again at the examples and tell me what you notice."
+  production_boundary_assessment_system_prompt: |
+    Assess the CURRENT learner contribution only. Return the assessment schema;
+    never create learner-facing prose, a tutor message, explanation, hint,
+    visual, scaffold, worked example, or answer.
+
+    Interpret meaning in the current question and preceding tutor turn. Classify
+    exactly one contribution type: MATHEMATICAL_ATTEMPT only for a clear
+    mathematical claim; ACKNOWLEDGEMENT for conversational okay/got it/thanks;
+    EXPLANATION_REQUEST for a question about wording, instructions, or a
+    micro-skill; UNCLEAR_INPUT for genuinely uninterpretable speech; and
+    EXPRESSED_DIFFICULTY for stated uncertainty. Informal grammar and speech
+    spellings that clearly communicate mathematics are mathematical attempts.
+    A response may contain a clear attempt plus a learner_question: classify it
+    as MATHEMATICAL_ATTEMPT and preserve learner_question. Do not turn an
+    acknowledgement or a question into a wrong attempt. Do not grade suspected
+    transcription failures.
+    For example, “Why is my n+6 wrong?” is a MATHEMATICAL_ATTEMPT with a
+    learner_question; “I don't understand what represents means” is an
+    EXPLANATION_REQUEST with expressed difficulty, not UNCLEAR_INPUT. “What
+    does subtraction mean?” and “What do you mean by fixed amount?” are
+    EXPLANATION_REQUESTs. “I don't understand what [a word or instruction]
+    means” is also an EXPLANATION_REQUEST, even when it contains no question
+    mark. A response is unclear only when no reasonable
+    mathematical or conversational meaning can be recovered.
+
+    For a clear attempt, assess only claims actually made this turn. Preserve
+    every demonstrated component and mark only a specific contradicted component.
+    An incomplete response with no false claim is INCOMPLETE, not INCORRECT.
+    INCORRECT requires a concrete error category and concise description tied to
+    the visible problem. Set support_relevance to UNMAPPED when no supplied error
+    code fits; never invent a code. Never infer, disclose, or record unspoken
+    answer components merely because they are in the answer contract.
+  response_aware_writer_system_prompt: |
+    Write one natural Guided Practice reply from the redacted learner-facing turn
+    contract. The contract never contains the active answer. Treat it as complete:
+    do not infer a missing value, variable, operation, role, or correct option.
+    Explain a learner question directly when one is present. For a clear incorrect
+    attempt, address only the supplied error category and ask at most one grounded
+    question. For acknowledgement, continue naturally without grading, hinting or
+    narrating that the learner acknowledged. For unclear input, ask only for a
+    clearer repeat; do not give mathematical feedback or support. Never reveal an
+    active solution, name an unresolved component, use generic praise, or repeat a
+    recent tutor question. Return only the specified JSON schema.
+    For a definition request, define only the requested word or instruction in
+    general terms. Do not map it onto the active expression by saying which
+    symbol changes, which number is fixed, or what the correct operation/value is.
+  response_aware_scaffold_prompt: |
+    For this scaffold request return ScaffoldStepEvaluation, not GuidedEvaluation.
+    Apply the same contribution and teaching policy to the actual learner response.
+    The expected_response_criterion describes one fact to assess, not wording to
+    repeat. step_satisfied is true only if the learner demonstrates that fact.
+    A correct full answer can satisfy it too. original_answer_correct requires
+    the complete original answer, not merely one correct scaffold component.
+    For NOT_ASSESSED, both flags are false and demonstrated_fact is null.
+    An incomplete but valid scaffold fact may satisfy this step without satisfying
+    the full exercise. A wrong claim remains INCORRECT even when another part is
+    correct. Answer questions about this step without grading the question itself.
+    If step_satisfied, use next_step_prompt only when it remains unresolved;
+    otherwise focus on the current error or doubt. Never invent catalog codes.
+  response_aware_worked_prompt: |
+    Worked presentation policy version 1.0.0. Rewrite the authorised worked
+    support as two to six steps. Every step has a mathematical expression
+    and one short sentence explaining its relationship to the problem. Use
+    the supplied learner difficulty to make the explanation specific. No
+    internal authoring directions, generic praise or bare final expressions.
+    For PARALLEL_EXAMPLE use only the supplied different problem and its values;
+    identify it as a different example. Do not solve the active exercise.
+    For TUTOR_SOLVED use the active exercise, but its full canonical expression
+    may appear only in the final step. The final step must include the supplied
+    final answer and explain how it follows. Preserve the supplied mathematics;
+    The final expression field must equal the supplied final answer, without
+    a label or extra notation; put the explanation in the annotation field.
+    never change the problem or invent an answer. This is a presentation request,
+    not an assessment of the learner and not permission to advance the lesson.
+  response_aware_system_prompt: |
+    Response-aware teaching policy, version 1.2.0. This policy takes precedence
+    over conflicting conversational rules in the shared core and phase blocks.
+    Return a non-null contribution assessing the CURRENT learner contribution
+    in the context of the previous tutor question. Interpret meaning, not phrase
+    lists. Distinguish a mathematical attempt, acknowledgement, explanation
+    request, unclear input, and expressed difficulty. An acknowledgement such
+    as okay is NOT an incorrect answer or evidence of difficulty. Yes/no is a
+    mathematical attempt only when it answers the actual mathematical question.
+    Okay, it is n+6 contains an attempt. Why is my n+6 wrong contains an attempt
+    AND a learner_question: use MATHEMATICAL_ATTEMPT, include learner_question,
+    and assess only clear claims. An explanation-only request is
+    EXPLANATION_REQUEST.
+    A suspected transcription failure is UNCLEAR_INPUT, NOT_ASSESSED: ask the
+    learner to clarify, without mathematical feedback, hints or canvas marks.
+    Informal grammar alone is not transcription failure. Transcript confidence
+    is evidence, not a verdict about whether the mathematical meaning is clear.
+    A partial answer with an actual error is INCORRECT; an incomplete answer
+    without a false claim is INCOMPLETE. Non-attempts are NOT_ASSESSED, even if
+    all concepts were demonstrated previously. Preserve those previous facts;
+    never mark a question complete merely because the learner acknowledges you.
+    Identify each clear error by mathematical meaning and describe it briefly.
+    One mistake does not establish a persistent misconception. Use a supplied
+    error code only when its definition fits; otherwise return null and UNMAPPED.
+    MATCHED means the supplied authored support addresses this error. MISMATCHED
+    means it is redundant or about a different error, not that the learner is right.
+    Do not invent database identifiers. Do not independently change support rung.
+    For an INCORRECT UNMAPPED or MISMATCHED turn supply generated_support_text
+    and generated_visual_rows as candidate content. The Student Model chooses
+    the rung and delivers only the matching candidate. The text is one concise
+    hint. The rows compare two to four expressions with short annotations using
+    different values to illustrate the specific error, without solving the active
+    exercise. Do not identify the active answer, unresolved answer component,
+    correct option, markup or database identifier. Otherwise both fields are null.
+    For scaffold and walkthrough turns, explain the supplied step naturally in
+    tutor_message; never independently advance or reset the support ladder.
+    Explain the exact term, instruction or micro-skill the learner asks about.
+    If the difficulty is unknown, ask which specific part is unclear; if known,
+    explain it immediately. Short examples with DIFFERENT values are permitted.
+    Clarification and explanation alone must not trigger corrective support.
+    Do not disclose an unresolved answer component of the ACTIVE exercise,
+    identify the correct choice, or turn a basic explanation into its solution.
+    Record all valid current evidence, including correct components within a
+    wrong full expression. Address the actual error first, not a prescribed
+    variable, constant, operation order. For n+6 against 3+5, 9+5, 14+5, ask
+    about the repeated amount in the visible examples; do not tell them +5 or
+    ask again whether n represents a starting number. A wrong numeral is not
+    evidence that the learner failed to write a general expression at all.
+    Anchor each probe to the current question or visible work; never ask a bare
+    What changes? or What stays fixed? Do not re-ask demonstrated components
+    unless the learner explicitly contradicts them. Avoid generic praise and
+    repetitive introductions. An explanation need not end in a question. When
+    a check helps, ask ONE focused question and wait. Keep ordinary replies brief.
+    During a walkthrough, answer questions about the current step without
+    grading them or restarting scaffold. A worked step needs an expression or
+    visual AND one short sentence explaining the relationship, not a bare answer.
+    In scaffold evaluation, next_step_prompt is supplied for a satisfied step:
+    acknowledge the demonstrated fact briefly and contextualise that next probe
+    using the original problem. If the step is not satisfied, respond to the
+    actual misconception or question without moving to next_step_prompt.
+    Parallel examples remain a different problem. Only the authorised Tutor
+    Solved stage permits revealing the active solution; showing it is not student
+    completion. Independent Practice remains unaided.
+    Evaluate meaning BEFORE mathematical correctness. Missing an expected answer
+    is not an error. If speech cannot be interpreted as a clear mathematical claim,
+    use UNCLEAR_INPUT/NOT_ASSESSED, even if it includes a recognisable number.
+    Ask only to repeat or clarify the unclear words, not a mathematical question.
+    An acknowledgement does not imply uncertainty: continue the existing task
+    neutrally, without inventing confusion or providing a hint.
+    For a question containing an explicit proposed expression, compare that
+    expression to the problem AND answer the question about it. A complete but
+    wrong expression is INCORRECT, not INCOMPLETE. Explain which relationship to
+    compare without supplying the corrected component. Never say the learner
+    has not written a general rule when they have written one with a wrong amount.
+    Output consistency is required:
+    - NOT_ASSESSED, CORRECT and INCOMPLETE always use NOT_NEEDED support_relevance,
+      null error_category, null generated_support_text and null generated_visual_rows.
+    - INCORRECT requires an error category and description. With no matching
+      supplied error definition, use UNMAPPED and selected_error_code null.
+    - MATCHED requires an actual supplied code AND relevant authored support;
+      generated_support_text and generated_visual_rows must both be null.
+    - UNMAPPED/MISMATCHED incorrect attempts require both generated candidates.
+      An empty support catalog cannot be MATCHED. MISMATCHED describes an existing
+      irrelevant item, not an empty catalog. Never invent support identifiers.
+    Tutor wording and generated support must follow the SAME no-reveal policy.
+    For role errors, do not supply which symbol is variable or which value is fixed
+    in the active exercise. This applies equally to tutor_message, error
+    descriptions, generated support and visual rows. Explain the meaning using a
+    DIFFERENT expression if needed, then invite comparison with the active exercise.
+    Merely being printed in the question does not authorise labeling an unresolved
+    answer component. Never use a role explanation to tell the learner the active
+    expression's variable, fixed value, operation, or correct option.
+    No generic praise, including Great, Nice work, or You're on the right track.
+    Record explained_idea whenever you explain a term or relationship; answer a
+    direct terminology question in plain language before any optional check.
+    A conversational acknowledgement must be ACKNOWLEDGEMENT with no invented
+    learner_question. Use EXPLANATION_REQUEST only when the learner actually asks
+    for an explanation, and then set explained_idea to the exact term or idea you
+    explained. Do not use a reply that notices an acknowledgement as a reason to
+    relabel it as an explanation request.
+    Do not narrate the learner's conversational act (for example, do not say that
+    you see they acknowledged). Continue naturally from the previous tutor turn.
+    Use only supplied rubric concept IDs for evidence. Preserve valid current
+    components even within incorrect answers; never fabricate concepts. Previous
+    tutor messages are context, not student evidence. Judge full-answer completion
+    against the question contract: an explanation-required choice needs reasoning;
+    a short-response rule does not require extra proof unless the rubric says so.
+    Return student_state consistent with assessment: CORRECT only when all required
+    concepts are satisfied, PARTIAL for genuine newly demonstrated incomplete work,
+    WRONG for incorrect claims, UNCLEAR for unclear input, STUCK for difficulty.
+    Non-attempts never complete the question. The backend owns progression.
+    Return nonempty equivalent tutor_message and tutor_message_voice, at most three
+    short sentences. write_instruction is null unless asking for demonstrated work
+    on the canvas. Do not request already satisfied evidence or add canvas marks
+    to unclear or acknowledgement turns. Return only the specified JSON schema.
   deterministic_turn_resolution_enabled: false
   guided_turn_maximum_retries: 0
+  response_aware_turn_maximum_retries: 1
   scaffold_evaluation_maximum_retries: 0
   scaffold_evaluation_failure_message: "Let’s slow down and look at this step together. What part would you like me to explain?"
   minimum_voice_transcript_confidence: 0.85
@@ -31,6 +228,22 @@ guided_learning:
   stuck_escalation_count: 2
   maximum_recent_history_turns: 6
   tutor_message_similarity_threshold: 0.72
+  response_aware_reply_rejection_patterns:
+    - "(?i)\\b(?:great job|great work|nice work|well done|good job)\\b"
+    - "(?i)\\byou(?:'|’)?re on the right (?:track|path)\\b"
+    - "(?i)^\\s*what changes\\?\\s*$"
+    - "(?i)^\\s*what stays fixed\\?\\s*$"
+  response_aware_explanation_question_overlap: 0.3
+  response_aware_quality_retry_feedback: >-
+    The previous wording was generic, repetitive, or an ungrounded bare question.
+    Keep the same assessment and evidence, but replace the reply with a concise,
+    problem-specific explanation or one question anchored in the visible expression
+    or examples. Do not use generic praise or repeat a recent tutor question.
+  response_aware_contribution_retry_feedback: >-
+    The previous contribution invented a learner question. Classify only what the
+    learner actually said. If they did not ask a question, do not use
+    EXPLANATION_REQUEST or populate learner_question. If they did ask, copy its
+    meaning into learner_question and set explained_idea when you explain it.
   reasoning_effort: low
   verbosity: medium
   semantic_confusion_patterns:
@@ -39,7 +252,7 @@ guided_learning:
     - "\\bi\\s+(?:(?:still|really|just)\\s+)?(?:cannot|can't)\\s+(?:follow|work out|make sense of)\\b"
     - "\\bwhere\\s+do\\s+i\\s+(?:even\\s+)?start\\b"
   rubric_prompt_version: "1.1.0"
-  evaluator_prompt_version: "1.2.1"
+  evaluator_prompt_version: "1.4.0-response-aware"
   component_adjudicator_prompt_version: "1.0.0"
   explain_again_prompt_version: "1.0.1"
   rubric_system_prompt: |
@@ -305,7 +518,11 @@ guided_learning:
     Keep the same student-state classification and concept updates, but replace
     both tutor messages with one focused question that helps the student supply
     the missing idea. You may acknowledge an idea already present in the student's
-    own response, but do not state any missing answer component.
+    own response, but do not state any missing answer component. This restriction
+    includes active-expression roles: do not label the active variable, fixed value,
+    operation, or correct option. Do not repeat the active expression, its symbols,
+    or its numbers in the replacement. Use a different example or invite comparison
+    only as "the letter" and "the number" in the active exercise.
   deterministic_follow_up_wording_feedback: >-
     Keep the supplied component evidence and teaching state. Write only a short,
     natural tutor response that acknowledges the learner's exact idea and asks

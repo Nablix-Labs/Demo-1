@@ -40,10 +40,12 @@ from app.models.guided_learning import (
     FocusedComponentEvidence,
     GeneratedConcept,
     GeneratedQuestionRubric,
+    GuidedAssessment,
     GuidedEvaluation,
     ScaffoldEvaluationContext,
     ScaffoldStepEvaluation,
     GuidedTutorContext,
+    GuidedWorkedPresentation,
 )
 from app.models.student_model_session import AnswerSpec, QuestionType
 
@@ -55,6 +57,9 @@ def openai_strict_schema(schema: dict[str, object]) -> dict[str, object]:
     """Return an OpenAI-compatible strict schema without changing its caller."""
 
     normalized = deepcopy(schema)
+    definitions = normalized.get("$defs")
+    if isinstance(definitions, dict) and "StudentContribution" in definitions:
+        definitions["StudentContribution"] = contribution_output_schema(definitions["StudentContribution"])
 
     def normalize(node: object) -> None:
         if isinstance(node, list):
@@ -72,6 +77,45 @@ def openai_strict_schema(schema: dict[str, object]) -> dict[str, object]:
 
     normalize(normalized)
     return normalized
+
+
+def contribution_output_schema(contribution_schema: dict[str, object]) -> dict[str, object]:
+    """Make incompatible support/assessment combinations impossible in output.
+
+    These are the existing contract invariants, not rules for interpreting a
+    learner. The model still chooses the contribution and the mathematical error.
+    """
+    base = deepcopy(contribution_schema)
+    variants: list[dict[str, object]] = []
+    combinations = [
+        (["ACKNOWLEDGEMENT", "EXPLANATION_REQUEST", "UNCLEAR_INPUT", "EXPRESSED_DIFFICULTY"],
+         ["NOT_ASSESSED"], ["NOT_NEEDED"]),
+        (["MATHEMATICAL_ATTEMPT"], ["CORRECT", "INCOMPLETE"], ["NOT_NEEDED"]),
+        (["MATHEMATICAL_ATTEMPT"], ["INCORRECT"], ["MATCHED"]),
+        (["MATHEMATICAL_ATTEMPT"], ["INCORRECT"], ["UNMAPPED", "MISMATCHED"]),
+    ]
+    for kinds, assessments, relevance in combinations:
+        if not set(relevance).issubset(base["properties"]["support_relevance"]["enum"]):
+            continue
+        variant = deepcopy(base)
+        properties = variant["properties"]
+        properties["kind"] = {"type": "string", "enum": kinds}
+        properties["assessment"] = {"type": "string", "enum": assessments}
+        properties["support_relevance"] = {"type": "string", "enum": relevance}
+        incorrect = assessments == ["INCORRECT"]
+        for field in ("error_category", "error_description"):
+            properties[field] = ({**properties[field], **properties[field]["anyOf"][0]}
+                                 if incorrect else {"type": "null"})
+            properties[field].pop("anyOf", None)
+        for field in ("generated_support_text", "generated_visual_rows"):
+            properties[field] = (
+                {**properties[field], **properties[field]["anyOf"][0]}
+                if relevance == ["UNMAPPED", "MISMATCHED"] else {"type": "null"}
+            )
+            properties[field].pop("anyOf", None)
+            properties[field].pop("default", None)
+        variants.append(variant)
+    return {"anyOf": variants}
 
 
 def _guided_conversation_history(
@@ -117,8 +161,14 @@ def guided_evaluation_schema() -> dict[str, object]:
     required = schema.get("required")
     if not isinstance(properties, dict) or not isinstance(required, list):
         raise AdapterError("openai_ai_engine", "Guided evaluation schema is malformed.")
-    schema["required"] = [*required, "write_instruction", "canvas_intentions"]
+    schema["required"] = [*required, "write_instruction", "canvas_intentions", "contribution"]
     return schema
+
+
+def guided_assessment_schema() -> dict[str, object]:
+    """Return the production evaluator schema without learner-facing fields."""
+
+    return GuidedAssessment.model_json_schema()
 
 
 def build_explain_again_initial_payload(
@@ -243,6 +293,24 @@ class OpenAIAIEngineClient:
         self._guided_model_supports_reasoning_effort = guided_model_supports_reasoning_effort
         self._guided_verbosity = guided_verbosity
 
+    def with_guided_model(
+        self,
+        model: str,
+        reasoning_effort: str,
+        supports_reasoning_effort: bool,
+    ) -> OpenAIAIEngineClient:
+        return OpenAIAIEngineClient(
+            api_key=self._api_key,
+            model=model,
+            timeout_seconds=self._timeout_seconds,
+            prompt_cache_key_enabled=self._prompt_cache_key_enabled,
+            store_responses=self._store_responses,
+            retry_count=self._retry_count,
+            guided_reasoning_effort=reasoning_effort,
+            guided_model_supports_reasoning_effort=supports_reasoning_effort,
+            guided_verbosity=self._guided_verbosity,
+        )
+
     def generate_tutor_turn(
         self,
         question: str,
@@ -366,6 +434,20 @@ class OpenAIAIEngineClient:
             }
         )
 
+    def write_guided_worked_presentation(
+        self, support: dict[str, object], system_prompt: str,
+    ) -> GuidedWorkedPresentation:
+        content = self._request_guided_json(
+            name="guided_worked_presentation",
+            schema=GuidedWorkedPresentation.model_json_schema(),
+            system_prompt=system_prompt,
+            user_payload=support,
+        )
+        try:
+            return GuidedWorkedPresentation.model_validate(content)
+        except ValidationError as error:
+            raise AdapterError("openai_ai_engine", f"Invalid worked presentation: {error}") from error
+
     def evaluate_guided_turn(
         self,
         question_type: QuestionType | None,
@@ -383,9 +465,16 @@ class OpenAIAIEngineClient:
         evaluator_prompt_version: str,
         system_prompt: str,
     ) -> GuidedEvaluation:
+        schema = guided_evaluation_schema()
+        permitted_codes = [item["error_code"] for item in allowed_error_codes if isinstance(item.get("error_code"), str)]
+        schema["properties"]["selected_error_code"]["enum"] = [None, *permitted_codes]
+        if not permitted_codes:
+            schema["$defs"]["StudentContribution"]["properties"]["support_relevance"]["enum"] = [
+                "NOT_NEEDED", "UNMAPPED", "MISMATCHED",
+            ]
         content = self._request_guided_json(
             name="guided_turn_evaluation",
-            schema=guided_evaluation_schema(),
+            schema=schema,
             system_prompt=system_prompt,
             user_payload={
                 "question_type": question_type,
@@ -413,6 +502,71 @@ class OpenAIAIEngineClient:
             raise AdapterError(
                 "openai_ai_engine",
                 f"invalid guided evaluation: {error}",
+            ) from error
+
+    def evaluate_guided_assessment(
+        self,
+        question_type: QuestionType | None,
+        question: str,
+        answer_spec: AnswerSpec,
+        generated_rubric: GeneratedQuestionRubric,
+        active_objective: ActiveTeachingObjective,
+        guided_tutor_context: GuidedTutorContext,
+        student_response: str,
+        input_source: InputSource,
+        allowed_error_codes: list[dict[str, object]],
+        recent_conversation: list[ConversationMessage],
+        evaluator_prompt_version: str,
+        system_prompt: str,
+    ) -> GuidedEvaluation:
+        schema = guided_assessment_schema()
+        permitted_codes = [item["error_code"] for item in allowed_error_codes if isinstance(item.get("error_code"), str)]
+        schema["properties"]["selected_error_code"]["enum"] = [None, *permitted_codes]
+        if not permitted_codes:
+            schema["$defs"]["GuidedAssessmentContribution"]["properties"]["support_relevance"]["enum"] = [
+                "NOT_NEEDED", "UNMAPPED", "MISMATCHED",
+            ]
+        content = self._request_guided_json(
+            name="guided_turn_assessment",
+            schema=schema,
+            system_prompt=system_prompt,
+            user_payload={
+                "question_type": question_type,
+                "question": question,
+                "answer_spec": answer_spec.model_dump(),
+                "generated_rubric": generated_rubric.model_dump(),
+                "active_objective": active_objective.model_dump(),
+                "guided_tutor_context": guided_tutor_context.model_dump(),
+                "student_response": student_response,
+                "input_source": input_source,
+                "allowed_error_codes": allowed_error_codes,
+                "recent_conversation": [message.model_dump() for message in recent_conversation],
+                "evaluator_prompt_version": evaluator_prompt_version,
+            },
+        )
+        try:
+            assessment = GuidedAssessment.model_validate(content)
+            contribution = assessment.contribution.model_dump()
+            contribution["explained_idea"] = None
+            contribution["generated_support_text"] = None
+            contribution["generated_visual_rows"] = None
+            return GuidedEvaluation(
+                contribution=contribution,
+                student_state=assessment.student_state,
+                newly_confirmed_concept_ids=assessment.newly_confirmed_concept_ids,
+                preserved_concept_ids=assessment.preserved_concept_ids,
+                contradicted_concept_ids=assessment.contradicted_concept_ids,
+                missing_concept_ids=assessment.missing_concept_ids,
+                selected_error_code=assessment.selected_error_code,
+                confidence=assessment.confidence,
+                next_objective=assessment.next_objective,
+                tutor_message="Internal assessment completed.",
+                tutor_message_voice="Internal assessment completed.",
+            )
+        except ValidationError as error:
+            raise AdapterError(
+                "openai_ai_engine",
+                f"invalid guided assessment: {error}",
             ) from error
 
     def write_guided_fact_budget_message(
@@ -494,7 +648,10 @@ class OpenAIAIEngineClient:
     ) -> ScaffoldStepEvaluation:
         content = self._request_guided_json(
             name="scaffold_step_evaluation",
-            schema=ScaffoldStepEvaluation.model_json_schema(),
+            schema={
+                **ScaffoldStepEvaluation.model_json_schema(),
+                "required": list(ScaffoldStepEvaluation.model_fields),
+            },
             system_prompt=system_prompt,
             user_payload={
                 "scaffold": context.model_dump(),

@@ -181,12 +181,10 @@ function errorMessage(err: unknown, fallback: string): string {
  */
 function presentAuthorisedHint(
   res: Parameters<typeof authorisedHint>[0],
-  addTranscriptMessage: (m: { role: 'ai' | 'student'; text: string }) => unknown,
   addTrailEntry: (e: { kind: TrailKind; text: string; meta?: string }) => unknown,
 ): string | null {
   const hint = authorisedHint(res);
   if (!hint) return null;
-  addTranscriptMessage({ role: 'ai', text: hint });
   addTrailEntry({ kind: 'hint', text: hint, meta: 'auto' });
   return hint;
 }
@@ -814,7 +812,7 @@ export function useDemoTutor() {
         // a rescue is opening, which supersedes it.
         const hint = rescueTurn
           ? null
-          : presentAuthorisedHint(res, addTranscriptMessage, addTrailEntry);
+          : presentAuthorisedHint(res, addTrailEntry);
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message });
         // The phase is NOT set here. syncBackendSession above owns it, and it
@@ -1352,7 +1350,7 @@ export function useDemoTutor() {
         }
         const voiceHint = rescueTurn
           ? null
-          : presentAuthorisedHint(res, addTranscriptMessage, addTrailEntry);
+          : presentAuthorisedHint(res, addTrailEntry);
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message });
         if (res.ocr) {
@@ -1467,7 +1465,7 @@ export function useDemoTutor() {
       // referring to it out loud, the tutor would point at something that was
       // never rendered.
         const spoken = applyInteractionSupport(res);
-        const hint = presentAuthorisedHint(res, addTranscriptMessage, addTrailEntry);
+        const hint = presentAuthorisedHint(res, addTrailEntry);
         addTranscriptMessage({ role: 'ai', text: res.message });
         addTrailEntry({ kind: 'tutor', text: res.message, meta: 'option selected' });
         tutorSay(withHint(hint, spoken), { onEnd: onReplyEnd });
@@ -1510,7 +1508,7 @@ export function useDemoTutor() {
       if (!acceptResponse(res)) return false;
       syncBackendSession(res);
       const spoken = applyInteractionSupport(res);
-      const hint = presentAuthorisedHint(res, addTranscriptMessage, addTrailEntry);
+      const hint = presentAuthorisedHint(res, addTrailEntry);
       addTranscriptMessage({ role: 'ai', text: res.message });
       addTrailEntry({ kind: 'tutor', text: res.message, meta: 'teach back feedback' });
       tutorSay(withHint(hint, spoken), { onEnd: takeFloorForReply() });

@@ -66,6 +66,7 @@ export default function CanvasStage() {
   // from the phase rather than the route — the phase is what decides whether
   // the tutor is allowed to be helping right now.
   const silentPhase3 = isPhase3(useNumeraStore((s) => s.currentPhase));
+  const guidedPractice = useNumeraStore((s) => s.currentPhase === 'GUIDED_PRACTICE');
   // A rescue is exclusive: it is the bottom of the ladder, so the scaffold it
   // was escalated PAST must not sit beside it. Hidden here as well as cleared
   // in the store, because `applyInteractionSupport` sets the scaffold from
@@ -226,7 +227,7 @@ export default function CanvasStage() {
             second click from creating a duplicate turn. */}
         {/* §3.2: Explain Again is unavailable in Phase 3 — it is help, and the
             attempt is meant to be unaided. */}
-        {!silentPhase3 && canReplayCue && (
+        {!silentPhase3 && !guidedPractice && canReplayCue && (
           <button
             onClick={replayCue}
             disabled={explainAgainPending}
