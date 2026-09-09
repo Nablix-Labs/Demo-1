@@ -4664,7 +4664,27 @@ def guided_tutor_message_reveal_reason(
         objective,
     ):
         return "ANSWER_REVEAL"
-    if guided_message_reveals_active_roles(message, request, objective):
+    role_checked_message = message
+    contribution = evaluation.contribution
+    learner_question = contribution.learner_question if contribution is not None else None
+    canonical_answer = (
+        request.answer_spec.canonical_answer if request.answer_spec is not None else ""
+    )
+    expression = _expression_parts(canonical_answer) or _expression_parts(request.question)
+    if (
+        contribution is not None
+        and contribution.kind == "EXPLANATION_REQUEST"
+        and learner_question is not None
+        and expression is not None
+        and re.search(rf"\b{re.escape(expression[0])}\b", learner_question, re.IGNORECASE)
+    ):
+        role_checked_message = re.sub(
+            rf"\b{re.escape(expression[0])}\b",
+            "letter",
+            message,
+            flags=re.IGNORECASE,
+        )
+    if guided_message_reveals_active_roles(role_checked_message, request, objective):
         return "ACTIVE_ROLE_REVEAL"
     if guided_message_reveals_fixed_amount_for_mismatched_rule(message, request):
         return "FIXED_AMOUNT_REVEAL"
@@ -4784,6 +4804,8 @@ def response_aware_message_rejection_reason(
     message = evaluation.tutor_message.strip()
     if message == "" or evaluation.tutor_message_voice.strip() == "":
         return "EMPTY_WORDING"
+    if message.count("?") > 1:
+        return "MULTIPLE_QUESTIONS"
     if maximum_recent_tutor_message_similarity(message, request) >= rules.guided_learning.tutor_message_similarity_threshold:
         return "NEAR_DUPLICATE_WORDING"
     if any(
