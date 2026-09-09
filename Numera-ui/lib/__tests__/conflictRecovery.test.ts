@@ -188,3 +188,105 @@ describe('recovery after a journey conflict', () => {
     expect(useNumeraStore.getState().sessionRecovering).toBe(false);
   });
 });
+
+/**
+ * 503 PROGRESSION_RETRY_REQUIRED — the engine died mid-progression.
+ *
+ * The unusual property is that it is SAFE. The follow-up event is already
+ * persisted, so retrying re-sends the identical event and nothing is graded or
+ * counted twice. That makes the wrong responses obvious: resubmitting the
+ * answer (double attempt) or giving up (student stranded on a recoverable
+ * failure).
+ */
+describe('a retryable progression failure', () => {
+  let root: Root;
+  let tutor: ReturnType<typeof useDemoTutor> | null;
+
+  const progression = () => Object.assign(new Error('PROGRESSION_RETRY_REQUIRED'), {
+    response: {
+      status: 503,
+      data: { error_code: 'PROGRESSION_RETRY_REQUIRED', message: '' },
+    },
+  });
+
+  beforeEach(async () => {
+    process.env.NEXT_PUBLIC_API_BASE_URL = '/api';
+    submitCanvas.mockReset();
+    getSession.mockReset();
+    tutor = null;
+    useNumeraStore.setState({
+      sessionId: 'SESSION001',
+      activeConceptId: 'T01',
+      currentPhase: 'INDEPENDENT_PRACTICE',
+      activeQuestionId: 'Q-T01-003',
+      sessionRecovering: false,
+      progressionRetry: false,
+      contentGapPaused: false,
+      transcript: [],
+      items: [{
+        id: 'stroke-1', kind: 'stroke', tool: 'pen',
+        points: [0, 0, 1, 1], color: '#000000', size: 3,
+      }],
+      canvasExporter: () => ({
+        snapshotDataUrl: 'data:image/png;base64,c25hcHNob3Q=',
+        strokes: [],
+        capturedAt: '2026-09-09T10:00:00.000Z',
+      }),
+    } as never);
+    const container = document.createElement('div');
+    root = createRoot(container);
+    await act(async () => {
+      root.render(createElement(() => {
+        tutor = useDemoTutor();
+        return null;
+      }));
+    });
+  });
+
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    delete process.env.NEXT_PUBLIC_API_BASE_URL;
+  });
+
+  it('re-reads the session rather than resubmitting the answer', async () => {
+    submitCanvas.mockRejectedValueOnce(progression());
+    getSession.mockResolvedValueOnce(recovered('Q-T01-003'));
+
+    await act(async () => { await tutor?.submitCanvasWork(); });
+
+    expect(submitCanvas).toHaveBeenCalledTimes(1);
+    expect(getSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the try-again state once the read lands', async () => {
+    submitCanvas.mockRejectedValueOnce(progression());
+    getSession.mockResolvedValueOnce(recovered('Q-T01-003'));
+
+    await act(async () => { await tutor?.submitCanvasWork(); });
+
+    expect(useNumeraStore.getState().progressionRetry).toBe(false);
+  });
+
+  it('offers try-again when the recovering read is itself unreachable', async () => {
+    // GET /session is the route the client is told to call to recover, and it
+    // can answer this same 503. A dead end here would strand the student.
+    submitCanvas.mockRejectedValueOnce(progression());
+    getSession.mockRejectedValueOnce(progression());
+
+    await act(async () => { await tutor?.submitCanvasWork(); });
+
+    expect(useNumeraStore.getState().progressionRetry).toBe(true);
+  });
+
+  it('does not record it as a failed tutor turn', async () => {
+    // It is not a failed attempt. The work is saved and only the progression
+    // failed, so the chat must not report the turn as lost.
+    useNumeraStore.setState({ tutorTurnFailed: false } as never);
+    submitCanvas.mockRejectedValueOnce(progression());
+    getSession.mockResolvedValueOnce(recovered('Q-T01-003'));
+
+    await act(async () => { await tutor?.submitCanvasWork(); });
+
+    expect(useNumeraStore.getState().tutorTurnFailed).toBe(false);
+  });
+});

@@ -4,6 +4,7 @@ import {
   identityOf,
   identityMatches,
   belongsToActiveSession,
+  isProgressionRetryRequired,
   type SubmissionIdentity,
 } from '@/lib/sessionRecovery';
 import type { SessionRecord } from '@/lib/api';
@@ -177,5 +178,44 @@ describe('belongsToActiveSession', () => {
 
   it('ignores blank identifiers rather than treating them as a mismatch', () => {
     expect(belongsToActiveSession({ session_id: '', concept_id: '  ' }, active)).toBe(true);
+  });
+});
+
+/**
+ * 503 PROGRESSION_RETRY_REQUIRED — the engine was unreachable mid-progression.
+ *
+ * Retryable and SAFE, which is the unusual part. The follow-up event is already
+ * persisted, so a retry re-sends the identical event and nothing is graded or
+ * counted twice. The student's work is saved.
+ *
+ * It can come back from GET /session itself — the one route the client is told
+ * to call to recover — so "the read failed" cannot mean "give up here".
+ */
+describe('isProgressionRetryRequired', () => {
+  const at = (status: number, error_code: string) => ({
+    response: { status, data: { error_code, message: '' } },
+  });
+
+  it('recognises the retryable progression failure', () => {
+    expect(isProgressionRetryRequired(at(503, 'PROGRESSION_RETRY_REQUIRED'))).toBe(true);
+  });
+
+  it('is not an ordinary 503', () => {
+    // A plain 503 is not known to be safe to retry. Only the code says so.
+    expect(isProgressionRetryRequired(at(503, ''))).toBe(false);
+  });
+
+  it('is not the same code on another status', () => {
+    expect(isProgressionRetryRequired(at(500, 'PROGRESSION_RETRY_REQUIRED'))).toBe(false);
+  });
+
+  it('is not a conflict, and a conflict is not it', () => {
+    // Different envelopes, different client actions: REFRESH versus RETRY.
+    expect(isProgressionRetryRequired(at(409, 'JOURNEY_VERSION_CONFLICT'))).toBe(false);
+    expect(requiresSessionRefresh(at(503, 'PROGRESSION_RETRY_REQUIRED'))).toBe(false);
+  });
+
+  it('is false when nothing arrived', () => {
+    expect(isProgressionRetryRequired(new Error('Network Error'))).toBe(false);
   });
 });

@@ -38,6 +38,7 @@ import {
 } from '@/lib/api';
 import {
   requiresSessionRefresh, identityOf, identityMatches, belongsToActiveSession,
+  isProgressionRetryRequired,
 } from '@/lib/sessionRecovery';
 import { isContentGapError, contentGapPaused } from '@/lib/contentGap';
 import { selectedOptionText } from '@/lib/selectedOption';
@@ -313,6 +314,19 @@ async function recoverAfterConflict(): Promise<'unchanged' | 'changed' | 'unreco
     useNumeraStore.getState().setSessionRecovering(!matched);
     return matched ? 'unchanged' : 'changed';
   } catch (err) {
+    /**
+     * The recovering read failed. If it failed the retryable way, say so.
+     *
+     * GET /session is the one route the client is told to call to recover, and
+     * it can itself answer 503 PROGRESSION_RETRY_REQUIRED — that 503 is raised
+     * inside `resume_guided_progression`, which GET /session goes through.
+     * Treating it as a dead end would strand a student on a failure the backend
+     * has explicitly marked safe: the pending event is persisted, so a retry
+     * re-sends the identical event and regrades nothing.
+     */
+    if (isProgressionRetryRequired(err)) {
+      useNumeraStore.getState().setProgressionRetry(true);
+    }
     console.warn('✗ could not recover the session after a conflict:', err);
     return 'unrecovered';
   }
@@ -340,6 +354,24 @@ function reportTutorFailure(
   // dedupe below is the only thing that stops a repeated conflict filling the
   // chat with the same line. The copy they get says the session is being
   // brought up to date and pointedly does not ask for a resubmit.
+  /**
+   * The engine was unreachable part-way through moving the student on.
+   *
+   * Not a failed attempt, and never something to resubmit: the follow-up event
+   * is already persisted, so the identical event retries and nothing is graded
+   * or counted twice. The student gets a try-again state and the re-read is
+   * what carries them forward — which is why this deliberately does NOT mark
+   * the turn failed the way an ordinary error does.
+   */
+  if (isProgressionRetryRequired(err)) {
+    reportFailure(label, err, {
+      session_id: store.sessionId,
+      retryable: 'PROGRESSION_RETRY_REQUIRED',
+    });
+    store.setProgressionRetry(true);
+    void recoverAfterConflict();
+    return;
+  }
   // A submission into a gap is refused with 409 CONTENT_GAP. It is the same
   // paused state as the record's, not a failure: nothing broke and there is
   // nothing to retry, so the student gets the pause rather than an error.
@@ -469,6 +501,9 @@ export function syncBackendSession(response: {
    */
   const paused = contentGapPaused(useNumeraStore.getState().backendSession);
   if (paused !== store.contentGapPaused) store.setContentGapPaused(paused);
+  // A reply landed, so the progression is no longer stuck. Cleared here rather
+  // than at the retry site because this is the one place that proves it moved.
+  if (store.progressionRetry) store.setProgressionRetry(false);
   // For a same-question reply, register its target anchors before resolving
   // semantic actions. Otherwise an accepted label such as `m → changes` is
   // dropped simply because this path has not yet received the anchor list.

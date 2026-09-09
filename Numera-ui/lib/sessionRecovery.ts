@@ -71,6 +71,27 @@ export function requiresSessionRefresh(err: unknown): boolean {
 }
 
 /**
+ * Was the engine unreachable part-way through moving the student on?
+ *
+ * `503 PROGRESSION_RETRY_REQUIRED`. Retryable and safe, which is the unusual
+ * part: the follow-up event is already persisted, so a retry re-sends the
+ * identical event and nothing is graded or counted twice
+ * (`session_service.py:2020`). The answer is NOT resubmitted and this is not a
+ * failed attempt — the student's work is saved and the only thing that failed
+ * was the progression.
+ *
+ * It can come back from GET /session itself, which is the one route the client
+ * is told to call to recover, so a read that fails this way must be retried
+ * rather than treated as a dead end. Matched on the code, never the bare 503: a
+ * plain 503 is not known to be safe to retry, and retrying one blindly is how a
+ * client doubles an attempt.
+ */
+export function isProgressionRetryRequired(err: unknown): boolean {
+  const res = (err as { response?: { status?: number; data?: { error_code?: string } } })?.response;
+  return res?.status === 503 && res?.data?.error_code === 'PROGRESSION_RETRY_REQUIRED';
+}
+
+/**
  * What the student's pending work is pinned to.
  *
  * Three fields, not four — see the header for why `question_usage_id` is

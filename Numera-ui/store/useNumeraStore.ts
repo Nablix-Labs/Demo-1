@@ -450,6 +450,15 @@ export interface NumeraState {
    */
   contentGapPaused: boolean;
 
+  /**
+   * The engine was unreachable part-way through moving the student on.
+   *
+   * A try-again state, not a failure: the follow-up event is already persisted,
+   * so retrying re-sends the identical event and nothing is graded or counted
+   * twice. The answer is never resubmitted and this is not a failed attempt.
+   */
+  progressionRetry: boolean;
+
   // Visual cue card — supporting guidance shown when the AI Engine flags a
   // mistake. `visualCueType` is the backend cue_type (picks which card renders);
   // `visualCueDescription` is the backend's instructional text. Session-scoped.
@@ -812,6 +821,8 @@ export interface NumeraState {
   setSessionRecovering: (recovering: boolean) => void;
   /** No authored question exists: render the pause and stop asking. */
   setContentGapPaused: (paused: boolean) => void;
+  /** The progression could not finish: offer try-again, never a resubmit. */
+  setProgressionRetry: (retry: boolean) => void;
   setVisibleHint: (hint: string | null) => void;
   setWriteInstruction: (instruction: string | null) => void;
   setGuidedRescue: (rescue: GuidedRescuePayload | null) => void;
@@ -942,7 +953,7 @@ export interface NumeraState {
 const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
-  | 'setQuestionText' | 'setQuestionAnchors' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'setEndedSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'noteTutorLineage' | 'markTutorTurnFailed' | 'setSessionRecovering' | 'setContentGapPaused'
+  | 'setQuestionText' | 'setQuestionAnchors' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'setEndedSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'noteTutorLineage' | 'markTutorTurnFailed' | 'setSessionRecovering' | 'setContentGapPaused' | 'setProgressionRetry'
   | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue' | 'setVisibleHint' | 'setWriteInstruction' | 'setGuidedRescue' | 'openSupportRung' | 'collapseSupportDeck' | 'clearRescueSteps' | 'noteRescueAdvanceFailed' | 'noteRescueCompleted'
   | 'setSupportShown' | 'setLastHintText' | 'lockPhase3Attempt' | 'setInterventionState'
   | 'setPendingTutorSpeech' | 'claimPendingTutorSpeech' | 'setQuestionProgress' | 'setAppliedResponse' | 'setInactivityPolicy'
@@ -1005,6 +1016,7 @@ const initial: Omit<
   tutorTurnFailed: false,
   sessionRecovering: false,
   contentGapPaused: false,
+  progressionRetry: false,
   activeScaffold: null as ActiveScaffold | null,
   visibleHint: null as string | null,
   writeInstruction: null as string | null,
@@ -1338,6 +1350,7 @@ export const useNumeraStore = create<NumeraState>()(
   markTutorTurnFailed: () => set({ tutorTurnFailed: true }),
   setSessionRecovering: (recovering) => set({ sessionRecovering: recovering }),
   setContentGapPaused: (paused) => set({ contentGapPaused: paused }),
+  setProgressionRetry: (retry) => set({ progressionRetry: retry }),
 
   // Setting a hint records its arrival in the deck. Clearing one does NOT
   // remove it: `deckRungs` derives membership from live content, so a cleared
