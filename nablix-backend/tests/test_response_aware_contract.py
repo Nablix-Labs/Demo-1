@@ -6,7 +6,12 @@ import pytest
 
 from app.ai_engine.classifier import ClassificationRequest, build_guided_tutor_response, validate_guided_evaluation
 from app.ai_engine.classifier_config import load_classifier_rules
-from app.ai_engine.openai_client import guided_evaluation_schema, openai_strict_schema
+from app.ai_engine.openai_client import (
+    guided_assessment_schema,
+    guided_evaluation_schema,
+    normalize_assessment_contribution_payload,
+    openai_strict_schema,
+)
 from app.ai_engine.schemas import SafetyCheck
 from app.core.exceptions import AdapterError
 from app.models.adapters import TutorResult
@@ -207,6 +212,38 @@ def test_strict_output_cannot_mix_correctness_and_corrective_support() -> None:
     ]
     without_catalog = openai_strict_schema(original)
     assert len(without_catalog["$defs"]["StudentContribution"]["anyOf"]) == 3
+
+
+def test_production_assessment_schema_cannot_mix_correctness_and_support() -> None:
+    schema = openai_strict_schema(guided_assessment_schema())
+    variants = schema["$defs"]["GuidedAssessmentContribution"]["anyOf"]
+
+    assert len(variants) == 4
+    for variant in variants:
+        properties = variant["properties"]
+        assessments = properties["assessment"]["enum"]
+        if "INCORRECT" not in assessments:
+            assert properties["support_relevance"]["enum"] == ["NOT_NEEDED"]
+
+
+def test_production_assessment_recovers_evidence_from_irrelevant_support_metadata() -> None:
+    payload = normalize_assessment_contribution_payload({
+        "contribution": {
+            "kind": "MATHEMATICAL_ATTEMPT",
+            "assessment": "CORRECT",
+            "error_category": "VARIABLE_CONSTANT",
+            "error_description": "unused",
+            "support_relevance": "MATCHED",
+        },
+        "newly_confirmed_concept_ids": ["GENERAL_RULE_ADD_FIVE"],
+    })
+    contribution = payload["contribution"]
+
+    assert isinstance(contribution, dict)
+    assert contribution["error_category"] is None
+    assert contribution["error_description"] is None
+    assert contribution["support_relevance"] == "NOT_NEEDED"
+    assert payload["newly_confirmed_concept_ids"] == ["GENERAL_RULE_ADD_FIVE"]
 
 
 def test_model_evidence_survives_wrong_rule_then_correct_rule_canvas_handoff() -> None:
