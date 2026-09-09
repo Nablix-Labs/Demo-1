@@ -232,7 +232,7 @@ guided_learning:
     - "(?i)\\byou(?:'|’)?re on the right (?:track|path)\\b"
     - "(?i)^\\s*what changes\\?\\s*$"
     - "(?i)^\\s*what stays fixed\\?\\s*$"
-  response_aware_explanation_question_overlap: 0.6
+  response_aware_explanation_question_overlap: 0.3
   response_aware_quality_retry_feedback: >-
     The previous wording was generic, repetitive, or an ungrounded bare question.
     Keep the same assessment and evidence, but replace the reply with a concise,

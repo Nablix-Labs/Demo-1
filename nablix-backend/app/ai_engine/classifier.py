@@ -3514,6 +3514,10 @@ def classify_guided_learning_response(
             break
         except AdapterError as error:
             last_error = error
+            if rules.guided_learning.production_boundary_enabled:
+                # The assessment placeholder is internal-only. A rejected writer
+                # response must never leave that placeholder in the learner path.
+                evaluation = None
             validation_feedback = error.detail
             logger.warning(
                 "guided_evaluation_retry",

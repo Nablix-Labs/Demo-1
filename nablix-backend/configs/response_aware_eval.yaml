@@ -378,7 +378,7 @@ cases:
   - <<: *repair_chain
     id: repair_specific_evidence
     input: "I see that four is after the plus sign every time"
-    assessment: INCOMPLETE
+    assessment: CORRECT
     expected_confirmed: [CHANGING_VALUE, OPERATION, FIXED_VALUE]
   - <<: *repair_chain
     id: repair_complete_rule
@@ -394,7 +394,7 @@ cases:
     input: "four stays the same"
     source: TEXT
     kind: MATHEMATICAL_ATTEMPT
-    assessment: INCOMPLETE
+    assessment: CORRECT
     scaffold:
       scaffold_id: LIVE-SCAFFOLD-PROGRESS
       step_id: FIXED_AMOUNT
