@@ -36,6 +36,7 @@ import {
   isStaleSessionError,
   isInterventionPausedError,
 } from '@/lib/api';
+import { requiresSessionRefresh, identityOf, identityMatches } from '@/lib/sessionRecovery';
 import { selectedOptionText } from '@/lib/selectedOption';
 import {
   applyInteractionSupport, acceptResponse, authorisedHint, applyServedCue,
@@ -268,6 +269,52 @@ function refreshInterventionState(): void {
     .catch((err) => console.warn('✗ could not re-read the paused session:', err));
 }
 
+/**
+ * A conflict invalidated the question. Recover, and say whether the student's
+ * work still has a question to be an answer to.
+ *
+ * Unlike `refreshInterventionState` above this is NOT fire-and-forget. The
+ * backend refuses any submission made before it completes, so the gate goes up
+ * first and only comes down when the GET has landed and its identity has been
+ * checked. A failed GET deliberately leaves the gate up: not knowing which
+ * question is authoritative is exactly the state in which submitting is unsafe,
+ * and the student retries by reloading rather than by pressing Check into a
+ * refusal.
+ *
+ * Returns the identity comparison so the caller can decide what happens to the
+ * ink — see `identityMatches` for why a changed question must not carry it.
+ */
+async function recoverAfterConflict(): Promise<'unchanged' | 'changed' | 'unrecovered'> {
+  const store = useNumeraStore.getState();
+  store.setSessionRecovering(true);
+  if (!apiEnabled() || !store.sessionId) {
+    // Nothing to recover against. Leave the gate up rather than pretending.
+    return 'unrecovered';
+  }
+  // What the student was looking at when they pressed Check, captured BEFORE
+  // the read replaces it.
+  const before = {
+    sessionId: store.sessionId,
+    topicId: store.activeConceptId || null,
+    questionId: store.activeQuestionId,
+  };
+  try {
+    const rec = await getSession(store.sessionId, studentId());
+    const after = identityOf(rec);
+    // Apply the authoritative state either way: it is the point of the read,
+    // and the student must end up on the question the backend says is live.
+    useNumeraStore.getState().setBackendSession(rec);
+    syncBackendSession(rec);
+    const matched = identityMatches(before, after);
+    // Only a checked match re-opens submission.
+    useNumeraStore.getState().setSessionRecovering(!matched);
+    return matched ? 'unchanged' : 'changed';
+  } catch (err) {
+    console.warn('✗ could not recover the session after a conflict:', err);
+    return 'unrecovered';
+  }
+}
+
 function reportTutorFailure(
   err: unknown,
   fallback: string,
@@ -284,6 +331,14 @@ function reportTutorFailure(
     store.markTutorTurnFailed();
     return;
   }
+  // A conflict is not a failure the student can retry either — it is a stale
+  // question, and recovery is mandatory before anything else can be sent. It
+  // does NOT return early: the student is still owed the message, and the
+  // dedupe below is the only thing that stops a repeated conflict filling the
+  // chat with the same line. The copy they get says the session is being
+  // brought up to date and pointedly does not ask for a resubmit.
+  const recovering = requiresSessionRefresh(err);
+  if (recovering) void recoverAfterConflict();
   // Before anything student-facing: the full picture in the console, including
   // exactly what we sent. A screenshot of the chat says almost nothing; this
   // says who broke and gives the backend's own request_id to grep for.
@@ -294,6 +349,9 @@ function reportTutorFailure(
     turn_id: store.currentTurnId,
     previous_tutor_turn_id: store.lastTutorTurnId,
     expects_student_response: store.expectsStudentResponse,
+    // Names the one failure that is recovering itself, so a conflict is not
+    // read in the console as an ordinary turn failure.
+    ...(recovering ? { recovering: 'GET /session' } : {}),
   });
   const text = chatError(err, fallback);
   const previous = store.transcript.at(-1);
@@ -848,6 +906,11 @@ export function useDemoTutor() {
       addTrailEntry({ kind: 'tutor', text: message });
       return null;
     }
+    // The hard gate. A conflict invalidated the question and the backend will
+    // refuse anything sent before GET /session says which one is authoritative
+    // — so this is not merely a courtesy to the server. Sending here is what
+    // graded old ink against a new question in the ST010 run.
+    if (useNumeraStore.getState().sessionRecovering) return null;
     if (canvasSubmissionInFlight.current) return null;
     canvasSubmissionInFlight.current = true;
     try {

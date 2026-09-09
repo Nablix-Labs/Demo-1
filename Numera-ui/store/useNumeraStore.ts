@@ -426,6 +426,20 @@ export interface NumeraState {
    */
   tutorTurnFailed: boolean;
 
+  /**
+   * A conflict invalidated the question, and nothing may be submitted until a
+   * GET /session has said what the authoritative one is.
+   *
+   * This is a hard gate, not a spinner. The backend refuses a submission made
+   * while it holds — 409 SESSION_STATE_REFRESH_REQUIRED — because recovery is
+   * what selects the question, and work sent before it would be graded against
+   * a question the student never saw. That is what corrupted the ST010 run.
+   *
+   * Set on the conflict, cleared only when recovery has returned AND the
+   * identity it returned has been checked (see lib/sessionRecovery).
+   */
+  sessionRecovering: boolean;
+
   // Visual cue card — supporting guidance shown when the AI Engine flags a
   // mistake. `visualCueType` is the backend cue_type (picks which card renders);
   // `visualCueDescription` is the backend's instructional text. Session-scoped.
@@ -784,6 +798,8 @@ export interface NumeraState {
   noteTutorLineage: (tutorTurnId: string) => void;
   /** The tutor turn failed; the student is owed a reply, not a nudge. */
   markTutorTurnFailed: () => void;
+  /** A conflict invalidated the question: block submissions until recovery lands. */
+  setSessionRecovering: (recovering: boolean) => void;
   setVisibleHint: (hint: string | null) => void;
   setWriteInstruction: (instruction: string | null) => void;
   setGuidedRescue: (rescue: GuidedRescuePayload | null) => void;
@@ -914,7 +930,7 @@ export interface NumeraState {
 const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
-  | 'setQuestionText' | 'setQuestionAnchors' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'setEndedSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'noteTutorLineage' | 'markTutorTurnFailed'
+  | 'setQuestionText' | 'setQuestionAnchors' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'setEndedSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'noteTutorLineage' | 'markTutorTurnFailed' | 'setSessionRecovering'
   | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue' | 'setVisibleHint' | 'setWriteInstruction' | 'setGuidedRescue' | 'openSupportRung' | 'collapseSupportDeck' | 'clearRescueSteps' | 'noteRescueAdvanceFailed' | 'noteRescueCompleted'
   | 'setSupportShown' | 'setLastHintText' | 'lockPhase3Attempt' | 'setInterventionState'
   | 'setPendingTutorSpeech' | 'claimPendingTutorSpeech' | 'setQuestionProgress' | 'setAppliedResponse' | 'setInactivityPolicy'
@@ -975,6 +991,7 @@ const initial: Omit<
   expectsStudentResponse: true,
   allowVoiceInput: true,
   tutorTurnFailed: false,
+  sessionRecovering: false,
   activeScaffold: null as ActiveScaffold | null,
   visibleHint: null as string | null,
   writeInstruction: null as string | null,
@@ -1306,6 +1323,7 @@ export const useNumeraStore = create<NumeraState>()(
   noteTutorLineage: (lastTutorTurnId) => set({ lastTutorTurnId }),
 
   markTutorTurnFailed: () => set({ tutorTurnFailed: true }),
+  setSessionRecovering: (recovering) => set({ sessionRecovering: recovering }),
 
   // Setting a hint records its arrival in the deck. Clearing one does NOT
   // remove it: `deckRungs` derives membership from live content, so a cleared
