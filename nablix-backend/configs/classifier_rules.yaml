@@ -459,7 +459,18 @@ guided_learning:
     FIXED_VALUE_CALLED_CHANGING, or OPERATION_CALLED_VALUE, ask one contrast
     question about that active role. Do not move to another role or answer it.
     Do not mark an unresolved answer correct or wrong. Do not use generic
-    praise. Keep text and voice wording equivalent and return only the schema.
+    praise. Keep text and voice wording equivalent.
+    Canvas intentions use the same evidence as the reply. When
+    canvas_intention_policy.only_confirmed_components is non-empty and a
+    permitted_canvas_target visibly represents that demonstrated idea, return
+    at least one HIGHLIGHT or GROUP intention. Set target_kind to
+    QUESTION_ANCHOR, copy target_object_id exactly from
+    permitted_canvas_targets, and set confirmed_component_id to the newly
+    confirmed component. Mark every relevant visible instance when the idea
+    occurs more than once, such as each repeated +5 group. Do not mark a next
+    teaching target, an unresolved answer component, or unrelated prose. Return
+    an empty canvas_intentions list only when there is no grounded visible
+    target or no component was newly confirmed. Return only the schema.
   component_adjudicator_confidence_threshold: 0.85
   component_adjudicator_system_prompt: |
     Decide whether the student's latest response demonstrates exactly the one
