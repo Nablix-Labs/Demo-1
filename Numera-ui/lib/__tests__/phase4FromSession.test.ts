@@ -247,3 +247,148 @@ describe('the journey rail lists the whole Phase 3 journey', () => {
     expect(review.question_journey[0].evaluation).toBe('WRONG');
   });
 });
+
+/**
+ * Fields the backend generates, the screen reads, and the adapter used to drop.
+ *
+ * Every one of these is authored by Sanya's engine (configs/phase4_review.yaml),
+ * validated server-side, and typed on the view model — but `SessionPhase4Review`
+ * did not declare them, so the mappers silently left them behind. They rendered
+ * in the dev fixture and never on a live session, which is the failure mode that
+ * hides longest: the screen looks finished to whoever built it.
+ *
+ * Shapes here are taken from a real payload captured against the VM on
+ * 2026-09-11 (student ST015, topic ALG-KS3-01).
+ */
+describe('fields the engine sends that the screen already reads', () => {
+  const insights = {
+    strength_summary: 'You understand the structure in algebra.',
+    development_summary: 'Distinguishing specific numbers from general rules.',
+    next_practice_focus: 'Focus on how to generalise rules from examples.',
+    personalised_notes: ['one', 'two', 'three'],
+  };
+
+  it('carries why_it_matters onto the replay', () => {
+    // FeedbackRail renders this as its own card beside `summary`: the summary
+    // says what the mistake was, this says why it is a mistake.
+    const review = phase4FromSession({
+      phase4_review: {
+        tutor_replays: [{
+          ...REPLAY,
+          first_error: {
+            summary: 'Treated "falls" as addition.',
+            why_it_matters: 'Multiplication changes the size; the pattern must grow evenly.',
+            student_page_no: 2,
+          },
+        }],
+        student_insights: insights,
+      },
+    } as never, 'Topic')!;
+    expect(review.tutor_replays[0].first_error.why_it_matters)
+      .toBe('Multiplication changes the size; the pattern must grow evenly.');
+  });
+
+  it('carries next_action_message onto the outcome', () => {
+    // The personalised sentence under the "Next action" heading.
+    // `recommended_next_action` beside it is only a short chip label.
+    const review = phase4FromSession({
+      phase4_review: {
+        tutor_replays: [],
+        student_insights: insights,
+        topic_outcome: {
+          mastery_status: 'NEARLY_MASTERED',
+          recommended_next_action: 'START_NEXT_TOPIC',
+          next_action_message: 'Great progress — one question left to finish this topic.',
+        },
+      },
+    } as never, 'Topic')!;
+    expect(review.topic_outcome.next_action_message)
+      .toBe('Great progress — one question left to finish this topic.');
+  });
+
+  it('carries skill_label onto each journey row', () => {
+    // Without it the rail prints the whole prompt and truncates to
+    // "Which option correctly identifies the gener…", which is not a skill name.
+    const review = phase4FromSession({
+      phase4_review: {
+        tutor_replays: [],
+        student_insights: insights,
+        question_journey: [{
+          question_id: 'Q-T01-009',
+          question_text: 'Which option correctly identifies the general rule and the reason?',
+          evaluation: 'INCORRECT',
+          review_item_id: null,
+          skill_label: 'Identify general rules',
+        }],
+      },
+    } as never, 'Topic')!;
+    expect(review.question_journey[0].skill_label).toBe('Identify general rules');
+  });
+
+  it('keeps PARTIAL as its own state instead of reporting it as wrong', () => {
+    // The rail legend advertises three states and statusOf() already maps
+    // PARTIAL. Collapsing it here told a part-correct student they were wrong.
+    const review = phase4FromSession({
+      phase4_review: {
+        tutor_replays: [],
+        student_insights: insights,
+        question_journey: [
+          { question_id: 'Q-1', question_text: 'First', evaluation: 'PARTIAL', review_item_id: null },
+          { question_id: 'Q-2', question_text: 'Second', evaluation: 'INCORRECT', review_item_id: null },
+          { question_id: 'Q-3', question_text: 'Third', evaluation: 'CORRECT', review_item_id: null },
+        ],
+      },
+    } as never, 'Topic')!;
+    expect(review.question_journey.map((q) => q.evaluation))
+      .toEqual(['PARTIAL', 'INCORRECT', 'CORRECT']);
+  });
+
+  it('still reads an unrecognised evaluation as wrong', () => {
+    // The one default that cannot flatter a student who got it wrong.
+    const review = phase4FromSession({
+      phase4_review: {
+        tutor_replays: [],
+        student_insights: insights,
+        question_journey: [
+          { question_id: 'Q-1', question_text: 'First', evaluation: 'SOMETHING_NEW', review_item_id: null },
+          { question_id: 'Q-2', question_text: 'Second', evaluation: '', review_item_id: null },
+        ],
+      },
+    } as never, 'Topic')!;
+    expect(review.question_journey.map((q) => q.evaluation)).toEqual(['WRONG', 'WRONG']);
+  });
+});
+
+/**
+ * The backend currently feeds the Student Model's ROUTING verb into
+ * `recommended_next_action` (`event.routing.next_action`,
+ * session_service.py:1127), so a live review arrives asking the student to
+ * "Wait for student response" — on the button they press to leave the review.
+ * Verified on the VM 2026-09-11 (ST015). The real fix is Chiru's; this keeps
+ * internal vocabulary off the screen until it lands.
+ */
+describe('a routing verb arriving as the next action', () => {
+  const insights = {
+    strength_summary: 's', development_summary: 'd',
+    next_practice_focus: 'n', personalised_notes: ['a', 'b', 'c'],
+  };
+  const outcome = (action: string) => phase4FromSession({
+    phase4_review: {
+      tutor_replays: [], student_insights: insights,
+      topic_outcome: { mastery_status: 'NEARLY_MASTERED', recommended_next_action: action },
+    },
+  } as never, 'Topic')!.topic_outcome.recommended_next_action;
+
+  it('is not shown to the student', () => {
+    expect(outcome('WAIT_FOR_STUDENT_RESPONSE')).toBe('CONTINUE');
+    expect(outcome('WAIT_FOR_CONTENT')).toBe('CONTINUE');
+  });
+
+  it('leaves a real next action exactly as sent', () => {
+    // Anything that is not a WAIT_FOR_* verb is the backend's to word, and
+    // guessing at a replacement is how the review came to be headed
+    // "Linear equations" for a session about something else.
+    expect(outcome('START_NEXT_TOPIC')).toBe('START_NEXT_TOPIC');
+    expect(outcome('CONTINUE_PRACTICE')).toBe('CONTINUE_PRACTICE');
+  });
+});
