@@ -8259,6 +8259,35 @@ def test_semantic_contract_normalizes_general_keyboard_math_notation(
     assert classifier.evaluate_answer_contract(request) == "CORRECT"
 
 
+@pytest.mark.parametrize(
+    ("student_input", "expected"),
+    [
+        ("Selected B: Add 6 to n", "CORRECT"),
+        ("selected b: add 6 to n", "CORRECT"),
+        ("B", "CORRECT"),
+        ("Selected A: Multiply n by 6", "INCORRECT"),
+    ],
+)
+def test_choice_contract_reads_the_selected_option_the_ui_submits(
+    student_input: str,
+    expected: str,
+) -> None:
+    request = ClassificationRequest(
+        question_type="CHOICE_WITH_EXPLANATION",
+        question="Which statement correctly describes n + 6?",
+        correct_answer="B",
+        answer_spec=_answer_spec("B", [], "EXACT_CHOICE_MATCH"),
+        student_input=student_input,
+        current_phase="INDEPENDENT_PRACTICE",
+        input_source="CHOICE",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+    )
+
+    assert classifier.evaluate_answer_contract(request) == expected
+
+
 def test_multi_part_accepted_fragment_is_not_treated_as_complete(
     monkeypatch,
 ) -> None:

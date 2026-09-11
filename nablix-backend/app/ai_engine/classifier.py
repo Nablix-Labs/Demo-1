@@ -7374,6 +7374,13 @@ def normalized_choice_response(student_input: str) -> str:
     """Return the selected option ID from a short typed choice response."""
 
     normalized = student_input.strip().upper()
+    # ponytail: the UI and _selected_option_message submit "Selected B: Add 6 to n".
+    normalized = re.sub(
+        r"\A(?:SELECTED|CHOSE|CHOOSE)\s+(?:OPTION\s+)?([A-Z])\s*:.*\Z",
+        r"\1",
+        normalized,
+        flags=re.DOTALL,
+    )
     match = re.fullmatch(
         r"(?:I\s+(?:CHOOSE|CHOSE)\s+(?:OPTION\s+)?|(?:THE\s+)?(?:OPTION|CHOICE)\s+)?([A-Z])\.?",
         normalized,
