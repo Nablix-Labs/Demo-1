@@ -4006,6 +4006,19 @@ def write_redacted_response_aware_message(
             message.content for message in request.conversation_history[-4:]
             if message.role == "assistant"
         ],
+        "permitted_canvas_targets": [
+            anchor.model_dump()
+            for anchor in plan_canvas_action_anchors(request.question_id, request.question)
+        ],
+        "ordered_canvas_memory": [
+            event.model_dump()
+            for event in request.canvas_events[-40:]
+        ],
+        "canvas_intention_policy": {
+            "only_confirmed_components": sorted(evaluation.newly_confirmed_concept_ids),
+            "wrong_turns_may_target_only_visible_student_attempts": True,
+            "never_reveal_unresolved_answer": True,
+        },
         "answer_reveal_allowed": False,
     }
     explained_topic = (
