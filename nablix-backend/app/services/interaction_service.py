@@ -110,7 +110,7 @@ from app.services.canvas_annotations import (
     plan_write_request_tutor_actions,
     rescue_tutor_wording,
 )
-from app.services.question_anchors import plan_canvas_action_anchors, plan_question_anchors
+from app.services.question_anchors import plan_canvas_action_anchors
 from app.services.canvas_evidence import (
     CanvasEvidence,
     canvas_events_are_stale,
@@ -1263,17 +1263,9 @@ def _choice_selection_canvas_actions(
 
 
 def _question_anchors(session: SessionRecord) -> list[QuestionTextAnchor]:
-    """Anchor the active teaching step into the question the learner is reading."""
+    """Keep question tokens addressable without rendering premature emphasis."""
 
-    if session.current_phase != "GUIDED_PRACTICE":
-        return []
-    teaching_state = session.guided_teaching_state
-    return plan_question_anchors(
-        session.question_id,
-        session.current_question,
-        _active_answer_spec(session),
-        teaching_state.active_step_id if teaching_state is not None else None,
-    )
+    return []
 
 
 def _phase_2_prompt_context(
