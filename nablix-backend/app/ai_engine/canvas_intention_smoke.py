@@ -73,6 +73,7 @@ def live_canvas_intention_check() -> None:
         current_phase="GUIDED_PRACTICE",
         input_source=case.source,
         transcript_confidence=None,
+        canvas_solution_complete_candidate=True,
         attempt_count=0,
         current_hint_level=None,
         conversation_history=[ConversationMessage(role="assistant", content=case.prior)],
