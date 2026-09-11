@@ -2362,14 +2362,13 @@ async def complete_review(
         ),
         access_token,
     )
-    # The event is authoritative and has already been applied remotely, so it is
-    # persisted BEFORE the handoff is judged. Validating first left the backend
-    # holding a stale journey version against a journey that had already
-    # completed, and the retry that should have recovered it carried that stale
-    # version. A malformed handoff is still refused below -- it just no longer
-    # takes the record of what actually happened down with it.
-    completed = await _apply_schema_event(session, response)
+    # Validate the routing decision before mutating the local session. The
+    # Student Model may have accepted the event remotely, but a malformed
+    # handoff cannot be exposed as a usable completion: persisting it first
+    # leaves a started local session with the response request id, so a retry
+    # returns that same incomplete record without re-validating the handoff.
     handoff = _next_topic_handoff(session.session_id, response)
+    completed = await _apply_schema_event(session, response)
     # Handoff and ended status land in the same write, so a caller can never
     # read an ended session with no handoff, or a handoff whose source session
     # is still live. (The authoritative event above is its own, earlier write.)
@@ -2416,9 +2415,38 @@ def _next_topic_handoff(
     """
 
     routing = response.routing
+    has_partial_handoff = (
+        routing.next_topic_id is not None
+        or routing.next_topic_entry_phase is not None
+    )
+    if routing.next_action != "START_NEXT_TOPIC" and has_partial_handoff:
+        logger.error(
+            "next_topic_handoff_malformed",
+            extra={
+                "session_id": session_id,
+                "student_model_request_id": response.request_id,
+                "next_action": routing.next_action,
+                "next_topic_id": routing.next_topic_id,
+                "next_topic_entry_phase": routing.next_topic_entry_phase,
+            },
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "NEXT_TOPIC_HANDOFF_INVALID",
+                "message": (
+                    "Student Model returned next-topic fields without "
+                    "START_NEXT_TOPIC."
+                ),
+            },
+        )
     if routing.next_action != "START_NEXT_TOPIC":
         return None
-    if not routing.next_topic_id or routing.next_topic_entry_phase is None:
+    if (
+        routing.next_topic_id is None
+        or not routing.next_topic_id.strip()
+        or routing.next_topic_entry_phase is None
+    ):
         logger.error(
             "next_topic_handoff_malformed",
             extra={
