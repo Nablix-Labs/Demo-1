@@ -100,17 +100,25 @@ def _replay_item(index: int, attempt: TopicAttemptRecord) -> ReplayItem | None:
     summary; they just have nothing to replay.
     """
 
-    if attempt.work_artifact is None:
+    def skipped(reason: str) -> None:
+        # attempt_id alone does not identify an attempt -- the sequence restarts
+        # per question -- so log the question too, or "which attempt was this?"
+        # is unanswerable from the logs afterwards.
         logger.info(
             "phase4_replay_item_skipped",
-            extra={"attempt_id": attempt.attempt_id, "reason": "no_work_artifact"},
+            extra={
+                "attempt_id": attempt.attempt_id,
+                "question_id": attempt.question_id,
+                "question_usage_id": attempt.question_usage_id,
+                "reason": reason,
+            },
         )
+
+    if attempt.work_artifact is None:
+        skipped("no_work_artifact")
         return None
     if attempt.question_usage_id is None:
-        logger.info(
-            "phase4_replay_item_skipped",
-            extra={"attempt_id": attempt.attempt_id, "reason": "no_question_usage_id"},
-        )
+        skipped("no_question_usage_id")
         return None
     detected_errors = [
         DetectedError(error_code=error.error_code, micro_skill_id=error.micro_skill_id)
@@ -118,10 +126,7 @@ def _replay_item(index: int, attempt: TopicAttemptRecord) -> ReplayItem | None:
         if error.micro_skill_id is not None
     ]
     if not detected_errors:
-        logger.info(
-            "phase4_replay_item_skipped",
-            extra={"attempt_id": attempt.attempt_id, "reason": "no_detected_errors"},
-        )
+        skipped("no_detected_errors")
         return None
     return ReplayItem(
         review_item_id=f"REV-{index:03d}",
