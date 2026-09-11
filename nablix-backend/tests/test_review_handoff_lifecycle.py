@@ -438,6 +438,39 @@ def test_a_start_next_topic_with_no_topic_is_refused_not_guessed(
     assert session_service._sessions[session_id].next_topic_handoff is None
 
 
+def test_partial_next_topic_handoff_is_rejected_without_mutating_local_session(
+    harness: _Harness,
+) -> None:
+    """A partial routing decision must not leave a stale local completion.
+
+    If this response were persisted before validation, a retry with the same
+    review turn would see the stored Student Model request id and return the
+    still-started session without ever producing a usable handoff.
+    """
+
+    session_id = _start()
+    assert _submit_final(session_id).status_code == 200
+    before = session_service._sessions[session_id].student_model_event
+    assert before is not None
+    harness.review_completed_routing = {
+        "next_action": "NONE",
+        "next_topic_id": "ALG-ORI-02",
+        "next_topic_entry_phase": None,
+    }
+
+    completed = client.post(
+        f"/session/{session_id}/review/complete",
+        json={"student_id": STUDENT, "turn_id": "TURN-REVIEW-PARTIAL"},
+    )
+
+    assert completed.status_code == 503, completed.text
+    assert completed.json()["error_code"] == "NEXT_TOPIC_HANDOFF_INVALID"
+    stored = session_service._sessions[session_id]
+    assert stored.status == "started"
+    assert stored.student_model_event is not None
+    assert stored.student_model_event.request_id == before.request_id
+
+
 def test_no_next_topic_completes_the_review_without_a_handoff(
     harness: _Harness,
 ) -> None:
