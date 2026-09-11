@@ -29,6 +29,8 @@ export interface QuestionAnchor {
   char_end: number;
   /** e.g. "changes" / "stays fixed". Null means highlight with no label. */
   label?: string | null;
+  /** Set locally after a validated tutor highlight action resolves to this token. */
+  highlighted?: boolean;
 }
 
 export interface AnchorSegment {

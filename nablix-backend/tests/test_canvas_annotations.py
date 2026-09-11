@@ -796,6 +796,26 @@ def test_write_request_on_first_attempt_has_no_rule_anchors() -> None:
     ]
 
 
+def test_stuck_turn_does_not_focus_an_arbitrary_question_token() -> None:
+    tutor = _tutor_result(
+        TutorMistakeClassification(status="no_mistake", confidence=0.9),
+        [],
+    ).model_copy(update={"guided_student_state": "STUCK"})
+
+    actions = plan_tutor_canvas_actions(
+        tutor,
+        [QuestionTextAnchor(token_id="Q:QTOKEN:1", text="A", char_start=0, char_end=1)],
+        [],
+        "TURN-1",
+        "c + 4",
+        _fallback_labels(),
+        wrong_attempt_count=0,
+        student_response="",
+    )
+
+    assert actions == []
+
+
 def test_written_rule_request_adds_safe_tutor_anchors_not_the_final_rule() -> None:
     """After a failed attempt, the rule parts appear as scaffolding."""
 
