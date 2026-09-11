@@ -2948,3 +2948,118 @@ def test_a_canvas_reply_after_a_typed_turn_carries_its_own_identity(
     stored = session_service._get_owned_session(session_id, "ST410")
     assert stored.last_tutor_turn_id == second_body["tutor_turn_id"]
     assert stored.last_processed_turn_id == "TURN-CCC"
+
+
+def test_a_correct_answer_is_not_sent_as_a_retry_for_an_unrelated_skill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ST010 409: NO_INDEPENDENT_RETRY_IN_PROGRESS for T01.M5.
+
+    A retry pending for some other skill must not relabel this question's
+    answer. The retry list held a skill the current question does not test,
+    and the event still went out as INDEPENDENT_RETRY_COMPLETED carrying this
+    question's primary skill, which Student Model rejects.
+    """
+    events: list[StudentModelSessionEvent] = []
+
+    async def send_session_event(
+        adapter: StudentModelServiceAdapter,
+        event: StudentModelSessionEvent,
+        access_token: str,
+    ) -> StudentModelSessionEventResponse:
+        del adapter, access_token
+        events.append(event)
+        body = _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+        # The question under answer maps to T02.M1 only; the pending retry is
+        # for a skill it does not test.
+        body["journey_state"]["phase_3_independent_practice"][
+            "retry_required_micro_skill_ids"] = ["T02.M9"]
+        body["request_id"] = event.request_id
+        return StudentModelSessionEventResponse.model_validate(body)
+
+    async def correct_pipeline(
+        context: AdapterContext,
+    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
+        del context
+        return (
+            RAGResult(documents=[], retrieval_confidence=0.0),
+            StudentModelResult(
+                mastery_status="NEARLY_MASTERED",
+                continuity_status="on_track",
+                recommended_entry_phase="INDEPENDENT_PRACTICE",
+                hint_dependency_score=0.0,
+                intervention_required=False,
+            ),
+            _correct_canvas_tutor(),
+        )
+
+    monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", send_session_event)
+    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", correct_pipeline)
+    session_id = _start_session("ST010")
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST010",
+            "turn_id": "TURN-ST010-UNRELATED-RETRY",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert events[-1].event_type == "CORRECT_ATTEMPT"
+
+
+def test_a_correct_answer_on_the_retried_skill_is_still_sent_as_a_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The genuine retry keeps its event type and carries the retried skill."""
+    events: list[StudentModelSessionEvent] = []
+
+    async def send_session_event(
+        adapter: StudentModelServiceAdapter,
+        event: StudentModelSessionEvent,
+        access_token: str,
+    ) -> StudentModelSessionEventResponse:
+        del adapter, access_token
+        events.append(event)
+        body = _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+        body["journey_state"]["phase_3_independent_practice"][
+            "retry_required_micro_skill_ids"] = ["T02.M1"]
+        body["request_id"] = event.request_id
+        return StudentModelSessionEventResponse.model_validate(body)
+
+    async def correct_pipeline(
+        context: AdapterContext,
+    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
+        del context
+        return (
+            RAGResult(documents=[], retrieval_confidence=0.0),
+            StudentModelResult(
+                mastery_status="NEARLY_MASTERED",
+                continuity_status="on_track",
+                recommended_entry_phase="INDEPENDENT_PRACTICE",
+                hint_dependency_score=0.0,
+                intervention_required=False,
+            ),
+            _correct_canvas_tutor(),
+        )
+
+    monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", send_session_event)
+    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", correct_pipeline)
+    session_id = _start_session("ST011")
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST011",
+            "turn_id": "TURN-ST011-REAL-RETRY",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert events[-1].event_type == "INDEPENDENT_RETRY_COMPLETED"
+    assert events[-1].micro_skill_ids[0] == "T02.M1"

@@ -701,10 +701,18 @@ async def process_answer_with_session_event(
         stored_event.journey_state.phase_2_guided_learning
         .highest_support_used_by_skill.get(micro_skill_ids[0], "NONE")
     )
-    retry_required = bool(
-        stored_event.journey_state.phase_3_independent_practice
-        .retry_required_micro_skill_ids
-    )
+    # A retry event names ONE skill: Student Model reads micro_skill_ids[0] and
+    # rejects the event unless that skill is on its retry list. So "a retry is
+    # pending" has to mean pending for a skill THIS question tests, not merely
+    # pending for someone. The checkpoint question is chosen for the failed
+    # skill rather than for its own headline skill, so the retried skill is
+    # routinely not the question's primary one.
+    retry_skills = [
+        skill for skill in micro_skill_ids
+        if skill in (stored_event.journey_state.phase_3_independent_practice
+                     .retry_required_micro_skill_ids)
+    ]
+    retry_required = bool(retry_skills)
     if support_escalation:
         next_stuck_count = session.stuck_count + 1
         escalation_type: Literal[
@@ -794,7 +802,9 @@ async def process_answer_with_session_event(
                 student_id=session.student_id,
                 timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 question_id=session.question_id,
-                micro_skill_ids=micro_skill_ids,
+                micro_skill_ids=retry_skills + [
+                    skill for skill in micro_skill_ids if skill not in retry_skills
+                ],
                 student_response=context.message,
                 independent_success=event_type == "CORRECT_ATTEMPT",
                 error_code=(
