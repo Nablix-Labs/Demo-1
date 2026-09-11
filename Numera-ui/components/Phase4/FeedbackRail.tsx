@@ -15,7 +15,7 @@
 
 import { AlertTriangle, Info, RefreshCw, Target, Flag, ArrowRight } from 'lucide-react';
 import { cn } from '@/lib/cn';
-import { patternSentence, humanLabel } from '@/lib/phase4Review';
+import { patternSentence } from '@/lib/phase4Review';
 import type { Phase4Replay, Phase4Review } from '@/lib/api';
 
 type Tone = 'error' | 'info' | 'warn' | 'focus' | 'go';
@@ -67,10 +67,6 @@ export default function FeedbackRail({
   // The counted sentence when the engine asserted one, the prose summary
   // otherwise, and nothing at all when it asserted neither.
   const pattern = patternSentence(review) ?? learning_pattern_summary?.trim() ?? null;
-  const nextAction =
-    review.topic_outcome.next_action_message?.trim()
-    || humanLabel(review.topic_outcome.recommended_next_action)
-    || null;
 
   return (
     <div className="flex flex-col gap-3">
@@ -96,20 +92,28 @@ export default function FeedbackRail({
         {next_practice_focus}
       </Card>
 
-      {nextAction && (
-        <Card tone="go" icon={Flag} title="Next action">
-          <p>{nextAction}</p>
-          <button
-            onClick={onContinue}
-            className="mt-3 w-full inline-flex items-center justify-center gap-1.5 rounded-lg
-                       bg-focus-navy px-3 py-2.5 text-[12.5px] font-semibold text-white
-                       hover:opacity-85 transition-opacity"
-          >
-            {continueLabel}
-            <ArrowRight size={14} strokeWidth={2.2} aria-hidden />
-          </button>
-        </Card>
-      )}
+      {/* The way on from this replay, and nothing else.
+          `next_action_message` used to be printed here above the button. It
+          belongs to `topic_outcome`, beside `mastery_status` — all three are
+          statements about the TOPIC, not about one replay — so a rail that
+          only renders when a replay exists was the one place a topic-level
+          sentence could not always be said. It is on the Learning Summary now
+          (Chirudeva, 11 Sep 2026: "move it, and the payload already argues for
+          it").
+          Unconditional, too. It used to be gated on that same sentence being
+          non-empty, which made the only forward control out of a replay
+          dependent on a field the engine may legitimately omit. */}
+      <Card tone="go" icon={Flag} title="Next action">
+        <button
+          onClick={onContinue}
+          className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg
+                     bg-focus-navy px-3 py-2.5 text-[12.5px] font-semibold text-white
+                     hover:opacity-85 transition-opacity"
+        >
+          {continueLabel}
+          <ArrowRight size={14} strokeWidth={2.2} aria-hidden />
+        </button>
+      </Card>
     </div>
   );
 }

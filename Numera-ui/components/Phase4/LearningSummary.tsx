@@ -33,6 +33,9 @@ export default function LearningSummary({
 }) {
   const sections = insightSections(review.student_insights);
   const takeaways = keyTakeaways(review);
+  // Authored per student by the engine, so there is nothing to fall back to
+  // when it is absent — the outcome and the button stand alone.
+  const nextActionMessage = review.topic_outcome.next_action_message?.trim() || null;
 
   return (
     <div className="flex flex-col gap-6 max-w-[720px]">
@@ -79,13 +82,25 @@ export default function LearningSummary({
       )}
 
       {/* Topic outcome and the backend's routing decision — §8.9, and §6.9 makes
-          the next action theirs to decide, not a choice offered here. */}
+          the next action theirs to decide, not a choice offered here.
+          `next_action_message` is the engine's encouraging sentence about where
+          this student goes next. It used to render in FeedbackRail, which only
+          exists while a replay is on screen — so on a topic with nothing
+          replayable it was generated and thrown away, and that is exactly the
+          run where a next step is most worth saying. It hangs off
+          `topic_outcome` beside the two values already here, which is the
+          argument for it being here (Chirudeva, 11 Sep 2026). */}
       <div className="flex items-center justify-between gap-4 rounded-lg border border-muted-gray bg-white px-5 py-4">
         <div>
           <div className="text-[10px] tracking-widest uppercase text-slate-blue">Topic outcome</div>
           <div className="text-[15px] font-semibold text-ink mt-0.5">
             {humanLabel(review.topic_outcome.mastery_status)}
           </div>
+          {nextActionMessage && (
+            <p className="text-[13px] text-slate-blue leading-relaxed mt-1.5 max-w-[380px]">
+              {nextActionMessage}
+            </p>
+          )}
         </div>
         <button
           onClick={onEnd}

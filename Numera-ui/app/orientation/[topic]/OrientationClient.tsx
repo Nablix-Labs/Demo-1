@@ -27,6 +27,7 @@ import {
   Image as ImageIcon, Sparkles, AlertTriangle, PenLine,
 } from 'lucide-react';
 import { getTopic } from '@/lib/curriculum';
+import { displayTopic } from '@/lib/topicDisplay';
 import { useFlowNav } from '@/lib/useFlowNav';
 import {
   orientationFor,
@@ -43,6 +44,7 @@ import {
   requiredOrientationContent,
   type OrientationMessages,
   sessionTopicCode,
+  sessionTopicTitle,
   startOrientation,
   studentId,
   type SchemaOrientationItem,
@@ -574,11 +576,16 @@ function MicroCard({ media }: { media: Extract<OrientationMedia, { kind: 'micro'
  * has the student in PHASE_1_ORIENTATION, and they land back here next session.
  */
 function BackendOrientation({ topicId }: { topicId: string }) {
-  const topic = getTopic(topicId);
   const sessionId = useNumeraStore((s) => s.sessionId);
   const activeConceptId = useNumeraStore((s) => s.activeConceptId);
   const backendSession = useNumeraStore((s) => s.backendSession);
   const setBackendSession = useNumeraStore((s) => s.setBackendSession);
+  // `topicId` is a backend curriculum code on every live session — this route
+  // is where `next_topic_handoff` sends a PHASE_1_ORIENTATION student — and the
+  // mock curriculum lists four ids, none of them codes. Looking it up and
+  // calling `notFound()` on the miss is what turned the topic transition into a
+  // blank white page (11 Sep 2026). The session names the topic instead.
+  const topic = displayTopic(topicId, sessionTopicTitle(backendSession));
 
   const [status, setStatus] = useState<Status>('loading');
   // Position in the delivery sequence — the video, then the worked example.
@@ -710,8 +717,6 @@ function BackendOrientation({ topicId }: { topicId: string }) {
     }
   };
 
-  if (!topic) notFound();
-
   return (
     <main className="flex-1 min-w-0 flex flex-col bg-white" aria-label="Concept orientation">
       <header className="flex items-center justify-between gap-4 px-8 py-6 border-b border-muted-gray flex-shrink-0">
@@ -724,9 +729,14 @@ function BackendOrientation({ topicId }: { topicId: string }) {
             <h1 className="text-[16px] font-semibold text-ink leading-tight">{topic.title}</h1>
           </div>
         </div>
-        <Link href={`/workbook/${topic.id}`} className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-slate-blue hover:text-ink transition-colors">
-          <ChevronLeft size={15} strokeWidth={1.8} /> Topic
-        </Link>
+        {/* Only when the workbook can actually open this topic. The workbook is
+            built from the mock curriculum, so a backend topic code leads to its
+            own not-found — a way out that goes nowhere is worse than no link. */}
+        {getTopic(topicId) && (
+          <Link href={`/workbook/${topicId}`} className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-slate-blue hover:text-ink transition-colors">
+            <ChevronLeft size={15} strokeWidth={1.8} /> Topic
+          </Link>
+        )}
       </header>
 
       {/* The video and the worked-example canvas are the content here, not

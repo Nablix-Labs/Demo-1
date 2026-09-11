@@ -6,7 +6,7 @@
  * and the student came back to the same review forever.
  */
 import { describe, expect, it } from 'vitest';
-import { handoffDestination } from '@/lib/usePhaseRouting';
+import { handoffDestination, routeForPhase } from '@/lib/usePhaseRouting';
 import { startPayloadFor } from '@/lib/sessionStart';
 
 const handoff = (over: Record<string, string> = {}) => ({
@@ -70,5 +70,33 @@ describe('starting the next topic', () => {
   it('never sends both — topic_code alone identifies the topic', () => {
     const payload = startPayloadFor('ST1', 'ALG_LINEAR_ONE_STEP', 'ALG-KS3-01', 'VOICE');
     expect('concept_id' in payload).toBe(false);
+  });
+});
+
+describe('the phase left behind when the handoff moves the student', () => {
+  it('routes a phase it knows to that phase’s screen', () => {
+    expect(routeForPhase('CONCEPT_ORIENTATION', 'ALG-ORI-02')).toBe('/orientation/ALG-ORI-02');
+    expect(routeForPhase('REVIEW', 'ALG-ORI-02')).toBe('/review');
+  });
+
+  it('routes nowhere once the phase has been cleared', () => {
+    // The third root cause of the blank topic transition (11 Sep 2026). The
+    // handoff pushes the student to the next topic's orientation, but
+    // `currentPhase` is still the finished session's REVIEW, so usePhaseRouting
+    // reads it on the new page's first render and pushes them straight back to
+    // /review.
+    //
+    // Clearing it is the honest value, not a placeholder: the old session is
+    // over and the new one has not reported a phase yet. Chirudeva, 11 Sep:
+    // "/session/start is authoritative. Stop routing off last_journey_state."
+    // An empty phase routes nowhere, so the student stays where the handoff put
+    // them until the session says otherwise.
+    expect(routeForPhase('', 'ALG-ORI-02')).toBeNull();
+  });
+
+  it('routes nowhere for a phase name it does not know', () => {
+    // Same protection as landingRoute's fallback, but here a wrong guess would
+    // yank a student off a page they are already correctly on.
+    expect(routeForPhase('PHASE_9_SOMETHING', 'ALG-ORI-02')).toBeNull();
   });
 });

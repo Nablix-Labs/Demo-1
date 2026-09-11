@@ -28,9 +28,11 @@ import {
   completeDiagnostic,
   diagnosticQuestions,
   studentId,
+  sessionTopicTitle,
   type DiagnosticAnswer,
   type SchemaQuestion,
 } from '@/lib/api';
+import { displayTopic } from '@/lib/topicDisplay';
 import { applyPhaseHandoff } from '@/lib/phaseHandoff';
 import { speakTutor, stopTutorSpeech } from '@/lib/tts';
 import { cn } from '@/lib/cn';
@@ -78,8 +80,12 @@ function diagnosticTransitionFor(
 }
 
 export default function DiagnosticClient({ topicId }: { topicId: string }) {
-  const topic = getTopic(topicId);
-  if (!topic) notFound();
+  // No `notFound()` here any more. `topicId` is a backend curriculum CODE on
+  // every live session — `ALG-KS3-01` is what `next_topic_handoff` sends, and
+  // PHASE_0_DIAGNOSTIC is its default entry phase — and `getTopic` only knows
+  // the four mock ids. So this guard fired on the first screen of every real
+  // topic and blanked it (11 Sep 2026). Mock mode still needs the fixture and
+  // still checks for it.
   return apiEnabled ? <BackendDiagnostic topicId={topicId} /> : <MockDiagnostic topicId={topicId} />;
 }
 
@@ -88,10 +94,12 @@ export default function DiagnosticClient({ topicId }: { topicId: string }) {
 type Status = 'loading' | 'ready' | 'submitting' | 'error';
 
 function BackendDiagnostic({ topicId }: { topicId: string }) {
-  const topic = getTopic(topicId)!;
   const tutor = useDemoTutor();
   const sessionId = useNumeraStore((s) => s.sessionId);
   const backendSession = useNumeraStore((s) => s.backendSession);
+  // The curriculum entry when this id happens to be a mock one, the name the
+  // session sent otherwise, and the code itself when neither is available.
+  const topic = displayTopic(topicId, sessionTopicTitle(backendSession));
   const setBackendSession = useNumeraStore((s) => s.setBackendSession);
   const activeConceptId = useNumeraStore((s) => s.activeConceptId);
 
@@ -357,7 +365,8 @@ function Centered({ children }: { children: React.ReactNode }) {
 
 function MockDiagnostic({ topicId }: { topicId: string }) {
   const { decideDiagnostic } = useFlowNav();
-  const topic = getTopic(topicId)!;
+  const topic = getTopic(topicId);
+  if (!topic) notFound();
   const questions = PROBES[topicId] ?? GENERIC;
 
   const [step, setStep] = useState<'intro' | 'quiz' | 'result'>('intro');

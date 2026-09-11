@@ -107,9 +107,28 @@ export function reviewProgressLabel(index: number, total: number): string | null
 }
 
 /**
- * §8.8: with no wrong answers the replay section is skipped entirely and the
- * student goes straight to the Learning Summary. An empty replay list is the
- * expected shape of a topic answered correctly — never an error.
+ * Whether there is anything to replay — NOT whether the student got everything
+ * right. The two are different questions and this only answers the first.
+ *
+ * §8.8 skips the replay section when there were no wrong answers, and an empty
+ * replay list is the expected shape of a topic answered correctly. But it is
+ * not the only shape it takes. A wrong attempt is disqualified from replay
+ * whenever it has no stored work artifact, and work artifacts are only ever
+ * written on the CANVAS path in Phase 3 (`canvas_service.py:350-364`) — so a
+ * multiple-choice question answered wrong produces an empty `tutor_replays`
+ * with a wrong answer sitting in `question_journey`. That is ST015 today:
+ * `evaluation: "INCORRECT"`, `review_item_id: null`, zero replays (verified
+ * live, 11 Sep 2026). A tap has no working to walk through.
+ *
+ * So nothing congratulatory may ever be hung off this predicate. The honest
+ * reading of "the student got everything right" is on the journey, which
+ * carries every Phase 3 attempt whether it is replayable or not:
+ *
+ *   review.question_journey.every(row => row.evaluation === 'CORRECT')
+ *
+ * Nothing branches on that today — the summary states the engine's own
+ * `mastery_status` and its own prose, so it is already truthful on this path —
+ * and it is written here rather than added as an unused helper.
  */
 export function skipsReplay(review: Phase4Review): boolean {
   return review.tutor_replays.length === 0;

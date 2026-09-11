@@ -121,6 +121,26 @@ export function followsBackendPhase(pathname: string): boolean {
   return !(pathname === '/dev-screens' || pathname.startsWith('/dev-screens/'));
 }
 
+/**
+ * The route a backend phase belongs on, or null when there is nothing to say.
+ *
+ * Null covers both an unknown phase name and the empty string, and the empty
+ * string is the load-bearing one. When `next_topic_handoff` moves a student to
+ * the next topic, the finished session's phase is still sitting in the store —
+ * REVIEW — and this hook reads it on the new page's first render and pushes
+ * them straight back to /review. That is the third root cause of the blank
+ * topic transition (11 Sep 2026); the handoff now clears the phase, and an
+ * empty phase has to route nowhere for the clear to mean anything.
+ *
+ * Clearing rather than guessing the next phase is deliberate. Chirudeva, 11
+ * Sep: "/session/start is authoritative. Stop routing off last_journey_state."
+ * The old session is over and the new one has not reported yet, so the student
+ * stays where the handoff put them until the session says otherwise.
+ */
+export function routeForPhase(phase: string, topicId: string): string | null {
+  return PHASE_ROUTE[phase]?.(topicId) ?? null;
+}
+
 const apiEnabled = Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
 export function usePhaseRouting(): void {
@@ -138,7 +158,7 @@ export function usePhaseRouting(): void {
       const { completePhase } = useNumeraStore.getState();
       phasesToUnlock(stage).forEach(completePhase);
     }
-    const target = PHASE_ROUTE[currentPhase]?.(currentTopicId);
+    const target = routeForPhase(currentPhase, currentTopicId);
     if (target && target !== pathname) router.push(target);
   }, [currentPhase, currentTopicId, pathname, router]);
 }

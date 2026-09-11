@@ -257,6 +257,12 @@ export default function ReviewPage() {
         // PhaseGate bounces them straight back out of it.
         store.setCurrentTopic(next.topicId);
         store.setPendingTopicCode(next.topicId);
+        // The finished session's phase must not outlive it. Left at REVIEW,
+        // usePhaseRouting reads it as the new page mounts and pushes the
+        // student straight back here — the next topic never opens. The next
+        // /session/start is what sets it again, and it is the authority
+        // (Chirudeva, 11 Sep 2026).
+        store.setCurrentPhase('');
         goStage(next.unlock, next.topicId);
         return;
       }
