@@ -816,6 +816,67 @@ def test_stuck_turn_does_not_focus_an_arbitrary_question_token() -> None:
     assert actions == []
 
 
+def test_confirmed_component_creates_grounded_highlights_and_a_canvas_note() -> None:
+    tutor = _tutor_result(
+        TutorMistakeClassification(status="no_mistake", confidence=0.9),
+        [],
+    ).model_copy(
+        update={
+            "guided_student_state": "PARTIAL",
+            "active_teaching_objective": ActiveTeachingObjective(
+                objective_type="ANSWER_QUESTION",
+                target_concept_ids=["REQUIRED_COMPONENT_1"],
+                confirmed_concept_ids=["REQUIRED_COMPONENT_1"],
+                missing_concept_ids=[],
+            ),
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-T01-006",
+                objective_component_ids=["REQUIRED_COMPONENT_1"],
+                confirmed_component_ids=["REQUIRED_COMPONENT_1"],
+                missing_component_ids=[],
+                active_component_id=None,
+                last_tutor_question_type="COMPONENT",
+                selected_option_id=None,
+                awaiting_response=True,
+            ),
+            "generated_question_rubric": GeneratedQuestionRubric(
+                question_id="Q-T01-006",
+                required_concepts=[
+                    GeneratedConcept(
+                        concept_id="REQUIRED_COMPONENT_1",
+                        description="c + 4",
+                        required=True,
+                    )
+                ],
+                completion_rule="ALL_REQUIRED_CONCEPTS",
+                cache_key="test",
+                prompt_version="test",
+            ),
+        }
+    )
+    anchors = [
+        QuestionTextAnchor(token_id="Q-T01-006:QTOKEN:7", text="c", char_start=30, char_end=31),
+        QuestionTextAnchor(token_id="Q-T01-006:QTOKEN:11", text="4", char_start=49, char_end=50),
+    ]
+
+    actions = plan_tutor_canvas_actions(
+        tutor,
+        anchors,
+        [],
+        "TURN-1",
+        "c + 4; c changes; +4 stays fixed",
+        _fallback_labels(),
+        wrong_attempt_count=0,
+        student_response="",
+    )
+
+    assert [(action.type, action.target_object_id, action.text) for action in actions] == [
+        ("HIGHLIGHT", "Q-T01-006:QTOKEN:7", None),
+        ("HIGHLIGHT", "Q-T01-006:QTOKEN:11", None),
+        ("INSERT_LABEL", "TUTOR_ANCHOR:CONFIRMED:Q-T01-006:3", "c + 4"),
+    ]
+
+
 def test_written_rule_request_adds_safe_tutor_anchors_not_the_final_rule() -> None:
     """After a failed attempt, the rule parts appear as scaffolding."""
 
