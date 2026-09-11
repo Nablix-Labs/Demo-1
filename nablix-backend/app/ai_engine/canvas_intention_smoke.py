@@ -108,11 +108,14 @@ def live_canvas_intention_check() -> None:
             tutor.guided_teaching_state.confirmed_component_ids
             if tutor.guided_teaching_state is not None else []
         ),
+        "writer_intentions": [intent.model_dump() for intent in tutor.canvas_intentions],
         "validated_actions": [action.model_dump() for action in actions],
     }
     print(json.dumps(payload, indent=2), flush=True)
+    if not tutor.canvas_intentions:
+        raise SystemExit("FAIL: the writer returned no canvas intentions.")
     if not actions:
-        raise SystemExit("FAIL: confirmed evidence produced no canvas action.")
+        raise SystemExit("FAIL: the backend rejected every canvas intention.")
 
 
 if __name__ == "__main__":
