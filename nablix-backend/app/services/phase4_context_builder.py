@@ -30,18 +30,17 @@ class Phase4ContextError(ValueError):
     pass
 
 
-# What the student should do after this topic. This is the tutor's own closed
-# set, deliberately small: the client renders the token as the label on the
-# button that ends the review, so every value here has to read as an
-# instruction to a child.
-STUDENT_FACING_NEXT_ACTIONS: frozenset[str] = frozenset(
-    {"START_NEXT_TOPIC", "PRACTISE_AGAIN", "KEEP_LEARNING", "CONTINUE"}
-)
-
 # routing.next_action is the Student Model's instruction to the *tutor loop*,
 # not to the learner -- "WAIT_FOR_STUDENT_RESPONSE" rendered as a button asked
 # a child to wait for themselves. Translate it here, once, rather than leave
 # the client guessing at a vocabulary it does not own.
+#
+# A stopgap, and worth retiring rather than growing: the Student Model already
+# authors what the student should do next as prose (topic_summary_insights.
+# generate_recommended_next_action -- "Repeat guided learning for: T01.M7."),
+# it is simply not on /topic/event-history. Read that once it is exposed and
+# delete this table. The client passes non-ALL_CAPS through untouched, so
+# prose needs no change there.
 _NEXT_ACTION_BY_ROUTING_VERB: dict[str, str] = {
     "START_NEXT_TOPIC": "START_NEXT_TOPIC",
     "DELIVER_PARALLEL_EXAMPLE": "PRACTISE_AGAIN",
@@ -63,6 +62,13 @@ _NEXT_ACTION_BY_ROUTING_VERB: dict[str, str] = {
     "WAIT_FOR_CONTENT": "CONTINUE",
     "WAIT_FOR_STUDENT_RESPONSE": "CONTINUE",
 }
+
+# The closed set the client may be handed, which is a contract: it renders the
+# token as the label on the button that ends the review, so every value has to
+# read as an instruction to a child. Derived, so it cannot drift from the map.
+STUDENT_FACING_NEXT_ACTIONS: frozenset[str] = frozenset(
+    _NEXT_ACTION_BY_ROUTING_VERB.values()
+)
 
 
 def student_facing_next_action(routing_next_action: str) -> str:

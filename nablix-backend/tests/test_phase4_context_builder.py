@@ -10,6 +10,7 @@ from app.models.topic_event_history import (
     WorkArtifactRef,
 )
 from app.services.phase4_context_builder import (
+    STUDENT_FACING_NEXT_ACTIONS,
     Phase4ContextError,
     _whole_topic_evidence,
     build_phase4_review_request,
@@ -387,6 +388,8 @@ def test_routing_verbs_never_reach_the_student_as_a_next_action() -> None:
             history, [], "DEVELOPING", verb
         ).topic_outcome.recommended_next_action
         assert action == expected_action, verb
+        # The table is one half; this is the invariant it exists to hold.
+        assert action in STUDENT_FACING_NEXT_ACTIONS, verb
 
     assert (
         build_phase4_review_request(

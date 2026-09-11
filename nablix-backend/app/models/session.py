@@ -478,6 +478,7 @@ class SessionResponse(SessionRecord):
 
         question = self.active_student_model_question
         return question.question_usage_id if question is not None else None
+
     # Two sources of mastery and phase in one response can only disagree.
     # student_model_state is projected from the newest authoritative Schema 3
     # event; last_student_model is a legacy snapshot kept for diagnostics only.
