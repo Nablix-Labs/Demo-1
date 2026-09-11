@@ -1265,7 +1265,7 @@ def _choice_selection_canvas_actions(
 def _question_anchors(session: SessionRecord) -> list[QuestionTextAnchor]:
     """Keep question tokens addressable without rendering premature emphasis."""
 
-    return []
+    return plan_canvas_action_anchors(session.question_id, session.current_question)
 
 
 def _phase_2_prompt_context(
