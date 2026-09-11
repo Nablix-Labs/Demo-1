@@ -294,7 +294,17 @@ def plan_tutor_canvas_actions(
     )
     if tutor.guided_teaching_state is not None:
         confirmed.update(tutor.guided_teaching_state.confirmed_component_ids)
+    current_turn_confirmed = {
+        claim.concept_id
+        for claim in (
+            tutor.guided_teaching_state.last_turn_evidence
+            if tutor.guided_teaching_state is not None
+            else []
+        )
+        if claim.status == "DEMONSTRATED"
+    }
 
+    write_actions: list[TutorCanvasAction] = []
     if tutor.requires_written_math_evidence:
         # First attempt stays clean evidence of what the student knows unaided;
         # the rule parts are scaffolding for a student who has already tried
@@ -317,7 +327,7 @@ def plan_tutor_canvas_actions(
             )
             for index, text in enumerate(anchor_texts, start=1)
         ]
-        return [
+        write_actions = [
             *anchor_actions,
             *plan_write_request_tutor_actions(turn_id, len(anchor_actions) + 1)
         ]
@@ -351,31 +361,7 @@ def plan_tutor_canvas_actions(
     if student_state == "WRONG":
         if selected_option_action is not None:
             return [selected_option_action]
-        student_attempt = next(
-            (
-                event.target_object_id
-                for event in reversed(canvas_events)
-                if event.actor == "STUDENT"
-                and event.action_type == "WRITE"
-                and event.active_state == "ACTIVE"
-                and event.target_object_id is not None
-            ),
-            None,
-        )
-        if student_attempt is None:
-            return []
-        return [
-            TutorCanvasAction(
-                action_id=f"{turn_id}:1:HIGHLIGHT:{student_attempt}",
-                type="HIGHLIGHT",
-                target_kind="STUDENT_ATTEMPT",
-                target_object_id=student_attempt,
-                confirmed_component_id=None,
-                text=None,
-                source_id=None,
-                answer_reveal_allowed=False,
-            )
-        ]
+        return []
 
     if student_state == "STUCK":
         target = question_anchors[0].token_id if question_anchors else None
@@ -393,14 +379,23 @@ def plan_tutor_canvas_actions(
         ]
 
     if student_state not in {"CORRECT", "PARTIAL"}:
-        return []
+        return write_actions
 
-    actions: list[TutorCanvasAction] = []
-    seen: set[tuple[str, str | None, str | None]] = set()
-    for position, intention in enumerate(tutor.canvas_intentions, start=1):
+    actions = confirmed_evidence_highlight_actions(
+        tutor,
+        question_anchors,
+        canvas_events,
+        turn_id,
+        canonical_answer,
+    )
+    seen = {(action.type, action.target_object_id, action.text) for action in actions}
+    for position, intention in enumerate(tutor.canvas_intentions, start=len(actions) + 1):
         if intention.action_type in {"TUTOR_SOLVED_STEP", "SHOW_CUE", "OPEN_SCAFFOLD_STEP", "SHOW_PARALLEL"}:
             continue
-        if intention.confirmed_component_id is not None and intention.confirmed_component_id not in confirmed:
+        if (
+            intention.confirmed_component_id is not None
+            and intention.confirmed_component_id not in current_turn_confirmed
+        ):
             continue
         if intention.target_kind == "QUESTION_ANCHOR":
             target_is_valid = intention.target_object_id in active_anchors
@@ -434,14 +429,6 @@ def plan_tutor_canvas_actions(
         )
     supplementary_actions = [
         *([selected_option_action] if selected_option_action is not None else []),
-        *explicit_student_confirmation_actions(
-            tutor,
-            question_anchors,
-            canvas_events,
-            turn_id,
-            student_response,
-            fallback_labels,
-        ),
     ]
     action_keys = {
         (action.type, action.target_object_id, action.text)
@@ -452,7 +439,81 @@ def plan_tutor_canvas_actions(
         if key not in action_keys:
             actions.append(action)
             action_keys.add(key)
-    return add_confirmation_canvas_slots(actions, turn_id)
+    return [*add_confirmation_canvas_slots(actions, turn_id), *write_actions]
+
+
+def confirmed_evidence_highlight_actions(
+    tutor: TutorResult,
+    question_anchors: list[QuestionTextAnchor],
+    canvas_events: list[CanvasEvent],
+    turn_id: str,
+    canonical_answer: str,
+) -> list[TutorCanvasAction]:
+    """Render only targets justified by evidence from the current turn."""
+
+    if canvas_student_state(tutor) not in {"CORRECT", "PARTIAL"}:
+        return []
+    evidence = (
+        tutor.guided_teaching_state.last_turn_evidence
+        if tutor.guided_teaching_state is not None
+        else []
+    )
+    component_ids = [
+        claim.concept_id for claim in evidence if claim.status == "DEMONSTRATED"
+    ]
+    parts = _SYMBOLIC_RULE_RE.search(canonical_answer)
+    if parts is None:
+        return []
+    variable, operator, fixed_value = parts.groups()
+    normalised_operator = "+" if operator == "+" else "-"
+    actions: list[TutorCanvasAction] = []
+    for component_id in component_ids:
+        role = confirmation_role(component_id, tutor)
+        if role == "changing_value":
+            targets = [anchor for anchor in question_anchors if anchor.text == variable]
+            if not targets:
+                targets = [
+                    anchor for anchor in question_anchors
+                    if anchor.text.isdigit() and anchor.text != fixed_value
+                ]
+        elif role == "fixed_value":
+            targets = [anchor for anchor in question_anchors if anchor.text == fixed_value]
+        elif role == "operation":
+            targets = [
+                anchor for anchor in question_anchors
+                if anchor.text.replace("−", "-") == normalised_operator
+            ]
+        elif role == "general_rule":
+            targets = [
+                anchor for anchor in question_anchors
+                if anchor.text in {variable, fixed_value}
+                or anchor.text.replace("−", "-") == normalised_operator
+            ]
+        else:
+            continue
+        for target in targets:
+            if any(
+                event.actor == "TUTOR"
+                and event.action_type == "HIGHLIGHT"
+                and event.semantic_tag == component_id
+                and event.target_object_id == target.token_id
+                and event.active_state == "ACTIVE"
+                for event in canvas_events
+            ):
+                continue
+            actions.append(
+                TutorCanvasAction(
+                    action_id=f"{turn_id}:{len(actions) + 1}:HIGHLIGHT:{target.token_id}",
+                    type="HIGHLIGHT",
+                    target_kind="QUESTION_ANCHOR",
+                    target_object_id=target.token_id,
+                    confirmed_component_id=component_id,
+                    text=None,
+                    source_id=None,
+                    answer_reveal_allowed=False,
+                )
+            )
+    return actions
 
 
 def plan_rescue_canvas_actions(
@@ -839,6 +900,8 @@ def confirmation_role(component_id: str, tutor: TutorResult) -> str:
         return "fixed_value"
     if any(term in source for term in ("operation", "addition", "subtract", "multiply", "divide")):
         return "operation"
+    if "rule" in source:
+        return "general_rule"
     return "generic"
 
 
