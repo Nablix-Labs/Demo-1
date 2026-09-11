@@ -100,6 +100,27 @@ export function handoffDestination(
   return { topicId, ...landingRoute(handoff?.entry_phase, topicId) };
 }
 
+/**
+ * Screens that render fixtures and must not be moved by the backend's phase.
+ *
+ * /dev-screens exists to show a screen without a session, and its pages seed the
+ * store to do it — support-deck writes `currentPhase: 'GUIDED_PRACTICE'` because
+ * `lib/supportDeck` hides the deck in Phase 3, so it has no choice. This hook
+ * then read that seed as a real phase and pushed the page to '/', and the
+ * fixture evicted itself the moment it mounted.
+ *
+ * It only ever did so in a DEPLOYED build: the effect no-ops without an API base
+ * URL, which local dev does not set, so the page worked everywhere except the
+ * VM — where Manjusha was the one asked to look at it (5 Sep).
+ *
+ * Exempting the route rather than changing the seed keeps the fixture rendering
+ * the real components off the real store, which is the entire point of it, and
+ * covers the next fixture that needs to seed a phase.
+ */
+export function followsBackendPhase(pathname: string): boolean {
+  return !(pathname === '/dev-screens' || pathname.startsWith('/dev-screens/'));
+}
+
 const apiEnabled = Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
 export function usePhaseRouting(): void {
@@ -109,6 +130,9 @@ export function usePhaseRouting(): void {
   const currentTopicId = useNumeraStore((s) => s.currentTopicId);
   useEffect(() => {
     if (!apiEnabled) return;
+    // Before the unlock too: a fixture's seeded phase must not write itself
+    // into the student's real `phasesDone`.
+    if (!followsBackendPhase(pathname)) return;
     const stage = PHASE_STAGE[currentPhase];
     if (stage) {
       const { completePhase } = useNumeraStore.getState();

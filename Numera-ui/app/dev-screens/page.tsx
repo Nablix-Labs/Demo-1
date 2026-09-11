@@ -67,6 +67,10 @@ const SCREENS: Screen[] = [
   { path: '/dev-screens/intervention', label: 'Phase 3 intervention input', group: 'Fixtures' },
 ];
 
+// Inlined at build time like every NEXT_PUBLIC_*, so this is the same value the
+// rest of the app decides mock-vs-live on (see AppFrame's `misconfigured`).
+const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? '';
+
 const VIEWPORTS = {
   desktop: { w: 1512, h: 900, label: 'Desktop 1512×900' },
   mobile: { w: 390, h: 780, label: 'Mobile 390×780' },
@@ -181,8 +185,18 @@ export default function ScreensPage() {
       <header className="sticky top-0 z-20 bg-white/90 backdrop-blur border-b border-muted-gray px-6 py-3 flex items-center gap-4">
         <div>
           <h1 className="text-[17px] font-semibold">Numera — all screens</h1>
+          {/*
+            Read, never asserted. This line was the hardcoded string "Mock data —
+            no API base URL set." and printed it on a build that was talking to
+            the live VM, which is the one thing this page must never get wrong:
+            DEPLOY.md exists because a bundle silently running on demo data has
+            already been mistaken for a broken app twice.
+          */}
           <p className="text-[12px] text-slate-blue">
-            {SCREENS.length} routes, live. Mock data — no API base URL set.
+            {SCREENS.length} routes, live.{' '}
+            {apiBaseUrl
+              ? `Live data — API base URL ${apiBaseUrl}.`
+              : 'Mock data — no API base URL set.'}
           </p>
         </div>
         <div className="ml-auto flex items-center gap-2">

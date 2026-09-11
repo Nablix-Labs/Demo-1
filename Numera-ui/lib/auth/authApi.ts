@@ -29,17 +29,17 @@ export interface LoginResponse {
    * The student's workbook code (`ST###`) — what every tutoring call must send
    * as `student_id`.
    *
-   * NOT SENT YET. Verified against the auth service on 2026-07-28: `login()`
-   * returns only access_token/token_type/role/tier/last_journey_state, the JWT
-   * payload is `{sub, role, tier, iat, exp}` where `sub` is the integer user_id,
-   * and `last_journey_state` has the code projected out of it. So there is no
-   * way to derive this client-side — it needs the backend to include it
-   * (`auth_service.login` already loads the student row for the journey lookup).
+   * SENT. Verified live 2026-09-11: login returns `student_code: "ST015"`, and
+   * a /session/start carrying it is accepted for that student.
    *
-   * Until then the tutoring calls fall back to the fixed ST001, which is why a
-   * logged-in student who isn't ST001's owner gets 403 STUDENT_FORBIDDEN from
-   * student_model (issue #40). Reading it here means the fix lands with the
-   * backend field and needs no further frontend change.
+   * It was absent until 26 Aug 2026 — the JWT payload is `{sub, role, tier,
+   * iat, exp}` where `sub` is the integer user_id, so there was nothing to
+   * derive client-side, and every tutoring call fell back to the fixed ST001.
+   * That is what made a logged-in student who did not own ST001 get
+   * 403 STUDENT_FORBIDDEN from student_model (issue #40).
+   *
+   * Still optional here because the fallback in `studentId()` is what keeps an
+   * anonymous/degraded session working, not because the field is missing.
    */
   student_code?: string | null;
   /**
