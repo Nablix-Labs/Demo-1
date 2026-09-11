@@ -364,19 +364,7 @@ def plan_tutor_canvas_actions(
         return []
 
     if student_state == "STUCK":
-        target = question_anchors[0].token_id if question_anchors else None
-        return [
-            TutorCanvasAction(
-                action_id=f"{turn_id}:1:FOCUS:{target or 'NONE'}",
-                type="FOCUS",
-                target_kind="QUESTION_ANCHOR" if target is not None else "TUTOR_ANCHOR",
-                target_object_id=target,
-                confirmed_component_id=None,
-                text="Start with this part.",
-                source_id=None,
-                answer_reveal_allowed=False,
-            )
-        ]
+        return []
 
     if student_state not in {"CORRECT", "PARTIAL"}:
         return write_actions
