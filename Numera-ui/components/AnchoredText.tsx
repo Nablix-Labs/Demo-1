@@ -43,6 +43,8 @@ export default function AnchoredText({
       {segments.map((segment, i) =>
         segment.anchor === null ? (
           <span key={i}>{segment.text}</span>
+        ) : !segment.anchor.label ? (
+          <span key={i}>{segment.text}</span>
         ) : (
           <span key={i} className="relative inline whitespace-nowrap">
             <mark
