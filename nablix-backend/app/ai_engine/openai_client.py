@@ -46,7 +46,6 @@ from app.models.guided_learning import (
     ScaffoldStepEvaluation,
     GuidedTutorContext,
     GuidedWorkedPresentation,
-    CanvasPedagogyIntent,
 )
 from app.models.student_model_session import AnswerSpec, QuestionType
 
@@ -283,7 +282,6 @@ class OpenAITutorMessage(StrictSchema):
     tutor_message: str
     tutor_message_voice_optimised: str
     confidence: float = Field(ge=0.0, le=1.0)
-    canvas_intentions: list[CanvasPedagogyIntent] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)
