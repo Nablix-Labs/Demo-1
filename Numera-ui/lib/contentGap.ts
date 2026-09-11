@@ -54,3 +54,36 @@ export function contentGapPaused(rec: SessionRecord | undefined | null): boolean
   if (routing?.content_gap_detected !== true) return false;
   return !rec.question_id;
 }
+
+
+/**
+ * Is this topic paused because its checkpoint ran out of Guided repairs?
+ *
+ * Student Model escalates a third failure on the same checkpoint to a
+ * prerequisite route (TC-29/TC-31). The backend resolves that route and then
+ * stops, because the return leg — run the earlier topic, come back to this
+ * checkpoint (TC-32) — does not exist yet. Same shape as a content gap from the
+ * screen's point of view: no question, nothing to retry, a backend-owned
+ * sentence to show. Different cause, so it is matched separately rather than by
+ * pretending `content_gap_detected` is set.
+ *
+ * Requires the absence of a question for the same reason `contentGapPaused`
+ * does: a pause flag alongside a live question is not a pause, and blanking the
+ * screen would take that question away from the student.
+ */
+export function prerequisiteRemediationPaused(rec: SessionRecord | undefined | null): boolean {
+  if (!rec) return false;
+  const routing = (rec.student_model_event as { routing?: { reason_code?: string } } | null | undefined)?.routing;
+  if (routing?.reason_code !== 'PREREQUISITE_REMEDIATION_REQUIRED') return false;
+  return !rec.question_id;
+}
+
+/**
+ * Is the lesson stopped with nothing for the student to do?
+ *
+ * The union the practice screen actually cares about: both causes render the
+ * same panel from the backend's own `message`, and neither offers a retry.
+ */
+export function lessonPaused(rec: SessionRecord | undefined | null): boolean {
+  return contentGapPaused(rec) || prerequisiteRemediationPaused(rec);
+}

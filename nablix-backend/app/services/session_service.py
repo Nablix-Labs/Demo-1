@@ -1105,6 +1105,19 @@ CONTENT_GAP_MESSAGE = (
 )
 
 
+# Shown when a checkpoint has used both Guided repair cycles and Student Model
+# has routed the topic to prerequisite remediation (TC-31). The route itself --
+# running the earlier topic and returning to this checkpoint (TC-32) -- is not
+# built yet, so the honest thing is to stop here with the work saved rather than
+# open a journey that cannot be finished. Deliberately vague about the cause,
+# like the content-gap message: a routing limit is ours to fix, not something to
+# explain to a child mid-lesson.
+PREREQUISITE_REMEDIATION_MESSAGE = (
+    "Let us pause this topic here. I want to go back over some earlier steps "
+    "with you before we try this one again. Your work so far is saved."
+)
+
+
 async def generate_phase4_review_for(
     session: SessionRecord,
     event: StudentModelSessionEventResponse,
@@ -1383,6 +1396,27 @@ async def _apply_schema_event(
             "current_phase": "INDEPENDENT_PRACTICE",
             "ui_state": "INDEPENDENT_PRACTICE",
             "message": event.routing.reason,
+            "recommended_entry_phase": None,
+            "current_question": None,
+            "question_id": None,
+            "question_type": None,
+            "correct_answer": None,
+            "active_student_model_question": None,
+            **_INTERVENTION_UI_FLAGS,
+            "active_guided_rescue": None,
+        })
+        await save_session(updated)
+        _sessions[session.session_id] = updated
+        return updated
+    if event.routing.reason_code == "PREREQUISITE_REMEDIATION_REQUIRED":
+        event = _project_for_frontend(event)
+        updated = session.model_copy(update={
+            "student_model_event": event,
+            "student_model_state": project_student_model_state(event),
+            "content_gap_detected": event.routing.content_gap_detected,
+            "current_phase": session.current_phase,
+            "ui_state": session.current_phase,
+            "message": PREREQUISITE_REMEDIATION_MESSAGE,
             "recommended_entry_phase": None,
             "current_question": None,
             "question_id": None,
