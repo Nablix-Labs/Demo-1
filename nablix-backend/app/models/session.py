@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 from app.models.adapters import (
     CanvasFeedback,
@@ -463,6 +463,21 @@ class SessionResponse(SessionRecord):
         default=None,
         exclude=True,
     )
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def question_usage_id(self) -> str | None:
+        """The usage the current question was served as, for identity checks.
+
+        The client re-enables Check only when session, topic, question_id and
+        this agree. question_id alone cannot separate a genuine match from the
+        same question re-served as a new usage, which is exactly what a Guided
+        repair return does. Derived, never stored: the whole question is
+        excluded from this response because it carries the answer spec.
+        """
+
+        question = self.active_student_model_question
+        return question.question_usage_id if question is not None else None
     # Two sources of mastery and phase in one response can only disagree.
     # student_model_state is projected from the newest authoritative Schema 3
     # event; last_student_model is a legacy snapshot kept for diagnostics only.

@@ -92,7 +92,11 @@ def test_student_model_adapter_surfaces_journey_version_conflict(
                 "token",
             )
         )
-    assert "submit it once more" in str(conflict.value.detail)
+    # Resubmitting is what SESSION_STATE_REFRESH_REQUIRED now refuses, so the
+    # 409 must not ask for it -- anything reading detail gets the same advice
+    # the client gives.
+    assert "submit it once more" not in str(conflict.value.detail)
+    assert "Your work is saved" in str(conflict.value.detail)
     assert "journey_state" not in str(conflict.value.detail)
 
 
