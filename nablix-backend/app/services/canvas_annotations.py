@@ -295,6 +295,17 @@ def plan_tutor_canvas_actions(
     if tutor.guided_teaching_state is not None:
         confirmed.update(tutor.guided_teaching_state.confirmed_component_ids)
 
+    current_turn_confirmed = {
+        claim.concept_id
+        for claim in (
+            tutor.guided_teaching_state.last_turn_evidence
+            if tutor.guided_teaching_state is not None
+            else []
+        )
+        if claim.status == "DEMONSTRATED"
+    }
+
+    write_actions = []
     if tutor.requires_written_math_evidence:
         # First attempt stays clean evidence of what the student knows unaided;
         # the rule parts are scaffolding for a student who has already tried
@@ -317,7 +328,7 @@ def plan_tutor_canvas_actions(
             )
             for index, text in enumerate(anchor_texts, start=1)
         ]
-        return [
+        write_actions = [
             *anchor_actions,
             *plan_write_request_tutor_actions(turn_id, len(anchor_actions) + 1)
         ]
@@ -348,66 +359,32 @@ def plan_tutor_canvas_actions(
 
     student_state = canvas_student_state(tutor)
 
-    if student_state == "WRONG":
-        if selected_option_action is not None:
-            return [selected_option_action]
-        student_attempt = next(
-            (
-                event.target_object_id
-                for event in reversed(canvas_events)
-                if event.actor == "STUDENT"
-                and event.action_type == "WRITE"
-                and event.active_state == "ACTIVE"
-                and event.target_object_id is not None
-            ),
-            None,
-        )
-        if student_attempt is None:
-            return []
-        return [
-            TutorCanvasAction(
-                action_id=f"{turn_id}:1:HIGHLIGHT:{student_attempt}",
-                type="HIGHLIGHT",
-                target_kind="STUDENT_ATTEMPT",
-                target_object_id=student_attempt,
-                confirmed_component_id=None,
-                text=None,
-                source_id=None,
-                answer_reveal_allowed=False,
-            )
-        ]
-
     if student_state == "STUCK":
-        target = question_anchors[0].token_id if question_anchors else None
-        return [
-            TutorCanvasAction(
-                action_id=f"{turn_id}:1:FOCUS:{target or 'NONE'}",
-                type="FOCUS",
-                target_kind="QUESTION_ANCHOR" if target is not None else "TUTOR_ANCHOR",
-                target_object_id=target,
-                confirmed_component_id=None,
-                text="Start with this part.",
-                source_id=None,
-                answer_reveal_allowed=False,
-            )
-        ]
+        return write_actions
 
-    if student_state not in {"CORRECT", "PARTIAL"}:
-        return []
+    if student_state not in {"CORRECT", "PARTIAL", "WRONG"}:
+        return write_actions
 
     actions: list[TutorCanvasAction] = []
     seen: set[tuple[str, str | None, str | None]] = set()
     for position, intention in enumerate(tutor.canvas_intentions, start=1):
         if intention.action_type in {"TUTOR_SOLVED_STEP", "SHOW_CUE", "OPEN_SCAFFOLD_STEP", "SHOW_PARALLEL"}:
             continue
-        if intention.confirmed_component_id is not None and intention.confirmed_component_id not in confirmed:
+        if (
+            student_state != "WRONG"
+            and intention.confirmed_component_id is not None
+            and intention.confirmed_component_id not in current_turn_confirmed
+        ):
             continue
         if intention.target_kind == "QUESTION_ANCHOR":
             target_is_valid = intention.target_object_id in active_anchors
         elif intention.target_kind in {"CANVAS_OBJECT", "STUDENT_ATTEMPT"}:
             target_is_valid = intention.target_object_id in active_canvas_objects
         else:
-            target_is_valid = intention.target_kind == "TUTOR_ANCHOR" and intention.target_object_id is None
+            target_is_valid = (
+                intention.target_kind == "TUTOR_ANCHOR"
+                and intention.target_object_id is not None
+            )
         if not target_is_valid:
             continue
         text = intention.text.strip() if intention.text is not None else None
@@ -434,14 +411,6 @@ def plan_tutor_canvas_actions(
         )
     supplementary_actions = [
         *([selected_option_action] if selected_option_action is not None else []),
-        *explicit_student_confirmation_actions(
-            tutor,
-            question_anchors,
-            canvas_events,
-            turn_id,
-            student_response,
-            fallback_labels,
-        ),
     ]
     action_keys = {
         (action.type, action.target_object_id, action.text)
@@ -452,7 +421,7 @@ def plan_tutor_canvas_actions(
         if key not in action_keys:
             actions.append(action)
             action_keys.add(key)
-    return add_confirmation_canvas_slots(actions, turn_id)
+    return [*add_confirmation_canvas_slots(actions, turn_id), *write_actions]
 
 
 def plan_rescue_canvas_actions(

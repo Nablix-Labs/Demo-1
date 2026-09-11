@@ -42,7 +42,7 @@ from app.ai_engine.schemas import (
     VisualCue,
 )
 from app.core.config import Settings, get_settings
-from app.services.question_anchors import plan_question_anchors
+from app.services.question_anchors import plan_canvas_action_anchors, plan_question_anchors
 from app.core.exceptions import AdapterError
 from app.core.logger import logger
 from app.models.adapters import (
@@ -1143,9 +1143,9 @@ def requires_written_symbolic_rule_evidence(
         return False
     if request.answer_spec is None:
         return False
-    # A canvas-write request confirms a rule that has already been evaluated as
-    # correct. Never let an optimistic model state turn a contradictory typed
-    # expression into a request to write that expression on the canvas.
+    # A reliable canvas or exact typed response confirms notation. Multipart
+    # conceptual items retain their response-aware component policy, so a valid
+    # explanation is never downgraded merely because it was not canvas ink.
     if evaluate_answer_contract(request) == "INCORRECT":
         return False
     if _expression_parts(request.answer_spec.canonical_answer) is None:
@@ -4026,6 +4026,7 @@ def write_redacted_response_aware_message(
             "contribution": recorded_contribution,
             "tutor_message": message.tutor_message,
             "tutor_message_voice": message.tutor_message_voice_optimised,
+            "canvas_intentions": message.canvas_intentions,
         })
         rejection = response_aware_message_rejection_reason(
             rewritten, request, rubric, objective, rules,
@@ -4159,6 +4160,19 @@ def guided_fact_budget_context(
             if request.guided_teaching_state is not None
             else []
         ),
+        "permitted_canvas_targets": [
+            anchor.model_dump()
+            for anchor in plan_canvas_action_anchors(request.question_id, request.question)
+        ],
+        "ordered_canvas_memory": [
+            event.model_dump()
+            for event in request.canvas_events[-40:]
+        ],
+        "canvas_intention_policy": {
+            "only_confirmed_components": sorted(evaluation.newly_confirmed_concept_ids),
+            "wrong_turns_may_target_only_visible_student_attempts": True,
+            "never_reveal_unresolved_answer": True,
+        },
         "forbidden_question_concept_ids": sorted(
             confirmed_ids - set(evaluation.newly_confirmed_concept_ids)
         ),

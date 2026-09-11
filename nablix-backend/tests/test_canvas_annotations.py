@@ -22,6 +22,7 @@ from app.models.guided_learning import (
     GuidedRescueContext,
     GuidedTeachingState,
     TutorCanvasAction,
+    GuidedEvidenceClaim,
 )
 from app.models.question_anchor import QuestionTextAnchor
 from pydantic import ValidationError
@@ -247,12 +248,75 @@ def test_confirmed_guided_idea_emits_a_component_scoped_semantic_action() -> Non
         student_response="",
     )
 
-    assert actions[0].type == "INSERT_LABEL"
-    assert actions[0].text == "m → changes"
-    assert actions[0].answer_reveal_allowed is False
+    assert actions == []
 
 
-def test_accepted_student_statement_gets_a_tutor_layer_label_without_llm_intention() -> None:
+def test_writer_intention_marks_only_the_component_confirmed_this_turn() -> None:
+    tutor = _tutor_result(
+        TutorMistakeClassification(status="no_mistake", confidence=0.9),
+        [],
+    ).model_copy(
+        update={
+            "guided_student_state": "PARTIAL",
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-T01-002",
+                objective_component_ids=["CHANGING_VALUE", "FIXED_VALUE"],
+                confirmed_component_ids=["CHANGING_VALUE"],
+                missing_component_ids=["FIXED_VALUE"],
+                active_component_id="FIXED_VALUE",
+                last_tutor_question_type="COMPONENT",
+                selected_option_id=None,
+                awaiting_response=True,
+                last_turn_evidence=[
+                    GuidedEvidenceClaim(
+                        concept_id="CHANGING_VALUE",
+                        status="DEMONSTRATED",
+                        source="VOICE",
+                    )
+                ],
+            ),
+            "canvas_intentions": [
+                CanvasPedagogyIntent(
+                    action_type="INSERT_LABEL",
+                    target_kind="QUESTION_ANCHOR",
+                    target_object_id="Q-T01-002:QTOKEN:1",
+                    confirmed_component_id="CHANGING_VALUE",
+                    text="m → changes",
+                    source_id=None,
+                ),
+                CanvasPedagogyIntent(
+                    action_type="INSERT_LABEL",
+                    target_kind="QUESTION_ANCHOR",
+                    target_object_id="Q-T01-002:QTOKEN:2",
+                    confirmed_component_id="FIXED_VALUE",
+                    text="7 → stays fixed",
+                    source_id=None,
+                ),
+            ],
+        }
+    )
+
+    actions = plan_tutor_canvas_actions(
+        tutor,
+        [
+            QuestionTextAnchor(token_id="Q-T01-002:QTOKEN:1", text="m", char_start=3, char_end=4),
+            QuestionTextAnchor(token_id="Q-T01-002:QTOKEN:2", text="7", char_start=7, char_end=8),
+        ],
+        [],
+        "TURN-1",
+        "m; 7; addition",
+        _fallback_labels(),
+        wrong_attempt_count=0,
+        student_response="m",
+    )
+
+    assert [(action.target_object_id, action.text) for action in actions] == [
+        ("Q-T01-002:QTOKEN:1", "m → changes"),
+        ("TUTOR_ANCHOR:CONFIRMED:Q-T01-002:1", "m → changes"),
+    ]
+
+
+def test_accepted_student_statement_does_not_get_a_template_label_without_llm_intention() -> None:
     tutor = _tutor_result(
         TutorMistakeClassification(status="no_mistake", confidence=0.9),
         [],
@@ -275,13 +339,10 @@ def test_accepted_student_statement_gets_a_tutor_layer_label_without_llm_intenti
         student_response="m changes",
     )
 
-    assert [(action.target_kind, action.target_object_id, action.text) for action in actions] == [
-        ("QUESTION_ANCHOR", "Q-T01-002:QTOKEN:2", "m → changes"),
-        ("TUTOR_ANCHOR", "TUTOR_ANCHOR:CONFIRMED:Q-T01-002:1", "m → changes"),
-    ]
+    assert actions == []
 
 
-def test_legacy_partial_evaluation_keeps_an_accepted_component_visible() -> None:
+def test_legacy_partial_evaluation_does_not_invent_an_accepted_component_label() -> None:
     tutor = _tutor_result(
         TutorMistakeClassification(status="no_mistake", confidence=0.9),
         [],
@@ -304,13 +365,10 @@ def test_legacy_partial_evaluation_keeps_an_accepted_component_visible() -> None
         student_response="m changes",
     )
 
-    assert [(action.target_kind, action.text) for action in actions] == [
-        ("QUESTION_ANCHOR", "m → changes"),
-        ("TUTOR_ANCHOR", "m → changes"),
-    ]
+    assert actions == []
 
 
-def test_accepted_fixed_value_and_operation_get_tutor_layer_labels() -> None:
+def test_accepted_fixed_value_and_operation_do_not_get_regex_labels() -> None:
     tutor = _tutor_result(
         TutorMistakeClassification(status="no_mistake", confidence=0.9),
         [],
@@ -341,12 +399,7 @@ def test_accepted_fixed_value_and_operation_get_tutor_layer_labels() -> None:
         student_response="7 is fixed and the plus sign means addition",
     )
 
-    assert [(action.target_object_id, action.text) for action in actions] == [
-        ("Q-T01-002:QTOKEN:3", "7 → stays fixed"),
-        ("Q-T01-002:QTOKEN:2", "+ → addition"),
-        ("TUTOR_ANCHOR:CONFIRMED:Q-T01-002:1", "7 → stays fixed"),
-        ("TUTOR_ANCHOR:CONFIRMED:Q-T01-002:2", "+ → addition"),
-    ]
+    assert actions == []
 
 
 def test_canvas_labels_use_only_the_current_student_statement() -> None:
@@ -389,7 +442,7 @@ def test_canvas_labels_use_only_the_current_student_statement() -> None:
     )
 
     assert all(action.text != "n → changes" for action in actions)
-    assert any(action.text == "5 → stays fixed" for action in actions)
+    assert actions == []
 
 
 def test_canvas_action_rejects_unconfirmed_target_and_answer_reveal_text() -> None:
@@ -430,7 +483,7 @@ def test_canvas_action_rejects_unconfirmed_target_and_answer_reveal_text() -> No
     ) == []
 
 
-def test_wrong_turn_targets_only_reliable_student_written_work() -> None:
+def test_wrong_turn_does_not_add_a_generic_highlight_without_writer_intention() -> None:
     tutor = _tutor_result(
         TutorMistakeClassification(status="no_mistake", confidence=0.9),
         [],
@@ -461,9 +514,7 @@ def test_wrong_turn_targets_only_reliable_student_written_work() -> None:
         student_response="",
     )
 
-    assert [(action.type, action.target_object_id) for action in actions] == [
-        ("HIGHLIGHT", "student-5n")
-    ]
+    assert actions == []
 
 
 def test_partial_choice_selection_gets_a_stable_option_action() -> None:

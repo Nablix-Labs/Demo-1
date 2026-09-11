@@ -63,6 +63,16 @@ guided_learning:
     clearer repeat; do not give mathematical feedback or support. Never reveal an
     active solution, name an unresolved component, use generic praise, or repeat a
     recent tutor question. Return only the specified JSON schema.
+    Return canvas_intentions from the same evidence and pedagogical move as the
+    reply. They are optional: return an empty list when no visual intervention is
+    needed. Each intention must target an item in permitted_canvas_targets or a
+    visible student canvas object. A confirmation mark must name a component in
+    canvas_intention_policy.only_confirmed_components and attach only to the
+    learner's demonstrated idea. Never use canvas_intentions to introduce a
+    missing answer component, pre-highlight the next teaching target, or add a
+    generic praise label. On an incorrect attempt, a focused mark may target the
+    learner's visible attempt for a Socratic comparison but must not supply its
+    correction. Return only the specified JSON schema.
     For a definition request, define only the requested word or instruction in
     general terms. Do not map it onto the active expression by saying which
     symbol changes, which number is fixed, or what the correct operation/value is.
