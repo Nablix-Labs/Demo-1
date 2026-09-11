@@ -271,6 +271,17 @@ def _is_complete_correct_canvas(
     )
 
 
+def _has_exact_symbolic_text_evidence(
+    text_input: str | None,
+    correct_answer: str | None,
+) -> bool:
+    """Treat an exact typed rule as trusted notation, like a clear canvas rule."""
+
+    if text_input is None or correct_answer is None:
+        return False
+    return normalize_exact_notation(text_input) == normalize_exact_notation(correct_answer)
+
+
 async def _canvas_evidence_for(request: InteractionRequest) -> CanvasEvidence | None:
     canvas_state = request.canvas_state
     if canvas_state is None:
@@ -1263,17 +1274,9 @@ def _choice_selection_canvas_actions(
 
 
 def _question_anchors(session: SessionRecord) -> list[QuestionTextAnchor]:
-    """Anchor the active teaching step into the question the learner is reading."""
+    """Visible anchors arrive only through validated tutor canvas actions."""
 
-    if session.current_phase != "GUIDED_PRACTICE":
-        return []
-    teaching_state = session.guided_teaching_state
-    return plan_question_anchors(
-        session.question_id,
-        session.current_question,
-        _active_answer_spec(session),
-        teaching_state.active_step_id if teaching_state is not None else None,
-    )
+    return []
 
 
 def _phase_2_prompt_context(
@@ -3849,9 +3852,9 @@ async def _process_interaction(
         if canvas_submission is not None
         else None
     )
-    canvas_solution_complete_candidate = _is_complete_correct_canvas(
-        ocr,
-        session.correct_answer,
+    canvas_solution_complete_candidate = (
+        _is_complete_correct_canvas(ocr, session.correct_answer)
+        or _has_exact_symbolic_text_evidence(request.text_input, session.correct_answer)
     )
     if (
         canvas_evidence is not None

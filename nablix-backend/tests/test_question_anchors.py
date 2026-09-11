@@ -87,8 +87,8 @@ def test_general_rule_step_anchors_nothing() -> None:
     ) == []
 
 
-def test_guided_turn_returns_anchors_for_the_active_step(monkeypatch) -> None:
-    """The response carries the spans alongside the question string they index."""
+def test_guided_turn_does_not_visually_anchor_an_unresolved_step(monkeypatch) -> None:
+    """Candidate anchors are not learner-visible actions before confirmation."""
 
     from app.models.guided_learning import GuidedTeachingState
     from app.services import interaction_service, session_service
@@ -116,5 +116,4 @@ def test_guided_turn_returns_anchors_for_the_active_step(monkeypatch) -> None:
 
     anchors = interaction_service._question_anchors(session)
 
-    assert [(anchor.text, anchor.label) for anchor in anchors] == [("n", "changes")]
-    assert question[anchors[0].char_start : anchors[0].char_end] == "n"
+    assert anchors == []
