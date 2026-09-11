@@ -40,6 +40,24 @@ function ready() {
 beforeEach(ready);
 
 describe('idempotency', () => {
+  it('marks only the confirmed question token', () => {
+    useNumeraStore.setState({
+      questionAnchors: [
+        { token_id: 'TOK-1', text: 'c', char_start: 30, char_end: 31, label: null },
+        { token_id: 'TOK-2', text: '4', char_start: 49, char_end: 50, label: null },
+      ],
+    });
+
+    useNumeraStore.getState().applyTutorCanvasActions([
+      action({ target_kind: 'QUESTION_ANCHOR', target_object_id: 'TOK-1' }),
+    ]);
+
+    expect(useNumeraStore.getState().questionAnchors).toEqual([
+      { token_id: 'TOK-1', text: 'c', char_start: 30, char_end: 31, label: null, highlighted: true },
+      { token_id: 'TOK-2', text: '4', char_start: 49, char_end: 50, label: null },
+    ]);
+  });
+
   it('renders a re-delivered action once', () => {
     // A reconnect replays the turn. Rendering twice would show the tutor
     // making the same teaching move again.

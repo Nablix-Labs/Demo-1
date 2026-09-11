@@ -1860,10 +1860,15 @@ export const useNumeraStore = create<NumeraState>()(
 
         // A label on a question token rides on the text, which is the only
         // thing that knows where the token wrapped to.
-        if (target.kind === 'anchor' && action.type === 'INSERT_LABEL' && action.text) {
-          questionAnchors = questionAnchors.map((anchor) =>
-            anchor.token_id === target.tokenId ? { ...anchor, label: action.text } : anchor,
-          );
+        if (target.kind === 'anchor') {
+          questionAnchors = questionAnchors.map((anchor) => {
+            if (anchor.token_id !== target.tokenId) return anchor;
+            if (action.type === 'HIGHLIGHT') return { ...anchor, highlighted: true };
+            if (action.type === 'INSERT_LABEL' && action.text) {
+              return { ...anchor, label: action.text, highlighted: true };
+            }
+            return anchor;
+          });
         }
 
         if (showsWriteAffordance(action)) writeAffordance = true;
