@@ -97,8 +97,10 @@ class JourneyVersionConflict(HTTPException):
         super().__init__(
             status_code=409,
             detail=(
+                # Never "submit it once more": the client now refuses that
+                # with SESSION_STATE_REFRESH_REQUIRED and re-syncs instead.
                 "Your learning progress changed while this answer was being "
-                "checked. Please submit it once more."
+                "checked. Your work is saved -- the tutor is catching up."
             ),
         )
         self.error_code = "JOURNEY_VERSION_CONFLICT"

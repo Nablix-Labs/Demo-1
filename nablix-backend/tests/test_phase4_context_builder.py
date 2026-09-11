@@ -10,6 +10,7 @@ from app.models.topic_event_history import (
     WorkArtifactRef,
 )
 from app.services.phase4_context_builder import (
+    STUDENT_FACING_NEXT_ACTIONS,
     Phase4ContextError,
     _whole_topic_evidence,
     build_phase4_review_request,
@@ -350,3 +351,57 @@ def test_journey_questions_cover_correct_attempts_not_just_replays() -> None:
         ("QU-T01-005-P3", "A1"),
         ("QU-T01-009-P3", "A2"),
     }
+
+
+def test_routing_verbs_never_reach_the_student_as_a_next_action() -> None:
+    """recommended_next_action is rendered as the button that ends the review.
+
+    routing.next_action is the Student Model's instruction to the tutor loop,
+    so WAIT_FOR_STUDENT_RESPONSE once asked a child to wait for themselves.
+    """
+
+    history = _history([])
+
+    expected_actions: dict[str, str] = {
+        "START_NEXT_TOPIC": "START_NEXT_TOPIC",
+        "DELIVER_PARALLEL_EXAMPLE": "PRACTISE_AGAIN",
+        "DELIVER_REDUCED_DIFFICULTY_FRESH_RETRY": "PRACTISE_AGAIN",
+        "DELIVER_SUPPORT_AND_RETRY": "PRACTISE_AGAIN",
+        "START_INDEPENDENT": "PRACTISE_AGAIN",
+        "PROCEED_TO_PHASE_3": "PRACTISE_AGAIN",
+        "RETURN_TO_SAME_PHASE_3_QUESTION": "PRACTISE_AGAIN",
+        "CHECK_PREREQUISITE_REMEDIATION_ROUTE": "KEEP_LEARNING",
+        "DELIVER_SCAFFOLD_STEP": "KEEP_LEARNING",
+        "PLAY_VIDEO_THEN_WORKED_EXAMPLE": "KEEP_LEARNING",
+        "START_GUIDED": "KEEP_LEARNING",
+        "START_ORIENTATION": "KEEP_LEARNING",
+        "START_PREREQUISITE_ORIENTATION": "KEEP_LEARNING",
+        "AWAIT_INTERVENTION_REVIEW": "CONTINUE",
+        "COLLECT_INTERVENTION_INPUT": "CONTINUE",
+        "NONE": "CONTINUE",
+        "START_REVIEW": "CONTINUE",
+        "WAIT_FOR_CONTENT": "CONTINUE",
+        "WAIT_FOR_STUDENT_RESPONSE": "CONTINUE",
+    }
+    for verb, expected_action in expected_actions.items():
+        action = build_phase4_review_request(
+            history, [], "DEVELOPING", verb
+        ).topic_outcome.recommended_next_action
+        assert action == expected_action, verb
+        # The table is one half; this is the invariant it exists to hold.
+        assert action in STUDENT_FACING_NEXT_ACTIONS, verb
+
+    assert (
+        build_phase4_review_request(
+            history, [], "DEVELOPING", "WAIT_FOR_STUDENT_RESPONSE"
+        ).topic_outcome.recommended_next_action
+        == "CONTINUE"
+    )
+    # The Student Model's set is a bare str with no enum, so it can grow
+    # without us. An unseen verb is not something to put in front of a child.
+    assert (
+        build_phase4_review_request(
+            history, [], "DEVELOPING", "SOME_VERB_ADDED_LATER"
+        ).topic_outcome.recommended_next_action
+        == "CONTINUE"
+    )

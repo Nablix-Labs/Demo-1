@@ -12,13 +12,15 @@ table do not have it.
 raised and the backend would not start at all.
 """
 
+from datetime import datetime, timezone
+
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app.adapters.student_model import StudentModelServiceAdapter
 from app.main import app
-from app.models.session import SessionPerformance, SessionRecord
+from app.models.session import SessionPerformance, SessionRecord, SessionResponse
 from app.models.student_model_session import (
     GuidedRepairCompletedEvent,
     StudentModelSessionEvent,
@@ -177,3 +179,56 @@ def test_an_inconsistent_stored_repair_event_fails_loudly() -> None:
         GuidedRepairCompletedEvent.model_validate({**incomplete,
                                                   "micro_skill_ids": ["T01.M5"],
                                                   "repair_cycle_no": 3})
+
+def _session_with_active_question() -> SessionRecord:
+    event = StudentModelSessionEventResponse.model_validate(
+        _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+    )
+    assert event.phase_payload is not None and event.phase_payload.question_set is not None
+    question = event.phase_payload.question_set.questions[0]
+    return SessionRecord(
+        session_id="SESSION001",
+        student_id="ST440",
+        concept_id="ALG_LINEAR_ONE_STEP",
+        started_at=datetime.now(timezone.utc),
+        current_phase="INDEPENDENT_PRACTICE",
+        current_question=question.student_view.question_text,
+        question_id=question.question_id,
+        question_number=1,
+        interaction_mode="TEXT",
+        ui_state="AWAITING_ANSWER",
+        message="",
+        hint_count=0,
+        status="started",
+        inactivity_policy=session_service.inactivity_policy(),
+        active_student_model_question=question,
+        correct_answer="7",
+    )
+
+
+def test_question_usage_id_is_exposed_without_the_answer_spec() -> None:
+    """The client compares identity before it re-enables Check.
+
+    question_id alone cannot separate a genuine match from the same question
+    re-served as a new usage -- which is what a Guided repair return does -- so
+    the usage id has to be on the wire. The question it comes from carries the
+    answer spec and must not be.
+    """
+
+    record = _session_with_active_question()
+    assert record.active_student_model_question is not None
+    body = SessionResponse.model_validate(record).model_dump(mode="json")
+
+    assert body["question_usage_id"] == record.active_student_model_question.question_usage_id
+    assert "active_student_model_question" not in body
+    assert "correct_answer" not in body
+
+
+def test_question_usage_id_is_null_between_questions() -> None:
+    record = _session_with_active_question().model_copy(
+        update={"active_student_model_question": None}
+    )
+
+    body = SessionResponse.model_validate(record).model_dump(mode="json")
+
+    assert body["question_usage_id"] is None

@@ -272,9 +272,16 @@ class QuestionSkillLabel(StrictSchema):
 class Phase4ReviewResponse(StrictSchema):
     tutor_replays: list[TutorReplay]
     student_insights: StudentInsights
-    # Forwarded from the request after generation, never asked of the model —
-    # both come straight from data the session already holds (see
+    # Overwritten from the request after generation —
+    # all three come straight from data the session already holds (see
     # generate_phase4_review_for in session_service.py).
+    #
+    # topic_info is what the review is headed with. Without it the client has
+    # no human-readable topic name at Review — journey_state.topic_id is a code
+    # and the orientation bundle is null by then — so it printed "This topic".
+    # Optional on the wire only because sessions persisted before this field
+    # existed do not carry it.
+    topic_info: TopicInfo | None = None
     topic_outcome: TopicOutcome | None = None
     question_journey: list[QuestionJourneyItem] | None = None
     # Merged into question_journey rows after generation, on the attempt pair.
