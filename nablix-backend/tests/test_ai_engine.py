@@ -8259,24 +8259,30 @@ def test_semantic_contract_normalizes_general_keyboard_math_notation(
     assert classifier.evaluate_answer_contract(request) == "CORRECT"
 
 
+# "Selected B: n + 4" carries the option letter and the option text, and
+# authored specs canonicalise either one. ST-018 (letter) and ST-008 (text) were
+# both graded INCORRECT on a correct selection and pushed into guided repair.
 @pytest.mark.parametrize(
-    ("student_input", "expected"),
+    ("canonical_answer", "student_input", "expected"),
     [
-        ("Selected B: Add 6 to n", "CORRECT"),
-        ("selected b: add 6 to n", "CORRECT"),
-        ("B", "CORRECT"),
-        ("Selected A: Multiply n by 6", "INCORRECT"),
+        ("B", "Selected B: n + 4", "CORRECT"),
+        ("B", "selected b: n + 4", "CORRECT"),
+        ("B", "B", "CORRECT"),
+        ("B", "Selected A: 12 + 4", "INCORRECT"),
+        ("n + 4", "Selected B: n + 4", "CORRECT"),
+        ("n + 4", "Selected A: 12 + 4", "INCORRECT"),
     ],
 )
 def test_choice_contract_reads_the_selected_option_the_ui_submits(
+    canonical_answer: str,
     student_input: str,
     expected: str,
 ) -> None:
     request = ClassificationRequest(
         question_type="CHOICE_WITH_EXPLANATION",
-        question="Which statement correctly describes n + 6?",
-        correct_answer="B",
-        answer_spec=_answer_spec("B", [], "EXACT_CHOICE_MATCH"),
+        question="Which is the general rule? A: 12 + 4. B: n + 4.",
+        correct_answer=canonical_answer,
+        answer_spec=_answer_spec(canonical_answer, [], "EXACT_CHOICE_MATCH"),
         student_input=student_input,
         current_phase="INDEPENDENT_PRACTICE",
         input_source="CHOICE",

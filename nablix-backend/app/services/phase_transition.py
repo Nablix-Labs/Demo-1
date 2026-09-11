@@ -19,7 +19,13 @@ VALID_TRANSITIONS: dict[Phase, tuple[Phase, ...]] = {
     ),
     "CONCEPT_ORIENTATION": ("GUIDED_PRACTICE", "DIAGNOSTIC", "REVIEW"),
     "GUIDED_PRACTICE": ("INDEPENDENT_PRACTICE", "DIAGNOSTIC", "REVIEW"),
-    "INDEPENDENT_PRACTICE": ("GUIDED_PRACTICE", "REVIEW"),
+    # CONCEPT_ORIENTATION is the prerequisite-remediation route: a checkpoint
+    # that survives both Guided repair cycles escalates to the prerequisite
+    # lookup, and a resolved route comes back as a PHASE_1_ORIENTATION bundle on
+    # the prerequisite topic (START_PREREQUISITE_ORIENTATION). Without it that
+    # response 409s as an invalid transition and the student is left on the
+    # empty practice screen this route exists to rescue them from.
+    "INDEPENDENT_PRACTICE": ("GUIDED_PRACTICE", "REVIEW", "CONCEPT_ORIENTATION"),
     "REVIEW": ("GUIDED_PRACTICE", "CONCEPT_ORIENTATION"),
 }
 

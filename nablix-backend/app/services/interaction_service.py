@@ -89,6 +89,7 @@ from app.models.student_model_session import (
     GuidedAttemptEvent,
     FreshIndependentQuestionRequestedEvent,
     GuidedQuestionSetRequestedEvent,
+    PrerequisiteRouteResolvedEvent,
     GuidedSupportEvent,
     IndependentQuestionSetRequestedEvent,
     Phase2RepairResult,
@@ -565,6 +566,11 @@ async def process_answer_with_session_event(
 
     adapters = get_adapters()
     require_learning_active(session)
+    if context.source_turn_id == session.accepted_progression_turn_id:
+        raise HTTPException(status_code=409, detail={
+            "code": "TURN_ALREADY_ACCEPTED",
+            "message": "This answer was already accepted. Refresh to continue with the current question.",
+        })
     session = await _initialize_restored_schema_phase(
         session,
         adapters.student_model,
@@ -1021,6 +1027,16 @@ async def process_answer_with_session_event(
                 timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 target_micro_skill_ids=targets,
             ),
+            access_token,
+        )
+    if (
+        response.routing.prerequisite_check_required
+        and response.status.status_code == "PREREQUISITE_LOOKUP_REQUIRED"
+    ):
+        response = await _resolve_prerequisite_route(
+            session,
+            response,
+            context.source_turn_id,
             access_token,
         )
     updated_session = await _apply_schema_event(session, response)
@@ -1480,11 +1496,10 @@ async def _initialize_restored_schema_phase(
         phase = event.journey_state.recommended_entry_phase or event.journey_state.current_phase
         guided = event.journey_state.phase_2_guided_learning
         if phase != "PHASE_2_GUIDED_LEARNING" or guided.status != "NOT_STARTED":
-            # Deterministic on (session, stale version): a retry after a lost
-            # response re-asks the identical question instead of booking a new
-            # one. SESSION_OPENED is read-only upstream, so a replay is free.
+            # SESSION_OPENED retains no replay envelope upstream. Each read
+            # needs a new ID; only mutating progression events reuse their ID.
             response = await student_model.send_session_event(SessionOpenedEvent(
-                request_id=f"{session.session_id}:RECOVER-{event.journey_state.version}",
+                request_id=f"{session.session_id}:RECOVER-{uuid4()}",
                 event_type="SESSION_OPENED", topic_id=event.journey_state.topic_id,
                 student_id=session.student_id,
                 timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -2052,6 +2067,85 @@ def _next_hint_count_from(session: SessionRecord) -> int:
 
 def _new_tutor_turn_id() -> str:
     return f"TUTOR-{uuid4()}"
+
+
+async def _resolve_prerequisite_route(
+    session: SessionRecord,
+    response: StudentModelSessionEventResponse,
+    source_turn_id: str,
+    access_token: str,
+) -> StudentModelSessionEventResponse:
+    """Answer Student Model's prerequisite lookup so the topic keeps moving.
+
+    A third failure on the same checkpoint uses up both Guided repair cycles,
+    and Student Model escalates: reason_code MAX_GUIDED_REPAIRS_EXHAUSTED,
+    next_action CHECK_PREREQUISITE_REMEDIATION_ROUTE, no phase_payload, and a
+    journey parked at PAUSED_FOR_PREREQUISITE_LOOKUP. That is a question, not a
+    verdict -- it is waiting to be told which micro-skills sit beneath the one
+    the student cannot clear, and it cannot find out for itself.
+
+    Nothing here answered it. The session persisted with question_id null and
+    the student was shown an empty practice screen, which reads as "no more
+    questions left" -- the end of ST-018's run on 11 Sep, and where ST-008 was
+    heading. So the curriculum lookup runs and its answer is reported back.
+
+    An empty chain is a real answer rather than a failure to look: Student
+    Model needs it to tell EARLIEST_TOPIC_NO_BACKWARD_ROUTE from
+    NO_PREREQUISITE_ROUTE_AVAILABLE, and turns either into the teacher
+    intervention it owns the wording for. Both outcomes are reported, and only
+    a transport failure leaves the pause standing -- where it is at least
+    retryable against an unchanged journey, since the escalation is persisted.
+    """
+
+    checkpoint = (
+        response.journey_state.return_checkpoint
+        or response.journey_state.phase_3_independent_practice.return_checkpoint
+    )
+    if checkpoint is None:
+        # The escalation records the return point before routing away, so its
+        # absence means the two sides disagree about what just happened.
+        raise HTTPException(
+            status_code=503,
+            detail="Student Model escalated to a prerequisite lookup without a return checkpoint.",
+        )
+    student_model = get_adapters().student_model
+    route = await student_model.fetch_prerequisite_route(
+        response.journey_state.topic_id,
+        checkpoint.micro_skill_id,
+        _schema_interaction_request_id(
+            session,
+            source_turn_id,
+            "PREREQUISITE_ROUTE_LOOKUP",
+        ),
+    )
+    logger.info(
+        "prerequisite_route_resolved",
+        extra={
+            "session_id": session.session_id,
+            "topic_id": response.journey_state.topic_id,
+            "micro_skill_id": checkpoint.micro_skill_id,
+            "checkpoint_question_id": checkpoint.checkpoint_question_id,
+            "prerequisite_micro_skill_count": len(route.prerequisite_micro_skills),
+        },
+    )
+    return await student_model.send_session_event(
+        PrerequisiteRouteResolvedEvent(
+            request_id=_schema_interaction_request_id(
+                session,
+                source_turn_id,
+                "PREREQUISITE_ROUTE_RESOLVED",
+            ),
+            event_type="PREREQUISITE_ROUTE_RESOLVED",
+            source_turn_id=source_turn_id,
+            expected_journey_version=response.journey_state.version,
+            topic_id=response.journey_state.topic_id,
+            student_id=session.student_id,
+            timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            source_micro_skill_id=checkpoint.micro_skill_id,
+            prerequisite_micro_skills=route.prerequisite_micro_skills,
+        ),
+        access_token,
+    )
 
 
 def _schema_interaction_request_id(

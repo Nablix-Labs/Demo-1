@@ -484,12 +484,39 @@ class SessionResumedEvent(MutatingSessionEventBase):
     saved_journey: dict[str, object]
 
 
+class PrerequisiteMicroSkill(BaseModel):
+    """One link of the prerequisite chain, echoed back from the lookup endpoint.
+
+    Student Model dereferences exactly these three fields when it groups the
+    chain into a remediation plan, so they are the ones modelled here; the
+    endpoint's `active` flag is carried through untouched.
+    """
+
+    micro_skill_id: str
+    lowest_topic_id: str
+    lowest_topic_sequence: int
+    active: bool = True
+
+
+class PrerequisiteRouteResolvedEvent(MutatingSessionEventBase):
+    event_type: Literal["PREREQUISITE_ROUTE_RESOLVED"]
+    source_micro_skill_id: str
+    prerequisite_micro_skills: list[PrerequisiteMicroSkill]
+
+
+class PrerequisiteRouteLookup(BaseModel):
+    """The curriculum lookup's answer: the chain, or an empty one."""
+
+    prerequisite_micro_skills: list[PrerequisiteMicroSkill]
+
+
 class ReviewCompletedEvent(MutatingSessionEventBase):
     event_type: Literal["REVIEW_COMPLETED"]
 
 
 StudentModelSessionEvent: TypeAlias = (
-    SessionOpenedEvent
+    PrerequisiteRouteResolvedEvent
+    | SessionOpenedEvent
     | InterventionInputSubmittedEvent
     | DiagnosticQuestionSetRequestedEvent
     | DiagnosticCompletedEvent
