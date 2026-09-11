@@ -71,6 +71,15 @@ export function voiceSupportFrame(msg: VoiceTutorFrame): SupportPresentation {
     show_visual_cue: msg.show_visual_cue as boolean | undefined,
     visual_cue: msg.visual_cue as SupportPresentation['visual_cue'],
 
+    // How a cue gets taken DOWN. applyInteractionSupport clears the cue when a
+    // turn serves none and the question is finished, and it reads exactly these
+    // two to decide "finished". Both are optional on InteractionResponse, so
+    // omitting them here compiled and simply read as "not finished" — the cue
+    // from a solved question stayed on screen for the whole of the next one,
+    // on voice only. Fourth field lost to this allow-list; see the header.
+    answer_value_confirmed: msg.answer_value_confirmed as boolean | undefined,
+    question_completed: msg.question_completed as boolean | undefined,
+
     show_scaffold_panel: msg.show_scaffold_panel as boolean | undefined,
     scaffold_id: str(msg.scaffold_id),
     current_scaffold_step_id: str(msg.current_scaffold_step_id),

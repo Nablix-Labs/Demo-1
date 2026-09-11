@@ -30,6 +30,12 @@ const FULL = {
   scaffold_step_text: 'Find what changes.',
   scaffold_step_voice: 'Now find what changes.',
   total_scaffold_steps: 4,
+  // Read by applyInteractionSupport to CLEAR a cue once the question is
+  // finished. Absent on voice, the clear never fires and a solved question's
+  // cue stays on screen. The fixture is what makes "drops no field" bite, so a
+  // field missing from it is a field the test cannot protect.
+  answer_value_confirmed: true,
+  question_completed: true,
   tutor_canvas_actions: [{
     action_id: 'ACT-9',
     type: 'HIGHLIGHT',
