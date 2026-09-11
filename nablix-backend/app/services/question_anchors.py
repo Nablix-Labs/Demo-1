@@ -48,11 +48,10 @@ def plan_question_anchors(
     answer_spec: AnswerSpec | None,
     active_step_id: str | None,
 ) -> list[QuestionTextAnchor]:
-    """Plan candidate tokens for an active teaching step.
+    """Anchor the part of the question the active teaching step is about.
 
-    This helper is an address-book builder. Callers that render learner-visible
-    annotations must use a validated canvas action, never these candidates on
-    their own.
+    The step is chosen by the guided controller, so the anchor follows the
+    lesson rather than a model's guess at what to point out.
     """
 
     if question_id is None or not question_text or active_step_id is None:
@@ -63,19 +62,26 @@ def plan_question_anchors(
     if parts is None:
         return []
     variable, _operator, fixed_value = parts.groups()
+
     tokens = question_text_tokens(question_id, question_text)
     if active_step_id == "CHANGING_VALUE":
+        # Case-sensitive: a lowercase variable never opens a sentence, so this
+        # keeps the article "A" from being read as the variable "a".
         named = [token for token in tokens if token.text == variable]
+        # A question that never names the variable still shows the learner
+        # concrete starting values; those are what varies between cases.
         targets = named or [
             token for token in tokens if token.text.isdigit() and token.text != fixed_value
         ]
         return [token.model_copy(update={"label": _CHANGING_LABEL}) for token in targets]
+
     if active_step_id == "FIXED_VALUE":
         return [
             token.model_copy(update={"label": _FIXED_LABEL})
             for token in tokens
             if token.text == fixed_value
         ]
+
     return []
 
 

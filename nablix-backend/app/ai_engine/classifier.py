@@ -1143,9 +1143,9 @@ def requires_written_symbolic_rule_evidence(
         return False
     if request.answer_spec is None:
         return False
-    # A reliable canvas or exact typed response confirms notation. Multipart
-    # conceptual items retain their response-aware component policy, so a valid
-    # explanation is never downgraded merely because it was not canvas ink.
+    # A canvas-write request confirms a rule that has already been evaluated as
+    # correct. Never let an optimistic model state turn a contradictory typed
+    # expression into a request to write that expression on the canvas.
     if evaluate_answer_contract(request) == "INCORRECT":
         return False
     if _expression_parts(request.answer_spec.canonical_answer) is None:
