@@ -360,14 +360,20 @@ describe('fields the engine sends that the screen already reads', () => {
 });
 
 /**
- * The backend currently feeds the Student Model's ROUTING verb into
- * `recommended_next_action` (`event.routing.next_action`,
- * session_service.py:1127), so a live review arrives asking the student to
- * "Wait for student response" — on the button they press to leave the review.
- * Verified on the VM 2026-09-11 (ST015). The real fix is Chiru's; this keeps
- * internal vocabulary off the screen until it lands.
+ * The next action is the backend's vocabulary, and the client renders it.
+ *
+ * It used to arrive as the Student Model's ROUTING verb — the button ending the
+ * review read "Wait for student response" (verified on the VM, ST015,
+ * 11 Sep 2026). Chiru now translates it in the builder and hands over a closed
+ * set: START_NEXT_TOPIC / PRACTISE_AGAIN / KEEP_LEARNING / CONTINUE, with
+ * anything unmapped falling back to CONTINUE server-side and logged there
+ * (phase4_context_builder.student_facing_next_action, PR #271).
+ *
+ * So the client's own WAIT_FOR_* filter is gone: two places owning one rule is
+ * how vocabularies drift, and the whole point of the ask was that the backend
+ * owns this one. These pin the pass-through instead.
  */
-describe('a routing verb arriving as the next action', () => {
+describe('the student-facing next action', () => {
   const insights = {
     strength_summary: 's', development_summary: 'd',
     next_practice_focus: 'n', personalised_notes: ['a', 'b', 'c'],
@@ -379,16 +385,20 @@ describe('a routing verb arriving as the next action', () => {
     },
   } as never, 'Topic')!.topic_outcome.recommended_next_action;
 
-  it('is not shown to the student', () => {
-    expect(outcome('WAIT_FOR_STUDENT_RESPONSE')).toBe('CONTINUE');
-    expect(outcome('WAIT_FOR_CONTENT')).toBe('CONTINUE');
+  it('passes the whole closed set through untouched', () => {
+    for (const action of ['START_NEXT_TOPIC', 'PRACTISE_AGAIN', 'KEEP_LEARNING', 'CONTINUE']) {
+      expect(outcome(action), action).toBe(action);
+    }
   });
 
-  it('leaves a real next action exactly as sent', () => {
-    // Anything that is not a WAIT_FOR_* verb is the backend's to word, and
-    // guessing at a replacement is how the review came to be headed
-    // "Linear equations" for a session about something else.
-    expect(outcome('START_NEXT_TOPIC')).toBe('START_NEXT_TOPIC');
-    expect(outcome('CONTINUE_PRACTICE')).toBe('CONTINUE_PRACTICE');
+  it('passes prose through too', () => {
+    // The builder notes its table is a stopgap and that the Student Model
+    // already authors this as a sentence; humanLabel leaves non-ALL_CAPS alone,
+    // so prose needs no client change when it lands.
+    expect(outcome('Repeat guided learning for fractions.')).toBe('Repeat guided learning for fractions.');
+  });
+
+  it('falls back only when the backend sent nothing at all', () => {
+    expect(outcome('   ')).toBe('CONTINUE');
   });
 });

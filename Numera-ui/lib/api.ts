@@ -840,7 +840,23 @@ export function sessionTopicTitle(record: SessionRecord | null | undefined): str
   // ordinary — and the throw landed on the final screen of the lesson.
   const video = orientationBundle(record)?.delivery_sequence
     ?.find((item) => item.video?.title)?.video;
-  return video?.title?.trim() || null;
+  const fromBundle = video?.title?.trim();
+  if (fromBundle) return fromBundle;
+
+  // At REVIEW the bundle is gone — `payload_type` is REVIEW_SUMMARY with a null
+  // orientation_bundle — so the only screen that needs a topic name was the one
+  // screen that had none, and every live review was headed "This topic".
+  // Chiru put the name on the review itself (topic_info, PR #271, 11 Sep 2026),
+  // which is the authoritative one: build_phase4_review_request raises rather
+  // than fabricate it, and session_service overwrites whatever the model
+  // returned with the request's copy, so it cannot be invented.
+  //
+  // Still no fallback to `journey_state.topic_id` — that is a code, and naming
+  // a topic from it client-side is what produced a review headed "Linear
+  // equations" for a session about something else (QA row 42).
+  const fromReview = (record?.phase4_review as
+    { topic_info?: { title?: unknown } } | null | undefined)?.topic_info?.title;
+  return typeof fromReview === 'string' && fromReview.trim() ? fromReview.trim() : null;
 }
 
 // ── Phase 0 → 1 lifecycle ────────────────────────────────────────────────────

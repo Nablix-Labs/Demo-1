@@ -15,17 +15,14 @@
  * dangerous direction: it described fields the adapter was dropping as fields
  * the backend was not sending.
  *
- * Two things are still genuinely absent, and both degrade rather than guess:
+ * `topic_info` shipped on 11 Sep 2026 too (Chiru, PR #271), which is why the
+ * `topicTitle` argument is now only a fallback: `sessionTopicTitle` reads the
+ * name off the review itself. Before that, REVIEW was the one screen with no
+ * topic name available — the orientation bundle is null by then — and every
+ * live review was headed "This topic".
  *
- *   topic_title    NOT on the wire at Review. The only human-readable name the
- *                  backend sends is the orientation video's title, and at
- *                  REVIEW `payload_type` is REVIEW_SUMMARY with a null
- *                  orientation_bundle — so `sessionTopicTitle` returns null and
- *                  the caller passes its own fallback. Resolving a name from
- *                  the topic CODE client-side is exactly what row 42 reported
- *                  (a review headed "Linear equations" for a session about
- *                  something else), so it is deliberately not done here.
- *                  Needs `topic_info.title` on Phase4ReviewResponse — Chiru.
+ * One thing is still genuinely absent, and it degrades rather than guesses:
+ *
  *   error_pattern  Never sent. `key_takeaways` likewise falls back to
  *                  `personalised_notes`. Both are optional by design.
  */
@@ -104,31 +101,6 @@ export interface SessionForPhase4 {
 
 /** Shown when the backend sent no outcome. Deliberately not a mastery claim. */
 export const OUTCOME_PENDING = 'Reviewed';
-
-/**
- * `recommended_next_action` is the label on the button that ENDS the review, so
- * it has to read as something the student does.
- *
- * The backend currently supplies the Student Model's routing verb instead:
- * `build_phase4_review_request(..., event.routing.next_action)` at
- * session_service.py:1127. Those are WAIT_FOR_* tokens — WAIT_FOR_STUDENT_RESPONSE,
- * WAIT_FOR_CONTENT — addressed to the tutor loop, not the learner, and
- * `humanLabel` renders them verbatim: a 12-year-old finishing their topic was
- * asked to "Wait for student response" (verified live, ST015, 2026-09-11).
- *
- * Only that family is filtered, and it falls back to the same 'CONTINUE' used
- * when the field is absent entirely. Everything else is passed through
- * untouched — mapping unknown tokens onto invented wording is precisely how the
- * review came to be headed "Linear equations" for a session about something
- * else, and the backend owns this vocabulary.
- *
- * Remove once Chiru passes a genuine next action.
- */
-function studentFacingAction(action: string | undefined): string {
-  const token = action?.trim() ?? '';
-  if (!token || token.toUpperCase().startsWith('WAIT_FOR')) return 'CONTINUE';
-  return token;
-}
 
 function toReplay(
   raw: NonNullable<SessionPhase4Review['tutor_replays']>[number],
@@ -250,7 +222,7 @@ export function phase4FromSession(
     // claim, which is the whole reason OUTCOME_PENDING reads "Reviewed".
     topic_outcome: {
       mastery_status: raw.topic_outcome?.mastery_status?.trim() || OUTCOME_PENDING,
-      recommended_next_action: studentFacingAction(raw.topic_outcome?.recommended_next_action),
+      recommended_next_action: raw.topic_outcome?.recommended_next_action?.trim() || 'CONTINUE',
       next_action_message: raw.topic_outcome?.next_action_message?.trim() || null,
     },
     // Taken from the backend, which sends the whole Phase 3 journey.
