@@ -365,9 +365,15 @@ def plan_tutor_canvas_actions(
     if student_state not in {"CORRECT", "PARTIAL", "WRONG"}:
         return write_actions
 
-    actions: list[TutorCanvasAction] = []
-    seen: set[tuple[str, str | None, str | None]] = set()
-    for position, intention in enumerate(tutor.canvas_intentions, start=1):
+    actions = confirmed_evidence_highlight_actions(
+        tutor,
+        question_anchors,
+        canvas_events,
+        turn_id,
+        canonical_answer,
+    )
+    seen = {(action.type, action.target_object_id, action.text) for action in actions}
+    for position, intention in enumerate(tutor.canvas_intentions, start=len(actions) + 1):
         if intention.action_type in {"TUTOR_SOLVED_STEP", "SHOW_CUE", "OPEN_SCAFFOLD_STEP", "SHOW_PARALLEL"}:
             continue
         if (
@@ -422,6 +428,92 @@ def plan_tutor_canvas_actions(
             actions.append(action)
             action_keys.add(key)
     return [*add_confirmation_canvas_slots(actions, turn_id), *write_actions]
+
+
+def confirmed_evidence_highlight_actions(
+    tutor: TutorResult,
+    question_anchors: list[QuestionTextAnchor],
+    canvas_events: list[CanvasEvent],
+    turn_id: str,
+    canonical_answer: str,
+) -> list[TutorCanvasAction]:
+    """Highlight only the maths supported by evidence from this turn.
+
+    This intentionally runs after assessment and outside the response writer.
+    Canvas information must never alter the prompt or context used to write the
+    learner-facing tutor message.
+    """
+
+    if canvas_student_state(tutor) not in {"CORRECT", "PARTIAL"}:
+        return []
+    current_turn = (
+        tutor.guided_teaching_state.last_turn_evidence
+        if tutor.guided_teaching_state is not None
+        else []
+    )
+    confirmed_component_ids = [
+        claim.concept_id
+        for claim in current_turn
+        if claim.status == "DEMONSTRATED"
+    ]
+    parts = _SYMBOLIC_RULE_RE.search(canonical_answer)
+    if parts is None:
+        return []
+    variable, operator, fixed_value = parts.groups()
+    normalised_operator = "+" if operator == "+" else "-"
+    actions: list[TutorCanvasAction] = []
+    for component_id in confirmed_component_ids:
+        role = confirmation_role(component_id, tutor)
+        if role == "changing_value":
+            targets = [anchor for anchor in question_anchors if anchor.text == variable]
+            if not targets:
+                targets = [
+                    anchor
+                    for anchor in question_anchors
+                    if anchor.text.isdigit() and anchor.text != fixed_value
+                ]
+        elif role == "fixed_value":
+            targets = [anchor for anchor in question_anchors if anchor.text == fixed_value]
+        elif role == "operation":
+            targets = [
+                anchor
+                for anchor in question_anchors
+                if anchor.text.replace("−", "-") == normalised_operator
+            ]
+        elif role == "general_rule":
+            targets = [
+                anchor
+                for anchor in question_anchors
+                if anchor.text in {variable, fixed_value}
+                or anchor.text.replace("−", "-") == normalised_operator
+            ]
+        else:
+            continue
+        for target in targets:
+            if any(
+                event.actor == "TUTOR"
+                and event.action_type == "HIGHLIGHT"
+                and event.semantic_tag == component_id
+                and event.target_object_id == target.token_id
+                and event.active_state == "ACTIVE"
+                for event in canvas_events
+            ):
+                continue
+            actions.append(
+                TutorCanvasAction(
+                    action_id=(
+                        f"{turn_id}:{len(actions) + 1}:HIGHLIGHT:{target.token_id}"
+                    ),
+                    type="HIGHLIGHT",
+                    target_kind="QUESTION_ANCHOR",
+                    target_object_id=target.token_id,
+                    confirmed_component_id=component_id,
+                    text=None,
+                    source_id=None,
+                    answer_reveal_allowed=False,
+                )
+            )
+    return actions
 
 
 def plan_rescue_canvas_actions(
@@ -808,6 +900,8 @@ def confirmation_role(component_id: str, tutor: TutorResult) -> str:
         return "fixed_value"
     if any(term in source for term in ("operation", "addition", "subtract", "multiply", "divide")):
         return "operation"
+    if "rule" in source:
+        return "general_rule"
     return "generic"
 
 
