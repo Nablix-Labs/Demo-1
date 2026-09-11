@@ -444,7 +444,7 @@ def confirmed_component_canvas_actions(
     if canvas_student_state(tutor) not in {"CORRECT", "PARTIAL"}:
         return []
     actions: list[TutorCanvasAction] = []
-    component_ids = confirmed_component_ids(tutor)
+    component_ids = ordered_confirmed_component_ids(tutor)
     for component_id in component_ids:
         targets = confirmation_targets(
             component_id,
@@ -568,6 +568,23 @@ def confirmation_note_exists(
         and event.active_state == "ACTIVE"
         for event in canvas_events
     )
+
+
+def ordered_confirmed_component_ids(tutor: TutorResult) -> list[str]:
+    """Keep simultaneous confirmation marks in authored component order."""
+
+    confirmed = confirmed_component_ids(tutor)
+    authored_order = [
+        concept.concept_id
+        for concept in (
+            tutor.generated_question_rubric.required_concepts
+            if tutor.generated_question_rubric is not None
+            else []
+        )
+        if concept.concept_id in confirmed
+    ]
+    remaining = sorted(confirmed.difference(authored_order))
+    return [*authored_order, *remaining]
 
 
 def answer_confirmation_role(
