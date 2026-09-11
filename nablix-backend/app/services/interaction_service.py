@@ -71,7 +71,7 @@ from app.models.guided_learning import (
 )
 
 from app.models.question_anchor import QuestionTextAnchor
-from app.models.remediation import InterventionFeedback
+from app.models.remediation import InterventionFeedback, Phase3Checkpoint
 from app.models.interaction import (
     InteractionRequest,
     InteractionResponse,
@@ -89,6 +89,7 @@ from app.models.student_model_session import (
     GuidedAttemptEvent,
     FreshIndependentQuestionRequestedEvent,
     GuidedQuestionSetRequestedEvent,
+    PrerequisiteRouteResolvedEvent,
     GuidedSupportEvent,
     IndependentQuestionSetRequestedEvent,
     Phase2RepairResult,
@@ -1031,6 +1032,17 @@ async def process_answer_with_session_event(
                 timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 target_micro_skill_ids=targets,
             ),
+            access_token,
+        )
+    if (
+        response.routing.prerequisite_check_required
+        and response.status.status_code == "PREREQUISITE_LOOKUP_REQUIRED"
+    ):
+        response = await _resolve_prerequisite_route(
+            session,
+            response,
+            context.source_turn_id,
+            adapters.student_model,
             access_token,
         )
     updated_session = await _apply_schema_event(session, response)
@@ -2054,6 +2066,106 @@ def _next_hint_count_from(session: SessionRecord) -> int:
 
 def _new_tutor_turn_id() -> str:
     return f"TUTOR-{uuid4()}"
+
+
+async def _resolve_prerequisite_route(
+    session: SessionRecord,
+    response: StudentModelSessionEventResponse,
+    source_turn_id: str,
+    student_model: StudentModelAdapter,
+    access_token: str,
+) -> StudentModelSessionEventResponse:
+    """Answer the prerequisite lookup Student Model is waiting on (TC-29/30/31).
+
+    A third failure on the same checkpoint spends both Phase 2 repair cycles,
+    and Student Model escalates: MAX_GUIDED_REPAIRS_EXHAUSTED, no phase_payload,
+    Phase 3 parked at PAUSED_FOR_PREREQUISITE_LOOKUP. That is a question -- which
+    micro-skills sit beneath the one the student cannot clear -- and it cannot
+    answer it itself.
+
+    Nothing here answered it, so the session persisted with question_id null and
+    the practice screen went empty, which the student reads as "no more questions
+    left": the end of ST-018's run on 11 Sep 2026, and where ST-008 was heading.
+
+    An empty chain is a real answer, not a failure to look. Student Model needs
+    it to tell EARLIEST_TOPIC_NO_BACKWARD_ROUTE from NO_PREREQUISITE_ROUTE_AVAILABLE
+    (TC-34/TC-35) and turns either into the teacher intervention it owns the
+    wording for. Both outcomes are reported; only a transport failure leaves the
+    pause standing, and the escalation is persisted upstream so that is
+    retryable against an unchanged journey.
+    """
+
+    checkpoint = _escalated_checkpoint(response)
+    if checkpoint is None:
+        # The escalation records its return point before routing away, so an
+        # absent one means the two sides disagree about what just happened.
+        raise HTTPException(
+            status_code=503,
+            detail="Student Model escalated to a prerequisite lookup without a return checkpoint.",
+        )
+    route = await student_model.fetch_prerequisite_route(
+        response.journey_state.topic_id,
+        checkpoint.micro_skill_id,
+        _schema_interaction_request_id(
+            session,
+            source_turn_id,
+            "PREREQUISITE_ROUTE_LOOKUP",
+        ),
+    )
+    logger.info(
+        "prerequisite_route_resolved",
+        extra={
+            "session_id": session.session_id,
+            "topic_id": response.journey_state.topic_id,
+            "micro_skill_id": checkpoint.micro_skill_id,
+            "checkpoint_question_id": checkpoint.checkpoint_question_id,
+            "prerequisite_micro_skill_count": len(route.prerequisite_micro_skills),
+        },
+    )
+    return await student_model.send_session_event(
+        PrerequisiteRouteResolvedEvent(
+            request_id=_schema_interaction_request_id(
+                session,
+                source_turn_id,
+                "PREREQUISITE_ROUTE_RESOLVED",
+            ),
+            event_type="PREREQUISITE_ROUTE_RESOLVED",
+            source_turn_id=source_turn_id,
+            expected_journey_version=response.journey_state.version,
+            topic_id=response.journey_state.topic_id,
+            source_topic_id=response.journey_state.topic_id,
+            student_id=session.student_id,
+            timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            source_micro_skill_id=checkpoint.micro_skill_id,
+            prerequisite_micro_skills=route.prerequisite_micro_skills,
+        ),
+        access_token,
+    )
+
+
+def _escalated_checkpoint(
+    response: StudentModelSessionEventResponse,
+) -> Phase3Checkpoint | None:
+    """The checkpoint the escalation parked, keyed the way upstream keys it.
+
+    Student Model indexes repair_state_by_skill by this micro_skill_id and 409s
+    on any other, so prefer the entry it actually marked
+    PREREQUISITE_LOOKUP_REQUIRED. The checkpoint is only the fallback: it is
+    preserved rather than replaced across escalations
+    (`return_checkpoint = existing or new`), so on a multi-skill Phase 3 it can
+    name an older skill than the one that just ran out of repairs.
+    """
+
+    phase3 = response.journey_state.phase_3_independent_practice
+    checkpoint = response.journey_state.return_checkpoint or phase3.return_checkpoint
+    escalated = [
+        skill
+        for skill, state in phase3.repair_state_by_skill.items()
+        if state.status == "PREREQUISITE_LOOKUP_REQUIRED"
+    ]
+    if checkpoint is not None and len(escalated) == 1 and escalated[0] != checkpoint.micro_skill_id:
+        return checkpoint.model_copy(update={"micro_skill_id": escalated[0]})
+    return checkpoint
 
 
 def _schema_interaction_request_id(

@@ -154,6 +154,23 @@ class OrientationBundle(BaseModel):
     delivery_sequence: list[OrientationDeliveryItem]
 
 
+class PrerequisiteRemediationBundle(BaseModel):
+    """TC-31's bundle, which is NOT an orientation bundle despite the key.
+
+    Student Model sends this under `orientation_bundle` when it routes a topic
+    to prerequisite remediation, and it carries no delivery_sequence: it names
+    the earlier topic and the skills to teach there, and that topic's content is
+    fetched separately. Modelled as its own type rather than by relaxing
+    OrientationBundle, because an orientation bundle with no delivery sequence
+    is a real fault -- it renders a blank lesson -- and must keep failing.
+    """
+
+    topic_id: str
+    target_micro_skill_ids: list[str]
+    difficulty: int | None = None
+    remediation_reason: str | None = None
+
+
 class StudentModelPhasePayload(BaseModel):
     phase: StudentModelPhase
     payload_type: str
@@ -161,7 +178,7 @@ class StudentModelPhasePayload(BaseModel):
     # Derived by the tutor backend, not sent upstream: see
     # session_service._project_for_frontend.
     intervention_input_request: InterventionInputRequest | None = None
-    orientation_bundle: OrientationBundle | None = None
+    orientation_bundle: OrientationBundle | PrerequisiteRemediationBundle | None = None
     support_to_serve: dict[str, object] | None = None
     rescue_to_serve: dict[str, object] | None = None
     review_summary: dict[str, object] | None = None
@@ -298,7 +315,7 @@ class PublicStudentModelPhasePayload(BaseModel):
     phase: StudentModelPhase
     payload_type: str
     question_set: PublicQuestionSet | None = None
-    orientation_bundle: OrientationBundle | None = None
+    orientation_bundle: OrientationBundle | PrerequisiteRemediationBundle | None = None
     intervention_input_request: InterventionInputRequest | None = None
 
 
@@ -484,12 +501,48 @@ class SessionResumedEvent(MutatingSessionEventBase):
     saved_journey: dict[str, object]
 
 
+class PrerequisiteMicroSkill(BaseModel):
+    """One link of the prerequisite chain, echoed back from the lookup endpoint.
+
+    Student Model dereferences exactly `micro_skill_id`, `lowest_topic_id` and
+    `lowest_topic_sequence` when it groups the chain into a remediation plan
+    (TC-30/TC-31), so those are the ones modelled; `active` is carried through.
+    """
+
+    micro_skill_id: str
+    lowest_topic_id: str
+    lowest_topic_sequence: int
+    active: bool = True
+
+
+class PrerequisiteRouteResolvedEvent(MutatingSessionEventBase):
+    """TC-31's input: the curriculum answer Student Model is waiting for.
+
+    `source_topic_id` duplicates `topic_id` deliberately. The handler resolves
+    the topic from `body.topic_id`, but the authoritative testcase names the
+    field `source_topic_id`; sending both satisfies the running code and the
+    spec at once.
+    """
+
+    event_type: Literal["PREREQUISITE_ROUTE_RESOLVED"]
+    source_topic_id: str
+    source_micro_skill_id: str
+    prerequisite_micro_skills: list[PrerequisiteMicroSkill]
+
+
+class PrerequisiteRouteLookup(BaseModel):
+    """TC-30's answer: the prerequisite chain, possibly empty."""
+
+    prerequisite_micro_skills: list[PrerequisiteMicroSkill]
+
+
 class ReviewCompletedEvent(MutatingSessionEventBase):
     event_type: Literal["REVIEW_COMPLETED"]
 
 
 StudentModelSessionEvent: TypeAlias = (
-    SessionOpenedEvent
+    PrerequisiteRouteResolvedEvent
+    | SessionOpenedEvent
     | InterventionInputSubmittedEvent
     | DiagnosticQuestionSetRequestedEvent
     | DiagnosticCompletedEvent

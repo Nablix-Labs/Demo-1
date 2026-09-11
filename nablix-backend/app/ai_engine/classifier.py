@@ -7321,9 +7321,12 @@ def evaluate_answer_contract(
         *answer_spec.accepted_answers,
     ]
     if method == "EXACT_CHOICE_MATCH":
-        student_choice = normalized_choice_response(request.student_input)
         accepted_choices = {answer.strip().upper() for answer in accepted_answers}
-        return "CORRECT" if student_choice in accepted_choices else "INCORRECT"
+        submitted = {normalized_choice_response(request.student_input)}
+        option_text = selected_option_text(request.student_input)
+        if option_text is not None:
+            submitted.add(option_text)
+        return "CORRECT" if submitted & accepted_choices else "INCORRECT"
     if method == "EXACT_NOTATION_MATCH":
         student_notation = normalize_exact_notation(request.student_input)
         accepted_notation = {
@@ -7370,17 +7373,32 @@ def evaluate_answer_contract(
     return None
 
 
+# A choice arrives as "Selected B: n + 4" -- built by the Numera canvas and by
+# _selected_option_message alike -- and carries BOTH halves of the answer: the
+# option letter and the option text. Authored specs canonicalise either one:
+# Q-T01-010 uses the letter, Q-T01-004 and Q-T01-009 the text. Reading only the
+# letter still graded ST-008's correct selection on Q-T01-009 INCORRECT and
+# walked it into the guided repair loop (11 Sep 2026).
+_SELECTED_OPTION_SUBMISSION = re.compile(
+    r"(?:SELECTED|CHOSE|CHOOSE)\s+(?:OPTION\s+)?([A-Z])\s*:\s*(.*)",
+    re.DOTALL,
+)
+
+
+def selected_option_text(student_input: str) -> str | None:
+    """Return the upper-cased option text from "Selected B: n + 4", or None."""
+
+    match = _SELECTED_OPTION_SUBMISSION.fullmatch(student_input.strip().upper())
+    return match.group(2).strip() if match is not None else None
+
+
 def normalized_choice_response(student_input: str) -> str:
     """Return the selected option ID from a short typed choice response."""
 
     normalized = student_input.strip().upper()
-    # ponytail: the UI and _selected_option_message submit "Selected B: Add 6 to n".
-    normalized = re.sub(
-        r"\A(?:SELECTED|CHOSE|CHOOSE)\s+(?:OPTION\s+)?([A-Z])\s*:.*\Z",
-        r"\1",
-        normalized,
-        flags=re.DOTALL,
-    )
+    selected = _SELECTED_OPTION_SUBMISSION.fullmatch(normalized)
+    if selected is not None:
+        normalized = selected.group(1)
     match = re.fullmatch(
         r"(?:I\s+(?:CHOOSE|CHOSE)\s+(?:OPTION\s+)?|(?:THE\s+)?(?:OPTION|CHOICE)\s+)?([A-Z])\.?",
         normalized,
