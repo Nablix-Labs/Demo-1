@@ -30,6 +30,59 @@ class Phase4ContextError(ValueError):
     pass
 
 
+# What the student should do after this topic. This is the tutor's own closed
+# set, deliberately small: the client renders the token as the label on the
+# button that ends the review, so every value here has to read as an
+# instruction to a child.
+STUDENT_FACING_NEXT_ACTIONS: frozenset[str] = frozenset(
+    {"START_NEXT_TOPIC", "PRACTISE_AGAIN", "KEEP_LEARNING", "CONTINUE"}
+)
+
+# routing.next_action is the Student Model's instruction to the *tutor loop*,
+# not to the learner -- "WAIT_FOR_STUDENT_RESPONSE" rendered as a button asked
+# a child to wait for themselves. Translate it here, once, rather than leave
+# the client guessing at a vocabulary it does not own.
+_NEXT_ACTION_BY_ROUTING_VERB: dict[str, str] = {
+    "START_NEXT_TOPIC": "START_NEXT_TOPIC",
+    "DELIVER_PARALLEL_EXAMPLE": "PRACTISE_AGAIN",
+    "DELIVER_REDUCED_DIFFICULTY_FRESH_RETRY": "PRACTISE_AGAIN",
+    "DELIVER_SUPPORT_AND_RETRY": "PRACTISE_AGAIN",
+    "START_INDEPENDENT": "PRACTISE_AGAIN",
+    "PROCEED_TO_PHASE_3": "PRACTISE_AGAIN",
+    "RETURN_TO_SAME_PHASE_3_QUESTION": "PRACTISE_AGAIN",
+    "CHECK_PREREQUISITE_REMEDIATION_ROUTE": "KEEP_LEARNING",
+    "DELIVER_SCAFFOLD_STEP": "KEEP_LEARNING",
+    "PLAY_VIDEO_THEN_WORKED_EXAMPLE": "KEEP_LEARNING",
+    "START_GUIDED": "KEEP_LEARNING",
+    "START_ORIENTATION": "KEEP_LEARNING",
+    "START_PREREQUISITE_ORIENTATION": "KEEP_LEARNING",
+    "AWAIT_INTERVENTION_REVIEW": "CONTINUE",
+    "COLLECT_INTERVENTION_INPUT": "CONTINUE",
+    "NONE": "CONTINUE",
+    "START_REVIEW": "CONTINUE",
+    "WAIT_FOR_CONTENT": "CONTINUE",
+    "WAIT_FOR_STUDENT_RESPONSE": "CONTINUE",
+}
+
+
+def student_facing_next_action(routing_next_action: str) -> str:
+    """Map a Student Model routing verb onto what the student should do next.
+
+    Unknown verbs fall back to CONTINUE: the Student Model's set is untyped
+    (a bare str, no enum), so it can grow without us, and a token we have
+    never seen is not something to put in front of a child.
+    """
+
+    action = _NEXT_ACTION_BY_ROUTING_VERB.get(routing_next_action.strip().upper())
+    if action is None:
+        logger.info(
+            "phase4_next_action_unmapped",
+            extra={"routing_next_action": routing_next_action},
+        )
+        return "CONTINUE"
+    return action
+
+
 def _replay_item(index: int, attempt: TopicAttemptRecord) -> ReplayItem | None:
     """Build one replay item, or None when it cannot be replayed.
 
@@ -135,7 +188,7 @@ def build_phase4_review_request(
     history: TopicEventHistoryResponse,
     replay_attempts: list[TopicAttemptRecord],
     mastery_status: str,
-    recommended_next_action: str,
+    routing_next_action: str,
 ) -> Phase4ReviewRequest:
     """Turn one topic's history into the tutor engine's review request."""
 
@@ -160,7 +213,7 @@ def build_phase4_review_request(
         topic_info=topic_info,
         topic_outcome=TopicOutcome(
             mastery_status=mastery_status,
-            recommended_next_action=recommended_next_action,
+            recommended_next_action=student_facing_next_action(routing_next_action),
         ),
         replay_items=replay_items,
         whole_topic_evidence=_whole_topic_evidence(history),

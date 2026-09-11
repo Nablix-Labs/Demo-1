@@ -1145,8 +1145,16 @@ async def generate_phase4_review_for(
             },
         ) from error
 
-    # Deterministic fields the model was never asked for: forwarded straight
-    # from the request that was just built, not generated.
+    if review.topic_outcome is None:
+        logger.warning(
+            "phase4_review_topic_outcome_missing",
+            extra={
+                "session_id": session.session_id,
+                "topic_id": event.journey_state.topic_id,
+            },
+        )
+
+    # Overwrite deterministic fields with the authoritative request data.
     replay_context_by_id = {item.review_item_id: item for item in request.replay_items}
     # Attempt identity is (question_usage_id, attempt_id) — attempt_id sequences
     # restart per question, so question_id alone cannot identify an attempt.
@@ -1172,8 +1180,12 @@ async def generate_phase4_review_for(
                 else replay
                 for replay in review.tutor_replays
             ],
-            # Merge, not replace: mastery_status and recommended_next_action stay
-            # the Student Model's, but next_action_message is generated, so
+            # The title the review is headed with: validated on the request
+            # (build_phase4_review_request raises rather than fabricate it) and
+            # overwritten here, so the model cannot invent a topic name.
+            "topic_info": request.topic_info,
+            # Preserve mastery and the builder's student-facing action, but
+            # next_action_message is generated, so
             # forwarding the request wholesale would discard it.
             "topic_outcome": request.topic_outcome.model_copy(
                 update={

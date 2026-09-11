@@ -12,6 +12,7 @@ from app.models.phase4_review import (
     Phase4ReviewResponse,
     QuestionSkillLabel,
     StudentInsights,
+    TopicInfo,
     TopicOutcome,
     TutorReplay,
     TutorReplayStep,
@@ -36,6 +37,9 @@ def _history() -> TopicEventHistoryResponse:
 
 def _review() -> Phase4ReviewResponse:
     return Phase4ReviewResponse(
+        topic_info=TopicInfo.model_validate(
+            {**TOPIC_INFO, "title": "GENERATED_AND_DISCARDED"}
+        ),
         tutor_replays=[
             TutorReplay(
                 review_item_id="REV-001",
@@ -94,12 +98,19 @@ def _review_ready_session() -> SessionRecord:
     )
 
 
+@pytest.mark.parametrize("has_generated_outcome", [True, False])
 def test_deterministic_fields_are_forwarded_not_generated(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    has_generated_outcome: bool,
 ) -> None:
-    """question_text, work_artifact, topic_outcome, question_journey are known
-    before the model is ever called — forwarded from the request that was
-    built, not asked of the model (see #4 of the frontend handoff)."""
+    """Authoritative metadata overrides generated values, including omissions."""
+
+    monkeypatch.setattr(
+        session_service.logger,
+        "handlers",
+        [*session_service.logger.handlers, caplog.handler],
+    )
 
     async def fetch(
         adapter: StudentModelServiceAdapter,
@@ -112,10 +123,12 @@ def test_deterministic_fields_are_forwarded_not_generated(
     monkeypatch.setattr(
         StudentModelServiceAdapter, "fetch_topic_event_history", fetch
     )
-    # The model's own output never sets these — proving the forwarding, not a
-    # value the generation step happened to produce.
+    generated = _review()
+    if not has_generated_outcome:
+        generated = generated.model_copy(update={"topic_outcome": None})
+    # Conflicting generated metadata must not override authoritative history.
     monkeypatch.setattr(
-        session_service, "generate_phase4_review", lambda request: _review()
+        session_service, "generate_phase4_review", lambda request: generated
     )
     session = _review_ready_session()
 
@@ -133,6 +146,11 @@ def test_deterministic_fields_are_forwarded_not_generated(
     assert replay.work_artifact.pdf_url == "https://blob.example/submission.pdf"
     assert replay.work_artifact.page_count == 2
 
+    # The title the review is headed with. Absent it the client has nothing
+    # readable to name the topic at Review and falls back to "This topic".
+    assert result.topic_info is not None
+    assert result.topic_info.title == _history().topic_info["title"]
+
     assert result.topic_outcome is not None
     assert result.topic_outcome.mastery_status
     assert result.topic_outcome.recommended_next_action
@@ -142,7 +160,11 @@ def test_deterministic_fields_are_forwarded_not_generated(
     assert result.topic_outcome.recommended_next_action != "GENERATED_AND_DISCARDED"
     assert result.topic_outcome.next_action_message == (
         "Great progress. Finish the last question to complete this topic."
+        if has_generated_outcome else None
     )
+    assert (
+        "phase4_review_topic_outcome_missing" in caplog.messages
+    ) is (not has_generated_outcome)
 
     assert result.question_journey is not None
     assert len(result.question_journey) == 1
