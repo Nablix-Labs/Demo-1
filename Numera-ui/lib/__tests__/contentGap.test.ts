@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { isContentGapError, contentGapPaused } from '@/lib/contentGap';
+import {
+  isContentGapError,
+  contentGapPaused,
+  prerequisiteRemediationPaused,
+  lessonPaused,
+} from '@/lib/contentGap';
 import type { SessionRecord } from '@/lib/api';
 
 const err = (status: number, error_code: string) => ({
@@ -82,3 +87,56 @@ describe('contentGapPaused', () => {
   });
 });
 
+const remediation = (over: Record<string, unknown> = {}) => ({
+  session_id: 'S1',
+  concept_id: 'T01',
+  question_id: null,
+  student_model_event: { routing: { reason_code: 'PREREQUISITE_REMEDIATION_REQUIRED' } },
+  ...over,
+} as unknown as SessionRecord);
+
+/**
+ * A checkpoint that used both Guided repair cycles.
+ *
+ * Student Model routes it to an earlier topic (TC-31); the return leg (TC-32)
+ * does not exist yet, so the backend stops with an explanation. From the
+ * screen's side that is the same shape as a gap — no question, nothing to
+ * retry — but a different cause, so it is matched on its own reason_code
+ * rather than by pretending content_gap_detected is set.
+ */
+describe('prerequisiteRemediationPaused', () => {
+  it('is true when the route resolved and no question is served', () => {
+    expect(prerequisiteRemediationPaused(remediation())).toBe(true);
+  });
+
+  it('is not a pause while a question is still answerable', () => {
+    // Blanking the screen here would take a live question off the student.
+    expect(prerequisiteRemediationPaused(remediation({ question_id: 'Q-T01-010' }))).toBe(false);
+  });
+
+  it('is not the escalation that precedes it', () => {
+    // MAX_GUIDED_REPAIRS_EXHAUSTED is answered by the backend within the same
+    // turn; it is never a state the client should render.
+    expect(prerequisiteRemediationPaused(remediation({
+      student_model_event: { routing: { reason_code: 'MAX_GUIDED_REPAIRS_EXHAUSTED' } },
+    }))).toBe(false);
+  });
+
+  it('is false on a missing or empty routing block', () => {
+    expect(prerequisiteRemediationPaused(remediation({ student_model_event: {} }))).toBe(false);
+    expect(prerequisiteRemediationPaused(remediation({ student_model_event: null }))).toBe(false);
+    expect(prerequisiteRemediationPaused(undefined)).toBe(false);
+  });
+});
+
+describe('lessonPaused', () => {
+  it('covers both causes', () => {
+    expect(lessonPaused(record())).toBe(true);
+    expect(lessonPaused(remediation())).toBe(true);
+  });
+
+  it('is false for a lesson that still has a question', () => {
+    expect(lessonPaused(record({ question_id: 'Q-T01-009' }))).toBe(false);
+    expect(lessonPaused(remediation({ question_id: 'Q-T01-010' }))).toBe(false);
+  });
+});

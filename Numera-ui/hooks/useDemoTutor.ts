@@ -40,7 +40,7 @@ import {
   requiresSessionRefresh, identityOf, identityMatches, belongsToActiveSession,
   isProgressionRetryRequired,
 } from '@/lib/sessionRecovery';
-import { isContentGapError, contentGapPaused } from '@/lib/contentGap';
+import { isContentGapError, lessonPaused } from '@/lib/contentGap';
 import { selectedOptionText } from '@/lib/selectedOption';
 import {
   applyInteractionSupport, acceptResponse, authorisedHint, applyServedCue,
@@ -499,7 +499,7 @@ export function syncBackendSession(response: {
    * ST017 run asked twice. Clearing it is what lets the lesson resume the
    * moment a question is served again, so a resolved gap needs no reload.
    */
-  const paused = contentGapPaused(useNumeraStore.getState().backendSession);
+  const paused = lessonPaused(useNumeraStore.getState().backendSession);
   if (paused !== store.contentGapPaused) store.setContentGapPaused(paused);
   // A reply landed, so the progression is no longer stuck. Cleared here rather
   // than at the retry site because this is the one place that proves it moved.

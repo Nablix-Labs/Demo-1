@@ -12,7 +12,9 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from app.adapters import provider, student_model
 from app.adapters.student_model import StudentModelServiceAdapter
+from app.core.config import Settings
 from app.main import app
 from app.models.remediation import (
     InterventionFeedback,
@@ -625,3 +627,192 @@ def test_reopen_uses_checkpoint_answer_spec_not_first_array_item(monkeypatch: py
     assert session.active_student_model_question == checkpoint_question
     assert session.question_id == checkpoint_question.question_id
     assert session.question_number == 3
+
+
+def _submitted_event(session: SessionRecord, feedback: InterventionFeedback) -> InterventionInputSubmittedEvent:
+    """The pending event submit_intervention_input builds, without the service."""
+
+    assert session.intervention is not None and session.student_model_event is not None
+    return InterventionInputSubmittedEvent(
+        request_id="INTERVENTION_INPUT_SUBMITTED:contract",
+        event_type="INTERVENTION_INPUT_SUBMITTED",
+        student_id=session.student_id,
+        topic_id=session.intervention.topic_id,
+        intervention_id=session.intervention.intervention_id,
+        micro_skill_id=session.intervention.effective_micro_skill_id,
+        source_turn_id="INTERVENTION_INPUT_SUBMITTED:contract",
+        expected_journey_version=session.student_model_event.journey_state.version,
+        timestamp="2026-09-12T00:00:00Z",
+        feedback=feedback,
+    )
+
+
+def _collected(response: StudentModelSessionEventResponse, body: dict[str, object]) -> dict[str, object]:
+    """Student Model's own reply, built the way its handler builds it.
+
+    Mirrors journey_state.apply_intervention_input_submitted: the reasons and
+    voice block are read off the *top level* of the request body, and the
+    receipt flattens the voice half into three `voice_*` fields. Deriving the
+    reply from `body` rather than hard-coding it is the point -- a body that
+    omits what the handler reads produces an empty receipt here too.
+    """
+
+    voice = body.get("voice_input") or {}
+    source = response.model_dump(mode="json")
+    intervention = dict(source["journey_state"]["intervention"])
+    intervention |= {
+        "status": "AWAITING_REVIEW",
+        "state": "ACTIVE",
+        "student_input_status": "COLLECTED",
+        "student_input": {
+            "selected_reason_codes": list(body.get("selected_reason_codes") or []),
+            "voice_input_provided": bool(voice.get("provided")),
+            "voice_audio_ref": voice.get("audio_ref"),
+            "voice_transcript": voice.get("transcript"),
+            "submitted_at": "2026-09-12T00:00:01Z",
+        },
+    }
+    source["journey_state"]["intervention"] = intervention
+    source["request_id"] = body["request_id"]
+    source["routing"] |= {
+        "reason_code": "INTERVENTION_INPUT_COLLECTED",
+        "next_action": "AWAIT_INTERVENTION_REVIEW",
+    }
+    source["status"] |= {"status_code": "INTERVENTION_REQUIRED", "intervention_required": True}
+    return source
+
+
+@pytest.mark.parametrize(
+    "feedback",
+    [
+        pytest.param(InterventionFeedback(selected_reason_codes=["OTHER"]), id="reasons-only"),
+        pytest.param(
+            InterventionFeedback(selected_reason_codes=["OTHER", "WORKING_MISTAKES"]),
+            id="multiple-reasons",
+        ),
+        pytest.param(
+            InterventionFeedback(
+                selected_reason_codes=["OTHER"],
+                voice_input=InterventionVoiceInput(provided=False, audio_ref=None, transcript=None),
+            ),
+            id="empty-voice-block",
+        ),
+        pytest.param(
+            InterventionFeedback(
+                selected_reason_codes=["WORDS_SYMBOLS_CONFUSING"],
+                voice_input=InterventionVoiceInput(
+                    provided=True, audio_ref=None, transcript="I cannot choose the operation."
+                ),
+            ),
+            id="transcript-null-audio-ref",
+        ),
+    ],
+)
+def test_feedback_serializes_where_student_model_reads_it(
+    monkeypatch: pytest.MonkeyPatch, feedback: InterventionFeedback
+) -> None:
+    """The defect the stubbed-adapter tests cannot see.
+
+    Every other test here replaces send_session_event, so the nested `feedback`
+    field never reaches a serializer. This one runs the real model_dump and the
+    real response parse, with only the socket replaced.
+    """
+
+    terminal = _terminal(_event())
+    # _start stubs send_session_event on the class -- the very stub that hides
+    # this defect. Restore the real method and replace only the socket.
+    real_send = StudentModelServiceAdapter.send_session_event
+    session = _start(monkeypatch, terminal)
+    monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", real_send)
+    event = _submitted_event(session, feedback)
+    captured: dict[str, object] = {}
+
+    async def post_json(name, url, body, headers, timeout, retries):
+        captured["body"] = body
+        return _collected(terminal, body)
+
+    monkeypatch.setattr(student_model, "post_json", post_json)
+    adapter = student_model.StudentModelServiceAdapter(
+        Settings(
+            student_model_url="https://student-model.example/",
+            student_model_topic_ids={},
+            use_mock_student_model=False,
+            student_model_jwt_secret="shared-with-student-model-at-least-32-bytes",
+        )
+    )
+    response = asyncio.run(adapter.send_session_event(event, "test-token"))
+
+    body = captured["body"]
+    # What handle_intervention_input_submitted actually reads off body.model_extra.
+    assert body["selected_reason_codes"] == feedback.selected_reason_codes
+    assert "feedback" not in body, "the nested field is the defect; it must not be sent"
+    if feedback.voice_input is None:
+        assert "voice_input" not in body
+    else:
+        assert body["voice_input"]["provided"] is feedback.voice_input.provided
+        assert body["voice_input"].get("transcript") == feedback.voice_input.transcript
+        assert body["voice_input"].get("audio_ref") is None
+    # Identity and case context survive the flattening.
+    assert body["intervention_id"] == event.intervention_id
+    assert body["expected_journey_version"] == event.expected_journey_version
+    assert body["source_turn_id"] == event.source_turn_id
+
+    receipt = response.journey_state.intervention
+    assert receipt is not None and receipt.student_input_status == "COLLECTED"
+    # The receipt must compare equal to what was submitted, or the service
+    # rejects its own successful submission as "different evidence".
+    assert receipt.effective_feedback == feedback
+
+
+def test_silent_student_submission_retries_and_conflicts_over_http(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The whole route with only the socket stubbed, and no voice evidence.
+
+    The stubbed-adapter tests above echo `request.feedback` straight back, so
+    the receipt is equal to the submission by construction. Student Model
+    really replies with the flattened `student_input`, and the popup can leave
+    `voice_input` out entirely -- the combination that made every silent
+    student's submission come back as "different evidence".
+    """
+
+    terminal = _terminal(_event())
+    real_send = StudentModelServiceAdapter.send_session_event
+    session = _start(monkeypatch, terminal)
+    monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", real_send)
+    monkeypatch.setattr(provider, "get_settings", lambda: Settings(
+        student_model_url="https://student-model.example/",
+        student_model_topic_ids={},
+        use_mock_student_model=False,
+        student_model_topic_codes={"ALG_LINEAR_ONE_STEP": "ALG-ORI-02"},
+        student_model_jwt_secret="shared-with-student-model-at-least-32-bytes",
+    ))
+    bodies: list[dict[str, object]] = []
+
+    async def post_json(name, url, body, headers, timeout, retries):
+        bodies.append(body)
+        return _collected(terminal, body)
+
+    monkeypatch.setattr(student_model, "post_json", post_json)
+
+    body = _request(session)
+    body.pop("voice_input")
+    submitted = client.post("/interaction", json=body)
+    assert submitted.status_code == 200, submitted.text
+    assert submitted.json()["allow_text_input"] is False
+    assert submitted.json()["attempt_increment"] == 0
+    event = submitted.json()["student_model_event"]
+    assert event["routing"]["next_action"] == "AWAIT_INTERVENTION_REVIEW"
+
+    stored = session_service._sessions[session.session_id]
+    assert stored.pending_intervention_input is None
+    assert stored.intervention is not None
+    assert stored.intervention.effective_feedback is not None
+    assert stored.intervention.effective_feedback.voice_input is None
+
+    # Identical retry is the same accepted submission, not a second event.
+    assert client.post("/interaction", json={**body, "turn_id": "INTERVENTION-2"}).status_code == 200
+    assert len(bodies) == 1 and bodies[0]["selected_reason_codes"] == ["DONT_KNOW_HOW_TO_START"]
+
+    # Changed evidence against a settled case is a conflict, not an overwrite.
+    changed = {**body, "turn_id": "INTERVENTION-3", "selected_reason_codes": ["OTHER"]}
+    assert client.post("/interaction", json=changed).status_code == 409
+    assert len(bodies) == 1

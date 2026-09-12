@@ -16,6 +16,8 @@ from app.core.exceptions import (
 )
 from app.models.adapters import AdapterContext, StudentModelResult
 from app.models.student_model_session import (
+    InterventionInputSubmittedEvent,
+    PrerequisiteRouteLookup,
     StudentModelSessionEvent,
     StudentModelSessionEventResponse,
 )
@@ -69,6 +71,15 @@ class StudentModelServiceAdapter:
 
         url = self._require_student_model_url("Schema 3.0 session events")
         request_body = event.model_dump(mode="json", exclude_none=True)
+        if isinstance(event, InterventionInputSubmittedEvent):
+            # Wire translation. We nest the student's evidence under `feedback`;
+            # Student Model reads `selected_reason_codes`/`voice_input` off the
+            # top level (handle_intervention_input_submitted) and its request
+            # model is extra="allow", so the nested form was accepted, ignored,
+            # and rejected as MISSING_REASON_CODE. Flattened here and not in the
+            # model so the persisted pending_intervention_input snapshot stays
+            # readable by the model that wrote it.
+            request_body |= request_body.pop("feedback")
         record_request(request_body)
         try:
             response = await post_json(
@@ -245,6 +256,47 @@ class StudentModelServiceAdapter:
             raise AdapterError(
                 "student_model",
                 f"invalid topic event history body={response}: {error}",
+            ) from error
+
+    async def fetch_prerequisite_route(
+        self,
+        topic_id: str,
+        micro_skill_id: str,
+        request_id: str,
+    ) -> PrerequisiteRouteLookup:
+        """Ask which micro-skills sit beneath a skill the student cannot clear.
+
+        TC-30. Curriculum facts only -- it decides nothing. Student Model
+        escalates a third checkpoint failure with
+        CHECK_PREREQUISITE_REMEDIATION_ROUTE and then waits: it cannot tell "no
+        route exists" from "nobody looked" until this answer comes back as
+        PREREQUISITE_ROUTE_RESOLVED, so an empty chain is a real answer and is
+        still reported.
+
+        Service-authenticated like the Phase 4 reads: the endpoint is
+        internal_service-only (mathtutor-student api/routers/curriculum.py) and
+        has no student branch.
+        """
+
+        url = self._require_student_model_url("prerequisite remediation route")
+        response = await post_json(
+            "student_model",
+            f"{url}/api/v1/curriculum/prerequisite-remediation-route",
+            {
+                "request_id": request_id,
+                "current_topic_id": topic_id,
+                "current_micro_skill_id": micro_skill_id,
+            },
+            {"Authorization": f"Bearer {self._service_token()}"},
+            self._settings.adapter_request_timeout_seconds,
+            self._settings.adapter_request_retry_count,
+        )
+        try:
+            return PrerequisiteRouteLookup.model_validate(response)
+        except ValidationError as error:
+            raise AdapterError(
+                "student_model",
+                f"invalid prerequisite route body={response}: {error}",
             ) from error
 
     def _service_token(self) -> str:
