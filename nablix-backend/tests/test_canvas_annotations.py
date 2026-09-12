@@ -18,6 +18,7 @@ from app.models.guided_learning import (
     ActiveTeachingObjective,
     CanvasPedagogyIntent,
     GeneratedConcept,
+    GuidedEvidenceClaim,
     GeneratedQuestionRubric,
     GuidedRescueContext,
     GuidedTeachingState,
@@ -37,6 +38,20 @@ from app.services.canvas_annotations import (
 
 def _fallback_labels() -> FallbackCanvasLabelsConfig:
     return load_classifier_rules().guided_learning.fallback_canvas_labels
+
+
+def _demonstrated(*component_ids: str) -> list[GuidedEvidenceClaim]:
+    """Evidence that these components were shown in the CURRENT turn.
+
+    Canvas marks are gated on this, not on the cumulative
+    confirmed_component_ids: a component confirmed on an earlier turn must not
+    re-mark the question. See test_historical_confirmations_do_not_create_new_canvas_labels.
+    """
+
+    return [
+        GuidedEvidenceClaim(concept_id=component_id, status="DEMONSTRATED", source="TEXT")
+        for component_id in component_ids
+    ]
 
 
 def _rescue_wording() -> CanvasRescueWordingConfig:
@@ -222,6 +237,7 @@ def test_confirmed_guided_idea_emits_a_component_scoped_semantic_action() -> Non
                 last_tutor_question_type="COMPONENT",
                 selected_option_id=None,
                 awaiting_response=True,
+                last_turn_evidence=_demonstrated("CHANGING_VALUE"),
             ),
             "canvas_intentions": [
                 CanvasPedagogyIntent(
@@ -247,16 +263,34 @@ def test_confirmed_guided_idea_emits_a_component_scoped_semantic_action() -> Non
         student_response="",
     )
 
-    assert actions[0].type == "INSERT_LABEL"
-    assert actions[0].text == "m → changes"
-    assert actions[0].answer_reveal_allowed is False
+    label = next(action for action in actions if action.type == "INSERT_LABEL")
+    assert label.text == "m → changes"
+    assert label.confirmed_component_id == "CHANGING_VALUE"
+    assert label.answer_reveal_allowed is False
 
 
-def test_accepted_student_statement_gets_a_tutor_layer_label_without_llm_intention() -> None:
+def test_accepted_statement_marks_the_question_without_an_llm_intention() -> None:
+    """Evidence alone is enough; the planner does not need a canvas intention."""
+
     tutor = _tutor_result(
         TutorMistakeClassification(status="no_mistake", confidence=0.9),
         [],
-    ).model_copy(update={"guided_student_state": "PARTIAL"})
+    ).model_copy(
+        update={
+            "guided_student_state": "PARTIAL",
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-T01-002",
+                objective_component_ids=["CHANGING_VALUE"],
+                confirmed_component_ids=["CHANGING_VALUE"],
+                missing_component_ids=[],
+                active_component_id=None,
+                last_tutor_question_type="COMPONENT",
+                selected_option_id=None,
+                awaiting_response=True,
+                last_turn_evidence=_demonstrated("CHANGING_VALUE"),
+            ),
+        }
+    )
     anchor = QuestionTextAnchor(
         token_id="Q-T01-002:QTOKEN:2",
         text="m",
@@ -269,15 +303,14 @@ def test_accepted_student_statement_gets_a_tutor_layer_label_without_llm_intenti
         question_anchors=[anchor],
         canvas_events=[],
         turn_id="TURN-accepted",
-        canonical_answer="m; 7; addition",
+        canonical_answer="m + 7",
         fallback_labels=_fallback_labels(),
         wrong_attempt_count=0,
         student_response="m changes",
     )
 
-    assert [(action.target_kind, action.target_object_id, action.text) for action in actions] == [
-        ("QUESTION_ANCHOR", "Q-T01-002:QTOKEN:2", "m → changes"),
-        ("TUTOR_ANCHOR", "TUTOR_ANCHOR:CONFIRMED:Q-T01-002:1", "m → changes"),
+    assert [(action.type, action.target_kind, action.target_object_id) for action in actions] == [
+        ("HIGHLIGHT", "QUESTION_ANCHOR", "Q-T01-002:QTOKEN:2"),
     ]
 
 
@@ -285,7 +318,22 @@ def test_legacy_partial_evaluation_keeps_an_accepted_component_visible() -> None
     tutor = _tutor_result(
         TutorMistakeClassification(status="no_mistake", confidence=0.9),
         [],
-    ).model_copy(update={"evaluation": "PARTIALLY_CORRECT"})
+    ).model_copy(
+        update={
+            "evaluation": "PARTIALLY_CORRECT",
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-T01-002",
+                objective_component_ids=["CHANGING_VALUE"],
+                confirmed_component_ids=["CHANGING_VALUE"],
+                missing_component_ids=[],
+                active_component_id=None,
+                last_tutor_question_type="COMPONENT",
+                selected_option_id=None,
+                awaiting_response=True,
+                last_turn_evidence=_demonstrated("CHANGING_VALUE"),
+            ),
+        }
+    )
     anchor = QuestionTextAnchor(
         token_id="Q-T01-002:QTOKEN:2",
         text="m",
@@ -298,23 +346,37 @@ def test_legacy_partial_evaluation_keeps_an_accepted_component_visible() -> None
         question_anchors=[anchor],
         canvas_events=[],
         turn_id="TURN-legacy-partial",
-        canonical_answer="m; 7; addition",
+        canonical_answer="m + 7",
         fallback_labels=_fallback_labels(),
         wrong_attempt_count=0,
         student_response="m changes",
     )
 
-    assert [(action.target_kind, action.text) for action in actions] == [
-        ("QUESTION_ANCHOR", "m → changes"),
-        ("TUTOR_ANCHOR", "m → changes"),
+    assert [(action.type, action.target_object_id) for action in actions] == [
+        ("HIGHLIGHT", "Q-T01-002:QTOKEN:2"),
     ]
 
 
-def test_accepted_fixed_value_and_operation_get_tutor_layer_labels() -> None:
+def test_accepted_fixed_value_and_operation_mark_their_own_tokens() -> None:
     tutor = _tutor_result(
         TutorMistakeClassification(status="no_mistake", confidence=0.9),
         [],
-    ).model_copy(update={"guided_student_state": "PARTIAL"})
+    ).model_copy(
+        update={
+            "guided_student_state": "PARTIAL",
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-T01-002",
+                objective_component_ids=["FIXED_VALUE", "OPERATION"],
+                confirmed_component_ids=["FIXED_VALUE", "OPERATION"],
+                missing_component_ids=[],
+                active_component_id=None,
+                last_tutor_question_type="COMPONENT",
+                selected_option_id=None,
+                awaiting_response=True,
+                last_turn_evidence=_demonstrated("FIXED_VALUE", "OPERATION"),
+            ),
+        }
+    )
     anchors = [
         QuestionTextAnchor(
             token_id="Q-T01-002:QTOKEN:2",
@@ -335,21 +397,26 @@ def test_accepted_fixed_value_and_operation_get_tutor_layer_labels() -> None:
         question_anchors=anchors,
         canvas_events=[],
         turn_id="TURN-fixed-operation",
-        canonical_answer="m; 7; addition",
+        canonical_answer="m + 7",
         fallback_labels=_fallback_labels(),
         wrong_attempt_count=0,
         student_response="7 is fixed and the plus sign means addition",
     )
 
-    assert [(action.target_object_id, action.text) for action in actions] == [
-        ("Q-T01-002:QTOKEN:3", "7 → stays fixed"),
-        ("Q-T01-002:QTOKEN:2", "+ → addition"),
-        ("TUTOR_ANCHOR:CONFIRMED:Q-T01-002:1", "7 → stays fixed"),
-        ("TUTOR_ANCHOR:CONFIRMED:Q-T01-002:2", "+ → addition"),
+    assert [(action.type, action.target_object_id) for action in actions] == [
+        ("HIGHLIGHT", "Q-T01-002:QTOKEN:3"),
+        ("HIGHLIGHT", "Q-T01-002:QTOKEN:2"),
     ]
 
 
-def test_canvas_labels_use_only_the_current_student_statement() -> None:
+def test_canvas_marks_use_only_the_current_turn_evidence() -> None:
+    """Confirmed earlier is not confirmed now.
+
+    All three components sit in confirmed_component_ids, but only FIXED_VALUE
+    was demonstrated this turn, so only the token it refers to is marked.
+    """
+
+
     tutor = _tutor_result(
         TutorMistakeClassification(status="no_mistake", confidence=0.9),
         [],
@@ -365,6 +432,7 @@ def test_canvas_labels_use_only_the_current_student_statement() -> None:
                 last_tutor_question_type="COMPONENT",
                 selected_option_id=None,
                 awaiting_response=True,
+                last_turn_evidence=_demonstrated("FIXED_VALUE"),
             ),
         }
     )
@@ -388,8 +456,63 @@ def test_canvas_labels_use_only_the_current_student_statement() -> None:
         student_response="5 stays fixed",
     )
 
-    assert all(action.text != "n → changes" for action in actions)
-    assert any(action.text == "5 → stays fixed" for action in actions)
+    assert [(action.type, action.target_object_id) for action in actions] == [
+        ("HIGHLIGHT", "Q-T01-001:QTOKEN:2"),
+    ]
+    assert all(action.confirmed_component_id == "FIXED_VALUE" for action in actions)
+
+
+def test_intention_for_an_earlier_confirmation_is_dropped() -> None:
+    """The gate that limits marks to current evidence, pinned.
+
+    CHANGING_VALUE is in confirmed_component_ids but was not demonstrated this
+    turn, so the evaluator's intention for it must not reach the canvas. If this
+    ever compares against the cumulative set again, the learner gets a fresh
+    mark for something they explained several turns ago.
+    """
+
+    tutor = _tutor_result(
+        TutorMistakeClassification(status="no_mistake", confidence=0.9),
+        [],
+    ).model_copy(
+        update={
+            "guided_student_state": "PARTIAL",
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-T01-002",
+                objective_component_ids=["CHANGING_VALUE", "FIXED_VALUE"],
+                confirmed_component_ids=["CHANGING_VALUE", "FIXED_VALUE"],
+                missing_component_ids=[],
+                active_component_id=None,
+                last_tutor_question_type="COMPONENT",
+                selected_option_id=None,
+                awaiting_response=True,
+                last_turn_evidence=_demonstrated("FIXED_VALUE"),
+            ),
+            "canvas_intentions": [
+                CanvasPedagogyIntent(
+                    action_type="INSERT_LABEL",
+                    target_kind="QUESTION_ANCHOR",
+                    target_object_id="Q-T01-002:QTOKEN:1",
+                    confirmed_component_id="CHANGING_VALUE",
+                    text="m → changes",
+                    source_id=None,
+                )
+            ],
+        }
+    )
+
+    actions = plan_tutor_canvas_actions(
+        tutor,
+        [QuestionTextAnchor(token_id="Q-T01-002:QTOKEN:1", text="m", char_start=0, char_end=1)],
+        [],
+        "TURN-stale",
+        "m + 7",
+        _fallback_labels(),
+        wrong_attempt_count=0,
+        student_response="",
+    )
+
+    assert actions == []
 
 
 def test_canvas_action_rejects_unconfirmed_target_and_answer_reveal_text() -> None:
@@ -430,7 +553,14 @@ def test_canvas_action_rejects_unconfirmed_target_and_answer_reveal_text() -> No
     ) == []
 
 
-def test_wrong_turn_targets_only_reliable_student_written_work() -> None:
+def test_wrong_turn_does_not_mark_the_student_attempt() -> None:
+    """A wrong turn earns no canvas mark at all.
+
+    The planner used to highlight the learner's own writing here. That is the
+    same premature emphasis the stuck turn above stopped rendering: a mark on
+    wrong work points at it without saying anything true about it.
+    """
+
     tutor = _tutor_result(
         TutorMistakeClassification(status="no_mistake", confidence=0.9),
         [],
@@ -461,9 +591,7 @@ def test_wrong_turn_targets_only_reliable_student_written_work() -> None:
         student_response="",
     )
 
-    assert [(action.type, action.target_object_id) for action in actions] == [
-        ("HIGHLIGHT", "student-5n")
-    ]
+    assert actions == []
 
 
 def test_partial_choice_selection_gets_a_stable_option_action() -> None:
