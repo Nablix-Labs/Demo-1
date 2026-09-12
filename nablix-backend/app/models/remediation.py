@@ -10,7 +10,7 @@ Routing itself remains Student Model-owned; this module only types it.
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.fields import NonEmptyText
 
@@ -77,6 +77,24 @@ class InterventionFeedback(BaseModel):
     @classmethod
     def normalize_reasons(cls, values: list[InterventionReason]) -> list[InterventionReason]:
         return sorted(set(values))
+
+    @model_validator(mode="after")
+    def drop_empty_voice_input(self) -> "InterventionFeedback":
+        """An omitted voice block and an all-empty one are the same evidence.
+
+        The popup always sends `voice_input`, Student Model always returns the
+        three flattened `voice_*` fields, and a retry may send neither. Without
+        this, a silent student's receipt never equals what was submitted and
+        every submission 409s as "different evidence". Normalizing here fixes
+        the comparison at all five sites instead of at the one that was
+        reported. A spoken answer is never collapsed: any of provided,
+        audio_ref or transcript keeps the block intact.
+        """
+
+        voice = self.voice_input
+        if voice is not None and not (voice.provided or voice.audio_ref or voice.transcript):
+            self.voice_input = None
+        return self
 
 
 class InterventionStudentInput(BaseModel):

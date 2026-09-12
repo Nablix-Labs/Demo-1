@@ -16,6 +16,7 @@ from app.core.exceptions import (
 )
 from app.models.adapters import AdapterContext, StudentModelResult
 from app.models.student_model_session import (
+    InterventionInputSubmittedEvent,
     PrerequisiteRouteLookup,
     StudentModelSessionEvent,
     StudentModelSessionEventResponse,
@@ -70,6 +71,15 @@ class StudentModelServiceAdapter:
 
         url = self._require_student_model_url("Schema 3.0 session events")
         request_body = event.model_dump(mode="json", exclude_none=True)
+        if isinstance(event, InterventionInputSubmittedEvent):
+            # Wire translation. We nest the student's evidence under `feedback`;
+            # Student Model reads `selected_reason_codes`/`voice_input` off the
+            # top level (handle_intervention_input_submitted) and its request
+            # model is extra="allow", so the nested form was accepted, ignored,
+            # and rejected as MISSING_REASON_CODE. Flattened here and not in the
+            # model so the persisted pending_intervention_input snapshot stays
+            # readable by the model that wrote it.
+            request_body |= request_body.pop("feedback")
         record_request(request_body)
         try:
             response = await post_json(
