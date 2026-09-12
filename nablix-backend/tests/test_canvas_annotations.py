@@ -263,6 +263,10 @@ def test_confirmed_guided_idea_emits_a_component_scoped_semantic_action() -> Non
         student_response="",
     )
 
+    assert any(
+        action.type == "HIGHLIGHT" and action.target_object_id == "Q-T01-002:QTOKEN:1"
+        for action in actions
+    )
     label = next(action for action in actions if action.type == "INSERT_LABEL")
     assert label.text == "m → changes"
     assert label.confirmed_component_id == "CHANGING_VALUE"
