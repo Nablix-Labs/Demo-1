@@ -116,6 +116,10 @@ describe('interaction turn contract', () => {
       char_start: 3,
       char_end: 4,
       label: 'm → changes',
+      // A resolved INSERT_LABEL marks the token highlighted as well as labelled
+      // (`f747c2a`, Sanya) — the label rides on a token the tutor has pointed
+      // at, so the two always land together.
+      highlighted: true,
     }]);
   });
 
