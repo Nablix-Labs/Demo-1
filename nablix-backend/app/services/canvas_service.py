@@ -542,6 +542,17 @@ async def submit_canvas(
         updated_session = updated_session.model_copy(
             update={
                 "interaction_state_version": turn_session.interaction_state_version + 1,
+                "pending_canvas_submission_question_id": (
+                    None
+                    if (
+                        updated_session.question_id != turn_session.question_id
+                        or (
+                            _is_complete_correct_canvas(ocr, turn_session.correct_answer)
+                            and tutor.evaluation == "CORRECT"
+                        )
+                    )
+                    else updated_session.pending_canvas_submission_question_id
+                ),
                 **_independent_attempt_updates(turn_session, tutor),
                 **_turn_updates(
                     submission_id,

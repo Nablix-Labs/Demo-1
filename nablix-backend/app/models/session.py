@@ -377,6 +377,7 @@ class SessionRecord(BaseModel):
     selected_error_code: str | None = None
     question_completed: bool = False
     answer_value_confirmed: bool = False
+    pending_canvas_submission_question_id: QuestionId | None = None
     conversation_history: list[ConversationMessage] = Field(default_factory=list)
     last_processed_turn_id: TurnId | None = None
     last_tutor_turn_id: TurnId | None = None
