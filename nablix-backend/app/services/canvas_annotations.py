@@ -375,6 +375,7 @@ def plan_tutor_canvas_actions(
         canvas_events,
         turn_id,
         canonical_answer,
+        fallback_labels,
     )
     seen = {(action.type, action.target_object_id, action.text) for action in actions}
     for position, intention in enumerate(tutor.canvas_intentions, start=len(actions) + 1):
@@ -436,8 +437,9 @@ def confirmed_evidence_highlight_actions(
     canvas_events: list[CanvasEvent],
     turn_id: str,
     canonical_answer: str,
+    labels: FallbackCanvasLabelsConfig,
 ) -> list[TutorCanvasAction]:
-    """Render only targets justified by evidence from the current turn."""
+    """Render only current-turn confirmations as a mark and concise canvas note."""
 
     if canvas_student_state(tutor) not in {"CORRECT", "PARTIAL"}:
         return []
@@ -449,21 +451,16 @@ def confirmed_evidence_highlight_actions(
     component_ids = [
         claim.concept_id for claim in evidence if claim.status == "DEMONSTRATED"
     ]
-    parts = _SYMBOLIC_RULE_RE.search(canonical_answer)
-    if parts is None:
+    expression_parts = confirmation_expression_parts(canonical_answer)
+    if expression_parts is None:
         return []
-    variable, operator, fixed_value = parts.groups()
-    normalised_operator = "+" if operator == "+" else "-"
+    variable, normalised_operator, fixed_value = expression_parts
     actions: list[TutorCanvasAction] = []
+    active_anchor_ids = {anchor.token_id for anchor in question_anchors}
     for component_id in component_ids:
-        role = confirmation_role(component_id, tutor)
+        role = answer_confirmation_role(component_id, tutor, canonical_answer)
         if role == "changing_value":
             targets = [anchor for anchor in question_anchors if anchor.text == variable]
-            if not targets:
-                targets = [
-                    anchor for anchor in question_anchors
-                    if anchor.text.isdigit() and anchor.text != fixed_value
-                ]
         elif role == "fixed_value":
             targets = [anchor for anchor in question_anchors if anchor.text == fixed_value]
         elif role == "operation":
@@ -478,6 +475,8 @@ def confirmed_evidence_highlight_actions(
                 or anchor.text.replace("−", "-") == normalised_operator
             ]
         else:
+            continue
+        if not targets:
             continue
         for target in targets:
             if any(
@@ -501,45 +500,11 @@ def confirmed_evidence_highlight_actions(
                     answer_reveal_allowed=False,
                 )
             )
-    return actions
-
-
-def confirmed_component_canvas_actions(
-    tutor: TutorResult,
-    question_anchors: list[QuestionTextAnchor],
-    canvas_events: list[CanvasEvent],
-    turn_id: str,
-    canonical_answer: str,
-    labels: FallbackCanvasLabelsConfig,
-) -> list[TutorCanvasAction]:
-    """Render each confirmed component once, with a mark and concise note."""
-
-    if canvas_student_state(tutor) not in {"CORRECT", "PARTIAL"}:
-        return []
-    actions: list[TutorCanvasAction] = []
-    component_ids = ordered_confirmed_component_ids(tutor)
-    for component_id in component_ids:
-        targets = confirmation_targets(
-            component_id,
-            tutor,
-            question_anchors,
-            canonical_answer,
-        )
-        if not targets or confirmation_note_exists(canvas_events, component_id):
+        if (
+            confirmation_note_exists(canvas_events, component_id)
+            or has_explicit_confirmation_label(tutor, component_id, active_anchor_ids)
+        ):
             continue
-        for target in targets:
-            actions.append(
-                TutorCanvasAction(
-                    action_id=f"{turn_id}:{len(actions) + 1}:HIGHLIGHT:{target.token_id}",
-                    type="HIGHLIGHT",
-                    target_kind="QUESTION_ANCHOR",
-                    target_object_id=target.token_id,
-                    confirmed_component_id=component_id,
-                    text=None,
-                    source_id=None,
-                    answer_reveal_allowed=False,
-                )
-            )
         note = confirmation_note(component_id, tutor, targets[0], canonical_answer, labels)
         if note is None:
             continue
@@ -549,9 +514,7 @@ def confirmed_component_canvas_actions(
                 action_id=f"{turn_id}:{len(actions) + 1}:INSERT_LABEL:TUTOR_ANCHOR",
                 type="INSERT_LABEL",
                 target_kind="TUTOR_ANCHOR",
-                target_object_id=(
-                    f"TUTOR_ANCHOR:CONFIRMED:{question_id}:{len(actions) + 1}"
-                ),
+                target_object_id=f"TUTOR_ANCHOR:CONFIRMED:{question_id}:{len(actions) + 1}",
                 confirmed_component_id=component_id,
                 text=note,
                 source_id=None,
@@ -561,44 +524,22 @@ def confirmed_component_canvas_actions(
     return actions
 
 
-def confirmation_targets(
-    component_id: str,
+def has_explicit_confirmation_label(
     tutor: TutorResult,
-    question_anchors: list[QuestionTextAnchor],
-    canonical_answer: str,
-) -> list[QuestionTextAnchor]:
-    """Find the question maths that expresses one confirmed component."""
+    component_id: str,
+    active_anchor_ids: set[str],
+) -> bool:
+    """Keep a writer-provided label when it is grounded in the served question."""
 
-    role = answer_confirmation_role(component_id, tutor, canonical_answer)
-    parts = _SYMBOLIC_RULE_RE.search(canonical_answer)
-    if parts is None:
-        return generic_component_targets(component_id, tutor, question_anchors)
-    variable, operator, fixed_value = parts.groups()
-    normalised_operator = "+" if operator == "+" else "-"
-    if role == "changing_value":
-        return [anchor for anchor in question_anchors if anchor.text == variable]
-    if role == "fixed_value":
-        return [anchor for anchor in question_anchors if anchor.text == fixed_value]
-    if role == "operation":
-        symbols = [
-            anchor
-            for anchor in question_anchors
-            if anchor.text.replace("−", "-") == normalised_operator
-        ]
-        if symbols:
-            return symbols
-        words = ("increase", "increases", "add", "adds") if normalised_operator == "+" else (
-            "decrease", "decreases", "subtract", "subtracts",
-        )
-        return [anchor for anchor in question_anchors if anchor.text.casefold() in words]
-    if role == "general_rule":
-        return [
-            anchor
-            for anchor in question_anchors
-            if anchor.text in {variable, fixed_value}
-            or anchor.text.replace("−", "-") == normalised_operator
-        ]
-    return generic_component_targets(component_id, tutor, question_anchors)
+    return any(
+        intention.action_type == "INSERT_LABEL"
+        and intention.confirmed_component_id == component_id
+        and intention.target_kind == "QUESTION_ANCHOR"
+        and intention.target_object_id in active_anchor_ids
+        and intention.text is not None
+        and intention.text.strip() != ""
+        for intention in tutor.canvas_intentions
+    )
 
 
 def confirmation_note(
@@ -616,16 +557,14 @@ def confirmation_note(
     if role == "fixed_value":
         return labels.fixed_value.format(value=target.text)
     if role == "operation":
-        match = _SYMBOLIC_RULE_RE.search(canonical_answer)
-        operator = match.group(2).replace("−", "-") if match is not None else target.text
         return labels.operation.format(
             value=target.text,
-            operation=labels.operation_names.get(operator, "the operation"),
+            operation=labels.operation_names.get(target.text.replace("−", "-"), "the operation"),
         )
     if role == "general_rule":
-        match = _SYMBOLIC_RULE_RE.search(canonical_answer)
-        return match.group(0) if match is not None else None
-    return labels.generic.format(value=target.text)
+        symbolic_match = _SYMBOLIC_RULE_RE.search(canonical_answer)
+        return symbolic_match.group(0) if symbolic_match is not None else None
+    return None
 
 
 def confirmation_note_exists(
@@ -643,21 +582,27 @@ def confirmation_note_exists(
     )
 
 
-def ordered_confirmed_component_ids(tutor: TutorResult) -> list[str]:
-    """Keep simultaneous confirmation marks in authored component order."""
+def confirmation_expression_parts(canonical_answer: str) -> tuple[str, str, str] | None:
+    """Return variable, operator, and fixed value from symbolic or multipart answers."""
 
-    confirmed = confirmed_component_ids(tutor)
-    authored_order = [
-        concept.concept_id
-        for concept in (
-            tutor.generated_question_rubric.required_concepts
-            if tutor.generated_question_rubric is not None
-            else []
-        )
-        if concept.concept_id in confirmed
-    ]
-    remaining = sorted(confirmed.difference(authored_order))
-    return [*authored_order, *remaining]
+    symbolic_match = _SYMBOLIC_RULE_RE.search(canonical_answer)
+    if symbolic_match is not None:
+        variable, operator, fixed_value = symbolic_match.groups()
+        return variable, "+" if operator == "+" else "-", fixed_value
+
+    answer_parts = [part.strip().casefold() for part in canonical_answer.split(";") if part.strip()]
+    if len(answer_parts) != 3:
+        return None
+    variable, fixed_value, operation = answer_parts
+    operation_symbols = {"addition": "+", "subtraction": "-"}
+    operator = operation_symbols.get(operation)
+    if (
+        re.fullmatch(r"[a-z]", variable) is None
+        or re.fullmatch(r"[+\-−]?\s*\d+", fixed_value) is None
+        or operator is None
+    ):
+        return None
+    return variable, operator, fixed_value.replace("−", "-").replace(" ", "")
 
 
 def answer_confirmation_role(
@@ -685,7 +630,6 @@ def answer_confirmation_role(
     if answer_part in {"addition", "subtraction", "multiplication", "division"}:
         return "operation"
     return role
-
 
 def plan_rescue_canvas_actions(
     rescue_context: GuidedRescueContext,
