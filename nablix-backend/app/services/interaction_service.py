@@ -133,6 +133,7 @@ from app.services.session_service import (
     _get_owned_session_for_turn,
     submit_intervention_input,
     require_learning_active,
+    independent_practice_is_silent,
     intervention_response_updates,
     cache_interaction_response,
     final_turn_receipt_for,
@@ -4975,7 +4976,7 @@ async def _process_interaction(
             "phase3_review_evidence": tutor.phase3_review_evidence,
         }
     )
-    if turn_session.current_phase == "INDEPENDENT_PRACTICE":
+    if independent_practice_is_silent(turn_session):
         response = response.model_copy(
             update={
                 "message": (

@@ -426,6 +426,35 @@ def require_learning_active(session: SessionRecord) -> None:
         })
 
 
+def independent_practice_is_silent(session: SessionRecord) -> bool:
+    """Independent Practice shows the learner no tutor marks on their own work.
+
+    Phase 3 is evidence of what the student can do unaided, so the tutor layer
+    stays empty and wrong work is replayed in Phase 4 instead. Two sites enforce
+    it -- `/canvas/submit` before it plans anything, `_process_interaction` by
+    overwriting the response it just built -- and each spelled the rule out as
+    its own phase comparison, so the two read as coincidence rather than as one
+    rule. This is that rule.
+
+    It is not yet the only way out. `_process_interaction` has three earlier
+    returns that set `canvas_draw` to a write-request block and never reach the
+    overwrite, and nothing phase-gates the flag that opens the newest of them
+    (`pending_canvas_submission_question_id`, set without regard to phase).
+    Whether Phase 3 can actually reach them is unproven either way and is not
+    this function's business to settle -- but a named rule is what makes the
+    question askable, which is most of why the name exists.
+
+    Callers pass the session as it stood when the turn arrived, so the turn that
+    moves a student from Guided Practice into Phase 3 is still a Guided turn and
+    keeps its marks.
+
+    Interventions need no clause: `require_learning_active` refuses a frozen
+    topic before either path reaches a planner.
+    """
+
+    return session.current_phase == "INDEPENDENT_PRACTICE"
+
+
 def intervention_response_updates(session: SessionRecord) -> dict[str, object]:
     """Keep cached turn receipts from reopening controls after a later halt."""
 

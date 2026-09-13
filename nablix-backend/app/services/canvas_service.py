@@ -67,6 +67,7 @@ from app.services.interaction_service import (
 from app.services.session_service import (
     _get_owned_session,
     require_learning_active,
+    independent_practice_is_silent,
     intervention_response_updates,
     cache_interaction_response,
     final_turn_receipt_for,
@@ -473,7 +474,7 @@ async def submit_canvas(
             update={"next_phase_recommendation": student_result.recommended_entry_phase}
         )
     tutor_latency_ms = (perf_counter() - tutor_started) * 1000
-    phase3_silent = turn_session.current_phase == "INDEPENDENT_PRACTICE"
+    phase3_silent = independent_practice_is_silent(turn_session)
     canvas_draw = (
         []
         if phase3_silent
