@@ -75,6 +75,51 @@ def test_canvas_completion_accepts_a_detected_equation_without_final_answer() ->
     assert interaction_service._is_complete_correct_canvas(ocr, "n + 5")
 
 
+def test_pending_canvas_submission_blocks_typed_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def unexpected_tutor_call(context: AdapterContext):
+        raise AssertionError(f"canvas-write gate called tutor for {context.message!r}")
+
+    monkeypatch.setattr(
+        interaction_service,
+        "run_tutor_pipeline",
+        unexpected_tutor_call,
+    )
+    session_id = _start_session("ST411")
+    before = session_service._get_owned_session(session_id, "ST411")
+    session_service._sessions[session_id] = before.model_copy(
+        update={"pending_canvas_submission_question_id": before.question_id}
+    )
+
+    response = client.post(
+        "/interaction",
+        json={
+            "session_id": session_id,
+            "student_id": "ST411",
+            "interaction_type": "ANSWER_SUBMISSION",
+            "input_source": "TEXT",
+            "turn_id": "TURN-CANVAS-GATE",
+            "text_input": "n can change",
+            "current_phase": before.current_phase,
+            "concept_id": "ALG_LINEAR_ONE_STEP",
+            "question_id": before.question_id,
+            "hint_count": before.hint_count,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "CLARIFICATION_REQUIRED"
+    assert body["next_expected_input"] == "WRITE"
+    assert body["question_id"] == before.question_id
+    assert body["question_completed"] is False
+    assert body["attempt_increment"] == 0
+    assert body["message"] == "You have the rule. Now write it on the canvas, then press Check."
+    stored = session_service._get_owned_session(session_id, "ST411")
+    assert stored.pending_canvas_submission_question_id == before.question_id
+
+
 @pytest.mark.parametrize(
     ("ocr_text", "mathml_operator"),
     [

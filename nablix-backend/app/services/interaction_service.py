@@ -272,6 +272,15 @@ def _is_complete_correct_canvas(
     )
 
 
+def _canvas_submission_is_pending(session: SessionRecord) -> bool:
+    """Return whether the active question still needs its required canvas work."""
+
+    return (
+        session.question_id is not None
+        and session.pending_canvas_submission_question_id == session.question_id
+    )
+
+
 async def _canvas_evidence_for(request: InteractionRequest) -> CanvasEvidence | None:
     canvas_state = request.canvas_state
     if canvas_state is None:
@@ -3957,6 +3966,74 @@ async def _process_interaction(
         ocr,
         session.correct_answer,
     )
+    if _canvas_submission_is_pending(session) and canvas_evidence is None:
+        message = rules.guided_learning.critical_thinking.written_rule_prompt
+        write_actions = plan_write_request_tutor_actions(
+            request.turn_id or "TURN-0000", 1
+        )
+        updated_session = await update_interaction_state(
+            request.session_id,
+            request.student_id,
+            session,
+            session.current_phase,
+            session.hint_count,
+            session.current_phase,
+            request.transcript_confidence,
+            session.canvas_state.snapshot_id,
+            session.canvas_state.ocr_result,
+            session.show_visual_cue,
+            session.show_scaffold_panel,
+            session.scaffold_steps,
+            {
+                "attempt_count": session.attempt_count,
+                "question_completed": False,
+                "pending_canvas_submission_question_id": session.question_id,
+                "conversation_history": _updated_conversation_history(
+                    session.conversation_history,
+                    student_message,
+                    message,
+                    rules.conversation_rules.max_recent_messages,
+                ),
+                **_canvas_memory_update_with_tutor_actions(
+                    request, session, write_actions
+                ),
+                **_turn_updates(
+                    request.turn_id,
+                    "REQUESTED_CLARIFICATION",
+                    "CLARIFICATION",
+                ),
+            },
+        )
+        return await _cache_response(
+            request,
+            _response_from(
+                session_id=request.session_id,
+                student_id=request.student_id,
+                turn_id=request.turn_id or "TURN-0000",
+                interaction_type=request.interaction_type,
+                nudge_id=request.nudge_id,
+                session=updated_session,
+                message=message,
+                message_voice=message,
+                visual_cue=None,
+                scaffold_steps=updated_session.scaffold_steps,
+                session_summary=None,
+                conversation_action="REQUEST_CLARIFICATION",
+                attempt_increment=0,
+                status="CLARIFICATION_REQUIRED",
+                retry_safe=None,
+            ).model_copy(
+                update={
+                    "next_expected_input": "WRITE",
+                    "requires_written_math_evidence": True,
+                    "write_instruction": message,
+                    "canvas_draw": plan_write_request_tutor_draw(
+                        request.turn_id or "TURN-0000"
+                    ),
+                    "tutor_canvas_actions": write_actions,
+                }
+            ),
+        )
     if (
         canvas_evidence is not None
         and canvas_solution_complete_candidate
@@ -4426,6 +4503,20 @@ async def _process_interaction(
             session.answer_value_confirmed
             if schema_question_changed
             else tutor.answer_value_confirmed
+        ),
+        "pending_canvas_submission_question_id": (
+            None
+            if (
+                canvas_evidence is not None
+                and canvas_solution_complete_candidate
+                and tutor.evaluation == "CORRECT"
+            )
+            else turn_session.question_id
+            if (
+                tutor.requires_written_math_evidence
+                or _canvas_submission_is_pending(turn_session)
+            )
+            else None
         ),
         "conversation_history": conversation_history,
         "generated_question_rubric": (
