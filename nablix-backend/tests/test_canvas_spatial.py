@@ -133,7 +133,21 @@ def test_align_step_tokens_and_plan_canvas_draw() -> None:
     assert 0.18 <= elem.x <= 0.28
 
 
-def test_plan_canvas_draw_omits_uncertain_token_alignment() -> None:
+def test_no_spatial_tokens_circles_the_step_rather_than_drawing_nothing() -> None:
+    """The acceptance criteria ask for a line circle, not silence.
+
+    Renamed from test_plan_canvas_draw_omits_uncertain_token_alignment, which
+    asserted the opposite. That name was already loose -- it passes no tokens at
+    all, which is missing alignment rather than uncertain alignment -- and the
+    behaviour it pinned contradicts both ADR 0001 ("circle whole wrong steps
+    when precise token anchors are unavailable") and the pipeline spec ("When
+    exact token anchors are missing, the system circles the full wrong line
+    instead of guessing exact character geometry").
+
+    This is not a rare path. collect_canvas_evidence skips any region whose
+    MathML is absent, so a submission the vision adapter returns no MathML for
+    has no spatial tokens at all -- and drew nothing at all until now.
+    """
     tutor_res = TutorResult(
         evaluation="INCORRECT",
         error_type="OPPOSITE_OPERATION",
@@ -163,7 +177,10 @@ def test_plan_canvas_draw_omits_uncertain_token_alignment() -> None:
 
     payloads = plan_canvas_draw(tutor_res, regions, [])
 
-    assert payloads == []
+    assert len(payloads) == 1
+    ellipse = payloads[0].elements[0]
+    assert ellipse.kind == "ellipse"
+    assert ellipse.w == regions[0].w and ellipse.h == regions[0].h
 
 
 _CMINUS4 = "<math><mi>c</mi><mo>-</mo><mn>4</mn></math>"
@@ -223,3 +240,90 @@ def test_ocr_symbol_boxes_are_rejected_when_they_disagree_with_the_symbols() -> 
     tokens = align_step_tokens("step-1", _CMINUS4, "c-4", [], _LINE, disagreeing)
 
     assert all(token.alignment_confidence < 0.9 for token in tokens)
+
+
+def _unplaceable_token_tutor() -> TutorResult:
+    """A verifier that found the sign, on work the aligner could not place."""
+
+    return TutorResult(
+        evaluation="INCORRECT",
+        error_type="OPPOSITE_OPERATION",
+        intent="CANVAS_EVAL",
+        response_strategy="CORRECT_MISTAKE",
+        tutor_message="Check your sign",
+        tutor_message_voice="Check your sign",
+        voice_optimised=True,
+        hint_level=1,
+        answer_reveal_allowed=False,
+        confidence=0.95,
+        input_source="CANVAS",
+        recommended_conversation_action="GIVE_HINT",
+        question_completed=False,
+        attempt_increment=1,
+        mistake_classification=TutorMistakeClassification(
+            status="mistake_found",
+            mistake_step_id="step-1",
+            target_token_ids=["step-1:token-2"],
+            error_token="-",
+            expected_token="+",
+            confidence=0.95,
+        ),
+        annotation_intents=[
+            AnnotationIntent(kind="circle_target", target_step_id="step-1"),
+        ],
+    )
+
+
+def test_unplaceable_tokens_circle_the_step_instead_of_dropping_the_mark() -> None:
+    """A student who joins two symbols in one stroke still gets a mark.
+
+    `align_step_tokens` falls back to the step region below 0.9, so the box is
+    already the whole line. Returning nothing left the tutor talking about a
+    line with no mark on it.
+    """
+
+    region = OCRTextRegion(
+        step_id="step-1", text="4-y", x=0.10, y=0.30, w=0.40, h=0.08, confidence=0.9
+    )
+    strokes = [
+        CanvasStroke(
+            stroke_id="s1",
+            tool="pen",
+            points=[CanvasPoint(x=0.10, y=0.30), CanvasPoint(x=0.25, y=0.34)],
+        )
+    ]
+    spatial_tokens = align_step_tokens(
+        "step-1", "<math><mn>4</mn><mo>-</mo><mi>y</mi></math>", "4-y", strokes, region
+    )
+    # One cluster, three tokens: the aligner cannot pair them.
+    assert [token.alignment_confidence for token in spatial_tokens] == [0.5, 0.5, 0.5]
+
+    payloads = plan_canvas_draw(_unplaceable_token_tutor(), [region], spatial_tokens)
+
+    assert len(payloads) == 1
+    assert payloads[0].action_id == "canvas-correction-step-1"
+    ellipse = payloads[0].elements[0]
+    assert ellipse.kind == "ellipse"
+    # The whole step, not a token-sized circle sitting at a guessed position.
+    assert ellipse.w == region.w and ellipse.h == region.h
+
+
+def test_tokens_the_verifier_and_ocr_disagree_on_are_still_never_marked() -> None:
+    """Low confidence is placement; disagreement is identity. Only the first recovers."""
+
+    region = OCRTextRegion(
+        step_id="step-1", text="4+y", x=0.10, y=0.30, w=0.40, h=0.08, confidence=0.9
+    )
+    strokes = [
+        CanvasStroke(
+            stroke_id="s1",
+            tool="pen",
+            points=[CanvasPoint(x=0.10, y=0.30), CanvasPoint(x=0.25, y=0.34)],
+        )
+    ]
+    spatial_tokens = align_step_tokens(
+        "step-1", "<math><mn>4</mn><mo>+</mo><mi>y</mi></math>", "4+y", strokes, region
+    )
+
+    # The verifier says the error token is "-"; the canvas reads "+".
+    assert plan_canvas_draw(_unplaceable_token_tutor(), [region], spatial_tokens) == []

@@ -210,7 +210,7 @@ def test_canvas_planner_circles_explicit_whole_line_mistake() -> None:
     draw = plan_canvas_draw(tutor, regions, [_token()])
 
     assert len(draw) == 1
-    assert draw[0].action_id == "canvas-line-review-step-1"
+    assert draw[0].action_id == "canvas-correction-step-1"
     assert [element.kind for element in draw[0].elements] == ["ellipse"]
 
 

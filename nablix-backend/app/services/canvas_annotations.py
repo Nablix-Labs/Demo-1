@@ -105,7 +105,14 @@ def plan_canvas_draw(
                     elements=elements,
                 )
             ] if elements else []
-        return _whole_region_draw(tutor, classification, target_region)
+        # ADR 0001: "circle whole wrong steps when precise token anchors are
+        # unavailable". _whole_region_draw answers only the narrower case where
+        # the classification named the entire line, so on its own it left the
+        # commonest path drawing nothing -- canvas_evidence skips every region
+        # without MathML, so no spatial tokens at all is routine, not a corner.
+        return _whole_region_draw(
+            tutor, classification, target_region
+        ) or _step_region_draw(tutor, classification, target_region)
 
     matching_tokens = [
         tok
@@ -114,10 +121,21 @@ def plan_canvas_draw(
     ]
     if (
         len(matching_tokens) != len(classification.target_token_ids)
-        or any(token.alignment_confidence < 0.9 for token in matching_tokens)
         or _normalised_token_text(matching_tokens) != _normalised_text(classification.error_token)
     ):
+        # OCR and the verifier disagree about what is actually written. Any
+        # mark here would be pointing at a guess, so point at nothing.
         return []
+
+    if any(token.alignment_confidence < 0.9 for token in matching_tokens):
+        # The right tokens, but `align_step_tokens` could not place them, so
+        # their boxes are a fallback rather than a reading of the ink (the step
+        # region at 0.5, a bare placeholder at 0.1). Discard the boxes and mark
+        # the step: that is what the correction pipeline asks for when exact
+        # placement is unsafe, and dropping the payload instead left the tutor
+        # saying "look at this line" over a canvas with nothing on it, which
+        # reads as a broken renderer.
+        return _step_region_draw(tutor, classification, target_region)
 
     boxes = [token.bounding_box for token in matching_tokens if token.bounding_box]
     if len(boxes) != len(matching_tokens):
@@ -1150,7 +1168,12 @@ def _whole_region_draw(
         return []
     return [
         CanvasDrawPayload(
-            action_id=f"canvas-line-review-{region.step_id}",
+            # One id for the correction of a step, whatever precision produced
+            # it. The client's seen-set lives for the session and is cleared
+            # only by mode="replace", so a second id for the same visual mark
+            # stacks a duplicate circle on the same line; a shared one means the
+            # step is annotated once. Same reasoning as _step_region_draw.
+            action_id=f"canvas-correction-{region.step_id}",
             mode="append",
             elements=[
                 _ellipse_element((region.x, region.y, region.w, region.h), 1)
@@ -1158,6 +1181,36 @@ def _whole_region_draw(
         )
     ]
 
+
+
+def _step_region_draw(
+    tutor: TutorResult,
+    classification: TutorMistakeClassification,
+    region: OCRTextRegion,
+) -> list[CanvasDrawPayload]:
+    """Mark the whole step when the token geometry is not precise enough.
+
+    Unlike `_whole_region_draw`, which serves a classification that named the
+    entire line as the target, this places the same intents the token path
+    would have placed onto the step's own box.
+    """
+
+    elements = _elements_for(
+        classification,
+        tutor.annotation_intents,
+        (region.x, region.y, region.w, region.h),
+    )
+    if not elements:
+        return []
+    return [
+        CanvasDrawPayload(
+            # Every mark correcting this step shares one id; see
+            # _whole_region_draw for why the client makes that necessary.
+            action_id=f"canvas-correction-{region.step_id}",
+            mode="append",
+            elements=elements,
+        )
+    ]
 
 
 def _region_for(step_id: str | None, regions: list[OCRTextRegion]) -> OCRTextRegion | None:
