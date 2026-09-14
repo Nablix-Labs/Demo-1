@@ -1101,3 +1101,51 @@ def test_canvas_planner_uses_target_token_geometry() -> None:
     ]
     assert abs(draw[0].elements[0].w - 0.05) < 1e-9
     assert abs(draw[0].elements[0].h - 0.08) < 1e-9
+
+
+def test_two_part_authored_answer_marks_only_newly_confirmed_variable_and_change() -> None:
+    tutor = _tutor_result(
+        TutorMistakeClassification(status="no_mistake", confidence=0.9),
+        [],
+    ).model_copy(
+        update={
+            "guided_student_state": "CORRECT",
+            "generated_question_rubric": GeneratedQuestionRubric(
+                question_id="Q-T01-002",
+                required_concepts=[
+                    GeneratedConcept(concept_id="REQUIRED_COMPONENT_1", description="m", required=True),
+                    GeneratedConcept(concept_id="REQUIRED_COMPONENT_2", description="+7", required=True),
+                ],
+                completion_rule="ALL_REQUIRED_CONCEPTS",
+                cache_key="m-plus-seven",
+                prompt_version="1.0.0",
+            ),
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-T01-002",
+                objective_component_ids=["REQUIRED_COMPONENT_1", "REQUIRED_COMPONENT_2"],
+                confirmed_component_ids=["REQUIRED_COMPONENT_1", "REQUIRED_COMPONENT_2"],
+                missing_component_ids=[],
+                active_component_id=None,
+                last_tutor_question_type="COMPONENT",
+                selected_option_id=None,
+                awaiting_response=True,
+                last_turn_evidence=_demonstrated("REQUIRED_COMPONENT_1", "REQUIRED_COMPONENT_2"),
+            ),
+        }
+    )
+    anchors = [
+        QuestionTextAnchor(token_id="Q-T01-002:QTOKEN:2", text="m", char_start=3, char_end=4),
+        QuestionTextAnchor(token_id="Q-T01-002:QTOKEN:3", text="+", char_start=5, char_end=6),
+        QuestionTextAnchor(token_id="Q-T01-002:QTOKEN:4", text="7", char_start=7, char_end=8),
+    ]
+
+    actions = plan_tutor_canvas_actions(
+        tutor, anchors, [], "TURN-two-part", "m; +7", _fallback_labels(), 0, "m changes and +7 stays fixed"
+    )
+
+    assert [(action.type, action.target_object_id, action.text) for action in actions] == [
+        ("HIGHLIGHT", "Q-T01-002:QTOKEN:2", None),
+        ("INSERT_LABEL", "TUTOR_ANCHOR:CONFIRMED:Q-T01-002:2", "m → changes"),
+        ("HIGHLIGHT", "Q-T01-002:QTOKEN:4", None),
+        ("INSERT_LABEL", "TUTOR_ANCHOR:CONFIRMED:Q-T01-002:4", "7 → stays fixed"),
+    ]
