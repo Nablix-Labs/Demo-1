@@ -6600,13 +6600,12 @@ def build_guided_tutor_response(
         request,
         rules,
     )
-    message = write_instruction or evaluation.tutor_message
     return guarded_response.model_copy(
         update={
             "evaluation": "PARTIALLY_CORRECT",
             "response_strategy": "CLARIFY",
-            "tutor_message": message,
-            "tutor_message_voice_optimised": message,
+            "tutor_message": guarded_response.tutor_message,
+            "tutor_message_voice_optimised": guarded_response.tutor_message_voice_optimised,
             "attempt_increment": 0,
             "recommended_conversation_action": "REQUEST_CLARIFICATION",
             "question_completed": False,

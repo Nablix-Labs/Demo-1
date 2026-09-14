@@ -1809,7 +1809,7 @@ def test_voice_only_symbolic_rule_requires_written_evidence() -> None:
         "Write the general rule using the starting score and the change "
         "you identified."
     )
-    assert response.tutor_message == response.write_instruction
+    assert response.tutor_message == "That is the right new-score rule."
 
 
 def test_written_rule_instruction_cannot_reveal_the_unwritten_rule() -> None:
