@@ -74,7 +74,7 @@ def test_canvas_completion_accepts_a_detected_equation_without_final_answer() ->
     assert interaction_service._is_complete_correct_canvas(ocr, "n + 5")
 
 
-def test_pending_canvas_submission_blocks_typed_progress(
+def test_pending_canvas_submission_returns_direct_prompt_for_empty_submit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def unexpected_tutor_call(context: AdapterContext):
@@ -99,7 +99,7 @@ def test_pending_canvas_submission_blocks_typed_progress(
             "interaction_type": "ANSWER_SUBMISSION",
             "input_source": "TEXT",
             "turn_id": "TURN-CANVAS-GATE",
-            "text_input": "n can change",
+            "text_input": "",
             "current_phase": before.current_phase,
             "concept_id": "ALG_LINEAR_ONE_STEP",
             "question_id": before.question_id,

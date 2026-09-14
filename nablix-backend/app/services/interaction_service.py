@@ -560,16 +560,25 @@ async def run_tutor_pipeline(
 def _require_authored_canvas_confirmation(
     session: SessionRecord,
     tutor: TutorResult,
+    canvas_submission_complete: bool,
 ) -> TutorResult:
     """Keep configured guided-rule questions open until canvas work is checked."""
 
-    if not session.canvas_submission_required or tutor.requires_written_math_evidence:
+    if (
+        not session.canvas_submission_required
+        or canvas_submission_complete
+        or tutor.requires_written_math_evidence
+    ):
         return tutor
     if not tutor.answer_value_confirmed:
         return tutor
     rules = load_classifier_rules()
     instruction = rules.guided_learning.critical_thinking.written_rule_prompt
-    message = f"{tutor.tutor_message.rstrip()} {instruction}"
+    message = (
+        tutor.tutor_message
+        if _canvas_submission_is_pending(session)
+        else f"{tutor.tutor_message.rstrip()} {instruction}"
+    )
     return tutor.model_copy(
         update={
             "evaluation": "PARTIALLY_CORRECT",
@@ -621,7 +630,11 @@ async def process_answer_with_session_event(
         )
 
     student, tutor = await run_tutor_pipeline(context)
-    tutor = _require_authored_canvas_confirmation(session, tutor)
+    tutor = _require_authored_canvas_confirmation(
+        session,
+        tutor,
+        context.canvas_solution_complete_candidate,
+    )
     if tutor.requires_written_math_evidence:
         return student, tutor, None, None, session
     if (
@@ -3960,7 +3973,11 @@ async def _process_interaction(
         ocr,
         session.correct_answer,
     )
-    if _canvas_submission_is_pending(session) and canvas_evidence is None:
+    if (
+        _canvas_submission_is_pending(session)
+        and canvas_evidence is None
+        and student_message.strip() == ""
+    ):
         message = rules.guided_learning.critical_thinking.written_rule_prompt
         write_actions = plan_write_request_tutor_actions(
             request.turn_id or "TURN-0000", 1
@@ -4317,7 +4334,11 @@ async def _process_interaction(
         ) = await process_answer_with_session_event(context, session, access_token)
     else:
         student, tutor = await run_tutor_pipeline(context)
-        tutor = _require_authored_canvas_confirmation(session, tutor)
+        tutor = _require_authored_canvas_confirmation(
+            session,
+            tutor,
+            canvas_solution_complete_candidate,
+        )
         schema_content_response = None
         schema_response = None
     tutor = tutor.model_copy(update={"safety_check": safety_check})
