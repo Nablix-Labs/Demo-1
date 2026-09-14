@@ -557,6 +557,35 @@ async def run_tutor_pipeline(
     return student, tutor
 
 
+def _require_authored_canvas_confirmation(
+    session: SessionRecord,
+    tutor: TutorResult,
+) -> TutorResult:
+    """Keep configured guided-rule questions open until canvas work is checked."""
+
+    if not session.canvas_submission_required or tutor.requires_written_math_evidence:
+        return tutor
+    if not tutor.answer_value_confirmed:
+        return tutor
+    rules = load_classifier_rules()
+    instruction = rules.guided_learning.critical_thinking.written_rule_prompt
+    message = f"{tutor.tutor_message.rstrip()} {instruction}"
+    return tutor.model_copy(
+        update={
+            "evaluation": "PARTIALLY_CORRECT",
+            "response_strategy": "CLARIFY",
+            "tutor_message": message,
+            "tutor_message_voice": message,
+            "attempt_increment": 0,
+            "recommended_conversation_action": "REQUEST_CLARIFICATION",
+            "question_completed": False,
+            "reasoning_complete": False,
+            "requires_written_math_evidence": True,
+            "write_instruction": instruction,
+        }
+    )
+
+
 async def process_answer_with_session_event(
     context: AdapterContext,
     session: SessionRecord,
@@ -592,6 +621,7 @@ async def process_answer_with_session_event(
         )
 
     student, tutor = await run_tutor_pipeline(context)
+    tutor = _require_authored_canvas_confirmation(session, tutor)
     if tutor.requires_written_math_evidence:
         return student, tutor, None, None, session
     if (
@@ -2696,6 +2726,7 @@ def _response_from(
         highest_support_used="NONE" if phase3_silent else highest_support_used,
         consecutive_stuck_count=session.stuck_count,
         question_anchors=[] if phase3_silent else _question_anchors(session),
+        question_opening_canvas_actions=[],
         wrong_attempt_count=session.wrong_attempt_count,
         intervention_triggered=session.wrong_attempt_count >= 4,
         intervention=session.intervention,
@@ -4320,6 +4351,7 @@ async def _process_interaction(
         ) = await process_answer_with_session_event(context, session, access_token)
     else:
         student, tutor = await run_tutor_pipeline(context)
+        tutor = _require_authored_canvas_confirmation(session, tutor)
         schema_content_response = None
         schema_response = None
     tutor = tutor.model_copy(update={"safety_check": safety_check})
@@ -4668,7 +4700,11 @@ async def _process_interaction(
             guided_question_opening(
                 resulting_question,
                 guided_question_type,
-                "Nice work. Here is the next question.",
+                "Here is the next question.",
+                cast(str | None, state_updates.get(
+                    "guided_start_tutor_prompt",
+                    turn_session.guided_start_tutor_prompt,
+                )),
             )
             if session.current_phase == "GUIDED_PRACTICE"
             else rules.messages.NEXT_QUESTION.format(
@@ -4918,6 +4954,11 @@ async def _process_interaction(
                 ),
             ],
             "tutor_canvas_actions": tutor.tutor_canvas_actions,
+            "question_opening_canvas_actions": (
+                updated_session.question_opening_canvas_actions
+                if question_advanced
+                else []
+            ),
             "question_anchors": [
                 *response.question_anchors,
                 *[

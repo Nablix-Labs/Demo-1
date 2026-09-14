@@ -16,6 +16,25 @@
   --reading-surface: #f4f6f9;
   --off-white: #fafafa;
   --muted-gray: #e0e2e5;
+
+  /* Drawably's pen, in Numera's ink rather than the library's own blue.
+     Set once here as the library intends, so every drawn control picks it up
+     and no component carries a colour of its own. Slate blue is what the
+     chips' text and the app's secondary rules already use, so a drawn box
+     around them belongs to the same hand. */
+  --drawably-stroke: #4a6984;
+  --drawably-fill: #4a6984;
+
+  /* The tutor's marker wash on an anchored question token (AnchoredText).
+     `drawably` defaults to pen blue, which is the tutor's INK colour here —
+     a wash in it would read as writing over the word rather than marking it.
+     Amber at low alpha is the same highlight the CSS background used, so the
+     meaning of the colour is unchanged and only the edge is now drawn.
+
+     Heavier than the 0.25 the flat CSS fill used: a drawn stroke has soft
+     edges, so the same alpha covers visibly less and the mark stopped reading
+     as a mark. */
+  --drawably-anchor-wash: rgb(255 159 28 / 0.45);
 }
 
 * {

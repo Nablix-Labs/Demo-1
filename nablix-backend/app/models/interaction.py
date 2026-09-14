@@ -241,6 +241,9 @@ class InteractionResponse(BaseModel):
     nudge_delivery: NudgeDeliveryRecord | None = None
     canvas_draw: list[CanvasDrawPayload] = Field(default_factory=list)
     tutor_canvas_actions: list[TutorCanvasAction] = Field(default_factory=list)
+    # Authored visual cues for the question that has just arrived. These are
+    # separate from turn actions, which annotate the question being left.
+    question_opening_canvas_actions: list[TutorCanvasAction] = Field(default_factory=list)
     # Spans into `current_question` for the frontend to highlight and label.
     question_anchors: list[QuestionTextAnchor] = Field(default_factory=list)
     localization_status: Literal["grounded", "uncertain"] | None = None

@@ -37,7 +37,7 @@ import {
   acknowledgeRescueRender, advanceRescue,
   type QuestionType,
 } from '@/lib/api';
-import { resetSessionStart } from '@/hooks/useDemoTutor';
+import { resetSessionStart, resyncSession } from '@/hooks/useDemoTutor';
 import { applyInteractionSupport, acceptResponse } from '@/lib/interactionPresentation';
 import { voiceSupportFrame } from '@/lib/voiceSupportFrame';
 import { TurnWatchdog } from '@/lib/turnWatchdog';
@@ -80,6 +80,9 @@ function logFrame(direction: 'in' | 'out', msg: Record<string, unknown>): void {
 /** Reconnect back-off: base 3s, doubling per consecutive failure, capped. */
 const RETRY_BASE_MS = 3_000;
 const RETRY_MAX_MS = 30_000;
+/** Idle-frame interval. Well inside the shortest observed drop (55s). */
+const KEEPALIVE_MS = 20_000;
+
 /** After the watchdog's rescue `stop`, how long the server gets to answer it
  *  before the turn is declared failed to the student. */
 const RESCUE_GRACE_MS = 8_000;
@@ -87,6 +90,7 @@ const RESCUE_GRACE_MS = 8_000;
 export function useWebSocket(sessionId: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
   const watchdogRef = useRef<TurnWatchdog | null>(null);
+  const keepaliveRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const processingTimerRef = useRef<SpeechSettleTimer | null>(null);
   /** Pending reconnect timer. Held so cleanup can cancel it — an uncancelled
    *  one reopened sockets after unmount and, after a sessionId change, from a
@@ -324,13 +328,31 @@ export function useWebSocket(sessionId: string | null) {
         rescueGraceRef.current = null;
         const store = useNumeraStore.getState();
         if (store.currentTurnId !== armedTurnId) return; // something resolved it
-        // Keep the apology's id: replies have been observed landing AFTER this
-        // rescue (53s past utterance end, 10 Aug), and "Something went wrong"
-        // sitting above "Nice work!" reads as a contradiction. If that happens,
-        // the tutor_response handler retracts this bubble.
-        rescueMsgIdRef.current = addTranscriptMessage({ role: 'ai', text: voiceTurnFailedMessage() });
-        store.beginListeningTurn();
-        sendTurnContext();
+        // Read the live session before saying anything.
+        //
+        // A turn reaching here has produced no reply ON THIS SOCKET, which is
+        // not the same as the backend having done nothing. Manjusha, 14 Sep:
+        // "it is not moving forward unless refreshed… got parallel example only
+        // at refresh". The VM logs for that session show the backend planning
+        // SHOW_PARALLEL and serving a HINT, and the voice server logging "Text
+        // sent to frontend", for turns whose support never appeared. A refresh
+        // showed it, because GET /session carries the live state.
+        //
+        // So do what the refresh did. If the backend moved on, the student sees
+        // it and the apology below is never written — apologising for a turn
+        // that actually completed is the worst of both, leaving the support
+        // unread on the record AND telling them it failed.
+        void resyncSession().finally(() => {
+          const after = useNumeraStore.getState();
+          if (after.currentTurnId !== armedTurnId) return; // the resync moved us on
+          // Keep the apology's id: replies have been observed landing AFTER this
+          // rescue (53s past utterance end, 10 Aug), and "Something went wrong"
+          // sitting above "Nice work!" reads as a contradiction. If that happens,
+          // the tutor_response handler retracts this bubble.
+          rescueMsgIdRef.current = addTranscriptMessage({ role: 'ai', text: voiceTurnFailedMessage() });
+          after.beginListeningTurn();
+          sendTurnContext();
+        });
       }, RESCUE_GRACE_MS);
     });
 
@@ -354,8 +376,57 @@ export function useWebSocket(sessionId: string | null) {
       if (!useNumeraStore.getState().currentTurnId) {
         useNumeraStore.getState().beginListeningTurn();
       }
-      setVoiceStatus('listening');
+      // Only hand the floor back if the tutor is not still audible.
+      //
+      // This socket reconnects constantly — the VM logs for 14 Sep show it
+      // closing and reopening every 60-85s for the whole of Manjusha's lesson,
+      // which is an idle timeout in front of it, not a client decision. Each
+      // reopen ran this line unconditionally, so the mic was told to listen
+      // while TTS audio buffered from before the drop was still playing out of
+      // the speakers.
+      //
+      // That is not theoretical. 07:47:33, one turn after a reconnect:
+      //   Flux EndOfTurn ... word_conf=0.9998: 'Scaffolded support for t zero one.'
+      // 0.9998 is not a person talking into a laptop mic — that is the tutor's
+      // own synthesised audio, captured cleanly and transcribed back as the
+      // student's answer. The backend then judged it, failed the scaffold step
+      // and escalated to MAXIMUM_GUIDED_SUPPORT_PARALLEL, which is why a
+      // parallel example appeared for an answer the student never gave.
+      if (!useMicLevel.getState().aiSpeaking) setVoiceStatus('listening');
       sendTurnContext();
+      // Recover whatever the gap swallowed.
+      //
+      // A reply that lands while the socket is down is gone — the frame has
+      // nowhere to arrive. That is the other half of "it is not moving forward
+      // unless refreshed" (Manjusha, 14 Sep): the backend had served the hint
+      // or the parallel example, the socket was mid-reconnect, and only a page
+      // refresh went and read the state that was already sitting on the
+      // session record.
+      void resyncSession();
+
+      // Keep the socket warm.
+      //
+      // A MITIGATION, not a diagnosis — I could not identify what closes it.
+      // What is ruled out: nginx (`proxy_read_timeout 86400` on
+      // /api/voice/stream) and this effect re-running (every dependency is
+      // stable — the three local callbacks close over nothing, the rest are
+      // zustand actions).
+      //
+      // What is established: it closed every 55-106s through Manjusha's whole
+      // lesson on 14 Sep, and audio frames stop flowing whenever the tutor is
+      // speaking or the turn is processing, which is exactly when those gaps
+      // fall. An idle socket being dropped somewhere in the path fits; a
+      // keepalive costs one small frame every 20s and removes that whole class
+      // of cause.
+      //
+      // Safe to send: the server dispatches on `type` and ignores anything it
+      // does not recognise (streaming_server.py:300) — no `else` branch, no
+      // error path.
+      if (keepaliveRef.current) clearInterval(keepaliveRef.current);
+      keepaliveRef.current = setInterval(() => {
+        if (wsRef.current !== ws || ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({ type: 'keepalive' }));
+      }, KEEPALIVE_MS);
     };
 
     ws.onmessage = (event: MessageEvent) => {
@@ -811,6 +882,10 @@ export function useWebSocket(sessionId: string | null) {
 
     ws.onclose = (e) => {
       if (wsRef.current !== ws) return; // an old socket dying is not news
+      // After the identity check, not before: a superseded socket closing must
+      // not clear the interval its replacement has already armed. The new
+      // socket's onopen clears whatever it inherits, so nothing leaks either.
+      if (keepaliveRef.current) { clearInterval(keepaliveRef.current); keepaliveRef.current = null; }
       console.log('[WS] closed', e.code, e.reason);
       // A turn was in flight — the student spoke and the reply can no longer
       // arrive on this socket. It used to vanish without a word; tell them.
@@ -864,6 +939,9 @@ export function useWebSocket(sessionId: string | null) {
       // screen and would reopen a listening turn on whatever the student
       // navigated to — including a phase that expects no voice input at all.
       tutorAudioStream.setOnIdle(null);
+      // The keepalive must die with the screen; an interval firing into a
+      // closed socket is harmless but an interval outliving the page is not.
+      if (keepaliveRef.current) { clearInterval(keepaliveRef.current); keepaliveRef.current = null; }
       const ws = wsRef.current;
       wsRef.current = null; // orphan it first so its handlers no-op
       ws?.close(1000, 'component unmount');

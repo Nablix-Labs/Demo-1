@@ -4,8 +4,8 @@
  * `getTopic` answers for the four mock curriculum ids and nothing else. Every
  * real topic id comes from the backend as a curriculum CODE — `ALG-ORI-02` on
  * a `next_topic_handoff`, `ALG-KS3-01` on a fresh journey — so the lookup
- * missed on every live topic and both `/diagnostic/[topic]` and
- * `/orientation/[topic]` answered the miss with `notFound()`.
+ * missed on every live topic and both the diagnostic and orientation screens
+ * answered the miss with `notFound()`.
  *
  * There is no `not-found.tsx` under either route, so Next unmounted the
  * children inside AppFrame and left an empty div: a blank white page, produced

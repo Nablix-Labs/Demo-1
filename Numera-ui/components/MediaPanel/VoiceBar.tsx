@@ -16,6 +16,9 @@ export default function VoiceBar() {
   const active = useMicLevel((s) => s.active);
   const caption = useMicLevel((s) => s.caption);
   const micError = useMicLevel((s) => s.micError);
+  // Same source the page's own mic gate reads, so the caption and the gate
+  // cannot disagree about whether the tutor has the floor.
+  const tutorSpeaking = useMicLevel((s) => s.aiSpeaking);
   const consents = useAuthStore((s) => s.consents);
   /**
    * A rescue is running, so a spoken answer is not being submitted.
@@ -33,6 +36,21 @@ export default function VoiceBar() {
 
   // The bar is "live" (reacting to real input) only while capturing + unmuted.
   const live = active && !micMuted;
+
+  /**
+   * Is the student's voice actually going anywhere?
+   *
+   * `live` only says the microphone hardware is open. On the server transport
+   * that is true almost all the time BY DESIGN — the device is held open so the
+   * first syllable of an answer is not eaten (app/page.tsx), and turn-taking
+   * gates whether frames are SENT, not whether the mic is on.
+   *
+   * So the caption below said "Listening — start speaking…" while the tutor was
+   * mid-sentence and nothing the student said could be submitted. Manjusha's
+   * recording of 14 Sep shows it exactly: "Status: Speaking…" and "Listening…"
+   * on screen at the same moment.
+   */
+  const submitting = voiceStatus === 'listening' && !tutorSpeaking;
 
   return (
     <div className="px-3.5 pb-3.5 flex flex-col gap-2.5">
@@ -105,7 +123,9 @@ export default function VoiceBar() {
               <span className="text-ai-cyan font-semibold">“</span>{caption}<span className="text-ai-cyan font-semibold">”</span>
             </p>
           ) : (
-            <p className="text-[11px] text-slate-blue italic">Listening — start speaking…</p>
+            <p className="text-[11px] text-slate-blue italic">
+              {submitting ? 'Listening — start speaking…' : 'Wait for Numera to finish…'}
+            </p>
           )}
         </div>
       )}

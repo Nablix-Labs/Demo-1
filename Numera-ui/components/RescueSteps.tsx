@@ -34,6 +34,8 @@ import { emitRescueAdvance } from '@/lib/rescueEvents';
 import { findReturnSurfaces, returnToQuestion } from '@/lib/rescueReturn';
 import { nextUnspokenStep, speakRescueStep } from '@/lib/rescueSpeech';
 import { tutorSay } from '@/lib/tutorSpeech';
+import { DrawablyButton } from 'drawably/react';
+import 'drawably/style.css';
 import StickyNote from '@/components/StickyNote';
 
 const TITLE = {
@@ -219,17 +221,27 @@ export default function RescueSteps() {
 
         <div className="mt-3 flex items-center gap-2">
           {!final && (
-            <button
+            // Drawn, like the chips and the anchor marks. These two sit ON the
+            // canvas now, so a crisp CSS button here is the one control on that
+            // surface that does not look drawn. The pen colour is themed once
+            // in globals.css.
+            //
+            // `boil={0}`: a walkthrough is read, not glanced at, and a button
+            // that flickers under the step you are reading pulls the eye off it.
+            // `state` drives the library's own async treatment instead of an
+            // opacity class — this is exactly the wait it models.
+            <DrawablyButton
               type="button"
               onClick={onNext}
               disabled={pending}
-              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-sm
-                         font-medium text-slate-700 hover:bg-slate-200/60
-                         disabled:cursor-not-allowed disabled:opacity-60"
+              boil={0}
+              state={pending ? 'loading' : 'idle'}
+              className="inline-flex items-center gap-1 px-2 py-1 text-sm font-medium text-slate-700
+                         disabled:cursor-not-allowed"
             >
               {pending ? 'Waiting for the next step…' : 'Next step'}
               {!pending && <ChevronRight className="h-4 w-4" aria-hidden />}
-            </button>
+            </DrawablyButton>
           )}
           {failedToSend && !pending && (
             <span role="status" className="text-xs text-slate-500">
@@ -237,15 +249,15 @@ export default function RescueSteps() {
             </span>
           )}
           {final && (
-            <button
+            <DrawablyButton
               type="button"
               onClick={onReturn}
-              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-sm
-                         font-medium text-slate-700 hover:bg-slate-200/60"
+              boil={0}
+              className="inline-flex items-center gap-1 px-2 py-1 text-sm font-medium text-slate-700"
             >
               <ArrowLeft className="h-4 w-4" aria-hidden />
               Return to original
-            </button>
+            </DrawablyButton>
           )}
         </div>
       </StickyNote>

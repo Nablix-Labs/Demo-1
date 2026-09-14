@@ -21,10 +21,10 @@
 import { useShallow } from 'zustand/react/shallow';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { visibleRung, collapsedRungs, rungLabel, type DeckRung } from '@/lib/supportDeck';
+import { DrawablyButton } from 'drawably/react';
+import 'drawably/style.css';
 import HintNote from '@/components/HintNote';
 import VisualCue from '@/components/VisualCue';
-import RescueNote from '@/components/RescueNote';
-import RescueSteps from '@/components/RescueSteps';
 
 function Card({ rung }: { rung: DeckRung }) {
   switch (rung) {
@@ -32,19 +32,14 @@ function Card({ rung }: { rung: DeckRung }) {
       return <HintNote />;
     case 'VISUAL_CUE':
       return <VisualCue />;
-    // One rung, two implementations. Both are mounted because only one can ever
-    // have content — RescueNote stands down whenever a stepwise step exists
-    // (lib/rescueMode) — and that precedence is load-bearing: the legacy payload
-    // carries every step including the answer the stepwise walkthrough is
-    // releasing one at a time.
+    // Presented on the CANVAS, not here — see `railRungs`. `visibleRung` can no
+    // longer return either, so this is unreachable; it stays as an explicit
+    // answer rather than a fallthrough, because a new rung added to DeckRung
+    // should fail the switch's exhaustiveness check and not land in the column
+    // by default.
     case 'PARALLEL_EXAMPLE':
     case 'TUTOR_SOLVED':
-      return (
-        <>
-          <RescueNote />
-          <RescueSteps />
-        </>
-      );
+      return null;
   }
 }
 
@@ -66,13 +61,13 @@ export default function SupportDeck() {
   return (
     <div className="flex flex-col gap-2">
       {showing && (
-        <div className="pointer-events-auto">
+        <div>
           <Card rung={showing} />
         </div>
       )}
 
       {earlier.length > 0 && (
-        <div className="pointer-events-auto w-[264px]">
+        <div className="w-[264px]">
           {/* Named rather than a row of bare chips: "Earlier help" says what
               the row IS. Without it the chips read as things to do next, which
               is the opposite of what they are. */}
@@ -81,16 +76,30 @@ export default function SupportDeck() {
           </div>
           <div className="flex flex-wrap gap-1.5">
             {earlier.map((rung) => (
-              <button
+              // Drawn rather than a CSS pill. These sit directly under the
+              // tutor's paper notes, and a crisp bordered chip beside a
+              // hand-drawn note read as a different product's control.
+              //
+              // `boil={0}` renders ONE static path instead of the library's
+              // default three-frame flicker. A chip that never stops moving
+              // beside a canvas a student is writing on competes with the
+              // writing; the sketch is the point here, the motion is not.
+              // (The library also freezes itself under prefers-reduced-motion.)
+              //
+              // It decorates a real <button>, so the keyboard and screen-reader
+              // behaviour is the element's own, not a reimplementation.
+              //
+              // No `tone` — the pen colour is themed once in globals.css, so
+              // this draws in the app's slate blue. `tone="neutral"` was the
+              // library's warm grey, which rendered brown beside the notes.
+              <DrawablyButton
                 key={rung}
                 onClick={() => openSupportRung(rung)}
-                className="rounded-full border border-muted-gray bg-white/90 px-3 py-1.5 text-[11.5px]
-                           font-semibold text-slate-blue shadow-sm transition-colors
-                           hover:border-slate-blue hover:text-ink
-                           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-learning-blue/50"
+                boil={0}
+                className="px-3 py-1.5 text-[11.5px] font-semibold text-slate-blue hover:text-ink"
               >
                 {rungLabel(rung)}
-              </button>
+              </DrawablyButton>
             ))}
           </div>
         </div>

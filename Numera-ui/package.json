@@ -19,6 +19,7 @@
     "axios": "^1.7.2",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
+    "drawably": "^0.4.2",
     "driver.js": "^1.6.0",
     "html2canvas": "^1.4.1",
     "jspdf": "^2.5.2",

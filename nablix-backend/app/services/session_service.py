@@ -73,7 +73,10 @@ from app.models.student_model_session import (
     StudentModelSessionEventResponse,
     WorkedExampleRequestedEvent,
 )
-from app.services.guided_question_opening import guided_question_opening
+from app.services.guided_question_opening import (
+    authored_question_opening_actions,
+    guided_question_opening,
+)
 from app.services.phase_transition import (
     TRANSITION_MESSAGES,
     UI_STATE_FLAGS,
@@ -123,6 +126,9 @@ class QuestionUpdates(TypedDict):
     question_id: str | None
     question_number: NotRequired[int]
     correct_answer: str | None
+    guided_start_tutor_prompt: str | None
+    guided_start_canvas_action: str | None
+    canvas_submission_required: bool
     served_question_ids: NotRequired[list[str]]
 
 
@@ -785,6 +791,19 @@ async def start_session(
     support_steps = schema_support_steps(event)
     support_hint = schema_hint(event)
     phase_state = _payload_phase_state(event)
+    opening_anchors, opening_actions, opening_rejection = authored_question_opening_actions(
+        question_updates["question_id"],
+        current_question,
+        question_updates["guided_start_canvas_action"],
+    )
+    if opening_rejection is not None:
+        logger.info(
+            "guided_question_opening_canvas_action_rejected",
+            extra={
+                "question_id": question_updates["question_id"],
+                "reason": opening_rejection,
+            },
+        )
     session = SessionRecord(
         session_id=session_id,
         student_id=request.student_id,
@@ -798,6 +817,10 @@ async def start_session(
         question_number=question_updates.get("question_number", 1),
         correct_answer=question_updates["correct_answer"],
         served_question_ids=question_updates.get("served_question_ids", []),
+        guided_start_tutor_prompt=question_updates["guided_start_tutor_prompt"],
+        canvas_submission_required=question_updates["canvas_submission_required"],
+        question_anchors=opening_anchors,
+        question_opening_canvas_actions=opening_actions,
         interaction_mode=request.interaction_mode,
         ui_state=phase,
         message=(
@@ -808,7 +831,8 @@ async def start_session(
             else guided_question_opening(
                 current_question,
                 question_updates["question_type"],
-                "Let’s resume with this question.",
+                "Here is the next question.",
+                question_updates["guided_start_tutor_prompt"],
             )
             if (
                 phase == "GUIDED_PRACTICE"
@@ -1019,6 +1043,9 @@ def _question_updates(
             "question_type": None,
             "question_id": None,
             "correct_answer": None,
+            "guided_start_tutor_prompt": None,
+            "guided_start_canvas_action": None,
+            "canvas_submission_required": False,
         }
     current_question_id = _payload_phase_state(event).current_question_id
     questions = payload.question_set.questions
@@ -1067,6 +1094,21 @@ def _question_updates(
         "question_id": current.question_id,
         "question_number": checkpoint_position if checkpoint_position is not None else question_index + 1,
         "correct_answer": current.tutor_view.answer_spec.canonical_answer,
+        "guided_start_tutor_prompt": (
+            current.tutor_view.guided_start_prompt.tutor_prompt
+            if current.tutor_view.guided_start_prompt is not None
+            else None
+        ),
+        "guided_start_canvas_action": (
+            current.tutor_view.guided_start_prompt.canvas_action
+            if current.tutor_view.guided_start_prompt is not None
+            else None
+        ),
+        "canvas_submission_required": (
+            current.tutor_view.guided_start_prompt.canvas_submission_required
+            if current.tutor_view.guided_start_prompt is not None
+            else False
+        ),
         "served_question_ids": [question.question_id for question in questions],
     }
 
@@ -1601,7 +1643,22 @@ async def _apply_schema_event(
         "allow_voice_input": flags["allow_voice_input"],
     }
     if question_updates is not None:
+        opening_anchors, opening_actions, opening_rejection = authored_question_opening_actions(
+            question_updates["question_id"],
+            question_updates["current_question"],
+            question_updates["guided_start_canvas_action"],
+        )
+        if opening_rejection is not None:
+            logger.info(
+                "guided_question_opening_canvas_action_rejected",
+                extra={
+                    "question_id": question_updates["question_id"],
+                    "reason": opening_rejection,
+                },
+            )
         updates.update(question_updates)
+        updates["question_anchors"] = opening_anchors
+        updates["question_opening_canvas_actions"] = opening_actions
         if payload is not None and payload.question_set is not None and payload.question_set.questions:
             current_question_id = question_updates["question_id"]
             updates["active_student_model_question"] = next(
@@ -1696,7 +1753,8 @@ async def _apply_schema_event(
         updates["message"] = guided_question_opening(
             next_question,
             question_updates["question_type"],
-            str(updates["message"]),
+            "Here is the next question.",
+            question_updates["guided_start_tutor_prompt"],
         )
     # The authoritative REVIEW transition is persisted with PENDING in the same
     # write that records it, before a single line of Phase 4 generation runs.

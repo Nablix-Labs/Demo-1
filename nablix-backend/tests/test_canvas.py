@@ -952,7 +952,10 @@ def test_canvas_submit_stops_before_tutor_below_legacy_reliability_threshold(
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "CLARIFICATION_REQUIRED"
-    assert body["message"] == "Please write out that step so I can check it."
+    assert body["message"] == (
+        "I can read x + ? = 9 on the canvas. Please rewrite the unclear part "
+        "clearly, then press Check again."
+    )
     assert body["next_expected_input"] == "WRITE"
     assert body["canvas_draw"][0]["actionId"].endswith(":write-request")
     assert body["tutor_canvas_actions"][0]["type"] == "FOCUS"
@@ -2133,6 +2136,55 @@ def test_canvas_clarification_identifies_a_missing_operation() -> None:
         "operation between them. Check whether a sign is missing, then write "
         "the rule again."
     )
+
+
+def test_canvas_clarification_explains_a_partial_ocr_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[dict[str, object]] = []
+
+    def write_partial_canvas_feedback(**kwargs: object) -> object:
+        support_context = kwargs["support_context"]
+        assert isinstance(support_context, dict)
+        captured.append(support_context)
+        return type("WrittenFeedback", (), {
+            "tutor_message": "I can read h + 5. Please make the first symbol clearer and press Check again.",
+        })()
+
+    monkeypatch.setattr(
+        canvas_service,
+        "build_support_aware_tutor_message",
+        write_partial_canvas_feedback,
+    )
+    ocr = VisionOCRResult(
+        raw_ocr_text="h + 5",
+        confidence=0.4,
+        needs_clarification=True,
+    )
+
+    tutor = canvas_service._clarification_result(
+        ocr,
+        canvas_service.load_classifier_rules(),
+        AdapterContext(
+            session_id="SESSION-PARTIAL-CANVAS",
+            student_id="ST412",
+            message="h + 5",
+            question="Write the general rule.",
+            correct_answer="n + 5",
+        ),
+    )
+
+    assert tutor.tutor_message == (
+        "I can read h + 5. Please make the first symbol clearer and press Check again."
+    )
+    assert captured == [{
+        "diagnostic_focus": "PARTIAL_CANVAS_READ",
+        "ocr_evidence": "h + 5",
+        "response_constraints": (
+            canvas_service.load_classifier_rules().guided_learning.critical_thinking
+            .partial_canvas_read_llm_constraints
+        ),
+    }]
 
 
 def test_unified_voice_canvas_unclear_ocr_does_not_grade(

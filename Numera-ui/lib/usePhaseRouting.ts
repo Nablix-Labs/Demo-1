@@ -21,9 +21,14 @@
 import { useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useNumeraStore } from '@/store/useNumeraStore';
-import { phasesToUnlock, type FlowStage } from '@/lib/flow';
+import { phasesToUnlock, routeFor, type FlowStage } from '@/lib/flow';
 
-// Backend current_phase -> the manual flow stage it corresponds to. Following
+// Backend current_phase -> the manual flow stage it corresponds to. The route
+// comes from `routeFor` off this same stage, so there is ONE map from backend
+// phase to screen rather than two kept in step by hand — which is the objection
+// handoffDestination already records against adding a third.
+//
+// Following
 // the backend has to unlock the client-side phase gates too: those are driven by
 // `phasesDone`, which only goStage() writes. Without this the backend routes a
 // student to /orientation and PhaseGate immediately tells them "ORIENTATION
@@ -35,16 +40,6 @@ const PHASE_STAGE: Record<string, FlowStage> = {
   GUIDED_PRACTICE: 'guided',
   INDEPENDENT_PRACTICE: 'practice',
   REVIEW: 'review',
-};
-
-// Backend current_phase -> the route where that phase's work happens.
-const PHASE_ROUTE: Record<string, (topicId: string) => string> = {
-  DIAGNOSTIC: (t) => `/diagnostic/${t}`,
-  CONCEPT_ORIENTATION: (t) => `/orientation/${t}`,
-  TEACH_BACK: (t) => `/teach/${t}`,
-  GUIDED_PRACTICE: () => '/',
-  INDEPENDENT_PRACTICE: () => '/practice',
-  REVIEW: () => '/review',
 };
 
 // Student Model phase names (PHASE_0_DIAGNOSTIC, …) as they appear on the login
@@ -74,10 +69,8 @@ export function landingRoute(
 ): { href: string; unlock: FlowStage } {
   const phase = journeyPhase ? JOURNEY_PHASE[journeyPhase] : undefined;
   const resolved = phase ?? 'DIAGNOSTIC';
-  return {
-    href: PHASE_ROUTE[resolved]?.(topicId) ?? `/diagnostic/${topicId}`,
-    unlock: PHASE_STAGE[resolved] ?? 'topic-diagnostic',
-  };
+  const unlock = PHASE_STAGE[resolved] ?? 'topic-diagnostic';
+  return { href: routeFor(unlock, topicId), unlock };
 }
 
 /**
@@ -138,7 +131,8 @@ export function followsBackendPhase(pathname: string): boolean {
  * stays where the handoff put them until the session says otherwise.
  */
 export function routeForPhase(phase: string, topicId: string): string | null {
-  return PHASE_ROUTE[phase]?.(topicId) ?? null;
+  const stage = PHASE_STAGE[phase];
+  return stage ? routeFor(stage, topicId) : null;
 }
 
 const apiEnabled = Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);

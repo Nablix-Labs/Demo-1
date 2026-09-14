@@ -169,3 +169,44 @@ describe('interaction turn contract', () => {
     });
   });
 });
+
+describe('authored question opening actions', () => {
+  it('renders an arriving question action after its anchors are installed', () => {
+    useNumeraStore.setState({
+      currentPhase: 'GUIDED_PRACTICE',
+      activeQuestionId: 'Q-OLD',
+      questionAnchors: [],
+      tutorElements: [],
+    });
+
+    syncBackendSession({
+      current_phase: 'GUIDED_PRACTICE',
+      current_question: 'In m + 7, identify the changing quantity.',
+      question_id: 'Q-T01-002',
+      question_anchors: [{
+        token_id: 'Q-T01-002:QTOKEN:2',
+        text: 'm',
+        char_start: 3,
+        char_end: 4,
+      }],
+      question_opening_canvas_actions: [{
+        action_id: 'AUTHORED:Q-T01-002:QTOKEN:2:HIGHLIGHT',
+        type: 'HIGHLIGHT',
+        target_kind: 'QUESTION_ANCHOR',
+        target_object_id: 'Q-T01-002:QTOKEN:2',
+        confirmed_component_id: null,
+        text: null,
+        source_id: 'question_guided_start_prompts',
+        answer_reveal_allowed: false,
+      }],
+    });
+
+    expect(useNumeraStore.getState().questionAnchors).toEqual([{
+      token_id: 'Q-T01-002:QTOKEN:2',
+      text: 'm',
+      char_start: 3,
+      char_end: 4,
+      highlighted: true,
+    }]);
+  });
+});

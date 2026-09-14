@@ -218,6 +218,8 @@ class CriticalThinkingConfig(StrictSchema):
     written_rule_prompt: str
     missing_operation_canvas_prompt: str
     missing_operation_canvas_llm_constraints: list[str]
+    partial_canvas_read_prompt: str
+    partial_canvas_read_llm_constraints: list[str]
 
 
 class GuidedLearningConfig(StrictSchema):

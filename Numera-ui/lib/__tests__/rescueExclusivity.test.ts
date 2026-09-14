@@ -97,18 +97,21 @@ describe('opening a rescue', () => {
     expect(rungs().scaffold).toBeNull();
   });
 
-  it('demotes the OFFERS rather than destroying them', () => {
-    // These used to be cleared here too, which is why a student sent to a
-    // walkthrough could never re-read the hint that preceded it. Only one card
-    // is on screen — the rescue — but the earlier rungs are chips now
-    // (Manjusha, 5 Sep).
+  it('keeps the OFFERS rather than destroying them', () => {
+    // These used to be cleared here, which is why a student sent to a
+    // walkthrough could never re-read the hint that preceded it (Manjusha,
+    // 5 Sep). They survive the rescue opening.
+    //
+    // They no longer surrender the column for it either: since 7 Sep the
+    // walkthrough is presented on the canvas, beside the writing it produces,
+    // so the cue keeps the card and the hint keeps its chip.
     rungsUp();
     apply(step(1));
     expect(rungs().hint).toBe('Try grouping the like terms.');
     expect(rungs().cueVisible).toBe(true);
     const s = useNumeraStore.getState() as never;
-    expect(visibleRung(s)).toBe('TUTOR_SOLVED');
-    expect(collapsedRungs(s)).toEqual(['HINT', 'VISUAL_CUE']);
+    expect(visibleRung(s)).toBe('VISUAL_CUE');
+    expect(collapsedRungs(s)).toEqual(['HINT']);
   });
 
   it('leaves the rungs alone on the second step of the same rescue', () => {

@@ -259,7 +259,7 @@ function ClosingSheet({
       </dl>
 
       <Link
-        href={`/diagnostic/${topic.id}`}
+        href={`/topic-diagnostic/?topic=${encodeURIComponent(topic.id)}`}
         className="mt-auto inline-flex items-center justify-center rounded-md border border-focus-navy px-4 py-2.5 text-[12px] font-semibold text-ink transition-colors hover:bg-focus-navy hover:text-white"
       >
         Check my level on {topic.title}
@@ -301,7 +301,9 @@ function SubtopicSheet({
   // A new lesson starts via the topic-entry diagnostic; resuming or re-learning
   // goes straight to the guided lesson.
   const linkFor = (status: LessonStatus, lessonId: string) =>
-    status === 'not-started' ? `/diagnostic/${topicId}?lesson=${lessonId}` : '/';
+    status === 'not-started'
+      ? `/topic-diagnostic/?topic=${encodeURIComponent(topicId)}&lesson=${encodeURIComponent(lessonId)}`
+      : '/';
 
   return (
     <div

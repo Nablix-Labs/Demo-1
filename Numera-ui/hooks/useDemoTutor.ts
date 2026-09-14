@@ -448,6 +448,8 @@ export function syncBackendSession(response: {
   tutor_canvas_actions?: TutorCanvasAction[];
   /** Active-question anchors required to resolve semantic tutor actions. */
   question_anchors?: QuestionAnchor[];
+  /** Authored visual actions for the question that has just arrived. */
+  question_opening_canvas_actions?: TutorCanvasAction[];
   /**
    * Who this reply is about. Optional because not every caller builds a full
    * record, and a response naming neither is applied rather than dropped — see
@@ -520,12 +522,22 @@ export function syncBackendSession(response: {
   const tutorActions = response.tutor_canvas_actions ?? [];
   if (tutorActions.length > 0) store.applyTutorCanvasActions(tutorActions);
 
-  const applyPhase = () => useNumeraStore.getState().applyBackendPhase({
-    phase: response.current_phase,
-    questionId: response.question_id,
-    questionText: response.current_question,
-    questionType: response.question_type ?? null,
-  });
+  const openingActions = response.question_opening_canvas_actions ?? [];
+  const applyPhase = () => {
+    useNumeraStore.getState().applyBackendPhase({
+      phase: response.current_phase,
+      questionId: response.question_id,
+      questionText: response.current_question,
+      questionType: response.question_type ?? null,
+    });
+    if (openingActions.length > 0 && response.question_anchors !== undefined) {
+      const current = useNumeraStore.getState();
+      if (current.activeQuestionId === response.question_id) {
+        current.setQuestionAnchors(response.question_anchors);
+        current.applyTutorCanvasActions(openingActions);
+      }
+    }
+  };
 
   // When this reply both annotates the finished work and moves the student on,
   // hold the board briefly so the annotation is actually seen. Without it the
@@ -809,6 +821,64 @@ export async function resumeSession(): Promise<void> {
     }
   })();
   return resumeInFlight;
+}
+
+/**
+ * Re-read the live session mid-lesson, and apply it.
+ *
+ * This is what a student's page refresh does, without the refresh.
+ *
+ * Manjusha, 14 Sep: "it is not moving forward unless refreshed — initially I
+ * got stuck up after scaffold, got parallel example only at refresh. Then now
+ * after hint 1 hint 2 also is delivered after refresh."
+ *
+ * The VM logs for that session show the backend did its part: 07:47:38,
+ * `guided_canvas_actions_planned` with `action_types: ["SHOW_PARALLEL"]` and
+ * `validation_rejections: 0`; 07:54:09, a HINT on `SUPPORT_AND_RETRY`. The
+ * voice server logged "Text sent to frontend" for every one of those turns. The
+ * support was generated and it was sent — the screen never showed it.
+ *
+ * Rather than guess which field went missing between the wire and the store,
+ * this recovers the way the student already had to: GET /session carries the
+ * live state and is not subject to whatever the turn payload lost. See
+ * `numera-frontend-traps` — reading the session is the established repair for
+ * a turn payload that arrives stripped.
+ *
+ * Deliberately NOT `resumeSession`. That guards on `store.backendSession` and
+ * returns early once a session is loaded, because it exists to open a stored
+ * session on a cold start. A mid-lesson stall is the exact opposite case, and
+ * it would no-op precisely when it is needed.
+ *
+ * Two things it must not do, both of which would make a stall worse:
+ *  - overwrite a transcript that already has content, which is the student's
+ *    own conversation;
+ *  - speak. The rescue that calls this is already deciding what to say.
+ */
+export async function resyncSession(): Promise<void> {
+  if (!apiEnabled()) return;
+  const store = useNumeraStore.getState();
+  if (!store.sessionId) return;
+  try {
+    const rec = await getSession(store.sessionId, studentId());
+    const s = useNumeraStore.getState();
+    s.setBackendSession(rec);
+    syncBackendSession(rec);
+    // Support is the whole reason we are here — recovering the question and
+    // dropping the hint that prompted it would fix nothing the student can see.
+    if (rec.active_visual_cue) applyServedCue(rec.active_visual_cue);
+    if (s.transcript.length === 0) {
+      const restored = (rec.conversation_history ?? []).map((message) => ({
+        role: message.role === 'user' ? 'student' as const : 'ai' as const,
+        text: message.content,
+      }));
+      if (restored.length > 0) s.setTranscript(restored);
+    }
+  } catch (err) {
+    // A failed repair must never take the lesson down with it — the student is
+    // already stuck, and an exception here would replace a recoverable stall
+    // with a blank screen.
+    console.warn('[resync] could not re-read the session', err);
+  }
 }
 
 /**

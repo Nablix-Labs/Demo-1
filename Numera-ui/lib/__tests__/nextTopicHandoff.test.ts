@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import { handoffDestination, routeForPhase } from '@/lib/usePhaseRouting';
 import { startPayloadFor } from '@/lib/sessionStart';
+import { routeFor } from '@/lib/flow';
 
 const handoff = (over: Record<string, string> = {}) => ({
   source_session_id: 'S1',
@@ -21,14 +22,14 @@ describe('routing from the handoff', () => {
   it('maps the Student Model phase through the existing map, not a new one', () => {
     expect(handoffDestination(handoff())).toEqual({
       topicId: 'ALG-KS3-01',
-      href: '/diagnostic/ALG-KS3-01',
+      href: '/topic-diagnostic/?topic=ALG-KS3-01',
       unlock: 'topic-diagnostic',
     });
   });
 
   it('routes each journey phase to the screen that phase happens on', () => {
     expect(handoffDestination(handoff({ entry_phase: 'PHASE_1_ORIENTATION' }))!.href)
-      .toBe('/orientation/ALG-KS3-01');
+      .toBe('/orientation/?topic=ALG-KS3-01');
     expect(handoffDestination(handoff({ entry_phase: 'PHASE_2_GUIDED_LEARNING' }))!.href)
       .toBe('/');
     expect(handoffDestination(handoff({ entry_phase: 'PHASE_3_INDEPENDENT_PRACTICE' }))!.href)
@@ -38,7 +39,7 @@ describe('routing from the handoff', () => {
   it('falls back to the diagnostic for a phase name it does not know', () => {
     // A new phase name must not strand the student on a blank route.
     expect(handoffDestination(handoff({ entry_phase: 'PHASE_9_SOMETHING' }))!.href)
-      .toBe('/diagnostic/ALG-KS3-01');
+      .toBe('/topic-diagnostic/?topic=ALG-KS3-01');
   });
 
   it('is null without a handoff, so the caller keeps its own routing', () => {
@@ -75,7 +76,7 @@ describe('starting the next topic', () => {
 
 describe('the phase left behind when the handoff moves the student', () => {
   it('routes a phase it knows to that phase’s screen', () => {
-    expect(routeForPhase('CONCEPT_ORIENTATION', 'ALG-ORI-02')).toBe('/orientation/ALG-ORI-02');
+    expect(routeForPhase('CONCEPT_ORIENTATION', 'ALG-ORI-02')).toBe('/orientation/?topic=ALG-ORI-02');
     expect(routeForPhase('REVIEW', 'ALG-ORI-02')).toBe('/review');
   });
 
@@ -98,5 +99,36 @@ describe('the phase left behind when the handoff moves the student', () => {
     // Same protection as landingRoute's fallback, but here a wrong guess would
     // yank a student off a page they are already correctly on.
     expect(routeForPhase('PHASE_9_SOMETHING', 'ALG-ORI-02')).toBeNull();
+  });
+});
+
+describe('carrying the topic in the query string', () => {
+  it('never puts the topic id in the path', () => {
+    // The whole point. A path segment has no HTML and no RSC flight payload on
+    // disk for a backend code under `output: export`, and the App Router
+    // fetches that payload on a client-side push too — nginx answers the miss
+    // with the app shell under a 200, so `/orientation/ALG-ORI-02` navigated
+    // and then rendered the ROOT GUIDED LESSON (verified on the deployed build,
+    // 13 Sep 2026). One route with a query param cannot go stale as the
+    // curriculum grows.
+    for (const stage of ['topic-diagnostic', 'orientation', 'teach'] as const) {
+      const href = routeFor(stage, 'ALG-ORI-02');
+      expect(href).toContain('?topic=ALG-ORI-02');
+      expect(href).not.toContain('/ALG-ORI-02');
+    }
+  });
+
+  it('does not collide with the one-time placement assessment', () => {
+    // /diagnostic is the big placement assessment taken once on joining — a
+    // different screen. The per-topic readiness check could not take
+    // `/diagnostic?topic=` without shadowing it.
+    expect(routeFor('topic-diagnostic', 'algebra')).toBe('/topic-diagnostic/?topic=algebra');
+  });
+
+  it('encodes an id that is not URL-safe', () => {
+    // Topic ids come from the Student Model. Nothing promises they are safe to
+    // drop into a query string, and an unencoded `&` would silently truncate
+    // the topic and land the student on the no-topic screen.
+    expect(routeFor('orientation', 'ALG&ORI 02')).toBe('/orientation/?topic=ALG%26ORI%2002');
   });
 });

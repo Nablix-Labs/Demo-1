@@ -14,6 +14,7 @@ from app.models.adapters import (
 )
 from app.models.canvas import CanvasQuestionMemory, CanvasSubmissionRecord
 from app.models.phase4_review import Phase4ReviewResponse
+from app.models.question_anchor import QuestionTextAnchor
 from app.models.remediation import InterventionFeedback, StudentModelIntervention
 from app.models.fields import (
     ConceptId,
@@ -330,6 +331,10 @@ class SessionRecord(BaseModel):
     correct_answer: str | None = None
     # Every question id served this session.
     served_question_ids: list[str] = Field(default_factory=list)
+    guided_start_tutor_prompt: str | None = None
+    canvas_submission_required: bool = False
+    question_opening_canvas_actions: list[TutorCanvasAction] = Field(default_factory=list)
+    question_anchors: list[QuestionTextAnchor] = Field(default_factory=list)
     interaction_mode: InteractionMode
     voice_state: VoiceState = Field(default_factory=VoiceState)
     canvas_state: CanvasState = Field(default_factory=CanvasState)

@@ -31,30 +31,34 @@ const PAPER_PATH =
 
 export type NoteTone = 'amber' | 'sky' | 'mint' | 'rose';
 
-const TONES: Record<NoteTone, { paper: string; label: string; ink: string; rule: string }> = {
+const TONES: Record<NoteTone, { paper: string; label: string; ink: string; rule: string; shade: string }> = {
   amber: {
     paper: 'linear-gradient(175deg, #FBE9A0 0%, #F8DE85 55%, #F3D269 100%)',
     label: '#8A6407',
     ink: '#3A2E10',
     rule: 'rgba(138,100,7,.22)',
+    shade: '72,52,10',
   },
   sky: {
     paper: 'linear-gradient(175deg, #BEDFF2 0%, #A9D3EC 55%, #93C6E4 100%)',
     label: '#1E5C82',
     ink: '#14314A',
     rule: 'rgba(30,92,130,.22)',
+    shade: '16,54,80',
   },
   mint: {
     paper: 'linear-gradient(175deg, #BFE3BC 0%, #A9DAA6 55%, #93CE90 100%)',
     label: '#2E6B33',
     ink: '#1B3A1E',
     rule: 'rgba(46,107,51,.22)',
+    shade: '22,58,26',
   },
   rose: {
     paper: 'linear-gradient(175deg, #F6CBD2 0%, #F0B7C0 55%, #E9A3AF 100%)',
     label: '#8C3A4B',
     ink: '#43202A',
     rule: 'rgba(140,58,75,.22)',
+    shade: '74,30,40',
   },
 };
 
@@ -84,10 +88,17 @@ export default function StickyNote({
       <div className="relative">
         {/* The note rests on the surface — shadow sits under and slightly left,
             inset so it never shows past the curl. */}
+        {/* The note rests on the surface. Tinted from the note's OWN tone: this
+            was a fixed amber-brown for all four, which is the paper's shadow on
+            an amber note and mud under a blue one. Lighter than it was, too —
+            it used to read as a card hovering well above the page. */}
         <span
           aria-hidden="true"
           className="absolute left-[6px] top-[18%] h-[74%] w-[92%]"
-          style={{ background: 'rgba(72,52,10,.14)', boxShadow: '-2px 3px 16px 0 rgba(72,52,10,.34)' }}
+          style={{
+            background: `rgba(${t.shade},.10)`,
+            boxShadow: `-1px 2px 10px 0 rgba(${t.shade},.22)`,
+          }}
         />
 
         <svg width="0" height="0" aria-hidden="true" style={{ position: 'absolute' }}>
@@ -100,7 +111,12 @@ export default function StickyNote({
 
         <div
           role="note"
-          className="relative flex min-h-[196px] flex-col px-6 pb-9 pt-6"
+          // Sized by its content. `min-h-[196px]` with `pb-9` gave a one-line
+          // hint the same tall block as a worked example, so most notes stood
+          // two-thirds empty — very visible now they sit in a column rather
+          // than floating over the canvas. The bottom padding still clears the
+          // curl, whose top edge is at 96% of the box.
+          className="relative flex flex-col px-6 pb-7 pt-5"
           style={{ background: t.paper, clipPath: `url(#${clipId})` }}
         >
           <div

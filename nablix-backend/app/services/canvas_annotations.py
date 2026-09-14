@@ -609,6 +609,13 @@ def confirmation_expression_parts(canonical_answer: str) -> tuple[str, str, str]
         return variable, "+" if operator == "+" else "-", fixed_value
 
     answer_parts = [part.strip().casefold() for part in canonical_answer.split(";") if part.strip()]
+    if len(answer_parts) == 2:
+        variable, signed_fixed_value = answer_parts
+        fixed_match = re.fullmatch(r"([+\-−])?\s*(\d+)", signed_fixed_value)
+        if re.fullmatch(r"[a-z]", variable) is None or fixed_match is None:
+            return None
+        sign, fixed_value = fixed_match.groups()
+        return variable, "-" if sign in {"-", "−"} else "+", fixed_value
     if len(answer_parts) != 3:
         return None
     variable, fixed_value, operation = answer_parts
@@ -620,7 +627,7 @@ def confirmation_expression_parts(canonical_answer: str) -> tuple[str, str, str]
         or operator is None
     ):
         return None
-    return variable, operator, fixed_value.replace("−", "-").replace(" ", "")
+    return variable, operator, fixed_value.replace("−", "-").replace(" ", "").lstrip("+")
 
 
 def answer_confirmation_role(
@@ -635,7 +642,7 @@ def answer_confirmation_role(
         return role
     match = re.fullmatch(r"REQUIRED_COMPONENT_(\d+)", component_id)
     answer_parts = [part.strip() for part in canonical_answer.split(";") if part.strip()]
-    if match is None or len(answer_parts) != 3:
+    if match is None or len(answer_parts) not in {2, 3}:
         return role
     part_index = int(match.group(1)) - 1
     if part_index < 0 or part_index >= len(answer_parts):

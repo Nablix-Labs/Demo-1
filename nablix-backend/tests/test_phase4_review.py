@@ -208,6 +208,43 @@ def test_phase4_review_generates_exact_replay_contract(monkeypatch: pytest.Monke
     ]
 
 
+def test_phase4_review_retries_a_board_that_mixes_old_and_new_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    invalid_response = _response_body()
+    replay = invalid_response["tutor_replays"][0]
+    replay["replay_steps"][2]["board"]["elements"].insert(
+        1,
+        {
+            "kind": "value_row",
+            "values": ["23", "5", "2"],
+            "arrow_label": "changes",
+        },
+    )
+    calls: list[dict[str, object]] = []
+
+    class FakeClient:
+        def generate_phase4_review(
+            self,
+            context: dict[str, object],
+            schema: dict[str, object],
+        ) -> dict[str, object]:
+            calls.append(context)
+            return invalid_response if len(calls) == 1 else _response_body()
+
+    monkeypatch.setattr(
+        phase4_review,
+        "build_openai_phase4_review_client",
+        lambda settings: FakeClient(),
+    )
+
+    result = phase4_review.generate_phase4_review(Phase4ReviewRequest.model_validate(_request_body()))
+
+    assert len(calls) == 2
+    assert "Never combine a new requested value" in calls[1]["generation_instructions"]
+    assert result.tutor_replays[0].replay_steps[2].board is not None
+
+
 def test_phase4_schema_is_openai_strict_and_keeps_nullable_fields() -> None:
     schema = openai_client.openai_strict_schema(
         Phase4ReviewResponse.model_json_schema()

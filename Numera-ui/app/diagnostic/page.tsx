@@ -3,7 +3,7 @@
 /**
  * Diagnostic — the BIG, one-time placement assessment. Taken once when a
  * student joins; it decides which topic they start on. (The smaller per-topic
- * readiness check lives at /diagnostic/[topic] and runs before each new topic.)
+ * readiness check lives at /topic-diagnostic and runs before each new topic.)
  * Scoring/placement is backend in production; mocked here as a simple wizard.
  */
 

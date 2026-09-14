@@ -146,7 +146,15 @@ export default function Toolbar({ onCheckWork }: ToolbarProps) {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       className={cn(
-        'lg-glass absolute z-20 flex items-center rounded-full select-none',
+        // `w-max` because this is absolutely positioned with `left` set and no
+        // `right`: shrink-to-fit then caps the width at whatever remains to the
+        // right edge — exactly 50% of the canvas at the default `left-1/2`. The
+        // tool row is `flex-shrink-0` and the open wrapper sets
+        // `overflow: visible`, so the buttons simply spilled past the glass
+        // instead of widening it, leaving Check hanging outside the pill and,
+        // once the support column narrowed the canvas, sitting on top of the
+        // paper-style group. Measured 950px canvas -> 475px toolbar, 718 -> 359.
+        'lg-glass absolute z-20 flex w-max items-center rounded-full select-none',
         vertical ? 'flex-col' : 'flex-row',
         'p-1.5',
         !positioned && 'bottom-16 left-1/2 -translate-x-1/2'

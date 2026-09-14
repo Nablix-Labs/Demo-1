@@ -630,6 +630,13 @@ guided_learning:
       - "Do not mark the rule correct or incorrect."
       - "Ask exactly one concise question."
       - "Do not reveal the operation or the completed rule."
+    partial_canvas_read_prompt: "I can read {ocr_evidence} on the canvas. Please rewrite the unclear part clearly, then press Check again."
+    partial_canvas_read_llm_constraints:
+      - "Quote only the OCR reading, without correcting it."
+      - "Name the one unclear part of the writing and ask the learner to rewrite it clearly."
+      - "Do not mark the rule correct or incorrect."
+      - "Do not reveal the intended variable or completed rule."
+      - "Ask exactly one concise question."
 safety:
   unsafe_terms:
     - hurt myself
