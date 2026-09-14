@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -258,6 +259,62 @@ def _validate_student_language(
         )
 
 
+def _normalise_math_text(text: str) -> str:
+    return re.sub(r"[^a-z0-9+*/=.-]", "", text.lower().replace("×", "*").replace("−", "-"))
+
+
+def _numeric_row_values(element: ValueRowBoardElement) -> tuple[str, ...]:
+    return tuple(re.findall(r"\d+(?:\.\d+)?", " ".join(element.values)))
+
+
+def _validate_board_progression(
+    request: Phase4ReviewRequest,
+    response: Phase4ReviewResponse,
+) -> None:
+    """Keep each replay board tied to its own question as it develops."""
+    item_by_id = {item.review_item_id: item for item in request.replay_items}
+    for replay in response.tutor_replays:
+        item = item_by_id[replay.review_item_id]
+        previous_rows: set[tuple[str, ...]] = set()
+        previous_values: set[str] = set()
+        canonical_answer = _normalise_math_text(item.canonical_answer)
+        submitted_work = {
+            _normalise_math_text(value)
+            for value in (item.student_answer, item.ocr_text)
+            if value is not None and value.strip()
+        }
+        for step in replay.replay_steps:
+            if step.board is None:
+                continue
+            for element in step.board.elements:
+                if isinstance(element, ValueRowBoardElement):
+                    values = _numeric_row_values(element)
+                    if not values or values in previous_rows:
+                        previous_rows.add(values)
+                        previous_values.update(values)
+                        continue
+                    if set(values).intersection(previous_values):
+                        raise Phase4ReviewValidationError(
+                            "a replay board value row mixes new values with values from an earlier row "
+                            f"for review_item_id={replay.review_item_id}"
+                        )
+                    previous_rows.add(values)
+                    previous_values.update(values)
+                elif isinstance(element, BoxedBoardElement):
+                    if canonical_answer not in _normalise_math_text(element.text):
+                        raise Phase4ReviewValidationError(
+                            "a replay board boxed rule differs from the supplied canonical answer "
+                            f"for review_item_id={replay.review_item_id}"
+                        )
+                elif isinstance(element, StruckBoardElement):
+                    struck_expression = _normalise_math_text(element.text)
+                    if not any(struck_expression in work for work in submitted_work):
+                        raise Phase4ReviewValidationError(
+                            "a replay board crossed-out expression is not supported by submitted work "
+                            f"for review_item_id={replay.review_item_id}"
+                        )
+
+
 def validate_phase4_review_response(
     request: Phase4ReviewRequest,
     response: Phase4ReviewResponse,
@@ -268,25 +325,40 @@ def validate_phase4_review_response(
     _validate_pattern_and_improvement(request, response.student_insights, config)
     _validate_skill_labels(request, response)
     _validate_student_language(request, response, config)
+    _validate_board_progression(request, response)
 
 
 def generate_phase4_review(request: Phase4ReviewRequest) -> Phase4ReviewResponse:
     config = load_phase4_review_config()
     context = build_openai_phase4_review_context(request, config)
     client = build_openai_phase4_review_client(get_settings())
+    schema = Phase4ReviewResponse.model_json_schema()
     try:
         generated = Phase4ReviewResponse.model_validate(
-            client.generate_phase4_review(
-                context=context,
-                schema=Phase4ReviewResponse.model_json_schema(),
-            )
+            client.generate_phase4_review(context=context, schema=schema)
         )
+        validate_phase4_review_response(request, generated, config)
     except AdapterError:
         raise
-    except (ValidationError, ValueError) as error:
-        raise Phase4ReviewValidationError(f"Phase 4 review generation failed: {error}") from error
-
-    validate_phase4_review_response(request, generated, config)
+    except (ValidationError, ValueError) as first_error:
+        stricter_context = {
+            **context,
+            "generation_instructions": (
+                f"{config.generation_instructions}\n\n{config.stricter_guardrail_instruction}"
+            ),
+        }
+        try:
+            generated = Phase4ReviewResponse.model_validate(
+                client.generate_phase4_review(context=stricter_context, schema=schema)
+            )
+            validate_phase4_review_response(request, generated, config)
+        except AdapterError:
+            raise
+        except (ValidationError, ValueError) as retry_error:
+            raise Phase4ReviewValidationError(
+                f"Phase 4 review generation failed after a grounded retry: {retry_error}"
+            ) from retry_error
+        logger.warning("phase4_review_grounded_retry", extra={"validation_error": str(first_error)})
     logger.info(
         "phase4_review_generated",
         extra={

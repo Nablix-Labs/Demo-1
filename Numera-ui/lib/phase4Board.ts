@@ -15,7 +15,7 @@
  */
 
 import type { TutorElement } from '@/store/useNumeraStore';
-import type { Phase4ReplayStep } from '@/lib/api';
+import type { Phase4BoardElement, Phase4ReplayStep } from '@/lib/api';
 
 /** Written marks are anchored at their LEFT edge — see the TutorLayer header. */
 const LEFT = 0.09;
@@ -111,4 +111,23 @@ export function boardDraw(
       .slice(0, nextIndex + 1)
       .map((step, i) => lineElement(step, i, total)),
   };
+}
+
+/** Keep the tutor's earlier marks visible while the replay moves forward. */
+export function boardElementsThrough(
+  steps: readonly Phase4ReplayStep[],
+  index: number,
+): Phase4BoardElement[] {
+  if (index < 0) return [];
+  const seen = new Set<string>();
+  const elements: Phase4BoardElement[] = [];
+  for (const step of steps.slice(0, index + 1)) {
+    for (const element of step.board?.elements ?? []) {
+      const identity = JSON.stringify(element);
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      elements.push(element);
+    }
+  }
+  return elements;
 }

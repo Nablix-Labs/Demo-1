@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { writeLine, boardDraw } from '@/lib/phase4Board';
+import { writeLine, boardDraw, boardElementsThrough } from '@/lib/phase4Board';
 import type { Phase4ReplayStep } from '@/lib/api';
 
 const steps = (n: number): Phase4ReplayStep[] =>
@@ -115,6 +115,35 @@ describe('what is written', () => {
     const draw = boardDraw(-1, 0, steps(2));
     expect(draw.elements[0].text).toBe('Line 1');
     expect(JSON.stringify(draw.elements)).not.toContain('Narration');
+  });
+});
+
+describe('the structured tutor board', () => {
+  it('keeps earlier tutor marks while the explanation advances', () => {
+    const replaySteps: Phase4ReplayStep[] = [
+      {
+        sequence_no: 1,
+        narration: 'First.',
+        tutor_write: 'Pattern',
+        board: { elements: [{ kind: 'expression', text: '5 + 4' }] },
+      },
+      {
+        sequence_no: 2,
+        narration: 'Then.',
+        tutor_write: 'Rule',
+        board: {
+          elements: [
+            { kind: 'expression', text: '5 + 4' },
+            { kind: 'boxed', text: 'n + 4', tone: 'correct' },
+          ],
+        },
+      },
+    ];
+
+    expect(boardElementsThrough(replaySteps, 1)).toEqual([
+      { kind: 'expression', text: '5 + 4' },
+      { kind: 'boxed', text: 'n + 4', tone: 'correct' },
+    ]);
   });
 });
 
