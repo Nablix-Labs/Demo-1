@@ -429,6 +429,24 @@ def test_topic1_choice_is_detected_inside_an_explanation() -> None:
     assert "different starting number" in evaluation.tutor_message
 
 
+def test_topic1_symbolic_variable_is_not_treated_as_a_choice_label() -> None:
+    request = ClassificationRequest(
+        question_id="Q-T01-004",
+        question_type="CHOICE_WITH_EXPLANATION",
+        question="Which is the general rule? A: 12 + 4. B: n + 4.",
+        correct_answer="B",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T01-004", canonical_answer="B", accepted_answers=["B"],
+            verification_method="EXACT_CHOICE_MATCH", explanation_required=True,
+        ),
+        phase_2_prompt_context=_guided_context(0), student_input="n",
+        current_phase="GUIDED_PRACTICE", input_source="TEXT", transcript_confidence=None,
+        attempt_count=0, current_hint_level=None,
+    )
+
+    assert classifier.typed_choice_selection(request) is None
+
+
 def test_topic1_selected_option_transport_is_detected_as_a_wrong_choice() -> None:
     request = ClassificationRequest(
         question_id="Q-T01-004",

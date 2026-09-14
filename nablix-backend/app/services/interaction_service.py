@@ -721,9 +721,9 @@ async def process_answer_with_session_event(
     )
     confusion_support_request = (
         schema_managed
-        and tutor.contribution is None
         and session.current_phase == "GUIDED_PRACTICE"
         and tutor.intent == "EXPRESSING_CONFUSION"
+        and tutor.guided_student_state == "STUCK"
     )
     support_escalation = (
         wrong_four_escalation
@@ -1274,40 +1274,6 @@ def _active_answer_spec(session: SessionRecord) -> AnswerSpec | None:
     if session.student_model_event is None:
         return None
     return _schema_question(session).tutor_view.answer_spec
-
-
-def _choice_selection_canvas_actions(
-    session: SessionRecord,
-    tutor: TutorResult,
-    turn_id: str,
-) -> list[TutorCanvasAction]:
-    """Highlight each available choice while the learner is being asked to select."""
-
-    objective = tutor.active_teaching_objective
-    teaching_state = tutor.guided_teaching_state
-    selected_option_id = (
-        teaching_state.selected_option_id if teaching_state is not None else None
-    )
-    if (
-        session.question_type != "CHOICE_WITH_EXPLANATION"
-        or objective is None
-        or "ANSWER_SELECTION" not in objective.missing_concept_ids
-        or selected_option_id is not None
-    ):
-        return []
-    return [
-        TutorCanvasAction(
-            action_id=f"{turn_id}:SELECT_OPTION:{option.option_id}",
-            type="HIGHLIGHT",
-            target_kind="QUESTION_OPTION",
-            target_object_id=f"{session.question_id}:OPTION:{option.option_id}",
-            confirmed_component_id=None,
-            text="Tap an option.",
-            source_id=None,
-            answer_reveal_allowed=False,
-        )
-        for option in _schema_question(session).student_view.options
-    ]
 
 
 def _question_anchors(session: SessionRecord) -> list[QuestionTextAnchor]:
@@ -4701,10 +4667,13 @@ async def _process_interaction(
                 resulting_question,
                 guided_question_type,
                 "Here is the next question.",
-                cast(str | None, state_updates.get(
-                    "guided_start_tutor_prompt",
-                    turn_session.guided_start_tutor_prompt,
-                )),
+                cast(
+                    str | None,
+                    state_updates.get(
+                        "guided_start_tutor_prompt",
+                        session.guided_start_tutor_prompt,
+                    ),
+                ),
             )
             if session.current_phase == "GUIDED_PRACTICE"
             else rules.messages.NEXT_QUESTION.format(
@@ -4769,7 +4738,9 @@ async def _process_interaction(
         else None
     )
     tutor_canvas_actions = (
-        plan_rescue_canvas_actions(
+        []
+        if question_advanced
+        else plan_rescue_canvas_actions(
             rescue_context,
             request.turn_id or "TURN-0000",
             canonical_answer,
@@ -4787,14 +4758,6 @@ async def _process_interaction(
             student_response=request.text_input or request.voice_transcript or "",
         )
     )
-    tutor_canvas_actions = [
-        *_choice_selection_canvas_actions(
-            turn_session,
-            tutor,
-            request.turn_id or "TURN-0000",
-        ),
-        *tutor_canvas_actions,
-    ]
     logger.info(
         "guided_canvas_actions_planned",
         extra={
