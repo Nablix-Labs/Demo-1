@@ -58,8 +58,6 @@ def schema_student_model(monkeypatch: pytest.MonkeyPatch) -> None:
         use_mock_voice=True,
         use_mock_vision=True,
         use_openai_ai_engine=False,
-        qdrant_url="https://qdrant.test",
-        qdrant_api_key="test-key",
     )
 
     async def send_session_event(

@@ -729,9 +729,7 @@ async def start_session(
             detail="Send topic_code, or a concept_id with a configured Student "
             "Model topic code.",
         )
-    # ponytail: with no concept_id, the topic code doubles as the RAG key --
-    # qdrant_concept_id_map already falls back to the raw value, so an unmapped
-    # code surfaces as a retrieval miss, not a hard 422 before the session opens.
+    # Preserve concept_id for older clients while allowing topic_code-only starts.
     concept_id = request.concept_id or topic_id
 
     session_id = _build_session_id()

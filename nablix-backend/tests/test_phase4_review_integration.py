@@ -24,7 +24,7 @@ from app.adapters import provider, student_model
 from app.adapters.student_model import StudentModelServiceAdapter
 from app.core.config import Settings
 from app.main import app
-from app.models.adapters import AdapterContext, RAGResult, StudentModelResult, TutorResult
+from app.models.adapters import AdapterContext, StudentModelResult, TutorResult
 from app.models.phase4_review import (
     FirstError,
     Phase4ReviewResponse,
@@ -248,7 +248,7 @@ def student_model_service(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
 
     async def wrong_pipeline(
         context: AdapterContext,
-    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
+    ) -> tuple[StudentModelResult, TutorResult]:
         del context
         student = StudentModelResult(
             mastery_status="MASTERED",
@@ -275,7 +275,7 @@ def student_model_service(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
             answer_value_confirmed=True,
             reasoning_complete=True,
         )
-        return RAGResult(documents=[], retrieval_confidence=0.0), student, tutor
+        return student, tutor
 
     monkeypatch.setattr(student_model, "post_json", post_json)
     monkeypatch.setattr(student_model, "get_bytes", get_bytes)

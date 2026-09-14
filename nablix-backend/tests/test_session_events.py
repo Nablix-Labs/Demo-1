@@ -2486,8 +2486,6 @@ def test_legacy_initial_phase_session_is_rejected(monkeypatch) -> None:
         student_model_url="https://student-model.example",
         student_model_topic_ids={"ALG_LINEAR_ONE_STEP": 2},
         use_mock_student_model=False,
-        qdrant_url="https://qdrant.test",
-        qdrant_api_key="test-key",
     )
 
     async def fake_post_json(

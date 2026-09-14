@@ -14,7 +14,7 @@ import os
 # Both of these must land before the first app import.
 #
 # 1. Settings binds its env-file source at class-creation time.
-# 2. Four modules (voice/core, rag/*) call load_dotenv() at import, which
+# 2. The voice and isolated RAG-lab modules call load_dotenv() at import, which
 #    copies the whole deployment .env into os.environ -- at which point
 #    Settings reads the values as ordinary environment variables and
 #    env_file is irrelevant. Neutering it here is the only single place
@@ -63,8 +63,6 @@ async def _skip_session_persistence(_: SessionRecord) -> None:
 @pytest.fixture(autouse=True)
 def force_mock_adapters(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("NABLIX_USE_OPENAI_AI_ENGINE", "false")
-    monkeypatch.setenv("NABLIX_QDRANT_URL", "https://qdrant.test")
-    monkeypatch.setenv("NABLIX_QDRANT_API_KEY", "test-key")
     get_settings.cache_clear()
     test_settings = Settings(
         student_model_url="",
@@ -77,8 +75,6 @@ def force_mock_adapters(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         use_mock_voice=True,
         use_mock_vision=True,
         use_openai_ai_engine=False,
-        qdrant_url="https://qdrant.test",
-        qdrant_api_key="test-key",
     )
 
     monkeypatch.setattr(

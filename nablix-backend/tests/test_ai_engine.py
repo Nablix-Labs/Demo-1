@@ -5,7 +5,7 @@ from typing import cast
 from fastapi.testclient import TestClient
 import pytest
 
-from app.adapters.tutor_engine import TutorEngineServiceAdapter, apply_retrieved_content
+from app.adapters.tutor_engine import TutorEngineServiceAdapter
 from app.ai_engine import classifier, openai_client
 from app.ai_engine.classifier_config import load_classifier_rules
 from app.ai_engine.canvas_math_review import review_canvas_math
@@ -36,8 +36,6 @@ from app.models.adapters import (
     ConversationState,
     OCRTextRegion,
     Phase2PromptContext,
-    RAGResult,
-    RetrievedDocument,
     SpatialMathToken,
     StudentModelResult,
     TutorEngineRequest,
@@ -6148,7 +6146,6 @@ def test_tutor_adapter_maps_canvas_mistake_to_backend_result() -> None:
                     OCRTextRegion(step_id="step-2", text="x = 9 - 5", x=0.1, y=0.2, w=0.4, h=0.08, confidence=0.95),
                 ],
             ),
-            rag=RAGResult(documents=[], retrieval_confidence=0.0),
             student=StudentModelResult(
                 mastery_status="DEVELOPING",
                 continuity_status="on_track",
@@ -6166,58 +6163,6 @@ def test_tutor_adapter_maps_canvas_mistake_to_backend_result() -> None:
     assert result.canvas_feedback.highlight_instruction is not None
     assert result.canvas_feedback.highlight_instruction.step_number == 2
     assert result.canvas_feedback.step_feedback[1].error_type == "ARITHMETIC_ERROR"
-
-
-def test_retrieved_canvas_feedback_is_guarded_before_return() -> None:
-    adapter = TutorEngineServiceAdapter(Settings(use_mock_tutor=True, use_openai_ai_engine=False))
-    result = adapter._mock_response(
-        TutorEngineRequest(
-            context=AdapterContext(
-                session_id="SESSION001",
-                student_id="ST001",
-                message="x = 6",
-                question="x + 4 = 9",
-                correct_answer="x = 5",
-                current_phase="GUIDED_PRACTICE",
-                input_source="CANVAS",
-                attempt_count=1,
-                canvas_regions=[
-                    OCRTextRegion(
-                        step_id="step-1",
-                        text="x = 6",
-                        x=0.1,
-                        y=0.1,
-                        w=0.3,
-                        h=0.08,
-                        confidence=0.95,
-                    )
-                ],
-            ),
-            rag=RAGResult(documents=[], retrieval_confidence=0.0),
-            student=StudentModelResult(
-                mastery_status="DEVELOPING",
-                continuity_status="on_track",
-                recommended_entry_phase="GUIDED_PRACTICE",
-                hint_dependency_score=0.0,
-                intervention_required=False,
-            ),
-        )
-    )
-    rag = RAGResult(
-        documents=[
-            RetrievedDocument(
-                title="Unsafe hint",
-                content="The answer is x = 5.",
-                source="curriculum",
-            )
-        ],
-        retrieval_confidence=0.99,
-    )
-
-    guarded = apply_retrieved_content(result, rag, "x = 5")
-
-    assert guarded.tutor_message == result.tutor_message
-    assert guarded.tutor_message_voice == result.tutor_message_voice
 
 
 def test_canvas_wording_retries_an_answer_revealing_draft() -> None:

@@ -1,8 +1,8 @@
 """Tutor-engine adapter.
 
 The tutor engine is the final decision point in the text pipeline. It receives
-student context, retrieved curriculum material, and student-model state, then
-returns the frontend-facing tutoring decision fields.
+student context and student-model state, then returns the frontend-facing
+tutoring decision fields.
 """
 
 from typing import cast
@@ -10,9 +10,7 @@ from typing import cast
 from app.ai_engine.classifier import (
     ClassificationRequest,
     classify_student_response,
-    contains_answer_reveal,
 )
-from app.ai_engine.classifier_config import load_classifier_rules
 from app.ai_engine.schemas import (
     CanvasTextRegion,
     HintLevel,
@@ -28,7 +26,6 @@ from app.models.adapters import (
     CanvasStepFeedback,
     HighlightInstruction,
     OCRTextRegion,
-    RAGResult,
     SafetyCheckResult,
     StudentModelResult,
     StudentModelEvent,
@@ -77,12 +74,11 @@ class TutorEngineServiceAdapter:
     async def evaluate(
         self,
         context: AdapterContext,
-        rag: RAGResult,
         student: StudentModelResult,
     ) -> TutorResult:
         """Service-facing method used by interaction and hint workflows."""
 
-        request = TutorEngineRequest(context=context, rag=rag, student=student)
+        request = TutorEngineRequest(context=context, student=student)
         return await self.call(request)
 
     async def call(self, request: TutorEngineRequest) -> TutorResult:
@@ -299,38 +295,3 @@ def tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:
         canvas_intentions=response.canvas_intentions,
         tutor_canvas_actions=response.tutor_canvas_actions,
     )
-
-
-# Strategies whose message body should be the retrieved curriculum text: the
-# classifier decides the strategy, RAG supplies the words.
-_CONTENT_STRATEGIES = {"GUIDED_HINT", "SCAFFOLD", "PROVIDE_WORKED_EXAMPLE"}
-
-
-def apply_retrieved_content(
-    result: TutorResult,
-    rag: RAGResult,
-    correct_answer: str,
-) -> TutorResult:
-    """Use the top retrieved document as the tutor message for content-bearing
-    strategies. No documents or a non-content strategy → leave the classifier's
-    message untouched. Called by run_tutor_pipeline after classification, so the
-    retrieval already used the classifier's chosen hint level.
-    """
-    if not rag.documents or result.response_strategy not in _CONTENT_STRATEGIES:
-        return result
-    top_document = rag.documents[0]
-    if top_document.source == "mock_curriculum":
-        return result
-
-    content = top_document.content
-    updated_result: TutorResult = result.model_copy(
-        update={"tutor_message": content, "tutor_message_voice": content}
-    )
-    rules = load_classifier_rules()
-    if result.answer_reveal_allowed is False and contains_answer_reveal(
-        content,
-        correct_answer,
-        rules,
-    ):
-        return result
-    return updated_result

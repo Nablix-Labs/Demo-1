@@ -26,7 +26,6 @@ from app.models.adapters import (
     AdapterContext,
     AnnotationIntent,
     OCRTextRegion,
-    RAGResult,
     StudentModelResult,
     TutorResult,
     TutorMistakeClassification,
@@ -357,8 +356,6 @@ def schema_student_model(monkeypatch: pytest.MonkeyPatch) -> None:
         use_mock_voice=True,
         use_mock_vision=True,
         use_openai_ai_engine=False,
-        qdrant_url="https://qdrant.test",
-        qdrant_api_key="test-key",
     )
 
     async def send_session_event(
@@ -802,11 +799,10 @@ def test_canvas_submit_sends_full_ocr_context_and_forwards_events(
     async def capture_evaluate(
         adapter: TutorEngineServiceAdapter,
         context: AdapterContext,
-        rag: RAGResult,
         student: StudentModelResult,
     ) -> TutorResult:
         captured_contexts.append(context)
-        return await original_evaluate(adapter, context, rag, student)
+        return await original_evaluate(adapter, context, student)
 
     async def capture_event(
         adapter: StudentModelServiceAdapter,
@@ -1197,7 +1193,7 @@ def test_canvas_correct_same_phase_routes_next_question(
             answer_value_confirmed=True,
             reasoning_complete=True,
         )
-        return RAGResult(documents=[], retrieval_confidence=0.0), student, tutor
+        return student, tutor
 
     monkeypatch.setattr(interaction_service, "run_tutor_pipeline", fake_pipeline)
     session_id = _start_session("ST012")
@@ -1370,7 +1366,7 @@ def test_canvas_final_independent_attempt_is_recorded_before_review(
 
     async def correct_pipeline(
         context: AdapterContext,
-    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
+    ) -> tuple[StudentModelResult, TutorResult]:
         del context
         student = StudentModelResult(
             mastery_status="MASTERED",
@@ -1397,7 +1393,7 @@ def test_canvas_final_independent_attempt_is_recorded_before_review(
             answer_value_confirmed=True,
             reasoning_complete=True,
         )
-        return RAGResult(documents=[], retrieval_confidence=0.0), student, tutor
+        return student, tutor
 
     monkeypatch.setattr(
         StudentModelServiceAdapter,
@@ -1503,7 +1499,7 @@ def _review_transition_session(monkeypatch: pytest.MonkeyPatch) -> str:
 
     async def correct_pipeline(
         context: AdapterContext,
-    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
+    ) -> tuple[StudentModelResult, TutorResult]:
         del context
         student = StudentModelResult(
             mastery_status="MASTERED",
@@ -1512,7 +1508,7 @@ def _review_transition_session(monkeypatch: pytest.MonkeyPatch) -> str:
             hint_dependency_score=0.0,
             intervention_required=False,
         )
-        return RAGResult(documents=[], retrieval_confidence=0.0), student, _correct_canvas_tutor()
+        return student, _correct_canvas_tutor()
 
     monkeypatch.setattr(
         StudentModelServiceAdapter,
@@ -1559,7 +1555,7 @@ def _independent_practice_session(monkeypatch: pytest.MonkeyPatch) -> str:
 
     async def correct_pipeline(
         context: AdapterContext,
-    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
+    ) -> tuple[StudentModelResult, TutorResult]:
         del context
         student = StudentModelResult(
             mastery_status="DEVELOPING",
@@ -1586,7 +1582,7 @@ def _independent_practice_session(monkeypatch: pytest.MonkeyPatch) -> str:
             answer_value_confirmed=True,
             reasoning_complete=True,
         )
-        return RAGResult(documents=[], retrieval_confidence=0.0), student, tutor
+        return student, tutor
 
     monkeypatch.setattr(
         StudentModelServiceAdapter,
@@ -1766,10 +1762,9 @@ def test_tc21_canvas_failure_requests_fresh_content_and_keeps_gap_neutral(
 
     async def incorrect_pipeline(
         context: AdapterContext,
-    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
+    ) -> tuple[StudentModelResult, TutorResult]:
         del context
         return (
-            RAGResult(documents=[], retrieval_confidence=0.0),
             StudentModelResult(
                 mastery_status="DEVELOPING",
                 continuity_status="on_track",
@@ -1880,10 +1875,9 @@ def test_tc20_failed_checkpoint_repairs_the_same_skill_not_a_prerequisite(
 
     async def incorrect_pipeline(
         context: AdapterContext,
-    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
+    ) -> tuple[StudentModelResult, TutorResult]:
         del context
         return (
-            RAGResult(documents=[], retrieval_confidence=0.0),
             StudentModelResult(
                 mastery_status="LEARNING_GAP",
                 continuity_status="on_track",
@@ -1972,10 +1966,9 @@ def test_a_failed_checkpoint_with_no_repair_target_is_refused_not_guessed(
 
     async def incorrect_pipeline(
         context: AdapterContext,
-    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
+    ) -> tuple[StudentModelResult, TutorResult]:
         del context
         return (
-            RAGResult(documents=[], retrieval_confidence=0.0),
             StudentModelResult(
                 mastery_status="LEARNING_GAP",
                 continuity_status="on_track",
@@ -2224,7 +2217,6 @@ def test_unified_voice_canvas_keeps_mathml_in_tutor_context(
     async def capture_pipeline(context: AdapterContext):
         captured_context.append(context)
         return (
-            RAGResult(documents=[], retrieval_confidence=0.0),
             StudentModelResult(
                 mastery_status="DEVELOPING",
                 continuity_status="on_track",
@@ -2438,11 +2430,10 @@ def test_unclear_canvas_replaces_memory_for_the_same_question(
     async def capture_evaluate(
         adapter: TutorEngineServiceAdapter,
         context: AdapterContext,
-        rag: RAGResult,
         student: StudentModelResult,
     ) -> TutorResult:
         captured_contexts.append(context)
-        return await original_evaluate(adapter, context, rag, student)
+        return await original_evaluate(adapter, context, student)
 
     async def unclear_ocr(
         adapter: MockVisionOCRAdapter,
@@ -2605,10 +2596,9 @@ def test_canvas_submit_uses_shared_spatial_tokens_for_grounded_draw(
     async def incorrect_evaluation(
         adapter: TutorEngineServiceAdapter,
         context: AdapterContext,
-        rag: RAGResult,
         student: StudentModelResult,
     ) -> TutorResult:
-        del adapter, rag, student
+        del adapter, student
         captured_contexts.append(context)
         return TutorResult(
             evaluation="INCORRECT",
@@ -2899,7 +2889,7 @@ def test_a_canvas_reply_after_a_typed_turn_carries_its_own_identity(
 
     async def pipeline(
         context: AdapterContext,
-    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
+    ) -> tuple[StudentModelResult, TutorResult]:
         del context
         student = StudentModelResult(
             mastery_status="DEVELOPING",
@@ -2924,7 +2914,7 @@ def test_a_canvas_reply_after_a_typed_turn_carries_its_own_identity(
             recommended_conversation_action="GIVE_HINT",
             question_completed=False,
         )
-        return RAGResult(documents=[], retrieval_confidence=0.0), student, tutor
+        return student, tutor
 
     monkeypatch.setattr(interaction_service, "run_tutor_pipeline", pipeline)
     session_id = _start_session("ST410")
@@ -3024,10 +3014,9 @@ def test_a_correct_answer_is_not_sent_as_a_retry_for_an_unrelated_skill(
 
     async def correct_pipeline(
         context: AdapterContext,
-    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
+    ) -> tuple[StudentModelResult, TutorResult]:
         del context
         return (
-            RAGResult(documents=[], retrieval_confidence=0.0),
             StudentModelResult(
                 mastery_status="NEARLY_MASTERED",
                 continuity_status="on_track",
@@ -3077,10 +3066,9 @@ def test_a_correct_answer_on_the_retried_skill_is_still_sent_as_a_retry(
 
     async def correct_pipeline(
         context: AdapterContext,
-    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
+    ) -> tuple[StudentModelResult, TutorResult]:
         del context
         return (
-            RAGResult(documents=[], retrieval_confidence=0.0),
             StudentModelResult(
                 mastery_status="NEARLY_MASTERED",
                 continuity_status="on_track",

@@ -23,7 +23,7 @@ import pytest
 from copy import deepcopy
 
 from app.adapters.student_model import StudentModelServiceAdapter
-from app.models.adapters import AdapterContext, RAGResult, StudentModelResult, TutorResult
+from app.models.adapters import AdapterContext, StudentModelResult, TutorResult
 from app.models.student_model_session import (
     PrerequisiteRouteLookup,
     StudentModelSessionEvent,
@@ -251,10 +251,9 @@ def _exhausted_checkpoint(
 
     async def incorrect_pipeline(
         context: AdapterContext,
-    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
+    ) -> tuple[StudentModelResult, TutorResult]:
         del context
         return (
-            RAGResult(documents=[], retrieval_confidence=0.0),
             StudentModelResult(
                 mastery_status="LEARNING_GAP",
                 continuity_status="on_track",

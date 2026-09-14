@@ -26,9 +26,8 @@ flowchart LR
     API --> Hint["Hint routes"]
     API --> Canvas["Canvas routes"]
     API --> Voice["Voice routes"]
-    API --> Adapters["Mock/real adapters"]
+    API --> Adapters["Service adapters"]
     Adapters --> Tutor["Tutor engine"]
-    Adapters --> RAG["RAG service"]
     Adapters --> Model["Student model"]
     Adapters --> Speech["Voice service"]
 ```
@@ -46,7 +45,7 @@ the PNG below is the rendered export that GitHub displays.
 ```text
 app/
   api/          HTTP route modules
-  adapters/     boundaries for tutor, retrieval, student model, and voice services
+  adapters/     boundaries for tutor, student model, and voice services
   core/         config, logger, and custom exceptions
   middleware/   request logging
   models/       request/response model package placeholder
@@ -71,7 +70,6 @@ sequenceDiagram
     participant InteractionModel
     participant InteractionService
     participant AdapterProvider
-    participant RagAdapter
     participant StudentModelAdapter
     participant TutorEngineAdapter
     participant VoiceRoute
@@ -94,11 +92,9 @@ sequenceDiagram
     InteractionRoute->>InteractionService: process_interaction
     InteractionService->>AdapterProvider: get_adapters
     AdapterProvider-->>InteractionService: AdapterSet
-    InteractionService->>RagAdapter: retrieve(AdapterContext)
-    RagAdapter-->>InteractionService: RAGResult
     InteractionService->>StudentModelAdapter: assess(AdapterContext)
     StudentModelAdapter-->>InteractionService: StudentModelResult
-    InteractionService->>TutorEngineAdapter: evaluate(context, rag, student)
+    InteractionService->>TutorEngineAdapter: evaluate(context, student)
     TutorEngineAdapter-->>InteractionService: TutorResult
     InteractionService-->>InteractionRoute: InteractionResponse
     InteractionRoute-->>Frontend: 200 + merged tutor response
@@ -148,7 +144,7 @@ sequenceDiagram
 | `POST` | `/session/start` | Starts a mock session from `concept_id` + `interaction_mode`; returns diagnostic question plus UI/voice/canvas start state. | Implemented |
 | `GET` | `/session/{session_id}` | Reads in-memory mock session state. | Implemented |
 | `POST` | `/session/end` | Marks an in-memory mock session as ended. | Implemented |
-| `POST` | `/interaction` | Sends a student interaction through mock RAG, student model, and tutor engine adapters; returns the session view. | Implemented |
+| `POST` | `/interaction` | Sends a student interaction through the student model and tutor engine adapters; returns the session view. | Implemented |
 | `POST` | `/hint/request` | Requests a generated hint for an active session in a hint-enabled phase. | Implemented |
 | `POST` | `/canvas/submit` | Sends canvas work for mock submission. | Implemented |
 | `POST` | `/voice/session/start` | Starts a mock voice stream for an existing session. | Implemented |
@@ -237,14 +233,14 @@ mock data or call its configured downstream service URL.
 
 Current adapter changes:
 
-- `POST /interaction` builds one typed `AdapterContext` and merges typed RAG,
-  student-model, and tutor-engine results.
+- `POST /interaction` builds one typed `AdapterContext` and merges typed
+  student-model and tutor-engine results.
 - `POST /voice` is implemented and routes voice requests through the voice
   adapter.
 - `POST /hint/request` validates the active session, checks that hints are
   allowed in the stored phase, uses the stored hint count, records a student
   model hint event, increments session state, and returns the short hint shape.
-- `AdapterSet` is the single provider return type for the active tutor, RAG,
+- `AdapterSet` is the single provider return type for the active tutor,
   student-model, and voice adapters.
 - The current implementations expose `call(...)`, `parse_response(...)`, and
   `handle_error(...)` behind their service-facing methods.
@@ -258,7 +254,6 @@ Configured adapters:
 | Adapter protocol | Current implementation | Method |
 | --- | --- | --- |
 | `TutorEngineAdapter` | `TutorEngineServiceAdapter` | `evaluate(...)` |
-| `RAGServiceAdapter` | `RAGServiceAdapterClient` | `retrieve(...)` |
 | `StudentModelAdapter` | `StudentModelServiceAdapter` | `assess(...)` |
 | `VoiceServiceAdapter` | `VoiceServiceAdapterClient` | `transcribe(...)` |
 
@@ -278,7 +273,6 @@ Example:
 ```env
 NABLIX_APP_NAME=Nablix AI Math Tutor API
 NABLIX_DEBUG=false
-NABLIX_USE_MOCK_RAG=true
 NABLIX_USE_MOCK_STUDENT_MODEL=true
 NABLIX_USE_MOCK_VOICE=true
 NABLIX_ADAPTER_REQUEST_TIMEOUT_SECONDS=20
