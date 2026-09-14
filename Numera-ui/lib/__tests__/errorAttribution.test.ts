@@ -31,6 +31,19 @@ describe('server-side failures are named as server-side', () => {
     expect(message).not.toMatch(/status=|body=|invalid_json_schema/i);
   });
 
+  it('a 503 names the tutor service, which is what /orientation/complete returns', () => {
+    // The status Sanya actually got on 2026-09-14: the Student Model 500'd on
+    // ORIENTATION_COMPLETED (a column its ORM declared was absent from the
+    // database) and the tutor backend turned that into a 503. The orientation
+    // screen's own copy was "Couldn't mark this as done. Please try again.",
+    // which reads as the frontend's fault and invites exactly the retry loop
+    // she ran. 500 and 502 are pinned above; 503 was the one nothing covered.
+    const msg = studentFacingError(err(503));
+    expect(msg).toMatch(/tutor service/i);
+    expect(msg).toMatch(/nothing you did/i);
+    expect(msg).not.toMatch(/reach/i);
+  });
+
   it('a 504 is reported as a timeout, not a connection failure', () => {
     expect(studentFacingError(err(504))).toMatch(/too long/i);
   });

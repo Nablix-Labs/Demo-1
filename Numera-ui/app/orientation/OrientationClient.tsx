@@ -46,6 +46,7 @@ import {
   sessionTopicCode,
   sessionTopicTitle,
   startOrientation,
+  studentFacingError,
   studentId,
   type SchemaOrientationItem,
   type SchemaWorkedExample,
@@ -568,6 +569,29 @@ function MicroCard({ media }: { media: Extract<OrientationMedia, { kind: 'micro'
 // ─── Backend-driven orientation ──────────────────────────────────────────────
 
 /**
+ * What the student is told when an orientation call fails — and what the
+ * console is told about it.
+ *
+ * Both catches below were bare `catch {}` with one hardcoded sentence. On
+ * 2026-09-14 the Student Model began 500ing on ORIENTATION_COMPLETED (its ORM
+ * declared a column the database did not have), so /orientation/complete
+ * answered 503 and Sanya was told "Couldn't mark this as done. Please try
+ * again." She tried seven times in three minutes against a server that could
+ * not succeed, and because the status never reached the console the screen
+ * offered nothing to diagnose with — the fault looked like ours.
+ *
+ * `studentFacingError` is what the rest of the app already uses to attribute a
+ * failure to whatever actually failed. The hardcoded sentence stays only as the
+ * fallback for a request that never completed, which is the one case where
+ * "couldn't reach the tutor" is the true story.
+ */
+function orientationFailure(err: unknown, call: string, fallback: string): string {
+  const status = (err as { response?: { status?: number } })?.response?.status;
+  console.warn(`[orientation] ${call} did not land (status ${status ?? 'none'}).`, err);
+  return studentFacingError(err) ?? fallback;
+}
+
+/**
  * Phase 1 as the Student Model defines it: an ordered delivery sequence of
  * concept videos and worked examples, followed by completing the phase.
  *
@@ -646,8 +670,8 @@ function BackendOrientation({ topicId }: { topicId: string }) {
       const rec = await startOrientation(active, studentId());
       setBackendSession(rec);
       setStatus(orientationSequence(rec).length > 0 ? 'ready' : 'empty');
-    } catch {
-      setError("Couldn't load this topic's orientation.");
+    } catch (err) {
+      setError(orientationFailure(err, 'orientation/start', "Couldn't load this topic's orientation."));
       setStatus('error');
       // NOT cleared here on purpose — an auto-retry on failure is how the
       // diagnostic screen once fired thousands of requests. Only the retry
@@ -711,8 +735,8 @@ function BackendOrientation({ topicId }: { topicId: string }) {
       // cannot leave its choices sitting under the next phase's question
       // (Manjusha, 8 Aug — diagnostic options under a Phase 2 question).
       applyPhaseHandoff(rec);
-    } catch {
-      setError("Couldn't mark this as done. Please try again.");
+    } catch (err) {
+      setError(orientationFailure(err, 'orientation/complete', "Couldn't mark this as done. Please try again."));
       setFinishing(false);
     }
   };
