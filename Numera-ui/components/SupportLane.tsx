@@ -37,48 +37,74 @@
  * nothing is underneath it now.
  */
 
+import { useShallow } from 'zustand/react/shallow';
 import { useNumeraStore } from '@/store/useNumeraStore';
+import { deckRungs } from '@/lib/supportDeck';
 import { cn } from '@/lib/cn';
 import WriteNote from '@/components/WriteNote';
 import SupportDeck from '@/components/SupportDeck';
 
 export default function SupportLane() {
   const panelSide = useNumeraStore((s) => s.panelSide);
+  // What the tutor has offered, and the instruction that is not an offer.
+  // Only used to decide whether the column says "nothing yet" — the deck still
+  // owns which card is on screen.
+  const rungs = useNumeraStore(useShallow(deckRungs));
+  const writeInstruction = useNumeraStore((s) => s.writeInstruction);
+  const empty = rungs.length === 0 && !writeInstruction;
 
   return (
-    <div
+    <aside
+      aria-label="Support"
       className={cn(
         // An ordinary flex child beside the canvas, which is `flex-1 min-w-0`
         // and so simply takes the rest. Nothing here is positioned over the
         // work surface any more.
-        'w-[320px] shrink-0 flex flex-col gap-3 px-4 pt-4',
-        // Clear of the "Need help?" pill, which is global chrome pinned
-        // `fixed bottom-6 right-4` and therefore lands at the foot of this
-        // column. That reads correctly — this is the help column — but a card
-        // scrolled to the bottom would sit underneath it.
-        'pb-24',
+        'w-[320px] shrink-0 flex flex-col',
         'border-muted-gray bg-reading-surface',
-        // Still scrollable. The deck should make overflow impossible — one card
-        // instead of four — but a single long walkthrough on a short window can
-        // still run past the fold.
-        //
-        // `overflow-x-hidden` because setting overflow on one axis forces the
-        // other to `auto` rather than leaving it visible, and the note's shadow
-        // overhangs its box by 4px — enough to put a horizontal scrollbar under
-        // every card.
-        'overflow-y-auto overflow-x-hidden',
         // Opposite the tutor panel: the canvas keeps the middle.
         panelSide === 'right' ? 'order-first border-r' : 'border-l',
       )}
     >
-      {/* An INSTRUCTION, not an offer, so it is never collapsed into the deck:
-          a WRITE instruction is the tutor saying it could not read the student,
-          and it names the action that moves the turn on. Below a hint it would
-          read as the least urgent thing on screen when it is the only one that
-          unblocks them. */}
-      <WriteNote />
-      {/* Everything the tutor has OFFERED — one card, earlier ones as chips. */}
-      <SupportDeck />
-    </div>
+      {/* The column is reserved and therefore usually empty, so it needs to say
+          what it is. Without a heading it reads as canvas that stops early. */}
+      <div className="flex-shrink-0 px-4 pt-4 pb-2">
+        <span className="text-[9.5px] font-bold uppercase tracking-[0.16em] text-slate-blue/70">
+          Support
+        </span>
+      </div>
+
+      <div
+        className={cn(
+          'flex-1 min-h-0 flex flex-col gap-3 px-4',
+          // Clear of the "Need help?" pill, which is global chrome pinned
+          // `fixed bottom-6 right-4` and so lands at the foot of this column.
+          // That reads correctly — this IS the help column — but a card
+          // scrolled to the bottom would sit underneath it.
+          'pb-24',
+          // `overflow-x-hidden` because setting overflow on one axis forces the
+          // other to `auto`, and the note's shadow overhangs its box by 4px —
+          // enough to put a horizontal scrollbar under every card.
+          'overflow-y-auto overflow-x-hidden',
+        )}
+      >
+        {/* An INSTRUCTION, not an offer, so it is never collapsed into the
+            deck: a WRITE instruction is the tutor saying it could not read the
+            student, and it names the action that moves the turn on. Below a
+            hint it would read as the least urgent thing on screen when it is
+            the only one that unblocks them. */}
+        <WriteNote />
+        {/* Everything the tutor has OFFERED — one card, earlier ones as chips. */}
+        <SupportDeck />
+
+        {/* Said plainly rather than left blank. A student who has asked for
+            nothing should read this column as "ready", not as broken. */}
+        {empty && (
+          <p className="text-[12px] leading-relaxed text-slate-blue/70">
+            Hints and cues from Numera will appear here.
+          </p>
+        )}
+      </div>
+    </aside>
   );
 }

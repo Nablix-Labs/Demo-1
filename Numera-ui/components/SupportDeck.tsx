@@ -66,13 +66,13 @@ export default function SupportDeck() {
   return (
     <div className="flex flex-col gap-2">
       {showing && (
-        <div className="pointer-events-auto">
+        <div>
           <Card rung={showing} />
         </div>
       )}
 
       {earlier.length > 0 && (
-        <div className="pointer-events-auto w-[264px]">
+        <div className="w-[264px]">
           {/* Named rather than a row of bare chips: "Earlier help" says what
               the row IS. Without it the chips read as things to do next, which
               is the opposite of what they are. */}

@@ -302,7 +302,17 @@ export default function CanvasStage() {
           (app/practice/page.tsx, right-[180px]); this cluster was missed. Up
           rather than across, because the right edge is where the FABs belong
           and the drawing toolbar owns bottom-centre. */}
-      <div className="absolute bottom-[86px] right-6 z-20 flex items-center gap-2.5">
+      {/* Paper style and canvas help, as ONE group in the toolbar's own
+          vocabulary — a `lg-glass` pill holding plain buttons — rather than two
+          loose glass circles floating beside it. They are canvas utilities, so
+          they stay with the canvas and out of the support column.
+
+          Deliberately ABOVE the toolbar's band rather than aligned to it. The
+          toolbar is centred and content-width (~540px); once the support column
+          took its share, a 718px canvas at 1280 could not hold both on one line
+          and the two overlapped by 25px. Sharing a baseline only ever worked
+          while the canvas was wide enough, so it stops sharing one. */}
+      <div className="lg-glass absolute bottom-[130px] right-6 z-20 flex items-center gap-1 rounded-full p-1.5">
         {/* Paper / grid style picker */}
         <div className="relative">
           {gridOpen && (
@@ -402,7 +412,10 @@ export default function CanvasStage() {
 /** Corner FAB styling — dark glass when open, light glass when closed. */
 function cnFab(open: boolean) {
   return [
-    'w-10 h-10 rounded-full flex items-center justify-center transition-colors',
-    open ? 'lg-glass-dark text-white' : 'lg-glass text-slate-blue hover:text-ink',
+    'w-9 h-9 rounded-full flex items-center justify-center transition-colors',
+    // No glass of its own any more: the group around these IS the glass, and
+    // nesting one inside the other doubled the blur and read as a raised chip
+    // on a raised bar.
+    open ? 'lg-glass-dark text-white' : 'text-slate-blue hover:text-ink hover:bg-white/60',
   ].join(' ');
 }
