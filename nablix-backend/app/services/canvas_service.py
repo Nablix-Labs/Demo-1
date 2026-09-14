@@ -116,8 +116,28 @@ def _clarification_result(
     missing_operation = _MISSING_OPERATION_CANVAS_PATTERN.fullmatch(normalized_ocr_text)
     message = _UNRELIABLE_EVIDENCE_MESSAGE
     message_source = "controller"
+    diagnostic_focus = "OCR_UNCLEAR"
     if missing_operation:
         fallback_message = rules.guided_learning.critical_thinking.missing_operation_canvas_prompt
+        response_constraints = (
+            rules.guided_learning.critical_thinking
+            .missing_operation_canvas_llm_constraints
+        )
+        diagnostic_focus = "MISSING_OPERATION"
+    elif normalized_ocr_text:
+        fallback_message = (
+            rules.guided_learning.critical_thinking.partial_canvas_read_prompt
+            .format(ocr_evidence=normalized_ocr_text)
+        )
+        response_constraints = (
+            rules.guided_learning.critical_thinking
+            .partial_canvas_read_llm_constraints
+        )
+        diagnostic_focus = "PARTIAL_CANVAS_READ"
+    else:
+        fallback_message = None
+        response_constraints = []
+    if fallback_message is not None:
         authored_message = build_support_aware_tutor_message(
             question_id=context.question_id,
             question=context.question or "",
@@ -129,12 +149,9 @@ def _clarification_result(
             hint_level=None,
             conversation_history=context.conversation_history,
             support_context={
-                "diagnostic_focus": "MISSING_OPERATION",
+                "diagnostic_focus": diagnostic_focus,
                 "ocr_evidence": normalized_ocr_text,
-                "response_constraints": (
-                    rules.guided_learning.critical_thinking
-                    .missing_operation_canvas_llm_constraints
-                ),
+                "response_constraints": response_constraints,
             },
             openai_client=build_openai_ai_engine_client(get_settings()),
         )
@@ -148,7 +165,7 @@ def _clarification_result(
         "canvas_clarification_diagnostics",
         extra={
             "question_id": context.question_id,
-            "diagnostic_focus": "MISSING_OPERATION" if missing_operation else "OCR_UNCLEAR",
+            "diagnostic_focus": diagnostic_focus,
             "message_source": message_source,
             "ocr_evidence": normalized_ocr_text,
         },
