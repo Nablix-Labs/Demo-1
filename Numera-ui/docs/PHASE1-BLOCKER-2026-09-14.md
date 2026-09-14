@@ -74,23 +74,38 @@ PR #21 added the column to the ORM and shipped the alembic revision
 It did **not** ship `migrations/sql/0028_guided_canvas_submission_policy_up.sql`.
 
 Every migration from 0004 to 0027 has that `_up.sql` / `_down.sql` pair, and those
-are what actually get applied on the VM. 0028 is the only one without it, so it
-fell outside the path the schema is deployed through. The code went out; the
-column never did.
+are what actually get applied on the VM. 0028 is the only one without it.
+
+This is not my inference about your process — it is written in the repo. The
+header of `migrations/sql/0027_processed_events_seq_up.sql` says:
+
+```
+-- Run as the table owner:
+--   sudo -u postgres psql -d <db> -f 0027_processed_events_seq_up.sql
+```
+
+So the `_up.sql` is the artefact that gets applied, by hand, as `postgres`. 0028
+has no such file, so there was nothing to run. The code went out; the column
+never did.
+
+Worth noting that 0027's header describes this same failure one migration
+earlier: *"no migration ever created it, so the column exists in the deployed
+database and nowhere in this repository."* Second time in two migrations.
 
 ---
 
 ## Do NOT run `alembic upgrade head`
 
-I suggested this before checking, and it is wrong. On the VM:
+I suggested this before checking, and it is wrong. Verified on the VM:
 
 ```
-identity.alembic_version  →  0003
-migration files present   →  0004 … 0028
+$ alembic current      0003
+$ alembic heads        0028 (head)
 ```
 
-Alembic believes the database is at 0003. It is not — the schema is current,
-applied through the SQL pairs. `upgrade head` would replay twenty-five migrations
+`migrations/env.py` sets `version_table_schema="identity"`, so `identity.alembic_version`
+really is the tracked state, and it reads 0003 against a schema that is current.
+`upgrade head` would attempt to replay 0004 → 0028 — twenty-five migrations —
 against a database that already has them.
 
 ---
@@ -117,6 +132,14 @@ sudo systemctl restart mathtutor-student.service
 Then please add `migrations/sql/0028_guided_canvas_submission_policy_up.sql` and
 its `_down.sql`. Without them the next person who builds the database from the
 SQL directory gets this same outage.
+
+No grant is needed. 0027 required one because `BIGSERIAL` creates a sequence
+object; a plain `BOOLEAN` column inherits the table's existing privileges.
+
+**What I have not done:** I have not run these statements. Backend is not mine
+to change, so the fix above is reasoned from the traceback and from 0028's own
+`upgrade()` body — it is not a fix I have watched succeed. Everything else in
+this document was read directly off the VM.
 
 ---
 
