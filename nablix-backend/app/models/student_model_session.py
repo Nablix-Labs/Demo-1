@@ -86,12 +86,18 @@ class AnswerSpec(BaseModel):
     answer_steps: list[str] = Field(default_factory=list)
 
 
+class GuidedStartPrompt(BaseModel):
+    tutor_prompt: str
+    canvas_action: str | None = None
+
+
 class TutorQuestionView(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     answer_spec: AnswerSpec
     potential_errors: list[dict[str, object]] = Field(default_factory=list)
     support_catalog: dict[str, object] = Field(default_factory=dict)
+    guided_start_prompt: GuidedStartPrompt | None = None
 
 
 class StudentModelQuestion(BaseModel):

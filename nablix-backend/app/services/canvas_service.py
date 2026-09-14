@@ -530,7 +530,8 @@ async def submit_canvas(
         response_message = guided_question_opening(
             updated_session.current_question,
             updated_session.question_type,
-            "Nice work. Here is the next question.",
+            "Here is the next question.",
+            updated_session.guided_start_tutor_prompt,
         )
         response_message_voice = response_message
         response_action = "ADVANCE_TO_NEXT_QUESTION"
@@ -642,6 +643,9 @@ async def submit_canvas(
         plan_write_request_tutor_actions(request.turn_id or "TURN-0000", 1)
         if tutor.requires_written_math_evidence
         else tutor.tutor_canvas_actions
+    )
+    response.question_opening_canvas_actions = (
+        updated_session.question_opening_canvas_actions if question_advanced else []
     )
     response.localization_status = (
         "grounded" if canvas_evidence.spatial_tokens else "uncertain"

@@ -448,6 +448,8 @@ export function syncBackendSession(response: {
   tutor_canvas_actions?: TutorCanvasAction[];
   /** Active-question anchors required to resolve semantic tutor actions. */
   question_anchors?: QuestionAnchor[];
+  /** Authored visual actions for the question that has just arrived. */
+  question_opening_canvas_actions?: TutorCanvasAction[];
   /**
    * Who this reply is about. Optional because not every caller builds a full
    * record, and a response naming neither is applied rather than dropped — see
@@ -520,12 +522,22 @@ export function syncBackendSession(response: {
   const tutorActions = response.tutor_canvas_actions ?? [];
   if (tutorActions.length > 0) store.applyTutorCanvasActions(tutorActions);
 
-  const applyPhase = () => useNumeraStore.getState().applyBackendPhase({
-    phase: response.current_phase,
-    questionId: response.question_id,
-    questionText: response.current_question,
-    questionType: response.question_type ?? null,
-  });
+  const openingActions = response.question_opening_canvas_actions ?? [];
+  const applyPhase = () => {
+    useNumeraStore.getState().applyBackendPhase({
+      phase: response.current_phase,
+      questionId: response.question_id,
+      questionText: response.current_question,
+      questionType: response.question_type ?? null,
+    });
+    if (openingActions.length > 0 && response.question_anchors !== undefined) {
+      const current = useNumeraStore.getState();
+      if (current.activeQuestionId === response.question_id) {
+        current.setQuestionAnchors(response.question_anchors);
+        current.applyTutorCanvasActions(openingActions);
+      }
+    }
+  };
 
   // When this reply both annotates the finished work and moves the student on,
   // hold the board briefly so the annotation is actually seen. Without it the
