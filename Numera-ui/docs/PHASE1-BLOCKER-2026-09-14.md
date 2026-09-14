@@ -66,6 +66,57 @@ declares it `nullable=False`.
 
 ---
 
+## "But it was working this morning"
+
+Correct. It was. Every `/orientation/complete` today:
+
+```
+04:51:26  200
+07:31:37  200   SESSIONe5a6c3e8…  (Manjusha, ST002)
+07:53:28  200   SESSIONd3204ad7…  (Manjusha, ST016)
+──────────────  frontend deployed 08:18:22 · mathtutor-student restarted 10:41:22
+11:24:42  503
+11:24:48  503   … nine in total, every one since
+```
+
+**Timing alone does not clear the frontend, and I am not going to pretend it
+does.** The last success was at 07:53, the frontend went out at 08:18, and
+nobody attempted an orientation-complete between 08:18 and 10:41. So there is no
+green run on the current frontend build. Both deploys sit inside the unobserved
+window.
+
+Two things clear it instead.
+
+**1. The orientation code did not change.** The only frontend commit touching
+this screen before the break was `e609d36`, the routing refactor. Rename-aware,
+it reads:
+
+```
+.../{[topic] => }/OrientationClient.tsx   |  0
+```
+
+Zero lines. The file moved folders; not one character of it changed. `finish()`,
+the `completeOrientation` call, and the `videoIds`/`workedExampleIds` payload are
+byte-identical to the code that returned 200 at 07:53.
+
+**2. The failure is one a browser cannot cause.** Run in psql, with no request,
+no session and no frontend anywhere in the picture:
+
+```
+mathtutor=# SELECT canvas_submission_required FROM nablix_content.question_guided_start_prompts LIMIT 1;
+ERROR:  column "canvas_submission_required" does not exist
+```
+
+And the column is a mapped ORM attribute, so it is in the `SELECT` list on
+*every* call to `guided_start_prompt_for_question` — see the logged SQL. No
+payload reaches a code path that omits it. Any `ORIENTATION_COMPLETED` fails,
+whatever the client sends.
+
+Same frontend code as the 200s, and a Postgres error no client can produce. The
+one thing that changed between 07:53 and 11:24 is the 10:41 restart onto PR #21.
+
+---
+
 ## Root cause
 
 PR #21 added the column to the ORM and shipped the alembic revision
