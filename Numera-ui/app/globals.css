@@ -16,6 +16,17 @@
   --reading-surface: #f4f6f9;
   --off-white: #fafafa;
   --muted-gray: #e0e2e5;
+
+  /* The tutor's marker wash on an anchored question token (AnchoredText).
+     `drawably` defaults to pen blue, which is the tutor's INK colour here —
+     a wash in it would read as writing over the word rather than marking it.
+     Amber at low alpha is the same highlight the CSS background used, so the
+     meaning of the colour is unchanged and only the edge is now drawn.
+
+     Heavier than the 0.25 the flat CSS fill used: a drawn stroke has soft
+     edges, so the same alpha covers visibly less and the mark stopped reading
+     as a mark. */
+  --drawably-anchor-wash: rgb(255 159 28 / 0.45);
 }
 
 * {
