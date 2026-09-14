@@ -21,6 +21,11 @@ generation_instructions: >-
   sentences and tutor_write to a short board heading; the board elements carry the
   visual explanation. The canonical answer may appear only within replay steps,
   including their board elements.
+  Build each board as a sequence for that replay's own question. A value row may
+  repeat an earlier row exactly to keep it visible, or introduce a wholly new row,
+  but never mix a newly requested value with values copied from an earlier row.
+  Each later step should add or clarify the explanation already shown, so the board
+  reads as the tutor working through the question rather than a fresh worksheet.
   For each replay, set first_error.why_it_matters to one short sentence explaining why
   the error is wrong conceptually, distinct from the summary's description of what the
   error was; return null when there is nothing conceptual to add beyond the summary.
@@ -39,7 +44,11 @@ generation_instructions: >-
 stricter_guardrail_instruction: >-
   Return only the supplied replay items in their original order. Remove every internal
   identifier, URL, error code, misconception ID, count, routing claim, mastery claim,
-  and invented fact. Keep canonical answers inside tutor replay steps only.
+  and invented fact. Keep canonical answers inside tutor replay steps only. Every board
+  must explain its own supplied question and answer steps. Keep an earlier value row
+  exactly unchanged when it remains visible. Never combine a new requested value with
+  selected values from an earlier row, and never write a boxed rule that differs from
+  the supplied canonical answer.
 forbidden_student_text_patterns:
   - "ERR-"
   - "MIS-"

@@ -26,7 +26,7 @@ import {
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useWorkedExamplePlayer } from '@/hooks/useWorkedExamplePlayer';
 import { setTutorSpeechRate, stopTutorSpeech } from '@/lib/tts';
-import { boardDraw } from '@/lib/phase4Board';
+import { boardDraw, boardElementsThrough } from '@/lib/phase4Board';
 import { loadWorkArtifactPdf, type PdfOutcome } from '@/lib/workArtifactPdf';
 import { openingPageNo } from '@/lib/phase4Review';
 import { stagesFrom, totalDurationMs, elapsedMsAt, clock } from '@/lib/phase4Stages';
@@ -163,6 +163,10 @@ export default function TutorStage({
     : steps.length > 1 ? Math.max(0, index) / (steps.length - 1) : 0;
 
   const currentStep = replay.replay_steps[Math.max(0, Math.min(index, replay.replay_steps.length - 1))];
+  const boardElements = useMemo(
+    () => boardElementsThrough(replay.replay_steps, index),
+    [replay, index],
+  );
 
   const changeSpeed = useCallback(() => {
     const next = SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.length];
@@ -292,7 +296,7 @@ export default function TutorStage({
               // Remount per step so the board is rebuilt rather than diffed
               // element-by-element into the previous step's shape.
               key={currentStep?.sequence_no ?? index}
-              elements={currentStep?.board?.elements ?? []}
+              elements={boardElements}
               fallbackText={currentStep?.tutor_write}
             />
           ) : (
@@ -542,4 +546,3 @@ export default function TutorStage({
 const ctrl =
   'w-9 h-9 rounded-full border border-muted-gray text-slate-blue flex items-center justify-center ' +
   'hover:text-ink hover:border-slate-blue disabled:opacity-30 disabled:hover:border-muted-gray transition-colors';
-
