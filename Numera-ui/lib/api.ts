@@ -1970,6 +1970,7 @@ export interface CanvasSubmissionResult extends Phase3ResponseFields {
   question_type?: QuestionType | null;
   question_anchors?: QuestionAnchor[];
   tutor_canvas_actions?: TutorCanvasAction[];
+  question_opening_canvas_actions?: TutorCanvasAction[];
   tutor_turn_id?: string | null;
   expected_previous_tutor_turn_id?: string | null;
   expected_student_response?: string;

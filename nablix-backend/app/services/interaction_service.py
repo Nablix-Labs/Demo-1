@@ -2700,6 +2700,7 @@ def _response_from(
         highest_support_used="NONE" if phase3_silent else highest_support_used,
         consecutive_stuck_count=session.stuck_count,
         question_anchors=[] if phase3_silent else _question_anchors(session),
+        question_opening_canvas_actions=[],
         wrong_attempt_count=session.wrong_attempt_count,
         intervention_triggered=session.wrong_attempt_count >= 4,
         intervention=session.intervention,
@@ -4672,7 +4673,11 @@ async def _process_interaction(
             guided_question_opening(
                 resulting_question,
                 guided_question_type,
-                "Nice work. Here is the next question.",
+                "Here is the next question.",
+                cast(str | None, state_updates.get(
+                    "guided_start_tutor_prompt",
+                    turn_session.guided_start_tutor_prompt,
+                )),
             )
             if session.current_phase == "GUIDED_PRACTICE"
             else rules.messages.NEXT_QUESTION.format(
@@ -4922,6 +4927,11 @@ async def _process_interaction(
                 ),
             ],
             "tutor_canvas_actions": tutor.tutor_canvas_actions,
+            "question_opening_canvas_actions": (
+                updated_session.question_opening_canvas_actions
+                if question_advanced
+                else []
+            ),
             "question_anchors": [
                 *response.question_anchors,
                 *[
