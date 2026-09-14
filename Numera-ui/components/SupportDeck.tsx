@@ -88,10 +88,13 @@ export default function SupportDeck() {
               //
               // It decorates a real <button>, so the keyboard and screen-reader
               // behaviour is the element's own, not a reimplementation.
+              //
+              // No `tone` — the pen colour is themed once in globals.css, so
+              // this draws in the app's slate blue. `tone="neutral"` was the
+              // library's warm grey, which rendered brown beside the notes.
               <DrawablyButton
                 key={rung}
                 onClick={() => openSupportRung(rung)}
-                tone="neutral"
                 boil={0}
                 className="px-3 py-1.5 text-[11.5px] font-semibold text-slate-blue hover:text-ink"
               >
