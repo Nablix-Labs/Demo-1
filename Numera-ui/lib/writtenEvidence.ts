@@ -10,8 +10,7 @@
  * escalate support. Nothing about the student's understanding has been
  * established, because nothing was actually read.
  *
- * The frontend's obligation is the mirror of that: show the instruction to write
- * or type, do not auto-submit anything, and do not count it against the student
+ * The frontend's obligation is the mirror of that: show the instruction to write on the canvas, do not auto-submit anything, and do not count it against the student
  * locally. A silent WRITE turn is the worst outcome available — the student sat
  * through a turn where the tutor learned nothing and told them nothing, and the
  * natural reading is that they were ignored.
@@ -22,7 +21,7 @@
  */
 
 /** The handoff's own suggested wording (revised, frontend §5). */
-export const WRITE_FALLBACK_PROMPT = 'Write the rule on the canvas or type it below.';
+export const WRITE_FALLBACK_PROMPT = 'Write the rule on the canvas, then press Check.';
 
 export interface WrittenEvidenceFields {
   next_expected_input?: string | null;
