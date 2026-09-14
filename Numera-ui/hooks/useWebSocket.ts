@@ -80,6 +80,9 @@ function logFrame(direction: 'in' | 'out', msg: Record<string, unknown>): void {
 /** Reconnect back-off: base 3s, doubling per consecutive failure, capped. */
 const RETRY_BASE_MS = 3_000;
 const RETRY_MAX_MS = 30_000;
+/** Idle-frame interval. Well inside the shortest observed drop (55s). */
+const KEEPALIVE_MS = 20_000;
+
 /** After the watchdog's rescue `stop`, how long the server gets to answer it
  *  before the turn is declared failed to the student. */
 const RESCUE_GRACE_MS = 8_000;
@@ -87,6 +90,7 @@ const RESCUE_GRACE_MS = 8_000;
 export function useWebSocket(sessionId: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
   const watchdogRef = useRef<TurnWatchdog | null>(null);
+  const keepaliveRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const processingTimerRef = useRef<SpeechSettleTimer | null>(null);
   /** Pending reconnect timer. Held so cleanup can cancel it — an uncancelled
    *  one reopened sockets after unmount and, after a sessionId change, from a
@@ -399,6 +403,30 @@ export function useWebSocket(sessionId: string | null) {
       // refresh went and read the state that was already sitting on the
       // session record.
       void resyncSession();
+
+      // Keep the socket warm.
+      //
+      // A MITIGATION, not a diagnosis — I could not identify what closes it.
+      // What is ruled out: nginx (`proxy_read_timeout 86400` on
+      // /api/voice/stream) and this effect re-running (every dependency is
+      // stable — the three local callbacks close over nothing, the rest are
+      // zustand actions).
+      //
+      // What is established: it closed every 55-106s through Manjusha's whole
+      // lesson on 14 Sep, and audio frames stop flowing whenever the tutor is
+      // speaking or the turn is processing, which is exactly when those gaps
+      // fall. An idle socket being dropped somewhere in the path fits; a
+      // keepalive costs one small frame every 20s and removes that whole class
+      // of cause.
+      //
+      // Safe to send: the server dispatches on `type` and ignores anything it
+      // does not recognise (streaming_server.py:300) — no `else` branch, no
+      // error path.
+      if (keepaliveRef.current) clearInterval(keepaliveRef.current);
+      keepaliveRef.current = setInterval(() => {
+        if (wsRef.current !== ws || ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({ type: 'keepalive' }));
+      }, KEEPALIVE_MS);
     };
 
     ws.onmessage = (event: MessageEvent) => {
@@ -854,6 +882,10 @@ export function useWebSocket(sessionId: string | null) {
 
     ws.onclose = (e) => {
       if (wsRef.current !== ws) return; // an old socket dying is not news
+      // After the identity check, not before: a superseded socket closing must
+      // not clear the interval its replacement has already armed. The new
+      // socket's onopen clears whatever it inherits, so nothing leaks either.
+      if (keepaliveRef.current) { clearInterval(keepaliveRef.current); keepaliveRef.current = null; }
       console.log('[WS] closed', e.code, e.reason);
       // A turn was in flight — the student spoke and the reply can no longer
       // arrive on this socket. It used to vanish without a word; tell them.
@@ -907,6 +939,9 @@ export function useWebSocket(sessionId: string | null) {
       // screen and would reopen a listening turn on whatever the student
       // navigated to — including a phase that expects no voice input at all.
       tutorAudioStream.setOnIdle(null);
+      // The keepalive must die with the screen; an interval firing into a
+      // closed socket is harmless but an interval outliving the page is not.
+      if (keepaliveRef.current) { clearInterval(keepaliveRef.current); keepaliveRef.current = null; }
       const ws = wsRef.current;
       wsRef.current = null; // orphan it first so its handlers no-op
       ws?.close(1000, 'component unmount');
