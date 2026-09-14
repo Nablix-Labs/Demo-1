@@ -824,6 +824,64 @@ export async function resumeSession(): Promise<void> {
 }
 
 /**
+ * Re-read the live session mid-lesson, and apply it.
+ *
+ * This is what a student's page refresh does, without the refresh.
+ *
+ * Manjusha, 14 Sep: "it is not moving forward unless refreshed — initially I
+ * got stuck up after scaffold, got parallel example only at refresh. Then now
+ * after hint 1 hint 2 also is delivered after refresh."
+ *
+ * The VM logs for that session show the backend did its part: 07:47:38,
+ * `guided_canvas_actions_planned` with `action_types: ["SHOW_PARALLEL"]` and
+ * `validation_rejections: 0`; 07:54:09, a HINT on `SUPPORT_AND_RETRY`. The
+ * voice server logged "Text sent to frontend" for every one of those turns. The
+ * support was generated and it was sent — the screen never showed it.
+ *
+ * Rather than guess which field went missing between the wire and the store,
+ * this recovers the way the student already had to: GET /session carries the
+ * live state and is not subject to whatever the turn payload lost. See
+ * `numera-frontend-traps` — reading the session is the established repair for
+ * a turn payload that arrives stripped.
+ *
+ * Deliberately NOT `resumeSession`. That guards on `store.backendSession` and
+ * returns early once a session is loaded, because it exists to open a stored
+ * session on a cold start. A mid-lesson stall is the exact opposite case, and
+ * it would no-op precisely when it is needed.
+ *
+ * Two things it must not do, both of which would make a stall worse:
+ *  - overwrite a transcript that already has content, which is the student's
+ *    own conversation;
+ *  - speak. The rescue that calls this is already deciding what to say.
+ */
+export async function resyncSession(): Promise<void> {
+  if (!apiEnabled()) return;
+  const store = useNumeraStore.getState();
+  if (!store.sessionId) return;
+  try {
+    const rec = await getSession(store.sessionId, studentId());
+    const s = useNumeraStore.getState();
+    s.setBackendSession(rec);
+    syncBackendSession(rec);
+    // Support is the whole reason we are here — recovering the question and
+    // dropping the hint that prompted it would fix nothing the student can see.
+    if (rec.active_visual_cue) applyServedCue(rec.active_visual_cue);
+    if (s.transcript.length === 0) {
+      const restored = (rec.conversation_history ?? []).map((message) => ({
+        role: message.role === 'user' ? 'student' as const : 'ai' as const,
+        text: message.content,
+      }));
+      if (restored.length > 0) s.setTranscript(restored);
+    }
+  } catch (err) {
+    // A failed repair must never take the lesson down with it — the student is
+    // already stuck, and an exception here would replace a recoverable stall
+    // with a blank screen.
+    console.warn('[resync] could not re-read the session', err);
+  }
+}
+
+/**
  * One repair attempt per question id, so a question whose options genuinely do
  * not exist cannot put a GET on the wire on every render.
  */

@@ -37,7 +37,7 @@ import {
   acknowledgeRescueRender, advanceRescue,
   type QuestionType,
 } from '@/lib/api';
-import { resetSessionStart } from '@/hooks/useDemoTutor';
+import { resetSessionStart, resyncSession } from '@/hooks/useDemoTutor';
 import { applyInteractionSupport, acceptResponse } from '@/lib/interactionPresentation';
 import { voiceSupportFrame } from '@/lib/voiceSupportFrame';
 import { TurnWatchdog } from '@/lib/turnWatchdog';
@@ -324,13 +324,31 @@ export function useWebSocket(sessionId: string | null) {
         rescueGraceRef.current = null;
         const store = useNumeraStore.getState();
         if (store.currentTurnId !== armedTurnId) return; // something resolved it
-        // Keep the apology's id: replies have been observed landing AFTER this
-        // rescue (53s past utterance end, 10 Aug), and "Something went wrong"
-        // sitting above "Nice work!" reads as a contradiction. If that happens,
-        // the tutor_response handler retracts this bubble.
-        rescueMsgIdRef.current = addTranscriptMessage({ role: 'ai', text: voiceTurnFailedMessage() });
-        store.beginListeningTurn();
-        sendTurnContext();
+        // Read the live session before saying anything.
+        //
+        // A turn reaching here has produced no reply ON THIS SOCKET, which is
+        // not the same as the backend having done nothing. Manjusha, 14 Sep:
+        // "it is not moving forward unless refreshed… got parallel example only
+        // at refresh". The VM logs for that session show the backend planning
+        // SHOW_PARALLEL and serving a HINT, and the voice server logging "Text
+        // sent to frontend", for turns whose support never appeared. A refresh
+        // showed it, because GET /session carries the live state.
+        //
+        // So do what the refresh did. If the backend moved on, the student sees
+        // it and the apology below is never written — apologising for a turn
+        // that actually completed is the worst of both, leaving the support
+        // unread on the record AND telling them it failed.
+        void resyncSession().finally(() => {
+          const after = useNumeraStore.getState();
+          if (after.currentTurnId !== armedTurnId) return; // the resync moved us on
+          // Keep the apology's id: replies have been observed landing AFTER this
+          // rescue (53s past utterance end, 10 Aug), and "Something went wrong"
+          // sitting above "Nice work!" reads as a contradiction. If that happens,
+          // the tutor_response handler retracts this bubble.
+          rescueMsgIdRef.current = addTranscriptMessage({ role: 'ai', text: voiceTurnFailedMessage() });
+          after.beginListeningTurn();
+          sendTurnContext();
+        });
       }, RESCUE_GRACE_MS);
     });
 
@@ -354,8 +372,33 @@ export function useWebSocket(sessionId: string | null) {
       if (!useNumeraStore.getState().currentTurnId) {
         useNumeraStore.getState().beginListeningTurn();
       }
-      setVoiceStatus('listening');
+      // Only hand the floor back if the tutor is not still audible.
+      //
+      // This socket reconnects constantly — the VM logs for 14 Sep show it
+      // closing and reopening every 60-85s for the whole of Manjusha's lesson,
+      // which is an idle timeout in front of it, not a client decision. Each
+      // reopen ran this line unconditionally, so the mic was told to listen
+      // while TTS audio buffered from before the drop was still playing out of
+      // the speakers.
+      //
+      // That is not theoretical. 07:47:33, one turn after a reconnect:
+      //   Flux EndOfTurn ... word_conf=0.9998: 'Scaffolded support for t zero one.'
+      // 0.9998 is not a person talking into a laptop mic — that is the tutor's
+      // own synthesised audio, captured cleanly and transcribed back as the
+      // student's answer. The backend then judged it, failed the scaffold step
+      // and escalated to MAXIMUM_GUIDED_SUPPORT_PARALLEL, which is why a
+      // parallel example appeared for an answer the student never gave.
+      if (!useMicLevel.getState().aiSpeaking) setVoiceStatus('listening');
       sendTurnContext();
+      // Recover whatever the gap swallowed.
+      //
+      // A reply that lands while the socket is down is gone — the frame has
+      // nowhere to arrive. That is the other half of "it is not moving forward
+      // unless refreshed" (Manjusha, 14 Sep): the backend had served the hint
+      // or the parallel example, the socket was mid-reconnect, and only a page
+      // refresh went and read the state that was already sitting on the
+      // session record.
+      void resyncSession();
     };
 
     ws.onmessage = (event: MessageEvent) => {
