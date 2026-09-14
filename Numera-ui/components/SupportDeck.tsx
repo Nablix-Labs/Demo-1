@@ -21,6 +21,8 @@
 import { useShallow } from 'zustand/react/shallow';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { visibleRung, collapsedRungs, rungLabel, type DeckRung } from '@/lib/supportDeck';
+import { DrawablyButton } from 'drawably/react';
+import 'drawably/style.css';
 import HintNote from '@/components/HintNote';
 import VisualCue from '@/components/VisualCue';
 
@@ -74,16 +76,27 @@ export default function SupportDeck() {
           </div>
           <div className="flex flex-wrap gap-1.5">
             {earlier.map((rung) => (
-              <button
+              // Drawn rather than a CSS pill. These sit directly under the
+              // tutor's paper notes, and a crisp bordered chip beside a
+              // hand-drawn note read as a different product's control.
+              //
+              // `boil={0}` renders ONE static path instead of the library's
+              // default three-frame flicker. A chip that never stops moving
+              // beside a canvas a student is writing on competes with the
+              // writing; the sketch is the point here, the motion is not.
+              // (The library also freezes itself under prefers-reduced-motion.)
+              //
+              // It decorates a real <button>, so the keyboard and screen-reader
+              // behaviour is the element's own, not a reimplementation.
+              <DrawablyButton
                 key={rung}
                 onClick={() => openSupportRung(rung)}
-                className="rounded-full border border-muted-gray bg-white/90 px-3 py-1.5 text-[11.5px]
-                           font-semibold text-slate-blue shadow-sm transition-colors
-                           hover:border-slate-blue hover:text-ink
-                           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-learning-blue/50"
+                tone="neutral"
+                boil={0}
+                className="px-3 py-1.5 text-[11.5px] font-semibold text-slate-blue hover:text-ink"
               >
                 {rungLabel(rung)}
-              </button>
+              </DrawablyButton>
             ))}
           </div>
         </div>
