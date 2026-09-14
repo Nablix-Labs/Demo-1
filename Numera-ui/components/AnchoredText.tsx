@@ -95,6 +95,16 @@ export default function AnchoredText({
               </mark>
             </DrawablyHighlight>
             {segment.anchor.label && (
+              // Deliberately NOT drawn, though the wash beside it is.
+              // `DrawablyBadge` was tried here and is the wrong component: it
+              // hard-codes `Geist Mono, ui-monospace` at 12px, because a badge
+              // in that library is a kbd-style chip. This label is the tutor's
+              // words about a word — prose, not a code token — and in monospace
+              // inside a sentence it reads as machine output.
+              //
+              // The drawn box was also heavier than the mark it annotates,
+              // which inverts the hierarchy: the WORD is what the student
+              // should look at, and the label is the aside.
               <span
                 className="ml-1 align-middle rounded-full bg-highlight-amber/15 px-1.5 py-[1px] text-[10px] font-semibold tracking-wide text-slate-blue"
                 // Read out as part of the sentence it annotates, not as a
