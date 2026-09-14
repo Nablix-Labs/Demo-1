@@ -565,10 +565,7 @@ async def submit_canvas(
                     None
                     if (
                         updated_session.question_id != turn_session.question_id
-                        or (
-                            _is_complete_correct_canvas(ocr, turn_session.correct_answer)
-                            and tutor.evaluation == "CORRECT"
-                        )
+                        or _is_complete_correct_canvas(ocr, turn_session.correct_answer)
                     )
                     else updated_session.pending_canvas_submission_question_id
                 ),
