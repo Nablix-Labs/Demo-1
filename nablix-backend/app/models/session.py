@@ -105,8 +105,8 @@ class SessionStartRequest(BaseModel):
     student_id: StudentId
     # Saravanan's Student Model owns topic identity. When topic_code is sent it
     # IS the topic -- no lookup, so a new topic never needs a Nablix deploy.
-    # concept_id survives only as the RAG/Qdrant key; older clients that send it
-    # alone still resolve through settings.student_model_topic_codes.
+    # Older clients that send concept_id alone still resolve through
+    # settings.student_model_topic_codes.
     topic_code: ConceptId | None = None
     concept_id: ConceptId | None = None
     interaction_mode: InteractionMode
@@ -327,9 +327,9 @@ class SessionRecord(BaseModel):
     question_type: QuestionType | None = None
     question_id: QuestionId | None
     question_number: int
-    # Answer key served with the question (Qdrant payload or demo stub).
+    # Answer key served with the question.
     correct_answer: str | None = None
-    # Every question id served this session, for knowledge-base exclusion.
+    # Every question id served this session.
     served_question_ids: list[str] = Field(default_factory=list)
     guided_start_tutor_prompt: str | None = None
     canvas_submission_required: bool = False

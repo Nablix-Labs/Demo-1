@@ -500,8 +500,6 @@ def test_stepwise_interaction_hides_the_full_rescue_payload(monkeypatch) -> None
         use_mock_voice=True,
         use_mock_vision=True,
         use_openai_ai_engine=False,
-        qdrant_url="https://qdrant.test",
-        qdrant_api_key="test-key",
     )
     monkeypatch.setattr(provider, "get_settings", lambda: settings)
     monkeypatch.setattr(session_service, "get_settings", lambda: settings)

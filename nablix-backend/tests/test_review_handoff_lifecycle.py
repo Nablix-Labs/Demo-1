@@ -23,7 +23,7 @@ from app.adapters import provider, student_model
 from app.adapters.student_model import StudentModelServiceAdapter
 from app.core.config import Settings
 from app.main import app
-from app.models.adapters import AdapterContext, RAGResult, StudentModelResult, TutorResult
+from app.models.adapters import AdapterContext, StudentModelResult, TutorResult
 from app.models.session import SessionRecord
 from app.models.student_model_session import (
     StudentModelSessionEvent,
@@ -171,7 +171,7 @@ def harness(monkeypatch: pytest.MonkeyPatch) -> _Harness:
 
     async def correct_pipeline(
         context: AdapterContext,
-    ) -> tuple[RAGResult, StudentModelResult, TutorResult]:
+    ) -> tuple[StudentModelResult, TutorResult]:
         del context
         seen.tutor_calls += 1
         student = StudentModelResult(
@@ -199,7 +199,7 @@ def harness(monkeypatch: pytest.MonkeyPatch) -> _Harness:
             answer_value_confirmed=True,
             reasoning_complete=True,
         )
-        return RAGResult(documents=[], retrieval_confidence=0.0), student, tutor
+        return student, tutor
 
     def generate(request):
         del request

@@ -1,4 +1,4 @@
-"""Typed contracts exchanged with the tutor, RAG, student-model, and voice adapters.
+"""Typed contracts exchanged with the tutor, student-model, and voice adapters.
 
 These DTOs are the seam between the services and whatever sits behind an adapter
 (mock today, real HTTP later). Because they are Pydantic models, a malformed
@@ -87,10 +87,10 @@ class Phase2PromptContext(BaseModel):
 
 
 class AdapterContext(BaseModel):
-    """Shared input for the three text adapters (tutor, RAG, student model).
+    """Shared input for the tutor and student-model adapters.
 
-    All three answer the same question — "what is this student doing right now?"
-    — so they take one context instead of three near-identical request shapes.
+    Both answer the same question — "what is this student doing right now?" — so
+    they take one context instead of two near-identical request shapes.
     """
 
     session_id: str
@@ -134,19 +134,6 @@ class AdapterContext(BaseModel):
     phase3_allowed_error_definitions: list[dict[str, object]] = Field(default_factory=list)
 
 
-class RetrievedDocument(BaseModel):
-    """One piece of learning material returned by the RAG service."""
-
-    title: str
-    content: str
-    source: str
-
-
-class RAGResult(BaseModel):
-    documents: list[RetrievedDocument]
-    retrieval_confidence: float
-
-
 class StudentModelResult(BaseModel):
     """Response contract returned by Saravanan's Student Model service."""
 
@@ -160,7 +147,6 @@ class StudentModelResult(BaseModel):
 
 class TutorEngineRequest(BaseModel):
     context: AdapterContext
-    rag: RAGResult
     student: StudentModelResult
 
 

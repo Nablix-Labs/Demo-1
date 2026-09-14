@@ -47,7 +47,6 @@ from app.models.adapters import (
     ConversationState,
     ExpectedStudentResponse,
     Phase2PromptContext,
-    RAGResult,
     StudentModelResult,
     TutorAction,
     TutorResult,
@@ -205,7 +204,6 @@ _ADDITION_CHANGE_PATTERN: Final[re.Pattern[str]] = re.compile(
 )
 
 
-_EMPTY_RAG = RAGResult(documents=[], retrieval_confidence=0.0)
 _UNRELIABLE_EVIDENCE_MESSAGE = "Please write out that step so I can check it."
 _STALE_TURN_MESSAGE = (
     "The conversation has moved forward. Please use the latest tutor response."
@@ -549,16 +547,14 @@ def _evaluation_reason(tutor: TutorResult) -> EvaluationReasonCode:
 
 async def run_tutor_pipeline(
     context: AdapterContext,
-) -> tuple[RAGResult, StudentModelResult, TutorResult]:
-    """Run the shared RAG, student-model, and tutor-engine adapter sequence."""
+) -> tuple[StudentModelResult, TutorResult]:
+    """Run the shared student-model and tutor-engine adapter sequence."""
 
     adapters = get_adapters()
-    # Classify first: error_type / response_strategy / chosen hint_level are tutor
-    # outputs, so RAG can only target the right hint after evaluation.
     student = await adapters.student_model.assess(context)
-    tutor = await adapters.tutor.evaluate(context, _EMPTY_RAG, student)
+    tutor = await adapters.tutor.evaluate(context, student)
 
-    return _EMPTY_RAG, student, tutor
+    return student, tutor
 
 
 def _require_authored_canvas_confirmation(
@@ -624,7 +620,7 @@ async def process_answer_with_session_event(
             detail="Schema 3.0 session state is required for answer processing.",
         )
 
-    _, student, tutor = await run_tutor_pipeline(context)
+    student, tutor = await run_tutor_pipeline(context)
     tutor = _require_authored_canvas_confirmation(session, tutor)
     if tutor.requires_written_math_evidence:
         return student, tutor, None, None, session
@@ -3698,7 +3694,7 @@ async def _process_interaction(
 ) -> InteractionResponse | StaleTurnResponse:
     """Run a student interaction through the tutor pipeline and return the session view.
 
-    The raw RAG/student/tutor outputs still drive the response, but only the
+    The student-model and tutor outputs drive the response, but only the
     student-facing session fields are surfaced (per the module guide). The tutor
     still runs in full; its verdict fields just aren't echoed.
     """
@@ -4354,7 +4350,7 @@ async def _process_interaction(
             session,
         ) = await process_answer_with_session_event(context, session, access_token)
     else:
-        _, student, tutor = await run_tutor_pipeline(context)
+        student, tutor = await run_tutor_pipeline(context)
         tutor = _require_authored_canvas_confirmation(session, tutor)
         schema_content_response = None
         schema_response = None

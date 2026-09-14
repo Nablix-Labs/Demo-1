@@ -1,7 +1,7 @@
 """Mock safety adapter for pre-tutor checks.
 
 The safety service is intentionally adapter-shaped even while it is mock-only,
-so `InteractionService` can keep a separate preflight step before RAG and tutor
+so `InteractionService` can keep a separate preflight step before tutor
 generation. A future live safety provider should keep the same `check` result
 contract.
 """
