@@ -2255,8 +2255,8 @@ def typed_choice_selection(request: ClassificationRequest) -> str | None:
     if request.question_type != "CHOICE_WITH_EXPLANATION":
         return None
     choice = normalized_choice_response(request.student_input)
-    if len(choice) == 1 and choice.isalpha():
-        return choice
+    if len(choice) == 1 and choice in {"a", "b", "c", "d"}:
+        return choice.upper()
     matches = re.findall(
         r"(?:^\s*|\b(?:option|choose|chose|selected)\s+)([a-d])\b",
         request.student_input.casefold(),

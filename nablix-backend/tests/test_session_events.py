@@ -1746,6 +1746,7 @@ def test_diagnostic_and_orientation_lifecycle_uses_micro_skills(monkeypatch) -> 
 
         assert stuck.status_code == 200
         assert stuck.json()["attempt_count"] == 0
+        assert stuck.json()["tutor_canvas_actions"] == []
         if expected_stuck_count == 1:
             assert len(events) == event_count_before_stuck + 1
             assert events[-1]["event_type"] == "GUIDED_SUPPORT_REQUESTED"
