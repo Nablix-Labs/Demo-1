@@ -71,16 +71,18 @@ describe('deckRungs', () => {
   });
 
   it('never lets an unrecorded rung outrank one that was watched arriving', () => {
-    // A rung of unknown age must not claim "latest" from a walkthrough that
-    // just opened — otherwise a hint already on screen steals the view from the
-    // rescue the student was sent to.
+    // `deckRungs` is the arrival RECORD and still orders unrecorded rungs
+    // first, which is what stops a hint of unknown age claiming "latest".
+    // The rescue no longer competes for the column — it is presented on the
+    // canvas (see supportSurface.test.ts) — so the ordering is asserted here
+    // and the column's own choice is asserted below.
     const s = withCue(withHint({
       ...base,
       rescueSteps: [step('TUTOR_SOLVED')],
       supportDeck: ['TUTOR_SOLVED'],
     }));
     expect(deckRungs(s)).toEqual(['HINT', 'VISUAL_CUE', 'TUTOR_SOLVED']);
-    expect(visibleRung(s)).toBe('TUTOR_SOLVED');
+    expect(visibleRung(s)).toBe('VISUAL_CUE');
   });
 
   it('is empty in Phase 3, whatever arrived', () => {
@@ -128,16 +130,19 @@ describe('deckRungs — rescue', () => {
     expect(deckRungs(s)).toEqual(['TUTOR_SOLVED']);
   });
 
-  it('demotes the rungs above it instead of destroying them', () => {
-    // The change Manjusha asked for. Previously opening a rescue cleared the
-    // hint and cue outright, so a student could not re-read the hint.
+  it('leaves the rungs above it alone instead of destroying them', () => {
+    // The change Manjusha asked for on 5 Sep. Previously opening a rescue
+    // cleared the hint and cue outright, so a student could not re-read the
+    // hint. They survive — and now they do not even have to give up the
+    // column, because the rescue is presented on the canvas (7 Sep).
     const s = withCue(withHint({
       ...base,
       rescueSteps: [step('TUTOR_SOLVED')],
       supportDeck: ['HINT', 'VISUAL_CUE', 'TUTOR_SOLVED'],
     }));
-    expect(visibleRung(s)).toBe('TUTOR_SOLVED');
-    expect(collapsedRungs(s)).toEqual(['HINT', 'VISUAL_CUE']);
+    expect(deckRungs(s)).toContain('TUTOR_SOLVED');
+    expect(visibleRung(s)).toBe('VISUAL_CUE');
+    expect(collapsedRungs(s)).toEqual(['HINT']);
   });
 });
 
@@ -148,22 +153,24 @@ describe('visibleRung / collapsedRungs', () => {
     supportDeck: ['HINT', 'VISUAL_CUE', 'TUTOR_SOLVED'],
   }));
 
-  it('shows the latest when nothing is opened', () => {
-    expect(visibleRung(three)).toBe('TUTOR_SOLVED');
-    expect(collapsedRungs(three)).toEqual(['HINT', 'VISUAL_CUE']);
+  it('shows the latest of its own rungs when nothing is opened', () => {
+    // "Latest" is latest IN THE COLUMN. The rescue in this fixture is on the
+    // canvas and cannot be the answer here.
+    expect(visibleRung(three)).toBe('VISUAL_CUE');
+    expect(collapsedRungs(three)).toEqual(['HINT']);
   });
 
   it('shows the opened chip instead', () => {
     const s = { ...three, openedRung: 'HINT' as DeckRung };
     expect(visibleRung(s)).toBe('HINT');
-    expect(collapsedRungs(s)).toEqual(['VISUAL_CUE', 'TUTOR_SOLVED']);
+    expect(collapsedRungs(s)).toEqual(['VISUAL_CUE']);
   });
 
   it('falls back to the latest when the opened rung is stale', () => {
     // The student opened a hint; the backend then cleared it. An empty lane is
     // not an answer to "show me that again".
     const s: DeckState = { ...three, visibleHint: null, openedRung: 'HINT' };
-    expect(visibleRung(s)).toBe('TUTOR_SOLVED');
+    expect(visibleRung(s)).toBe('VISUAL_CUE');
   });
 
   it('shows nothing but keeps every chip once the student puts the card away', () => {
@@ -172,7 +179,7 @@ describe('visibleRung / collapsedRungs', () => {
     // would have lost.
     const s: DeckState = { ...three, deckCollapsed: true };
     expect(visibleRung(s)).toBeNull();
-    expect(collapsedRungs(s)).toEqual(['HINT', 'VISUAL_CUE', 'TUTOR_SOLVED']);
+    expect(collapsedRungs(s)).toEqual(['HINT', 'VISUAL_CUE']);
   });
 
   it('leaves no chips when only one rung is held', () => {

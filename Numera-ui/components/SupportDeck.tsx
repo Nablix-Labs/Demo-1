@@ -23,8 +23,6 @@ import { useNumeraStore } from '@/store/useNumeraStore';
 import { visibleRung, collapsedRungs, rungLabel, type DeckRung } from '@/lib/supportDeck';
 import HintNote from '@/components/HintNote';
 import VisualCue from '@/components/VisualCue';
-import RescueNote from '@/components/RescueNote';
-import RescueSteps from '@/components/RescueSteps';
 
 function Card({ rung }: { rung: DeckRung }) {
   switch (rung) {
@@ -32,19 +30,14 @@ function Card({ rung }: { rung: DeckRung }) {
       return <HintNote />;
     case 'VISUAL_CUE':
       return <VisualCue />;
-    // One rung, two implementations. Both are mounted because only one can ever
-    // have content — RescueNote stands down whenever a stepwise step exists
-    // (lib/rescueMode) — and that precedence is load-bearing: the legacy payload
-    // carries every step including the answer the stepwise walkthrough is
-    // releasing one at a time.
+    // Presented on the CANVAS, not here — see `railRungs`. `visibleRung` can no
+    // longer return either, so this is unreachable; it stays as an explicit
+    // answer rather than a fallthrough, because a new rung added to DeckRung
+    // should fail the switch's exhaustiveness check and not land in the column
+    // by default.
     case 'PARALLEL_EXAMPLE':
     case 'TUTOR_SOLVED':
-      return (
-        <>
-          <RescueNote />
-          <RescueSteps />
-        </>
-      );
+      return null;
   }
 }
 

@@ -100,7 +100,13 @@ export default function VisualCue() {
         <button
           onClick={collapseSupportDeck}
           aria-label={`Hide ${label.toLowerCase()}`}
-          className="absolute -right-1 -top-1 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-white/70 text-[#8A6407] shadow-sm hover:bg-white"
+          // Inside the paper, not hanging off it. `-right-1 -top-1` put it 4px
+          // beyond the note's box, which read as a floating control while the
+          // card floated too — in the reserved support column it pressed
+          // against the rail's edge and looked detached from the note it
+          // closes. `right-3` clears StickyNote's clip path, whose top edge
+          // stops at 96% of the box.
+          className="absolute right-3 top-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-white/70 text-[#8A6407] shadow-sm hover:bg-white"
         >
           <X size={13} strokeWidth={2.2} />
         </button>

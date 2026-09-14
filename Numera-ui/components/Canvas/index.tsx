@@ -15,7 +15,7 @@ import dynamic from 'next/dynamic';
 import { useShallow } from 'zustand/react/shallow';
 import { useNumeraStore, type CanvasExporter } from '@/store/useNumeraStore';
 import { isPhase3 } from '@/lib/phase3';
-import { rescueActive } from '@/lib/rescueMode';
+import { rescueActive, legacyRescueVisible } from '@/lib/rescueMode';
 import { useAuthStore, isConsentActive } from '@/store/useAuthStore';
 import type { SchemaQuestionOption } from '@/lib/api';
 import { useDemoTutor } from '@/hooks/useDemoTutor';
@@ -23,6 +23,8 @@ import { gridBackground, GRID_OPTIONS } from '@/lib/canvasGrid';
 import { tutorSay } from '@/lib/tutorSpeech';
 import QuestionDisplay from '@/components/QuestionDisplay';
 import ScaffoldPanel from '@/components/ScaffoldPanel';
+import RescueNote from '@/components/RescueNote';
+import RescueSteps from '@/components/RescueSteps';
 import Toolbar from './Toolbar';
 import TeachBack from './TeachBack';
 import { displayedQuestionNumber } from '@/lib/questionNumber';
@@ -74,6 +76,10 @@ export default function CanvasStage() {
   // carries both, the store's clear is immediately overwritten and the render
   // gate is the only thing left holding the rule.
   const rescueOn = useNumeraStore(rescueActive);
+  // Either implementation — stepwise steps or the legacy payload. The column
+  // used to answer this question; the canvas owns it now.
+  const legacyRescueOn = useNumeraStore(legacyRescueVisible);
+  const rescueVisible = rescueOn || legacyRescueOn;
   const visualCueType = useNumeraStore((s) => s.visualCueType);
   const visualCueDescription = useNumeraStore((s) => s.visualCueDescription);
   const setVisualCueVisible = useNumeraStore((s) => s.setVisualCueVisible);
@@ -253,6 +259,33 @@ export default function CanvasStage() {
       {!silentPhase3 && !rescueOn && activeScaffold && (
         <div className="mt-3 w-[min(560px,100%)]">
           <ScaffoldPanel scaffold={activeScaffold} />
+        </div>
+      )}
+
+      {/* The worked example, on the canvas rather than in the support column
+          (Manjusha, 7 Sep: "the rest of the stuff's should come in the canvas
+          ... parallel ex, tutor solved").
+
+          It takes the slot the scaffold vacates, which costs nothing: the two
+          are already mutually exclusive — the line above stands the scaffold
+          down whenever a rescue is on — so there was never a moment both wanted
+          it.
+
+          This is where it belongs. A TUTOR_SOLVED rescue writes its steps onto
+          the tutor layer of THIS canvas (`rescueSlot`, `actionMarks`), so the
+          panel that counts those steps and offers "Return to original" now sits
+          on the same surface as the writing it is talking about. In the column
+          it sat over that writing and clipped it mid-word.
+
+          Both components are mounted because only one can ever have content —
+          RescueNote stands down whenever a stepwise step exists (lib/rescueMode)
+          — and that precedence is load-bearing: the legacy payload carries every
+          step including the answer the stepwise walkthrough is releasing one at
+          a time. */}
+      {!silentPhase3 && rescueVisible && (
+        <div className="mt-3 w-[min(560px,100%)]">
+          <RescueNote />
+          <RescueSteps />
         </div>
       )}
       </div>

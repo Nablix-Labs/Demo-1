@@ -170,14 +170,34 @@ export function deckRungs(state: DeckState): DeckRung[] {
 }
 
 /**
- * The one rung to render: the chip the student opened, else the latest.
+ * The rungs the SUPPORT COLUMN presents: the hint and the visual cue.
+ *
+ * A worked example — `PARALLEL_EXAMPLE` or `TUTOR_SOLVED` — is presented on the
+ * canvas instead (Manjusha, 7 Sep: "the rest of the stuff's should come in the
+ * canvas"). It is the tutor doing the maths, so it belongs on the surface the
+ * maths is on, and the column is the wrong shape for it: a walkthrough is wide
+ * and long, a hint is a sentence.
+ *
+ * They stay in `DeckRung` and in `supportDeck` regardless. The arrival record
+ * is what the ladder escalates through, and dropping a rescue from it would
+ * lose the fact that the student was offered one. This filters presentation
+ * only.
+ */
+const RAIL_RUNGS: readonly DeckRung[] = ['HINT', 'VISUAL_CUE'];
+
+export function railRungs(state: DeckState): DeckRung[] {
+  return deckRungs(state).filter((rung) => RAIL_RUNGS.includes(rung));
+}
+
+/**
+ * The one rung the column renders: the chip the student opened, else the latest.
  *
  * An `openedRung` whose content has gone falls back to the latest rather than
  * rendering nothing — the student asked to see something, and an empty lane is
  * not an answer.
  */
 export function visibleRung(state: DeckState): DeckRung | null {
-  const rungs = deckRungs(state);
+  const rungs = railRungs(state);
   if (rungs.length === 0) return null;
   // Put away by the student. The chips stay — `collapsedRungs` derives from
   // this, so every held rung falls into the strip with nothing to special-case.
@@ -190,7 +210,9 @@ export function visibleRung(state: DeckState): DeckRung | null {
 /** The rest, for the "Earlier help" strip, in the order they were offered. */
 export function collapsedRungs(state: DeckState): DeckRung[] {
   const showing = visibleRung(state);
-  return deckRungs(state).filter((rung) => rung !== showing);
+  // From the rail's own rungs, so a worked example never becomes a chip that
+  // reopens a card this column no longer renders.
+  return railRungs(state).filter((rung) => rung !== showing);
 }
 
 /**
