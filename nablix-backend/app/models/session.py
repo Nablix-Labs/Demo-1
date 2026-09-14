@@ -332,6 +332,7 @@ class SessionRecord(BaseModel):
     # Every question id served this session, for knowledge-base exclusion.
     served_question_ids: list[str] = Field(default_factory=list)
     guided_start_tutor_prompt: str | None = None
+    canvas_submission_required: bool = False
     question_opening_canvas_actions: list[TutorCanvasAction] = Field(default_factory=list)
     question_anchors: list[QuestionTextAnchor] = Field(default_factory=list)
     interaction_mode: InteractionMode

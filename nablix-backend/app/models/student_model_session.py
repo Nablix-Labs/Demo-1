@@ -89,6 +89,7 @@ class AnswerSpec(BaseModel):
 class GuidedStartPrompt(BaseModel):
     tutor_prompt: str
     canvas_action: str | None = None
+    canvas_submission_required: bool = False
 
 
 class TutorQuestionView(BaseModel):

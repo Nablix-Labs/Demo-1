@@ -561,6 +561,35 @@ async def run_tutor_pipeline(
     return _EMPTY_RAG, student, tutor
 
 
+def _require_authored_canvas_confirmation(
+    session: SessionRecord,
+    tutor: TutorResult,
+) -> TutorResult:
+    """Keep configured guided-rule questions open until canvas work is checked."""
+
+    if not session.canvas_submission_required or tutor.requires_written_math_evidence:
+        return tutor
+    if not tutor.answer_value_confirmed:
+        return tutor
+    rules = load_classifier_rules()
+    instruction = rules.guided_learning.critical_thinking.written_rule_prompt
+    message = f"{tutor.tutor_message.rstrip()} {instruction}"
+    return tutor.model_copy(
+        update={
+            "evaluation": "PARTIALLY_CORRECT",
+            "response_strategy": "CLARIFY",
+            "tutor_message": message,
+            "tutor_message_voice": message,
+            "attempt_increment": 0,
+            "recommended_conversation_action": "REQUEST_CLARIFICATION",
+            "question_completed": False,
+            "reasoning_complete": False,
+            "requires_written_math_evidence": True,
+            "write_instruction": instruction,
+        }
+    )
+
+
 async def process_answer_with_session_event(
     context: AdapterContext,
     session: SessionRecord,
@@ -596,6 +625,7 @@ async def process_answer_with_session_event(
         )
 
     _, student, tutor = await run_tutor_pipeline(context)
+    tutor = _require_authored_canvas_confirmation(session, tutor)
     if tutor.requires_written_math_evidence:
         return student, tutor, None, None, session
     if (
@@ -4325,6 +4355,7 @@ async def _process_interaction(
         ) = await process_answer_with_session_event(context, session, access_token)
     else:
         _, student, tutor = await run_tutor_pipeline(context)
+        tutor = _require_authored_canvas_confirmation(session, tutor)
         schema_content_response = None
         schema_response = None
     tutor = tutor.model_copy(update={"safety_check": safety_check})

@@ -128,6 +128,7 @@ class QuestionUpdates(TypedDict):
     correct_answer: str | None
     guided_start_tutor_prompt: str | None
     guided_start_canvas_action: str | None
+    canvas_submission_required: bool
     served_question_ids: NotRequired[list[str]]
 
 
@@ -819,6 +820,7 @@ async def start_session(
         correct_answer=question_updates["correct_answer"],
         served_question_ids=question_updates.get("served_question_ids", []),
         guided_start_tutor_prompt=question_updates["guided_start_tutor_prompt"],
+        canvas_submission_required=question_updates["canvas_submission_required"],
         question_anchors=opening_anchors,
         question_opening_canvas_actions=opening_actions,
         interaction_mode=request.interaction_mode,
@@ -1045,6 +1047,7 @@ def _question_updates(
             "correct_answer": None,
             "guided_start_tutor_prompt": None,
             "guided_start_canvas_action": None,
+            "canvas_submission_required": False,
         }
     current_question_id = _payload_phase_state(event).current_question_id
     questions = payload.question_set.questions
@@ -1102,6 +1105,11 @@ def _question_updates(
             current.tutor_view.guided_start_prompt.canvas_action
             if current.tutor_view.guided_start_prompt is not None
             else None
+        ),
+        "canvas_submission_required": (
+            current.tutor_view.guided_start_prompt.canvas_submission_required
+            if current.tutor_view.guided_start_prompt is not None
+            else False
         ),
         "served_question_ids": [question.question_id for question in questions],
     }
