@@ -45,13 +45,13 @@ export const PHASE_META: Record<
   },
   orientation: {
     label: 'Orientation',
-    href: '/orientation/algebra',
+    href: '/orientation/?topic=algebra',
     cta: 'Watch the orientation',
     blurb: 'A short concept video before you start practising.',
   },
   teach: {
     label: 'Teacher Mode',
-    href: '/teach/algebra',
+    href: '/teach/?topic=algebra',
     cta: 'Teach it back',
     blurb: 'Explain the idea back to Numera in your own words.',
   },

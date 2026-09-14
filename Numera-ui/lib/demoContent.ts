@@ -378,7 +378,7 @@ export function orientationVideoForTopicCode(topicCode: string | null | undefine
  * simulated player, no file for it yet), statistics → key points.
  *
  * Only the FIRST algebra video is reachable today. The other five belong to
- * algebra subtopics, and orientation routes by topic (`/orientation/algebra`),
+ * algebra subtopics, and orientation routes by topic (`/orientation/?topic=algebra`),
  * not subtopic — so serving 02–06 needs subtopic-level routing that doesn't
  * exist yet.
  */

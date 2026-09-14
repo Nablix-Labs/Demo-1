@@ -41,9 +41,9 @@ const SCREENS: Screen[] = [
   { path: '/restricted', label: 'Restricted', group: 'Pre-auth' },
 
   { path: '/diagnostic', label: 'Diagnostic — picker', group: 'Learning flow' },
-  { path: '/diagnostic/statistics', label: 'Diagnostic — topic', group: 'Learning flow' },
-  { path: '/orientation/statistics', label: 'Orientation', group: 'Learning flow' },
-  { path: '/teach/statistics', label: 'Teach back', group: 'Learning flow' },
+  { path: '/topic-diagnostic/?topic=statistics', label: 'Diagnostic — topic', group: 'Learning flow' },
+  { path: '/orientation/?topic=statistics', label: 'Orientation', group: 'Learning flow' },
+  { path: '/teach/?topic=statistics', label: 'Teach back', group: 'Learning flow' },
   { path: '/', label: 'Guided lesson', group: 'Learning flow' },
   { path: '/practice', label: 'Independent practice', group: 'Learning flow' },
   { path: '/review', label: 'Review', group: 'Learning flow' },

@@ -34,15 +34,28 @@ export const FORWARD: FlowStage[] = [
   'review',
 ];
 
-/** Where a stage lives in the app. */
+/**
+ * Where a stage lives in the app.
+ *
+ * The three topic-scoped screens carry the topic as `?topic=`, not as a path
+ * segment. This is a static export and topic ids are backend curriculum codes
+ * from an open-ended set, so a dynamic segment has no HTML and no RSC payload
+ * on disk for any real topic — and the App Router fetches that payload on a
+ * client-side push, not just on a refresh. See components/TopicParamRoute for
+ * what that produced on the deployed build.
+ *
+ * `topicId` is encoded: it comes from the Student Model and nothing guarantees
+ * it is URL-safe.
+ */
 export function routeFor(stage: FlowStage, topicId: string): string {
+  const topic = encodeURIComponent(topicId);
   switch (stage) {
     case 'topic-diagnostic':
-      return `/diagnostic/${topicId}`;
+      return `/topic-diagnostic/?topic=${topic}`;
     case 'orientation':
-      return `/orientation/${topicId}`;
+      return `/orientation/?topic=${topic}`;
     case 'teach':
-      return `/teach/${topicId}`;
+      return `/teach/?topic=${topic}`;
     case 'guided':
       return '/';
     case 'practice':
