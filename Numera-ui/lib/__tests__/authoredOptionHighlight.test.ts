@@ -2,11 +2,12 @@
  * The authored opening action for a choice question.
  *
  * Q-T01-004 on the VM: `authored_canvas_targets_not_in_question` on every turn.
- * The question is stored as "Which is the general rule: A) 12 + 4 or B) n + 4?"
- * and Student Model serves the stem apart from the options, so the backend's
- * grounding — which only looked at the stem — never found "n + 4" and dropped
+ * The authored action is "Highlight n in n+4 and 12 in 12+4 for comparison" and
+ * Student Model serves the stem apart from the options, so the backend's
+ * grounding — which only looked at the stem — found neither context and dropped
  * the action. It now grounds against the options too and emits the
- * QUESTION_OPTION action this store already knows how to render.
+ * QUESTION_OPTION actions this store already knows how to render: BOTH options,
+ * because the author asked for a comparison.
  *
  * What is asserted here is the client half of that contract: given the action
  * the backend now sends, the option is highlighted, and an action naming an
@@ -44,6 +45,22 @@ describe('an authored opening action that names an option', () => {
   it('highlights that option', () => {
     store().applyTutorCanvasActions([OPTION_B_HIGHLIGHT]);
     expect(store().tutorOptionActionIds).toEqual(['Q-T01-004:OPTION:B']);
+  });
+
+  it('highlights both options when the action names both', () => {
+    // The real Q-T01-004 shape: two QUESTION_OPTION actions in one opening.
+    store().applyTutorCanvasActions([
+      {
+        ...OPTION_B_HIGHLIGHT,
+        action_id: 'AUTHORED:Q-T01-004:OPTION:A:HIGHLIGHT',
+        target_object_id: 'Q-T01-004:OPTION:A',
+      } as TutorCanvasAction,
+      OPTION_B_HIGHLIGHT,
+    ]);
+    expect(store().tutorOptionActionIds).toEqual([
+      'Q-T01-004:OPTION:A',
+      'Q-T01-004:OPTION:B',
+    ]);
   });
 
   it('is ignored when the option is not one this question serves', () => {
