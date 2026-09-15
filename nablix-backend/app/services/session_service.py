@@ -464,7 +464,7 @@ def independent_practice_is_silent(session: SessionRecord) -> bool:
     topic before either path reaches a planner.
     """
 
-    return session.current_phase == "INDEPENDENT_PRACTICE"
+    return session.current_phase == "INDEPENDENT_PRACTICE" and session.question_id is not None
 
 
 def intervention_response_updates(session: SessionRecord) -> dict[str, object]:
@@ -2990,6 +2990,8 @@ async def update_interaction_state(
             **transition_updates,
         }
     )
+    if current_phase == "INDEPENDENT_PRACTICE" and session.question_id is None:
+        updated_session = updated_session.model_copy(update=_INTERVENTION_UI_FLAGS)
     if session.intervention is not None:
         updated_session = updated_session.model_copy(update={
             **_INTERVENTION_UI_FLAGS,

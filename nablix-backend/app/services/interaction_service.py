@@ -2729,7 +2729,7 @@ def _response_from(
     )
     phase3_attempt = _phase3_terminal_attempt(stored_event)
     phase3_silent = (
-        session.current_phase == "INDEPENDENT_PRACTICE"
+        independent_practice_is_silent(session)
         and previous_phase != "GUIDED_PRACTICE"
         # Silence exists to keep the answer key off a live question. A halted
         # topic has no question -- the projected payload is the §11 popup or
@@ -2738,6 +2738,9 @@ def _response_from(
         # is about.
         and session.intervention is None
     )
+    if session.current_phase == "INDEPENDENT_PRACTICE" and session.question_id is None:
+        message = session.message
+        message_voice = session.message
     # The panel flag and the step it needs are updated by different code paths:
     # `_completed_scaffold_state` clears the ids when a scaffold finishes but
     # never lowers the flag, and every later turn carries the raised flag
@@ -5073,8 +5076,8 @@ async def _process_interaction(
                 _evaluation_reason(tutor)
             ),
             "routing_reason_code": (
-                schema_content_response.routing.reason_code
-                if schema_content_response is not None
+                updated_session.student_model_event.routing.reason_code
+                if updated_session.student_model_event is not None
                 else None
             ),
             "support_reason_code": (
@@ -5185,7 +5188,7 @@ async def _process_interaction(
             "phase3_review_evidence": tutor.phase3_review_evidence,
         }
     )
-    if independent_practice_is_silent(turn_session):
+    if independent_practice_is_silent(updated_session):
         response = response.model_copy(
             update={
                 "message": (
