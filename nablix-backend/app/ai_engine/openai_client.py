@@ -297,6 +297,26 @@ class OpenAIGuidedWording(StrictSchema):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
+def guided_wording_schema(
+    wording_context: dict[str, object],
+) -> dict[str, object]:
+    """Require replacement support when the validated turn needs it."""
+
+    schema = OpenAIGuidedWording.model_json_schema()
+    if (
+        wording_context.get("assessment") == "INCORRECT"
+        and wording_context.get("support_relevance")
+        in {"UNMAPPED", "MISMATCHED"}
+    ):
+        schema["properties"]["generated_support_text"] = {
+            "title": "Generated Support Text",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 280,
+        }
+    return schema
+
+
 @dataclass(frozen=True)
 class OpenAIUsageMetrics:
     cached_tokens: int
@@ -631,7 +651,7 @@ class OpenAIAIEngineClient:
 
         content = self._request_guided_json(
             name="guided_fact_budget_wording",
-            schema=OpenAIGuidedWording.model_json_schema(),
+            schema=guided_wording_schema(wording_context),
             system_prompt=system_prompt,
             user_payload=wording_context,
         )

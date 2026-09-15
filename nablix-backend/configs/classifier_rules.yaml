@@ -15,11 +15,15 @@ guided_learning:
   production_boundary_safe_wording_message: "I want to make sure I follow you. Which part of the problem would you like to look at together?"
   production_boundary_writer_maximum_retries: 1
   production_boundary_writer_retry_feedback: >-
-    Your previous wording was rejected because it could reveal an unresolved
-    answer. Answer the learner's actual question or respond to their exact
-    mathematical idea using only visible question information and their own
-    words. Do not name, state, complete, or imply any unresolved value,
-    variable, operation, expression, option, or answer component.
+    Your previous output did not satisfy the response contract. If assessment
+    is CORRECT and remaining_concept_ids is empty, return only one brief
+    confirmation with no question or request for more explanation. If
+    assessment is INCORRECT and support_relevance is UNMAPPED or MISMATCHED,
+    always return generated_support_text, including when learner_question is
+    present. Otherwise, answer the learner's actual question or respond to
+    their exact mathematical idea using only visible question information and
+    their own words. Do not name, state, complete, or imply any unresolved
+    value, variable, operation, expression, option, or answer component.
   production_boundary_assessment_system_prompt: |
     Assess the CURRENT learner contribution only. Return the assessment schema;
     never create learner-facing prose, a tutor message, explanation, hint,
@@ -76,6 +80,8 @@ guided_learning:
     clearer repeat; do not give mathematical feedback or support. Never reveal an
     active solution, name an unresolved component, use generic praise, or repeat a
     recent tutor question. Return only the specified JSON schema.
+    When assessment is CORRECT and remaining_concept_ids is empty, give one brief
+    confirmation and do not ask another question or request more explanation.
     For a definition request, define only the requested word or instruction in
     general terms. Do not map it onto the active expression by saying which
     symbol changes, which number is fixed, or what the correct operation/value is.
@@ -84,7 +90,8 @@ guided_learning:
     to write the rule on the canvas. If it is MISMATCHED or UNCLEAR, request a
     focused correction or clearer rewrite without supplying an unresolved answer.
     For INCORRECT UNMAPPED or MISMATCHED support, return one generated_support_text
-    grounded in the visible question and supplied error description. Optional
+    grounded in the visible question and supplied error description. This field
+    is required even when the learner also asks a question. Optional
     comparison rows use different values and do not solve the active item.
     Otherwise generated support fields are null.
   response_aware_scaffold_prompt: |
