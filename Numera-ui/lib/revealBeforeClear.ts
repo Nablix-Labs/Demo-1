@@ -16,18 +16,24 @@
  *
  * So: apply the marks against the question they describe, hold them briefly,
  * then let the phase change land.
+ *
+ * ── Why the hold is no longer a constant ───────────────────────────────────
+ *
+ * It used to be a flat 900ms, picked as "long enough to read a short
+ * annotation". That is long enough to READ one and not long enough to WRITE
+ * one: `useTutorReveal` takes `max(700, chars × 95)`ms per text mark, so an
+ * eighteen-character confirmation takes about 1.7s and a two-mark one nearly
+ * four. The phase change landed at 900ms and cut the tutor off mid-word.
+ *
+ * That is issue #304 — "Tutor writes on canvas to confirm what the student said
+ * but with out completing immediately moves to next question /sections" — which
+ * reads as the backend advancing too early and is in fact this number.
+ *
+ * The hold now comes from `lib/tutorWritingTime.ts`, which is also what drives
+ * the animation, so the two cannot disagree again.
  */
 
-/**
- * How long the completed question's marks stay up before the board clears.
- *
- * Long enough to read a short annotation and connect it to the work it points
- * at; short enough that it reads as the end of the turn rather than a stall.
- * Deliberately the same order as the transition dwell the diagnostic already
- * uses for its tutor lines (MIN_DWELL, 900ms) — the two are the same kind of
- * pause and should not feel different.
- */
-export const REVEAL_MS = 900;
+import { MAX_HOLD_MS } from '@/lib/tutorWritingTime';
 
 export interface RevealDecision {
   /** Apply these against the question they describe, before anything clears. */
@@ -37,15 +43,22 @@ export interface RevealDecision {
 }
 
 /**
- * Should this reply's marks be shown before the phase change clears them?
+ * Should this reply's marks be shown before the phase change clears them, and
+ * for how long?
  *
- * Only when there is something to show AND the board is actually about to be
+ * `writingMs` is what the tutor still owes on the board — see
+ * `outstandingWritingMs`. Zero covers three different "nothing to wait for"
+ * cases at once, which is why it is passed as a duration rather than a count:
+ * no marks at all, marks that have already finished writing, and reduced
+ * motion, where everything is drawn instantly.
+ *
+ * Held only when there is writing left AND the board is actually about to be
  * wiped. Holding the phase change on a turn that changes no question would
- * delay the next question for no reason, and holding it on a turn with no marks
- * would be a pause with nothing in it.
+ * delay the next question for no reason, and holding it on a turn with nothing
+ * being written would be a pause with nothing in it.
  */
 export function revealDecision(
-  actionCount: number,
+  writingMs: number,
   currentQuestionId: string | null,
   nextQuestionId: string | null | undefined,
 ): RevealDecision {
@@ -55,6 +68,6 @@ export function revealDecision(
     && currentQuestionId !== null
     && nextQuestionId !== currentQuestionId;
 
-  const reveal = actionCount > 0 && questionChanging;
-  return { reveal, holdMs: reveal ? REVEAL_MS : 0 };
+  const reveal = writingMs > 0 && questionChanging;
+  return { reveal, holdMs: reveal ? Math.min(writingMs, MAX_HOLD_MS) : 0 };
 }

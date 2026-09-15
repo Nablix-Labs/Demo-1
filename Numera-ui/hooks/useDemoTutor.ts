@@ -47,6 +47,8 @@ import {
 } from '@/lib/interactionPresentation';
 import { opensRescue } from '@/lib/rescueTranscript';
 import { revealDecision } from '@/lib/revealBeforeClear';
+import { outstandingWritingMs } from '@/lib/tutorWritingTime';
+import { useTutorReveal } from '@/store/useTutorReveal';
 import { refreshedRecord } from '@/lib/sessionRecordRefresh';
 import { sessionEndSummary, storeEndedSession } from '@/lib/sessionEnd';
 import { useNumeraStore, type TrailKind, type TutorCanvasAction } from '@/store/useNumeraStore';
@@ -540,10 +542,17 @@ export function syncBackendSession(response: {
   };
 
   // When this reply both annotates the finished work and moves the student on,
-  // hold the board briefly so the annotation is actually seen. Without it the
-  // marks are added and cleared in the same tick.
+  // hold the board until the writing has FINISHED, so the annotation is
+  // actually seen. Without any hold the marks are added and cleared in the same
+  // tick; with the flat 900ms this used to use, the tutor was cut off mid-word
+  // (#304) — a confirmation like "Start: n" takes about 1.7s to write.
   const { reveal, holdMs } = revealDecision(
-    tutorActions.length, store.activeQuestionId, response.question_id,
+    outstandingWritingMs(
+      useNumeraStore.getState().tutorElements,
+      useTutorReveal.getState().progress,
+    ),
+    store.activeQuestionId,
+    response.question_id,
   );
   if (reveal) window.setTimeout(applyPhase, holdMs);
   else applyPhase();

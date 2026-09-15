@@ -10,7 +10,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { applyVoiceSessionFrame } from '@/lib/voiceSessionSync';
 import { useNumeraStore } from '@/store/useNumeraStore';
-import { REVEAL_MS } from '@/lib/revealBeforeClear';
+import { outstandingWritingMs } from '@/lib/tutorWritingTime';
 
 const OPTIONS = [
   { option_id: 'A', text: 'n + 4' },
@@ -88,15 +88,20 @@ describe('the phase change', () => {
     expect(useNumeraStore.getState().activeQuestionId).toBe('Q2');
   });
 
-  it('is held when the turn also annotated the work it is leaving', () => {
+  it('is held while the tutor is still writing on the board it is leaving', () => {
     // Without the hold the marks are added and cleared in the same tick, and
-    // the student sees a blank board instead of the point being made.
+    // the student sees a blank board instead of the point being made. The hold
+    // is as long as the writing still owes -- a flat one cut the tutor off
+    // mid-word (#304).
+    const mark = { id: 'M1', kind: 'text' as const, text: 'Start: n, Gain: +5', x: 0.1, y: 0.2 };
+    useNumeraStore.setState({ tutorElements: [mark] });
     let deferred: (() => void) | null = null;
     const held = applyVoiceSessionFrame(
       frameWithNewSet({ tutor_canvas_actions: [{ action_id: 'A1' }] }),
       (fn) => { deferred = fn; },
     );
-    expect(held).toBe(REVEAL_MS);
+    expect(held).toBe(outstandingWritingMs([mark], {}, false));
+    expect(held).toBeGreaterThan(900); // the old flat hold, which was too short
     // The board has NOT moved on yet — that is the whole point.
     expect(useNumeraStore.getState().activeQuestionId).toBe('Q1');
     deferred!();

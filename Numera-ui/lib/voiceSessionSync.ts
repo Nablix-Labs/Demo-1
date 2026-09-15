@@ -20,6 +20,8 @@
 
 import { refreshedRecord } from '@/lib/sessionRecordRefresh';
 import { revealDecision } from '@/lib/revealBeforeClear';
+import { outstandingWritingMs } from '@/lib/tutorWritingTime';
+import { useTutorReveal } from '@/store/useTutorReveal';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import type { QuestionType } from '@/lib/api';
 
@@ -55,8 +57,14 @@ export function applyVoiceSessionFrame(
   // holds the board briefly, so the annotation is seen rather than added and
   // cleared in the same tick. The marks themselves are applied by
   // applyInteractionSupport, before this runs.
+  // How long the tutor still owes on the board, not a flat constant: the
+  // writing takes as long as the writing takes, and a fixed hold cut it off
+  // mid-word on the way to the next question (#304).
   const { reveal, holdMs } = revealDecision(
-    Array.isArray(msg.tutor_canvas_actions) ? msg.tutor_canvas_actions.length : 0,
+    outstandingWritingMs(
+      useNumeraStore.getState().tutorElements,
+      useTutorReveal.getState().progress,
+    ),
     useNumeraStore.getState().activeQuestionId,
     (msg.question_id as string | null) ?? null,
   );
