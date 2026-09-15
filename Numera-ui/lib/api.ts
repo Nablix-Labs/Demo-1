@@ -1286,11 +1286,11 @@ export interface Phase4Replay {
   review_item_id: string;
   question_id: string;
   attempt_id: string;
-  artifact_id: string;
+  artifact_id: string | null;
   question_text: string;
   first_error: Phase4FirstError;
   replay_steps: Phase4ReplayStep[];
-  work_artifact: Phase4WorkArtifact;
+  work_artifact: Phase4WorkArtifact | null;
 }
 
 /**

@@ -278,12 +278,18 @@ def _exhausted_checkpoint(
 
 def _fail_the_checkpoint(session_id: str) -> object:
     return client.post(
-        "/canvas/submit",
+        "/interaction",
         json={
             "session_id": session_id,
             "student_id": STUDENT,
+            "interaction_type": "ANSWER_SUBMISSION",
+            "input_source": "CHOICE",
+            "selected_option_id": "A",
             "turn_id": "TURN-ST018-EXHAUSTED",
-            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+            "current_phase": "INDEPENDENT_PRACTICE",
+            "concept_id": "ALG-KS3-01",
+            "question_id": CHECKPOINT,
+            "hint_count": 0,
         },
     )
 
@@ -323,6 +329,12 @@ def test_a_resolved_route_pauses_the_topic_with_the_work_saved(
 
     answered = _fail_the_checkpoint(session_id)
     assert answered.status_code == 200, answered.text
+    response = answered.json()
+    assert response["message"] == session_service.PREREQUISITE_REMEDIATION_MESSAGE
+    assert response["student_model_event"]["routing"]["reason_code"] == (
+        "PREREQUISITE_REMEDIATION_REQUIRED"
+    )
+    assert response["routing_reason_code"] == "PREREQUISITE_REMEDIATION_REQUIRED"
 
     session = session_service._sessions[session_id]
     assert session.question_id is None

@@ -134,6 +134,7 @@ from app.services.session_service import (
     _get_owned_session_for_turn,
     submit_intervention_input,
     require_learning_active,
+    independent_practice_is_halted,
     independent_practice_is_silent,
     intervention_response_updates,
     cache_interaction_response,
@@ -2729,7 +2730,7 @@ def _response_from(
     )
     phase3_attempt = _phase3_terminal_attempt(stored_event)
     phase3_silent = (
-        session.current_phase == "INDEPENDENT_PRACTICE"
+        independent_practice_is_silent(session)
         and previous_phase != "GUIDED_PRACTICE"
         # Silence exists to keep the answer key off a live question. A halted
         # topic has no question -- the projected payload is the §11 popup or
@@ -2738,6 +2739,13 @@ def _response_from(
         # is about.
         and session.intervention is None
     )
+    # A halted topic carries its pause message on the session, not on the tutor
+    # turn that halted it. Read it back so the student sees, and hears, why the
+    # topic stopped. SessionRecord has no separate voice line, so both use it,
+    # and an empty session message is no message -- keep the turn's own.
+    if independent_practice_is_halted(session) and session.message.strip():
+        message = session.message
+        message_voice = session.message
     # The panel flag and the step it needs are updated by different code paths:
     # `_completed_scaffold_state` clears the ids when a scaffold finishes but
     # never lowers the flag, and every later turn carries the raised flag
@@ -5073,7 +5081,13 @@ async def _process_interaction(
                 _evaluation_reason(tutor)
             ),
             "routing_reason_code": (
-                schema_content_response.routing.reason_code
+                # A halt is decided by the Student Model, and the schema content
+                # for the turn still carries the route that led into the halt --
+                # the stale one. Every other turn keeps its own content's code.
+                updated_session.student_model_event.routing.reason_code
+                if independent_practice_is_halted(updated_session)
+                and updated_session.student_model_event is not None
+                else schema_content_response.routing.reason_code
                 if schema_content_response is not None
                 else None
             ),
@@ -5185,7 +5199,10 @@ async def _process_interaction(
             "phase3_review_evidence": tutor.phase3_review_evidence,
         }
     )
-    if independent_practice_is_silent(turn_session):
+    # Both sides of the turn must be a live Phase 3 question: turn_session keeps
+    # the guided -> independent transition turn audible, updated_session keeps a
+    # halted topic (no question) audible so the pause message survives.
+    if independent_practice_is_silent(turn_session) and independent_practice_is_silent(updated_session):
         response = response.model_copy(
             update={
                 "message": (

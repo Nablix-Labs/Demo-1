@@ -40,6 +40,9 @@ def _session(phase: str) -> SessionRecord:
 
 def test_only_independent_practice_is_silent() -> None:
     assert independent_practice_is_silent(_session("INDEPENDENT_PRACTICE")) is True
+    assert independent_practice_is_silent(
+        _session("INDEPENDENT_PRACTICE").model_copy(update={"question_id": None})
+    ) is False
     assert independent_practice_is_silent(_session("GUIDED_PRACTICE")) is False
     assert independent_practice_is_silent(_session("CONCEPT_ORIENTATION")) is False
     assert independent_practice_is_silent(_session("REVIEW")) is False

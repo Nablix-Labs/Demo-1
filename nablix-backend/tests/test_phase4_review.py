@@ -208,6 +208,42 @@ def test_phase4_review_generates_exact_replay_contract(monkeypatch: pytest.Monke
     ]
 
 
+def test_phase4_review_generates_a_grounded_choice_replay_without_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _request_body()
+    request["replay_items"][0]["work_artifact"] = None
+    request["replay_items"][0]["detected_errors"] = []
+    response = _response_body()
+    response["tutor_replays"][0]["artifact_id"] = None
+    response["tutor_replays"][0]["first_error"]["student_page_no"] = None
+
+    class FakeClient:
+        def generate_phase4_review(
+            self, context: dict[str, object], schema: dict[str, object]
+        ) -> dict[str, object]:
+            assert context["replay_items"][0]["artifact_id"] is None
+            assert context["replay_items"][0]["page_count"] is None
+            return response
+
+    monkeypatch.setattr(
+        phase4_review, "build_openai_phase4_review_client", lambda settings: FakeClient()
+    )
+
+    result = phase4_review.generate_phase4_review(Phase4ReviewRequest.model_validate(request))
+
+    assert result.tutor_replays[0].artifact_id is None
+    assert result.tutor_replays[0].first_error.student_page_no is None
+
+
+def test_phase4_review_rejects_page_for_artifact_free_replay() -> None:
+    response = _response_body()
+    response["tutor_replays"][0]["artifact_id"] = None
+
+    with pytest.raises(ValueError, match="student_page_no requires a work artifact"):
+        Phase4ReviewResponse.model_validate(response)
+
+
 def test_phase4_review_retries_a_board_that_mixes_old_and_new_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

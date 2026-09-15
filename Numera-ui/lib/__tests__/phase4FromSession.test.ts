@@ -87,11 +87,9 @@ describe('what the backend does not send yet', () => {
     expect(review?.question_journey[0].review_item_id).toBe('REV-1');
   });
 
-  it('hides the page selector when no page count was sent', () => {
-    // A selector over pages that cannot be opened is a control that does nothing.
+  it('keeps an absent artifact absent', () => {
     const review = phase4FromSession(session(), 'Algebra');
-    expect(review?.tutor_replays[0].work_artifact.page_count).toBe(0);
-    expect(review?.tutor_replays[0].work_artifact.pdf_url).toBe('');
+    expect(review?.tutor_replays[0].work_artifact).toBeNull();
   });
 
   it('labels a replay by position when no question text was merged in', () => {

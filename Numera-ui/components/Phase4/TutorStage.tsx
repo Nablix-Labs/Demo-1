@@ -186,12 +186,15 @@ export default function TutorStage({
     if (muted) stopTutorSpeech();
   }, [muted, index]);
 
+  // A replay of a wrong choice has no artifact at all. The empty url falls into
+  // the missing-work panel below and zero pages keeps the selector hidden --
+  // the two states this component already had for a work record it cannot show.
   const {
-    pdf_url: pdfUrl,
-    page_count: pageCount,
+    pdf_url: pdfUrl = '',
+    page_count: pageCount = 0,
     snapshot_image_url: snapshotUrl,
     error_regions: errorRegions,
-  } = replay.work_artifact;
+  } = replay.work_artifact ?? {};
   /**
    * The flat image is preferred for this panel, the PDF is the record.
    *

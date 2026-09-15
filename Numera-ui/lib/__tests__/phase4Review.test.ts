@@ -192,6 +192,10 @@ describe('which page of the work to open on', () => {
     }))).toBe(1);
   });
 
+  it('opens no artifact replay at page 1', () => {
+    expect(openingPageNo(replay('REV-1', { artifact_id: null, work_artifact: null }))).toBe(1);
+  });
+
   it('opens on page 1 rather than a page that does not exist', () => {
     // The page number is the model's reading of the work. A replay is not worth
     // discarding, or a blank frame worth showing, because it miscounted.

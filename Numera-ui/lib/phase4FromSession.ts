@@ -38,7 +38,7 @@ export interface SessionPhase4Review {
     review_item_id?: string;
     question_id?: string;
     attempt_id?: string;
-    artifact_id?: string;
+    artifact_id?: string | null;
     first_error?: {
       summary?: string;
       /** Why the error is an error, as opposed to what it was. Its own card. */
@@ -48,7 +48,7 @@ export interface SessionPhase4Review {
     replay_steps?: Phase4ReplayStep[];
     // Present only once Chiru merges them through — see the header.
     question_text?: string;
-    work_artifact?: { artifact_id?: string; pdf_url?: string; page_count?: number };
+    work_artifact?: { artifact_id?: string; pdf_url?: string; page_count?: number } | null;
   }>;
   student_insights?: Partial<Phase4StudentInsights>;
   /**
@@ -117,7 +117,7 @@ function toReplay(
     review_item_id: reviewItemId,
     question_id: raw.question_id ?? '',
     attempt_id: raw.attempt_id ?? '',
-    artifact_id: raw.artifact_id ?? '',
+    artifact_id: raw.artifact_id ?? null,
     question_text: raw.question_text?.trim() || `Question ${index + 1}`,
     first_error: {
       summary: raw.first_error?.summary ?? '',
@@ -127,13 +127,16 @@ function toReplay(
       student_page_no: raw.first_error?.student_page_no ?? null,
     },
     replay_steps: steps,
-    work_artifact: {
-      artifact_id: raw.work_artifact?.artifact_id ?? raw.artifact_id ?? '',
+    // Null stays null: no work was submitted is a different fact from work
+    // whose url did not come through, and only the panel can tell the student
+    // which one they are looking at.
+    work_artifact: raw.work_artifact ? {
+      artifact_id: raw.work_artifact.artifact_id ?? raw.artifact_id ?? '',
       // Zero pages, so the selector stays hidden rather than offering a page
       // that cannot be opened.
-      page_count: raw.work_artifact?.page_count ?? 0,
-      pdf_url: raw.work_artifact?.pdf_url ?? '',
-    },
+      page_count: raw.work_artifact.page_count ?? 0,
+      pdf_url: raw.work_artifact.pdf_url ?? '',
+    } : null,
   };
 }
 
