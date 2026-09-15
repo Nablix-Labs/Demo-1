@@ -266,11 +266,31 @@ def _is_complete_correct_canvas(
     if ocr is None or ocr.needs_clarification or correct_answer is None:
         return False
     expected = normalize_exact_notation(correct_answer)
-    candidates = [ocr.final_answer, ocr.detected_equation, *ocr.detected_steps]
+    candidates = [
+        ocr.final_answer,
+        ocr.detected_equation,
+        *ocr.detected_steps,
+        ocr.raw_ocr_text,
+        *(region.text for region in ocr.detected_regions),
+        *(region.text for region in ocr.word_regions),
+    ]
     return any(
-        candidate is not None and normalize_exact_notation(candidate) == expected
+        candidate is not None and _contains_complete_notation(candidate, expected)
         for candidate in candidates
     )
+
+
+def _contains_complete_notation(candidate: str, expected: str) -> bool:
+    """Match an exact expression even when earlier canvas work remains visible."""
+
+    normalized = normalize_exact_notation(candidate)
+    if normalized == expected:
+        return True
+    if expected == "":
+        return False
+    start_boundary = r"(?<![A-Za-z0-9])" if expected[0].isalnum() else ""
+    end_boundary = r"(?![A-Za-z0-9])" if expected[-1].isalnum() else ""
+    return re.search(f"{start_boundary}{re.escape(expected)}{end_boundary}", normalized) is not None
 
 
 def _canvas_submission_is_pending(session: SessionRecord) -> bool:
@@ -4985,6 +5005,9 @@ async def _process_interaction(
                 0,
                 len(tutor.canvas_intentions) - len(tutor_canvas_actions),
             ),
+            "canvas_solution_complete_candidate": canvas_solution_complete_candidate,
+            "canvas_ocr_confidence": ocr.confidence if ocr is not None else None,
+            "requires_written_math_evidence": tutor.requires_written_math_evidence,
             "question_advanced": question_advanced,
             "action_question_id": turn_session.question_id,
         },

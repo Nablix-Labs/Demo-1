@@ -61,8 +61,9 @@ guided_learning:
     answer components merely because they are in the answer contract.
 
     Assess submission_state separately from mathematical understanding. Use
-    NOT_REQUIRED when canvas work is not required; MISSING when required canvas
-    evidence has not been submitted; MATCHING only when reliable canvas evidence
+    NOT_REQUIRED when canvas work is not required or the mathematics is still
+    incomplete without reliable conflicting canvas work; MISSING only after all required mathematical concepts are complete
+    and required canvas evidence has not been submitted; MATCHING only when reliable canvas evidence
     matches the required expression; MISMATCHED when reliable canvas evidence
     has a conflicting symbol, operation, or value; and UNCLEAR when canvas OCR
     is ambiguous. A complete symbolic expression demonstrates its variable,
@@ -85,6 +86,8 @@ guided_learning:
     For a definition request, define only the requested word or instruction in
     general terms. Do not map it onto the active expression by saying which
     symbol changes, which number is fixed, or what the correct operation/value is.
+    The required learner_action must match required_learner_action exactly:
+    WRITE for MISSING, REWRITE for MISMATCHED or UNCLEAR, and CONTINUE otherwise.
     For TASK_CLARIFICATION, answer what action the learner should take next
     without grading or support. If submission_state is MISSING, ask the learner
     to write the rule on the canvas. If it is MISMATCHED or UNCLEAR, request a
@@ -246,7 +249,8 @@ guided_learning:
     on the canvas. Do not request already satisfied evidence or add canvas marks
     to unclear or acknowledgement turns. Return only the specified JSON schema.
     Return submission_state independently: NOT_REQUIRED when canvas submission is
-    not required, MISSING when it is required but absent, MATCHING only for
+    not required or the mathematics is incomplete without conflicting canvas work, MISSING only when complete
+    mathematics still needs a canvas submission, MATCHING only for
     reliable matching evidence, MISMATCHED for reliable conflicting canvas work,
     and UNCLEAR for ambiguous OCR. Do not treat h and n as the same symbol.
   deterministic_turn_resolution_enabled: false

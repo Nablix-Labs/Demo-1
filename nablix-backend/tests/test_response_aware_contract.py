@@ -8,11 +8,14 @@ from fastapi import HTTPException
 from app.ai_engine.classifier import (
     ClassificationRequest,
     build_guided_tutor_response,
+    required_response_aware_learner_action,
+    response_aware_fallback_message,
     validate_guided_evaluation,
     validate_response_aware_submission,
 )
 from app.ai_engine.classifier_config import load_classifier_rules
 from app.ai_engine.openai_client import (
+    OpenAIGuidedWording,
     guided_assessment_schema,
     guided_evaluation_schema,
     normalize_assessment_contribution_payload,
@@ -304,6 +307,153 @@ def test_canvas_submission_state_cannot_claim_matching_without_canvas_evidence()
         request,
     )
     assert missing.submission_state == "MISSING"
+
+
+def test_incomplete_canvas_question_does_not_request_submission_yet() -> None:
+    request = ClassificationRequest(
+        question_id="REPLAY",
+        question_type="SHORT_RESPONSE",
+        question="Write the general rule.",
+        correct_answer="n + 5",
+        answer_spec=AnswerSpec(
+            answer_spec_id="REPLAY",
+            canonical_answer="n + 5",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=False,
+        ),
+        student_input="5 stays fixed",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+        canvas_submission_required=True,
+    )
+    evaluation = GuidedEvaluation(
+        contribution=None,
+        student_state="PARTIAL",
+        newly_confirmed_concept_ids=["FIXED_VALUE"],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=["GENERAL_RULE"],
+        selected_error_code=None,
+        confidence=0.98,
+        next_objective=None,
+        submission_state="NOT_REQUIRED",
+        tutor_message="You identified the fixed value.",
+        tutor_message_voice="You identified the fixed value.",
+    )
+
+    assert validate_response_aware_submission(evaluation, request).submission_state == "NOT_REQUIRED"
+    assert required_response_aware_learner_action(evaluation) == "CONTINUE"
+
+
+def test_conflicting_canvas_work_can_request_rewrite_before_math_is_complete() -> None:
+    request = ClassificationRequest(
+        question_id="REPLAY",
+        question_type="SHORT_RESPONSE",
+        question="Write the general rule.",
+        correct_answer="n + 5",
+        answer_spec=AnswerSpec(
+            answer_spec_id="REPLAY",
+            canonical_answer="n + 5",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=False,
+        ),
+        student_input="h + 5",
+        current_phase="GUIDED_PRACTICE",
+        input_source="CANVAS",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+        canvas_submission_required=True,
+        has_canvas_evidence=True,
+    )
+    evaluation = GuidedEvaluation(
+        contribution=None,
+        student_state="WRONG",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=["GENERAL_RULE"],
+        missing_concept_ids=["GENERAL_RULE"],
+        selected_error_code=None,
+        confidence=0.98,
+        next_objective=None,
+        submission_state="MISMATCHED",
+        tutor_message="Check the required letter.",
+        tutor_message_voice="Check the required letter.",
+    )
+
+    assert validate_response_aware_submission(evaluation, request).submission_state == "MISMATCHED"
+    assert required_response_aware_learner_action(evaluation) == "REWRITE"
+
+
+@pytest.mark.parametrize(
+    ("submission_state", "expected_action"),
+    [
+        ("MISSING", "WRITE"),
+        ("MISMATCHED", "REWRITE"),
+        ("UNCLEAR", "REWRITE"),
+        ("NOT_REQUIRED", "CONTINUE"),
+        ("MATCHING", "CONTINUE"),
+    ],
+)
+def test_submission_state_authorizes_one_writer_action(
+    submission_state: str,
+    expected_action: str,
+) -> None:
+    evaluation = GuidedEvaluation(
+        contribution=None,
+        student_state="CORRECT",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=[],
+        selected_error_code=None,
+        confidence=0.98,
+        next_objective=None,
+        submission_state=submission_state,
+        tutor_message="Continue.",
+        tutor_message_voice="Continue.",
+    )
+
+    assert required_response_aware_learner_action(evaluation) == expected_action
+
+
+def test_guided_writer_requires_structured_learner_action() -> None:
+    schema = OpenAIGuidedWording.model_json_schema()
+    properties = schema["properties"]
+
+    assert properties["learner_action"]["enum"] == [
+        "CONTINUE",
+        "WRITE",
+        "REWRITE",
+        "CLARIFY",
+    ]
+
+
+def test_completed_canvas_turn_never_falls_back_to_generic_wording() -> None:
+    evaluation = GuidedEvaluation(
+        contribution=None,
+        student_state="CORRECT",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=[],
+        selected_error_code=None,
+        confidence=0.98,
+        next_objective=None,
+        submission_state="MISSING",
+        tutor_message="unused",
+        tutor_message_voice="unused",
+    )
+
+    assert response_aware_fallback_message(
+        evaluation,
+        load_classifier_rules(),
+    ) == "You have the rule. Now write it on the canvas, then press Check."
 
 
 def test_model_evidence_survives_wrong_rule_then_correct_rule_canvas_handoff() -> None:
