@@ -63,11 +63,11 @@ def build_openai_phase4_review_context(
                 "review_item_id": item.review_item_id,
                 "question_id": item.question_id,
                 "attempt_id": item.attempt_id,
-                "artifact_id": item.work_artifact.artifact_id if item.work_artifact else None,
+                "artifact_id": item.artifact_id,
                 "question_text": item.question_text,
                 "student_answer": item.student_answer,
                 "ocr_text": item.ocr_text,
-                "page_count": item.work_artifact.page_count if item.work_artifact else None,
+                "page_count": item.page_count,
                 "detected_errors": [error.model_dump() for error in item.detected_errors],
                 "linked_misconceptions": item.linked_misconceptions,
                 "canonical_answer": item.canonical_answer,
@@ -162,7 +162,7 @@ def _student_facing_text(response: Phase4ReviewResponse) -> list[str]:
 
 def _validate_replay_identity(request: Phase4ReviewRequest, response: Phase4ReviewResponse) -> None:
     expected = [
-        (item.review_item_id, item.question_id, item.attempt_id, item.work_artifact.artifact_id if item.work_artifact else None)
+        (item.review_item_id, item.question_id, item.attempt_id, item.artifact_id)
         for item in request.replay_items
     ]
     actual = [
@@ -176,10 +176,7 @@ def _validate_replay_identity(request: Phase4ReviewRequest, response: Phase4Revi
 
 
 def _validate_first_error_pages(request: Phase4ReviewRequest, response: Phase4ReviewResponse) -> None:
-    page_counts = {
-        item.review_item_id: item.work_artifact.page_count if item.work_artifact else None
-        for item in request.replay_items
-    }
+    page_counts = {item.review_item_id: item.page_count for item in request.replay_items}
     for replay in response.tutor_replays:
         page_no = replay.first_error.student_page_no
         page_count = page_counts[replay.review_item_id]
@@ -252,7 +249,9 @@ def _validate_student_language(
     ] + [
         item.attempt_id for item in request.replay_items
     ] + [
-        item.work_artifact.artifact_id for item in request.replay_items if item.work_artifact
+        artifact_id
+        for item in request.replay_items
+        if (artifact_id := item.artifact_id) is not None
     ]
     prohibited = [*config.forbidden_student_text_patterns, *internal_identifiers]
     text = " ".join(_student_facing_text(response)).lower()

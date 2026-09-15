@@ -118,6 +118,21 @@ def test_wrong_choice_without_detected_errors_is_replayed() -> None:
     assert _build(history).replay_items[0].detected_errors == []
 
 
+def test_attempt_with_neither_a_response_nor_work_is_not_replayed() -> None:
+    # Nothing to explain: the tutor would be talking about an answer the
+    # student never gave. Stored work on its own is still an answer, so this
+    # attempt has to be missing both.
+    attempt = _attempt("A1", "INCORRECT", with_artifact=False).model_copy(
+        update={"student_response": "  "}
+    )
+    history = _history([attempt])
+
+    request = _build(history)
+
+    assert request.replay_items == []
+    assert len(request.whole_topic_evidence.final_independent_results) == 1
+
+
 def test_attempt_without_question_usage_id_is_not_replayed() -> None:
     attempt = _attempt("A1", "INCORRECT").model_copy(update={"question_usage_id": None})
     history = _history([attempt])

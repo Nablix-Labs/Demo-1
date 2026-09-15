@@ -107,7 +107,9 @@ _last_interaction_responses: dict[tuple[str, str], InteractionResponse] = {}
 _interaction_payload_fingerprints: dict[tuple[str, str], str] = {}
 _nudge_deliveries: dict[tuple[str, str], NudgeDeliveryRecord] = {}
 
-_INTERVENTION_UI_FLAGS: dict[str, bool] = {
+# Every control off. A halted topic and a frozen intervention both leave the
+# learner on a screen with nothing to answer, so both lower the same flags.
+_LOCKED_SCREEN_UI_FLAGS: dict[str, bool] = {
     "show_canvas": False,
     "show_hint_button": False,
     "show_visual_cue": False,
@@ -456,9 +458,15 @@ def independent_practice_is_silent(session: SessionRecord) -> bool:
     this function's business to settle -- but a named rule is what makes the
     question askable, which is most of why the name exists.
 
-    Callers pass the session as it stood when the turn arrived, so the turn that
-    moves a student from Guided Practice into Phase 3 is still a Guided turn and
-    keeps its marks.
+    A live question is part of the rule. Silence exists to keep the answer key
+    off a question the student is still working; a halted topic has no question,
+    and silencing it would strand the learner on a locked screen with no visible
+    reason (see `independent_practice_is_halted`).
+
+    `_process_interaction` asks about both sides of the turn, and marks survive
+    unless both are a live Phase 3 question. That is what keeps the turn moving
+    a student from Guided Practice into Phase 3 audible: it arrived as a Guided
+    turn.
 
     Interventions need no clause: `require_learning_active` refuses a frozen
     topic before either path reaches a planner.
@@ -467,12 +475,24 @@ def independent_practice_is_silent(session: SessionRecord) -> bool:
     return session.current_phase == "INDEPENDENT_PRACTICE" and session.question_id is not None
 
 
+def independent_practice_is_halted(session: SessionRecord) -> bool:
+    """Phase 3 with no question left to answer -- the topic stopped mid-phase.
+
+    A prerequisite pause clears `question_id` and puts its reason on
+    `session.message`. Named because three sites care: the response builder
+    reads the message back, the state update lowers the controls, and
+    `independent_practice_is_silent` is its complement.
+    """
+
+    return session.current_phase == "INDEPENDENT_PRACTICE" and session.question_id is None
+
+
 def intervention_response_updates(session: SessionRecord) -> dict[str, object]:
     """Keep cached turn receipts from reopening controls after a later halt."""
 
     if session.intervention is None:
         return {}
-    return dict(_INTERVENTION_UI_FLAGS)
+    return dict(_LOCKED_SCREEN_UI_FLAGS)
 
 
 def _project_for_frontend(
@@ -1501,7 +1521,7 @@ async def _apply_schema_event(
             "question_type": None,
             "correct_answer": None,
             "active_student_model_question": None,
-            **_INTERVENTION_UI_FLAGS,
+            **_LOCKED_SCREEN_UI_FLAGS,
             "active_guided_rescue": None,
         })
         await save_session(updated)
@@ -1522,7 +1542,7 @@ async def _apply_schema_event(
             "question_type": None,
             "correct_answer": None,
             "active_student_model_question": None,
-            **_INTERVENTION_UI_FLAGS,
+            **_LOCKED_SCREEN_UI_FLAGS,
             "active_guided_rescue": None,
         })
         await save_session(updated)
@@ -2990,11 +3010,11 @@ async def update_interaction_state(
             **transition_updates,
         }
     )
-    if current_phase == "INDEPENDENT_PRACTICE" and session.question_id is None:
-        updated_session = updated_session.model_copy(update=_INTERVENTION_UI_FLAGS)
+    if independent_practice_is_halted(updated_session):
+        updated_session = updated_session.model_copy(update=_LOCKED_SCREEN_UI_FLAGS)
     if session.intervention is not None:
         updated_session = updated_session.model_copy(update={
-            **_INTERVENTION_UI_FLAGS,
+            **_LOCKED_SCREEN_UI_FLAGS,
             "current_phase": session.current_phase,
             "ui_state": session.ui_state,
             "question_id": session.question_id,

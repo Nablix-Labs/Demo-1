@@ -134,6 +134,7 @@ from app.services.session_service import (
     _get_owned_session_for_turn,
     submit_intervention_input,
     require_learning_active,
+    independent_practice_is_halted,
     independent_practice_is_silent,
     intervention_response_updates,
     cache_interaction_response,
@@ -2740,8 +2741,9 @@ def _response_from(
     )
     # A halted topic carries its pause message on the session, not on the tutor
     # turn that halted it. Read it back so the student sees, and hears, why the
-    # topic stopped. SessionRecord has no separate voice line, so both use it.
-    if session.current_phase == "INDEPENDENT_PRACTICE" and session.question_id is None:
+    # topic stopped. SessionRecord has no separate voice line, so both use it,
+    # and an empty session message is no message -- keep the turn's own.
+    if independent_practice_is_halted(session) and session.message.strip():
         message = session.message
         message_voice = session.message
     # The panel flag and the step it needs are updated by different code paths:
@@ -5079,8 +5081,14 @@ async def _process_interaction(
                 _evaluation_reason(tutor)
             ),
             "routing_reason_code": (
+                # A halt is decided by the Student Model, and the schema content
+                # for the turn still carries the route that led into the halt --
+                # the stale one. Every other turn keeps its own content's code.
                 updated_session.student_model_event.routing.reason_code
-                if updated_session.student_model_event is not None
+                if independent_practice_is_halted(updated_session)
+                and updated_session.student_model_event is not None
+                else schema_content_response.routing.reason_code
+                if schema_content_response is not None
                 else None
             ),
             "support_reason_code": (

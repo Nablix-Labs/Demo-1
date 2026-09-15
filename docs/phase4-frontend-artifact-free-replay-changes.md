@@ -75,3 +75,23 @@ selectable and playable — which is the point of the fix.
 - No change to `QuestionJourneyItem`. The explanation and correct reasoning stay
   in the linked `TutorReplay.replay_steps` rather than being duplicated onto the
   journey row.
+
+## Post-review amendments
+
+Added after the two-axis review (`/code-review`, Standards + Spec axes).
+
+- **`lib/phase4FromSession.ts`** — the surviving `raw.work_artifact?.page_count`
+  inside the `raw.work_artifact ? …` branch was changed to a plain read, and the
+  branch gained a comment saying why an absent artifact stays absent. **Why:** the
+  optional chain implied a nullability the branch has already ruled out, and the
+  only remaining comment described the *empty-artifact* fallback that this change
+  deleted, so it read as the opposite of what the code now does.
+- **`components/Phase4/TutorStage.tsx`** — added a comment above the destructure
+  explaining that `pdfUrl = ''` / `pageCount = 0` deliberately route the
+  artifact-free case into the panel's existing missing-work states. **Why:** the
+  review flagged the defaults as the empty artifact the adapter had just stopped
+  inventing. They are not: they are local render defaults, not data handed on to
+  anything else, and the file's convention is that every non-obvious line says so.
+
+No frontend behaviour changed in this pass — `npm test` 1365 passed,
+`npm run build` compiled clean.

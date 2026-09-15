@@ -92,12 +92,15 @@ def student_facing_next_action(routing_next_action: str) -> str:
 def _replay_item(index: int, attempt: TopicAttemptRecord) -> ReplayItem | None:
     """Build one replay item, or None when it cannot be replayed.
 
-    Several kinds of wrong attempt cannot be shown to the student: one whose
-    work was never stored (it predates work artifacts, or storage failed),
-    one with no usage id, and one with no error mapped to a specific skill
-    (an error can arrive with no micro_skill_id -- that's routine upstream
-    data, not corruption). All still count as evidence for the topic
-    summary; they just have nothing to replay.
+    A replay is grounded in what the tutor has to talk about: the question, the
+    answer the student gave, the canonical answer and the steps to it. Missing
+    any of those leaves nothing to explain, so the attempt is skipped. Stored
+    work and mapped errors are not among them -- a wrong multiple choice has
+    neither and is still worth replaying, as text. An attempt with no usage id
+    cannot be tied back to the question it was served from.
+
+    Skipped attempts still count as evidence for the topic summary; they just
+    have nothing to replay.
     """
 
     def skipped(reason: str) -> None:
@@ -117,11 +120,34 @@ def _replay_item(index: int, attempt: TopicAttemptRecord) -> ReplayItem | None:
     if attempt.question_usage_id is None:
         skipped("no_question_usage_id")
         return None
+    # ReplayItem forbids these empty, so screening here turns a whole-review
+    # ValidationError into one skipped attempt with a logged reason.
+    grounding: dict[str, object] = {
+        "no_question_text": attempt.question_text.strip(),
+        # What the student put forward: typed or chosen text, or the work they
+        # drew. A wrong choice with neither leaves the tutor nothing to explain.
+        "no_student_answer": (attempt.student_response or "").strip() or attempt.work_artifact,
+        "no_canonical_answer": attempt.canonical_answer.strip(),
+        "no_answer_steps": attempt.answer_steps,
+    }
+    for reason, value in grounding.items():
+        if not value:
+            skipped(reason)
+            return None
     detected_errors = [
         DetectedError(error_code=error.error_code, micro_skill_id=error.micro_skill_id)
         for error in attempt.detected_errors
         if error.micro_skill_id is not None
     ]
+    work_artifact = (
+        WorkArtifact(
+            artifact_id=attempt.work_artifact.artifact_id,
+            pdf_url=attempt.work_artifact.pdf_url,
+            page_count=attempt.work_artifact.page_count,
+        )
+        if attempt.work_artifact is not None
+        else None
+    )
     return ReplayItem(
         review_item_id=f"REV-{index:03d}",
         phase=PHASE_3,
@@ -131,11 +157,7 @@ def _replay_item(index: int, attempt: TopicAttemptRecord) -> ReplayItem | None:
         attempt_id=attempt.attempt_id,
         question_text=attempt.question_text,
         student_answer=attempt.student_response,
-        work_artifact=WorkArtifact(
-            artifact_id=attempt.work_artifact.artifact_id,
-            pdf_url=attempt.work_artifact.pdf_url,
-            page_count=attempt.work_artifact.page_count,
-        ) if attempt.work_artifact is not None else None,
+        work_artifact=work_artifact,
         detected_errors=detected_errors,
         linked_misconceptions=attempt.linked_misconceptions,
         canonical_answer=attempt.canonical_answer,

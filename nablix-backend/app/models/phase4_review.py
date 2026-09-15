@@ -52,6 +52,16 @@ class ReplayItem(StrictSchema):
     canonical_answer: str = Field(min_length=1)
     answer_steps: list[str] = Field(min_length=1)
 
+    @property
+    def artifact_id(self) -> str | None:
+        """None when the answer was a choice, so nothing was drawn."""
+
+        return self.work_artifact.artifact_id if self.work_artifact else None
+
+    @property
+    def page_count(self) -> int | None:
+        return self.work_artifact.page_count if self.work_artifact else None
+
 
 class FinalIndependentResult(StrictSchema):
     question_id: str = Field(min_length=1)

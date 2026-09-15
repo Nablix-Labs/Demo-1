@@ -127,11 +127,14 @@ function toReplay(
       student_page_no: raw.first_error?.student_page_no ?? null,
     },
     replay_steps: steps,
+    // Null stays null: no work was submitted is a different fact from work
+    // whose url did not come through, and only the panel can tell the student
+    // which one they are looking at.
     work_artifact: raw.work_artifact ? {
       artifact_id: raw.work_artifact.artifact_id ?? raw.artifact_id ?? '',
       // Zero pages, so the selector stays hidden rather than offering a page
       // that cannot be opened.
-      page_count: raw.work_artifact?.page_count ?? 0,
+      page_count: raw.work_artifact.page_count ?? 0,
       pdf_url: raw.work_artifact.pdf_url ?? '',
     } : null,
   };
