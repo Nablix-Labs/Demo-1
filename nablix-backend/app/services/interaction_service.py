@@ -1358,12 +1358,10 @@ def _validated_error_code(
     tutor: TutorResult,
 ) -> str | None:
     if tutor.contribution is not None:
+        if tutor.contribution.support_relevance != "MATCHED":
+            return None
         return _catalog_error_code(session, tutor.selected_error_code)
-    return (
-        _db_error_code(session, student_message)
-        or _catalog_error_code(session, tutor.selected_error_code)
-        or _catalog_error_code(session, tutor.error_type)
-    )
+    return _db_error_code(session, student_message)
 
 
 def _schema_question_mapped_micro_skills(session: SessionRecord) -> list[str]:

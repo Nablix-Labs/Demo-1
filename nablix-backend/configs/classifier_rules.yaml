@@ -258,6 +258,10 @@ guided_learning:
     - "\\bi(?: am|'m)\\s+lost\\b"
     - "\\bi\\s+(?:(?:still|really|just)\\s+)?(?:cannot|can't)\\s+(?:follow|work out|make sense of)\\b"
     - "\\bwhere\\s+do\\s+i\\s+(?:even\\s+)?start\\b"
+  task_clarification_patterns:
+    - "^\\s*what\\s+(?:do|should)\\s+i\\s+(?:need\\s+to\\s+)?(?:answer|do|write|choose|select)(?:\\s+now)?[\\s?.!]*$"
+    - "^\\s*what\\s+i\\s+need\\s+to\\s+(?:answer|do|write|choose|select)(?:\\s+now)?[\\s?.!]*$"
+    - "^\\s*what\\s+(?:am|are)\\s+i\\s+(?:supposed|meant)\\s+to\\s+(?:answer|do|write|choose|select)(?:\\s+now)?[\\s?.!]*$"
   rubric_prompt_version: "1.1.0"
   evaluator_prompt_version: "1.4.0-response-aware"
   component_adjudicator_prompt_version: "1.0.0"

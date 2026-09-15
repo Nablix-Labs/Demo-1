@@ -8931,3 +8931,175 @@ def test_guided_model_experiment_assignment_is_stable_per_session() -> None:
         update={"openai_ai_engine_experiment_percentage": 0}
     )
     assert classifier.openai_model_for_request(disabled, request) == load_classifier_rules().guided_learning.model
+
+
+@pytest.mark.parametrize(
+    "student_input",
+    [
+        "what i need to answer now",
+        "What do I need to write?",
+        "What am I supposed to choose",
+    ],
+)
+def test_task_clarification_is_a_question_not_confusion(student_input: str) -> None:
+    intent = classifier.detect_student_intent(
+        student_input,
+        load_classifier_rules(),
+    )
+
+    assert intent == "ASKING_QUESTION"
+
+
+def test_task_clarification_cannot_increment_attempts_or_trigger_support(
+    monkeypatch,
+) -> None:
+    class _MisclassifyingClient:
+        def evaluate_guided_turn(self, **kwargs: object) -> GuidedEvaluation:
+            objective = kwargs["active_objective"]
+            assert isinstance(objective, ActiveTeachingObjective)
+            return GuidedEvaluation(
+                student_state="WRONG",
+                newly_confirmed_concept_ids=[],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=["OPERATION"],
+                missing_concept_ids=objective.missing_concept_ids,
+                selected_error_code="ERR-T02-ADDITION",
+                confidence=0.99,
+                next_objective=objective,
+                tutor_message="You need to explain what writing c next to d means.",
+                tutor_message_voice="You need to explain what writing c next to d means.",
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _MisclassifyingClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T02-002",
+            question="What does cd mean?",
+            correct_answer="c multiplied by d",
+            answer_spec=_answer_spec(
+                "c multiplied by d",
+                ["c times d"],
+                "CONCEPT_TEXT_MATCH",
+            ),
+            phase_2_prompt_context=_guided_context(1),
+            generated_question_rubric=_guided_rubric(),
+            student_input="what i need to answer now",
+            current_phase="GUIDED_PRACTICE",
+            input_source="VOICE",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.intent == "ASKING_QUESTION"
+    assert response.guided_student_state == "UNCLEAR"
+    assert response.attempt_increment == 0
+    assert response.selected_error_code is None
+
+
+def test_choice_reasoning_cannot_replace_an_explicit_correct_selection(
+    monkeypatch,
+) -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-004",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="ANSWER_SELECTION",
+                description="Select the correct option.",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="ANSWER_EXPLANATION",
+                description="Explain why the option is general.",
+                required=True,
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="choice-selection-regression",
+        prompt_version="test",
+    )
+
+    class _IncorrectCompletionClient:
+        def evaluate_guided_turn(self, **kwargs: object) -> GuidedEvaluation:
+            return GuidedEvaluation(
+                student_state="CORRECT",
+                newly_confirmed_concept_ids=[
+                    "ANSWER_SELECTION",
+                    "ANSWER_EXPLANATION",
+                ],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=[],
+                selected_error_code=None,
+                confidence=0.99,
+                next_objective=None,
+                tutor_message="Let us move on to the next step.",
+                tutor_message_voice="Let us move on to the next step.",
+            )
+
+    monkeypatch.setattr(
+        classifier,
+        "build_openai_ai_engine_client",
+        lambda settings: _IncorrectCompletionClient(),
+    )
+    response = classify_student_response(
+        ClassificationRequest(
+            question_id="Q-T01-004",
+            question_type="CHOICE_WITH_EXPLANATION",
+            question="Which is the general rule: A: 12 + 4. B: n + 4? Explain briefly.",
+            correct_answer="B",
+            answer_spec=AnswerSpec(
+                answer_spec_id="ANS-T01-004",
+                canonical_answer="B",
+                accepted_answers=["B", "n + 4"],
+                verification_method="CHOICE_AND_CONCEPT_MATCH",
+                explanation_required=True,
+            ),
+            phase_2_prompt_context=_guided_context(0),
+            generated_question_rubric=rubric,
+            guided_teaching_state=GuidedTeachingState(
+                question_id="Q-T01-004",
+                objective_component_ids=[
+                    "ANSWER_SELECTION",
+                    "ANSWER_EXPLANATION",
+                ],
+                confirmed_component_ids=[],
+                missing_component_ids=[
+                    "ANSWER_SELECTION",
+                    "ANSWER_EXPLANATION",
+                ],
+                active_component_id="ANSWER_SELECTION",
+                last_tutor_question_type="OPTION_COMPARISON",
+                selected_option_id="A",
+                selected_option_text="12 + 4",
+                awaiting_response=True,
+            ),
+            student_input=(
+                "If there is a different starting value, it will be that "
+                "starting value plus four."
+            ),
+            current_phase="GUIDED_PRACTICE",
+            input_source="VOICE",
+            transcript_confidence=None,
+            attempt_count=1,
+            current_hint_level=None,
+        )
+    )
+
+    assert response.question_completed is False
+    assert response.guided_student_state == "PARTIAL"
+    assert response.active_teaching_objective is not None
+    assert response.active_teaching_objective.confirmed_concept_ids == [
+        "ANSWER_EXPLANATION"
+    ]
+    assert response.active_teaching_objective.missing_concept_ids == [
+        "ANSWER_SELECTION"
+    ]
+    assert response.active_teaching_objective.target_concept_ids == [
+        "ANSWER_SELECTION"
+    ]
