@@ -9302,3 +9302,165 @@ def test_choice_reasoning_cannot_replace_an_explicit_correct_selection(
     assert response.active_teaching_objective.target_concept_ids == [
         "ANSWER_SELECTION"
     ]
+
+
+def test_a_scaffold_reply_that_leaks_the_answer_gets_one_corrective_retry() -> None:
+    """The 503 the VM produced on every scaffold turn whose wording slipped.
+
+    The safety check sat AFTER the generation loop, so a leaked answer had no
+    way back: the turn ended as an adapter failure and the student saw the
+    tutor break mid-scaffold. The guided turn had had a corrective retry for
+    this since August; the scaffold never got one. It does now, with its own
+    budget -- the transport budget is deliberately 0, and a rejected wording is
+    not a transport failure.
+    """
+
+    contribution = StudentContribution(
+        kind="MATHEMATICAL_ATTEMPT",
+        assessment="INCOMPLETE",
+        error_category=None,
+        error_description=None,
+        identified_difficulty=None,
+        learner_question=None,
+        explained_idea=None,
+        generated_support_text=None,
+        generated_visual_rows=None,
+        support_relevance="NOT_NEEDED",
+    )
+    feedback_seen: list[object] = []
+
+    def reply(message: str) -> ScaffoldStepEvaluation:
+        return ScaffoldStepEvaluation(
+            contribution=contribution,
+            step_satisfied=False,
+            original_answer_correct=False,
+            demonstrated_fact=None,
+            confidence=0.97,
+            tutor_message=message,
+            tutor_message_voice=message,
+        )
+
+    class _LeakyThenClean:
+        def evaluate_scaffold_step(self, **kwargs: object) -> ScaffoldStepEvaluation:
+            feedback_seen.append(kwargs.get("validation_feedback"))
+            if len(feedback_seen) == 1:
+                return reply("The answer is 4y — can you see why?")
+            return reply("Which letter appears more than once?")
+
+    rules = load_classifier_rules()
+    rules = rules.model_copy(update={
+        "guided_learning": rules.guided_learning.model_copy(
+            update={"response_aware_enabled": True}
+        )
+    })
+    request = ClassificationRequest(
+        question_id="Q-T02-001",
+        question="Which term or factor is repeated?",
+        correct_answer="4y",
+        answer_spec=None,
+        phase_2_prompt_context=_guided_context(0),
+        scaffold_evaluation_context=ScaffoldEvaluationContext(
+            scaffold_id="SCF-T02-WRITE-COMPACT",
+            step_id="SCF-T02-WR-S1",
+            original_question="Write y + y + y + y in compact algebraic notation.",
+            canonical_answer="4y",
+            accepted_answers=["4y"],
+            verification_method="EXACT_NOTATION_MATCH",
+            step_prompt="Which term or factor is repeated?",
+            expected_response_criterion="Identify the repeated letter or base",
+            completed_step_ids=[],
+        ),
+        student_input="I do not know.",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=2,
+        current_hint_level=None,
+    )
+
+    response = classifier.classify_scaffold_response(
+        request,
+        rules,
+        classifier.SafetyCheck(passed=True, flag_type=None, action_taken=None),
+        cast(openai_client.OpenAIAIEngineClient, _LeakyThenClean()),
+        "SUBMITTING_ANSWER",
+    )
+
+    # Exactly one retry, and it was told WHY.
+    assert len(feedback_seen) == 2
+    assert feedback_seen[0] is None
+    assert feedback_seen[1] == rules.guided_learning.answer_reveal_retry_feedback
+    assert response.tutor_message == "Which letter appears more than once?"
+    assert "4y" not in response.tutor_message
+
+
+def test_a_scaffold_reply_that_leaks_twice_raises_its_own_error() -> None:
+    """No fallback wording. A rung that cannot be said safely is not served."""
+
+    contribution = StudentContribution(
+        kind="MATHEMATICAL_ATTEMPT",
+        assessment="INCOMPLETE",
+        error_category=None,
+        error_description=None,
+        identified_difficulty=None,
+        learner_question=None,
+        explained_idea=None,
+        generated_support_text=None,
+        generated_visual_rows=None,
+        support_relevance="NOT_NEEDED",
+    )
+    attempts: list[object] = []
+
+    class _AlwaysLeaks:
+        def evaluate_scaffold_step(self, **kwargs: object) -> ScaffoldStepEvaluation:
+            attempts.append(kwargs.get("validation_feedback"))
+            return ScaffoldStepEvaluation(
+                contribution=contribution,
+                step_satisfied=False,
+                original_answer_correct=False,
+                demonstrated_fact=None,
+                confidence=0.97,
+                tutor_message="The answer is 4y — can you see why?",
+                tutor_message_voice="The answer is 4y — can you see why?",
+            )
+
+    rules = load_classifier_rules()
+    rules = rules.model_copy(update={
+        "guided_learning": rules.guided_learning.model_copy(
+            update={"response_aware_enabled": True}
+        )
+    })
+    request = ClassificationRequest(
+        question_id="Q-T02-001",
+        question="Which term or factor is repeated?",
+        correct_answer="4y",
+        answer_spec=None,
+        phase_2_prompt_context=_guided_context(0),
+        scaffold_evaluation_context=ScaffoldEvaluationContext(
+            scaffold_id="SCF-T02-WRITE-COMPACT",
+            step_id="SCF-T02-WR-S1",
+            original_question="Write y + y + y + y in compact algebraic notation.",
+            canonical_answer="4y",
+            accepted_answers=["4y"],
+            verification_method="EXACT_NOTATION_MATCH",
+            step_prompt="Which term or factor is repeated?",
+            expected_response_criterion="Identify the repeated letter or base",
+            completed_step_ids=[],
+        ),
+        student_input="I do not know.",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=2,
+        current_hint_level=None,
+    )
+
+    with pytest.raises(AdapterError, match="reveals the active answer"):
+        classifier.classify_scaffold_response(
+            request,
+            rules,
+            classifier.SafetyCheck(passed=True, flag_type=None, action_taken=None),
+            cast(openai_client.OpenAIAIEngineClient, _AlwaysLeaks()),
+            "SUBMITTING_ANSWER",
+        )
+    assert len(attempts) == 2

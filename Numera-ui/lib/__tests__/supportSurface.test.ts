@@ -60,10 +60,12 @@ describe('the support column', () => {
     expect(collapsedRungs(state)).not.toContain('TUTOR_SOLVED');
   });
 
-  it('still shows the hint while a worked example is on the canvas', () => {
-    // The two surfaces are independent: moving the rescue out must not take the
-    // hint with it.
+  it('chips the hint rather than showing it beside a worked example', () => {
+    // The two surfaces are independent, but the ladder is not: the walkthrough
+    // is the current rung, so the hint it was escalated past keeps its chip and
+    // gives up the card. One offer on screen at a time.
     const state = withRescue({ visibleHint: 'Try grouping them.', supportDeck: ['HINT', 'TUTOR_SOLVED'] });
-    expect(visibleRung(state)).toBe('HINT');
+    expect(visibleRung(state)).toBeNull();
+    expect(collapsedRungs(state)).toEqual(['HINT']);
   });
 });

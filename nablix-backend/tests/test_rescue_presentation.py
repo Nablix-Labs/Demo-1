@@ -8,6 +8,9 @@ from fastapi import HTTPException
 
 from app.ai_engine.classifier_config import load_classifier_rules
 from app.models.guided_learning import (
+    COMPARISON_ANNOTATION_MAX_LENGTH,
+    COMPARISON_EXPRESSION_MAX_LENGTH,
+    RESCUE_STEP_MAX_LENGTH,
     ActiveGuidedRescue,
     GuidedRescue,
     ParallelExample,
@@ -49,7 +52,6 @@ def test_parallel_rescue_requires_render_ack_before_advancing() -> None:
     active = rescue_presentation.active_rescue_from(
         question_id="Q-T02-004",
         rescue=rescue,
-        canonical_answer="x = 5",
         request_id="REQ-1",
     )
 
@@ -99,7 +101,7 @@ def test_older_advance_returns_the_current_stable_action() -> None:
         ),
         tutor_solved=None,
     )
-    active = rescue_presentation.active_rescue_from("Q-T02-004", rescue, "x = 5", "REQ-2")
+    active = rescue_presentation.active_rescue_from("Q-T02-004", rescue, "REQ-2")
     acknowledged = rescue_presentation.acknowledge_active_rescue(
         active, active.current_action_id, active.current_target_object_id
     )
@@ -158,9 +160,9 @@ def test_tutor_solved_rescue_id_tracks_the_student_model_request() -> None:
         ),
     )
 
-    first = rescue_presentation.active_rescue_from("Q-T02-004", rescue, "", "REQ-A")
-    second = rescue_presentation.active_rescue_from("Q-T02-004", rescue, "", "REQ-B")
-    replay = rescue_presentation.active_rescue_from("Q-T02-004", rescue, "", "REQ-A")
+    first = rescue_presentation.active_rescue_from("Q-T02-004", rescue, "REQ-A")
+    second = rescue_presentation.active_rescue_from("Q-T02-004", rescue, "REQ-B")
+    replay = rescue_presentation.active_rescue_from("Q-T02-004", rescue, "REQ-A")
 
     assert first.rescue_id != second.rescue_id
     assert first.rescue_id == replay.rescue_id
@@ -183,7 +185,7 @@ def _parallel_active(worked: list[str] | None = None) -> ActiveGuidedRescue:
         tutor_solved=None,
     )
     return rescue_presentation.active_rescue_from(
-        "Q-T02-004", rescue, "x = 5", "REQ-PAR"
+        "Q-T02-004", rescue, "REQ-PAR"
     )
 
 
@@ -199,7 +201,7 @@ def _tutor_solved_active() -> ActiveGuidedRescue:
         ),
     )
     return rescue_presentation.active_rescue_from(
-        "Q-T02-004", rescue, "x = 5", "REQ-TS"
+        "Q-T02-004", rescue, "REQ-TS"
     )
 
 
@@ -556,3 +558,53 @@ def test_advance_after_completion_is_not_an_error(monkeypatch) -> None:
 
     with pytest.raises(HTTPException, match="No active rescue"):
         _advance(session_id, "SOME-OTHER-RESCUE", 1)
+
+
+# --- one limit, one reveal judgement ---------------------------------------
+
+
+def test_the_largest_row_the_writer_may_emit_survives_presentation() -> None:
+    """The exact failure the VM hit: a valid generated row, rejected at 80 chars.
+
+    The response-aware writer emits `expression\\nannotation`, capped by
+    GuidedComparisonRow at 120 and 180. Every field that then carries that step
+    capped at 80, so the widest LEGAL row could not be presented -- and it failed
+    after Student Model had already recorded the rung. One limit now, derived
+    from the writer's own contract, so the two cannot drift apart again.
+    """
+
+    widest = f"{'9' * COMPARISON_EXPRESSION_MAX_LENGTH}\n{'a' * COMPARISON_ANNOTATION_MAX_LENGTH}"
+    assert len(widest) == RESCUE_STEP_MAX_LENGTH
+
+    active = _parallel_active().model_copy(update={"steps": [widest, "y = 5"]})
+
+    context = rescue_presentation.rescue_context_for(active)
+    action = rescue_presentation.rescue_action_for(active)
+
+    assert context.current_step_text == widest
+    assert action.text == widest
+
+
+def test_reveal_is_judged_once_on_the_finished_steps() -> None:
+    """Parallel never reveals the active answer; Tutor-Solved only at the end.
+
+    Judged on the steps that will actually be shown, so authored content the
+    response-aware writer is about to replace is never rejected on its behalf --
+    which is what killed Tutor-Solved after Student Model had accepted it.
+    """
+
+    rules = load_classifier_rules()
+    solved = _tutor_solved_active()
+
+    # The canonical answer on the final step is the whole point of the rung.
+    interaction_service._validate_rescue_reveal(solved, "x = 5", rules)
+
+    early = solved.model_copy(update={"steps": ["The answer is x = 5.", "x = 5"]})
+    with pytest.raises(HTTPException, match="before authorisation"):
+        interaction_service._validate_rescue_reveal(early, "x = 5", rules)
+
+    # A parallel example works a DIFFERENT problem, so the active answer may not
+    # appear on any step, final one included.
+    parallel = _parallel_active().model_copy(update={"steps": ["Solve y + 3 = 8.", "x = 5"]})
+    with pytest.raises(HTTPException, match="before authorisation"):
+        interaction_service._validate_rescue_reveal(parallel, "x = 5", rules)

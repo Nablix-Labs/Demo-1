@@ -53,13 +53,21 @@ import { rescueActive, legacyRescueVisible, type RescueModeState } from '@/lib/r
  */
 export type DeckRung = 'HINT' | 'VISUAL_CUE' | 'PARALLEL_EXAMPLE' | 'TUTOR_SOLVED';
 
-/** Ladder rank, used only to break ties between rungs that arrive together. */
+/**
+ * Ladder rank. Breaks ties between rungs that arrive together, and answers
+ * which rung is CURRENT — the one rung allowed on screen.
+ *
+ * SCAFFOLD is not a deck rung and never becomes one, but it IS a rung of the
+ * ladder and sits between the cue and the walkthroughs, so the exclusivity rule
+ * has to be able to place it. Hence the gap at 2.
+ */
 const RANK: Record<DeckRung, number> = {
   HINT: 0,
   VISUAL_CUE: 1,
-  PARALLEL_EXAMPLE: 2,
-  TUTOR_SOLVED: 3,
+  PARALLEL_EXAMPLE: 3,
+  TUTOR_SOLVED: 4,
 };
+const SCAFFOLD_RANK = 2;
 
 /** What the student sees on a chip. Short — these sit in a row. */
 const LABEL: Record<DeckRung, string> = {
@@ -86,9 +94,14 @@ export interface DeckState extends RescueModeState {
   visualCueDescription: string | null;
   visualCueAssetUrl: string | null;
   visualCueId: string | null;
+  /**
+   * Whether a scaffold panel is open. Read only for the exclusivity rule: a
+   * scaffold outranks the hint and the cue, so it takes their card down.
+   */
+  activeScaffold: { currentStepId: string } | null;
   /** Arrival order. May name rungs whose content has since gone. */
   supportDeck: readonly DeckRung[];
-  /** Which chip the student opened. Null means "show the latest". */
+  /** Which chip the student opened. Null means "show the current rung". */
   openedRung: DeckRung | null;
   /**
    * The student put the card away.
@@ -190,11 +203,30 @@ export function railRungs(state: DeckState): DeckRung[] {
 }
 
 /**
- * The one rung the column renders: the chip the student opened, else the latest.
+ * The rung the tutor is offering RIGHT NOW — the highest one live, on any
+ * surface.
  *
- * An `openedRung` whose content has gone falls back to the latest rather than
- * rendering nothing — the student asked to see something, and an empty lane is
- * not an answer.
+ * Highest, not latest: the backend escalates upwards and clears what it has
+ * escalated past, so the top of what is live is what the student is being
+ * given. Returns the SCAFFOLD rank as a plain number because a scaffold is a
+ * rung of the ladder without being a rung of this deck.
+ */
+function currentRank(state: DeckState): number | null {
+  const held = deckRungs(state).map((rung) => RANK[rung]);
+  if (state.activeScaffold) held.push(SCAFFOLD_RANK);
+  return held.length === 0 ? null : Math.max(...held);
+}
+
+/**
+ * The one rung the column renders: the chip the student opened, else the
+ * CURRENT rung — the highest one live, on any surface.
+ *
+ * An explicit `openedRung` outranks that: the student asked to see a rung the
+ * ladder has escalated past, and refusing them is not an answer. One whose
+ * content has since gone falls back to the current rung for the same reason.
+ *
+ * Null when the current rung is one this column does not render — a scaffold,
+ * or a walkthrough presented on the canvas.
  */
 export function visibleRung(state: DeckState): DeckRung | null {
   const rungs = railRungs(state);
@@ -204,7 +236,14 @@ export function visibleRung(state: DeckState): DeckRung | null {
   if (state.deckCollapsed) return null;
   const opened = state.openedRung;
   if (opened && rungs.includes(opened)) return opened;
-  return rungs[rungs.length - 1];
+  // Exactly one rung is on screen at a time, and it is the HIGHEST one live --
+  // not the latest to arrive. A hint whose cue, scaffold or walkthrough has
+  // since been served is not "the latest help" any more; it is the rung the
+  // ladder escalated past, and standing beside its replacement it reads as two
+  // competing offers. It keeps its chip, so nothing is lost. Null when the
+  // current rung is one this column does not render (a scaffold, a walkthrough).
+  const top = rungs.reduce((highest, rung) => (RANK[rung] > RANK[highest] ? rung : highest));
+  return RANK[top] === currentRank(state) ? top : null;
 }
 
 /** The rest, for the "Earlier help" strip, in the order they were offered. */

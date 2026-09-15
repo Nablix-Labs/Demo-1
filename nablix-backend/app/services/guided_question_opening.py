@@ -5,7 +5,7 @@ from typing import Final
 
 from app.models.guided_learning import TutorCanvasAction
 from app.models.question_anchor import QuestionTextAnchor
-from app.models.student_model_session import QuestionType
+from app.models.student_model_session import QuestionOption, QuestionType
 from app.services.question_anchors import question_text_tokens
 
 
@@ -26,6 +26,11 @@ _MOTIVATION_BY_QUESTION_TYPE: Final[dict[QuestionType, str]] = {
 }
 _DEFAULT_MOTIVATION: Final[str] = "Take your time and start with what you notice."
 _ACTION_TOKEN_RE: Final[re.Pattern[str]] = re.compile(r"[A-Za-z]+|\d+|[+\-−×÷*/=]")
+_TRAILING_CLAUSE_RE: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:as|and annotate|then|after|for comparison)\b", re.IGNORECASE
+)
+_CLAUSE_SPLIT_RE: Final[re.Pattern[str]] = re.compile(r"\band\b", re.IGNORECASE)
+_IN_SPLIT_RE: Final[re.Pattern[str]] = re.compile(r"\s+in\s+", re.IGNORECASE)
 _ANNOTATION_LABELS: Final[tuple[tuple[str, str], ...]] = (
     ("stays fixed", "stays fixed"),
     ("fixed", "stays fixed"),
@@ -65,8 +70,16 @@ def authored_question_opening_actions(
     question_id: str | None,
     question_text: str | None,
     canvas_action: str | None,
+    options: list[QuestionOption] | None = None,
 ) -> tuple[list[QuestionTextAnchor], list[TutorCanvasAction], str | None]:
-    """Compile a safe subset of authored start actions against served text."""
+    """Compile a safe subset of authored start actions against served content.
+
+    Grounded against the question text AND its structured options. A choice
+    question is served with its stem split from its options, so an authored
+    action naming an option ("highlight n + 4" on Q-T01-004) matched nothing in
+    the stem and was rejected on every turn. An option target becomes the
+    QUESTION_OPTION action the client already renders, never invented geometry.
+    """
     if question_id is None or question_text is None or canvas_action is None:
         return [], [], None
     action_text = canvas_action.strip()
@@ -83,10 +96,22 @@ def authored_question_opening_actions(
         for anchor in anchors
         if anchor.text.casefold() in target_tokens
     ]
-    if not targets:
+    option_actions = [
+        TutorCanvasAction(
+            action_id=f"AUTHORED:{question_id}:OPTION:{option.option_id}:HIGHLIGHT",
+            type="HIGHLIGHT",
+            target_kind="QUESTION_OPTION",
+            target_object_id=f"{question_id}:OPTION:{option.option_id}",
+            confirmed_component_id=None,
+            text=None,
+            source_id="question_guided_start_prompts",
+        )
+        for option in _authored_target_options(options, action_text)
+    ]
+    if not targets and not option_actions:
         return anchors, [], "authored_canvas_targets_not_in_question"
     label = _annotation_label(action_text)
-    actions: list[TutorCanvasAction] = []
+    actions: list[TutorCanvasAction] = list(option_actions)
     for anchor in targets:
         prefix = f"AUTHORED:{question_id}:{anchor.token_id}"
         actions.append(TutorCanvasAction(
@@ -111,18 +136,60 @@ def authored_question_opening_actions(
     return anchors, actions, None
 
 
-def _authored_target_tokens(canvas_action: str) -> set[str]:
+def _authored_clauses(canvas_action: str) -> list[str]:
+    """The action's `<target> in <context>` clauses, in authored order.
+
+    Q-T01-004's authored action is "Highlight n in n+4 and 12 in 12+4 for
+    comparison": TWO clauses, each naming a token and the option it lives in.
+    Read as one flat phrase it collapsed to "n" and both contexts were lost,
+    which is why nothing matched and the action was rejected on every turn.
+    """
     lowered = canvas_action.casefold()
-    if lowered.startswith("group/highlight"):
-        target = canvas_action[len("group/highlight"):]
-    elif lowered.startswith("focus/highlight"):
-        target = canvas_action[len("focus/highlight"):]
+    for prefix in ("group/highlight", "focus/highlight", "highlight"):
+        if lowered.startswith(prefix):
+            body = canvas_action[len(prefix):]
+            break
     else:
-        target = canvas_action[len("highlight"):]
-    target = re.split(r"\b(?:as|and annotate|then|after|for comparison)\b", target, maxsplit=1, flags=re.IGNORECASE)[0]
-    if " in " in target.casefold():
-        target = target.split(" in ", 1)[0]
-    tokens = {match.group(0).casefold() for match in _ACTION_TOKEN_RE.finditer(target)}
+        body = canvas_action
+    # Trailing instructions first, so "and annotate" cannot be mistaken for the
+    # "and" that joins two clauses.
+    body = _TRAILING_CLAUSE_RE.split(body, maxsplit=1)[0]
+    return [clause for clause in _CLAUSE_SPLIT_RE.split(body) if clause.strip()]
+
+
+def _tokens_of(text: str) -> set[str]:
+    return {match.group(0).casefold() for match in _ACTION_TOKEN_RE.finditer(text)}
+
+
+def _authored_target_options(
+    options: list[QuestionOption] | None,
+    canvas_action: str,
+) -> list[QuestionOption]:
+    """Options the action names, through the `in <context>` half of its clauses.
+
+    Matched context-inside-option, never the reverse: the served option text
+    carries whatever the stem parser left on it -- Q-T01-004's option A arrives
+    as "12 + 4 or" -- so requiring the option to be a subset of the action would
+    drop a perfectly good match. A context with no word or number in it is
+    ignored, so a bare operator cannot select every option.
+    """
+    contexts: list[set[str]] = []
+    for clause in _authored_clauses(canvas_action):
+        context = _tokens_of(_IN_SPLIT_RE.split(clause, maxsplit=1)[-1])
+        if any(token.isalnum() for token in context):
+            contexts.append(context)
+    return [
+        option
+        for option in options or []
+        if any(context <= _tokens_of(option.text) for context in contexts)
+    ]
+
+
+def _authored_target_tokens(canvas_action: str) -> set[str]:
+    """Question-text tokens the action points at: each clause's `in` target."""
+    tokens: set[str] = set()
+    for clause in _authored_clauses(canvas_action):
+        tokens |= _tokens_of(_IN_SPLIT_RE.split(clause, maxsplit=1)[0])
     return tokens - {"only", "the", "four", "terms", "together"}
 
 

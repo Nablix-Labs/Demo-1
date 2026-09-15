@@ -9,6 +9,18 @@ from app.models.canvas_memory import CanvasEvent
 from app.models.question_anchor import QuestionTextAnchor
 
 
+# One comparison row is `expression`, a newline, then `annotation` -- the shape
+# the response-aware writer emits and the only thing a rescue step ever holds.
+# The three fields that carry a step used to cap at 80, which no generated row
+# could fit, so a valid Parallel Example died in validation AFTER Student Model
+# had already advanced the journey. One limit, derived from the writer's own
+# contract, so the two cannot drift apart again.
+COMPARISON_EXPRESSION_MAX_LENGTH = 120
+COMPARISON_ANNOTATION_MAX_LENGTH = 180
+RESCUE_STEP_MAX_LENGTH = (
+    COMPARISON_EXPRESSION_MAX_LENGTH + 1 + COMPARISON_ANNOTATION_MAX_LENGTH
+)
+
 GuidedStudentState = Literal["CORRECT", "PARTIAL", "WRONG", "STUCK", "UNCLEAR"]
 GuidedSubmissionState = Literal[
     "NOT_REQUIRED", "MISSING", "MATCHING", "MISMATCHED", "UNCLEAR",
@@ -167,7 +179,7 @@ class GuidedRescueContext(GuidedLearningModel):
     source_id: str = Field(min_length=1)
     current_step_index: int = Field(ge=1)
     total_steps: int = Field(ge=1)
-    current_step_text: str = Field(min_length=1, max_length=80)
+    current_step_text: str = Field(min_length=1, max_length=RESCUE_STEP_MAX_LENGTH)
     is_final_step: StrictBool
     approved_answer_reveal: StrictBool
     return_target_object_id: str = Field(min_length=1)
@@ -327,7 +339,7 @@ class CanvasPedagogyIntent(GuidedLearningModel):
     target_kind: TutorCanvasTargetKind
     target_object_id: str | None
     confirmed_component_id: str | None
-    text: str | None = Field(max_length=80)
+    text: str | None = Field(max_length=RESCUE_STEP_MAX_LENGTH)
     source_id: str | None
 
 
@@ -339,7 +351,7 @@ class TutorCanvasAction(GuidedLearningModel):
     target_kind: TutorCanvasTargetKind
     target_object_id: str | None
     confirmed_component_id: str | None
-    text: str | None = Field(default=None, max_length=80)
+    text: str | None = Field(default=None, max_length=RESCUE_STEP_MAX_LENGTH)
     source_id: str | None
     answer_reveal_allowed: StrictBool = False
     rescue_id: str | None = None
@@ -398,8 +410,8 @@ def inactivity_policy() -> InactivityPolicy:
 
 
 class GuidedComparisonRow(GuidedLearningModel):
-    expression: str = Field(min_length=1, max_length=120)
-    annotation: str = Field(min_length=1, max_length=180)
+    expression: str = Field(min_length=1, max_length=COMPARISON_EXPRESSION_MAX_LENGTH)
+    annotation: str = Field(min_length=1, max_length=COMPARISON_ANNOTATION_MAX_LENGTH)
 
 
 class GuidedWorkedPresentation(GuidedLearningModel):

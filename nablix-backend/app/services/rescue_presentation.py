@@ -31,21 +31,17 @@ def _rescue_steps(rescue: GuidedRescue, request_id: str) -> tuple[str, str, list
 def active_rescue_from(
     question_id: str,
     rescue: GuidedRescue,
-    canonical_answer: str,
     request_id: str,
 ) -> ActiveGuidedRescue:
+    """Assemble the rung. Answer-reveal safety is judged once, on the FINISHED
+    steps -- see interaction_service._validate_rescue_reveal. Judging the authored
+    steps here as well rejected Tutor-Solved content the response-aware writer
+    was about to replace, and it did so after Student Model had already recorded
+    the rung."""
+
     rescue_id, source_id, steps = _rescue_steps(rescue, request_id)
     if not steps or any(len(step.strip()) == 0 for step in steps):
         raise HTTPException(status_code=409, detail="Rescue content is empty.")
-    if rescue.rescue_type == "TUTOR_SOLVED" and canonical_answer.strip():
-        premature_reveal = any(
-            canonical_answer.casefold() in step.casefold() for step in steps[:-1]
-        )
-        if premature_reveal:
-            raise HTTPException(
-                status_code=409,
-                detail="Tutor-Solved rescue reveals the canonical answer before its final step.",
-            )
     return ActiveGuidedRescue(
         question_id=question_id,
         rescue_id=rescue_id,

@@ -40,6 +40,7 @@ from app.models.guided_learning import (
 from app.models.student_model_session import (
     InterventionInputSubmittedEvent,
     GuidedRepairCompletedEvent,
+    GuidedSupportEvent,
     IndependentQuestionSetRequestedEvent,
     PublicStudentModelEvent,
     PublicStudentModelRouting,
@@ -315,6 +316,13 @@ class SessionRecord(BaseModel):
     # Model, stored before it is sent: a retry re-sends this identical event
     # rather than deciding again from a reply that may never have arrived.
     pending_guided_progression: GuidedRepairCompletedEvent | IndependentQuestionSetRequestedEvent | None = None
+    # pending_support_event is the support escalation owed to Student Model,
+    # stored before it is sent. Student Model replays an identical request_id
+    # with the identical envelope, so a rung that was accepted upstream but
+    # failed while its visual presentation was being built is recovered by
+    # re-sending THIS event -- never by deciding a fresh escalation against the
+    # journey the first one already advanced.
+    pending_support_event: GuidedSupportEvent | None = None
     journey_recovery_required: bool = False
 
     session_id: SessionId
@@ -456,6 +464,7 @@ class SessionResponse(SessionRecord):
 
     correct_answer: str | None = Field(default=None, exclude=True)
     active_guided_rescue: ActiveGuidedRescue | None = Field(default=None, exclude=True)
+    pending_support_event: GuidedSupportEvent | None = Field(default=None, exclude=True)
     last_completed_rescue_action_id: str | None = Field(default=None, exclude=True)
     scaffold_steps: list[str] = Field(default_factory=list, exclude=True)
     scaffold_expected_response: str | None = Field(default=None, exclude=True)

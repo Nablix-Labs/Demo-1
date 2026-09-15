@@ -129,8 +129,11 @@ def test_reconcile_updates_the_stale_session_from_a_409_body() -> None:
 
     recovered = session_service._sessions[session_id]
     assert recovered.student_model_event.journey_state.version == stale_version + 3
-    assert recovered.question_id is None
-    assert recovered.active_student_model_question is None
+    # The question IDENTITY survives so _apply_schema_event can tell whether the
+    # recovered question is the same one; the stale PAYLOAD does not.
+    assert recovered.question_id == body["question_id"]
+    assert recovered.journey_recovery_required is True
+    assert recovered.student_model_event.phase_payload is None
 
 
 def test_reconcile_ignores_a_conflict_for_a_different_student() -> None:
@@ -226,11 +229,12 @@ def test_interaction_409_reconciles_the_session_before_returning(
 
     recovered = session_service._sessions[session_id]
     assert recovered.student_model_event.journey_state.version == stale_version + 3
-    # The v8-derived question must not survive onto the v11 journey.
-    assert recovered.question_id is None
-    assert recovered.current_question is None
-    assert recovered.correct_answer is None
-    assert recovered.active_student_model_question is None
+    # The v8-derived PAYLOAD must not survive onto the v11 journey, and no work
+    # may be submitted until recovery has replayed SESSION_OPENED. The question
+    # identity is kept only so the recovered question can be compared against it.
+    assert recovered.student_model_event.phase_payload is None
+    assert recovered.journey_recovery_required is True
+    assert recovered.question_id == body["question_id"]
 
 
 def test_live_shape_retry_recovers_with_a_fresh_authoritative_question(
@@ -382,7 +386,6 @@ def test_reconcile_resumes_at_the_effective_phase() -> None:
     # Nothing from the stale version survives, and no work may be submitted
     # until the client has refreshed.
     assert recovered.journey_recovery_required is True
-    assert recovered.question_id is None
     assert recovered.show_canvas is False
 
 

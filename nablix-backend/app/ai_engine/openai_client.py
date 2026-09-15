@@ -718,6 +718,7 @@ class OpenAIAIEngineClient:
         student_response: str,
         input_source: InputSource,
         system_prompt: str,
+        validation_feedback: str | None = None,
     ) -> ScaffoldStepEvaluation:
         content = self._request_guided_json(
             name="scaffold_step_evaluation",
@@ -730,6 +731,8 @@ class OpenAIAIEngineClient:
                 "scaffold": context.model_dump(),
                 "student_response": student_response,
                 "input_source": input_source,
+                "validation_feedback": validation_feedback,
+                "answer_reveal_allowed": False,
             },
         )
         try:
