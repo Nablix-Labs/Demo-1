@@ -35,7 +35,7 @@ import {
   orientationVideoForTopicCode,
   type OrientationMedia,
 } from '@/lib/demoContent';
-import { useNumeraStore, type TutorElement } from '@/store/useNumeraStore';
+import { useNumeraStore } from '@/store/useNumeraStore';
 import { beginSession, resumeSession, sessionStartError } from '@/hooks/useDemoTutor';
 import { useAuthStore } from '@/store/useAuthStore';
 import {
@@ -54,6 +54,7 @@ import {
 } from '@/lib/api';
 import { applyPhaseHandoff } from '@/lib/phaseHandoff';
 import { useWorkedExamplePlayer } from '@/hooks/useWorkedExamplePlayer';
+import { workedExampleStepElements } from '@/lib/workedExampleSheet';
 import {
   PLAYBACK_RATES, currentRate, rememberRate, rateLabel, type PlaybackRate,
 } from '@/lib/playbackSpeed';
@@ -985,17 +986,32 @@ function WorkedExampleCanvas({
   const applyCanvasDraw = useNumeraStore((s) => s.applyCanvasDraw);
   const clearTutorMarks = useNumeraStore((s) => s.clearTutorMarks);
 
-  // `replace`, not `append`: the canvas shows ONE step at a time. Stacking every
-  // step turned the sheet back into the list of eight this was meant to get away
-  // from (Manjusha, 2026-07-28) — by the end the student is reading a wall of
-  // working instead of watching one idea being written.
+  /**
+   * `append`, so the working stays up — issue #303.
+   *
+   * This was `replace`, on the reasoning that stacking the steps would turn the
+   * sheet back into the list of eight cards Manjusha rejected on 28 Jul. But
+   * replace also gave every step the SAME coordinates, so writing step 2 rubbed
+   * out step 1 and the finished example was one line: "steps are written one by
+   * one, it should be in one page" (Sanya, 14 Sep).
+   *
+   * What she is asking for and what Manjusha asked for are the same thing done
+   * properly — a teacher writes down the page and leaves the working up. The
+   * pacing is untouched; only the geometry changed, and it now lives in
+   * lib/workedExampleSheet.ts where it can be tested.
+   *
+   * Safe to append: the action id is unique per step, so a step redrawn by
+   * stepping back is dropped by the idempotency window rather than doubled, and
+   * `clearTutorMarks` — which the player calls on arrival and on restart —
+   * clears that window along with the marks.
+   */
   const draw = useCallback(
     (step: SchemaWorkedExampleStep, index: number, total: number) => {
       applyCanvasDraw({
         author: 'tutor',
-        mode: 'replace',
+        mode: 'append',
         actionId: `${example.worked_example_id}-${step.step_id}`,
-        elements: stepElements(step, index, total),
+        elements: workedExampleStepElements(step, index, total),
       });
     },
     [applyCanvasDraw, example.worked_example_id],
@@ -1107,42 +1123,4 @@ function WorkedExampleCanvas({
       </div>
     </section>
   );
-}
-
-/**
- * One step's line of working, alone on the sheet.
- *
- * Only the current step is drawn, so it sits large and centred rather than being
- * squeezed into a stack — the point is to watch one idea being written, not to
- * end up rereading eight lines.
- *
- * `screen_content` is plain unicode maths ("a × a = a²"), not LaTeX, so it is a
- * `text` element rather than `math` — handing it to KaTeX would render the
- * source, not the maths. Geometry is normalised 0–1 and text is anchored at its
- * LEFT edge (TUTOR-CANVAS-WRITE-SPEC §3.3).
- */
-function stepElements(
-  step: SchemaWorkedExampleStep,
-  index: number,
-  total: number,
-): Array<Omit<TutorElement, 'id'>> {
-  if (!step.screen_content) return [];
-  return [
-    {
-      kind: 'text',
-      x: 0.08,
-      y: 0.34,
-      text: `Step ${index + 1} of ${total}`,
-      size: 15,
-      color: '#5A6478',
-    },
-    {
-      kind: 'text',
-      x: 0.08,
-      y: 0.48,
-      text: step.screen_content,
-      size: 34,
-      color: '#1B2A4A',
-    },
-  ];
 }
