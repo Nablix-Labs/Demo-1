@@ -902,7 +902,6 @@ async def process_answer_with_session_event(
                 generated_support_text=(
                     tutor.contribution.generated_support_text
                     if tutor.contribution is not None
-                    and not rules.guided_learning.production_boundary_enabled
                     and tutor.contribution.support_relevance in {"UNMAPPED", "MISMATCHED"}
                     else None
                 ),
@@ -914,7 +913,7 @@ async def process_answer_with_session_event(
                 generated_visual_rows=(
                     tutor.contribution.generated_visual_rows
                     if tutor.contribution is not None and event_type == "INCORRECT_ATTEMPT"
-                    and not rules.guided_learning.production_boundary_enabled
+                    and tutor.contribution.support_relevance in {"UNMAPPED", "MISMATCHED"}
                     else None
                 ),
             ),
@@ -1974,6 +1973,26 @@ def _scaffold_evaluation_context(
     ):
         raise RuntimeError("Active scaffold is missing evaluation context.")
     answer_spec = _active_answer_spec(session)
+    rubric = session.generated_question_rubric
+    missing_component_ids = (
+        set(session.guided_teaching_state.missing_component_ids)
+        if session.guided_teaching_state is not None
+        else set()
+    )
+    allowed_concepts = (
+        [
+            concept
+            for concept in rubric.required_concepts
+            if not missing_component_ids or concept.concept_id in missing_component_ids
+        ]
+        if rubric is not None
+        else []
+    )
+    active_component_id = (
+        session.guided_teaching_state.active_component_id
+        if session.guided_teaching_state is not None
+        else None
+    )
     return ScaffoldEvaluationContext(
         scaffold_id=session.scaffold_id,
         step_id=session.current_scaffold_step_id,
@@ -1993,6 +2012,8 @@ def _scaffold_evaluation_context(
         expected_response_criterion=session.scaffold_expected_response,
         completed_step_ids=session.delivered_scaffold_step_ids,
         next_step_prompt=_next_scaffold_state(session)[0],
+        active_component_id=active_component_id,
+        allowed_concepts=allowed_concepts,
     )
 
 
@@ -3259,10 +3280,41 @@ async def _option_selected_interaction_response(
             generated_question_rubric=session.generated_question_rubric,
             active_teaching_objective=session.active_teaching_objective,
             guided_teaching_state=selected_state,
+            canvas_submission_required=session.canvas_submission_required,
             phase3_allowed_error_definitions=_schema_question(session).tutor_view.potential_errors,
         )
     )
     tutor = tutor_result_from_ai_response(classification)
+    answer_spec = _active_answer_spec(session)
+    canonical_answer = answer_spec.canonical_answer if answer_spec is not None else ""
+    tutor_action_anchors = plan_canvas_action_anchors(
+        session.question_id,
+        session.current_question,
+    )
+    tutor_canvas_actions = plan_tutor_canvas_actions(
+        tutor=tutor,
+        question_anchors=tutor_action_anchors,
+        canvas_events=_canvas_events_for_context(request, session),
+        turn_id=request.turn_id or "TURN-0000",
+        canonical_answer=canonical_answer,
+        fallback_labels=rules.guided_learning.fallback_canvas_labels,
+        wrong_attempt_count=session.wrong_attempt_count,
+        student_response=selection,
+    )
+    logger.info(
+        "guided_canvas_actions_planned",
+        extra={
+            "question_id": session.question_id,
+            "turn_id": request.turn_id,
+            "action_count": len(tutor_canvas_actions),
+            "action_ids": [action.action_id for action in tutor_canvas_actions],
+            "action_types": [action.type for action in tutor_canvas_actions],
+            "question_advanced": False,
+            "action_question_id": session.question_id,
+            "interaction_type": "OPTION_SELECTED",
+        },
+    )
+    tutor = tutor.model_copy(update={"tutor_canvas_actions": tutor_canvas_actions})
     message = tutor.tutor_message or fallback_message
     last_tutor_action, expected_student_response = _conversation_state_for(
         tutor.recommended_conversation_action,
@@ -3295,6 +3347,11 @@ async def _option_selected_interaction_response(
             "generated_question_rubric": tutor.generated_question_rubric,
             "active_teaching_objective": tutor.active_teaching_objective,
             "guided_teaching_state": tutor.guided_teaching_state or selected_state,
+            **_canvas_memory_update_with_tutor_actions(
+                request,
+                session,
+                tutor_canvas_actions,
+            ),
             **_turn_updates(
                 request.turn_id,
                 last_tutor_action,
@@ -3327,6 +3384,8 @@ async def _option_selected_interaction_response(
                     "WRITE" if tutor.requires_written_math_evidence else None
                 ),
                 "write_instruction": tutor.write_instruction,
+                "tutor_canvas_actions": tutor_canvas_actions,
+                "question_anchors": tutor_action_anchors,
             }
         ),
     )
@@ -4179,6 +4238,7 @@ async def _process_interaction(
         canvas_events=_canvas_events_for_context(request, session),
         has_canvas_evidence=canvas_evidence is not None,
         canvas_solution_complete_candidate=canvas_solution_complete_candidate,
+        canvas_submission_required=session.canvas_submission_required,
         phase3_submission_confirmed=(
             request.interaction_type == "ANSWER_SUBMISSION"
             and session.current_phase == "INDEPENDENT_PRACTICE"
@@ -4197,7 +4257,15 @@ async def _process_interaction(
         get_settings().min_ocr_confidence_threshold,
         rules.guided_learning.minimum_ocr_confidence,
     )
-    if ocr is not None and _legacy_ocr_needs_writing(ocr, minimum_ocr_confidence):
+    model_first_guided_enabled = (
+        rules.guided_learning.response_aware_enabled
+        or rules.guided_learning.production_boundary_enabled
+    )
+    if (
+        not model_first_guided_enabled
+        and ocr is not None
+        and _legacy_ocr_needs_writing(ocr, minimum_ocr_confidence)
+    ):
         message = _UNRELIABLE_EVIDENCE_MESSAGE
         write_actions = plan_write_request_tutor_actions(
             request.turn_id or "TURN-0000", 1
@@ -4434,9 +4502,8 @@ async def _process_interaction(
                     turn_session.correct_answer,
                     rules,
                 )
-                if tutor.contribution is None:
-                    tutor_message = next_prompt
-                    tutor_message_voice = next_prompt
+                tutor_message = next_prompt
+                tutor_message_voice = next_prompt
                 scaffold_steps = [next_prompt]
         else:
             scaffold_steps = list(turn_session.scaffold_steps)
@@ -4757,9 +4824,7 @@ async def _process_interaction(
         else None
     )
     tutor_canvas_actions = (
-        []
-        if question_advanced
-        else plan_rescue_canvas_actions(
+        plan_rescue_canvas_actions(
             rescue_context,
             request.turn_id or "TURN-0000",
             canonical_answer,
@@ -4789,6 +4854,8 @@ async def _process_interaction(
                 0,
                 len(tutor.canvas_intentions) - len(tutor_canvas_actions),
             ),
+            "question_advanced": question_advanced,
+            "action_question_id": turn_session.question_id,
         },
     )
     tutor = tutor.model_copy(update={"tutor_canvas_actions": tutor_canvas_actions})

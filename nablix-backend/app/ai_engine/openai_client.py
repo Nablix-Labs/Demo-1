@@ -41,6 +41,7 @@ from app.models.guided_learning import (
     GeneratedConcept,
     GeneratedQuestionRubric,
     GuidedAssessment,
+    GuidedComparisonRow,
     GuidedEvaluation,
     ScaffoldEvaluationContext,
     ScaffoldStepEvaluation,
@@ -95,7 +96,7 @@ def contribution_output_schema(contribution_schema: dict[str, object]) -> dict[s
     base = deepcopy(contribution_schema)
     variants: list[dict[str, object]] = []
     combinations = [
-        (["ACKNOWLEDGEMENT", "EXPLANATION_REQUEST", "UNCLEAR_INPUT", "EXPRESSED_DIFFICULTY"],
+        (["ACKNOWLEDGEMENT", "EXPLANATION_REQUEST", "TASK_CLARIFICATION", "UNCLEAR_INPUT", "EXPRESSED_DIFFICULTY"],
          ["NOT_ASSESSED"], ["NOT_NEEDED"]),
         (["MATHEMATICAL_ATTEMPT"], ["CORRECT", "INCOMPLETE"], ["NOT_NEEDED"]),
         (["MATHEMATICAL_ATTEMPT"], ["INCORRECT"], ["MATCHED"]),
@@ -281,6 +282,18 @@ class OpenAITutorTurn(StrictSchema):
 class OpenAITutorMessage(StrictSchema):
     tutor_message: str
     tutor_message_voice_optimised: str
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class OpenAIGuidedWording(StrictSchema):
+    tutor_message: str
+    tutor_message_voice_optimised: str
+    generated_support_text: str | None = Field(max_length=280)
+    generated_visual_rows: list[GuidedComparisonRow] | None = Field(
+        default=None,
+        min_length=2,
+        max_length=4,
+    )
     confidence: float = Field(ge=0.0, le=1.0)
 
 
@@ -509,6 +522,13 @@ class OpenAIAIEngineClient:
                 "guided_tutor_context": guided_tutor_context.model_dump(),
                 "student_response": student_response,
                 "input_source": input_source,
+                "submission_contract": {
+                    "canvas_submission_required": guided_tutor_context.canvas_submission_required,
+                    "canvas_evidence_present": guided_tutor_context.canvas_evidence_present,
+                    "canvas_solution_complete_candidate": guided_tutor_context.canvas_solution_complete_candidate,
+                    "canvas_ocr_text": guided_tutor_context.canvas_ocr_text,
+                    "canvas_ocr_confidence": guided_tutor_context.canvas_ocr_confidence,
+                },
                 "allowed_error_codes": allowed_error_codes,
                 "recent_conversation": [
                     message.model_dump()
@@ -562,6 +582,13 @@ class OpenAIAIEngineClient:
                 "guided_tutor_context": guided_tutor_context.model_dump(),
                 "student_response": student_response,
                 "input_source": input_source,
+                "submission_contract": {
+                    "canvas_submission_required": guided_tutor_context.canvas_submission_required,
+                    "canvas_evidence_present": guided_tutor_context.canvas_evidence_present,
+                    "canvas_solution_complete_candidate": guided_tutor_context.canvas_solution_complete_candidate,
+                    "canvas_ocr_text": guided_tutor_context.canvas_ocr_text,
+                    "canvas_ocr_confidence": guided_tutor_context.canvas_ocr_confidence,
+                },
                 "allowed_error_codes": allowed_error_codes,
                 "recent_conversation": [message.model_dump() for message in recent_conversation],
                 "evaluator_prompt_version": evaluator_prompt_version,
@@ -585,6 +612,7 @@ class OpenAIAIEngineClient:
                 selected_error_code=assessment.selected_error_code,
                 confidence=assessment.confidence,
                 next_objective=assessment.next_objective,
+                submission_state=assessment.submission_state,
                 tutor_message="Internal assessment completed.",
                 tutor_message_voice="Internal assessment completed.",
             )
@@ -598,17 +626,17 @@ class OpenAIAIEngineClient:
         self,
         system_prompt: str,
         wording_context: dict[str, object],
-    ) -> OpenAITutorMessage:
+    ) -> OpenAIGuidedWording:
         """Write one safe tutor turn from learner-visible evidence only."""
 
         content = self._request_guided_json(
             name="guided_fact_budget_wording",
-            schema=OpenAITutorMessage.model_json_schema(),
+            schema=OpenAIGuidedWording.model_json_schema(),
             system_prompt=system_prompt,
             user_payload=wording_context,
         )
         try:
-            return OpenAITutorMessage.model_validate(content)
+            return OpenAIGuidedWording.model_validate(content)
         except ValidationError as error:
             raise AdapterError(
                 "openai_ai_engine",

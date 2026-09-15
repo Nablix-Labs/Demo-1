@@ -10,6 +10,9 @@ from app.models.question_anchor import QuestionTextAnchor
 
 
 GuidedStudentState = Literal["CORRECT", "PARTIAL", "WRONG", "STUCK", "UNCLEAR"]
+GuidedSubmissionState = Literal[
+    "NOT_REQUIRED", "MISSING", "MATCHING", "MISMATCHED", "UNCLEAR",
+]
 GuidedPedagogicalMove = Literal[
     "ACKNOWLEDGE_AND_PROBE",
     "TEACH_AND_PROBE",
@@ -213,6 +216,11 @@ class GuidedTutorContext(GuidedLearningModel):
     selected_option_text: str | None
     active_canvas_events: list[CanvasEvent]
     canvas_evidence: GuidedCanvasEvidence = Field(default_factory=GuidedCanvasEvidence)
+    canvas_submission_required: StrictBool = False
+    canvas_evidence_present: StrictBool = False
+    canvas_solution_complete_candidate: StrictBool = False
+    canvas_ocr_text: str | None = None
+    canvas_ocr_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     prior_tutor_response: str | None = None
     attempt_count: int = Field(default=0, ge=0)
     learning_phase: str = "GUIDED_PRACTICE"
@@ -403,7 +411,7 @@ class StudentContribution(GuidedLearningModel):
 
     kind: Literal[
         "MATHEMATICAL_ATTEMPT", "ACKNOWLEDGEMENT", "EXPLANATION_REQUEST",
-        "UNCLEAR_INPUT", "EXPRESSED_DIFFICULTY",
+        "TASK_CLARIFICATION", "UNCLEAR_INPUT", "EXPRESSED_DIFFICULTY",
     ]
     assessment: Literal["NOT_ASSESSED", "CORRECT", "INCORRECT", "INCOMPLETE"]
     error_category: Literal[
@@ -443,7 +451,7 @@ class GuidedAssessmentContribution(GuidedLearningModel):
 
     kind: Literal[
         "MATHEMATICAL_ATTEMPT", "ACKNOWLEDGEMENT", "EXPLANATION_REQUEST",
-        "UNCLEAR_INPUT", "EXPRESSED_DIFFICULTY",
+        "TASK_CLARIFICATION", "UNCLEAR_INPUT", "EXPRESSED_DIFFICULTY",
     ]
     assessment: Literal["NOT_ASSESSED", "CORRECT", "INCORRECT", "INCOMPLETE"]
     error_category: Literal[
@@ -479,6 +487,7 @@ class GuidedAssessment(GuidedLearningModel):
     selected_error_code: str | None
     confidence: float = Field(ge=0.0, le=1.0)
     next_objective: ActiveTeachingObjective | None
+    submission_state: GuidedSubmissionState
 
 
 class GuidedEvaluation(GuidedLearningModel):
@@ -491,6 +500,7 @@ class GuidedEvaluation(GuidedLearningModel):
     selected_error_code: str | None
     confidence: float = Field(ge=0.0, le=1.0)
     next_objective: ActiveTeachingObjective | None
+    submission_state: GuidedSubmissionState = "NOT_REQUIRED"
     tutor_message: str = Field(min_length=1)
     tutor_message_voice: str = Field(min_length=1)
     write_instruction: str | None = Field(default=None, max_length=160)
@@ -515,6 +525,8 @@ class ScaffoldEvaluationContext(GuidedLearningModel):
     expected_response_criterion: str
     completed_step_ids: list[str]
     next_step_prompt: str | None = None
+    active_component_id: str | None = None
+    allowed_concepts: list[GeneratedConcept] = Field(default_factory=list)
 
 
 class ScaffoldStepEvaluation(GuidedLearningModel):
@@ -522,6 +534,7 @@ class ScaffoldStepEvaluation(GuidedLearningModel):
     step_satisfied: StrictBool
     original_answer_correct: StrictBool
     demonstrated_fact: str | None
+    focused_evidence: FocusedComponentEvidence | None = None
     confidence: float = Field(ge=0.0, le=1.0)
     tutor_message: str = Field(min_length=1)
     tutor_message_voice: str = Field(min_length=1)

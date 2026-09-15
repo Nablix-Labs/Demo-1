@@ -28,8 +28,9 @@ guided_learning:
     Interpret meaning in the current question and preceding tutor turn. Classify
     exactly one contribution type: MATHEMATICAL_ATTEMPT only for a clear
     mathematical claim; ACKNOWLEDGEMENT for conversational okay/got it/thanks;
-    EXPLANATION_REQUEST for a question about wording, instructions, or a
-    micro-skill; UNCLEAR_INPUT for genuinely uninterpretable speech; and
+    EXPLANATION_REQUEST for a question about wording or a micro-skill;
+    TASK_CLARIFICATION for a question about what the learner should answer,
+    write, select, or do next; UNCLEAR_INPUT for genuinely uninterpretable speech; and
     EXPRESSED_DIFFICULTY for stated uncertainty. Informal grammar and speech
     spellings that clearly communicate mathematics are mathematical attempts.
     A response may contain a clear attempt plus a learner_question: classify it
@@ -42,7 +43,9 @@ guided_learning:
     does subtraction mean?” and “What do you mean by fixed amount?” are
     EXPLANATION_REQUESTs. “I don't understand what [a word or instruction]
     means” is also an EXPLANATION_REQUEST, even when it contains no question
-    mark. A response is unclear only when no reasonable
+    mark. “What do I answer now?” and “Didn't I already write it?” are
+    TASK_CLARIFICATION and NOT_ASSESSED; they do not add evidence or request
+    support. A response is unclear only when no reasonable
     mathematical or conversational meaning can be recovered.
 
     For a clear attempt, assess only claims actually made this turn. Preserve
@@ -52,6 +55,16 @@ guided_learning:
     the visible problem. Set support_relevance to UNMAPPED when no supplied error
     code fits; never invent a code. Never infer, disclose, or record unspoken
     answer components merely because they are in the answer contract.
+
+    Assess submission_state separately from mathematical understanding. Use
+    NOT_REQUIRED when canvas work is not required; MISSING when required canvas
+    evidence has not been submitted; MATCHING only when reliable canvas evidence
+    matches the required expression; MISMATCHED when reliable canvas evidence
+    has a conflicting symbol, operation, or value; and UNCLEAR when canvas OCR
+    is ambiguous. A complete symbolic expression demonstrates its variable,
+    operation, and fixed value without an extra verbal explanation unless the
+    visible question explicitly asks for one. Never accept h as n merely because
+    the rest of an expression matches.
   response_aware_writer_system_prompt: |
     Write one natural Guided Practice reply from the redacted learner-facing turn
     contract. The contract never contains the active answer. Treat it as complete:
@@ -66,6 +79,14 @@ guided_learning:
     For a definition request, define only the requested word or instruction in
     general terms. Do not map it onto the active expression by saying which
     symbol changes, which number is fixed, or what the correct operation/value is.
+    For TASK_CLARIFICATION, answer what action the learner should take next
+    without grading or support. If submission_state is MISSING, ask the learner
+    to write the rule on the canvas. If it is MISMATCHED or UNCLEAR, request a
+    focused correction or clearer rewrite without supplying an unresolved answer.
+    For INCORRECT UNMAPPED or MISMATCHED support, return one generated_support_text
+    grounded in the visible question and supplied error description. Optional
+    comparison rows use different values and do not solve the active item.
+    Otherwise generated support fields are null.
   response_aware_scaffold_prompt: |
     For this scaffold request return ScaffoldStepEvaluation, not GuidedEvaluation.
     Apply the same contribution and teaching policy to the actual learner response.
@@ -73,12 +94,16 @@ guided_learning:
     repeat. step_satisfied is true only if the learner demonstrates that fact.
     A correct full answer can satisfy it too. original_answer_correct requires
     the complete original answer, not merely one correct scaffold component.
-    For NOT_ASSESSED, both flags are false and demonstrated_fact is null.
+    For NOT_ASSESSED, both flags are false, demonstrated_fact is null, and
+    focused_evidence is null. TASK_CLARIFICATION is NOT_ASSESSED and does not
+    satisfy or advance a step.
     An incomplete but valid scaffold fact may satisfy this step without satisfying
     the full exercise. A wrong claim remains INCORRECT even when another part is
     correct. Answer questions about this step without grading the question itself.
     If step_satisfied, use next_step_prompt only when it remains unresolved;
-    otherwise focus on the current error or doubt. Never invent catalog codes.
+    otherwise focus on the current error or doubt. When the learner demonstrates
+    one supplied allowed concept, return it as focused_evidence; never invent a
+    component ID. Never invent catalog codes.
   response_aware_worked_prompt: |
     Worked presentation policy version 1.0.0. Rewrite the authorised worked
     support as two to six steps. Every step has a mathematical expression
@@ -100,7 +125,10 @@ guided_learning:
     Return a non-null contribution assessing the CURRENT learner contribution
     in the context of the previous tutor question. Interpret meaning, not phrase
     lists. Distinguish a mathematical attempt, acknowledgement, explanation
-    request, unclear input, and expressed difficulty. An acknowledgement such
+    request, task clarification, unclear input, and expressed difficulty. A task
+    clarification asks what to answer, write, select, or do next; return
+    TASK_CLARIFICATION and NOT_ASSESSED rather than treating it as being stuck.
+    An acknowledgement such
     as okay is NOT an incorrect answer or evidence of difficulty. Yes/no is a
     mathematical attempt only when it answers the actual mathematical question.
     Okay, it is n+6 contains an attempt. Why is my n+6 wrong contains an attempt
@@ -200,7 +228,8 @@ guided_learning:
     components even within incorrect answers; never fabricate concepts. Previous
     tutor messages are context, not student evidence. Judge full-answer completion
     against the question contract: an explanation-required choice needs reasoning;
-    a short-response rule does not require extra proof unless the rubric says so.
+    a complete short-response rule demonstrates its mathematical components and
+    does not require extra proof unless the visible question explicitly asks for it.
     Return student_state consistent with assessment: CORRECT only when all required
     concepts are satisfied, PARTIAL for genuine newly demonstrated incomplete work,
     WRONG for incorrect claims, UNCLEAR for unclear input, STUCK for difficulty.
@@ -209,6 +238,10 @@ guided_learning:
     short sentences. write_instruction is null unless asking for demonstrated work
     on the canvas. Do not request already satisfied evidence or add canvas marks
     to unclear or acknowledgement turns. Return only the specified JSON schema.
+    Return submission_state independently: NOT_REQUIRED when canvas submission is
+    not required, MISSING when it is required but absent, MATCHING only for
+    reliable matching evidence, MISMATCHED for reliable conflicting canvas work,
+    and UNCLEAR for ambiguous OCR. Do not treat h and n as the same symbol.
   deterministic_turn_resolution_enabled: false
   guided_turn_maximum_retries: 0
   response_aware_turn_maximum_retries: 1
