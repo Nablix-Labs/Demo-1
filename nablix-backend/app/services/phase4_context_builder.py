@@ -114,9 +114,6 @@ def _replay_item(index: int, attempt: TopicAttemptRecord) -> ReplayItem | None:
             },
         )
 
-    if attempt.work_artifact is None:
-        skipped("no_work_artifact")
-        return None
     if attempt.question_usage_id is None:
         skipped("no_question_usage_id")
         return None
@@ -125,9 +122,6 @@ def _replay_item(index: int, attempt: TopicAttemptRecord) -> ReplayItem | None:
         for error in attempt.detected_errors
         if error.micro_skill_id is not None
     ]
-    if not detected_errors:
-        skipped("no_detected_errors")
-        return None
     return ReplayItem(
         review_item_id=f"REV-{index:03d}",
         phase=PHASE_3,
@@ -141,7 +135,7 @@ def _replay_item(index: int, attempt: TopicAttemptRecord) -> ReplayItem | None:
             artifact_id=attempt.work_artifact.artifact_id,
             pdf_url=attempt.work_artifact.pdf_url,
             page_count=attempt.work_artifact.page_count,
-        ),
+        ) if attempt.work_artifact is not None else None,
         detected_errors=detected_errors,
         linked_misconceptions=attempt.linked_misconceptions,
         canonical_answer=attempt.canonical_answer,

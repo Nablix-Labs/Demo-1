@@ -149,6 +149,7 @@ export function replayAt(review: Phase4Review, index: number): Phase4Replay | nu
  * because it counted pages wrong.
  */
 export function openingPageNo(replay: Phase4Replay): number {
+  if (replay.work_artifact === null) return 1;
   const wanted = replay.first_error.student_page_no;
   if (typeof wanted !== 'number') return 1;
   if (wanted < 1 || wanted > replay.work_artifact.page_count) return 1;

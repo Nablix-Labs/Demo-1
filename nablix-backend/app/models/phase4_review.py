@@ -46,8 +46,8 @@ class ReplayItem(StrictSchema):
     question_text: str = Field(min_length=1)
     student_answer: str | None = None
     ocr_text: str | None = None
-    work_artifact: WorkArtifact
-    detected_errors: list[DetectedError] = Field(min_length=1)
+    work_artifact: WorkArtifact | None = None
+    detected_errors: list[DetectedError]
     linked_misconceptions: list[str]
     canonical_answer: str = Field(min_length=1)
     answer_steps: list[str] = Field(min_length=1)
@@ -207,7 +207,7 @@ class TutorReplay(StrictSchema):
     review_item_id: str = Field(min_length=1)
     question_id: str = Field(min_length=1)
     attempt_id: str = Field(min_length=1)
-    artifact_id: str = Field(min_length=1)
+    artifact_id: str | None = None
     first_error: FirstError
     replay_steps: list[TutorReplayStep] = Field(min_length=1)
     # Forwarded from the request after generation, never asked of the model:
@@ -221,6 +221,8 @@ class TutorReplay(StrictSchema):
         expected = list(range(1, len(self.replay_steps) + 1))
         if [step.sequence_no for step in self.replay_steps] != expected:
             raise ValueError("replay_steps must be ordered consecutively from 1")
+        if self.artifact_id is None and self.first_error.student_page_no is not None:
+            raise ValueError("student_page_no requires a work artifact")
         return self
 
 

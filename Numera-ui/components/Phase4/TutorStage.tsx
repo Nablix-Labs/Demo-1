@@ -187,11 +187,11 @@ export default function TutorStage({
   }, [muted, index]);
 
   const {
-    pdf_url: pdfUrl,
-    page_count: pageCount,
+    pdf_url: pdfUrl = '',
+    page_count: pageCount = 0,
     snapshot_image_url: snapshotUrl,
     error_regions: errorRegions,
-  } = replay.work_artifact;
+  } = replay.work_artifact ?? {};
   /**
    * The flat image is preferred for this panel, the PDF is the record.
    *

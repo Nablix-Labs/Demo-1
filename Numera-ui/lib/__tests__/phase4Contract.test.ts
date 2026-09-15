@@ -86,14 +86,8 @@ describe('a topic with one wrong answer', () => {
     expect(reviewProgressLabel(0, review!.tutor_replays.length)).toBe('Review 1 of 1');
   });
 
-  it('degrades the work panel instead of breaking, since pdf_url is not sent', () => {
-    // TutorReplay carries artifact_id alone. page_count 0 keeps the page
-    // selector hidden rather than offering a page that cannot open.
-    const artifact = replayAt(review!, 0)!.work_artifact;
-    expect(artifact.artifact_id).toBe('ART-000122');
-    expect(artifact.pdf_url).toBe('');
-    expect(artifact.page_count).toBe(0);
-    // openingPageNo must not return the backend's page 1 against a 0-page doc.
+  it('preserves an absent work artifact instead of inventing one', () => {
+    expect(replayAt(review!, 0)!.work_artifact).toBeNull();
     expect(openingPageNo(replayAt(review!, 0)!)).toBe(1);
   });
 
