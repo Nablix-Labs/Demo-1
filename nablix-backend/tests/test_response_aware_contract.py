@@ -3,6 +3,7 @@
 These tests validate the service contract, not the quality of live interpretation.
 """
 import pytest
+from fastapi import HTTPException
 
 from app.ai_engine.classifier import (
     ClassificationRequest,
@@ -167,8 +168,11 @@ def test_generated_walkthrough_is_persistable_and_rejects_early_reveal(monkeypat
         tutor_solved=TutorSolved(explanation="Combine the parts.", final_answer="n + 5",
                                  answer_steps=["Compare the examples.", "n + 5"]),
     )
-    active = active_rescue_from("Q-T01-001", rescue, "n + 5", "TEST-WORKED")
-    session = SessionRecord.model_construct(question_id="Q-T01-001", current_question="3 + 5, 9 + 5, 14 + 5")
+    active = active_rescue_from("Q-T01-001", rescue, "TEST-WORKED")
+    session = SessionRecord.model_construct(
+        question_id="Q-T01-001", current_question="3 + 5, 9 + 5, 14 + 5",
+        active_guided_rescue=None,
+    )
     presentation = GuidedWorkedPresentation.model_validate({"steps": [
         {"expression": "3 + 5, 9 + 5, 14 + 5", "annotation": "The first numbers differ while the added amount repeats."},
         {"expression": "n + 5", "annotation": "The letter represents each starting number and five is added."},
@@ -181,7 +185,9 @@ def test_generated_walkthrough_is_persistable_and_rejects_early_reveal(monkeypat
             return presentation
 
     monkeypatch.setattr(interaction_service, "build_openai_ai_engine_client", lambda settings: PresentationClient())
-    updated = interaction_service._response_aware_worked_rescue(session, active, rescue, "n + 5", rules)
+    updated = interaction_service._presented_rescue(
+        session, "Q-T01-001", rescue, "n + 5", "TEST-WORKED", rules,
+    )
     assert updated is not None
     assert updated.steps[-1] == "n + 5\nThe letter represents each starting number and five is added."
     assert updated.current_step_index == 1
@@ -190,8 +196,10 @@ def test_generated_walkthrough_is_persistable_and_rejects_early_reveal(monkeypat
         {"expression": "n + 5", "annotation": "This is the answer."},
         {"expression": "n + 5", "annotation": "Five is added to the starting value."},
     ]})
-    with pytest.raises(AdapterError, match="before authorisation"):
-        interaction_service._response_aware_worked_rescue(session, active, rescue, "n + 5", rules)
+    with pytest.raises(HTTPException, match="before authorisation"):
+        interaction_service._presented_rescue(
+            session, "Q-T01-001", rescue, "n + 5", "TEST-WORKED", rules,
+        )
 
 
 def test_strict_output_cannot_mix_correctness_and_corrective_support() -> None:

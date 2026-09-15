@@ -126,8 +126,10 @@ from app.services.session_service import (
     reconcile_journey_conflict,
     complete_guided_progression,
     resume_guided_progression,
+    store_pending_support_event,
     get_session,
     _apply_schema_event,
+    _question_updates,
     _authoritative_intervention,
     _get_owned_session_for_turn,
     submit_intervention_input,
@@ -146,7 +148,6 @@ from app.services.session_service import (
     nudge_deliveries_for_tutor_turn,
     nudge_delivery_for,
     store_nudge_delivery,
-    store_active_rescue,
     store_prerequisite_repair_event,
     update_nudge_delivery_status,
     update_side_channel_state,
@@ -402,38 +403,12 @@ def _guided_rescue_message(rescue: GuidedRescue) -> str | None:
     )
 
 
-def _validate_guided_rescue_content(
-    rescue: GuidedRescue,
-    correct_answer: str,
-    rules: ClassifierRulesConfig,
-) -> None:
-    """Reject authored rescue content that exposes the active answer too early."""
+def _written_rescue_steps(
+    session: SessionRecord, rescue: GuidedRescue, canonical_answer: str,
+    rescue_id: str, rules: ClassifierRulesConfig,
+) -> list[str]:
+    """The response-aware rewrite of an authorised rung, one row per step."""
 
-    if rescue.rescue_type == "PARALLEL_EXAMPLE":
-        example = rescue.parallel_example
-        steps = (
-            []
-            if example is None
-            else [example.problem, *example.worked_steps, example.final_answer]
-        )
-    else:
-        solved = rescue.tutor_solved
-        steps = [] if solved is None else solved.answer_steps[:-1]
-    if any(contains_answer_reveal(step, correct_answer, rules) for step in steps):
-        raise RuntimeError(
-            "Student Model rescue content reveals the active canonical answer before an authorised final tutor-solved step."
-        )
-
-
-def _response_aware_worked_rescue(
-    session: SessionRecord, active: ActiveGuidedRescue | None,
-    rescue: GuidedRescue | None, canonical_answer: str, rules: ClassifierRulesConfig,
-) -> ActiveGuidedRescue | None:
-    if active is None or rescue is None or not rules.guided_learning.response_aware_enabled:
-        return active
-    existing = session.active_guided_rescue
-    if existing is not None and existing.rescue_id == active.rescue_id:
-        return existing
     client = build_openai_ai_engine_client(get_settings().model_copy(
         update={"openai_ai_engine_model": rules.guided_learning.model},
     ))
@@ -451,21 +426,71 @@ def _response_aware_worked_rescue(
         },
         system_prompt=rules.guided_learning.response_aware_worked_prompt,
     )
-    steps = [f"{step.expression}\n{step.annotation}" for step in presentation.steps]
-    forbidden_steps = steps if rescue.rescue_type == "PARALLEL_EXAMPLE" else steps[:-1]
-    if any(contains_answer_reveal(step, canonical_answer, rules) for step in forbidden_steps):
-        raise AdapterError("openai_ai_engine", "Worked presentation reveals the active answer before authorisation.")
     final_answer = (
         rescue.parallel_example.final_answer
         if rescue.parallel_example is not None else canonical_answer
     )
     if normalize_exact_notation(presentation.steps[-1].expression) != normalize_exact_notation(final_answer):
         raise AdapterError("openai_ai_engine", "Worked presentation changed the authorised final answer.")
+    steps = [f"{step.expression}\n{step.annotation}" for step in presentation.steps]
     logger.info("guided_worked_presentation_generated", extra={
-        "question_id": session.question_id, "rescue_id": active.rescue_id,
+        "question_id": session.question_id, "rescue_id": rescue_id,
         "step_count": len(steps), "provenance": "GENERATED",
     })
-    return active.model_copy(update={"steps": steps})
+    return steps
+
+
+def _validate_rescue_reveal(
+    active: ActiveGuidedRescue, canonical_answer: str, rules: ClassifierRulesConfig,
+) -> None:
+    """Judge answer reveal ONCE, on the steps that will actually be shown.
+
+    Parallel Example never reveals the active answer; Tutor-Solved may reveal it
+    only on its final step. Authored and generated steps are held to the same
+    rule here, so neither can be judged twice -- which is what rejected authored
+    Tutor-Solved content the writer was about to replace -- nor not at all.
+    """
+
+    forbidden = (
+        active.steps if active.rescue_type == "PARALLEL_EXAMPLE" else active.steps[:-1]
+    )
+    if any(contains_answer_reveal(step, canonical_answer, rules) for step in forbidden):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{active.rescue_type} rescue reveals the active answer "
+                "before authorisation."
+            ),
+        )
+
+
+def _presented_rescue(
+    session: SessionRecord, question_id: str | None, rescue: GuidedRescue | None,
+    canonical_answer: str, request_id: str, rules: ClassifierRulesConfig,
+) -> ActiveGuidedRescue | None:
+    """Build the complete rung the student will see, or nothing.
+
+    One place, because the presentation has to be finished BEFORE it is judged
+    and both callers need the same order: assemble, rewrite, validate.
+    """
+
+    if (
+        rescue is None
+        or question_id is None
+        or not rules.guided_learning.canvas_rescue_presentation_enabled
+    ):
+        return None
+    active = active_rescue_from(question_id, rescue, request_id)
+    existing = session.active_guided_rescue
+    if existing is not None and existing.rescue_id == active.rescue_id:
+        # Already built and already validated on the turn that served it.
+        return existing
+    if rules.guided_learning.response_aware_enabled:
+        active = active.model_copy(update={"steps": _written_rescue_steps(
+            session, rescue, canonical_answer, active.rescue_id, rules,
+        )})
+    _validate_rescue_reveal(active, canonical_answer, rules)
+    return active
 
 
 def _tutor_with_guided_rescue(
@@ -804,37 +829,42 @@ async def process_answer_with_session_event(
             context.message,
             tutor,
         )
-        response = await adapters.student_model.send_session_event(
-            GuidedSupportEvent(
-                request_id=_schema_interaction_request_id(
-                    session,
-                    context.source_turn_id,
-                    escalation_type,
-                ),
-                event_type=escalation_type,
-                source_turn_id=context.source_turn_id,
-                expected_journey_version=stored_event.journey_state.version,
-                topic_id=stored_event.journey_state.topic_id,
-                student_id=session.student_id,
-                timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                question_id=session.question_id,
-                micro_skill_id=micro_skill_ids[0],
-                triggering_response=(
-                    context.message
-                    if escalation_type == "GUIDED_SUPPORT_ESCALATION_REQUIRED"
-                    and wrong_four_escalation
-                    and (escalation_error_code is not None or tutor.contribution is not None)
-                    else None
-                ),
-                error_code=escalation_error_code,
-                unmapped_error_description=(
-                    tutor.contribution.error_description
-                    if tutor.contribution is not None and escalation_error_code is None
-                    else None
-                ),
+        escalation_event = GuidedSupportEvent(
+            request_id=_schema_interaction_request_id(
+                session,
+                context.source_turn_id,
+                escalation_type,
             ),
-
-
+            event_type=escalation_type,
+            source_turn_id=context.source_turn_id,
+            expected_journey_version=stored_event.journey_state.version,
+            topic_id=stored_event.journey_state.topic_id,
+            student_id=session.student_id,
+            timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            question_id=session.question_id,
+            micro_skill_id=micro_skill_ids[0],
+            triggering_response=(
+                context.message
+                if escalation_type == "GUIDED_SUPPORT_ESCALATION_REQUIRED"
+                and wrong_four_escalation
+                and (escalation_error_code is not None or tutor.contribution is not None)
+                else None
+            ),
+            error_code=escalation_error_code,
+            unmapped_error_description=(
+                tutor.contribution.error_description
+                if tutor.contribution is not None and escalation_error_code is None
+                else None
+            ),
+        )
+        # Persisted BEFORE the send, exactly as a Guided progression is. Building
+        # the rung's visual presentation can still fail after Student Model has
+        # recorded it; the recovery read then re-sends this same request_id and
+        # gets the same envelope back, instead of deciding a fresh escalation
+        # against a journey the first one already moved.
+        session = await store_pending_support_event(session, escalation_event)
+        response = await adapters.student_model.send_session_event(
+            escalation_event,
             access_token,
         )
     elif session.current_phase == "INDEPENDENT_PRACTICE" and retry_required:
@@ -927,22 +957,13 @@ async def process_answer_with_session_event(
 
     content_response = response
     guided_rescue = _guided_rescue(content_response)
-    active_guided_rescue = (
-        active_rescue_from(
-            session.question_id,
-            guided_rescue,
-            context.correct_answer,
-            content_response.request_id,
-        )
-        if (
-            rules.guided_learning.canvas_rescue_presentation_enabled
-            and guided_rescue is not None
-            and session.question_id is not None
-        )
-        else None
-    )
-    active_guided_rescue = _response_aware_worked_rescue(
-        session, active_guided_rescue, guided_rescue, context.correct_answer, rules,
+    active_guided_rescue = _presented_rescue(
+        session,
+        session.question_id,
+        guided_rescue,
+        context.correct_answer,
+        content_response.request_id,
+        rules,
     )
     persisted_rescue_context = (
         rescue_context_for(active_guided_rescue)
@@ -1093,12 +1114,14 @@ async def process_answer_with_session_event(
             adapters.student_model,
             access_token,
         )
-    updated_session = await _apply_schema_event(session, response)
+    # One write: the journey, the rung it authorised and the cleared pending
+    # support event land together. Persisting the rung afterwards left a window
+    # where Student Model had escalated and the session had no rescue to show.
     if active_guided_rescue is not None:
-        updated_session = await store_active_rescue(
-            updated_session,
-            active_guided_rescue,
+        session = session.model_copy(
+            update={"active_guided_rescue": active_guided_rescue}
         )
+    updated_session = await _apply_schema_event(session, response)
     if prerequisite_repair_event is not None:
         updated_session = await store_prerequisite_repair_event(
             updated_session,
@@ -1468,6 +1491,86 @@ def _raise_content_gap(
     )
 
 
+def _with_served_rung(
+    session: SessionRecord, event: StudentModelSessionEventResponse,
+) -> SessionRecord:
+    """Attach the support rung `event` re-serves, so applying it keeps the rung.
+
+    The answer spec comes from the INCOMING event, not the session: on a restore
+    the session's own copy is the stale one this event is replacing.
+    """
+
+    rescue = _guided_rescue(event)
+    if rescue is None:
+        return session
+    question = _question_updates(event)
+    active = _presented_rescue(
+        session,
+        question["question_id"] or session.question_id,
+        rescue,
+        question["correct_answer"] or session.correct_answer or "",
+        event.request_id,
+        load_classifier_rules(),
+    )
+    return session if active is None else session.model_copy(
+        update={"active_guided_rescue": active}
+    )
+
+
+async def resume_pending_support(
+    session: SessionRecord, access_token: str,
+) -> SessionRecord:
+    """Re-serve the support rung whose visual presentation failed to build.
+
+    Student Model answers an already-processed request_id with its original
+    envelope, so this rebuilds the rung from the SAME response the failed turn
+    received. Nothing is re-decided, no attempt is re-graded, and the escalation
+    is never re-chosen against the journey it already advanced.
+
+    A rebuild that fails again propagates: the pending event stays set, the
+    session stays blocked, and the student is told why rather than being handed
+    a question no submission will be accepted against.
+    """
+
+    event = session.pending_support_event
+    if event is None:
+        raise RuntimeError("Session has no pending support event.")
+    response = await get_adapters().student_model.send_session_event(event, access_token)
+    return await _apply_schema_event(_with_served_rung(session, response), response)
+
+
+async def _apply_restored_event(
+    session: SessionRecord, event: StudentModelSessionEventResponse,
+) -> SessionRecord:
+    """Apply a restore response, keeping any rung it re-serves.
+
+    SESSION_OPENED now answers with the rung the student is actually on -- a
+    RESCUE payload for Parallel Example and Tutor-Solved, carrying the question
+    with it. Applying only the journey and the question handed the student their
+    question back with the walkthrough silently dropped, which is the same rung
+    loss this whole change exists to end, one layer further out.
+
+    Best-effort, unlike resume_pending_support: nothing upstream moved to record
+    this rung, and GET /session is the one route the client is told to call to
+    recover. Failing it outright over a presentation it can re-request on the
+    next turn would strand the student completely.
+    """
+
+    try:
+        session = _with_served_rung(session, event)
+    except (HTTPException, AdapterError) as error:
+        logger.warning(
+            "restored_rung_presentation_failed",
+            extra={
+                "session_id": session.session_id,
+                "question_id": session.question_id,
+                "request_id": event.request_id,
+                "detail": getattr(error, "detail", str(error)),
+            },
+        )
+    return await _apply_schema_event(session, event)
+
+
 async def recover_session_for_read(
     session_id: str, student_id: str, access_token: str,
 ) -> SessionRecord:
@@ -1476,6 +1579,8 @@ async def recover_session_for_read(
         session = await get_session(session_id, student_id)
         if session.pending_guided_progression is not None:
             return await resume_guided_progression(session, access_token)
+        if session.pending_support_event is not None:
+            return await resume_pending_support(session, access_token)
         if session.journey_recovery_required:
             return await _initialize_restored_schema_phase(
                 session, get_adapters().student_model, access_token, for_read=True)
@@ -1517,7 +1622,7 @@ async def _initialize_restored_schema_phase(
             ), access_token)
             if response.status.success is False:
                 raise HTTPException(status_code=503, detail=response.status.intervention_reason)
-            return await _apply_schema_event(session, response)
+            return await _apply_restored_event(session, response)
     if (
         (session.current_question is None or session.question_id is None)
         and payload is not None
@@ -1665,7 +1770,7 @@ async def _initialize_restored_schema_phase(
             status_code=503,
             detail="Student Model did not initialize the restored phase with questions.",
         )
-    return await _apply_schema_event(session, response)
+    return await _apply_restored_event(session, response)
 def _schema_visual_cue(
     event: StudentModelSessionEventResponse | None,
 ) -> VisualCue | None:
@@ -2651,6 +2756,9 @@ def _response_from(
         message_voice = ""
         visual_cue = None
         scaffold_steps = []
+    if not phase3_silent and scaffold_is_renderable:
+        message = _scaffold_chat_line(message, scaffold_steps[0])
+        message_voice = _scaffold_chat_line(message_voice, scaffold_steps[0])
     return InteractionResponse(
         session_id=session_id,
         student_id=student_id,
@@ -2994,6 +3102,22 @@ async def _guided_help_response(
         "GIVE_HINT",
         _tutor_side_channel_updates(request, session, support_message),
     )
+
+
+def _scaffold_chat_line(reply: str, step: str) -> str:
+    """The tailored reply and the current scaffold prompt as ONE tutor line.
+
+    A scaffolded turn says two things -- what the tutor makes of the answer, and
+    the step it is asking next -- and the client had to append them separately,
+    which is how every scaffold turn produced two chat bubbles and a voice line
+    that matched neither. Composed here so both transports say the same sentence
+    and the frontend appends exactly one message.
+    """
+
+    reply_text, step_text = reply.strip(), step.strip()
+    if not step_text or step_text == reply_text:
+        return reply
+    return f"{reply_text} {step_text}".strip()
 
 
 def _active_scaffold(session: SessionRecord) -> ActiveScaffold | None:
@@ -4799,24 +4923,23 @@ async def _process_interaction(
     )
     canonical_answer = answer_spec.canonical_answer if answer_spec is not None else ""
     guided_rescue = _guided_rescue(schema_content_response)
-    if guided_rescue is not None:
-        _validate_guided_rescue_content(guided_rescue, canonical_answer, rules)
-    active_guided_rescue = (
-        active_rescue_from(
-            turn_session.question_id,
-            guided_rescue,
-            canonical_answer,
-            schema_content_response.request_id,
-        )
-        if (
-            rules.guided_learning.canvas_rescue_presentation_enabled
-            and guided_rescue is not None
-            and turn_session.question_id is not None
-        )
-        else None
-    )
-    active_guided_rescue = _response_aware_worked_rescue(
-        turn_session, active_guided_rescue, guided_rescue, canonical_answer, rules,
+    # `session`, not `turn_session`: process_answer_with_session_event has
+    # already built this rung, validated it and persisted it, and `session` is
+    # the record that carries it. Passing the pre-event `turn_session` made the
+    # "already built" check miss, so the whole presentation was GENERATED A
+    # SECOND TIME -- a second writer call per rescue turn, and a second chance to
+    # raise, this time after _apply_schema_event had cleared the pending support
+    # event that makes the failure recoverable.
+    #
+    # The request_id guard is load-bearing: arguments evaluate before the call,
+    # and schema_content_response is None on every non-Schema-3.0 turn.
+    active_guided_rescue = _presented_rescue(
+        session,
+        turn_session.question_id,
+        guided_rescue,
+        canonical_answer,
+        schema_content_response.request_id if schema_content_response is not None else "",
+        rules,
     )
     rescue_context = (
         rescue_context_for(active_guided_rescue)

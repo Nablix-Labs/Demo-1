@@ -376,9 +376,21 @@ def classify_scaffold_response(
         )
     last_error: AdapterError | None = None
     result: ScaffoldStepEvaluation | None = None
-    for attempt in range(rules.guided_learning.scaffold_evaluation_maximum_retries + 1):
+    # Wording safety is judged INSIDE this loop, so a scaffold reply that leaks
+    # the answer gets the same corrective retry the guided turn already gets
+    # (see the response-aware loop in build_guided_tutor_response) instead of
+    # ending the turn as a 503. The corrective retry has its own budget: the
+    # transport budget is deliberately 0, and a rejected wording is not a
+    # transport failure.
+    attempts_left = rules.guided_learning.scaffold_evaluation_maximum_retries + 1
+    corrective_retries_left = 1
+    attempt = 0
+    validation_feedback: str | None = None
+    while attempts_left > 0:
+        attempts_left -= 1
+        attempt += 1
         try:
-            result = openai_client.evaluate_scaffold_step(
+            candidate = openai_client.evaluate_scaffold_step(
                 context=context,
                 student_response=request.student_input,
                 input_source=request.input_source,
@@ -388,8 +400,8 @@ def classify_scaffold_response(
                     if rules.guided_learning.response_aware_enabled
                     else rules.guided_learning.scaffold_evaluator_system_prompt
                 ),
+                validation_feedback=validation_feedback,
             )
-            break
         except AdapterError as error:
             if rules.guided_learning.production_boundary_enabled:
                 evaluation = None
@@ -400,10 +412,38 @@ def classify_scaffold_response(
                     "question_id": request.question_id,
                     "scaffold_id": context.scaffold_id,
                     "step_id": context.step_id,
-                    "attempt": attempt + 1,
+                    "attempt": attempt,
                     "detail": error.detail,
                 },
             )
+            continue
+        if candidate.contribution is not None and message_reveals_answer(
+            candidate.tutor_message,
+            candidate.tutor_message_voice,
+            context.canonical_answer,
+            rules,
+        ):
+            logger.warning(
+                "scaffold_answer_reveal_rejected",
+                extra={
+                    "question_id": request.question_id,
+                    "scaffold_id": context.scaffold_id,
+                    "step_id": context.step_id,
+                    "attempt": attempt,
+                    "corrective_retry_left": corrective_retries_left,
+                },
+            )
+            if corrective_retries_left == 0:
+                raise AdapterError(
+                    "openai_ai_engine",
+                    "Scaffold response reveals the active answer before authorisation.",
+                )
+            corrective_retries_left -= 1
+            attempts_left += 1
+            validation_feedback = rules.guided_learning.answer_reveal_retry_feedback
+            continue
+        result = candidate
+        break
     if result is None:
         if rules.guided_learning.response_aware_enabled:
             raise last_error or AdapterError("openai_ai_engine", "Scaffold evaluation returned no result.")
@@ -460,6 +500,8 @@ def classify_scaffold_response(
         if explanation_requested
         else satisfied and result.original_answer_correct
     )
+    # Response-aware wording was already cleared inside the loop; this covers the
+    # deterministic fallback message, which carries no contribution.
     tutor_message_override = (
         result.tutor_message
         if not message_reveals_answer(
@@ -470,8 +512,6 @@ def classify_scaffold_response(
         )
         else None
     )
-    if contribution is not None and tutor_message_override is None:
-        raise AdapterError("openai_ai_engine", "Scaffold response reveals the active answer before authorisation.")
     logger.info(
         "scaffold_step_evaluated",
         extra={

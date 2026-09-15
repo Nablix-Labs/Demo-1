@@ -58,11 +58,13 @@ from app.models.student_model_session import (
     DiagnosticCompletedEvent,
     IndependentQuestionSetRequestedEvent,
     GuidedRepairCompletedEvent,
+    GuidedSupportEvent,
     InterventionInputSubmittedEvent,
     Phase2RepairResult,
     JourneyPhaseState,
     MicroSkillResult,
     OrientationCompletedEvent,
+    QuestionOption,
     QuestionType,
     ReviewCompletedEvent,
     SessionOpenedEvent,
@@ -425,7 +427,11 @@ def require_learning_active(session: SessionRecord) -> None:
                 "intervention": session.intervention.model_dump(mode="json"),
             },
         )
-    if session.pending_guided_progression is not None or session.journey_recovery_required:
+    if (
+        session.pending_guided_progression is not None
+        or session.pending_support_event is not None
+        or session.journey_recovery_required
+    ):
         raise HTTPException(status_code=409, detail={
             "code": "SESSION_STATE_REFRESH_REQUIRED",
             "message": "Refresh the session before submitting more work.",
@@ -649,18 +655,21 @@ async def reconcile_journey_conflict(
         _skip_journey_reconcile(session_id, student_id, "journey_state_not_newer")
         return
 
-    # Take the fresh version AND drop everything derived from the stale one. The
-    # 409 body carries journey_state only - no phase_payload - so the question,
-    # answer spec and served ids cannot be refreshed from it. Keeping them would
-    # splice the new journey onto the old question: a state the Student Model
-    # never held, and one that would submit already-used evidence against a
-    # version that now accepts it. Clearing them re-arms
-    # _initialize_restored_schema_phase, which every answer path runs first and
-    # which re-derives the whole envelope at the corrected version.
+    # Take the fresh version and drop the payload derived from the stale one.
+    # phase_payload must go: the restore path re-applies the stored event when
+    # its payload still carries questions, handing the stale question straight
+    # back. Dropping it forces a real question-set request, and
+    # journey_recovery_required re-arms _initialize_restored_schema_phase, which
+    # every answer path runs first and which re-derives the whole envelope at the
+    # corrected version.
     #
-    # phase_payload must go too: that restore path re-applies the stored event
-    # when its payload still carries questions, handing the stale question
-    # straight back. Dropping it forces a real question-set request.
+    # The question IDENTITY stays. It is not used to grade anything -- no
+    # submission is accepted until recovery has replayed SESSION_OPENED -- but it
+    # is what _apply_schema_event compares the recovered question against. Cleared
+    # here, every recovery looked like a question change and wiped the student's
+    # attempt counters, teaching evidence, scaffold cursor and canvas snapshot for
+    # a question they were still on. Kept, a genuinely different question still
+    # resets all of it, at the one place that can actually tell.
     #
     # Where the student resumes is the effective phase -- the recommendation when
     # there is one, else the current phase -- matching Student Model's own
@@ -684,18 +693,19 @@ async def reconcile_journey_conflict(
             "ui_state": PHASE_FROM_STUDENT_MODEL[effective_phase],
             "journey_recovery_required": True,
             "pending_guided_progression": None,
+            # A version conflict means Student Model REFUSED the event -- the
+            # gate runs before the request is even recorded, so there is no
+            # retained envelope to replay. Leaving it set made GET /session
+            # re-send it, collect the same 409, reconcile, and find it pending
+            # again: a permanent loop on the one route that is supposed to
+            # recover the session.
+            "pending_support_event": None,
             "show_canvas": False,
             "allow_text_input": False,
             "allow_voice_input": False,
             "show_hint_button": False,
             "show_visual_cue": False,
             "show_scaffold_panel": False,
-            "active_guided_rescue": None,
-            "current_question": None,
-            "question_id": None,
-            "question_type": None,
-            "correct_answer": None,
-            "active_student_model_question": None,
         }
     )
     _sessions[session_id] = updated
@@ -795,6 +805,7 @@ async def start_session(
         question_updates["question_id"],
         current_question,
         question_updates["guided_start_canvas_action"],
+        _served_question_options(event, question_updates["question_id"]),
     )
     if opening_rejection is not None:
         logger.info(
@@ -1031,6 +1042,25 @@ def _schema_request_id(
 
 def _schema_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _served_question_options(
+    event: StudentModelSessionEventResponse,
+    question_id: str | None,
+) -> list[QuestionOption]:
+    """The structured options served with `question_id`, if it is a choice."""
+
+    payload = event.phase_payload
+    if payload is None or payload.question_set is None or question_id is None:
+        return []
+    return next(
+        (
+            question.student_view.options
+            for question in payload.question_set.questions
+            if question.question_id == question_id
+        ),
+        [],
+    )
 
 
 def _question_updates(
@@ -1625,6 +1655,7 @@ async def _apply_schema_event(
         "content_gap_detected": event.routing.content_gap_detected,
         "journey_recovery_required": False,
         "pending_guided_progression": None,
+        "pending_support_event": None,
         "current_phase": next_phase,
         "ui_state": next_phase,
         "message": event.routing.reason,
@@ -1647,6 +1678,7 @@ async def _apply_schema_event(
             question_updates["question_id"],
             question_updates["current_question"],
             question_updates["guided_start_canvas_action"],
+            _served_question_options(event, question_updates["question_id"]),
         )
         if opening_rejection is not None:
             logger.info(
@@ -1699,6 +1731,32 @@ async def _apply_schema_event(
                 "canvas_state": session.canvas_state.model_copy(
                     update={"snapshot_id": None, "ocr_result": None}
                 ),
+                # The support ladder is per question, so its cursor moves with
+                # the question and with nothing else. This is the only place
+                # that knows the question actually changed -- conflict recovery
+                # deliberately no longer guesses.
+                #
+                # A rung the caller attached for the question ARRIVING survives:
+                # a restore re-serves the rung and the question together, and
+                # dropping it here put the student back on their question with
+                # the walkthrough silently gone.
+                "active_guided_rescue": (
+                    session.active_guided_rescue
+                    if (
+                        session.active_guided_rescue is not None
+                        and session.active_guided_rescue.question_id == next_question_id
+                    )
+                    else None
+                ),
+                "scaffold_id": None,
+                "current_scaffold_step_id": None,
+                "scaffold_step_number": 0,
+                "scaffold_total_steps": 0,
+                "scaffold_steps": [],
+                "delivered_scaffold_step_ids": [],
+                "scaffold_expected_response": None,
+                "scaffold_failure_count": 0,
+                "stuck_count": 0,
             }
         )
     if transition is not None:
@@ -2122,6 +2180,18 @@ async def get_session(session_id: str, student_id: str) -> SessionRecord:
     return session
 
 
+async def store_pending_support_event(
+    session: SessionRecord,
+    event: GuidedSupportEvent,
+) -> SessionRecord:
+    """Persist the support escalation owed to Student Model before sending it."""
+
+    updated = session.model_copy(update={"pending_support_event": event})
+    _sessions[updated.session_id] = updated
+    await save_session(updated)
+    return updated
+
+
 PROGRESSION_RETRY_MESSAGE = (
     "We could not finish moving you on just yet. Your work is saved -- "
     "reopen the session in a moment to continue."
@@ -2223,18 +2293,6 @@ async def _complete_tutor_solved_rescue(
     if event is None:
         raise RuntimeError("Tutor-Solved rescue completion requires a Student Model event.")
     return await complete_guided_progression(session, event, active.current_action_id, access_token)
-
-
-async def store_active_rescue(
-    session: SessionRecord,
-    active: ActiveGuidedRescue,
-) -> SessionRecord:
-    """Persist the rescue cursor so render-ack and advance can find it."""
-
-    updated = session.model_copy(update={"active_guided_rescue": active})
-    _sessions[updated.session_id] = updated
-    await save_session(updated)
-    return updated
 
 
 async def _clear_completed_rescue(

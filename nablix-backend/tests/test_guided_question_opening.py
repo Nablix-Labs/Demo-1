@@ -1,6 +1,6 @@
 import pytest
 
-from app.models.student_model_session import QuestionType
+from app.models.student_model_session import QuestionOption, QuestionType
 from app.services.guided_question_opening import (
     authored_question_opening_actions,
     guided_question_opening,
@@ -119,3 +119,47 @@ def test_guided_question_opening_does_not_include_internal_question_id() -> None
 
     assert message.startswith("Here is the next question. A counter starts")
     assert "Q-T01-006" not in message
+
+
+def test_an_authored_action_naming_an_option_highlights_that_option() -> None:
+    """Q-T01-004 on the VM: rejected on every single turn.
+
+    The question is stored as "Which is the general rule: A) 12 + 4 or B) n + 4?"
+    and Student Model serves the stem apart from the options, so "n + 4" was
+    nowhere in the text the grounding looked at and the authored action came back
+    `authored_canvas_targets_not_in_question`. The options are part of the
+    question the student is reading, so they are part of what grounds it -- and
+    an option target becomes the QUESTION_OPTION action the client already
+    renders, never invented canvas geometry.
+    """
+
+    anchors, actions, rejection = authored_question_opening_actions(
+        "Q-T01-004",
+        "Which is the general rule?",
+        "Highlight n + 4",
+        [
+            QuestionOption(option_id="A", text="12 + 4"),
+            QuestionOption(option_id="B", text="n + 4"),
+        ],
+    )
+
+    assert rejection is None
+    assert anchors
+    assert [
+        (action.type, action.target_kind, action.target_object_id)
+        for action in actions
+    ] == [("HIGHLIGHT", "QUESTION_OPTION", "Q-T01-004:OPTION:B")]
+
+
+def test_an_option_the_action_does_not_fully_name_is_left_alone() -> None:
+    """Subset match, so "n + 4" cannot drag in "12 + 4" through its shared + and 4."""
+
+    _anchors, actions, rejection = authored_question_opening_actions(
+        "Q-T01-004",
+        "Which is the general rule?",
+        "Highlight n + 4",
+        [QuestionOption(option_id="A", text="12 + 4")],
+    )
+
+    assert actions == []
+    assert rejection == "authored_canvas_targets_not_in_question"
