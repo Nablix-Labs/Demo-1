@@ -77,6 +77,26 @@ def test_unresolved_partial_does_not_emit_an_incorrect_attempt() -> None:
     assert interaction_service._guided_attempt_event_type(defence, rules) is None
 
 
+def test_legacy_error_code_requires_an_authored_response_match() -> None:
+    event = session_service.StudentModelSessionEventResponse.model_validate(
+        _event_response("ORIENTATION_COMPLETED", "REQ-ERROR-GROUNDING")
+    )
+    session = session_service.SessionRecord.model_construct(
+        student_model_event=event,
+        question_id="Q-T02-004",
+    )
+    tutor = TutorResult.model_construct(
+        contribution=None,
+        selected_error_code="ERR-T02-SUBTRACTION-MISAPPLIED",
+        error_type="ERR-T02-SUBTRACTION-MISAPPLIED",
+    )
+
+    assert interaction_service._validated_error_code(session, "x = 4", tutor) == (
+        "ERR-T02-SUBTRACTION-MISAPPLIED"
+    )
+    assert interaction_service._validated_error_code(session, "x = 3", tutor) is None
+
+
 def test_option_selection_creates_guided_state_when_none_exists() -> None:
     session = session_service.SessionRecord.model_construct(
         question_id="Q-T01-004",

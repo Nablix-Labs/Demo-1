@@ -2264,6 +2264,143 @@ def typed_choice_selection(request: ClassificationRequest) -> str | None:
     return matches[0].upper() if len(set(matches)) == 1 else None
 
 
+def enforce_explicit_choice_selection(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+    rules: ClassifierRulesConfig,
+) -> GuidedEvaluation:
+    """Prevent reasoning prose from silently replacing an explicit choice."""
+
+    if request.question_type != "CHOICE_WITH_EXPLANATION":
+        return evaluation
+    required_ids = {
+        concept.concept_id
+        for concept in rubric.required_concepts
+        if concept.required
+    }
+    if (
+        "ANSWER_SELECTION" not in required_ids
+        or "ANSWER_SELECTION" in objective.confirmed_concept_ids
+    ):
+        return evaluation
+    current_selection = typed_choice_selection(request)
+    accepted_choices = (
+        {
+            normalized_choice_response(answer)
+            for answer in [
+                request.answer_spec.canonical_answer,
+                *request.answer_spec.accepted_answers,
+            ]
+        }
+        if request.answer_spec is not None
+        else set()
+    )
+    if (
+        current_selection is not None
+        and normalized_choice_response(current_selection) in accepted_choices
+    ):
+        return evaluation
+    contribution = evaluation.contribution
+    if contribution is not None and contribution.assessment == "NOT_ASSESSED":
+        return evaluation
+    claimed_selection = "ANSWER_SELECTION" in {
+        *evaluation.newly_confirmed_concept_ids,
+        *evaluation.preserved_concept_ids,
+    }
+    if evaluation.student_state not in {"CORRECT", "PARTIAL"} and not claimed_selection:
+        return evaluation
+
+    newly_confirmed = set(evaluation.newly_confirmed_concept_ids)
+    newly_confirmed.discard("ANSWER_SELECTION")
+    preserved = set(evaluation.preserved_concept_ids)
+    preserved.discard("ANSWER_SELECTION")
+    confirmed = set(objective.confirmed_concept_ids) | newly_confirmed | preserved
+    confirmed.discard("ANSWER_SELECTION")
+    missing = required_ids - confirmed
+    next_objective = ActiveTeachingObjective(
+        objective_type="ANSWER_QUESTION",
+        target_concept_ids=["ANSWER_SELECTION"],
+        confirmed_concept_ids=sorted(confirmed),
+        missing_concept_ids=sorted(missing),
+    )
+    explicit_wrong_selection = current_selection is not None
+    message = (
+        rules.guided_learning.critical_thinking.wrong_choice_prompt
+        if explicit_wrong_selection
+        else rules.guided_learning.critical_thinking.choice_selection_prompt
+    )
+    normalized_contribution = (
+        contribution.model_copy(
+            update={
+                "assessment": "INCOMPLETE",
+                "error_category": None,
+                "error_description": None,
+                "generated_support_text": None,
+                "generated_visual_rows": None,
+                "support_relevance": "NOT_NEEDED",
+            }
+        )
+        if contribution is not None
+        else None
+    )
+    return evaluation.model_copy(
+        update={
+            "contribution": normalized_contribution,
+            "student_state": (
+                "WRONG"
+                if explicit_wrong_selection
+                else "PARTIAL" if confirmed else "UNCLEAR"
+            ),
+            "newly_confirmed_concept_ids": sorted(newly_confirmed),
+            "preserved_concept_ids": sorted(preserved),
+            "contradicted_concept_ids": (
+                ["ANSWER_SELECTION"] if explicit_wrong_selection else []
+            ),
+            "missing_concept_ids": sorted(missing),
+            "selected_error_code": None,
+            "next_objective": next_objective,
+            "tutor_message": message,
+            "tutor_message_voice": message,
+            "canvas_intentions": [],
+            "write_instruction": None,
+        }
+    )
+
+
+def enforce_task_clarification_is_not_an_attempt(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+    objective: ActiveTeachingObjective,
+    rules: ClassifierRulesConfig,
+) -> GuidedEvaluation:
+    """Keep a request about the task out of answer and support progression."""
+
+    if rules.guided_learning.response_aware_enabled:
+        return evaluation
+    normalized_input = request.student_input.casefold().strip()
+    if not any(
+        re.search(pattern, normalized_input)
+        for pattern in rules.guided_learning.task_clarification_patterns
+    ):
+        return evaluation
+    return evaluation.model_copy(
+        update={
+            "contribution": None,
+            "student_state": "UNCLEAR",
+            "newly_confirmed_concept_ids": [],
+            "preserved_concept_ids": objective.confirmed_concept_ids,
+            "contradicted_concept_ids": [],
+            "missing_concept_ids": objective.missing_concept_ids,
+            "selected_error_code": None,
+            "next_objective": objective,
+            "canvas_intentions": [],
+            "write_instruction": None,
+        }
+    )
+
+
 def selected_option_text_for_choice(
     request: ClassificationRequest,
     selected_option_id: str | None,
@@ -3444,6 +3581,19 @@ def classify_guided_learning_response(
             )
             if rules.guided_learning.production_boundary_enabled:
                 candidate = normalize_production_assessment(candidate)
+            candidate = enforce_task_clarification_is_not_an_attempt(
+                candidate,
+                request,
+                objective,
+                rules,
+            )
+            candidate = enforce_explicit_choice_selection(
+                candidate,
+                request,
+                rubric,
+                objective,
+                rules,
+            )
             raw_student_state = candidate.student_state
             raw_confidence = candidate.confidence
             evaluation = validate_guided_evaluation(
@@ -6029,6 +6179,14 @@ def validate_response_aware_evidence(
         raise AdapterError("openai_ai_engine", "Contribution selected an error code outside the supplied catalog.")
     if contribution.support_relevance == "MATCHED" and evaluation.selected_error_code is None:
         raise AdapterError("openai_ai_engine", "Matched support requires a supplied error code.")
+    if (
+        evaluation.selected_error_code is not None
+        and contribution.support_relevance != "MATCHED"
+    ):
+        raise AdapterError(
+            "openai_ai_engine",
+            "An error code requires support relevance MATCHED.",
+        )
     if contribution.assessment == "NOT_ASSESSED":
         if new_ids or contradicted or evaluation.selected_error_code is not None:
             raise AdapterError("openai_ai_engine", "A non-attempt cannot add mathematical evidence or an error code.")
@@ -6373,6 +6531,7 @@ def build_guided_tutor_response(
 ) -> TutorResponse:
     state = evaluation.student_state
     contribution = evaluation.contribution if rules.guided_learning.response_aware_enabled else None
+    detected_intent = detect_student_intent(request.student_input, rules)
     phase_context = request.phase_2_prompt_context
     consecutive_stuck_count = (
         phase_context.consecutive_stuck_count if phase_context is not None else 0
@@ -6421,7 +6580,7 @@ def build_guided_tutor_response(
             "openai_model": openai_model_for_request(get_settings(), request),
             "diagnostic_focus": diagnostic_focus,
             "pedagogy_archetype": pedagogy_archetype,
-            "detected_intent": detect_student_intent(request.student_input, rules),
+            "detected_intent": detected_intent,
             "pedagogical_move": pedagogical_move,
             "consecutive_stuck_count": consecutive_stuck_count,
             "confirmed_concept_ids": objective.confirmed_concept_ids if objective is not None else [],
@@ -6471,8 +6630,15 @@ def build_guided_tutor_response(
             if state == "WRONG"
             else None
         ),
-        intent=(contribution_intent(contribution) if contribution is not None
-                else "EXPRESSING_CONFUSION" if state == "STUCK" else "SUBMITTING_ANSWER"),
+        intent=(
+            contribution_intent(contribution)
+            if contribution is not None
+            else detected_intent
+            if detected_intent != "SUBMITTING_ANSWER"
+            else "EXPRESSING_CONFUSION"
+            if state == "STUCK"
+            else "SUBMITTING_ANSWER"
+        ),
         response_strategy=response_strategy,
         tutor_message=evaluation.tutor_message,
         tutor_message_voice_optimised=evaluation.tutor_message_voice,
@@ -7229,10 +7395,18 @@ def detect_student_intent(student_input: str, rules: ClassifierRulesConfig) -> I
         for pattern in rules.guided_learning.semantic_confusion_patterns
     ):
         return "EXPRESSING_CONFUSION"
+    if any(
+        re.search(pattern, normalized_input)
+        for pattern in rules.guided_learning.task_clarification_patterns
+    ):
+        return "ASKING_QUESTION"
     for intent, phrases in rules.intent_phrases.items():
         if contains_any(normalized_input, phrases):
             return intent
-    if "?" in student_input and not contains_any(normalized_input, rules.answer_patterns.answer_notation):
+    if "?" in student_input and not contains_any(
+        normalized_input,
+        rules.answer_patterns.answer_notation,
+    ):
         return "ASKING_QUESTION"
 
     return "SUBMITTING_ANSWER"

@@ -229,6 +229,36 @@ cases:
     id: choice_reason
     input: "because n can take any starting value"
     assessment: CORRECT
+  - id: choice_reason_without_correcting_selection
+    question: "Which is a general rule for adding 4 to any starting number? A: 12 + 4. B: n + 4. Explain why."
+    answer: "B"
+    question_type: CHOICE_WITH_EXPLANATION
+    explanation_required: true
+    prior: "A fixed starting number describes only one case. Choose the option that works for every starting number."
+    input: "If there is a different starting value, it will be that starting value plus four. For example, if it is ten, then it becomes ten plus four."
+    source: VOICE
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: INCOMPLETE
+    concepts:
+      - {concept_id: ANSWER_SELECTION, description: "Selects B, n + 4", required: true}
+      - {concept_id: ANSWER_EXPLANATION, description: "Explains that the starting value can change while four is added", required: true}
+    expected_confirmed: [ANSWER_EXPLANATION]
+    expected_missing: [ANSWER_SELECTION]
+  - id: task_clarification_not_stuck
+    question: "Which is a general rule for adding 4 to any starting number? A: 12 + 4. B: n + 4. Explain why."
+    answer: "B"
+    question_type: CHOICE_WITH_EXPLANATION
+    explanation_required: true
+    prior: "Choose the general rule and explain your choice."
+    input: "what i need to answer now"
+    source: VOICE
+    kind: EXPLANATION_REQUEST
+    assessment: NOT_ASSESSED
+    explanation_expected: true
+    concepts:
+      - {concept_id: ANSWER_SELECTION, description: "Selects B, n + 4", required: true}
+      - {concept_id: ANSWER_EXPLANATION, description: "Explains that n can represent any starting number", required: true}
+    expected_missing: [ANSWER_SELECTION, ANSWER_EXPLANATION]
   - &scaffold_case
     id: scaffold_term
     question: "3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number. Write the general rule."
@@ -299,6 +329,9 @@ cases:
     source: TEXT
     kind: MATHEMATICAL_ATTEMPT
     assessment: INCORRECT
+    expected_support_relevance: UNMAPPED
+    forbidden_content:
+      - "(?i)compare (?:the )?cases? (?:to see )?(?:which )?values? (?:are )?different"
   - id: variable_constant_misconception
     question: "In x + 8, which part can take different values?"
     answer: "x"

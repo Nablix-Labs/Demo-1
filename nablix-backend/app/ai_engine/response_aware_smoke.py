@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -49,6 +50,13 @@ class ReplayCase(BaseModel):
         GeneratedConcept(concept_id="GENERAL_RULE", description="States the correct general rule.", required=True),
     ])
     expected_confirmed: list[str] = Field(default_factory=list)
+    expected_missing: list[str] = Field(default_factory=list)
+    expected_support_relevance: Literal[
+        "NOT_NEEDED",
+        "MATCHED",
+        "UNMAPPED",
+        "MISMATCHED",
+    ] | None = None
     explanation_expected: bool = False
     forbidden_content: list[str] = Field(default_factory=list)
     scaffold: ScaffoldEvaluationContext | None = None
@@ -83,13 +91,21 @@ def replay_failures(case: ReplayCase, result: TutorResponse, forbidden_reply: li
             failures.append("non-attempt graded or completed")
         if contribution.support_relevance != "NOT_NEEDED":
             failures.append("support on non-attempt")
-    if case.assessment == "INCORRECT" and result.question_completed:
-        failures.append("incorrect answer completed question")
+    if case.assessment != "CORRECT" and result.question_completed:
+        failures.append("non-correct contribution completed question")
     if case.explanation_expected and not contribution.explained_idea:
         failures.append("requested explanation not recorded")
     confirmed = set(result.guided_teaching_state.confirmed_component_ids) if result.guided_teaching_state else set()
     if not set(case.expected_confirmed).issubset(confirmed):
         failures.append("valid evidence lost")
+    missing = set(result.guided_teaching_state.missing_component_ids) if result.guided_teaching_state else set()
+    if not set(case.expected_missing).issubset(missing):
+        failures.append("required missing evidence was incorrectly confirmed")
+    if (
+        case.expected_support_relevance is not None
+        and contribution.support_relevance != case.expected_support_relevance
+    ):
+        failures.append("incorrect support relevance")
     reply = result.tutor_message
     if reply.count("?") > 1:
         failures.append("multiple questions")

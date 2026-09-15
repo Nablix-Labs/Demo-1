@@ -266,6 +266,7 @@ class GuidedLearningConfig(StrictSchema):
     reasoning_effort: Literal["none", "minimal", "low", "medium", "high"]
     verbosity: Literal["low", "medium", "high"]
     semantic_confusion_patterns: list[str]
+    task_clarification_patterns: list[str]
     rubric_prompt_version: str
     evaluator_prompt_version: str
     component_adjudicator_prompt_version: str
@@ -289,6 +290,10 @@ class GuidedLearningConfig(StrictSchema):
 
     @model_validator(mode="after")
     def require_state_confidence_thresholds(self) -> "GuidedLearningConfig":
+        if self.production_boundary_enabled and not self.response_aware_enabled:
+            raise ValueError(
+                "production_boundary_enabled requires response_aware_enabled."
+            )
         missing_states = set(self.allowed_student_states) - set(
             self.state_confidence_thresholds
         )
