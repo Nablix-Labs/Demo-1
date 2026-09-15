@@ -6,6 +6,7 @@ from collections.abc import Collection
 from copy import deepcopy
 from dataclasses import dataclass
 from time import perf_counter
+from typing import Literal
 
 import httpx
 from pydantic import Field, StrictBool, ValidationError
@@ -288,6 +289,7 @@ class OpenAITutorMessage(StrictSchema):
 class OpenAIGuidedWording(StrictSchema):
     tutor_message: str
     tutor_message_voice_optimised: str
+    learner_action: Literal["CONTINUE", "WRITE", "REWRITE", "CLARIFY"] = "CONTINUE"
     generated_support_text: str | None = Field(max_length=280)
     generated_visual_rows: list[GuidedComparisonRow] | None = Field(
         default=None,

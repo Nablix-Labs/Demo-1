@@ -3823,9 +3823,13 @@ def classify_guided_learning_response(
                     "Safe replacement support could not be generated.",
                 )
             if rejected_evaluation is not None:
+                fallback_message = response_aware_fallback_message(
+                    rejected_evaluation,
+                    rules,
+                )
                 fallback = rejected_evaluation.model_copy(update={
-                    "tutor_message": rules.guided_learning.production_boundary_safe_wording_message,
-                    "tutor_message_voice": rules.guided_learning.production_boundary_safe_wording_message,
+                    "tutor_message": fallback_message,
+                    "tutor_message_voice": fallback_message,
                 })
             else:
                 fallback = GuidedEvaluation(
@@ -4304,6 +4308,7 @@ def write_redacted_response_aware_message(
         "answer_reveal_allowed": False,
         "submission_state": evaluation.submission_state,
         "canvas_submission_required": request.canvas_submission_required,
+        "required_learner_action": required_response_aware_learner_action(evaluation),
     }
     explained_topic = (
         contribution.identified_difficulty or contribution.learner_question
@@ -4338,11 +4343,20 @@ def write_redacted_response_aware_message(
             "tutor_message": message.tutor_message,
             "tutor_message_voice": message.tutor_message_voice_optimised,
         })
+        writer_action = getattr(message, "learner_action", None)
+        required_action = required_response_aware_learner_action(rewritten)
+        action_rejection = (
+            "WRITER_ACTION_MISMATCH"
+            if writer_action != required_action
+            else None
+        )
         rejection = (
             generated_support_grounding_rejection(rewritten, request)
             if replacement_required
             else None
         )
+        if rejection is None:
+            rejection = action_rejection
         if rejection is None:
             rejection = response_aware_message_rejection_reason(
                 rewritten, request, rubric, objective, rules,
@@ -6481,10 +6495,31 @@ def validate_response_aware_submission(
                 "Canvas submission state must be NOT_REQUIRED for this question.",
             )
         return evaluation
+    mathematical_completion = (
+        evaluation.student_state == "CORRECT"
+        and not evaluation.missing_concept_ids
+    )
+    if not mathematical_completion:
+        if submission_state == "MISSING":
+            raise AdapterError(
+                "openai_ai_engine",
+                "MISSING canvas submission requires complete mathematics.",
+            )
+        if submission_state == "MATCHING":
+            raise AdapterError(
+                "openai_ai_engine",
+                "MATCHING canvas submission requires complete mathematics.",
+            )
+        if submission_state in {"MISMATCHED", "UNCLEAR"} and not request.has_canvas_evidence:
+            raise AdapterError(
+                "openai_ai_engine",
+                f"{submission_state} canvas submission requires current canvas evidence.",
+            )
+        return evaluation
     if submission_state == "NOT_REQUIRED":
         raise AdapterError(
             "openai_ai_engine",
-            "Canvas submission is required but the assessment returned NOT_REQUIRED.",
+            "Complete mathematics requires a canvas submission state when canvas work is required.",
         )
     if submission_state == "MATCHING" and not request.canvas_solution_complete_candidate:
         raise AdapterError(
@@ -6497,6 +6532,33 @@ def validate_response_aware_submission(
             f"{submission_state} canvas submission requires current canvas evidence.",
         )
     return evaluation
+
+
+def required_response_aware_learner_action(
+    evaluation: GuidedEvaluation,
+) -> Literal["CONTINUE", "WRITE", "REWRITE", "CLARIFY"]:
+    """Return the learner action authorized by validated submission state."""
+
+    if evaluation.submission_state == "MISSING":
+        return "WRITE"
+    if evaluation.submission_state in {"MISMATCHED", "UNCLEAR"}:
+        return "REWRITE"
+    return "CONTINUE"
+
+
+def response_aware_fallback_message(
+    evaluation: GuidedEvaluation,
+    rules: ClassifierRulesConfig,
+) -> str:
+    """Keep a rejected writer from replacing a completed turn with generic prose."""
+
+    if evaluation.student_state == "CORRECT" and not evaluation.missing_concept_ids:
+        if evaluation.submission_state == "MISSING":
+            return rules.guided_learning.critical_thinking.written_rule_prompt
+        if evaluation.submission_state in {"MISMATCHED", "UNCLEAR"}:
+            return "Please rewrite the rule clearly on the canvas, then press Check."
+        return rules.messages.CORRECT
+    return rules.guided_learning.production_boundary_safe_wording_message
 
 
 def validate_guided_evaluation(

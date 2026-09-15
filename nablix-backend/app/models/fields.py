@@ -39,6 +39,13 @@ def _check_bounded_text(value: str) -> str:
     return value
 
 
+def _check_bounded_interaction_text(value: str) -> str:
+    settings = get_settings()
+    if len(value) > settings.max_text_input_length:
+        raise ValueError("value exceeds the maximum allowed length.")
+    return value
+
+
 def _check_snapshot_data_url(value: str) -> str:
     prefix = "data:image/png;base64,"
     if not value.startswith(prefix):
@@ -59,6 +66,7 @@ SessionId = Annotated[str, AfterValidator(_check_session_id)]
 StudentId = Annotated[str, AfterValidator(_check_student_id)]
 NonEmptyText = Annotated[str, AfterValidator(_check_nonempty)]
 BoundedText = Annotated[str, AfterValidator(_check_bounded_text)]
+BoundedInteractionText = Annotated[str, AfterValidator(_check_bounded_interaction_text)]
 SnapshotDataUrl = Annotated[str, AfterValidator(_check_snapshot_data_url)]
 
 # Concept and question identifiers (e.g. "ALG_LINEAR_ONE_STEP", "ALG_EQ_DIAG_001").

@@ -269,6 +269,51 @@ cases:
     assessment: CORRECT
     canvas_submission_required: true
     expected_write: true
+  - id: partial_rule_does_not_request_canvas_yet
+    question: "3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number. Write the general rule."
+    answer: "n + 5"
+    prior: "Look across the examples. What stays the same?"
+    input: "5 stays fixed"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: INCOMPLETE
+    canvas_submission_required: true
+    expected_write: false
+    expected_confirmed: [FIXED_VALUE]
+    expected_missing: [GENERAL_RULE]
+  - id: corrected_canvas_expression_with_old_work
+    question: "3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number. Write the general rule."
+    answer: "n + 5"
+    prior: "Write the rule on the canvas."
+    input: "n + 5"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: CORRECT
+    canvas_submission_required: true
+    has_canvas_evidence: true
+    canvas_solution_complete_candidate: true
+    canvas_ocr_text: "h + 5\nn + 5"
+    canvas_ocr_confidence: 0.98
+    expected_write: false
+  - id: multipart_canvas_rule_and_roles_complete
+    question: "A counter starts at any value c and increases by 4. Write the general rule and state what changes and what stays fixed."
+    answer: "c + 4"
+    prior: "Write the general rule, then state what changes and what stays fixed."
+    input: "c changes and 4 stays fixed"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: CORRECT
+    canvas_submission_required: true
+    has_canvas_evidence: true
+    canvas_solution_complete_candidate: true
+    canvas_ocr_text: "c + 4"
+    canvas_ocr_confidence: 0.98
+    expected_write: false
+    concepts:
+      - {concept_id: GENERAL_RULE, description: "Writes c + 4", required: true}
+      - {concept_id: CHANGING_VALUE, description: "Identifies c as changing", required: true}
+      - {concept_id: FIXED_VALUE, description: "Identifies 4 as fixed", required: true}
+    expected_confirmed: [GENERAL_RULE, CHANGING_VALUE, FIXED_VALUE]
   - id: wrong_canvas_symbol_needs_correction
     question: "3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number. Write the general rule."
     answer: "n + 5"

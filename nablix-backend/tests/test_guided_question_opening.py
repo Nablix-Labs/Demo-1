@@ -121,7 +121,7 @@ def test_guided_question_opening_does_not_include_internal_question_id() -> None
     assert "Q-T01-006" not in message
 
 
-def test_the_real_q_t01_004_action_highlights_both_options() -> None:
+def test_the_real_q_t01_004_action_defers_option_highlights_until_selection() -> None:
     """Q-T01-004 on the VM: rejected on every single turn.
 
     The authored action and the served question are both copied from production
@@ -130,9 +130,8 @@ def test_the_real_q_t01_004_action_highlights_both_options() -> None:
     apart from the options -- so "n+4" and "12+4" were nowhere in the text the
     grounding looked at and it answered `authored_canvas_targets_not_in_question`.
 
-    Both options are highlighted, because the action asks for both: it says
-    "for comparison", and dropping one half would silently discard the
-    comparison the author wrote.
+    The opening preserves the anchored question but defers both option marks.
+    A choice is highlighted only after the learner selects it.
     """
 
     anchors, actions, rejection = authored_question_opening_actions(
@@ -150,13 +149,7 @@ def test_the_real_q_t01_004_action_highlights_both_options() -> None:
 
     assert rejection is None
     assert anchors
-    assert [
-        (action.type, action.target_kind, action.target_object_id)
-        for action in actions
-    ] == [
-        ("HIGHLIGHT", "QUESTION_OPTION", "Q-T01-004:OPTION:A"),
-        ("HIGHLIGHT", "QUESTION_OPTION", "Q-T01-004:OPTION:B"),
-    ]
+    assert actions == []
 
 
 def test_an_option_the_action_never_names_is_left_alone() -> None:
@@ -173,7 +166,7 @@ def test_an_option_the_action_never_names_is_left_alone() -> None:
     )
 
     assert rejection is None
-    assert [action.target_object_id for action in actions] == ["Q-T01-004:OPTION:B"]
+    assert actions == []
 
 
 def test_an_action_grounded_in_neither_the_stem_nor_the_options_is_refused() -> None:

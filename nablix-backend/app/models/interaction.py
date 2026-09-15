@@ -14,7 +14,7 @@ from app.models.adapters import (
 from app.models.canvas import CanvasDrawPayload, CanvasLatency, CanvasStroke
 from app.models.canvas_memory import CanvasEvent, validate_canvas_event_order
 from app.models.fields import (
-    BoundedText,
+    BoundedInteractionText,
     ConceptId,
     InputSource,
     InteractionMode,
@@ -76,7 +76,7 @@ class InteractionRequest(BaseModel):
     student_id: StudentId
     interaction_type: InteractionType
     input_source: InputSource
-    text_input: BoundedText | None = None
+    text_input: BoundedInteractionText | None = None
     selected_option_id: str | None = None
     voice_transcript: str | None = None
     transcript_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -106,6 +106,15 @@ class InteractionRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_turn(self) -> "InteractionRequest":
+        if (
+            self.text_input is not None
+            and self.text_input.strip() == ""
+            and not (
+                self.interaction_type == "ANSWER_SUBMISSION"
+                and self.input_source == "TEXT"
+            )
+        ):
+            raise ValueError("text_input must not be empty for this interaction.")
         if self.input_source == "VOICE" and self.transcript_final is not True:
             raise ValueError("transcript_final must be true for VOICE interactions.")
         system_interactions = {"INACTIVITY_NUDGE", "NUDGE_PRESENTED"}

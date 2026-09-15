@@ -111,7 +111,10 @@ def authored_question_opening_actions(
     if not targets and not option_actions:
         return anchors, [], "authored_canvas_targets_not_in_question"
     label = _annotation_label(action_text)
-    actions: list[TutorCanvasAction] = list(option_actions)
+    # A choice is evidence only after the learner has made it. Opening-time
+    # highlights for both options make the tutor appear to reveal the answer
+    # and are not durable across the learner's later confirmation.
+    actions: list[TutorCanvasAction] = []
     for anchor in targets:
         prefix = f"AUTHORED:{question_id}:{anchor.token_id}"
         actions.append(TutorCanvasAction(

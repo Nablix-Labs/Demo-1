@@ -75,6 +75,29 @@ def test_canvas_completion_accepts_a_detected_equation_without_final_answer() ->
     assert interaction_service._is_complete_correct_canvas(ocr, "n + 5")
 
 
+def test_canvas_completion_accepts_correct_expression_beside_old_work() -> None:
+    ocr = VisionOCRResult(
+        raw_ocr_text="h + 5\nn + 5",
+        detected_equation="h + 5\nn + 5",
+        detected_steps=["h + 5", "n + 5"],
+        confidence=0.98,
+        needs_clarification=False,
+    )
+
+    assert interaction_service._is_complete_correct_canvas(ocr, "n + 5")
+
+
+def test_canvas_completion_rejects_ambiguous_expression() -> None:
+    ocr = VisionOCRResult(
+        raw_ocr_text="h/n + 5",
+        detected_equation="h/n + 5",
+        confidence=0.55,
+        needs_clarification=True,
+    )
+
+    assert not interaction_service._is_complete_correct_canvas(ocr, "n + 5")
+
+
 def test_pending_canvas_submission_returns_direct_prompt_for_empty_submit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
