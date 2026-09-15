@@ -32,6 +32,7 @@ from app.models.adapters import (
     VisionOCRResult,
 )
 from app.models.canvas import CanvasSubmitRequest
+from app.models.session import SessionRecord
 from app.services import canvas_evidence, canvas_service, interaction_service, session_service
 from app.services.snapshot_store import get_snapshot
 from app.models.student_model_session import (
@@ -964,6 +965,95 @@ def test_canvas_submit_stops_before_tutor_below_legacy_reliability_threshold(
     stored_session = client.get(f"/session/{session_id}", params={"student_id": "ST012"}).json()
     assert stored_session["attempt_count"] == 0
     assert stored_session["canvas_submissions"][0]["tutor"]["evaluation"] == "UNCLEAR"
+
+
+def test_response_aware_canvas_sends_ambiguous_ocr_to_tutor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def ambiguous_ocr(
+        adapter: MockVisionOCRAdapter,
+        snapshot_data_url: str,
+    ) -> VisionOCRResult:
+        del adapter, snapshot_data_url
+        return VisionOCRResult(
+            raw_ocr_text="h/n + 5",
+            detected_equation="h/n + 5",
+            detected_steps=["h/n + 5"],
+            confidence=0.55,
+            needs_clarification=True,
+        )
+
+    rules = canvas_service.load_classifier_rules()
+    model_first_rules = rules.model_copy(
+        update={
+            "guided_learning": rules.guided_learning.model_copy(
+                update={
+                    "response_aware_enabled": True,
+                    "production_boundary_enabled": True,
+                }
+            )
+        }
+    )
+    captured_contexts: list[AdapterContext] = []
+
+    async def response_aware_tutor(
+        context: AdapterContext,
+        session: SessionRecord,
+        access_token: str,
+    ) -> tuple[StudentModelResult, TutorResult, None, None, SessionRecord]:
+        del access_token
+        captured_contexts.append(context)
+        student = StudentModelResult(
+            mastery_status="DEVELOPING",
+            continuity_status="on_track",
+            recommended_entry_phase="GUIDED_PRACTICE",
+            hint_dependency_score=0.0,
+            intervention_required=False,
+        )
+        tutor = TutorResult(
+            evaluation="UNCLEAR",
+            error_type="INSUFFICIENT_INFORMATION",
+            intent="ASKING_QUESTION",
+            response_strategy="CLARIFY",
+            tutor_message="Please rewrite the first symbol more clearly.",
+            tutor_message_voice="Please rewrite the first symbol more clearly.",
+            voice_optimised=True,
+            hint_level=0,
+            answer_reveal_allowed=False,
+            confidence=0.9,
+            input_source="CANVAS",
+            attempt_increment=0,
+            recommended_conversation_action="REQUEST_CLARIFICATION",
+            question_completed=False,
+            requires_written_math_evidence=True,
+        )
+        return student, tutor, None, None, session
+
+    monkeypatch.setattr(MockVisionOCRAdapter, "recognize", ambiguous_ocr)
+    monkeypatch.setattr(canvas_service, "load_classifier_rules", lambda: model_first_rules)
+    monkeypatch.setattr(
+        canvas_service,
+        "process_answer_with_session_event",
+        response_aware_tutor,
+    )
+    session_id = _start_session("ST412")
+
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST412",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(captured_contexts) == 1
+    context = captured_contexts[0]
+    assert context.canvas_ocr_text == "h/n + 5"
+    assert context.ocr_confidence == 0.55
+    assert context.has_canvas_evidence is True
+    assert response.json()["status"] == "CLARIFICATION_REQUIRED"
 
 
 def test_canvas_submit_asks_for_clearer_writing_when_ocr_reads_nothing(

@@ -1608,16 +1608,22 @@ def test_production_boundary_rewrites_an_unsafe_writer_reply_once() -> None:
         def __init__(self) -> None:
             self.calls = 0
 
-        def write_guided_fact_budget_message(self, **kwargs: object) -> openai_client.OpenAITutorMessage:
+        def write_guided_fact_budget_message(self, **kwargs: object) -> openai_client.OpenAIGuidedWording:
             self.calls += 1
             message = (
                 "The fixed amount is 5."
                 if self.calls == 1
                 else "Compare the number after the sign in each visible example. What do you notice?"
             )
-            return openai_client.OpenAITutorMessage(
+            return openai_client.OpenAIGuidedWording(
                 tutor_message=message,
                 tutor_message_voice_optimised=message,
+                generated_support_text=(
+                    "Compare the amount in the visible examples with the amount in your rule."
+                    if self.calls > 1
+                    else "Compare the repeated amount in the visible examples."
+                ),
+                generated_visual_rows=None,
                 confidence=0.9,
             )
 
@@ -1662,6 +1668,10 @@ def test_production_boundary_rewrites_an_unsafe_writer_reply_once() -> None:
 
     assert writer.calls == 2
     assert rewritten.tutor_message.startswith("Compare the number")
+    assert rewritten.contribution is not None
+    assert rewritten.contribution.generated_support_text == (
+        "Compare the amount in the visible examples with the amount in your rule."
+    )
 
 
 def test_stuck_writer_reply_must_keep_the_controller_task() -> None:
@@ -1895,10 +1905,14 @@ def test_typed_symbolic_rule_requires_canvas_evidence() -> None:
         current_hint_level=None,
     )
 
-    assert classifier.requires_written_symbolic_rule_evidence(request, "CORRECT") is True
+    assert classifier.requires_written_symbolic_rule_evidence(
+        request, "CORRECT", "MISSING", False
+    ) is True
     assert classifier.requires_written_symbolic_rule_evidence(
         request.model_copy(update={"canvas_solution_complete_candidate": True}),
         "CORRECT",
+        "MATCHING",
+        False,
     ) is False
 
 
@@ -8511,6 +8525,106 @@ def test_scaffold_semantic_evaluator_accepts_the_requested_fact_or_full_answer(
 
     assert response.evaluation == "CORRECT"
     assert response.scaffold_original_answer_correct is original_answer_correct
+
+
+def test_response_aware_scaffold_records_focused_concept_evidence() -> None:
+    changing = GeneratedConcept(
+        concept_id="CHANGING_VALUE",
+        description="Identify the changing quantity.",
+        required=True,
+    )
+    context = ScaffoldEvaluationContext(
+        scaffold_id="SCF-T01-ROLES",
+        step_id="SCF-T01-ROLES-S1",
+        original_question="In m + 7, identify what changes and what stays fixed.",
+        canonical_answer="m; +7",
+        accepted_answers=["m; 7"],
+        verification_method="STRUCTURED_TEXT_MATCH",
+        step_prompt="Which part can take different values?",
+        expected_response_criterion="Identify the changing quantity.",
+        completed_step_ids=[],
+        active_component_id="CHANGING_VALUE",
+        allowed_concepts=[changing],
+    )
+    state = GuidedTeachingState(
+        question_id="Q-T01-002",
+        objective_component_ids=["CHANGING_VALUE", "FIXED_VALUE"],
+        confirmed_component_ids=[],
+        missing_component_ids=["CHANGING_VALUE", "FIXED_VALUE"],
+        active_component_id="CHANGING_VALUE",
+        last_tutor_question_type="COMPONENT",
+        selected_option_id=None,
+        awaiting_response=True,
+    )
+    request = ClassificationRequest(
+        question_id="Q-T01-002",
+        question="Which part can take different values?",
+        correct_answer="Identify the changing quantity.",
+        answer_spec=None,
+        scaffold_evaluation_context=context,
+        guided_teaching_state=state,
+        student_input="m changes",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+    )
+    contribution = StudentContribution(
+        kind="MATHEMATICAL_ATTEMPT",
+        assessment="INCOMPLETE",
+        error_category=None,
+        error_description=None,
+        identified_difficulty=None,
+        learner_question=None,
+        explained_idea=None,
+        generated_support_text=None,
+        generated_visual_rows=None,
+        support_relevance="NOT_NEEDED",
+    )
+
+    class _ScaffoldClient:
+        def evaluate_scaffold_step(self, **kwargs: object) -> ScaffoldStepEvaluation:
+            return ScaffoldStepEvaluation(
+                contribution=contribution,
+                step_satisfied=True,
+                original_answer_correct=False,
+                demonstrated_fact="m is the changing quantity.",
+                focused_evidence=FocusedComponentEvidence(
+                    component_id="CHANGING_VALUE",
+                    status="DEMONSTRATED",
+                    evidence="m changes",
+                    confidence=0.98,
+                ),
+                confidence=0.98,
+                tutor_message="Which value stays fixed?",
+                tutor_message_voice="Which value stays fixed?",
+            )
+
+    rules = load_classifier_rules()
+    rules = rules.model_copy(update={
+        "guided_learning": rules.guided_learning.model_copy(
+            update={"response_aware_enabled": True}
+        )
+    })
+    response = classifier.classify_scaffold_response(
+        request,
+        rules,
+        classifier.SafetyCheck(passed=True, flag_type=None, action_taken=None),
+        cast(openai_client.OpenAIAIEngineClient, _ScaffoldClient()),
+        "SUBMITTING_ANSWER",
+    )
+
+    assert response.guided_teaching_state is not None
+    assert response.guided_teaching_state.confirmed_component_ids == ["CHANGING_VALUE"]
+    assert response.guided_teaching_state.missing_component_ids == ["FIXED_VALUE"]
+    assert response.guided_teaching_state.last_turn_evidence == [
+        GuidedEvidenceClaim(
+            concept_id="CHANGING_VALUE",
+            status="DEMONSTRATED",
+            source="TEXT",
+        )
+    ]
 
 
 def test_scaffold_semantic_evaluator_rejects_an_unrelated_response(

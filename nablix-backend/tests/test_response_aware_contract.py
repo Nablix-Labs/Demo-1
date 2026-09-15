@@ -4,7 +4,12 @@ These tests validate the service contract, not the quality of live interpretatio
 """
 import pytest
 
-from app.ai_engine.classifier import ClassificationRequest, build_guided_tutor_response, validate_guided_evaluation
+from app.ai_engine.classifier import (
+    ClassificationRequest,
+    build_guided_tutor_response,
+    validate_guided_evaluation,
+    validate_response_aware_submission,
+)
 from app.ai_engine.classifier_config import load_classifier_rules
 from app.ai_engine.openai_client import (
     guided_assessment_schema,
@@ -30,7 +35,8 @@ from app.services.interaction_service import (
 
 
 @pytest.mark.parametrize("kind", [
-    "ACKNOWLEDGEMENT", "EXPLANATION_REQUEST", "UNCLEAR_INPUT", "EXPRESSED_DIFFICULTY",
+    "ACKNOWLEDGEMENT", "EXPLANATION_REQUEST", "TASK_CLARIFICATION",
+    "UNCLEAR_INPUT", "EXPRESSED_DIFFICULTY",
 ])
 def test_non_attempt_preserves_prior_evidence_without_support(kind: str) -> None:
     rules = load_classifier_rules()
@@ -246,6 +252,52 @@ def test_production_assessment_recovers_evidence_from_irrelevant_support_metadat
     assert payload["newly_confirmed_concept_ids"] == ["GENERAL_RULE_ADD_FIVE"]
 
 
+def test_canvas_submission_state_cannot_claim_matching_without_canvas_evidence() -> None:
+    request = ClassificationRequest(
+        question_id="REPLAY",
+        question_type="SHORT_RESPONSE",
+        question="Write the general rule.",
+        correct_answer="n + 5",
+        answer_spec=AnswerSpec(
+            answer_spec_id="REPLAY",
+            canonical_answer="n + 5",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=False,
+        ),
+        student_input="n + 5",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+        canvas_submission_required=True,
+    )
+    evaluation = GuidedEvaluation(
+        contribution=None,
+        student_state="CORRECT",
+        newly_confirmed_concept_ids=["GENERAL_RULE"],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=[],
+        selected_error_code=None,
+        confidence=0.98,
+        next_objective=None,
+        submission_state="MATCHING",
+        tutor_message="The rule is complete.",
+        tutor_message_voice="The rule is complete.",
+    )
+
+    with pytest.raises(AdapterError, match="reliable complete canvas evidence"):
+        validate_response_aware_submission(evaluation, request)
+
+    missing = validate_response_aware_submission(
+        evaluation.model_copy(update={"submission_state": "MISSING"}),
+        request,
+    )
+    assert missing.submission_state == "MISSING"
+
+
 def test_model_evidence_survives_wrong_rule_then_correct_rule_canvas_handoff() -> None:
     rules = load_classifier_rules()
     rules = rules.model_copy(update={"guided_learning": rules.guided_learning.model_copy(
@@ -262,6 +314,7 @@ def test_model_evidence_survives_wrong_rule_then_correct_rule_canvas_handoff() -
         question="3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number. Write the general rule.",
         correct_answer="n + 5", student_input="its n+6", current_phase="GUIDED_PRACTICE",
         input_source="TEXT", transcript_confidence=None, attempt_count=0, current_hint_level=None,
+        canvas_submission_required=True,
         answer_spec=AnswerSpec(answer_spec_id="REPLAY", canonical_answer="n + 5", accepted_answers=[],
                                verification_method="STRUCTURED_TEXT_MATCH", explanation_required=False),
     )
@@ -294,6 +347,7 @@ def test_model_evidence_survives_wrong_rule_then_correct_rule_canvas_handoff() -
         "student_state": "CORRECT", "newly_confirmed_concept_ids": ["FIXED_VALUE"],
         "preserved_concept_ids": ids[:2], "contradicted_concept_ids": [], "missing_concept_ids": [],
         "selected_error_code": None, "next_objective": None,
+        "submission_state": "MISSING",
         "tutor_message": "Your rule matches the examples. Write it on the canvas, then press Check.",
         "tutor_message_voice": "Your rule matches the examples. Write it on the canvas, then press Check.",
     })

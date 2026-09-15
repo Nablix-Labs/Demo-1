@@ -121,6 +121,7 @@ class TutorEngineServiceAdapter:
                     canvas_solution_complete_candidate=(
                         context.canvas_solution_complete_candidate
                     ),
+                    canvas_submission_required=context.canvas_submission_required,
                     conversation_history=context.conversation_history,
                     conversation_state=context.conversation_state,
                     generated_question_rubric=context.generated_question_rubric,

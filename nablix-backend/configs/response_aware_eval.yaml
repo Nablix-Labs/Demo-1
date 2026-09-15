@@ -252,13 +252,49 @@ cases:
     prior: "Choose the general rule and explain your choice."
     input: "what i need to answer now"
     source: VOICE
-    kind: EXPLANATION_REQUEST
+    kind: TASK_CLARIFICATION
     assessment: NOT_ASSESSED
-    explanation_expected: true
+    explanation_expected: false
     concepts:
       - {concept_id: ANSWER_SELECTION, description: "Selects B, n + 4", required: true}
       - {concept_id: ANSWER_EXPLANATION, description: "Explains that n can represent any starting number", required: true}
     expected_missing: [ANSWER_SELECTION, ANSWER_EXPLANATION]
+  - id: typed_rule_waits_for_canvas
+    question: "3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number. Write the general rule."
+    answer: "n + 5"
+    prior: "Write the general rule."
+    input: "n+5"
+    source: TEXT
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: CORRECT
+    canvas_submission_required: true
+    expected_write: true
+  - id: wrong_canvas_symbol_needs_correction
+    question: "3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number. Write the general rule."
+    answer: "n + 5"
+    prior: "Write the general rule on the canvas."
+    input: "h+5"
+    source: CANVAS
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: INCORRECT
+    canvas_submission_required: true
+    has_canvas_evidence: true
+    canvas_ocr_text: "h+5"
+    canvas_ocr_confidence: 0.96
+    expected_write: true
+  - id: ambiguous_canvas_symbol_needs_rewrite
+    question: "3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number. Write the general rule."
+    answer: "n + 5"
+    prior: "Write the general rule on the canvas."
+    input: "The first symbol is unclear, followed by plus five."
+    source: CANVAS
+    kind: UNCLEAR_INPUT
+    assessment: NOT_ASSESSED
+    canvas_submission_required: true
+    has_canvas_evidence: true
+    canvas_ocr_text: "h/n + 5"
+    canvas_ocr_confidence: 0.55
+    expected_write: true
   - &scaffold_case
     id: scaffold_term
     question: "3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number. Write the general rule."

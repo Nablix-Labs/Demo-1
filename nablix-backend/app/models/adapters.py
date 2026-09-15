@@ -123,6 +123,7 @@ class AdapterContext(BaseModel):
     canvas_events: list[CanvasEvent] = Field(default_factory=list)
     has_canvas_evidence: bool = False
     canvas_solution_complete_candidate: bool = False
+    canvas_submission_required: bool = False
     conversation_history: list["ConversationMessage"] = Field(default_factory=list)
     conversation_state: ConversationState | None = None
     generated_question_rubric: GeneratedQuestionRubric | None = None

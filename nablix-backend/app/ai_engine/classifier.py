@@ -66,6 +66,7 @@ from app.models.guided_learning import (
     GuidedPromptType,
     GuidedRescueContext,
     GuidedStudentState,
+    GuidedSubmissionState,
     GuidedTeachingState,
     GuidedTeachingPlanStep,
     StudentContribution,
@@ -127,6 +128,7 @@ class ClassificationRequest(StrictSchema):
     canvas_strokes: list[dict[str, object]] = Field(default_factory=list)
     has_canvas_evidence: bool = False
     canvas_solution_complete_candidate: bool = False
+    canvas_submission_required: bool = False
     conversation_history: list[ConversationMessage] = Field(default_factory=list)
     conversation_state: ConversationState | None = None
     generated_question_rubric: GeneratedQuestionRubric | None = None
@@ -426,6 +428,16 @@ def classify_scaffold_response(
         result.step_satisfied
         and result.confidence >= rules.guided_learning.confidence_threshold
     )
+    focused_evidence = result.focused_evidence
+    allowed_component_ids = {
+        concept.concept_id for concept in context.allowed_concepts
+    }
+    if focused_evidence is not None and focused_evidence.component_id not in allowed_component_ids:
+        raise AdapterError(
+            "openai_ai_engine",
+            "Scaffold evaluation returned a concept outside the supplied catalog: "
+            f"{focused_evidence.component_id}.",
+        )
     contribution = result.contribution if rules.guided_learning.response_aware_enabled else None
     if rules.guided_learning.response_aware_enabled and contribution is None:
         raise AdapterError("openai_ai_engine", "Scaffold evaluation is missing its contribution assessment.")
@@ -437,6 +449,12 @@ def classify_scaffold_response(
     if contribution is not None:
         satisfied = satisfied and contribution.assessment in {"CORRECT", "INCOMPLETE"}
         intent = contribution_intent(contribution)
+    if focused_evidence is not None and (
+        not satisfied
+        or focused_evidence.status != "DEMONSTRATED"
+        or focused_evidence.confidence < rules.guided_learning.confidence_threshold
+    ):
+        focused_evidence = None
     original_answer_correct = (
         False
         if explanation_requested
@@ -465,6 +483,19 @@ def classify_scaffold_response(
             "confidence": result.confidence,
             "detected_intent": intent,
             "explanation_requested": explanation_requested,
+            "contribution_kind": (
+                contribution.kind if contribution is not None else None
+            ),
+            "mathematical_assessment": (
+                contribution.assessment if contribution is not None else None
+            ),
+            "support_relevance": (
+                contribution.support_relevance if contribution is not None else None
+            ),
+            "focused_component_id": (
+                focused_evidence.component_id if focused_evidence is not None else None
+            ),
+            "progression_decision": "ADVANCE_STEP" if satisfied else "KEEP_STEP",
         },
     )
     decision = TutorDecision(
@@ -502,10 +533,49 @@ def classify_scaffold_response(
             result.tutor_message_voice if tutor_message_override is not None else None
         ),
     )
+    guided_state = request.guided_teaching_state
+    active_objective = request.active_teaching_objective
+    if focused_evidence is not None and guided_state is not None:
+        claim = GuidedEvidenceClaim(
+            concept_id=focused_evidence.component_id,
+            status="DEMONSTRATED",
+            source=evidence_source_for_request(request),
+        )
+        confirmed_ids = set(guided_state.confirmed_component_ids)
+        confirmed_ids.add(focused_evidence.component_id)
+        ledger = {
+            evidence.concept_id: evidence
+            for evidence in [*guided_state.evidence_ledger, claim]
+        }
+        guided_state = guided_state.model_copy(update={
+            "confirmed_component_ids": sorted(confirmed_ids),
+            "missing_component_ids": sorted(
+                set(guided_state.objective_component_ids) - confirmed_ids
+            ),
+            "last_turn_evidence": [claim],
+            "evidence_ledger": list(ledger.values()),
+        })
+        if active_objective is not None:
+            objective_confirmed = set(active_objective.confirmed_concept_ids)
+            objective_confirmed.add(focused_evidence.component_id)
+            objective_missing = set(active_objective.missing_concept_ids)
+            objective_missing.discard(focused_evidence.component_id)
+            active_objective = active_objective.model_copy(update={
+                "confirmed_concept_ids": sorted(objective_confirmed),
+                "missing_concept_ids": sorted(objective_missing),
+                "target_concept_ids": [
+                    component_id
+                    for component_id in active_objective.target_concept_ids
+                    if component_id in objective_missing
+                ] or sorted(objective_missing),
+            })
     return response.model_copy(
         update={
             "scaffold_original_answer_correct": original_answer_correct,
             "contribution": contribution,
+            "guided_teaching_state": guided_state,
+            "generated_question_rubric": request.generated_question_rubric,
+            "active_teaching_objective": active_objective,
             **({"evaluation": "NO_ATTEMPT", "attempt_increment": 0}
                if contribution is not None and contribution.assessment in {"NOT_ASSESSED", "INCOMPLETE"}
                and not satisfied else {}),
@@ -1134,9 +1204,17 @@ def _expression_parts(text: str) -> tuple[str, str, str] | None:
 def requires_written_symbolic_rule_evidence(
     request: ClassificationRequest,
     student_state: GuidedStudentState,
+    submission_state: GuidedSubmissionState,
+    response_aware_enabled: bool,
 ) -> bool:
     """Keep an algebra rule open until reliable canvas maths confirms it."""
 
+    if response_aware_enabled:
+        if not request.canvas_submission_required:
+            return False
+        if submission_state == "MISSING":
+            return student_state == "CORRECT"
+        return submission_state in {"MISMATCHED", "UNCLEAR"}
     if student_state != "CORRECT":
         return False
     if request.question_type != "SHORT_RESPONSE":
@@ -2875,6 +2953,11 @@ def guided_tutor_context_for(
             strokes=request.canvas_strokes,
             ordered_events=request.canvas_events,
         ),
+        canvas_submission_required=request.canvas_submission_required,
+        canvas_evidence_present=request.has_canvas_evidence,
+        canvas_solution_complete_candidate=request.canvas_solution_complete_candidate,
+        canvas_ocr_text=request.canvas_ocr_text,
+        canvas_ocr_confidence=request.canvas_ocr_confidence,
         prior_tutor_response=(
             request.conversation_history[-1].content
             if request.conversation_history
@@ -3603,6 +3686,8 @@ def classify_guided_learning_response(
                 allowed_errors,
                 rules,
             )
+            if response_aware_mode_enabled:
+                evaluation = validate_response_aware_submission(evaluation, request)
             if rules.guided_learning.production_boundary_enabled:
                 evaluation = redact_untrusted_response_aware_fields(evaluation)
                 evaluation = write_redacted_response_aware_message(
@@ -3681,6 +3766,22 @@ def classify_guided_learning_response(
             )
     if evaluation is None:
         if rules.guided_learning.production_boundary_enabled:
+            rejected_contribution = (
+                rejected_evaluation.contribution
+                if rejected_evaluation is not None
+                else None
+            )
+            if (
+                rejected_contribution is not None
+                and rejected_contribution.assessment == "INCORRECT"
+                and rejected_contribution.support_relevance
+                in {"UNMAPPED", "MISMATCHED"}
+                and rejected_contribution.generated_support_text is None
+            ):
+                raise last_error or AdapterError(
+                    "openai_ai_engine",
+                    "Safe replacement support could not be generated.",
+                )
             if rejected_evaluation is not None:
                 fallback = rejected_evaluation.model_copy(update={
                     "tutor_message": rules.guided_learning.production_boundary_safe_wording_message,
@@ -3839,6 +3940,8 @@ def classify_guided_learning_response(
             allowed_errors,
             rules,
         )
+        if response_aware_mode_enabled:
+            evaluation = validate_response_aware_submission(evaluation, request)
     if (
         evaluation.student_state == "PARTIAL"
         and not evaluation.newly_confirmed_concept_ids
@@ -4144,6 +4247,8 @@ def write_redacted_response_aware_message(
         "contribution_kind": contribution.kind,
         "assessment": contribution.assessment,
         "error_category": contribution.error_category,
+        "error_description": contribution.error_description,
+        "support_relevance": contribution.support_relevance,
         "learner_question": contribution.learner_question,
         "identified_difficulty": contribution.identified_difficulty,
         "explained_idea": contribution.explained_idea,
@@ -4157,6 +4262,8 @@ def write_redacted_response_aware_message(
             if message.role == "assistant"
         ],
         "answer_reveal_allowed": False,
+        "submission_state": evaluation.submission_state,
+        "canvas_submission_required": request.canvas_submission_required,
     }
     explained_topic = (
         contribution.identified_difficulty or contribution.learner_question
@@ -4172,14 +4279,34 @@ def write_redacted_response_aware_message(
             system_prompt=rules.guided_learning.response_aware_writer_system_prompt,
             wording_context=context,
         )
+        replacement_required = (
+            contribution.assessment == "INCORRECT"
+            and contribution.support_relevance in {"UNMAPPED", "MISMATCHED"}
+        )
+        rewritten_contribution = recorded_contribution.model_copy(update={
+            "generated_support_text": (
+                getattr(message, "generated_support_text", None)
+                if replacement_required else None
+            ),
+            "generated_visual_rows": (
+                getattr(message, "generated_visual_rows", None)
+                if replacement_required else None
+            ),
+        })
         rewritten = evaluation.model_copy(update={
-            "contribution": recorded_contribution,
+            "contribution": rewritten_contribution,
             "tutor_message": message.tutor_message,
             "tutor_message_voice": message.tutor_message_voice_optimised,
         })
-        rejection = response_aware_message_rejection_reason(
-            rewritten, request, rubric, objective, rules,
+        rejection = (
+            generated_support_grounding_rejection(rewritten, request)
+            if replacement_required
+            else None
         )
+        if rejection is None:
+            rejection = response_aware_message_rejection_reason(
+                rewritten, request, rubric, objective, rules,
+            )
         if rejection is None:
             return rewritten
         if attempt >= rules.guided_learning.production_boundary_writer_maximum_retries:
@@ -4986,6 +5113,39 @@ def response_aware_message_rejection_reason(
         for pattern in rules.guided_learning.response_aware_reply_rejection_patterns
     ):
         return "GENERIC_OR_UNGROUNDED_WORDING"
+    return None
+
+
+def generated_support_grounding_rejection(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+) -> str | None:
+    """Require generated support to share substance with its validated turn."""
+
+    contribution = evaluation.contribution
+    if contribution is None or contribution.generated_support_text is None:
+        return "MISSING_GENERATED_SUPPORT"
+    grounding_tokens = significant_component_tokens(
+        " ".join(
+            value
+            for value in (
+                request.question,
+                request.student_input,
+                contribution.error_description,
+            )
+            if value is not None
+        )
+    )
+    if not significant_component_tokens(
+        contribution.generated_support_text
+    ).intersection(grounding_tokens):
+        return "UNGROUNDED_GENERATED_SUPPORT"
+    for row in contribution.generated_visual_rows or []:
+        row_tokens = significant_component_tokens(
+            f"{row.expression} {row.annotation}"
+        )
+        if not row_tokens.intersection(grounding_tokens):
+            return "UNGROUNDED_GENERATED_VISUAL"
     return None
 
 
@@ -6153,6 +6313,7 @@ def contribution_intent(contribution: StudentContribution) -> IntentType:
         "MATHEMATICAL_ATTEMPT": "SUBMITTING_ANSWER",
         "ACKNOWLEDGEMENT": "ACKNOWLEDGEMENT",
         "EXPLANATION_REQUEST": "ASKING_QUESTION",
+        "TASK_CLARIFICATION": "ASKING_QUESTION",
         "UNCLEAR_INPUT": "ASKING_QUESTION",
         "EXPRESSED_DIFFICULTY": "EXPRESSING_CONFUSION",
     }
@@ -6197,7 +6358,11 @@ def validate_response_aware_evidence(
         ):
             raise AdapterError("openai_ai_engine", "An explanation request must record the idea explained to the learner.")
         return evaluation.model_copy(update={
-            "student_state": "UNCLEAR" if contribution.kind == "UNCLEAR_INPUT" else "STUCK",
+            "student_state": (
+                "UNCLEAR"
+                if contribution.kind in {"TASK_CLARIFICATION", "UNCLEAR_INPUT"}
+                else "STUCK"
+            ),
             "preserved_concept_ids": objective.confirmed_concept_ids,
             "missing_concept_ids": objective.missing_concept_ids,
             "next_objective": objective,
@@ -6253,6 +6418,38 @@ def normalize_production_assessment(evaluation: GuidedEvaluation) -> GuidedEvalu
             "support_relevance": "UNMAPPED",
         })
         return evaluation.model_copy(update={"contribution": normalized_contribution})
+    return evaluation
+
+
+def validate_response_aware_submission(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+) -> GuidedEvaluation:
+    """Validate model submission metadata against observable canvas state."""
+
+    submission_state = evaluation.submission_state
+    if not request.canvas_submission_required:
+        if submission_state != "NOT_REQUIRED":
+            raise AdapterError(
+                "openai_ai_engine",
+                "Canvas submission state must be NOT_REQUIRED for this question.",
+            )
+        return evaluation
+    if submission_state == "NOT_REQUIRED":
+        raise AdapterError(
+            "openai_ai_engine",
+            "Canvas submission is required but the assessment returned NOT_REQUIRED.",
+        )
+    if submission_state == "MATCHING" and not request.canvas_solution_complete_candidate:
+        raise AdapterError(
+            "openai_ai_engine",
+            "MATCHING canvas submission requires reliable complete canvas evidence.",
+        )
+    if submission_state in {"MISMATCHED", "UNCLEAR"} and not request.has_canvas_evidence:
+        raise AdapterError(
+            "openai_ai_engine",
+            f"{submission_state} canvas submission requires current canvas evidence.",
+        )
     return evaluation
 
 
@@ -6568,6 +6765,25 @@ def build_guided_tutor_response(
             "answer_assessment": contribution.assessment if contribution else None,
             "error_category": contribution.error_category if contribution else None,
             "support_relevance": contribution.support_relevance if contribution else None,
+            "submission_state": evaluation.submission_state,
+            "expected_student_action": (
+                "WRITE"
+                if evaluation.submission_state
+                in {"MISSING", "MISMATCHED", "UNCLEAR"}
+                else "ANSWER"
+                if objective is not None
+                else "NONE"
+            ),
+            "generated_support_provenance": (
+                "PRODUCTION_WRITER"
+                if contribution is not None
+                and contribution.generated_support_text is not None
+                and rules.guided_learning.production_boundary_enabled
+                else "GUIDED_EVALUATOR"
+                if contribution is not None
+                and contribution.generated_support_text is not None
+                else None
+            ),
             "prompt_similarity": round(maximum_recent_tutor_message_similarity(evaluation.tutor_message, request), 3),
             "repeated_question": maximum_recent_tutor_message_similarity(evaluation.tutor_message, request)
                 >= rules.guided_learning.tutor_message_similarity_threshold,
@@ -6576,6 +6792,11 @@ def build_guided_tutor_response(
             "current_evidence_ids": evaluation.newly_confirmed_concept_ids,
             "contradicted_evidence_ids": evaluation.contradicted_concept_ids,
             "question_id": request.question_id,
+            "active_step_id": (
+                request.guided_teaching_state.active_step_id
+                if request.guided_teaching_state is not None
+                else None
+            ),
             "message_source": "controller" if evaluation.confidence == 1.0 else "openai",
             "openai_model": openai_model_for_request(get_settings(), request),
             "diagnostic_focus": diagnostic_focus,
@@ -6589,7 +6810,12 @@ def build_guided_tutor_response(
                 claim.model_dump()
                 for claim in deterministic_turn_evidence(request, rubric, rules)
             ],
-            "completion_decision": "ADVANCE" if objective is None else "CONTINUE",
+            "completion_decision": (
+                "ADVANCE"
+                if objective is None
+                and evaluation.submission_state in {"NOT_REQUIRED", "MATCHING"}
+                else "CONTINUE"
+            ),
         },
     )
     review_request = request.model_copy(
@@ -6759,14 +6985,26 @@ def build_guided_tutor_response(
     guarded_response = response if contribution is not None else apply_answer_reveal_guardrail(
         response, request.correct_answer, rules,
     )
-    if not requires_written_symbolic_rule_evidence(request, state):
+    if not requires_written_symbolic_rule_evidence(
+        request,
+        state,
+        evaluation.submission_state,
+        rules.guided_learning.response_aware_enabled,
+    ):
         return guarded_response
     write_instruction = safe_guided_write_instruction(
         evaluation,
         request,
         rules,
     )
-    message = write_instruction or evaluation.tutor_message
+    if rules.guided_learning.response_aware_enabled:
+        write_instruction = (
+            write_instruction
+            or rules.guided_learning.critical_thinking.written_rule_prompt
+        )
+        message = evaluation.tutor_message
+    else:
+        message = write_instruction or evaluation.tutor_message
     return guarded_response.model_copy(
         update={
             "evaluation": "PARTIALLY_CORRECT",

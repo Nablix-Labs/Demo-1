@@ -58,6 +58,12 @@ class ReplayCase(BaseModel):
         "MISMATCHED",
     ] | None = None
     explanation_expected: bool = False
+    canvas_submission_required: bool = False
+    has_canvas_evidence: bool = False
+    canvas_solution_complete_candidate: bool = False
+    canvas_ocr_text: str | None = None
+    canvas_ocr_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    expected_write: bool = False
     forbidden_content: list[str] = Field(default_factory=list)
     scaffold: ScaffoldEvaluationContext | None = None
 
@@ -93,6 +99,8 @@ def replay_failures(case: ReplayCase, result: TutorResponse, forbidden_reply: li
             failures.append("support on non-attempt")
     if case.assessment != "CORRECT" and result.question_completed:
         failures.append("non-correct contribution completed question")
+    if result.requires_written_math_evidence != case.expected_write:
+        failures.append("incorrect canvas write requirement")
     if case.explanation_expected and not contribution.explained_idea:
         failures.append("requested explanation not recorded")
     confirmed = set(result.guided_teaching_state.confirmed_component_ids) if result.guided_teaching_state else set()
@@ -166,6 +174,11 @@ def main() -> None:
             active_teaching_objective=previous.objective if previous else None,
             guided_teaching_state=previous.teaching if previous else None,
             scaffold_evaluation_context=case.scaffold,
+            canvas_submission_required=case.canvas_submission_required,
+            has_canvas_evidence=case.has_canvas_evidence,
+            canvas_solution_complete_candidate=case.canvas_solution_complete_candidate,
+            canvas_ocr_text=case.canvas_ocr_text,
+            canvas_ocr_confidence=case.canvas_ocr_confidence,
         )
         start = monotonic()
         try:
@@ -188,6 +201,7 @@ def main() -> None:
                               "contribution": result.contribution.model_dump() if result.contribution else None,
                               "reply": result.tutor_message, "state": result.guided_student_state,
                               "completed": result.question_completed,
+                              "requires_write": result.requires_written_math_evidence,
                               "confirmed": result.guided_teaching_state.confirmed_component_ids if result.guided_teaching_state else [],
                               "latency_ms": round((monotonic() - start) * 1000)}), flush=True)
         except (AdapterError, ValidationError, ValueError) as error:

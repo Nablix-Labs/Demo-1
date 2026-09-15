@@ -430,6 +430,7 @@ async def submit_canvas(
         detected_equation=ocr.detected_equation,
         detected_steps=ocr.detected_steps,
         ocr_confidence=ocr.confidence,
+        canvas_ocr_text=ocr.raw_ocr_text,
         canvas_regions=canvas_regions,
         canvas_mathml_blocks=ocr.mathml_blocks,
         spatial_tokens=canvas_evidence.spatial_tokens,
@@ -446,6 +447,7 @@ async def submit_canvas(
             ocr,
             session.correct_answer,
         ),
+        canvas_submission_required=session.canvas_submission_required,
         phase3_submission_confirmed=(
             session.current_phase == "INDEPENDENT_PRACTICE"
             and request.submission_role != "VOICE_ATTACHMENT"
@@ -465,9 +467,22 @@ async def submit_canvas(
         student_result = None
         schema_content_response = None
         updated_session = session
-    elif ocr.needs_clarification or ocr.confidence < max(
-        settings.min_ocr_confidence_threshold,
-        rules.guided_learning.minimum_ocr_confidence,
+    elif (
+        not (
+            session.current_phase == "GUIDED_PRACTICE"
+            and (
+                rules.guided_learning.response_aware_enabled
+                or rules.guided_learning.production_boundary_enabled
+            )
+        )
+        and (
+            ocr.needs_clarification
+            or ocr.confidence
+            < max(
+                settings.min_ocr_confidence_threshold,
+                rules.guided_learning.minimum_ocr_confidence,
+            )
+        )
     ):
         tutor = _clarification_result(ocr, rules, context)
         student_result = None
