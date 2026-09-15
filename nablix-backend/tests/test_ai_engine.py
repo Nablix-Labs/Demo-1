@@ -1674,6 +1674,91 @@ def test_production_boundary_rewrites_an_unsafe_writer_reply_once() -> None:
     )
 
 
+def test_guided_writer_schema_requires_replacement_support_for_mixed_turn() -> None:
+    schema = openai_client.guided_wording_schema({
+        "assessment": "INCORRECT",
+        "support_relevance": "UNMAPPED",
+        "learner_question": "What should I do next?",
+    })
+    properties = cast(dict[str, object], schema["properties"])
+
+    assert properties["generated_support_text"] == {
+        "title": "Generated Support Text",
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 280,
+    }
+
+
+def test_completed_response_aware_turn_retries_follow_up_question() -> None:
+    class Writer:
+        def __init__(self) -> None:
+            self.contexts: list[dict[str, object]] = []
+
+        def write_guided_fact_budget_message(
+            self,
+            **kwargs: object,
+        ) -> openai_client.OpenAIGuidedWording:
+            context = cast(dict[str, object], kwargs["wording_context"])
+            self.contexts.append(context)
+            message = (
+                "Would you like to explain anything else?"
+                if len(self.contexts) == 1
+                else "That completes this question."
+            )
+            return openai_client.OpenAIGuidedWording(
+                tutor_message=message,
+                tutor_message_voice_optimised=message,
+                generated_support_text=None,
+                generated_visual_rows=None,
+                confidence=0.9,
+            )
+
+    request = _plain_general_rule_request("n + 5")
+    rubric = _plain_general_rule_rubric()
+    objective = classifier.initial_guided_objective(rubric)
+    contribution = StudentContribution(
+        kind="MATHEMATICAL_ATTEMPT",
+        assessment="CORRECT",
+        error_category=None,
+        error_description=None,
+        identified_difficulty=None,
+        learner_question=None,
+        explained_idea=None,
+        generated_support_text=None,
+        generated_visual_rows=None,
+        support_relevance="NOT_NEEDED",
+    )
+    evaluation = GuidedEvaluation(
+        contribution=contribution,
+        student_state="CORRECT",
+        newly_confirmed_concept_ids=["GENERAL_RULE"],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=[],
+        selected_error_code=None,
+        confidence=0.9,
+        next_objective=None,
+        tutor_message="unused",
+        tutor_message_voice="unused",
+    )
+    writer = Writer()
+
+    rewritten = classifier.write_redacted_response_aware_message(
+        evaluation,
+        request,
+        rubric,
+        objective,
+        cast(openai_client.OpenAIAIEngineClient, writer),
+        load_classifier_rules(),
+    )
+
+    assert len(writer.contexts) == 2
+    assert writer.contexts[0]["remaining_concept_ids"] == []
+    assert "writer_validation_feedback" in writer.contexts[1]
+    assert rewritten.tutor_message == "That completes this question."
+
+
 def test_stuck_writer_reply_must_keep_the_controller_task() -> None:
     request = _plain_general_rule_request("i don't know")
     rubric = _plain_general_rule_rubric()

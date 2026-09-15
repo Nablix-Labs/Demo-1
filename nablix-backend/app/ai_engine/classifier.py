@@ -4253,7 +4253,7 @@ def write_redacted_response_aware_message(
         "identified_difficulty": contribution.identified_difficulty,
         "explained_idea": contribution.explained_idea,
         "demonstrated_concept_ids": evaluation.newly_confirmed_concept_ids,
-        "remaining_concept_ids": objective.missing_concept_ids,
+        "remaining_concept_ids": evaluation.missing_concept_ids,
         "authorised_support": support_context_text(
             request.phase_2_prompt_context.current_support
         ) if request.phase_2_prompt_context and request.phase_2_prompt_context.current_support else None,
@@ -5104,6 +5104,12 @@ def response_aware_message_rejection_reason(
     message = evaluation.tutor_message.strip()
     if message == "" or evaluation.tutor_message_voice.strip() == "":
         return "EMPTY_WORDING"
+    if (
+        evaluation.student_state == "CORRECT"
+        and not evaluation.missing_concept_ids
+        and "?" in message
+    ):
+        return "COMPLETED_TURN_FOLLOW_UP"
     if message.count("?") > 1:
         return "MULTIPLE_QUESTIONS"
     if maximum_recent_tutor_message_similarity(message, request) >= rules.guided_learning.tutor_message_similarity_threshold:
