@@ -28,10 +28,12 @@ import {
   completeDiagnostic,
   diagnosticQuestions,
   studentId,
+  studentFacingError,
   sessionTopicTitle,
   type DiagnosticAnswer,
   type SchemaQuestion,
 } from '@/lib/api';
+import { reportFailure } from '@/lib/failureReport';
 import { displayTopic } from '@/lib/topicDisplay';
 import { applyPhaseHandoff } from '@/lib/phaseHandoff';
 import { speakTutor, stopTutorSpeech } from '@/lib/tts';
@@ -257,8 +259,27 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
       // carries question_id: null here, which the store now keeps as null.
       //
       applyPhaseHandoff(rec);
-    } catch {
-      setError("Couldn't send your answers. Please try again.");
+    } catch (err) {
+      /**
+       * Name the service that refused, and write the status down.
+       *
+       * The bare `catch` here told every failure the same story — "Couldn't
+       * send your answers" reads as a network problem, so a 422 on the answer
+       * payload or a 503 out of the Student Model sent whoever was testing to
+       * look at their wifi while the real fault sat in a service log nobody
+       * opened. This is the diagnostic's copy of the orientation fault fixed in
+       * 9f32c94; it is also the screen #283 reports arriving at empty, so a
+       * silent failure here is exactly what must not stay invisible.
+       *
+       * The original sentence survives as the fallback, for the one case it is
+       * true of: a request that never reached the backend at all.
+       */
+      reportFailure('/diagnostic/complete', err, {
+        session_id: sessionId,
+        topic_id: activeConceptId,
+        answers: payload.length,
+      });
+      setError(studentFacingError(err) ?? "Couldn't send your answers. Please try again.");
       setStatus('ready');
     }
   };

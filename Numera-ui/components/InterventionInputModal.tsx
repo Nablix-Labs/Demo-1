@@ -39,6 +39,8 @@ import {
   DEFAULT_INTERVENTION_PROMPT,
   type InterventionInputRequest,
 } from '@/lib/phase3Routing';
+import { studentFacingError } from '@/lib/api';
+import { reportFailure } from '@/lib/failureReport';
 import { cn } from '@/lib/cn';
 
 export interface InterventionInputSubmission {
@@ -121,9 +123,32 @@ export default function InterventionInputModal({ request, onSubmit, onDismiss }:
           transcript: said || null,
         },
       });
-    } catch {
-      // The student's words are still in the box, so the button is the retry.
-      setError("We couldn't send that just now. Your answer is still here — try again.");
+    } catch (err) {
+      /**
+       * Say what actually failed, and write the status down — issue #302,
+       * "Intervention screen is not saving anything ?".
+       *
+       * This was a bare `catch` with that one sentence. It is the right thing
+       * to say about a network drop and wrong about everything else: a 409 on
+       * an already-resolved case, a 422 on a reason code the backend does not
+       * know, a 500 in the Student Model all produced the identical line, none
+       * of them reached the console, and the question mark in the title of
+       * #302 is what that costs — nobody could tell whether the submission was
+       * refused, lost, or never sent. Same fault and same fix as the
+       * orientation screen in 9f32c94.
+       *
+       * The retry advice stays only as the fallback, which is the one case
+       * where "try again" is true: a request that never completed.
+       */
+      reportFailure('/intervention (input)', err, {
+        intervention_id: request?.intervention_id ?? null,
+        selected_reason_codes: selected,
+        voice_provided: said.length > 0,
+      });
+      setError(
+        studentFacingError(err)
+          ?? "We couldn't send that just now. Your answer is still here — try again.",
+      );
       setSending(false);
     }
   };
