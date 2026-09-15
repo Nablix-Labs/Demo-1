@@ -2738,6 +2738,9 @@ def _response_from(
         # is about.
         and session.intervention is None
     )
+    # A halted topic carries its pause message on the session, not on the tutor
+    # turn that halted it. Read it back so the student sees, and hears, why the
+    # topic stopped. SessionRecord has no separate voice line, so both use it.
     if session.current_phase == "INDEPENDENT_PRACTICE" and session.question_id is None:
         message = session.message
         message_voice = session.message
@@ -5188,7 +5191,10 @@ async def _process_interaction(
             "phase3_review_evidence": tutor.phase3_review_evidence,
         }
     )
-    if independent_practice_is_silent(updated_session):
+    # Both sides of the turn must be a live Phase 3 question: turn_session keeps
+    # the guided -> independent transition turn audible, updated_session keeps a
+    # halted topic (no question) audible so the pause message survives.
+    if independent_practice_is_silent(turn_session) and independent_practice_is_silent(updated_session):
         response = response.model_copy(
             update={
                 "message": (
