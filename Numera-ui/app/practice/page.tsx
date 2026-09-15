@@ -13,7 +13,7 @@ import { Eye, EyeOff, Lightbulb, Check, ArrowRight } from 'lucide-react';
 import { useNumeraStore, type CanvasExporter } from '@/store/useNumeraStore';
 import type { SchemaQuestionOption } from '@/lib/api';
 import { useFlowNav } from '@/lib/useFlowNav';
-import { useDemoTutor, resetSessionStart, resumeSession, sessionStartError, repairQuestionOptions } from '@/hooks/useDemoTutor';
+import { useDemoTutor, resetSessionStart, resumeSession, sessionStartError, repairQuestionOptions, resyncSession } from '@/hooks/useDemoTutor';
 import { useVoiceTurn } from '@/hooks/useVoiceTurn';
 import { DEMO_CONCEPT_ID, DEMO_PHASE, getSession } from '@/lib/api';
 import { reviewIsReady, isReviewUnavailable } from '@/lib/reviewReady';
@@ -25,6 +25,8 @@ import {
 } from '@/lib/phase3';
 import { rescueBlocksSubmission } from '@/lib/rescueMode';
 import { optionsMissing } from '@/lib/questionOptions';
+import { stalledWithNothingToAnswer } from '@/lib/phase3Stall';
+import { appendHint, hintLabel } from '@/lib/hintHistory';
 import QuestionDisplay from '@/components/QuestionDisplay';
 import InterventionInputModal, { type InterventionInputSubmission } from '@/components/InterventionInputModal';
 import InterventionPaused from '@/components/InterventionPaused';
@@ -201,7 +203,20 @@ export default function PracticePage() {
 
   const [mode, setMode] = useState<AIMode>('observing');
   const [hintIndex, setHintIndex] = useState(0);
-  const [hintText, setHintText] = useState<string | null>(null);
+  /**
+   * Every rung served on THIS question, oldest first — issue #312.
+   *
+   * This was a single `hintText`, so each new rung overwrote the one before it
+   * and the student was left reading hint 3 alone, which is written assuming
+   * they have hints 1 and 2 in front of them. See lib/hintHistory.ts.
+   */
+  const [hints, setHints] = useState<string[]>([]);
+  /**
+   * "The ladder is exhausted", or why a request failed. Deliberately NOT part
+   * of the list above: it is not support, and numbering it "Hint 4" would
+   * present an apology as teaching.
+   */
+  const [hintNotice, setHintNotice] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   /**
    * The one neutral line Phase 3 is allowed to show after an attempt closes,
@@ -241,6 +256,34 @@ export default function PracticePage() {
     void repairQuestionOptions();
   }, [silent, questionType, questionOptions, activeQuestionId]);
 
+  /**
+   * The same repair, for a reply that took the QUESTION away rather than its
+   * options — issue #309. See lib/phase3Stall.ts for the run this comes from.
+   *
+   * A latch rather than a one-shot: it re-arms the moment a question lands, so
+   * a second stall later in the same session is still recovered, while a topic
+   * that is genuinely halted cannot put a GET on the wire on every render. The
+   * pause and intervention screens are excluded inside the predicate, so
+   * clearing on `stalled` going false is enough.
+   */
+  const stallResyncSent = useRef(false);
+  const stalled = stalledWithNothingToAnswer({
+    phase: currentPhase,
+    questionId: activeQuestionId,
+    paused: contentGapPaused,
+    interventionStage,
+  });
+  useEffect(() => {
+    if (!tutor.apiEnabled) return;
+    if (!stalled) { stallResyncSent.current = false; return; }
+    if (stallResyncSent.current) return;
+    stallResyncSent.current = true;
+    // Says why a GET appeared mid-lesson. Sanya's stall showed nothing in the
+    // console at all, which is half of why it read as a frontend hang.
+    console.warn('[phase3] the last reply left no question on screen — re-reading the session');
+    void resyncSession();
+  }, [stalled, tutor.apiEnabled]);
+
   // Speak the line queued by a phase handoff or a session resume.
   //
   // Silent mode silences HELP, not the tutor's own place-setting: telling the
@@ -258,6 +301,11 @@ export default function PracticePage() {
   // with it — leaving it up would read as a comment on the new question.
   useEffect(() => {
     setNotice(null);
+    // The support ladder resets with the question, so the notes must too — a
+    // hint about the question the student has just left, sitting beside a new
+    // one, is worse than no hint at all (#312).
+    setHints([]);
+    setHintNotice(null);
   }, [activeQuestionId]);
 
   // Start a backend session once on entry (no-op unless an API base URL is set).
@@ -330,11 +378,14 @@ export default function PracticePage() {
     // Mock mode: walk the demo table. With a backend the hint must come from it,
     // otherwise the card would contradict the backend's question.
     if (!tutor.apiEnabled) {
-      setHintText(HINTS[hintIndex]);
+      setHints((prev) => appendHint(prev, HINTS[hintIndex]));
       setHintIndex((i) => Math.min(i + 1, HINTS.length - 1));
       return;
     }
-    setHintText(null);
+    // Only the notice clears. The hints already on the page are what the next
+    // rung builds on, and blanking them mid-request is the flicker that made
+    // the whole ladder feel like one replaced card.
+    setHintNotice(null);
     // Climbs the support ladder over what the backend has already authorised.
     // It used to POST /hint/request, which the backend deleted on 3 Aug 2026 —
     // so every press 404'd and this card showed a fetch error regardless of
@@ -347,17 +398,21 @@ export default function PracticePage() {
     try {
       rung = await tutor.hint();
     } catch (error) {
-      setHintText(hintFailureMessage(error));
+      setHintNotice(hintFailureMessage(error));
       return;
     }
-    setHintText(rung ? useNumeraStore.getState().lastHintText ?? null : LADDER_EXHAUSTED);
-    if (rung) setHintIndex((i) => i + 1);
+    if (!rung) {
+      setHintNotice(LADDER_EXHAUSTED);
+      return;
+    }
+    setHints((prev) => appendHint(prev, useNumeraStore.getState().lastHintText));
+    setHintIndex((i) => i + 1);
   };
 
   // The idle observer flips to 'hint' without fetching, so in mock mode the card
   // falls back to the demo table; with a backend it stays closed until the
   // student asks and a real hint arrives.
-  const hintBody = hintText ?? (tutor.apiEnabled ? null : HINTS[hintIndex]);
+  const visibleHints = hints.length > 0 || tutor.apiEnabled ? hints : [HINTS[hintIndex]];
 
   // "Can we disable the canvas until submit returns" (Manjusha, 31 Jul).
   // finish() used to fire-and-forget and show "Practice saved — nice work"
@@ -579,9 +634,23 @@ export default function PracticePage() {
           <DrawingCanvas onExportReady={handleExportReady} readOnly={locked} />
         </div>
 
-        {/* Hint — a sticky note left on the canvas, not another panel */}
-        {!silent && mode === 'hint' && !done && hintBody && (
-          <StickyNote tone="amber" label="Gentle hint" className="absolute top-5 left-6 z-20">{hintBody}</StickyNote>
+        {/* Hints — sticky notes left on the canvas, not another panel.
+            Every rung served on this question stays up: hint 3 is written
+            assuming hints 1 and 2 are still readable (#312). Stacked down the
+            left edge in the order they were given, with the notice — exhausted
+            ladder, or a failed request — last and unnumbered, because it is not
+            support. */}
+        {!silent && mode === 'hint' && !done && (visibleHints.length > 0 || hintNotice) && (
+          <div className="absolute top-5 left-6 z-20 flex flex-col gap-2 max-w-sm">
+            {visibleHints.map((hint, i) => (
+              <StickyNote key={`${i}-${hint}`} tone="amber" label={hintLabel(i, visibleHints.length)}>
+                {hint}
+              </StickyNote>
+            ))}
+            {hintNotice && (
+              <StickyNote tone="amber" label="Help">{hintNotice}</StickyNote>
+            )}
+          </div>
         )}
 
         {/* Quiet/distress reassurance */}
