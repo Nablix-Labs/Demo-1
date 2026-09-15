@@ -311,6 +311,11 @@ async function recoverAfterConflict(): Promise<'unchanged' | 'changed' | 'unreco
     // and the student must end up on the question the backend says is live.
     useNumeraStore.getState().setBackendSession(rec);
     syncBackendSession(rec);
+    // The cue the backend still holds open, put back the same way the resume
+    // and resync reads do it. Recovery restores the question and the phase; the
+    // support standing on that question is part of the state being recovered,
+    // and dropping it left the tutor's restored line pointing at a blank screen.
+    if (rec.active_visual_cue) applyServedCue(rec.active_visual_cue);
     const matched = identityMatches(before, after);
     // Only a checked match re-opens submission.
     useNumeraStore.getState().setSessionRecovering(!matched);

@@ -16,6 +16,9 @@ import { scaffoldVisible } from '@/lib/responseGate';
 /** A frame with every field the backend can send, all distinguishable. */
 const FULL = {
   text: 'So the rule is n plus four.',
+  // The composed spoken line. On a scaffolded turn it carries the same two
+  // parts as `text`, so the voice and the bubble say the same thing.
+  message_voice: 'So the rule is n plus four. Now find what changes.',
   support_message: 'Think about what stays the same.',
   conversation_action: 'GIVE_HINT',
   next_expected_input: 'WRITE',

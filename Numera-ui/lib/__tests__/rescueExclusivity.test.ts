@@ -102,16 +102,15 @@ describe('opening a rescue', () => {
     // walkthrough could never re-read the hint that preceded it (Manjusha,
     // 5 Sep). They survive the rescue opening.
     //
-    // They no longer surrender the column for it either: since 7 Sep the
-    // walkthrough is presented on the canvas, beside the writing it produces,
-    // so the cue keeps the card and the hint keeps its chip.
+    // They do surrender the CARD: the walkthrough is the current rung, so both
+    // lower rungs collapse to chips and the column shows nothing beside it.
     rungsUp();
     apply(step(1));
     expect(rungs().hint).toBe('Try grouping the like terms.');
     expect(rungs().cueVisible).toBe(true);
     const s = useNumeraStore.getState() as never;
-    expect(visibleRung(s)).toBe('VISUAL_CUE');
-    expect(collapsedRungs(s)).toEqual(['HINT']);
+    expect(visibleRung(s)).toBeNull();
+    expect(collapsedRungs(s)).toEqual(['HINT', 'VISUAL_CUE']);
   });
 
   it('leaves the rungs alone on the second step of the same rescue', () => {

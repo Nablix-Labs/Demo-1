@@ -29,6 +29,10 @@ const str = (v: unknown) => v as string | null | undefined;
 export function voiceSupportFrame(msg: VoiceTutorFrame): SupportPresentation {
   return {
     message: msg.text as string,
+    // The composed spoken line. Same two parts as `text` on a scaffolded turn,
+    // in the rendering written to be heard -- so the voice path speaks exactly
+    // what the bubble shows. Fifth field this allow-list would otherwise lose.
+    message_voice: str(msg.message_voice),
     support_message: str(msg.support_message),
     conversation_action: str(msg.conversation_action),
 

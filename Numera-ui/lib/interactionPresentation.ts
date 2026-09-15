@@ -30,6 +30,12 @@ export type SupportPresentation = Pick<
   | 'question_completed'
 > & {
   conversation_action?: string | null;
+  /**
+   * The spoken rendering of `message`. Optional, and read only for what the
+   * tutor SAYS: a transport whose frame is built by an allow-list may not carry
+   * it, and `/canvas/submit` does not send it at all.
+   */
+  message_voice?: string | null;
   /** Spans of the question the tutor is pointing at (Chirudeva §1). */
   question_anchors?: QuestionAnchor[];
   tutor_canvas_actions?: TutorCanvasAction[];
@@ -104,36 +110,31 @@ export function authorisedHint(response: SupportPresentation): string | null {
 }
 
 /**
- * A scaffold step is spoken INSTEAD of the tutor's reply — so show it too.
+ * What the tutor SAYS on a scaffolded turn.
  *
- * `scaffold_step_text` is "the guiding question to show" and
- * `scaffold_step_voice` is "what to speak for this step". Two authored
- * renderings of one step, which is right: the spoken form can say aloud what the
- * written form prints as symbols. What was wrong is that only one of them ever
- * reached the chat. The bubble carried `message` — the tutor's conversational
- * reply, which on a scaffolded turn is never spoken at all — while the student
- * heard the step. Two different sentences on every scaffolded turn, which is
- * Manjusha's row 54, "the tutor voice should perfectly match the tutor text".
+ * `message_voice` first, because the backend now composes the SAME two parts
+ * into both renderings — the tailored reply and the current scaffold prompt —
+ * so taking it is what makes the voice match the text (Manjusha, row 54: "the
+ * tutor voice should perfectly match the tutor text"). The authored per-step
+ * wordings stay as the fallback for a transport or a backend that sends no
+ * composed voice line.
  *
- * The step goes in ahead of the reply, which is where support already goes (see
- * the note above about the tutor's wording now referring to what is on screen)
- * and where an authorised hint already goes. Deduped against the reply, so a
- * backend that puts the same sentence in both does not say it twice.
- *
- * The DISPLAY wording is what lands on screen, never the voice wording. That one
- * is written to be heard, and printing it is how "13 + 5" arrives as row 53's
+ * The voice wording must never reach the screen either way. It is written to be
+ * heard, and printing it is how a clean "13 + 5" arrives as row 53's
  * "slash 13+5" the other way round.
+ *
+ * It does NOT write to the transcript any more. It used to add the step as its
+ * own bubble while every caller appended `response.message` as a second one, so
+ * a scaffolded turn produced two tutor bubbles on every transport. The backend
+ * composing one line (interaction_service._scaffold_chat_line) is what replaced
+ * that: one wording to read, one to speak, one bubble.
  */
-function presentSpokenStep(
+function spokenStep(
   stepText: string | null | undefined,
   stepVoice: string | null | undefined,
-  message: string | null | undefined,
+  response: SupportPresentation,
 ): string {
-  const shown = stepText?.trim();
-  if (shown && shown !== message?.trim()) {
-    useNumeraStore.getState().addTranscriptMessage({ role: 'ai', text: shown });
-  }
-  return stepVoice ?? stepText ?? message ?? '';
+  return response.message_voice ?? stepVoice ?? stepText ?? response.message ?? '';
 }
 
 /**
@@ -292,7 +293,7 @@ export function applyInteractionSupport(response: SupportPresentation): string {
       stepVoice: persisted!.step_voice ?? null,
       totalSteps: persisted!.total_steps,
     });
-    return presentSpokenStep(persisted!.step_text, persisted!.step_voice, response.message);
+    return spokenStep(persisted!.step_text, persisted!.step_voice, response);
   }
 
   // Pre-contract backend: the per-turn booleans are all we have.
@@ -301,5 +302,5 @@ export function applyInteractionSupport(response: SupportPresentation): string {
   }
   const scaffold = activeScaffold(response as InteractionResponse);
   useNumeraStore.getState().setActiveScaffold(scaffold);
-  return presentSpokenStep(scaffold?.stepText, scaffold?.stepVoice, response.message);
+  return spokenStep(scaffold?.stepText, scaffold?.stepVoice, response);
 }

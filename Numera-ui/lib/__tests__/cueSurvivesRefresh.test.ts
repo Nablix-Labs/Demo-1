@@ -86,3 +86,24 @@ describe('resume reads the record’s open cue', () => {
     expect(body).toContain('applyServedCue');
   });
 });
+
+/**
+ * Conflict recovery is the THIRD read of the session, and it had the same hole.
+ *
+ * `recoverAfterConflict` restores the phase and the question — it is the read
+ * the backend refuses every submission until — but it left the cue behind, so a
+ * student recovered onto the question they were already on and lost the picture
+ * the tutor's own restored line refers to. Asserted against the source for the
+ * same reason as resume: the symptom is a missing card, not an error.
+ */
+describe('conflict recovery reads the record’s open cue', () => {
+  it('applies active_visual_cue off the recovered record', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve } = await import('path');
+    const source = readFileSync(resolve(process.cwd(), 'hooks/useDemoTutor.ts'), 'utf8');
+    const recover = source.slice(source.indexOf('async function recoverAfterConflict'));
+    const body = recover.slice(0, recover.indexOf('\n}'));
+    expect(body).toContain('rec.active_visual_cue');
+    expect(body).toContain('applyServedCue');
+  });
+});
