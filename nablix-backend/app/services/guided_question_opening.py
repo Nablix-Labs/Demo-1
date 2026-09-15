@@ -26,6 +26,11 @@ _MOTIVATION_BY_QUESTION_TYPE: Final[dict[QuestionType, str]] = {
 }
 _DEFAULT_MOTIVATION: Final[str] = "Take your time and start with what you notice."
 _ACTION_TOKEN_RE: Final[re.Pattern[str]] = re.compile(r"[A-Za-z]+|\d+|[+\-−×÷*/=]")
+_TRAILING_CLAUSE_RE: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:as|and annotate|then|after|for comparison)\b", re.IGNORECASE
+)
+_CLAUSE_SPLIT_RE: Final[re.Pattern[str]] = re.compile(r"\band\b", re.IGNORECASE)
+_IN_SPLIT_RE: Final[re.Pattern[str]] = re.compile(r"\s+in\s+", re.IGNORECASE)
 _ANNOTATION_LABELS: Final[tuple[tuple[str, str], ...]] = (
     ("stays fixed", "stays fixed"),
     ("fixed", "stays fixed"),
@@ -101,7 +106,7 @@ def authored_question_opening_actions(
             text=None,
             source_id="question_guided_start_prompts",
         )
-        for option in _authored_target_options(options, target_tokens)
+        for option in _authored_target_options(options, action_text)
     ]
     if not targets and not option_actions:
         return anchors, [], "authored_canvas_targets_not_in_question"
@@ -131,41 +136,60 @@ def authored_question_opening_actions(
     return anchors, actions, None
 
 
+def _authored_clauses(canvas_action: str) -> list[str]:
+    """The action's `<target> in <context>` clauses, in authored order.
+
+    Q-T01-004's authored action is "Highlight n in n+4 and 12 in 12+4 for
+    comparison": TWO clauses, each naming a token and the option it lives in.
+    Read as one flat phrase it collapsed to "n" and both contexts were lost,
+    which is why nothing matched and the action was rejected on every turn.
+    """
+    lowered = canvas_action.casefold()
+    for prefix in ("group/highlight", "focus/highlight", "highlight"):
+        if lowered.startswith(prefix):
+            body = canvas_action[len(prefix):]
+            break
+    else:
+        body = canvas_action
+    # Trailing instructions first, so "and annotate" cannot be mistaken for the
+    # "and" that joins two clauses.
+    body = _TRAILING_CLAUSE_RE.split(body, maxsplit=1)[0]
+    return [clause for clause in _CLAUSE_SPLIT_RE.split(body) if clause.strip()]
+
+
+def _tokens_of(text: str) -> set[str]:
+    return {match.group(0).casefold() for match in _ACTION_TOKEN_RE.finditer(text)}
+
+
 def _authored_target_options(
     options: list[QuestionOption] | None,
-    target_tokens: set[str],
+    canvas_action: str,
 ) -> list[QuestionOption]:
-    """Options the authored action names in full.
+    """Options the action names, through the `in <context>` half of its clauses.
 
-    Subset match, so "highlight n + 4" picks option B (`n + 4`) and not option A
-    (`12 + 4`, whose `12` the action never names). At least one word or number is
-    required, so an option that is only an operator cannot match by accident.
+    Matched context-inside-option, never the reverse: the served option text
+    carries whatever the stem parser left on it -- Q-T01-004's option A arrives
+    as "12 + 4 or" -- so requiring the option to be a subset of the action would
+    drop a perfectly good match. A context with no word or number in it is
+    ignored, so a bare operator cannot select every option.
     """
-    matched = []
-    for option in options or []:
-        tokens = {
-            match.group(0).casefold()
-            for match in _ACTION_TOKEN_RE.finditer(option.text)
-        }
-        if tokens and tokens <= target_tokens and any(
-            token.isalnum() for token in tokens
-        ):
-            matched.append(option)
-    return matched
+    contexts: list[set[str]] = []
+    for clause in _authored_clauses(canvas_action):
+        context = _tokens_of(_IN_SPLIT_RE.split(clause, maxsplit=1)[-1])
+        if any(token.isalnum() for token in context):
+            contexts.append(context)
+    return [
+        option
+        for option in options or []
+        if any(context <= _tokens_of(option.text) for context in contexts)
+    ]
 
 
 def _authored_target_tokens(canvas_action: str) -> set[str]:
-    lowered = canvas_action.casefold()
-    if lowered.startswith("group/highlight"):
-        target = canvas_action[len("group/highlight"):]
-    elif lowered.startswith("focus/highlight"):
-        target = canvas_action[len("focus/highlight"):]
-    else:
-        target = canvas_action[len("highlight"):]
-    target = re.split(r"\b(?:as|and annotate|then|after|for comparison)\b", target, maxsplit=1, flags=re.IGNORECASE)[0]
-    if " in " in target.casefold():
-        target = target.split(" in ", 1)[0]
-    tokens = {match.group(0).casefold() for match in _ACTION_TOKEN_RE.finditer(target)}
+    """Question-text tokens the action points at: each clause's `in` target."""
+    tokens: set[str] = set()
+    for clause in _authored_clauses(canvas_action):
+        tokens |= _tokens_of(_IN_SPLIT_RE.split(clause, maxsplit=1)[0])
     return tokens - {"only", "the", "four", "terms", "together"}
 
 
