@@ -1903,10 +1903,21 @@ export interface OcrResult {
   raw_ocr_text: string;
   detected_equation: string;
   detected_steps: string[];
-  final_answer: string;
+  /**
+   * Null whenever the page has working on it but no answer the model would
+   * commit to — which is most of Phase 2, where the student is mid-derivation.
+   *
+   * `VisionOCRResult.final_answer` and `latex` are both `str | None` on the
+   * backend and always have been; this said `string`, so the compiler would
+   * have signed off on `ocr.final_answer.trim()` for a page that does not have
+   * one. Nothing reads either field today, which is the only reason that never
+   * became an outage.
+   */
+  final_answer: string | null;
   confidence: number;
   needs_clarification: boolean;
-  latex: string;
+  /** Null when the OCR provider returned no LaTeX for the page. */
+  latex: string | null;
   detected_shapes: unknown[];
   confidence_source: string;
   provider: string;

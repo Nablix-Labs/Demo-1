@@ -2,17 +2,17 @@
  * Outbound rescue events: step advance, and renderer acknowledgement.
  *
  * The handoff (§4) requires the renderer to send both, and specifies their
- * shape exactly — but not where they go. There is no `/rescue/advance`
- * endpoint and no ack frame on the voice socket yet; Chirudeva owns creating
- * them ("create a typed request/event such as…"). So the shapes are built and
- * validated here, and the delivery is left to a transport that is registered
- * once one exists.
+ * shape exactly — but not where they go. So the shapes are built and validated
+ * here and the delivery is left to a registered transport, which is what let
+ * the button, the step ordering and the supersession all be built and tested
+ * before any endpoint existed.
  *
- * Written this way round on purpose. The alternative — waiting for the endpoint
- * before building the UI — means the button, the step ordering and the
- * supersession all arrive untested on the day the endpoint lands. This way the
- * whole client path is exercised now, and turning it on is one registration
- * call.
+ * Both endpoints now exist — `POST /session/{id}/rescue/advance` and
+ * `/rescue/render-ack`, each returning a `RescueStepResponse` — and
+ * useWebSocket registers a transport that calls them through lib/api in both
+ * text and voice modes. This header used to say neither existed, which by now
+ * reads as "rescue advance goes nowhere" — worth correcting, because that is
+ * the first thing anyone debugging a stuck walkthrough would find.
  *
  * With no transport registered, an emit warns and reports false. It never
  * throws and never blocks a render: a rescue that cannot report itself is still

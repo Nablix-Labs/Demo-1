@@ -26,8 +26,9 @@ import { demoFor, type DemoWorksheet } from '@/lib/demoContent';
 import { cn } from '@/lib/cn';
 import {
   sessionTopicTitle, completeReview, studentId, getSession,
-  type FiveCategorySummary, type QuestionOutcome, type NextTopicHandoff,
+  type QuestionOutcome, type NextTopicHandoff,
 } from '@/lib/api';
+import { reviewCategories, reviewHook, reviewSummaryText } from '@/lib/sessionReview';
 import { reviewIsReady, isReviewUnavailable } from '@/lib/reviewReady';
 import { phase4FromSession, type SessionForPhase4 } from '@/lib/phase4FromSession';
 import { handoffDestination } from '@/lib/usePhaseRouting';
@@ -61,14 +62,6 @@ function stopSpeaking() {
 }
 
 /** Human labels for the engine's five review categories, in delivery order. */
-const REVIEW_CATEGORY_LABELS: [keyof FiveCategorySummary, string][] = [
-  ['category_1_strength', 'Strength'],
-  ['category_2_first_error', 'First error'],
-  ['category_3_pattern', 'Pattern'],
-  ['category_4_next_practice', 'Next practice'],
-  ['category_5_mastery', 'Mastery'],
-];
-
 export default function ReviewPage() {
   const [i, setI] = useState(0);
   const [showMarks, setShowMarks] = useState(false);
@@ -359,14 +352,25 @@ export default function ReviewPage() {
   const score = WORKSHEETS.filter((w) => w.correct).length;
   // The engine's natural-language review is shown verbatim; the sentence built
   // from outcome counts is only the fallback when no review was returned.
-  const SUMMARY = sessionReview
-    ? sessionReview.student_facing_summary
+  // The engine's sentence when it sent one — blank counts as absent, or the
+  // screen shows a hole where the session's one paragraph of feedback goes.
+  const engineSummary = reviewSummaryText(sessionReview);
+  const SUMMARY = engineSummary
+    ? engineSummary
     : live
       ? `You worked through ${total} question${total === 1 ? '' : 's'} this session and solved ${score} of them. ${score === total ? 'Excellent work — you are ready to move on.' : 'Let us keep practising the ones that got away.'}`
       : demo.reviewSummary;
-  const reviewCategories = sessionReview
-    ? REVIEW_CATEGORY_LABELS.filter(([key]) => sessionReview.five_category_summary[key] !== null)
-    : [];
+  /**
+   * Read defensively — this used to index straight into
+   * `sessionReview.five_category_summary[key]`.
+   *
+   * No backend response model carries `session_review` today, so this has
+   * never rendered; the day a partial one arrives, the last screen of the
+   * session would have thrown rather than shown four categories instead of
+   * five. See lib/sessionReview.
+   */
+  const categories = reviewCategories(sessionReview);
+  const hook = reviewHook(sessionReview);
 
   // Reaching the final summary clears the review phase.
   useEffect(() => {
@@ -724,19 +728,17 @@ export default function ReviewPage() {
             </div>
 
             {/* Engine review — the five categories, shown verbatim (nulls omitted). */}
-            {reviewCategories.length > 0 && sessionReview && (
+            {categories.length > 0 && (
               <div className="rounded-lg border border-muted-gray divide-y divide-muted-gray overflow-hidden">
-                {reviewCategories.map(([key, label]) => (
+                {categories.map(({ key, label, text }) => (
                   <div key={key} className="px-5 py-3.5">
                     <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-1">{label}</div>
-                    <p className="text-[13.5px] text-ink leading-relaxed">
-                      {sessionReview.five_category_summary[key]}
-                    </p>
+                    <p className="text-[13.5px] text-ink leading-relaxed">{text}</p>
                   </div>
                 ))}
-                {sessionReview.b6_hook && (
+                {hook && (
                   <div className="px-5 py-3.5 bg-reading-surface">
-                    <p className="text-[13.5px] text-ink leading-relaxed italic">{sessionReview.b6_hook}</p>
+                    <p className="text-[13.5px] text-ink leading-relaxed italic">{hook}</p>
                   </div>
                 )}
               </div>
