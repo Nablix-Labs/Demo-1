@@ -230,6 +230,12 @@ export function applyInteractionSupport(response: SupportPresentation): string {
   // pointing at — anchors left standing would keep a highlight on a token the
   // tutor has moved on from, which reads as "this is still the thing to look
   // at" for the rest of the question.
+  //
+  // The setter merges rather than replaces, so that clear reaches the tutor's
+  // POINTING and stops there. A highlight or label a resolved action wrote onto
+  // a token is confirmed state about the question, and it stays up until the
+  // question changes — otherwise a confirmation the student had just earned
+  // lasted exactly one reply (#321). See `mergeQuestionAnchors`.
   useNumeraStore.getState().setQuestionAnchors(
     response.question_anchors ?? (response as InteractionResponse).question_anchors ?? [],
   );

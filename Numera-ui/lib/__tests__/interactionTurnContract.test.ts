@@ -120,6 +120,9 @@ describe('interaction turn contract', () => {
       // (`f747c2a`, Sanya) — the label rides on a token the tutor has pointed
       // at, so the two always land together.
       highlighted: true,
+      // And both are confirmed state, so they outlive the next turn's base
+      // anchors rather than being replaced by them (#321).
+      confirmed: true,
     }]);
   });
 
@@ -207,6 +210,9 @@ describe('authored question opening actions', () => {
       char_start: 3,
       char_end: 4,
       highlighted: true,
+      // Written by a resolved action, so it outlives the next turn's base
+      // anchors rather than being replaced by them (#321).
+      confirmed: true,
     }]);
   });
 });

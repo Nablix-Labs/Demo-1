@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { usableAnchors, anchorSegments, locateFragment, fragmentRanges } from '@/lib/questionAnchors';
+import { usableAnchors, anchorSegments, locateFragment, fragmentRanges, mergeQuestionAnchors } from '@/lib/questionAnchors';
 import type { QuestionAnchor } from '@/lib/questionAnchors';
 
 // Chiru's own example. Note "n" also appears inside "and", "points", "then",
@@ -221,5 +221,71 @@ describe('resolving the fragments the layout renders', () => {
     const [leadIn, equation] = fragmentRanges('x + 4 = 9', ['Solve for x:', 'x + 4 = 9']);
     expect(leadIn).toEqual({ from: null, to: null });
     expect(equation).toEqual({ from: 0, to: 9 });
+  });
+});
+
+/**
+ * Keeping a confirmed label up while the student is still on the question.
+ *
+ * Two different things ride on the same array and the code used to treat them
+ * as one. What the tutor POINTS at is about this turn and goes stale the
+ * moment the turn ends. What the tutor has CONFIRMED — "m → changes", written
+ * onto the token because the student said so — is about the question, and the
+ * student is still looking at it (#321).
+ *
+ * Replacing the array wholesale wiped the second along with the first, so a
+ * confirmed label survived exactly one turn.
+ */
+describe('merging anchors on the same question', () => {
+  const base = anchor({ token_id: 'T1', label: null, highlighted: undefined });
+
+  it('takes the backend list when nothing has been confirmed yet', () => {
+    expect(mergeQuestionAnchors([], [base])).toEqual([base]);
+  });
+
+  it('keeps a confirmed highlight when the same anchor comes back plain', () => {
+    const confirmed = { ...base, highlighted: true, confirmed: true };
+    const [merged] = mergeQuestionAnchors([confirmed], [base]);
+    expect(merged.highlighted).toBe(true);
+    expect(merged.confirmed).toBe(true);
+  });
+
+  it('keeps a confirmed label rather than the backend base label', () => {
+    // The local label is the student's own confirmed idea. The base label is
+    // the generic one the question shipped with; it must not overwrite it.
+    const confirmed = { ...base, label: 'm → changes', highlighted: true, confirmed: true };
+    const [merged] = mergeQuestionAnchors([confirmed], [anchor({ token_id: 'T1', label: 'changes' })]);
+    expect(merged.label).toBe('m → changes');
+  });
+
+  it('takes the fresh span and text from the backend', () => {
+    // Confirmation is display state. Geometry is always the backend's — a
+    // reworded question on the same id must not keep stale offsets.
+    const confirmed = { ...base, highlighted: true, confirmed: true };
+    const moved = anchor({ token_id: 'T1', text: 'm', char_start: 20, char_end: 21 });
+    const [merged] = mergeQuestionAnchors([confirmed], [moved]);
+    expect(merged.char_start).toBe(20);
+    expect(merged.text).toBe('m');
+  });
+
+  it('holds a confirmed anchor the backend did not repeat', () => {
+    // The ordinary turn. The tutor says something unrelated and sends no
+    // anchors at all; the label it wrote two turns ago is still on screen and
+    // still true.
+    const confirmed = { ...base, highlighted: true, confirmed: true };
+    expect(mergeQuestionAnchors([confirmed], [])).toEqual([confirmed]);
+  });
+
+  it('drops an unconfirmed anchor the backend stopped sending', () => {
+    // The behaviour this must NOT break: a bare highlight the tutor has moved
+    // on from is transient and still clears, or it reads as "keep looking here"
+    // for the rest of the question.
+    expect(mergeQuestionAnchors([base], [])).toEqual([]);
+  });
+
+  it('orders the result by position so segmentation stays a left-to-right pass', () => {
+    const held = { ...anchor({ token_id: 'T9', char_start: 37, char_end: 38, text: '4' }), confirmed: true };
+    const fresh = anchor({ token_id: 'T1', char_start: 12, char_end: 13 });
+    expect(mergeQuestionAnchors([held], [fresh]).map((a) => a.token_id)).toEqual(['T1', 'T9']);
   });
 });

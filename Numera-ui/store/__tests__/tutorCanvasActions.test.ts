@@ -53,7 +53,9 @@ describe('idempotency', () => {
     ]);
 
     expect(useNumeraStore.getState().questionAnchors).toEqual([
-      { token_id: 'TOK-1', text: 'c', char_start: 30, char_end: 31, label: null, highlighted: true },
+      // `confirmed` marks state a resolved action wrote, which is what keeps it
+      // alive across the next turn's base anchors (#321).
+      { token_id: 'TOK-1', text: 'c', char_start: 30, char_end: 31, label: null, highlighted: true, confirmed: true },
       { token_id: 'TOK-2', text: '4', char_start: 49, char_end: 50, label: null },
     ]);
   });

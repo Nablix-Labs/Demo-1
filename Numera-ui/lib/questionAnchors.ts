@@ -31,6 +31,12 @@ export interface QuestionAnchor {
   label?: string | null;
   /** Set locally after a validated tutor highlight action resolves to this token. */
   highlighted?: boolean;
+  /**
+   * This anchor's `highlighted`/`label` were written by a resolved tutor
+   * action, not sent as part of the question. It is what `mergeQuestionAnchors`
+   * keeps across a turn — see the note there.
+   */
+  confirmed?: boolean;
 }
 
 export interface AnchorSegment {
@@ -173,4 +179,64 @@ export function fragmentRanges(question: string, fragments: string[]): FragmentR
     cursor = at + fragment.length;
     return { from: at, to: cursor };
   });
+}
+
+/**
+ * Fold a turn's anchors into what is already on screen (#321).
+ *
+ * Two different facts ride on this one array, and replacing it wholesale
+ * treated them as one:
+ *
+ *   - What the tutor is POINTING at. That is about this turn. It goes stale
+ *     the moment the turn ends, and leaving it up reads as "this is still the
+ *     thing to look at" for the rest of the question.
+ *   - What the tutor has CONFIRMED — `m → changes`, written onto the token
+ *     because the student said so and a HIGHLIGHT/INSERT_LABEL action resolved
+ *     onto it. That is about the QUESTION, and the student is still working on
+ *     it.
+ *
+ * So the second survives a turn and the first does not. Before this, a
+ * confirmed label lasted exactly one reply: the next turn's base anchors
+ * replaced the array and the local state went with it (Sanya, 15 Sep 2026).
+ *
+ * Geometry is never preserved. `char_start`/`char_end`/`text` always come from
+ * `incoming`, because a question can be re-served reworded under the same id
+ * and a kept offset would then point at the wrong character — the failure this
+ * whole module exists to prevent. Only `highlighted`, `label` and `confirmed`
+ * carry over.
+ *
+ * `previous` must belong to the SAME question. Anchors are raw offsets into one
+ * question's text, so the caller clears them on a question change rather than
+ * merging across it (`applyBackendPhase`).
+ *
+ * Note for the backend: the contract asks for confirmed state to clear when an
+ * action "explicitly withdraws" it, and `TutorCanvasActionType` has no verb
+ * that can say so. Until one exists, a question change is the only thing that
+ * clears a confirmation.
+ */
+export function mergeQuestionAnchors(
+  previous: QuestionAnchor[] | null | undefined,
+  incoming: QuestionAnchor[] | null | undefined,
+): QuestionAnchor[] {
+  const confirmed = new Map(
+    (previous ?? []).filter((a) => a?.confirmed).map((a) => [a.token_id, a]),
+  );
+
+  const merged = (incoming ?? []).map((anchor) => {
+    const held = confirmed.get(anchor.token_id);
+    if (!held) return anchor;
+    confirmed.delete(anchor.token_id);
+    return {
+      ...anchor,
+      // The confirmed label is the student's own idea. A base label shipped
+      // with the question must not overwrite it.
+      label: held.label ?? anchor.label ?? null,
+      highlighted: held.highlighted,
+      confirmed: true,
+    };
+  });
+
+  // Whatever is left was confirmed on an earlier turn and simply not repeated,
+  // which is the ordinary case: most replies carry no anchors at all.
+  return [...merged, ...confirmed.values()].sort((a, b) => a.char_start - b.char_start);
 }

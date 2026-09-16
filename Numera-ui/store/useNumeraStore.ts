@@ -7,6 +7,7 @@
  */
 import { create } from 'zustand';
 import type { QuestionAnchor } from '@/lib/questionAnchors';
+import { mergeQuestionAnchors } from '@/lib/questionAnchors';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { LearningPhase } from '@/lib/phases';
 import type { FlowStage } from '@/lib/flow';
@@ -1127,7 +1128,13 @@ export const useNumeraStore = create<NumeraState>()(
   setActiveSlide: (activeSlide) => set({ activeSlide }),
   setTotalSlides: (totalSlides) => set({ totalSlides }),
   setQuestionText: (questionText) => set({ questionText }),
-  setQuestionAnchors: (questionAnchors) => set({ questionAnchors }),
+  // Merged, not replaced. A confirmed highlight or label is display state the
+  // tutor wrote onto the token for THIS question, and it has to outlive the
+  // turn that wrote it; the backend's base anchors say what is being pointed at
+  // now, which does not (#321). `mergeQuestionAnchors` draws that line, and the
+  // clear on a question change stays where it belongs, in `applyBackendPhase`.
+  setQuestionAnchors: (incoming) =>
+    set((s) => ({ questionAnchors: mergeQuestionAnchors(s.questionAnchors, incoming) })),
 
   /**
    * Apply the phase/question the backend just reported.
@@ -1863,9 +1870,12 @@ export const useNumeraStore = create<NumeraState>()(
         if (target.kind === 'anchor') {
           questionAnchors = questionAnchors.map((anchor) => {
             if (anchor.token_id !== target.tokenId) return anchor;
-            if (action.type === 'HIGHLIGHT') return { ...anchor, highlighted: true };
+            // `confirmed` is what survives the next turn's base anchors. It
+            // marks state a resolved action wrote, as opposed to whatever the
+            // backend happens to be pointing at this turn.
+            if (action.type === 'HIGHLIGHT') return { ...anchor, highlighted: true, confirmed: true };
             if (action.type === 'INSERT_LABEL' && action.text) {
-              return { ...anchor, label: action.text, highlighted: true };
+              return { ...anchor, label: action.text, highlighted: true, confirmed: true };
             }
             return anchor;
           });
