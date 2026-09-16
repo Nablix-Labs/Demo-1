@@ -147,8 +147,34 @@ const WRITE_ARROW_TOP = 0.52;
  * the same geometry the reference slots are positioned against, so the labels,
  * the arrow, the band and the prompt always travel together.
  */
-export const WRITE_PROMPT_AT = { x: WRITE_AREA.x + 0.04, y: WRITE_AREA.y + 0.04 };
-const WRITE_ARROW_X = WRITE_AREA.x + 0.10;
+/**
+ * The prompt sits ABOVE the band, not inside it (#318).
+ *
+ * It used to be placed at WRITE_AREA + 0.04, which is within the band — so the
+ * moment the student answered, their ink went straight through the words
+ * asking them to. The screenshot on that issue is `n + 5` written across a
+ * struck-through "Write your rule here.", and what the two together read as is
+ * anybody's guess.
+ *
+ * Inside was never a considered choice; it is where the backend's own draw put
+ * it, and relocating the block carried the offset over unexamined. A prompt is
+ * a label FOR the field. It belongs above it, left-aligned with it, close
+ * enough to be read as attached to it — and out of the region the student is
+ * being asked to fill.
+ */
+const WRITE_PROMPT_GAP = 0.045;
+export const WRITE_PROMPT_AT = { x: WRITE_AREA.x, y: WRITE_AREA.y - WRITE_PROMPT_GAP };
+
+/**
+ * ...which is the strip the arrow used to drop through.
+ *
+ * Moved to the far end of the band rather than shortened: it still has to point
+ * INTO the area, and the two elements are the same request, so they cannot be
+ * positioned apart from each other. Same lesson as the reference slots above —
+ * two sets of magic numbers chosen independently will eventually land on each
+ * other.
+ */
+const WRITE_ARROW_X = WRITE_AREA.x + WRITE_AREA.w - 0.06;
 
 /**
  * Where a reference label goes.

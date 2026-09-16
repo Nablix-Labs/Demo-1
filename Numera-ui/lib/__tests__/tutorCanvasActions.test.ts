@@ -351,13 +351,27 @@ describe('the writing block on the left', () => {
     expect(arrow.to![1]).toBe(WRITE_AREA.y);
   });
 
-  it('puts the prompt inside the band it labels', () => {
+  it('puts the prompt ABOVE the band, not in it', () => {
+    // It used to sit inside, at WRITE_AREA + 0.04, and the student wrote
+    // straight through it — #318's screenshot is `n + 5` in ink with "Write
+    // your rule here." crossed out underneath it. A prompt is a label for the
+    // field, not a watermark inside it.
     const prompt = relocateWriteRequest(backendWriteRequest('T1'))
       .find((e) => e.id.endsWith(':write-prompt'))!;
-    expect(prompt.x!).toBeGreaterThanOrEqual(WRITE_AREA.x);
-    expect(prompt.x!).toBeLessThan(WRITE_AREA.x + WRITE_AREA.w);
-    expect(prompt.y!).toBeGreaterThanOrEqual(WRITE_AREA.y);
-    expect(prompt.y!).toBeLessThan(WRITE_AREA.y + WRITE_AREA.h);
+    expect(prompt.y!).toBeLessThan(WRITE_AREA.y);
+    // Still attached to the band: left-aligned with it, and close above it.
+    expect(prompt.x!).toBe(WRITE_AREA.x);
+    expect(WRITE_AREA.y - prompt.y!).toBeLessThan(0.08);
+  });
+
+  it('keeps the arrow out of the prompt it now sits beside', () => {
+    // The arrow drops through the strip the prompt has just moved into, so
+    // moving one without the other trades an overlap for an overlap.
+    const [prompt, arrow] = ['write-prompt', 'write-arrow'].map((id) =>
+      relocateWriteRequest(backendWriteRequest('T1')).find((e) => e.id.endsWith(id))!);
+    expect(arrow.from![0]).toBeGreaterThan(prompt.x! + 0.2);
+    // ...and still lands on the band it is pointing into.
+    expect(arrow.from![0]).toBeLessThan(WRITE_AREA.x + WRITE_AREA.w);
   });
 
   it('leaves every other tutor element exactly as sent', () => {
