@@ -21,7 +21,7 @@
  */
 
 import { isPhase3 } from '@/lib/phase3';
-import type { RescueStep } from '@/lib/rescueActions';
+import { isFinalStep, type RescueStep } from '@/lib/rescueActions';
 import type { GuidedRescuePayload } from '@/lib/guidedRescue';
 
 /**
@@ -45,7 +45,8 @@ export interface RescueModeState {
  * useless — the student is not waiting for anything, they are being asked to
  * read something and then press a specific button.
  */
-export const RESCUE_INPUT_NOTICE = 'Follow this example, then tap Next step.';
+export const RESCUE_INPUT_NOTICE =
+  'Follow this example — the tutor moves on as it finishes. Next step skips ahead.';
 
 /**
  * Is a stepwise rescue running?
@@ -173,4 +174,76 @@ export function advanceFailed(
 ): boolean {
   if (failure === null) return false;
   return failure.rescueId === current.rescueId && failure.step === current.stepIndex;
+}
+
+/**
+ * A narrated step that has been heard to the end, and what it was about.
+ *
+ * `audioStarted` is the half that matters and the half a callback cannot tell
+ * you. `tutorSay` calls back whether or not it spoke — it declines the floor
+ * while the student is writing, and says nothing at all when audio is muted or
+ * has failed — so the callback alone is not evidence the student heard
+ * anything. Only `speakRescueStep`'s return value is.
+ */
+export interface NarratedStep {
+  step: RescueStep | null;
+  audioStarted: boolean;
+  /** How long the utterance actually lasted, start of speech to `onEnd`. */
+  narratedMs: number;
+}
+
+/**
+ * Below this, nothing was really said.
+ *
+ * `tutorSay` reports that it STARTED, which is not the same as the student
+ * having heard anything. The TTS chain ends at browser speech, and on a device
+ * with no voices — or with audio blocked before the first gesture — that hands
+ * the callback straight back. Taken at face value it would run a whole silent
+ * walkthrough past the student in a few hundred milliseconds, which is a worse
+ * failure than the button it replaced.
+ *
+ * Generous on purpose. This is not a reading-time estimate; it only has to
+ * separate "spoke" from "returned immediately", and the shortest authored step
+ * still takes the better part of a second to say.
+ */
+export const MIN_NARRATION_MS = 600;
+
+/**
+ * Should the tutor finishing a step carry the walkthrough on by itself (#319)?
+ *
+ * A rescue was reading as a slideshow: every step sat waiting for "Next step",
+ * including the ones the tutor had just finished explaining out loud. "The
+ * parallel and tutor solved should be displayed like a live tutor is explaining
+ * and not like the student should press the next button each time."
+ *
+ * So the voice paces it. This does NOT advance the view — nothing here does,
+ * and that is deliberate: the backend owns the position and the client asks.
+ * Answering true means "send RESCUE_STEP_ADVANCE now", exactly as the button
+ * does, and the step still arrives from the backend or does not arrive at all.
+ *
+ * The button stays, and stays live while the tutor is talking. It is how a
+ * student skips ahead, and it is the ONLY way forward whenever the tutor could
+ * not speak — muted, failed, or silent because the student has the pen (§1).
+ * That is why `audioStarted` gates this: advancing on an utterance that never
+ * happened would race a silent walkthrough past a student who is reading it.
+ *
+ * Staleness is checked by identity, not by index. An utterance outlives the
+ * step it was about — the student presses Next mid-sentence, or a rescue is
+ * superseded — and acting on a finished sentence about a step that is no longer
+ * on screen would skip the step that is.
+ */
+export function narrationAdvances(
+  narrated: NarratedStep,
+  current: RescueStep | null,
+  completed: boolean,
+): boolean {
+  if (!narrated.audioStarted || !narrated.step || !current) return false;
+  // Started is not the same as said; see MIN_NARRATION_MS.
+  if (narrated.narratedMs < MIN_NARRATION_MS) return false;
+  // The utterance has to be about the step the student is looking at now.
+  if (narrated.step.actionId !== current.actionId) return false;
+  if (narrated.step.rescueId !== current.rescueId) return false;
+  // The last step is where "Return to original" lives; asking past it would
+  // request a step the backend has already said does not exist.
+  return !isFinalStep(current) && !completed;
 }

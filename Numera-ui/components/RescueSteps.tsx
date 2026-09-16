@@ -9,7 +9,10 @@
  *
  * What it deliberately does NOT do is advance anything. "Next step" sends
  * RESCUE_STEP_ADVANCE and then waits — the step list grows when the backend
- * sends the next step, not when the button is pressed. That is the whole point
+ * sends the next step, not when the button is pressed. The same is true of the
+ * narration that now carries the walkthrough on by itself (#319): finishing a
+ * step SENDS the same request the button does, and nothing moves until the
+ * backend answers. That is the whole point
  * of the inverted contract: a client that advanced its own view would be
  * showing the student a position the backend does not agree they are at, and
  * the first time the two disagreed it would be about how much of a worked
@@ -28,12 +31,15 @@ import { useEffect, useState } from 'react';
 import { ArrowLeft, ChevronRight } from 'lucide-react';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { isPhase3 } from '@/lib/phase3';
-import { isFinalStep } from '@/lib/rescueActions';
-import { advanceFailed, advancePending, panelCarriesStepText } from '@/lib/rescueMode';
+import { isFinalStep, type RescueStep } from '@/lib/rescueActions';
+import {
+  advanceFailed, advancePending, panelCarriesStepText, narrationAdvances, currentRescueStep,
+} from '@/lib/rescueMode';
 import { emitRescueAdvance } from '@/lib/rescueEvents';
 import { findReturnSurfaces, returnToQuestion } from '@/lib/rescueReturn';
 import { nextUnspokenStep, speakRescueStep } from '@/lib/rescueSpeech';
-import { tutorSay } from '@/lib/tutorSpeech';
+import { tutorSay, isStudentWriting } from '@/lib/tutorSpeech';
+import { speakTutor } from '@/lib/tts';
 import { DrawablyButton } from 'drawably/react';
 import 'drawably/style.css';
 import StickyNote from '@/components/StickyNote';
@@ -64,6 +70,48 @@ export default function RescueSteps() {
   const [awaiting, setAwaiting] = useState<{ rescueId: string; step: number } | null>(null);
 
   /**
+   * Ask the backend for the step after `current`.
+   *
+   * Shared by the button and by the narration finishing, because they are the
+   * same request — a student who listens to the end and a student who taps have
+   * both reached the end of this step, and the backend must not be able to tell
+   * them apart.
+   *
+   * Takes the step as an argument rather than closing over `current`: the
+   * narration path calls this from a speech callback that can outlive the
+   * render it was created in, and a stale `current` there would ask to advance
+   * from a step the student has already left.
+   */
+  const requestNextStep = (step: RescueStep) => {
+    if (!sessionId || !activeQuestionId) return;
+    const sent = emitRescueAdvance({
+      event_type: 'RESCUE_STEP_ADVANCE',
+      session_id: sessionId,
+      question_id: activeQuestionId,
+      rescue_id: step.rescueId,
+      // The step being LOOKED AT, never pre-incremented: Chirudeva rejects the
+      // request unless it matches the persisted index, which is what makes a
+      // double-press a no-op rather than a skipped step.
+      current_step_index: step.stepIndex,
+      trigger: 'UI_NEXT_STEP',
+    });
+    // Only latch on a send that actually left. A closed socket, or a backend
+    // that does not know this frame yet, must not leave the button reading
+    // "Waiting for the next step…" for the rest of the question. The other
+    // half — a request that left and was rejected — arrives later, through the
+    // transport, as `rescueAdvanceFailure`.
+    if (sent) {
+      // A fresh attempt clears the last one's failure, or the notice would sit
+      // under a press that is currently in flight and the latch it releases
+      // would leave the button live while a request is outstanding.
+      noteAdvanceFailed(null);
+      setAwaiting({ rescueId: step.rescueId, step: step.stepIndex + 1 });
+    } else {
+      noteAdvanceFailed({ rescueId: step.rescueId, step: step.stepIndex });
+    }
+  };
+
+  /**
    * Say each newly arrived step, once, after its visual.
    *
    * In an effect rather than in the store's reducer because speaking is a side
@@ -78,12 +126,48 @@ export default function RescueSteps() {
    * reply all reach the student the same way — as a step appearing in this
    * list — so all three are spoken by this one path, and none of them can be
    * the one that gets forgotten.
+   *
+   * ...and finishing a step is what carries the walkthrough on (#319). A rescue
+   * read as a slideshow: the tutor explained a step out loud and then the
+   * student had to press a button to be told the next one. A live tutor does
+   * not wait to be asked, so the end of the narration asks for them.
+   *
+   * The state is read through `getState()` inside the callback rather than
+   * closed over. Speech ends on its own clock — several seconds later, across
+   * renders, and after the student may have pressed Next or been moved to
+   * another rescue entirely — so the values this render captured are exactly
+   * the ones that must not be trusted by then.
    */
   useEffect(() => {
     if (isPhase3(currentPhase)) return;
     const step = nextUnspokenStep(steps);
     if (!step) return;
-    speakRescueStep(step, (text) => tutorSay(text, { afterMarks: true }));
+    // Set as the words actually begin, not when the step arrives: `afterMarks`
+    // holds them back while the mark lands, and counting that pause as
+    // narration would let a silent step clear MIN_NARRATION_MS on the delay
+    // alone.
+    let spokeAt = 0;
+    speakRescueStep(step, (text) => tutorSay(text, {
+      afterMarks: true,
+      speak: (t, onEnd) => { spokeAt = Date.now(); speakTutor(t, onEnd); },
+      onEnd: () => {
+        // The student picked the pen up during the settle pause, so `tutorSay`
+        // gave the floor back without saying anything. Advancing then would
+        // move a silent walkthrough on over a student who is working.
+        if (isStudentWriting()) return;
+        const s = useNumeraStore.getState();
+        const now = currentRescueStep(s);
+        const narrated = {
+          step,
+          audioStarted: spokeAt > 0,
+          narratedMs: spokeAt > 0 ? Date.now() - spokeAt : 0,
+        };
+        if (!narrationAdvances(narrated, now, s.rescueCompleted)) return;
+        // `now` is what narrationAdvances just proved the student is looking
+        // at — never the `step` this effect closed over.
+        requestNextStep(now!);
+      },
+    }));
   }, [steps, currentPhase]);
 
   if (steps.length === 0) return null;
@@ -118,34 +202,7 @@ export default function RescueSteps() {
   // failure has to RELEASE the latch, not merely sit beside it.
   const pending = advancePending(awaiting, current) && !failedToSend;
 
-  const onNext = () => {
-    if (!sessionId || !activeQuestionId) return;
-    const sent = emitRescueAdvance({
-      event_type: 'RESCUE_STEP_ADVANCE',
-      session_id: sessionId,
-      question_id: activeQuestionId,
-      rescue_id: current.rescueId,
-      // The step being LOOKED AT, never pre-incremented: Chirudeva rejects the
-      // request unless it matches the persisted index, which is what makes a
-      // double-press a no-op rather than a skipped step.
-      current_step_index: current.stepIndex,
-      trigger: 'UI_NEXT_STEP',
-    });
-    // Only latch on a send that actually left. A closed socket, or a backend
-    // that does not know this frame yet, must not leave the button reading
-    // "Waiting for the next step…" for the rest of the question. The other
-    // half — a request that left and was rejected — arrives later, through the
-    // transport, as `rescueAdvanceFailure`.
-    if (sent) {
-      // A fresh attempt clears the last one's failure, or the notice would sit
-      // under a press that is currently in flight and the latch it releases
-      // would leave the button live while a request is outstanding.
-      noteAdvanceFailed(null);
-      setAwaiting({ rescueId: current.rescueId, step: current.stepIndex + 1 });
-    } else {
-      noteAdvanceFailed({ rescueId: current.rescueId, step: current.stepIndex });
-    }
-  };
+  const onNext = () => requestNextStep(current);
 
   const onReturn = () => {
     // Dismisses the presentation. The question, the canvas and the student's

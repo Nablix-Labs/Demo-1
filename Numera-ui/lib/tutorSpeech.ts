@@ -158,7 +158,13 @@ export interface TutorSayOptions {
    * talking over their pen.
    */
   onEnd?: () => void;
-  /** Injection seam for tests. Defaults to the real TTS pipeline. */
+  /**
+   * Injection seam. Defaults to the real TTS pipeline.
+   *
+   * Tests substitute a recorder; RescueSteps wraps `speakTutor` to learn WHEN
+   * the words actually begin, which `afterMarks` makes unknowable from the
+   * call site — the delay would otherwise count as narration.
+   */
   speak?: (text: string, onEnd?: () => void) => void;
 }
 

@@ -8,7 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   rescueActive, legacyRescueVisible, currentRescueStep, rescueBlocksSubmission,
-  panelCarriesStepText,
+  panelCarriesStepText, narrationAdvances, MIN_NARRATION_MS,
   type RescueModeState,
 } from '@/lib/rescueMode';
 import { writesToStudentCanvas } from '@/lib/rescueActions';
@@ -166,5 +166,86 @@ describe('panelCarriesStepText — who owns the words', () => {
       } as never;
       expect(panelCarriesStepText(modeStep(mode))).toBe(!writesToStudentCanvas(action));
     });
+  });
+});
+
+/**
+ * A walkthrough that plays, instead of one the student clicks through (#319).
+ *
+ * "The parallel and tutor solved should be displayed like a live tutor is
+ * explaining and not like the student should press the next button each time."
+ *
+ * The tutor's own voice is what paces it: a step that has been narrated to the
+ * end is a step the student has heard, and that is the moment a live tutor
+ * carries on. What this must never do is advance on a step nobody heard —
+ * the tutor stays silent while the student is writing (§1) and says nothing at
+ * all when audio is muted or has failed, and in those cases the button is
+ * still how the student moves.
+ */
+describe('letting the narration carry the walkthrough', () => {
+  it('advances when the tutor finishes speaking the step on screen', () => {
+    expect(narrationAdvances(
+      { step: step(2), audioStarted: true, narratedMs: 4000 }, step(2), false,
+    )).toBe(true);
+  });
+
+  it('does not advance when the tutor never spoke', () => {
+    // Muted, failed, or the student has the pen. `tutorSay` calls back either
+    // way, so the callback alone is not evidence the student heard anything.
+    expect(narrationAdvances(
+      { step: step(2), audioStarted: false, narratedMs: 0 }, step(2), false,
+    )).toBe(false);
+  });
+
+  it('ignores an utterance the walkthrough has already moved past', () => {
+    // The student pressed Next mid-sentence, or a step arrived while the last
+    // one was still being read. The finished utterance is about a step that is
+    // no longer on screen, and acting on it would skip the one that is.
+    expect(narrationAdvances(
+      { step: step(2), audioStarted: true, narratedMs: 4000 }, step(3), false,
+    )).toBe(false);
+  });
+
+  it('ignores an utterance from a rescue that has been superseded', () => {
+    expect(narrationAdvances(
+      { step: step(2, 'R1'), audioStarted: true, narratedMs: 4000 }, step(2, 'R2'), false,
+    )).toBe(false);
+  });
+
+  it('stops at the last step rather than advancing off the end', () => {
+    // The last step is where "Return to original" lives. Advancing past it
+    // would ask the backend for a step it has already said does not exist.
+    expect(narrationAdvances(
+      { step: step(3), audioStarted: true, narratedMs: 4000 }, step(3), false,
+    )).toBe(false);
+  });
+
+  it('stops when the backend says the walkthrough is complete', () => {
+    // `total_steps` is nullable, so the count alone cannot always tell.
+    const open = { ...step(2), totalSteps: null };
+    expect(narrationAdvances({ step: open, audioStarted: true, narratedMs: 4000 }, open, true)).toBe(false);
+    expect(narrationAdvances({ step: open, audioStarted: true, narratedMs: 4000 }, open, false)).toBe(true);
+  });
+
+  it('does nothing once the rescue has been cleared', () => {
+    expect(narrationAdvances(
+      { step: step(2), audioStarted: true, narratedMs: 4000 }, null, false,
+    )).toBe(false);
+  });
+
+  it('does nothing when no step was narrated', () => {
+    expect(narrationAdvances({ step: null, audioStarted: true, narratedMs: 4000 }, step(2), false)).toBe(false);
+  });
+
+  it('does not advance on an utterance that ended instantly', () => {
+    // No voices on the device, or audio blocked before the first gesture: the
+    // TTS chain hands the callback straight back. Believed, that runs a silent
+    // walkthrough past the student in a few hundred milliseconds.
+    expect(narrationAdvances(
+      { step: step(2), audioStarted: true, narratedMs: MIN_NARRATION_MS - 1 }, step(2), false,
+    )).toBe(false);
+    expect(narrationAdvances(
+      { step: step(2), audioStarted: true, narratedMs: MIN_NARRATION_MS }, step(2), false,
+    )).toBe(true);
   });
 });
