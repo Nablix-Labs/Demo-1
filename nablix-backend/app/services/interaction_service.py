@@ -4395,15 +4395,7 @@ async def _process_interaction(
         conversation_state=_conversation_state_from_session(session),
         generated_question_rubric=session.generated_question_rubric,
         active_teaching_objective=session.active_teaching_objective,
-        guided_teaching_state=(
-            _guided_state_with_selected_option(
-                session,
-                request.selected_option_id,
-                _selected_option_message(session, request.selected_option_id)[2],
-            )
-            if request.input_source == "CHOICE" and request.selected_option_id is not None
-            else session.guided_teaching_state
-        ),
+        guided_teaching_state=session.guided_teaching_state,
         scaffold_evaluation_context=(
             _scaffold_evaluation_context(session)
             if scaffold_turn

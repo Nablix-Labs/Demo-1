@@ -97,6 +97,30 @@ def test_legacy_error_code_requires_an_authored_response_match() -> None:
     assert interaction_service._validated_error_code(session, "x = 3", tutor) is None
 
 
+def test_choice_error_code_matches_the_authoritative_option_text() -> None:
+    event = session_service.StudentModelSessionEventResponse.model_validate(
+        _event_response("ORIENTATION_COMPLETED", "REQ-CHOICE-ERROR-GROUNDING")
+    )
+    question = event.phase_payload.question_set.questions[0]
+    question.tutor_view.potential_errors = [
+        {
+            "error_code": "ERR-T02-OPERATION-MIXED-UP",
+            "error_description": "The operation was mixed up.",
+            "detection_method": "EXACT_NOTATION_MATCH",
+            "response_patterns": ["B", "Option B", "p decreases by 2"],
+            "linked_misconceptions": [],
+        }
+    ]
+    session = session_service.SessionRecord.model_construct(
+        student_model_event=event,
+        question_id=question.question_id,
+    )
+
+    assert interaction_service._db_error_code(
+        session, "Selected B: p decreases by 2"
+    ) == "ERR-T02-OPERATION-MIXED-UP"
+
+
 def test_option_selection_creates_guided_state_when_none_exists() -> None:
     session = session_service.SessionRecord.model_construct(
         question_id="Q-T01-004",

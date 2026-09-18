@@ -78,7 +78,6 @@ class InteractionRequest(BaseModel):
     input_source: InputSource
     text_input: BoundedInteractionText | None = None
     selected_option_id: str | None = None
-    selected_option_text: BoundedInteractionText | None = None
     voice_transcript: str | None = None
     transcript_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     turn_id: TurnId

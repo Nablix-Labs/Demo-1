@@ -8357,6 +8357,23 @@ def test_choice_contract_reads_the_selected_option_the_ui_submits(
     assert classifier.evaluate_answer_contract(request) == expected
 
 
+def test_wrong_choice_keeps_its_authored_text_for_feedback() -> None:
+    request = ClassificationRequest(
+        question_type="CHOICE_WITH_EXPLANATION",
+        question="Which is the general rule? A: 12 + 4. B: n + 4.",
+        correct_answer="A",
+        answer_spec=_answer_spec("A", [], "EXACT_CHOICE_MATCH"),
+        student_input="Selected B: n + 4",
+        current_phase="INDEPENDENT_PRACTICE",
+        input_source="CHOICE",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+    )
+
+    assert classifier.selected_option_text_for_choice(request, "B") == "n + 4"
+
+
 def test_multi_part_accepted_fragment_is_not_treated_as_complete(
     monkeypatch,
 ) -> None:
