@@ -8369,9 +8369,30 @@ def test_wrong_choice_keeps_its_authored_text_for_feedback() -> None:
         transcript_confidence=None,
         attempt_count=1,
         current_hint_level=None,
+        selected_option_id="B",
+        selected_option_text="n + 4",
     )
 
     assert classifier.selected_option_text_for_choice(request, "B") == "n + 4"
+
+
+def test_wrong_choice_ignores_mismatched_client_text() -> None:
+    request = ClassificationRequest(
+        question_type="CHOICE_WITH_EXPLANATION",
+        question="Which is the general rule? A: 12 + 4. B: n + 4.",
+        correct_answer="A",
+        answer_spec=_answer_spec("A", [], "EXACT_CHOICE_MATCH"),
+        student_input="Selected A: n + 4",
+        current_phase="INDEPENDENT_PRACTICE",
+        input_source="CHOICE",
+        transcript_confidence=None,
+        attempt_count=1,
+        current_hint_level=None,
+        selected_option_id="B",
+        selected_option_text="n + 4",
+    )
+
+    assert classifier.selected_option_text_for_choice(request, "A") is None
 
 
 def test_multi_part_accepted_fragment_is_not_treated_as_complete(

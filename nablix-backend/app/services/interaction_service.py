@@ -4360,6 +4360,11 @@ async def _process_interaction(
         )
         else session.attempt_count
     )
+    selected_option_text = (
+        _selected_option_message(session, request.selected_option_id)[2]
+        if request.input_source == "CHOICE" and request.selected_option_id is not None
+        else None
+    )
     context = AdapterContext(
         session_id=request.session_id,
         student_id=request.student_id,
@@ -4425,6 +4430,8 @@ async def _process_interaction(
             else None
         ),
         phase3_allowed_error_definitions=_schema_question(session).tutor_view.potential_errors,
+        selected_option_id=request.selected_option_id,
+        selected_option_text=selected_option_text,
     )
     minimum_ocr_confidence = max(
         get_settings().min_ocr_confidence_threshold,

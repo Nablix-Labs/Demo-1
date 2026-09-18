@@ -133,6 +133,8 @@ class AdapterContext(BaseModel):
     phase3_submission_confirmed: bool | None = None
     phase3_submission_kind: Literal["CANVAS", "CHOICE"] | None = None
     phase3_allowed_error_definitions: list[dict[str, object]] = Field(default_factory=list)
+    selected_option_id: str | None = None
+    selected_option_text: str | None = None
 
 
 class StudentModelResult(BaseModel):

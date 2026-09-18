@@ -1711,10 +1711,15 @@ export function useDemoTutor() {
           previous_tutor_turn_id: state.lastTutorTurnId,
         });
         if (!acceptResponse(res)) return null;
+        const previousPhase = useNumeraStore.getState().currentPhase;
         syncBackendSession(res);
         const onReplyEnd = takeFloorForReply();
         if (silent) {
-          tutorSay('', { onEnd: onReplyEnd });
+          const entering = phaseAnnouncement(res, previousPhase);
+          if (entering) {
+            addTrailEntry({ kind: 'tutor', text: entering.text, meta: 'phase change' });
+          }
+          tutorSay(withTransitionVoice(entering, res.message_voice), { onEnd: onReplyEnd });
           return res;
         }
       // This path never applied support at all, so a cue or scaffold served in

@@ -139,6 +139,8 @@ class ClassificationRequest(StrictSchema):
     phase3_submission_confirmed: bool | None = None
     phase3_submission_kind: str | None = None
     phase3_allowed_error_definitions: list[dict[str, object]] = Field(default_factory=list)
+    selected_option_id: str | None = None
+    selected_option_text: str | None = None
 
 
 @dataclass(frozen=True)
@@ -2538,9 +2540,12 @@ def selected_option_text_for_choice(
         if state_id is None or normalized_choice_response(state_id) == normalized_target:
             return request.guided_teaching_state.selected_option_text
 
-    submission = selected_option_submission(request.student_input)
-    if submission is not None and normalized_choice_response(submission[0]) == normalized_target:
-        return submission[1]
+    if (
+        request.selected_option_id is not None
+        and request.selected_option_text is not None
+        and normalized_choice_response(request.selected_option_id) == normalized_target
+    ):
+        return request.selected_option_text
 
     answer_spec = request.answer_spec
     if answer_spec is not None:
