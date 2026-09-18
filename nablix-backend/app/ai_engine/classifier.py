@@ -139,6 +139,8 @@ class ClassificationRequest(StrictSchema):
     phase3_submission_confirmed: bool | None = None
     phase3_submission_kind: str | None = None
     phase3_allowed_error_definitions: list[dict[str, object]] = Field(default_factory=list)
+    selected_option_id: str | None = None
+    selected_option_text: str | None = None
 
 
 @dataclass(frozen=True)
@@ -2525,21 +2527,42 @@ def selected_option_text_for_choice(
 ) -> str | None:
     """Resolve the authored text for a spoken or typed option selection."""
 
+    if selected_option_id is None:
+        return None
+
+    normalized_target = normalized_choice_response(selected_option_id)
+
+    if (
+        request.guided_teaching_state is not None
+        and request.guided_teaching_state.selected_option_text
+    ):
+        state_id = request.guided_teaching_state.selected_option_id
+        if state_id is None or normalized_choice_response(state_id) == normalized_target:
+            return request.guided_teaching_state.selected_option_text
+
+    if (
+        request.selected_option_id is not None
+        and request.selected_option_text is not None
+        and normalized_choice_response(request.selected_option_id) == normalized_target
+    ):
+        return request.selected_option_text
+
     answer_spec = request.answer_spec
-    if selected_option_id is None or answer_spec is None:
-        return None
-    canonical_option_id = normalized_choice_response(answer_spec.canonical_answer)
-    if normalized_choice_response(selected_option_id) != canonical_option_id:
-        return None
-    option_texts = [
-        accepted_answer
-        for accepted_answer in answer_spec.accepted_answers
-        if normalized_choice_response(accepted_answer) != canonical_option_id
-    ]
-    for option_text in option_texts:
-        if _expression_parts(option_text) is not None:
-            return option_text
-    return option_texts[0] if option_texts else None
+    if answer_spec is not None:
+        canonical_option_id = normalized_choice_response(answer_spec.canonical_answer)
+        if normalized_target == canonical_option_id:
+            option_texts = [
+                accepted_answer
+                for accepted_answer in answer_spec.accepted_answers
+                if normalized_choice_response(accepted_answer) != canonical_option_id
+            ]
+            for option_text in option_texts:
+                if _expression_parts(option_text) is not None:
+                    return option_text
+            if option_texts:
+                return option_texts[0]
+
+    return None
 
 
 def typed_option_text_evidence(
@@ -7846,6 +7869,7 @@ def evaluate_answer_contract(
         option_text = selected_option_text(request.student_input)
         if option_text is not None:
             submitted.add(option_text)
+            submitted.add(option_text.upper())
         return "CORRECT" if submitted & accepted_choices else "INCORRECT"
     if method == "EXACT_NOTATION_MATCH":
         student_notation = normalize_exact_notation(request.student_input)
@@ -7901,15 +7925,22 @@ def evaluate_answer_contract(
 # walked it into the guided repair loop (11 Sep 2026).
 _SELECTED_OPTION_SUBMISSION = re.compile(
     r"(?:SELECTED|CHOSE|CHOOSE)\s+(?:OPTION\s+)?([A-Z])\s*:\s*(.*)",
-    re.DOTALL,
+    re.IGNORECASE | re.DOTALL,
 )
 
 
 def selected_option_text(student_input: str) -> str | None:
-    """Return the upper-cased option text from "Selected B: n + 4", or None."""
+    """Return the option text from "Selected B: n + 4", or None."""
 
-    match = _SELECTED_OPTION_SUBMISSION.fullmatch(student_input.strip().upper())
-    return match.group(2).strip() if match is not None else None
+    submission = selected_option_submission(student_input)
+    return submission[1] if submission is not None else None
+
+
+def selected_option_submission(student_input: str) -> tuple[str, str] | None:
+    """Return the option id and authored text from the canonical choice message."""
+
+    match = _SELECTED_OPTION_SUBMISSION.fullmatch(student_input.strip())
+    return (match.group(1), match.group(2).strip()) if match is not None else None
 
 
 def normalized_choice_response(student_input: str) -> str:

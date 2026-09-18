@@ -2972,6 +2972,43 @@ def test_collect_canvas_evidence_keeps_all_regions_when_no_strokes_sent() -> Non
     assert evidence.ocr.detected_steps == ["x + 4 = 9", "x = 5"]
 
 
+def test_collect_canvas_evidence_starts_every_page_ocr_concurrently() -> None:
+    """All pages enter OCR before any page is allowed to finish."""
+
+    class ConcurrentVision:
+        def __init__(self) -> None:
+            self.started: list[str] = []
+            self.all_started = asyncio.Event()
+
+        async def recognize(self, snapshot_data_url: str) -> VisionOCRResult:
+            self.started.append(snapshot_data_url)
+            if len(self.started) == 3:
+                self.all_started.set()
+            await asyncio.wait_for(self.all_started.wait(), timeout=0.1)
+            return VisionOCRResult(
+                raw_ocr_text=snapshot_data_url[-1],
+                detected_equation="",
+                detected_steps=[],
+                confidence=0.95,
+                provider="mock",
+            )
+
+    vision = ConcurrentVision()
+    pages = [
+        VALID_SNAPSHOT_DATA_URL,
+        f"{VALID_SNAPSHOT_DATA_URL}2",
+        f"{VALID_SNAPSHOT_DATA_URL}3",
+    ]
+    evidence = asyncio.run(
+        canvas_evidence.collect_canvas_evidence(
+            pages[0], [], "SUB-CONCURRENT", vision, pages[1:]
+        )
+    )
+
+    assert vision.started == pages
+    assert evidence.page_ocr_texts == [page[-1] for page in pages]
+
+
 def test_canvas_does_not_store_work_for_an_unreadable_page(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

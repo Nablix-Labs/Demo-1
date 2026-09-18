@@ -13,6 +13,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const sendInteraction = vi.fn();
+const tutorSay = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
@@ -22,7 +23,7 @@ vi.mock('@/lib/api', async (importOriginal) => ({
 vi.mock('@/lib/tutorSpeech', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/tutorSpeech')>()),
   setStudentWriting: vi.fn(),
-  tutorSay: vi.fn(),
+  tutorSay,
 }));
 
 import { useDemoTutor } from '@/hooks/useDemoTutor';
@@ -54,6 +55,7 @@ describe('every reply path shows support before the message', () => {
   beforeEach(async () => {
     process.env.NEXT_PUBLIC_API_BASE_URL = '/api';
     sendInteraction.mockReset();
+    tutorSay.mockReset();
     tutor = null;
     useNumeraStore.setState({
       sessionId: 'SESSION001',
@@ -95,6 +97,27 @@ describe('every reply path shows support before the message', () => {
     unsubscribe();
     expect(order[0]).toBe('cue');
     expect(order).toContain('message');
+  });
+
+  it('announces a phase transition before applying the new backend phase', async () => {
+    useNumeraStore.setState({
+      currentPhase: 'INDEPENDENT_PRACTICE',
+      transcript: [],
+    });
+    sendInteraction.mockResolvedValue(replyWithCue({
+      current_phase: 'GUIDED_PRACTICE',
+      phase_changed: true,
+      previous_phase: 'INDEPENDENT_PRACTICE',
+      phase_transition_message: "Let's work through this together.",
+      phase_transition_voice: "Let's work through this together.",
+    }));
+
+    await act(async () => { await tutor?.answer('I am stuck', CTX); });
+
+    expect(useNumeraStore.getState().currentPhase).toBe('GUIDED_PRACTICE');
+    expect(useNumeraStore.getState().transcript.map((message) => message.text)).toContain(
+      "Let's work through this together.",
+    );
   });
 
   it('selectOption(): cue before the tutor line — this path applied no support at all', async () => {
@@ -168,6 +191,29 @@ describe('every reply path shows support before the message', () => {
     expect(response).toMatchObject({ current_phase: 'REVIEW' });
     expect(useNumeraStore.getState().currentPhase).toBe('REVIEW');
     expect(useNumeraStore.getState().transcript).toEqual([]);
+  });
+
+  it('speaks a Phase 3 choice transition into Guided Practice', async () => {
+    useNumeraStore.setState({
+      currentPhase: 'INDEPENDENT_PRACTICE',
+      activeQuestionId: 'Q-T01-008',
+      transcript: [],
+    });
+    sendInteraction.mockResolvedValue(replyWithCue({
+      current_phase: 'GUIDED_PRACTICE',
+      phase_changed: true,
+      previous_phase: 'INDEPENDENT_PRACTICE',
+      phase_transition_message: "Let's work through this together.",
+      phase_transition_voice: "Let's work through this together.",
+      interaction_state_version: 3,
+    }));
+
+    await act(async () => { await tutor?.selectOption('B', 'p decreases by 2'); });
+
+    expect(tutorSay).toHaveBeenCalledWith(
+      expect.stringContaining("Let's work through this together."),
+      expect.any(Object),
+    );
   });
 
   it('keeps OPTION_SELECTED in Guided Practice, where it is coached discussion', async () => {

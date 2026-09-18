@@ -131,6 +131,8 @@ class TutorEngineServiceAdapter:
                     phase3_submission_confirmed=context.phase3_submission_confirmed,
                     phase3_submission_kind=context.phase3_submission_kind,
                     phase3_allowed_error_definitions=context.phase3_allowed_error_definitions,
+                    selected_option_id=context.selected_option_id,
+                    selected_option_text=context.selected_option_text,
                 )
             )
             return tutor_result_from_ai_response(ai_response)

@@ -22,6 +22,7 @@ from app.ai_engine.classifier import (
     initial_guided_objective,
     normalize_exact_notation,
     resolve_guided_rubric,
+    selected_option_submission,
 )
 from app.adapters.tutor_engine import tutor_result_from_ai_response
 
@@ -1372,17 +1373,35 @@ def _db_error_code(session: SessionRecord, student_message: str) -> str | None:
     if session.student_model_event is None:
         return None
     normalized_message = normalize_exact_notation(student_message).casefold()
+    selected_option = selected_option_submission(student_message)
+    opt_id = selected_option[0].casefold() if selected_option is not None else None
+    opt_text = (
+        normalize_exact_notation(selected_option[1]).casefold()
+        if selected_option is not None
+        else None
+    )
+
     for potential_error in _schema_question(session).tutor_view.potential_errors:
         error_code = potential_error.get("error_code")
         response_patterns = potential_error.get("response_patterns")
         if not isinstance(error_code, str) or not isinstance(response_patterns, list):
             continue
-        if any(
-            isinstance(pattern, str)
-            and normalize_exact_notation(pattern).casefold() == normalized_message
-            for pattern in response_patterns
-        ):
-            return error_code
+        for pattern in response_patterns:
+            if not isinstance(pattern, str):
+                continue
+            normalized_pattern = normalize_exact_notation(pattern).casefold()
+            if (
+                normalized_pattern == normalized_message
+                or (
+                    opt_id is not None
+                    and (
+                        normalized_pattern == opt_id
+                        or normalized_pattern == f"option {opt_id}"
+                    )
+                )
+                or (opt_text is not None and normalized_pattern == opt_text)
+            ):
+                return error_code
     return None
 
 
@@ -2787,6 +2806,8 @@ def _response_from(
     if not phase3_silent and scaffold_is_renderable:
         message = _scaffold_chat_line(message, scaffold_steps[0])
         message_voice = _scaffold_chat_line(message_voice, scaffold_steps[0])
+    if previous_phase is not None and not message_voice.strip() and transition_message:
+        message_voice = transition_message
     return InteractionResponse(
         session_id=session_id,
         student_id=student_id,
@@ -4339,6 +4360,11 @@ async def _process_interaction(
         )
         else session.attempt_count
     )
+    selected_option_text = (
+        _selected_option_message(session, request.selected_option_id)[2]
+        if request.input_source == "CHOICE" and request.selected_option_id is not None
+        else None
+    )
     context = AdapterContext(
         session_id=request.session_id,
         student_id=request.student_id,
@@ -4404,6 +4430,8 @@ async def _process_interaction(
             else None
         ),
         phase3_allowed_error_definitions=_schema_question(session).tutor_view.potential_errors,
+        selected_option_id=request.selected_option_id,
+        selected_option_text=selected_option_text,
     )
     minimum_ocr_confidence = max(
         get_settings().min_ocr_confidence_threshold,
@@ -5063,7 +5091,7 @@ async def _process_interaction(
         attempt_increment=effective_attempt_increment,
         status=None,
         retry_safe=None,
-        previous_phase=session.current_phase if new_phase is not None else None,
+        previous_phase=turn_session.current_phase if new_phase is not None else None,
     )
     guided_rescue = _guided_rescue(schema_content_response)
     support_served: SupportUsed | None = (

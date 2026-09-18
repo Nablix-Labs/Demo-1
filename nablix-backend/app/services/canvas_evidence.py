@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import dataclass, field
 from time import perf_counter
 
@@ -131,7 +132,8 @@ async def collect_canvas_evidence(
     snapshot_reference = build_reference(submission_id)
     store_snapshot(snapshot_reference, snapshot_data_url)
     started = perf_counter()
-    ocr = await vision.recognize(snapshot_data_url)
+    page_results = await asyncio.gather(*(vision.recognize(page) for page in pages))
+    ocr = page_results[0]
     ocr = ocr.model_copy(
         update={"detected_regions": assign_step_ids(ocr.detected_regions)}
     )
@@ -181,11 +183,11 @@ async def collect_canvas_evidence(
     # Pages 2..N: OCR each in order and keep the text only. Structural analysis
     # (regions, spatial tokens) stays page-1-only because strokes belong to the
     # live canvas. Never stitch pages into one tall image before OCR.
-    page_ocr_texts = [ocr.raw_ocr_text]
-    for page in pages[1:]:
-        page_ocr_texts.append((await vision.recognize(page)).raw_ocr_text)
-
-    if len(pages) > 1:
+    page_ocr_texts = [
+        ocr.raw_ocr_text,
+        *(result.raw_ocr_text for result in page_results[1:]),
+    ]
+    if len(page_ocr_texts) > 1:
         ocr = ocr.model_copy(
             update={"raw_ocr_text": "\n".join(page_ocr_texts)}
         )

@@ -1006,10 +1006,11 @@ export function useDemoTutor() {
         // Ordering guard (handoff item 2): a response older than what is on
         // screen is dropped, and a cached replay is applied exactly once.
         if (!acceptResponse(res)) return res;
+        const previousPhase = useNumeraStore.getState().currentPhase;
         syncBackendSession(res);
         // Read the phase we were in BEFORE advancing it, or the transition can
         // never be detected.
-        const entering = phaseAnnouncement(res, useNumeraStore.getState().currentPhase);
+        const entering = phaseAnnouncement(res, previousPhase);
         // Support BEFORE the words that refer to it (Sanya, 12 Aug 2026). The
         // tutor now says things like "look at the visual cue on your screen",
         // so the cue and scaffold have to be on screen before that line is
@@ -1590,9 +1591,10 @@ export function useDemoTutor() {
           useNumeraStore.getState().beginListeningTurn();
           return null;
         }
+        const previousPhase = useNumeraStore.getState().currentPhase;
         syncBackendSession(res);
         console.groupEnd();
-        const entering = phaseAnnouncement(res, useNumeraStore.getState().currentPhase);
+        const entering = phaseAnnouncement(res, previousPhase);
         // Support first — see the answer path above.
         const spoken = withTransitionVoice(entering, applyInteractionSupport(res));
         // One child-facing message on a rescue turn — see the answer path.
@@ -1709,10 +1711,15 @@ export function useDemoTutor() {
           previous_tutor_turn_id: state.lastTutorTurnId,
         });
         if (!acceptResponse(res)) return null;
+        const previousPhase = useNumeraStore.getState().currentPhase;
         syncBackendSession(res);
         const onReplyEnd = takeFloorForReply();
         if (silent) {
-          tutorSay('', { onEnd: onReplyEnd });
+          const entering = phaseAnnouncement(res, previousPhase);
+          if (entering) {
+            addTrailEntry({ kind: 'tutor', text: entering.text, meta: 'phase change' });
+          }
+          tutorSay(withTransitionVoice(entering, res.message_voice), { onEnd: onReplyEnd });
           return res;
         }
       // This path never applied support at all, so a cue or scaffold served in
