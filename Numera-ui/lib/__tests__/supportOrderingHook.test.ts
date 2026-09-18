@@ -97,6 +97,27 @@ describe('every reply path shows support before the message', () => {
     expect(order).toContain('message');
   });
 
+  it('announces a phase transition before applying the new backend phase', async () => {
+    useNumeraStore.setState({
+      currentPhase: 'INDEPENDENT_PRACTICE',
+      transcript: [],
+    });
+    sendInteraction.mockResolvedValue(replyWithCue({
+      current_phase: 'GUIDED_PRACTICE',
+      phase_changed: true,
+      previous_phase: 'INDEPENDENT_PRACTICE',
+      phase_transition_message: "Let's work through this together.",
+      phase_transition_voice: "Let's work through this together.",
+    }));
+
+    await act(async () => { await tutor?.answer('I am stuck', CTX); });
+
+    expect(useNumeraStore.getState().currentPhase).toBe('GUIDED_PRACTICE');
+    expect(useNumeraStore.getState().transcript.map((message) => message.text)).toContain(
+      "Let's work through this together.",
+    );
+  });
+
   it('selectOption(): cue before the tutor line — this path applied no support at all', async () => {
     sendInteraction.mockResolvedValue(replyWithCue({ interaction_state_version: 2 }));
     const { order, unsubscribe } = watchOrder();

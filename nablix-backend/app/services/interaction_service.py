@@ -5084,7 +5084,7 @@ async def _process_interaction(
         attempt_increment=effective_attempt_increment,
         status=None,
         retry_safe=None,
-        previous_phase=session.current_phase if new_phase is not None else None,
+        previous_phase=turn_session.current_phase if new_phase is not None else None,
     )
     guided_rescue = _guided_rescue(schema_content_response)
     support_served: SupportUsed | None = (
