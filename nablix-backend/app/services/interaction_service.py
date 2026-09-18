@@ -22,6 +22,7 @@ from app.ai_engine.classifier import (
     initial_guided_objective,
     normalize_exact_notation,
     resolve_guided_rubric,
+    selected_option_submission,
 )
 from app.adapters.tutor_engine import tutor_result_from_ai_response
 
@@ -1372,17 +1373,35 @@ def _db_error_code(session: SessionRecord, student_message: str) -> str | None:
     if session.student_model_event is None:
         return None
     normalized_message = normalize_exact_notation(student_message).casefold()
+    selected_option = selected_option_submission(student_message)
+    opt_id = selected_option[0].casefold() if selected_option is not None else None
+    opt_text = (
+        normalize_exact_notation(selected_option[1]).casefold()
+        if selected_option is not None
+        else None
+    )
+
     for potential_error in _schema_question(session).tutor_view.potential_errors:
         error_code = potential_error.get("error_code")
         response_patterns = potential_error.get("response_patterns")
         if not isinstance(error_code, str) or not isinstance(response_patterns, list):
             continue
-        if any(
-            isinstance(pattern, str)
-            and normalize_exact_notation(pattern).casefold() == normalized_message
-            for pattern in response_patterns
-        ):
-            return error_code
+        for pattern in response_patterns:
+            if not isinstance(pattern, str):
+                continue
+            normalized_pattern = normalize_exact_notation(pattern).casefold()
+            if (
+                normalized_pattern == normalized_message
+                or (
+                    opt_id is not None
+                    and (
+                        normalized_pattern == opt_id
+                        or normalized_pattern == f"option {opt_id}"
+                    )
+                )
+                or (opt_text is not None and normalized_pattern == opt_text)
+            ):
+                return error_code
     return None
 
 
@@ -4374,7 +4393,15 @@ async def _process_interaction(
         conversation_state=_conversation_state_from_session(session),
         generated_question_rubric=session.generated_question_rubric,
         active_teaching_objective=session.active_teaching_objective,
-        guided_teaching_state=session.guided_teaching_state,
+        guided_teaching_state=(
+            _guided_state_with_selected_option(
+                session,
+                request.selected_option_id,
+                _selected_option_message(session, request.selected_option_id)[2],
+            )
+            if request.input_source == "CHOICE" and request.selected_option_id is not None
+            else session.guided_teaching_state
+        ),
         scaffold_evaluation_context=(
             _scaffold_evaluation_context(session)
             if scaffold_turn
