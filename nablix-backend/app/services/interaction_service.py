@@ -2806,6 +2806,8 @@ def _response_from(
     if not phase3_silent and scaffold_is_renderable:
         message = _scaffold_chat_line(message, scaffold_steps[0])
         message_voice = _scaffold_chat_line(message_voice, scaffold_steps[0])
+    if previous_phase is not None and not message_voice.strip() and transition_message:
+        message_voice = transition_message
     return InteractionResponse(
         session_id=session_id,
         student_id=student_id,
