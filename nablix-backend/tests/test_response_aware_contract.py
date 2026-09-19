@@ -477,9 +477,9 @@ def test_reliable_canvas_answer_completes_an_acknowledgement_turn() -> None:
         }),
         student_state="STUCK",
         newly_confirmed_concept_ids=[],
-        preserved_concept_ids=["GENERAL_RULE_ADD_FIVE"],
+        preserved_concept_ids=["FIXED_VALUE"],
         contradicted_concept_ids=[],
-        missing_concept_ids=[],
+        missing_concept_ids=["GENERAL_RULE_ADD_FIVE"],
         selected_error_code=None,
         confidence=0.98,
         next_objective=None,
@@ -492,6 +492,8 @@ def test_reliable_canvas_answer_completes_an_acknowledgement_turn() -> None:
 
     assert completed.student_state == "CORRECT"
     assert completed.submission_state == "MATCHING"
+    assert completed.newly_confirmed_concept_ids == ["GENERAL_RULE_ADD_FIVE"]
+    assert completed.missing_concept_ids == []
     assert validate_response_aware_submission(completed, request) is completed
 
 

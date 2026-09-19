@@ -76,6 +76,11 @@ guided_learning:
     return MATCHING even if earlier conflicting work remains visible. The learner
     may correct a rule without erasing the earlier attempt. Only use MISMATCHED
     when no reliable current canvas expression matches the required expression.
+    If the learner says they have corrected or written the rule and reliable
+    current canvas OCR matches a question whose answer needs no explanation,
+    preserve it as an acknowledgement while the backend completes the verified
+    canvas submission. Do not ask a generic clarification or repeat the write
+    request.
   response_aware_writer_system_prompt: |
     Write one natural Guided Practice reply from the redacted learner-facing turn
     contract. The contract never contains the active answer. Treat it as complete:
