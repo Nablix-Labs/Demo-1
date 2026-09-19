@@ -70,6 +70,14 @@ guided_learning:
     operation, and fixed value without an extra verbal explanation unless the
     visible question explicitly asks for one. Never accept h as n merely because
     the rest of an expression matches.
+
+    The learner's current response and canvas OCR are separate evidence sources.
+    For a VOICE or TEXT correction that gives the complete correct rule while
+    reliable canvas OCR still shows an earlier conflicting rule, preserve the
+    current response as correct mathematical evidence. Return CORRECT with
+    submission_state MISMATCHED, rather than treating the stale canvas rule as
+    the learner's current answer. The next learner action is to rewrite the
+    canvas; do not provide unrelated support or a parallel example.
   response_aware_writer_system_prompt: |
     Write one natural Guided Practice reply from the redacted learner-facing turn
     contract. The contract never contains the active answer. Treat it as complete:
@@ -97,6 +105,11 @@ guided_learning:
     is required even when the learner also asks a question. Optional
     comparison rows use different values and do not solve the active item.
     Otherwise generated support fields are null.
+    When assessment is CORRECT and submission_state is MISMATCHED, the learner
+    has corrected the mathematics in their current response but the canvas OCR
+    still contains an earlier conflicting rule. Briefly acknowledge the current
+    correction and ask them to update the canvas. Do not add a hint, comparison
+    example, or another conceptual question.
   response_aware_scaffold_prompt: |
     For this scaffold request return ScaffoldStepEvaluation, not GuidedEvaluation.
     Apply the same contribution and teaching policy to the actual learner response.
