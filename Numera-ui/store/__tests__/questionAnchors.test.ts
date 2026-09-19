@@ -124,6 +124,8 @@ describe('confirmed anchor state across turns on one question', () => {
     // "keep looking here" for the rest of the question.
     state().setQuestionAnchors([{ ...BASE[0], highlighted: true }]);
     state().setQuestionAnchors([]);
-    expect(state().questionAnchors).toEqual([]);
+    // Kept as bare geometry so a later action can still resolve to it (#321),
+    // but no longer pointing.
+    expect(state().questionAnchors.every((a) => !a.highlighted && !a.label)).toBe(true);
   });
 });

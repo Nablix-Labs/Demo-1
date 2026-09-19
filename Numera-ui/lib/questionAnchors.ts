@@ -218,13 +218,26 @@ export function mergeQuestionAnchors(
   previous: QuestionAnchor[] | null | undefined,
   incoming: QuestionAnchor[] | null | undefined,
 ): QuestionAnchor[] {
+  // Every token already on screen is remembered, not only the confirmed ones.
+  // The reply that confirms `m` is the same reply that moves the step on to
+  // `+`, so its base anchors no longer contain `m` — and the HIGHLIGHT that
+  // confirms `m` is applied AFTER them. Forgotten, that action had nothing to
+  // resolve against and was dropped, so `m` was never confirmed and lost its
+  // highlight on the next turn (#321, Sanya 18 Sep). An unconfirmed anchor is
+  // kept as bare geometry: no highlight, no label, so it still stops pointing.
   const confirmed = new Map(
-    (previous ?? []).filter((a) => a?.confirmed).map((a) => [a.token_id, a]),
+    (previous ?? []).filter((a) => a?.token_id).map((a) => [
+      a.token_id,
+      a.confirmed ? a : { ...a, highlighted: false, label: null },
+    ]),
   );
 
   const merged = (incoming ?? []).map((anchor) => {
     const held = confirmed.get(anchor.token_id);
-    if (!held) return anchor;
+    if (!held?.confirmed) {
+      confirmed.delete(anchor.token_id);
+      return anchor;
+    }
     confirmed.delete(anchor.token_id);
     return {
       ...anchor,
@@ -236,7 +249,8 @@ export function mergeQuestionAnchors(
     };
   });
 
-  // Whatever is left was confirmed on an earlier turn and simply not repeated,
-  // which is the ordinary case: most replies carry no anchors at all.
+  // Whatever is left was on screen on an earlier turn and simply not repeated,
+  // which is the ordinary case: most replies carry no anchors at all. Confirmed
+  // ones keep their marks; the rest are bare geometry for later actions.
   return [...merged, ...confirmed.values()].sort((a, b) => a.char_start - b.char_start);
 }

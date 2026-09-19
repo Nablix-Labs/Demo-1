@@ -276,11 +276,13 @@ describe('merging anchors on the same question', () => {
     expect(mergeQuestionAnchors([confirmed], [])).toEqual([confirmed]);
   });
 
-  it('drops an unconfirmed anchor the backend stopped sending', () => {
+  it('stops pointing at an unconfirmed anchor the backend stopped sending', () => {
     // The behaviour this must NOT break: a bare highlight the tutor has moved
     // on from is transient and still clears, or it reads as "keep looking here"
-    // for the rest of the question.
-    expect(mergeQuestionAnchors([base], [])).toEqual([]);
+    // for the rest of the question. The geometry is kept (#321) so an action
+    // arriving after the anchors can still resolve to it.
+    expect(mergeQuestionAnchors([{ ...base, highlighted: true, label: 'changes' }], []))
+      .toEqual([{ ...base, highlighted: false, label: null }]);
   });
 
   it('orders the result by position so segmentation stays a left-to-right pass', () => {
