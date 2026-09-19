@@ -47,6 +47,8 @@ specification's seventeen would have let through:
     NO_DELIBERATION_IN_CONTENT  the model's working-out left in a field the
                                 platform imports
     STANDARD_NOTATION           an answer key accepting both 4b and b4
+    ONE_MISCONCEPTION_PER_ERROR one error explained by two beliefs, so the
+                                tutor cannot tell which to re-teach
 
 They are marked local so nobody mistakes them for section 12.1, and they are
 skipped when validating a workbook we did not write.
@@ -201,6 +203,9 @@ RULES: dict[str, Rule] = {rule.code: rule for rule in [
          FULL, from_spec=False),
     Rule("STANDARD_NOTATION",
          "No answer key accepts a variable written before its coefficient.",
+         FULL, from_spec=False),
+    Rule("ONE_MISCONCEPTION_PER_ERROR",
+         "Each error type is explained by exactly one misconception.",
          FULL, from_spec=False),
 ]}
 
@@ -787,6 +792,38 @@ def check_no_error_conflict(tables) -> list[Finding]:
     return findings
 
 
+def check_one_misconception_per_error(tables) -> list[Finding]:
+    """An error must resolve to one belief, not several.
+
+    NO_ERROR_CONFLICT says one student response maps to one error. This is the
+    same rule one level up: one error maps to one misconception. Without it
+    the tutor detects the mistake, finds two candidate beliefs and picks one,
+    which means it can teach against something the student does not hold.
+
+    Manjusha's review of 13 September called this out as a major issue, and
+    three of 28 error codes in that workbook had it.
+    """
+    findings: list[Finding] = []
+    beliefs: dict[str, set[str]] = defaultdict(set)
+    for row in tables.get("Misconception_Errors", []):
+        code = _text(row.get("error_code"))
+        belief = _text(row.get("misconception_id"))
+        if code and belief:
+            beliefs[code].add(belief)
+
+    for code, found in sorted(beliefs.items()):
+        if len(found) > 1:
+            findings.append(_fail(
+                "ONE_MISCONCEPTION_PER_ERROR", "Misconception_Errors", code,
+                f"explained by {len(found)} misconceptions: "
+                f"{', '.join(sorted(found))}",
+                "The tutor cannot tell which belief to re-teach, so it will "
+                "pick one and may teach against something the student does "
+                "not hold. Merge the beliefs or give each its own error",
+            ))
+    return findings
+
+
 def check_mapping_complete(tables) -> list[Finding]:
     """Mapping rows must point at parents that are switched on.
 
@@ -1115,6 +1152,7 @@ CHECKS = {
     "SCOPE_EXCLUSION": check_scope_exclusion,
     "NO_ERROR_CONFLICT": check_no_error_conflict,
     "MAPPING_COMPLETE": check_mapping_complete,
+    "ONE_MISCONCEPTION_PER_ERROR": check_one_misconception_per_error,
     "WORKED_EXAMPLE_CORRECT": check_worked_example_correct,
     "COVERAGE_PLAN": check_coverage_plan,
     "UNREACHABLE_ROW": check_unreachable_row,
@@ -1147,7 +1185,7 @@ def declared_limits() -> list[Finding]:
 #: failures that are all correct behaviour by the other party.
 ONLY_FOR_GENERATED = frozenset({
     "COVERAGE_PLAN", "NOTHING_APPROVED", "NO_DELIBERATION_IN_CONTENT",
-    "STANDARD_NOTATION",
+    "STANDARD_NOTATION", "ONE_MISCONCEPTION_PER_ERROR",
 })
 
 

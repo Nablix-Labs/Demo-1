@@ -20,13 +20,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from brief_mapper import map_all                    # noqa: E402
 from diagnosis_generator import (                   # noqa: E402
+    DUPLICATE_OVERLAP,
     ERROR_SYSTEM_PROMPT,
     MAX_ERRORS,
     MAX_MISCONCEPTIONS,
     MIN_ERRORS,
     MIN_MISCONCEPTIONS,
     MISCONCEPTION_SYSTEM_PROMPT,
+    TYPICAL_ERRORS,
     DiagnosisError,
+    _description_overlap,
     build_error_prompt,
     build_misconception_prompt,
     generate_error_types,
@@ -94,8 +97,118 @@ def _prompt_text() -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────
+# The same error written twice
+# ──────────────────────────────────────────────────────────────────────
+
+def test_two_near_identical_errors_on_one_skill_are_reported(brief, skills):
+    """The literal case: same wording, one number changed."""
+    payload = {"error_types": [
+        _e(1, position=2, descriptor="SQUARE-AS-DOUBLE",
+           description="Student replaces a squared with 2a when asked for a "
+                       "multiplied by a."),
+        _e(2, position=2, descriptor="CUBE-AS-TRIPLE",
+           description="Student replaces a cubed with 3a when asked for a "
+                       "multiplied by a multiplied by a."),
+        _e(3, position=3), _e(4, position=4), _e(5, position=5),
+    ]}
+    result = _gen(brief, skills, payload)
+    assert any("describe the same mistake" in i.message for i in result.issues)
+
+
+def test_two_genuinely_different_errors_on_one_skill_are_left_alone(brief, skills):
+    """A skill may have two failures that look different on the page. The
+    check must not punish that."""
+    payload = {"error_types": [
+        _e(1, position=2, descriptor="LETTER-AS-FIXED",
+           description="Student insists a letter always stands for the same "
+                       "specific number in every context."),
+        _e(2, position=2, descriptor="RULE-WITHOUT-LETTER",
+           description="Student writes add three or you always get ten, using "
+                       "no letter at all."),
+        _e(3, position=3), _e(4, position=4), _e(5, position=5),
+    ]}
+    result = _gen(brief, skills, payload)
+    assert not [i for i in result.issues if "describe the same mistake" in i.message]
+
+
+def test_a_reported_duplicate_is_not_dropped(brief, skills):
+    """Choosing which of a near-identical pair to keep needs a reading of
+    both, and a wrong choice loses the better-written one."""
+    payload = {"error_types": [
+        _e(1, position=2, descriptor="SQUARE-AS-DOUBLE",
+           description="Student replaces a squared with 2a when asked for a "
+                       "multiplied by a."),
+        _e(2, position=2, descriptor="CUBE-AS-TRIPLE",
+           description="Student replaces a cubed with 3a when asked for a "
+                       "multiplied by a multiplied by a."),
+        _e(3, position=3), _e(4, position=4), _e(5, position=5),
+    ]}
+    result = _gen(brief, skills, payload)
+    assert len(result.rows) == 5
+
+
+def test_the_overlap_measure_ignores_the_words_every_description_uses():
+    """"Student writes" opens almost every row in the table, so counting it
+    would make everything look alike."""
+    high = _description_overlap(
+        "Student writes the coefficient after the variable.",
+        "Student writes the variable before the coefficient.")
+    low = _description_overlap(
+        "Student writes the coefficient after the variable.",
+        "Student reads a fraction bar as a ratio.")
+    assert high > low
+
+
+def test_the_measure_is_honest_about_what_it_misses():
+    """Pinned so nobody later mistakes this for a real duplicate detector.
+
+    Reworded duplicates share no content words. This is a cheap partial; the
+    count and the prompt do the work, and the semantic version is CG-021's.
+    """
+    reworded = _description_overlap(
+        "Student rewrites or reads an expression like x + 3 as times plus 3.",
+        "Student replaces the variable with a multiplication symbol.")
+    assert reworded < DUPLICATE_OVERLAP
+
+
+# ──────────────────────────────────────────────────────────────────────
 # The prompt
 # ──────────────────────────────────────────────────────────────────────
+
+def test_the_prompt_gives_a_number_rather_than_a_range():
+    """Manjusha's answer of 10 September was 6 per topic, and it matches the
+    approved content. The old prompt offered 4 to 10 and runs came back with
+    9 or 10 every time: a range without a stated target is read as a licence
+    to take its ceiling, the same failure as the optional third hint and the
+    3-to-5 scaffold."""
+    text = _prompt_text()
+    assert f"Write {TYPICAL_ERRORS} for a topic" in text
+    assert f"up to {MAX_ERRORS}" in text
+
+
+def test_the_typical_count_sits_inside_the_bounds():
+    assert MIN_ERRORS <= TYPICAL_ERRORS <= MAX_ERRORS
+
+
+def test_the_prompt_asks_for_one_error_per_skill():
+    text = _prompt_text()
+    assert "ONE ERROR PER SKILL" in text
+    assert "If your second error for a skill would be caught by the same " \
+           "check as the first, it is the same error" in text
+
+
+def test_the_prompt_shows_the_real_duplicate_pairs():
+    """Rules stated abstractly get agreed with and ignored. These three pairs
+    each cost a slot in the run of 9 September."""
+    text = _prompt_text()
+    assert "a2 interpreted as 2a" in text
+    assert "3(x+2) read as 3x+2" in text
+
+
+def test_the_prompt_forbids_repeating_a_prerequisites_error():
+    text = _prompt_text()
+    assert "DO NOT REPEAT A PREREQUISITE" in text
+
 
 def test_the_prompt_separates_an_error_from_a_belief():
     """The whole reason there are two tables."""

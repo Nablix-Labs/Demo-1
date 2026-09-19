@@ -47,6 +47,7 @@ convention the reference does not have.
 from __future__ import annotations
 
 import re
+from itertools import combinations
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -68,7 +69,66 @@ DEFAULT_VERSION = "1.0"
 # The reference holds 5 to 7 of each per topic. The bounds are wider than that
 # so a topic with less to go wrong is not forced to invent filler, but a
 # response of two errors means the model did not do the work.
-MIN_ERRORS, MAX_ERRORS = 4, 10
+MIN_ERRORS, MAX_ERRORS = 4, 8
+
+#: What a topic should come out at. Manjusha's answer of 10 September, and it
+#: matches the approved content, which has 17 error types across 3 topics.
+#:
+#: The old range was 4 to 10 and runs came back with 9 or 10 every time. Same
+#: failure as the optional third hint and the 3-to-5 scaffold: a range without
+#: a stated target is read as a licence to take its ceiling. So the number is
+#: given, and the ceiling is only there for a topic that genuinely needs it.
+TYPICAL_ERRORS = 6
+
+#: How much two descriptions of one skill's errors may share before they are
+#: the same error twice.
+#:
+#: Measured against the three real duplicate pairs from 9 September, and it
+#: only catches one of them:
+#:
+#:     "a2 interpreted as 2a" / "a3 interpreted as 3a"          50%  caught
+#:     "reads x as times" / "writes times where x was meant"      7%  missed
+#:     "3(x+2) read as 3x+2" / "bracketed sum without brackets"   0%  missed
+#:
+#: The two it misses are reworded rather than repeated, and share no content
+#: words at all despite being one mistake. No amount of tuning fixes that:
+#: word overlap cannot see that "reads x as times" and "writes times where x
+#: was meant" are one confusion stated in both directions. Lowering the
+#: threshold far enough to catch them would flag the honest pairs too, which
+#: sit at 20, 7 and 4 per cent.
+#:
+#: So this is a cheap partial and nothing more. What actually holds the count
+#: down is the stated target of {TYPICAL_ERRORS} plus rule 8's worked
+#: examples. The semantic version belongs in CG-021, which can read two
+#: descriptions and say they are the same mistake.
+DUPLICATE_OVERLAP = 0.5
+
+#: Words too ordinary to show two errors are the same. "Student writes" opens
+#: almost every description in the table.
+_COMMON_WORDS = frozenset("""
+a an and are as at be but by for from has have in into is it its of on or that
+the their them then there these this to was were what when where which with
+student students writes write written instead rather than one two same
+""".split())
+
+
+def _description_overlap(first, second) -> float:
+    """How much of two descriptions is the same content words.
+
+    Jaccard rather than a substring test, because the pairs that matter are
+    reworded rather than repeated: "3(x+2) read as 3x+2" and "bracketed sum
+    rewritten without brackets" share no phrase at all and are one error.
+    """
+    def words(value) -> set[str]:
+        return {w for w in re.findall(r"[a-z]+", str(value or "").lower())
+                if w not in _COMMON_WORDS and len(w) > 2}
+
+    left, right = words(first), words(second)
+    if not left or not right:
+        return 0.0
+    return len(left & right) / len(left | right)
+
+
 MIN_MISCONCEPTIONS, MAX_MISCONCEPTIONS = 3, 9
 
 #: Every misconception in the reference names at least one of these in its
@@ -199,8 +259,31 @@ Rules, in order of importance:
    becomes the error code, so it must be unique in this list and must describe
    the error rather than the topic.
 
-Give between {MIN_ERRORS} and {MAX_ERRORS} errors, covering different skills
-rather than several shades of one mistake.
+HOW MANY. Write {TYPICAL_ERRORS} for a topic. The approved content has 17
+across three topics. Only go above that, up to {MAX_ERRORS}, if a topic
+genuinely has more distinct failures, and never below {MIN_ERRORS}.
+
+8. ONE ERROR PER SKILL, unless a skill genuinely has two mistakes that look
+   DIFFERENT ON THE PAGE. These are the same error written twice, and each
+   pair below cost a slot in an earlier run:
+
+     "a2 interpreted as 2a" and "a3 interpreted as 3a"
+       one error about exponents read as coefficients, not two
+
+     "3(x+2) read as 3x+2" and "bracketed sum rewritten without brackets"
+       one error about dropping brackets, described twice
+
+     "reads x as a multiplication sign" and "writes a multiplication sign
+     where x was meant"
+       one confusion, stated in both directions
+
+   If your second error for a skill would be caught by the same check as the
+   first, it is the same error.
+
+9. DO NOT REPEAT A PREREQUISITE'S ERROR. Each skill below lists what it
+   builds on. A skill's errors are the ones specific to IT. Mistakes that
+   belong to a skill it depends on are already catalogued there, and a
+   student making them fails the earlier skill first.
 """
 
 
@@ -215,10 +298,16 @@ def build_error_prompt(
         "",
         "Micro-skills, numbered. Use these positions for micro_skill_position:",
     ]
-    lines += [
-        f"  {position}. {row.skill_name} -- {row.description}"
-        for position, row in enumerate(micro_skills, start=1)
-    ]
+    # "builds on" is shown so rule 9 has something to work with. Without it
+    # the instruction not to repeat a prerequisite's error is unfollowable:
+    # the model cannot avoid a dependency it was never told about.
+    names = {row.micro_skill_id: row.skill_name for row in micro_skills}
+    for position, row in enumerate(micro_skills, start=1):
+        line = f"  {position}. {row.skill_name} -- {row.description}"
+        builds_on = names.get(row.prerequisite_micro_skill_id or "")
+        if builds_on:
+            line += f"  (builds on: {builds_on})"
+        lines.append(line)
 
     if brief.misconceptions_to_prevent:
         lines += [
@@ -382,6 +471,33 @@ def _check_errors(
                  f"no failure mode cannot be diagnosed, so it gets no hint or "
                  f"scaffold either")
 
+    # -- the same error written twice ----------------------------------
+    #
+    # Rule 8 asks for one error per skill unless the second looks different
+    # on the page. This checks the answer rather than trusting it. Two errors
+    # on one skill whose descriptions share most of their content words are
+    # the same error described twice, which is where a topic's count drifted
+    # from 6 to 9 on the run of 9 September.
+    #
+    # Reported, not dropped. Choosing which of a near-identical pair to keep
+    # needs a reading of both, and a wrong choice loses the better-written one.
+    by_position: dict[int, list[dict]] = {}
+    for entry in usable:
+        position = entry.get("micro_skill_position")
+        if isinstance(position, int):
+            by_position.setdefault(position, []).append(entry)
+
+    for position, group in sorted(by_position.items()):
+        for first, second in combinations(group, 2):
+            overlap = _description_overlap(first.get("description"),
+                                           second.get("description"))
+            if overlap >= DUPLICATE_OVERLAP:
+                warn(f"error_types[{position}]",
+                     f"{first.get('descriptor')!r} and "
+                     f"{second.get('descriptor')!r} describe the same mistake "
+                     f"in {overlap:.0%} of the same words. One error per "
+                     f"skill unless the two look different on the page")
+
     return issues, bad
 
 
@@ -509,6 +625,16 @@ Rules, in order of importance:
    misconceptions than errors. Where two errors come from the same belief,
    write one misconception and name both codes in the rule rather than
    writing near-duplicate entries.
+
+   BUT EACH ERROR CODE BELONGS TO EXACTLY ONE MISCONCEPTION. The arrow goes
+   one way: a belief may name several codes, a code may be named by only one
+   belief. If two of your rules both trigger on ERR-T01-RULE-AS-ONE-CASE, the
+   tutor sees that error and cannot tell which belief to re-teach, so it
+   picks one and may teach against something the student does not think.
+
+   If two beliefs really both produce one error, they are probably the same
+   belief described twice. Merge them, or work out which one the error
+   actually shows and give the other its own code.
 
 4. description is one sentence, about the student's understanding, phrased so
    a tutor could read it and know what to re-teach.

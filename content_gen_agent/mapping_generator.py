@@ -130,6 +130,30 @@ def build_misconception_errors(
             f"resolve to one, so the tutor has something to re-teach",
         ))
 
+    # The arrow goes one way. A belief may cause several errors; an error may
+    # be explained by only one belief.
+    #
+    # Manjusha's review of 13 September: "errors map to more than one
+    # misconception, that will create confusion". Three of 28 did. The tutor
+    # detects the error, finds two candidate beliefs, and picks one -- so it
+    # may teach against something the student does not actually think.
+    #
+    # Reported rather than resolved. Deciding which of two beliefs an error
+    # really shows is a reading of both, and dropping the wrong row leaves a
+    # misconception that can never fire.
+    beliefs_per_error: dict[str, set[str]] = {}
+    for row in rows:
+        beliefs_per_error.setdefault(row.error_code, set()).add(row.misconception_id)
+
+    for code, beliefs in sorted(beliefs_per_error.items()):
+        if len(beliefs) > 1:
+            issues.append(ValidationIssue(
+                Severity.WARNING, name, code,
+                f"{code} is named by {len(beliefs)} misconceptions "
+                f"({', '.join(sorted(beliefs))}); a tutor seeing this error "
+                f"cannot tell which belief to re-teach",
+            ))
+
     return rows, issues
 
 
