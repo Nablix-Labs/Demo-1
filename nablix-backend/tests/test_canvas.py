@@ -981,9 +981,8 @@ def test_canvas_submit_stops_before_tutor_below_legacy_reliability_threshold(
         "clearly, then press Check again."
     )
     assert body["next_expected_input"] == "WRITE"
-    assert body["canvas_draw"][0]["actionId"].endswith(":write-request")
-    assert body["tutor_canvas_actions"][0]["type"] == "FOCUS"
-    assert body["tutor_canvas_actions"][0]["target_kind"] == "WRITE_AREA"
+    assert body["canvas_draw"] == []
+    assert body["tutor_canvas_actions"] == []
     assert body["localization_status"] == "uncertain"
     stored_session = client.get(f"/session/{session_id}", params={"student_id": "ST012"}).json()
     assert stored_session["attempt_count"] == 0
@@ -1129,8 +1128,8 @@ def test_canvas_submit_asks_for_clearer_writing_when_ocr_reads_nothing(
     assert body["status"] == "CLARIFICATION_REQUIRED"
     assert body["message"] == "Please write out that step so I can check it."
     assert body["next_expected_input"] == "WRITE"
-    assert body["canvas_draw"][0]["actionId"].endswith(":write-request")
-    assert body["tutor_canvas_actions"][0]["target_kind"] == "WRITE_AREA"
+    assert body["canvas_draw"] == []
+    assert body["tutor_canvas_actions"] == []
     stored = client.get(f"/session/{session_id}", params={"student_id": "ST017"}).json()
     assert stored["attempt_count"] == 0
     assert stored["canvas_submissions"][0]["tutor"]["evaluation"] == "UNCLEAR"
@@ -2112,13 +2111,13 @@ def test_a_failed_checkpoint_with_no_repair_target_is_refused_not_guessed(
     assert "GUIDED_QUESTION_SET_REQUESTED" not in [event.event_type for event in events]
 
 
-def test_unified_voice_canvas_validation_advances_for_complete_correct_work() -> None:
+def test_unified_voice_canvas_validation_advances_when_learner_says_work_is_written() -> None:
     session_id = _start_session("ST019")
     payload = _unified_voice_payload(
         session_id,
         "ST019",
         "TURN-UNIFIED-CORRECT",
-        "Is this right?",
+        "I have written it on the canvas.",
     )
 
     response = client.post("/interaction", json=payload)
