@@ -14,7 +14,14 @@ from app.ai_engine.classifier_config import load_classifier_rules
 from app.models.adapters import TutorResult
 from app.models.guided_learning import GuidedRescue
 from app.models.student_model_session import SessionOpenedEvent
-from app.services import interaction_service, session_service
+from app.services import (
+    interaction_response,
+    interaction_service,
+    rescue_presentation,
+    session_service,
+    student_model_session,
+    student_turn,
+)
 
 
 client = TestClient(app, headers={"Authorization": "Bearer test-token"})
@@ -38,9 +45,9 @@ def test_guided_partial_answers_do_not_advance_wrong_support() -> None:
         update={"intent": "EXPRESSING_CONFUSION"}
     )
 
-    assert not interaction_service._is_support_failure(wrong_partial)
-    assert not interaction_service._is_support_failure(defence_partial)
-    assert not interaction_service._is_support_failure(stuck)
+    assert not student_turn.is_support_failure(wrong_partial)
+    assert not student_turn.is_support_failure(defence_partial)
+    assert not student_turn.is_support_failure(stuck)
 
 
 def test_unresolved_scaffold_turns_include_wrong_answers_and_confusion() -> None:
@@ -58,9 +65,9 @@ def test_unresolved_scaffold_turns_include_wrong_answers_and_confusion() -> None
     )
     clarification = confusion.model_copy(update={"intent": "ASKING_QUESTION"})
 
-    assert interaction_service._is_unresolved_scaffold_turn(wrong)
-    assert interaction_service._is_unresolved_scaffold_turn(confusion)
-    assert not interaction_service._is_unresolved_scaffold_turn(clarification)
+    assert student_turn.is_unresolved_scaffold_turn(wrong)
+    assert student_turn.is_unresolved_scaffold_turn(confusion)
+    assert not student_turn.is_unresolved_scaffold_turn(clarification)
 
 
 def test_unresolved_partial_does_not_emit_an_incorrect_attempt() -> None:
@@ -73,8 +80,8 @@ def test_unresolved_partial_does_not_emit_an_incorrect_attempt() -> None:
     )
     defence = unresolved.model_copy(update={"answer_value_confirmed": True})
 
-    assert interaction_service._guided_attempt_event_type(unresolved, rules) is None
-    assert interaction_service._guided_attempt_event_type(defence, rules) is None
+    assert student_turn.guided_attempt_event_type(unresolved, rules) is None
+    assert student_turn.guided_attempt_event_type(defence, rules) is None
 
 
 def test_legacy_error_code_requires_an_authored_response_match() -> None:
@@ -91,10 +98,10 @@ def test_legacy_error_code_requires_an_authored_response_match() -> None:
         error_type="ERR-T02-SUBTRACTION-MISAPPLIED",
     )
 
-    assert interaction_service._validated_error_code(session, "x = 4", tutor) == (
+    assert student_turn.validated_error_code(session, "x = 4", tutor) == (
         "ERR-T02-SUBTRACTION-MISAPPLIED"
     )
-    assert interaction_service._validated_error_code(session, "x = 3", tutor) is None
+    assert student_turn.validated_error_code(session, "x = 3", tutor) is None
 
 
 def test_choice_error_code_matches_the_authoritative_option_text() -> None:
@@ -116,7 +123,7 @@ def test_choice_error_code_matches_the_authoritative_option_text() -> None:
         question_id=question.question_id,
     )
 
-    assert interaction_service._db_error_code(
+    assert student_turn.db_error_code(
         session, "Selected B: p decreases by 2"
     ) == "ERR-T02-OPERATION-MIXED-UP"
 
@@ -176,7 +183,7 @@ def test_missing_support_content_is_not_reported_as_active_support() -> None:
     event = session_service.StudentModelSessionEventResponse.model_validate(response)
     session = session_service.SessionRecord.model_construct(student_model_event=event)
 
-    active_support_level, _ = interaction_service._guided_support_levels(session)
+    active_support_level, _ = interaction_response.guided_support_levels(session)
 
     assert active_support_level == "NONE"
 
@@ -227,7 +234,7 @@ def test_schema_visual_cue_preserves_the_authored_identity_and_asset() -> None:
         ],
     }
 
-    visual_cue = interaction_service._schema_visual_cue(event)
+    visual_cue = student_model_session.schema_visual_cue(event)
 
     assert visual_cue is not None
     assert visual_cue.cue_id == "VC-T01-GENERAL-VS-PARTICULAR"
@@ -247,7 +254,7 @@ def test_empty_rescue_keeps_the_tutor_response_available(
         }
     )
 
-    assert interaction_service._guided_rescue_message(rescue) is None
+    assert rescue_presentation.guided_rescue_message(rescue) is None
 
 
 def test_scaffold_response_matching_accepts_safe_variants() -> None:
@@ -275,7 +282,7 @@ def test_scaffold_response_matching_accepts_safe_variants() -> None:
     ]
 
     for student_message, expected_response in accepted:
-        assert interaction_service._scaffold_response_is_correct(
+        assert rescue_presentation.scaffold_response_is_correct(
             student_message,
             expected_response,
             "INCORRECT",
@@ -283,7 +290,7 @@ def test_scaffold_response_matching_accepts_safe_variants() -> None:
             rules,
         )
     for student_message, expected_response in rejected:
-        assert not interaction_service._scaffold_response_is_correct(
+        assert not rescue_presentation.scaffold_response_is_correct(
             student_message,
             expected_response,
             "PARTIALLY_CORRECT",
@@ -292,7 +299,7 @@ def test_scaffold_response_matching_accepts_safe_variants() -> None:
         )
 
     for student_message in ["the starting variable", "n"]:
-        assert interaction_service._scaffold_response_is_correct(
+        assert rescue_presentation.scaffold_response_is_correct(
             student_message,
             "Starting number",
             "INCORRECT",

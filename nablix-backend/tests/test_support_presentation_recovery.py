@@ -35,7 +35,7 @@ from app.models.student_model_session import (
     StudentModelSessionEvent,
     StudentModelSessionEventResponse,
 )
-from app.services import interaction_service, session_service
+from app.services import interaction_service, journey_lifecycle, rescue_presentation, session_service, student_turn
 from app.services.rescue_presentation import active_rescue_from
 from tests.test_session_events import _event_response, _session_opened_response
 
@@ -81,6 +81,8 @@ def sent_events(monkeypatch: pytest.MonkeyPatch) -> list[StudentModelSessionEven
 
     monkeypatch.setattr(provider, "get_settings", lambda: settings)
     monkeypatch.setattr(session_service, "get_settings", lambda: settings)
+    monkeypatch.setattr(student_turn, "get_settings", lambda: settings)
+    monkeypatch.setattr(rescue_presentation, "get_settings", lambda: settings)
     monkeypatch.setattr(interaction_service, "get_settings", lambda: settings)
     monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", send_session_event)
     return events
@@ -128,7 +130,7 @@ def _break_presentation_once(monkeypatch: pytest.MonkeyPatch) -> None:
             raise HTTPException(status_code=409, detail="Rescue content is empty.")
         return active_rescue_from(question_id, rescue, request_id)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(interaction_service, "active_rescue_from", flaky)
+    monkeypatch.setattr(rescue_presentation, "active_rescue_from", flaky)
 
 
 def test_a_failed_presentation_is_recovered_by_replaying_the_same_event(
@@ -214,7 +216,7 @@ def test_a_restore_keeps_the_rung_student_model_re_serves(
 
     recovering = session.model_copy(update={"journey_recovery_required": True})
     session_service._sessions[session_id] = recovering
-    restored = asyncio.run(interaction_service._initialize_restored_schema_phase(
+    restored = asyncio.run(journey_lifecycle.initialize_restored_schema_phase(
         recovering, _Restoring(), "tok", for_read=True))
 
     assert restored.active_guided_rescue is not None

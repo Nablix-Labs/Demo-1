@@ -25,7 +25,7 @@ from app.models.student_model_session import (
     StudentModelSessionEvent,
     StudentModelSessionEventResponse,
 )
-from app.services import interaction_service, session_service
+from app.services import interaction_response, interaction_service, session_service
 from tests.test_session_events import _event_response, _session_opened_response
 
 
@@ -436,7 +436,7 @@ def test_scaffold_panel_is_never_opened_without_a_step_to_show() -> None:
         }
     )
 
-    response = interaction_service._response_from(
+    response = interaction_response.project_interaction_response(
         session_id=session_id,
         student_id=student_id,
         turn_id="TURN-SCAFFOLD-1",

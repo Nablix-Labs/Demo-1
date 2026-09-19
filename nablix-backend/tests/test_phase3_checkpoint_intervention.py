@@ -28,7 +28,7 @@ from app.models.student_model_session import (
     StudentModelSessionEvent,
     StudentModelSessionEventResponse,
 )
-from app.services import interaction_service, session_service, session_store
+from app.services import interaction_response, interaction_service, session_service, session_store, student_turn
 from tests.test_session_events import _session_opened_response
 
 
@@ -270,7 +270,7 @@ def test_terminal_state_survives_silent_response_and_store_restore(monkeypatch: 
 
     # Phase 3 normally strips the event; a halted topic has no question to
     # protect, so the popup must survive that stripping.
-    response = interaction_service._response_from(
+    response = interaction_response.project_interaction_response(
         session_id=session.session_id, student_id=session.student_id, turn_id="T1",
         interaction_type="ANSWER_SUBMISSION", nudge_id=None, session=session,
         message="Paused", message_voice="", visual_cue=None, scaffold_steps=[],
@@ -306,7 +306,7 @@ def test_halt_blocks_learning_before_external_work(
     async def forbidden(*args: object, **kwargs: object) -> None:
         pytest.fail("A halted learning request reached an external service")
     monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", forbidden)
-    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", forbidden)
+    monkeypatch.setattr(student_turn, "run_tutor_pipeline", forbidden)
     payload = {"student_id": session.student_id, **body}
     if "{id}" not in path:
         payload["session_id"] = session.session_id
@@ -504,7 +504,7 @@ def test_content_gap_visible_in_session_and_silent_response(monkeypatch: pytest.
     event = _event()
     event = event.model_copy(update={"routing": event.routing.model_copy(update={"content_gap_detected": True})})
     session = _start(monkeypatch, event)
-    response = interaction_service._response_from(
+    response = interaction_response.project_interaction_response(
         session_id=session.session_id, student_id=session.student_id, turn_id="GAP1",
         interaction_type="ANSWER_SUBMISSION", nudge_id=None, session=session,
         message="Content unavailable", message_voice="", visual_cue=None, scaffold_steps=[],

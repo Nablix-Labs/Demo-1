@@ -21,7 +21,7 @@ from fastapi import HTTPException
 from app.core.logger import logger as app_logger
 from app.models.session import SessionRecord
 from app.models.student_model_session import StudentModelSessionEventResponse
-from app.services import interaction_service, session_service
+from app.services import interaction_service, journey_lifecycle, session_service
 from tests.test_session_events import _session_opened_response
 
 
@@ -145,7 +145,7 @@ def _restored_phase3_session() -> SessionRecord:
 
 def _restore(session: SessionRecord, adapter: _CountingStudentModel) -> None:
     asyncio.run(
-        interaction_service._initialize_restored_schema_phase(session, adapter, "TOKEN")
+        journey_lifecycle.initialize_restored_schema_phase(session, adapter, "TOKEN")
     )
 
 
@@ -153,7 +153,7 @@ def _restore_for_read(
     session: SessionRecord, adapter: _CountingStudentModel
 ) -> SessionRecord:
     return asyncio.run(
-        interaction_service._initialize_restored_schema_phase(
+        journey_lifecycle.initialize_restored_schema_phase(
             session, adapter, "TOKEN", for_read=True
         )
     )

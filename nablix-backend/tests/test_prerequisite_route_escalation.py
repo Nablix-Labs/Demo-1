@@ -29,7 +29,7 @@ from app.models.student_model_session import (
     StudentModelSessionEvent,
     StudentModelSessionEventResponse,
 )
-from app.services import interaction_service, session_service
+from app.services import interaction_service, session_service, student_turn
 from tests.test_canvas import (
     VALID_SNAPSHOT_DATA_URL,
     client,
@@ -272,7 +272,7 @@ def _exhausted_checkpoint(
         "fetch_prerequisite_route",
         fetch_prerequisite_route,
     )
-    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", incorrect_pipeline)
+    monkeypatch.setattr(student_turn, "run_tutor_pipeline", incorrect_pipeline)
     return sent
 
 

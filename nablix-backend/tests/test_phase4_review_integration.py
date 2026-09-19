@@ -36,7 +36,7 @@ from app.models.student_model_session import (
     StudentModelSessionEvent,
     StudentModelSessionEventResponse,
 )
-from app.services import interaction_service, session_service
+from app.services import interaction_service, session_service, student_turn
 from tests.test_session_events import _session_opened_response
 
 JWT_SECRET = "shared-with-student-model-at-least-32-bytes"
@@ -282,7 +282,7 @@ def student_model_service(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
     monkeypatch.setattr(
         StudentModelServiceAdapter, "send_session_event", send_session_event
     )
-    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", wrong_pipeline)
+    monkeypatch.setattr(student_turn, "run_tutor_pipeline", wrong_pipeline)
     monkeypatch.setattr(
         session_service, "generate_phase4_review", lambda request: _review()
     )

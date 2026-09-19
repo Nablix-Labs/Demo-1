@@ -34,10 +34,10 @@ from app.models.guided_learning import (
 )
 from app.models.session import SessionRecord
 from app.models.student_model_session import AnswerSpec
-from app.services import interaction_service
-from app.services.rescue_presentation import active_rescue_from
-from app.services.interaction_service import (
-    _guided_attempt_event_type, _is_support_failure, _is_unresolved_scaffold_turn,
+from app.services import rescue_presentation
+from app.services.rescue_presentation import active_rescue_from, presented_rescue
+from app.services.student_turn import (
+    guided_attempt_event_type, is_support_failure, is_unresolved_scaffold_turn,
 )
 
 
@@ -82,9 +82,9 @@ def test_non_attempt_preserves_prior_evidence_without_support(kind: str) -> None
         contribution=result.contribution, guided_student_state=result.student_state,
         evaluation="NO_ATTEMPT", intent="EXPRESSING_CONFUSION",
     )
-    assert _guided_attempt_event_type(tutor, rules) is None
-    assert not _is_support_failure(tutor)
-    assert not _is_unresolved_scaffold_turn(tutor)
+    assert guided_attempt_event_type(tutor, rules) is None
+    assert not is_support_failure(tutor)
+    assert not is_unresolved_scaffold_turn(tutor)
     with pytest.raises(AdapterError, match="non-attempt"):
         validate_guided_evaluation(candidate.model_copy(update={
             "newly_confirmed_concept_ids": ["ANSWER_EXPLANATION"],
@@ -110,9 +110,9 @@ def test_partial_evidence_only_advances_support_when_it_contains_an_error(
         contribution=contribution, guided_student_state="PARTIAL",
         evaluation="PARTIALLY_CORRECT", intent="SUBMITTING_ANSWER",
     )
-    assert _guided_attempt_event_type(tutor, load_classifier_rules()) == expected_event
-    assert _is_support_failure(tutor) is incorrect
-    assert _is_unresolved_scaffold_turn(tutor) is incorrect
+    assert guided_attempt_event_type(tutor, load_classifier_rules()) == expected_event
+    assert is_support_failure(tutor) is incorrect
+    assert is_unresolved_scaffold_turn(tutor) is incorrect
 
 
 def test_incorrect_expression_keeps_valid_evidence_and_moves_to_an_unresolved_concept() -> None:
@@ -190,8 +190,8 @@ def test_generated_walkthrough_is_persistable_and_rejects_early_reveal(monkeypat
             assert system_prompt == rules.guided_learning.response_aware_worked_prompt
             return presentation
 
-    monkeypatch.setattr(interaction_service, "build_openai_ai_engine_client", lambda settings: PresentationClient())
-    updated = interaction_service._presented_rescue(
+    monkeypatch.setattr(rescue_presentation, "build_openai_ai_engine_client", lambda settings: PresentationClient())
+    updated = presented_rescue(
         session, "Q-T01-001", rescue, "n + 5", "TEST-WORKED", rules,
     )
     assert updated is not None
@@ -203,7 +203,7 @@ def test_generated_walkthrough_is_persistable_and_rejects_early_reveal(monkeypat
         {"expression": "n + 5", "annotation": "Five is added to the starting value."},
     ]})
     with pytest.raises(HTTPException, match="before authorisation"):
-        interaction_service._presented_rescue(
+        presented_rescue(
             session, "Q-T01-001", rescue, "n + 5", "TEST-WORKED", rules,
         )
 

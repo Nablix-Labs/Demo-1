@@ -3,7 +3,7 @@ from typing import cast
 
 from app.models.adapters import TutorResult
 from app.models.session import SessionRecord
-from app.services.interaction_service import _require_authored_canvas_confirmation
+from app.services.student_turn import require_authored_canvas_confirmation
 
 
 def _confirmed_tutor() -> TutorResult:
@@ -31,7 +31,7 @@ def test_authored_canvas_requirement_preserves_tutor_reply_and_stops_progression
         ),
     )
 
-    result = _require_authored_canvas_confirmation(
+    result = require_authored_canvas_confirmation(
         session,
         _confirmed_tutor(),
         False,
@@ -48,14 +48,14 @@ def test_question_without_authored_canvas_requirement_is_unchanged() -> None:
     session = cast(SessionRecord, SimpleNamespace(canvas_submission_required=False))
     tutor = _confirmed_tutor()
 
-    assert _require_authored_canvas_confirmation(session, tutor, False) is tutor
+    assert require_authored_canvas_confirmation(session, tutor, False) is tutor
 
 
 def test_complete_canvas_submission_allows_the_tutor_to_progress() -> None:
     session = cast(SessionRecord, SimpleNamespace(canvas_submission_required=True))
     tutor = _confirmed_tutor()
 
-    assert _require_authored_canvas_confirmation(session, tutor, True) is tutor
+    assert require_authored_canvas_confirmation(session, tutor, True) is tutor
 
 
 def test_pending_canvas_keeps_the_tutor_reply_without_repeating_the_instruction() -> None:
@@ -68,7 +68,7 @@ def test_pending_canvas_keeps_the_tutor_reply_without_repeating_the_instruction(
         ),
     )
 
-    result = _require_authored_canvas_confirmation(session, _confirmed_tutor(), False)
+    result = require_authored_canvas_confirmation(session, _confirmed_tutor(), False)
 
     assert result.tutor_message == "You have described the rule clearly."
     assert result.write_instruction == "You have the rule. Now write it on the canvas, then press Check."

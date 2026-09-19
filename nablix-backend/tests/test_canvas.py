@@ -34,7 +34,8 @@ from app.models.adapters import (
 )
 from app.models.canvas import CanvasSubmitRequest
 from app.models.session import SessionRecord
-from app.services import canvas_evidence, canvas_service, interaction_service, session_service
+from app.services import canvas_evidence, canvas_service, interaction_service, session_service, student_turn
+from app.services.student_turn import StudentTurnResult
 from app.services.snapshot_store import get_snapshot
 from app.models.student_model_session import (
     GuidedAttemptEvent,
@@ -73,7 +74,7 @@ def test_canvas_completion_accepts_a_detected_equation_without_final_answer() ->
         needs_clarification=False,
     )
 
-    assert interaction_service._is_complete_correct_canvas(ocr, "n + 5")
+    assert canvas_evidence.is_complete_correct_canvas(ocr, "n + 5")
 
 
 def test_canvas_completion_accepts_correct_expression_beside_old_work() -> None:
@@ -85,7 +86,7 @@ def test_canvas_completion_accepts_correct_expression_beside_old_work() -> None:
         needs_clarification=False,
     )
 
-    assert interaction_service._is_complete_correct_canvas(ocr, "n + 5")
+    assert canvas_evidence.is_complete_correct_canvas(ocr, "n + 5")
 
 
 def test_canvas_completion_rejects_ambiguous_expression() -> None:
@@ -96,7 +97,7 @@ def test_canvas_completion_rejects_ambiguous_expression() -> None:
         needs_clarification=True,
     )
 
-    assert not interaction_service._is_complete_correct_canvas(ocr, "n + 5")
+    assert not canvas_evidence.is_complete_correct_canvas(ocr, "n + 5")
 
 
 def test_pending_canvas_submission_returns_direct_prompt_for_empty_submit(
@@ -106,7 +107,7 @@ def test_pending_canvas_submission_returns_direct_prompt_for_empty_submit(
         raise AssertionError(f"canvas-write gate called tutor for {context.message!r}")
 
     monkeypatch.setattr(
-        interaction_service,
+        student_turn,
         "run_tutor_pipeline",
         unexpected_tutor_call,
     )
@@ -1087,7 +1088,7 @@ def test_canvas_submit_stops_before_tutor_below_legacy_reliability_threshold(
     monkeypatch.setattr(MockVisionOCRAdapter, "recognize", low_confidence_ocr)
     monkeypatch.setattr(
         canvas_service,
-        "process_answer_with_session_event",
+        "process_student_turn",
         unexpected_tutor_call,
     )
     session_id = _start_session("ST012")
@@ -1177,13 +1178,13 @@ def test_response_aware_canvas_sends_ambiguous_ocr_to_tutor(
             question_completed=False,
             requires_written_math_evidence=True,
         )
-        return student, tutor, None, None, session
+        return StudentTurnResult(student, tutor, None, None, session)
 
     monkeypatch.setattr(MockVisionOCRAdapter, "recognize", ambiguous_ocr)
     monkeypatch.setattr(canvas_service, "load_classifier_rules", lambda: model_first_rules)
     monkeypatch.setattr(
         canvas_service,
-        "process_answer_with_session_event",
+        "process_student_turn",
         response_aware_tutor,
     )
     session_id = _start_session("ST412")
@@ -1237,7 +1238,7 @@ def test_canvas_submit_asks_for_clearer_writing_when_ocr_reads_nothing(
     monkeypatch.setattr(MockVisionOCRAdapter, "recognize", empty_ocr)
     monkeypatch.setattr(
         canvas_service,
-        "process_answer_with_session_event",
+        "process_student_turn",
         unexpected_tutor_call,
     )
     session_id = _start_session("ST017")
@@ -1438,7 +1439,7 @@ def test_canvas_correct_same_phase_routes_next_question(
         )
         return student, tutor
 
-    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", fake_pipeline)
+    monkeypatch.setattr(student_turn, "run_tutor_pipeline", fake_pipeline)
     session_id = _start_session("ST012")
     before = session_service._sessions[session_id]
     student_model_events: list[str] = []
@@ -1643,7 +1644,7 @@ def test_canvas_final_independent_attempt_is_recorded_before_review(
         "send_session_event",
         send_session_event,
     )
-    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", correct_pipeline)
+    monkeypatch.setattr(student_turn, "run_tutor_pipeline", correct_pipeline)
     session_id = _start_session("ST024")
     before = session_service._get_owned_session(session_id, "ST024")
 
@@ -1758,7 +1759,7 @@ def _review_transition_session(monkeypatch: pytest.MonkeyPatch) -> str:
         "send_session_event",
         send_session_event,
     )
-    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", correct_pipeline)
+    monkeypatch.setattr(student_turn, "run_tutor_pipeline", correct_pipeline)
     return _start_session("ST042")
 
 
@@ -1832,7 +1833,7 @@ def _independent_practice_session(monkeypatch: pytest.MonkeyPatch) -> str:
         "send_session_event",
         send_session_event,
     )
-    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", correct_pipeline)
+    monkeypatch.setattr(student_turn, "run_tutor_pipeline", correct_pipeline)
     return _start_session("ST031")
 
 
@@ -2019,7 +2020,7 @@ def test_tc21_canvas_failure_requests_fresh_content_and_keeps_gap_neutral(
         )
 
     monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", send_session_event)
-    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", incorrect_pipeline)
+    monkeypatch.setattr(student_turn, "run_tutor_pipeline", incorrect_pipeline)
     session_id = _start_session("ST025")
     response = client.post(
         "/canvas/submit",
@@ -2132,7 +2133,7 @@ def test_tc20_failed_checkpoint_repairs_the_same_skill_not_a_prerequisite(
         )
 
     monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", send_session_event)
-    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", incorrect_pipeline)
+    monkeypatch.setattr(student_turn, "run_tutor_pipeline", incorrect_pipeline)
     session_id = _start_session("ST026")
     response = client.post(
         "/canvas/submit",
@@ -2223,7 +2224,7 @@ def test_a_failed_checkpoint_with_no_repair_target_is_refused_not_guessed(
         )
 
     monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", send_session_event)
-    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", incorrect_pipeline)
+    monkeypatch.setattr(student_turn, "run_tutor_pipeline", incorrect_pipeline)
     session_id = _start_session("ST027")
     response = client.post(
         "/canvas/submit",
@@ -2542,7 +2543,12 @@ def test_unified_voice_canvas_keeps_mathml_in_tutor_context(
         "get_adapters",
         lambda: replace(adapters, vision=MathMLVision()),
     )
-    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", capture_pipeline)
+    monkeypatch.setattr(
+        student_turn,
+        "get_adapters",
+        lambda: replace(adapters, vision=MathMLVision()),
+    )
+    monkeypatch.setattr(student_turn, "run_tutor_pipeline", capture_pipeline)
     session_id = _start_session("ST024")
     request = _unified_voice_payload(
         session_id,
@@ -3345,7 +3351,7 @@ def test_a_canvas_reply_after_a_typed_turn_carries_its_own_identity(
         )
         return student, tutor
 
-    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", pipeline)
+    monkeypatch.setattr(student_turn, "run_tutor_pipeline", pipeline)
     session_id = _start_session("ST410")
     before = session_service._get_owned_session(session_id, "ST410")
 
@@ -3457,7 +3463,7 @@ def test_a_correct_answer_is_not_sent_as_a_retry_for_an_unrelated_skill(
         )
 
     monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", send_session_event)
-    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", correct_pipeline)
+    monkeypatch.setattr(student_turn, "run_tutor_pipeline", correct_pipeline)
     session_id = _start_session("ST010")
 
     response = client.post(
@@ -3509,7 +3515,7 @@ def test_a_correct_answer_on_the_retried_skill_is_still_sent_as_a_retry(
         )
 
     monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", send_session_event)
-    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", correct_pipeline)
+    monkeypatch.setattr(student_turn, "run_tutor_pipeline", correct_pipeline)
     session_id = _start_session("ST011")
 
     response = client.post(

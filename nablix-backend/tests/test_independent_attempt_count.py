@@ -27,7 +27,7 @@ from app.models.student_model_session import (
     StudentModelSessionEvent,
     StudentModelSessionEventResponse,
 )
-from app.services import interaction_service, session_service
+from app.services import session_service, student_turn
 from tests.test_session_events import _session_opened_response
 
 
@@ -93,7 +93,7 @@ def _pipeline_returning(tutor: TutorResult, monkeypatch: pytest.MonkeyPatch) -> 
         )
         return student, tutor
 
-    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", pipeline)
+    monkeypatch.setattr(student_turn, "run_tutor_pipeline", pipeline)
 
 
 def _start(student_id: str) -> str:

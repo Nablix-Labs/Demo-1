@@ -28,7 +28,7 @@ from app.adapters.student_model import StudentModelServiceAdapter
 from app.core.config import Settings
 from app.main import app
 from app.models.student_model_session import StudentModelSessionEventResponse
-from app.services import interaction_service, rescue_presentation, session_service
+from app.services import interaction_service, rescue_presentation, session_service, student_turn
 from app.services.canvas_annotations import plan_rescue_canvas_actions
 from tests.test_canvas import _session_opened_response
 from tests.test_session_events import _event_response
@@ -509,6 +509,7 @@ def test_stepwise_interaction_hides_the_full_rescue_payload(monkeypatch) -> None
         StudentModelServiceAdapter, "send_session_event", _tutor_solved_rescue_event
     )
     monkeypatch.setattr(interaction_service, "load_classifier_rules", _stepwise_rules)
+    monkeypatch.setattr(student_turn, "load_classifier_rules", _stepwise_rules)
     started = client.post(
         "/session/start",
         json={
@@ -597,14 +598,14 @@ def test_reveal_is_judged_once_on_the_finished_steps() -> None:
     solved = _tutor_solved_active()
 
     # The canonical answer on the final step is the whole point of the rung.
-    interaction_service._validate_rescue_reveal(solved, "x = 5", rules)
+    rescue_presentation.validate_rescue_reveal(solved, "x = 5", rules)
 
     early = solved.model_copy(update={"steps": ["The answer is x = 5.", "x = 5"]})
     with pytest.raises(HTTPException, match="before authorisation"):
-        interaction_service._validate_rescue_reveal(early, "x = 5", rules)
+        rescue_presentation.validate_rescue_reveal(early, "x = 5", rules)
 
     # A parallel example works a DIFFERENT problem, so the active answer may not
     # appear on any step, final one included.
     parallel = _parallel_active().model_copy(update={"steps": ["Solve y + 3 = 8.", "x = 5"]})
     with pytest.raises(HTTPException, match="before authorisation"):
-        interaction_service._validate_rescue_reveal(parallel, "x = 5", rules)
+        rescue_presentation.validate_rescue_reveal(parallel, "x = 5", rules)

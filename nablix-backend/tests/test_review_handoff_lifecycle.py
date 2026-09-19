@@ -29,7 +29,7 @@ from app.models.student_model_session import (
     StudentModelSessionEvent,
     StudentModelSessionEventResponse,
 )
-from app.services import canvas_service, interaction_service, session_service
+from app.services import canvas_service, interaction_service, session_service, student_turn
 from app.services.session_store import restore_review_materialization_state
 from tests.test_phase4_review_integration import _review
 from tests.test_session_events import _session_opened_response
@@ -214,7 +214,7 @@ def harness(monkeypatch: pytest.MonkeyPatch) -> _Harness:
         StudentModelServiceAdapter, "send_session_event", send_session_event
     )
     monkeypatch.setattr(canvas_service, "collect_canvas_evidence", counted_evidence)
-    monkeypatch.setattr(interaction_service, "run_tutor_pipeline", correct_pipeline)
+    monkeypatch.setattr(student_turn, "run_tutor_pipeline", correct_pipeline)
     monkeypatch.setattr(session_service, "generate_phase4_review", generate)
     return seen
 

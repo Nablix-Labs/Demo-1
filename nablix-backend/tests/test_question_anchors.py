@@ -91,7 +91,7 @@ def test_guided_turn_returns_addressable_tokens_without_emphasis(monkeypatch) ->
     """The response exposes tokens for later actions without pre-confirmation marks."""
 
     from app.models.guided_learning import GuidedTeachingState
-    from app.services import interaction_service, session_service
+    from app.services import interaction_response, session_service
 
     question = _NAMES_THE_VARIABLE
     session = session_service.SessionRecord.model_construct(
@@ -110,11 +110,8 @@ def test_guided_turn_returns_addressable_tokens_without_emphasis(monkeypatch) ->
             active_step_id="CHANGING_VALUE",
         ),
     )
-    monkeypatch.setattr(
-        interaction_service, "_active_answer_spec", lambda _session: _answer_spec()
-    )
 
-    anchors = interaction_service._question_anchors(session)
+    anchors = interaction_response.question_anchors(session)
 
     variable = next(anchor for anchor in anchors if anchor.text == "n")
 
