@@ -62,6 +62,10 @@ function stopSpeaking() {
 }
 
 /** Human labels for the engine's five review categories, in delivery order. */
+/** How often, and how many times, to re-ask for a review still being built. */
+const REVIEW_RETRY_MS = 5_000;
+const REVIEW_AUTO_RETRIES = 24; // two minutes
+
 export default function ReviewPage() {
   const [i, setI] = useState(0);
   const [showMarks, setShowMarks] = useState(false);
@@ -125,6 +129,21 @@ export default function ReviewPage() {
       setResolved(true);
     }
   }, []);
+
+  // A blocked review is usually still being BUILT, not failed: the backend
+  // answers 503 PHASE4_REVIEW_UNAVAILABLE while generation runs, and that took
+  // 55s on #326. So keep asking on our own for a while before handing the
+  // student a button — pressing "try again" every few seconds is our job.
+  const [autoRetries, setAutoRetries] = useState(0);
+  const waitingForReview = reviewBlocked && autoRetries < REVIEW_AUTO_RETRIES;
+  useEffect(() => {
+    if (!waitingForReview || retrying) return;
+    const timer = setTimeout(() => {
+      setAutoRetries((n) => n + 1);
+      void retryReview();
+    }, REVIEW_RETRY_MS);
+    return () => clearTimeout(timer);
+  }, [waitingForReview, retrying, retryReview]);
 
   // Ask once on arrival: a student routed here by the backend has not been
   // through the practice screen's readiness check.
@@ -469,20 +488,21 @@ export default function ReviewPage() {
         <PageShell title="Review &amp; feedback" subtitle={subtitle}>
           <div className="rounded-lg border border-muted-gray bg-white px-6 py-8 flex flex-col items-start gap-3">
             <div className="text-[11px] font-semibold tracking-widest uppercase text-slate-blue">
-              Review could not be prepared
+              {waitingForReview ? 'Preparing your review' : 'Review could not be prepared'}
             </div>
             <p className="text-[14px] text-ink leading-relaxed max-w-prose">
-              Your work is saved. We could not put your review together just now —
-              try again in a moment.
+              {waitingForReview
+                ? 'Your work is saved. Your review is being put together — this can take up to a minute.'
+                : 'Your work is saved. We could not put your review together just now — try again in a moment.'}
             </p>
-            <button
+            {!waitingForReview && <button
               onClick={() => void retryReview()}
               disabled={retrying}
               aria-busy={retrying}
               className="mt-2 inline-flex items-center gap-1.5 rounded-md bg-focus-navy text-white px-5 py-2.5 text-[13px] font-semibold hover:opacity-80 transition-opacity disabled:opacity-60"
             >
               {retrying ? 'Trying again…' : <>Try again <ChevronRight size={15} strokeWidth={1.8} /></>}
-            </button>
+            </button>}
           </div>
         </PageShell>
       </PhaseGate>
