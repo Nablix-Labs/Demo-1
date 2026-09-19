@@ -26,7 +26,7 @@ from app.ai_engine.openai_client import (
 )
 from app.ai_engine.schemas import SafetyCheck
 from app.core.exceptions import AdapterError
-from app.models.adapters import TutorResult
+from app.models.adapters import AdapterContext, TutorResult
 from app.models.guided_learning import (
     ActiveTeachingObjective, GeneratedConcept, GeneratedQuestionRubric,
     GuidedEvaluation, StudentContribution,
@@ -38,6 +38,7 @@ from app.services import interaction_service
 from app.services.rescue_presentation import active_rescue_from
 from app.services.interaction_service import (
     _guided_attempt_event_type, _is_support_failure, _is_unresolved_scaffold_turn,
+    _verified_canvas_completion_event_type,
 )
 
 
@@ -113,6 +114,81 @@ def test_partial_evidence_only_advances_support_when_it_contains_an_error(
     assert _guided_attempt_event_type(tutor, load_classifier_rules()) == expected_event
     assert _is_support_failure(tutor) is incorrect
     assert _is_unresolved_scaffold_turn(tutor) is incorrect
+
+
+def test_verified_canvas_acknowledgement_becomes_a_correct_progression_event() -> None:
+    contribution = StudentContribution.model_validate({
+        "kind": "ACKNOWLEDGEMENT",
+        "assessment": "NOT_ASSESSED",
+        "error_category": None,
+        "error_description": None,
+        "identified_difficulty": None,
+        "learner_question": None,
+        "explained_idea": None,
+        "generated_support_text": None,
+        "support_relevance": "NOT_NEEDED",
+    })
+    tutor = TutorResult.model_construct(
+        contribution=contribution,
+        question_completed=True,
+        answer_value_confirmed=True,
+    )
+    context = AdapterContext.model_construct(
+        has_canvas_evidence=True,
+        canvas_solution_complete_candidate=True,
+    )
+
+    assert _verified_canvas_completion_event_type(tutor, context) == "CORRECT_ATTEMPT"
+
+
+def test_unverified_canvas_acknowledgement_does_not_progress() -> None:
+    contribution = StudentContribution.model_validate({
+        "kind": "ACKNOWLEDGEMENT",
+        "assessment": "NOT_ASSESSED",
+        "error_category": None,
+        "error_description": None,
+        "identified_difficulty": None,
+        "learner_question": None,
+        "explained_idea": None,
+        "generated_support_text": None,
+        "support_relevance": "NOT_NEEDED",
+    })
+    tutor = TutorResult.model_construct(
+        contribution=contribution,
+        question_completed=True,
+        answer_value_confirmed=True,
+    )
+    context = AdapterContext.model_construct(
+        has_canvas_evidence=True,
+        canvas_solution_complete_candidate=False,
+    )
+
+    assert _verified_canvas_completion_event_type(tutor, context) is None
+
+
+def test_canvas_completion_does_not_turn_task_clarification_into_an_attempt() -> None:
+    contribution = StudentContribution.model_validate({
+        "kind": "TASK_CLARIFICATION",
+        "assessment": "NOT_ASSESSED",
+        "error_category": None,
+        "error_description": None,
+        "identified_difficulty": None,
+        "learner_question": "What do I do now?",
+        "explained_idea": None,
+        "generated_support_text": None,
+        "support_relevance": "NOT_NEEDED",
+    })
+    tutor = TutorResult.model_construct(
+        contribution=contribution,
+        question_completed=True,
+        answer_value_confirmed=True,
+    )
+    context = AdapterContext.model_construct(
+        has_canvas_evidence=True,
+        canvas_solution_complete_candidate=True,
+    )
+
+    assert _verified_canvas_completion_event_type(tutor, context) is None
 
 
 def test_incorrect_expression_keeps_valid_evidence_and_moves_to_an_unresolved_concept() -> None:

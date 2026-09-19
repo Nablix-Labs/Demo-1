@@ -374,6 +374,26 @@ def _guided_attempt_event_type(
     return None
 
 
+def _verified_canvas_completion_event_type(
+    tutor: TutorResult,
+    context: AdapterContext,
+) -> Literal["CORRECT_ATTEMPT"] | None:
+    """Turn a verified canvas acknowledgement into a progression event."""
+
+    contribution = tutor.contribution
+    if (
+        not context.has_canvas_evidence
+        or not context.canvas_solution_complete_candidate
+        or not tutor.question_completed
+        or not tutor.answer_value_confirmed
+        or contribution is None
+        or contribution.assessment != "NOT_ASSESSED"
+        or contribution.kind != "ACKNOWLEDGEMENT"
+    ):
+        return None
+    return "CORRECT_ATTEMPT"
+
+
 def _guided_rescue(
     event: StudentModelSessionEventResponse | None,
 ) -> GuidedRescue | None:
@@ -765,6 +785,8 @@ async def process_answer_with_session_event(
         or scaffold_rescue_escalation
     )
     event_type = _guided_attempt_event_type(tutor, rules)
+    if event_type is None:
+        event_type = _verified_canvas_completion_event_type(tutor, context)
     response_is_wrong = _is_support_failure(tutor)
 
     next_wrong_attempt_count = (
