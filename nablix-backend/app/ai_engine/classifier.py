@@ -3761,6 +3761,10 @@ def classify_guided_learning_response(
                 rules,
             )
             if response_aware_mode_enabled:
+                evaluation = accept_reliable_canvas_submission_acknowledgement(
+                    evaluation,
+                    request,
+                )
                 evaluation = validate_response_aware_submission(evaluation, request)
             if rules.guided_learning.production_boundary_enabled:
                 evaluation = redact_untrusted_response_aware_fields(evaluation)
@@ -6515,6 +6519,29 @@ def normalize_production_assessment(evaluation: GuidedEvaluation) -> GuidedEvalu
         })
         return evaluation.model_copy(update={"contribution": normalized_contribution})
     return evaluation
+
+
+def accept_reliable_canvas_submission_acknowledgement(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+) -> GuidedEvaluation:
+    """Complete a required canvas submission already verified by reliable OCR."""
+
+    contribution = evaluation.contribution
+    if (
+        not request.canvas_submission_required
+        or not request.has_canvas_evidence
+        or not request.canvas_solution_complete_candidate
+        or evaluation.missing_concept_ids
+        or contribution is None
+        or contribution.assessment != "NOT_ASSESSED"
+        or contribution.kind not in {"ACKNOWLEDGEMENT", "TASK_CLARIFICATION"}
+    ):
+        return evaluation
+    return evaluation.model_copy(update={
+        "student_state": "CORRECT",
+        "submission_state": "MATCHING",
+    })
 
 
 def validate_response_aware_submission(
