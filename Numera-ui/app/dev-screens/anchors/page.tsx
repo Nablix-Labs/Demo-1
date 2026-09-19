@@ -56,6 +56,12 @@ const CASES: Array<{ title: string; note: string; question: string; anchors: Que
     anchors: [],
   },
   {
+    title: 'Expression — the label lands inside the maths',
+    note: 'Manjusha, 19 Sep 2026. An inline chip between "m" and "+ 7" breaks the expression apart.',
+    question: 'In m + 7, identify the changing quantity and the operation.',
+    anchors: [{ token_id: 'J', text: 'm', char_start: 3, char_end: 4, label: 'changes' }],
+  },
+  {
     title: 'A span that does not slice back',
     note: 'Contract breach — dropped, warned to console, question still renders.',
     question: 'Ravi scores n points and then scores 4 more.',

@@ -18,7 +18,7 @@
 
 import { DrawablyHighlight } from 'drawably/react';
 import 'drawably/style.css';
-import { anchorSegments, type QuestionAnchor } from '@/lib/questionAnchors';
+import { anchorSegments, usableAnchors, type QuestionAnchor } from '@/lib/questionAnchors';
 
 /**
  * A stable sketch seed for a token.
@@ -94,29 +94,53 @@ export default function AnchoredText({
                 {segment.text}
               </mark>
             </DrawablyHighlight>
-            {segment.anchor.label && (
-              // Deliberately NOT drawn, though the wash beside it is.
-              // `DrawablyBadge` was tried here and is the wrong component: it
-              // hard-codes `Geist Mono, ui-monospace` at 12px, because a badge
-              // in that library is a kbd-style chip. This label is the tutor's
-              // words about a word — prose, not a code token — and in monospace
-              // inside a sentence it reads as machine output.
-              //
-              // The drawn box was also heavier than the mark it annotates,
-              // which inverts the hierarchy: the WORD is what the student
-              // should look at, and the label is the aside.
-              <span
-                className="ml-1 align-middle rounded-full bg-highlight-amber/15 px-1.5 py-[1px] text-[10px] font-semibold tracking-wide text-slate-blue"
-                // Read out as part of the sentence it annotates, not as a
-                // stray fragment after it.
-                aria-label={`${segment.text}: ${segment.anchor.label}`}
-              >
-                {segment.anchor.label}
-              </span>
-            )}
+            {/* The label is NOT written here. It used to be an inline chip
+                immediately after the word, which reads acceptably in prose but
+                breaks an expression in half: "In m + 7" rendered as
+                "In m ⟨changes⟩ + 7", and the chip sits where a term belongs
+                (Manjusha, 19 Sep 2026 — she circled it in green on the
+                screenshot). The labels are collected under the question by
+                `AnchorLegend` instead, where they cannot land inside the
+                maths. */}
           </span>
         ),
       )}
     </>
+  );
+}
+
+/**
+ * The tutor's labels for this question, gathered under it.
+ *
+ * One line rather than a chip per word, for the reason above: the question is
+ * a sentence — sometimes an equation — and nothing may be inserted into the
+ * middle of it. Here the token is repeated beside its label, so "m — changes"
+ * stands on its own and reads in the same order the student met the words in.
+ *
+ * Rendered once per question, not per fragment, because a legend split across
+ * a grid of cases would repeat under every cell.
+ */
+export function AnchorLegend({
+  question,
+  anchors,
+}: {
+  question: string;
+  anchors: QuestionAnchor[] | null | undefined;
+}) {
+  // `usableAnchors` orders by position and drops the unrenderable, so the
+  // legend lists exactly the tokens that are washed above it, left to right.
+  const labelled = usableAnchors(question, anchors).filter((a) => a.label);
+  if (!labelled.length) return null;
+
+  return (
+    <p className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[12px] text-slate-blue">
+      {labelled.map((anchor) => (
+        <span key={anchor.token_id}>
+          <span className="font-semibold text-ink">{anchor.text}</span>
+          {' — '}
+          {anchor.label}
+        </span>
+      ))}
+    </p>
   );
 }

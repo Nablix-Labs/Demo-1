@@ -10,7 +10,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  workedExampleStepElements, rowY, rowHeight, contentSize,
+  workedExampleStepElements, rowY, rowHeight, contentSize, stepLines,
 } from '@/lib/workedExampleSheet';
 import type { SchemaWorkedExampleStep } from '@/lib/api';
 
@@ -94,5 +94,37 @@ describe('what each step actually writes', () => {
   it('never returns a mark without text, whatever the step carries', () => {
     const marks = workedExampleStepElements(step(), 0, 4);
     for (const mark of marks) expect(mark.text?.trim()).toBeTruthy();
+  });
+});
+
+/**
+ * Manjusha, 19 Sep 2026: `a × a = a² / a × a × a = a³` ran across the sheet as
+ * one line. "/ is used to separate the steps, it should be in the second line."
+ *
+ * The risk the separator creates is division, so these pin both sides of it.
+ */
+describe('a step authored as two lines in one string', () => {
+  it('breaks where the slash separates two complete statements', () => {
+    const [, content] = workedExampleStepElements(
+      step({ screen_content: 'a × a = a² / a × a × a = a³' }), 0, 4,
+    );
+    expect(content.text).toBe('a × a = a²\na × a × a = a³');
+  });
+
+  it('leaves a division alone — the slash is inside one statement', () => {
+    expect(stepLines('6 / 2 = 3')).toBe('6 / 2 = 3');
+    expect(stepLines('n = 12 / 4')).toBe('n = 12 / 4');
+  });
+
+  it('leaves a slash with no space around it alone', () => {
+    expect(stepLines('a/b = c/d')).toBe('a/b = c/d');
+  });
+
+  it('breaks a three-part step too', () => {
+    expect(stepLines('x = 1 / y = 2 / z = 3')).toBe('x = 1\ny = 2\nz = 3');
+  });
+
+  it('leaves an ordinary single step untouched', () => {
+    expect(stepLines('3n + 4 = 19')).toBe('3n + 4 = 19');
   });
 });

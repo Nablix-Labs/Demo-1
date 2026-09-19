@@ -80,6 +80,29 @@ export function rowY(index: number, total: number): number {
 }
 
 /**
+ * Break a step that was authored as two lines of working in one string.
+ *
+ * Manjusha, 19 Sep 2026: `a × a = a² / a × a × a = a³` arrived as one step and
+ * ran across the sheet as a single line — "/ is used to separate the steps, it
+ * should be in the second line".
+ *
+ * The catch is that `/` is also division, and this is a maths tutor: splitting
+ * on every slash would turn the step `6 / 2 = 3` into two lines reading "6" and
+ * "2 = 3". So the slash is only read as a separator when it divides two
+ * COMPLETE statements — every part has an `=` of its own. A division has its
+ * slash inside one side of the equation, so it never qualifies.
+ *
+ * Authoring a real newline, or two separate steps, is still the better fix and
+ * is unaffected by this — Konva already renders `\n`.
+ */
+export function stepLines(content: string): string {
+  const parts = content.split(' / ');
+  if (parts.length < 2) return content;
+  if (!parts.every((part) => part.includes('='))) return content;
+  return parts.map((part) => part.trim()).join('\n');
+}
+
+/**
  * One step's marks: its number, and the working beside it.
  *
  * Returns nothing for a step with no `screen_content`. Some authored steps are
@@ -109,7 +132,7 @@ export function workedExampleStepElements(
       kind: 'text',
       x: CONTENT_X,
       y,
-      text: content,
+      text: stepLines(content),
       size,
       color: CONTENT_COLOR,
       wrapWidth: CONTENT_WRAP,

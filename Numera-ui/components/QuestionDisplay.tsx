@@ -13,7 +13,7 @@
 
 import { questionLayout } from '@/lib/questionText';
 import { fragmentRanges, type QuestionAnchor } from '@/lib/questionAnchors';
-import AnchoredText from '@/components/AnchoredText';
+import AnchoredText, { AnchorLegend } from '@/components/AnchoredText';
 import type { QuestionType, SchemaQuestionOption } from '@/lib/api';
 import { cn } from '@/lib/cn';
 
@@ -206,6 +206,7 @@ export default function QuestionDisplay({
             />
           </span>
         </div>
+        <AnchorLegend question={question} anchors={anchors} />
         {optionList}
       </div>
     );
@@ -256,6 +257,7 @@ export default function QuestionDisplay({
             />
           </p>
         )}
+        <AnchorLegend question={question} anchors={anchors} />
         {optionList}
       </div>
     );
@@ -278,6 +280,7 @@ export default function QuestionDisplay({
           {...spanProps(fragmentRanges(question, [layout.text])[0])}
         />
       </p>
+      <AnchorLegend question={question} anchors={anchors} />
       {optionList}
     </div>
   );
