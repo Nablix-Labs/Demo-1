@@ -134,6 +134,51 @@ def test_an_error_no_misconception_explains_warns():
     assert "ERR-T01-ORPHAN" in warning.message
 
 
+def test_two_beliefs_triggering_on_one_error_is_reported():
+    """The arrow goes one way. A belief may name several codes; a code may be
+    named by only one belief, or the tutor cannot tell which to re-teach.
+
+    Three of 28 error codes had this in the workbook Manjusha reviewed on
+    13 September.
+    """
+    errors = [_error("ERR-T01-A")]
+    _, issues = build_misconception_errors(
+        [_misconception("FIRST", "Trigger after ERR-T01-A when repeated."),
+         _misconception("SECOND", "Trigger after ERR-T01-A when the rule is fixed.")],
+        errors,
+    )
+    warning = next(i for i in issues if "cannot tell which belief" in i.message)
+    assert not warning.is_error
+    assert "ERR-T01-A" in warning.message
+
+
+def test_one_belief_naming_two_errors_is_not_reported():
+    errors = [_error("ERR-T01-A"), _error("ERR-T01-B")]
+    _, issues = build_misconception_errors(
+        [_misconception("ONE", "Trigger after ERR-T01-A or ERR-T01-B.")], errors,
+    )
+    assert not [i for i in issues if "cannot tell which belief" in i.message]
+
+
+def test_the_shared_error_rows_are_kept_not_dropped():
+    """Deciding which of two beliefs an error really shows needs a reading of
+    both, and dropping the wrong row leaves a misconception that can never
+    fire."""
+    rows, _ = build_misconception_errors(
+        [_misconception("FIRST", "Trigger after ERR-T01-A when repeated."),
+         _misconception("SECOND", "Trigger after ERR-T01-A when fixed.")],
+        [_error("ERR-T01-A")],
+    )
+    assert len(rows) == 2
+
+
+def test_the_prompt_says_an_error_belongs_to_one_belief():
+    from diagnosis_generator import MISCONCEPTION_SYSTEM_PROMPT
+
+    text = " ".join(MISCONCEPTION_SYSTEM_PROMPT.split())
+    assert "EACH ERROR CODE BELONGS TO EXACTLY ONE MISCONCEPTION" in text
+
+
 def test_a_rule_naming_nothing_real_is_an_error():
     """CG-015 refuses this, so reaching it means the two ran against
     different error sets, which is worth shouting about."""

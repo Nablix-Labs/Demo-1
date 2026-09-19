@@ -550,6 +550,48 @@ def test_no_error_conflict_allows_two_responses_mapping_separately():
     assert not findings_for(tables, "NO_ERROR_CONFLICT")
 
 
+def test_an_error_explained_by_two_beliefs_is_caught():
+    """Manjusha's review of 13 September: "errors map to more than one
+    misconception, that will create confusion". Three of 28 did.
+
+    NO_ERROR_CONFLICT says one student response maps to one error. This is
+    the same rule one level up.
+    """
+    tables = clean_tables()
+    tables["Misconceptions"] = [
+        {"misconception_id": "MIS-T01-A", "name": "A", "active": True},
+        {"misconception_id": "MIS-T01-B", "name": "B", "active": True},
+    ]
+    tables["Misconception_Errors"] = [
+        {"misconception_id": "MIS-T01-A", "error_code": "ERR-T01-A",
+         "confidence_weight": 1.0},
+        {"misconception_id": "MIS-T01-B", "error_code": "ERR-T01-A",
+         "confidence_weight": 1.0},
+    ]
+    found = findings_for(tables, "ONE_MISCONCEPTION_PER_ERROR")
+    assert [f.record_id for f in found] == ["ERR-T01-A"]
+    assert "MIS-T01-A" in found[0].issue and "MIS-T01-B" in found[0].issue
+
+
+def test_one_belief_causing_several_errors_is_fine():
+    """The arrow only goes one way. A belief may produce many errors; that is
+    why there are fewer misconceptions than error types."""
+    tables = clean_tables()
+    tables["Error_Types"].append({
+        "error_code": "ERR-T01-B", "error_name": "Other",
+        "description": "Something else.", "related_micro_skill_id": SKILL,
+        "severity": "MEDIUM", "detection_method": "SYMBOLIC_PATTERN",
+        "active": True,
+    })
+    tables["Misconception_Errors"] = [
+        {"misconception_id": "MIS-T01-ADD", "error_code": "ERR-T01-A",
+         "confidence_weight": 1.0},
+        {"misconception_id": "MIS-T01-ADD", "error_code": "ERR-T01-B",
+         "confidence_weight": 1.0},
+    ]
+    assert not findings_for(tables, "ONE_MISCONCEPTION_PER_ERROR")
+
+
 def test_mapping_complete_fires_on_an_inactive_parent():
     """FOREIGN_KEY already proves the parent exists. This is the other half:
     a reference that resolves to something switched off."""
