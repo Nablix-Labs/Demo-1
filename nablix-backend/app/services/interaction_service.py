@@ -4192,6 +4192,9 @@ async def _process_interaction(
         )
         else None
     )
+    has_reliable_canvas_evidence = (
+        canvas_evidence is not None or canvas_submission is not None
+    )
     ocr = (
         canvas_evidence.ocr
         if canvas_evidence is not None
@@ -4414,7 +4417,7 @@ async def _process_interaction(
         canvas_mathml_blocks=ocr.mathml_blocks if ocr is not None else [],
         spatial_tokens=(canvas_evidence.spatial_tokens if canvas_evidence is not None else []),
         canvas_events=_canvas_events_for_context(request, session),
-        has_canvas_evidence=canvas_evidence is not None,
+        has_canvas_evidence=has_reliable_canvas_evidence,
         canvas_solution_complete_candidate=canvas_solution_complete_candidate,
         canvas_submission_required=session.canvas_submission_required,
         phase3_submission_confirmed=(
@@ -4768,7 +4771,7 @@ async def _process_interaction(
         "pending_canvas_submission_question_id": (
             None
             if (
-                canvas_evidence is not None
+                has_reliable_canvas_evidence
                 and canvas_solution_complete_candidate
                 and tutor.evaluation == "CORRECT"
             )

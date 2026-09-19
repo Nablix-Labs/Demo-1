@@ -143,6 +143,133 @@ def test_pending_canvas_submission_returns_direct_prompt_for_empty_submit(
     assert stored.pending_canvas_submission_question_id == before.question_id
 
 
+def test_voice_interaction_with_reliable_voice_attached_canvas_clears_pending_and_advances(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_contexts: list[AdapterContext] = []
+    original_evaluate = TutorEngineServiceAdapter.evaluate
+
+    async def capture_evaluate(
+        adapter: TutorEngineServiceAdapter,
+        context: AdapterContext,
+        student: StudentModelResult,
+    ) -> TutorResult:
+        captured_contexts.append(context)
+        return await original_evaluate(adapter, context, student)
+
+    monkeypatch.setattr(TutorEngineServiceAdapter, "evaluate", capture_evaluate)
+
+    session_id = _start_session("ST412")
+    before = session_service._get_owned_session(session_id, "ST412")
+    session_service._sessions[session_id] = before.model_copy(
+        update={
+            "canvas_submission_required": True,
+            "pending_canvas_submission_question_id": before.question_id,
+        }
+    )
+
+    attach_res = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST412",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+            "submission_role": "VOICE_ATTACHMENT",
+        },
+    )
+    assert attach_res.status_code == 200
+    submission_id = attach_res.json()["submission_id"]
+
+    voice_res = client.post(
+        "/voice/transcript",
+        json={
+            "session_id": session_id,
+            "student_id": "ST412",
+            "transcript": "x = 5",
+            "confidence": 0.95,
+            "audio_duration_seconds": 1.5,
+            "turn": "STUDENT",
+            "timestamp": "2026-09-19T10:00:00Z",
+            "turn_id": "TURN-VOICE-001",
+            "transcript_final": True,
+            "canvas_snapshot_id": submission_id,
+        },
+    )
+    assert voice_res.status_code == 200, voice_res.text
+    body = voice_res.json()
+
+    assert len(captured_contexts) == 1
+    assert captured_contexts[0].has_canvas_evidence is True
+
+    assert body.get("next_expected_input") != "WRITE"
+    assert body.get("requires_written_math_evidence") is not True
+
+    stored = session_service._get_owned_session(session_id, "ST412")
+    assert stored.pending_canvas_submission_question_id is None
+    assert body["question_completed"] is True or stored.question_completed is True or stored.question_id != before.question_id
+
+
+def test_voice_interaction_with_unreliable_attached_canvas_keeps_pending_requirement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def low_confidence_ocr(
+        adapter: MockVisionOCRAdapter,
+        snapshot_data_url: str,
+    ) -> VisionOCRResult:
+        return VisionOCRResult(
+            raw_ocr_text="x = 5",
+            detected_equation="x = 5",
+            detected_steps=["x = 5"],
+            final_answer="x = 5",
+            confidence=0.50,
+            needs_clarification=False,
+            provider="mock",
+        )
+
+    monkeypatch.setattr(MockVisionOCRAdapter, "recognize", low_confidence_ocr)
+
+    session_id = _start_session("ST413")
+    before = session_service._get_owned_session(session_id, "ST413")
+    session_service._sessions[session_id] = before.model_copy(
+        update={
+            "canvas_submission_required": True,
+            "pending_canvas_submission_question_id": before.question_id,
+        }
+    )
+
+    attach_res = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST413",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+            "submission_role": "VOICE_ATTACHMENT",
+        },
+    )
+    assert attach_res.status_code == 200
+    submission_id = attach_res.json()["submission_id"]
+
+    voice_res = client.post(
+        "/voice/transcript",
+        json={
+            "session_id": session_id,
+            "student_id": "ST413",
+            "transcript": "x = 5",
+            "confidence": 0.95,
+            "audio_duration_seconds": 1.5,
+            "turn": "STUDENT",
+            "timestamp": "2026-09-19T10:00:00Z",
+            "turn_id": "TURN-VOICE-002",
+            "transcript_final": True,
+            "canvas_snapshot_id": submission_id,
+        },
+    )
+    assert voice_res.status_code == 200
+    stored = session_service._get_owned_session(session_id, "ST413")
+    assert stored.pending_canvas_submission_question_id == before.question_id
+
+
+
 @pytest.mark.parametrize(
     ("ocr_text", "mathml_operator"),
     [
