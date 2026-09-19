@@ -122,64 +122,16 @@ export function resolveTarget(
 }
 
 /**
- * The writing area, mirrored from the backend's own write-request draw
- * (canvas_annotations.plan_write_request_tutor_draw): a highlight band across
- * x 0.58–0.92 / y 0.62–0.74, the prompt "Write your rule here." at (0.62, 0.66),
- * and an arrow dropping into it at x 0.75 from y 0.56.
+ * Where the student writes, kept as geometry even though nothing marks it any
+ * more: the reference slots below are positioned against it, so the labels stay
+ * clear of the ink the student answers with.
  *
- * Kept here so the reference slots below are positioned AGAINST it rather than
- * by independent guesswork. The first attempt put the slots at y 0.58 and 0.65,
- * which rendered their labels at y 0.652 and 0.722 — one on top of the prompt,
- * the other inside the band. Two sets of magic numbers chosen apart from each
- * other will always eventually land on each other.
+ * The yellow band, its "Write your rule here." prompt and the arrow into it are
+ * gone (19 Sep — Manjusha: "better to remove that yellow box"; Sanya: "it's just
+ * a placeholder"). The student sees only the question and the "write it down"
+ * note, and writes wherever they like.
  */
 export const WRITE_AREA = { x: 0.06, y: 0.58, w: 0.34, h: 0.12 };
-const WRITE_ARROW_TOP = 0.52;
-
-/**
- * Where the writing block sits, and why it is on the LEFT.
- *
- * The backend hardcodes this block on the right (x 0.58-0.92) — the one place
- * it does send coordinates, which the semantic-action contract otherwise
- * forbids ("never sends pixels, dimensions, coordinates"). The right-hand
- * column is where the cue card, the hint note and the "write it down" note
- * live, so the writing block landed underneath them and the student had, in
- * Sanya's words, nowhere to write.
- *
- * Layout is the client's job — it is the only side that knows what else is on
- * screen — so the block is relocated here rather than left where the payload
- * put it. `relocateWriteRequest` moves the backend's own three elements onto
- * the same geometry the reference slots are positioned against, so the labels,
- * the arrow, the band and the prompt always travel together.
- */
-/**
- * The prompt sits ABOVE the band, not inside it (#318).
- *
- * It used to be placed at WRITE_AREA + 0.04, which is within the band — so the
- * moment the student answered, their ink went straight through the words
- * asking them to. The screenshot on that issue is `n + 5` written across a
- * struck-through "Write your rule here.", and what the two together read as is
- * anybody's guess.
- *
- * Inside was never a considered choice; it is where the backend's own draw put
- * it, and relocating the block carried the offset over unexamined. A prompt is
- * a label FOR the field. It belongs above it, left-aligned with it, close
- * enough to be read as attached to it — and out of the region the student is
- * being asked to fill.
- */
-const WRITE_PROMPT_GAP = 0.045;
-export const WRITE_PROMPT_AT = { x: WRITE_AREA.x, y: WRITE_AREA.y - WRITE_PROMPT_GAP };
-
-/**
- * ...which is the strip the arrow used to drop through.
- *
- * Moved to the far end of the band rather than shortened: it still has to point
- * INTO the area, and the two elements are the same request, so they cannot be
- * positioned apart from each other. Same lesson as the reference slots above —
- * two sets of magic numbers chosen independently will eventually land on each
- * other.
- */
-const WRITE_ARROW_X = WRITE_AREA.x + WRITE_AREA.w - 0.06;
 
 /**
  * Where a reference label goes.
@@ -199,13 +151,13 @@ const WRITE_ARROW_X = WRITE_AREA.x + WRITE_AREA.w - 0.06;
  * same reason every other target here resolves locally.
  *
  * Downward, so the first label sits highest and the parts read in the order they
- * were confirmed. Bounded above the writing area: the arrow into it starts at
- * WRITE_ARROW_TOP, and a reference that drifts into the band the student answers
+ * were confirmed. Bounded above the writing area (y 0.52 leaves a gap above
+ * WRITE_AREA), and a reference that drifts into the band the student answers
  * in stops being a reference.
  */
 const SLOT_FIRST_Y = 0.14;
 const SLOT_GAP = 0.07;
-/** Never below this: the arrow into the writing area starts at WRITE_ARROW_TOP. */
+/** Never below this: it keeps the ladder clear of WRITE_AREA. */
 const SLOT_LAST_Y = 0.46;
 
 /** A slot mark, identified by the suffix `actionMarks` gives it. */
@@ -236,8 +188,8 @@ const LADDER_PAD = 0.03;
  *
  * Two rows still fit below it (0.39, then 0.46) before SLOT_LAST_Y clamps them
  * onto each other. Past this the honest answer is that the question is too tall
- * to also hold a reference column, and crowding the writing area — the arrow
- * into it starts at WRITE_ARROW_TOP — would cost more than the overlap does.
+ * to also hold a reference column, and crowding the writing area would cost
+ * more than the overlap does.
  */
 const LADDER_TOP_MAX = 0.39;
 
@@ -411,55 +363,11 @@ export function revealsAnswer(): boolean {
 }
 
 /**
- * The band the student is being asked to write in.
- *
- * Nothing the action carries is drawn. A WRITE_AREA action may arrive with
- * `text`, and that text can be the rule itself — putting it on the board would
- * hand the student the very thing they are being asked to produce, dressed as
- * ordinary tutor support. That rule is unchanged; what was missing is the band.
- *
- * The backend's older write request came as three hand-positioned ELEMENTS
- * (`:write-highlight`, `:write-prompt`, `:write-arrow`) which
- * relocateWriteRequest moves onto the geometry below. That is the yellow area
- * Manjusha knows. The semantic action that replaced it drew nothing at all: it
- * raised the rose "write it down" note in the support lane and stopped there,
- * so the ASK survived the migration and the PLACE did not. Row 56, "Phase 2
- * yellow writing area to write the answer is not shown".
- *
- * Same geometry as the relocated block, so the two spellings of one request
- * land in the same place and the reference slots above stay positioned against
- * it. Closed, unlike the backend's three-sided polygon: this is a region to
- * write inside, and an open box reads as a mark someone abandoned.
- *
- * No prompt text. The wording already exists once, on the WriteNote this same
- * action raises; a second copy inside the band would say it twice, and writing
- * canvas copy here is how the frontend starts authoring content it does not own.
- */
-function writeAreaMarks(actionId: string): TutorElement[] {
-  const { x, y, w, h } = WRITE_AREA;
-  return [
-    {
-      id: `${actionId}${WRITE_HIGHLIGHT}`,
-      kind: 'highlight',
-      points: [x, y, x + w, y, x + w, y + h, x, y + h, x, y],
-      strokeWidth: HIGHLIGHT_WEIGHT,
-    },
-    {
-      id: `${actionId}${WRITE_ARROW}`,
-      kind: 'arrow',
-      from: [WRITE_ARROW_X, WRITE_ARROW_TOP],
-      to: [WRITE_ARROW_X, y],
-    },
-  ];
-}
-
-/**
  * The tutor-layer marks an action becomes, or [] when it draws nothing.
  *
  * Empty is a normal outcome, not a failure: FOCUS moves attention without
  * leaving a mark, and an anchor label rides on the question text rather than
- * the canvas. A WRITE_AREA draws its band but never any CONTENT — that
- * distinction is the whole of writeAreaMarks.
+ * the canvas. A WRITE_AREA draws nothing — see WRITE_AREA.
  */
 export function actionMarks(
   action: TutorCanvasAction,
@@ -468,9 +376,9 @@ export function actionMarks(
   // The rule that matters most here. WRITE_AREA is the place the student is
   // being asked to commit the answer; writing the answer into it would hand
   // them the thing that was being asked for, and would do it while looking
-  // like ordinary tutor support. So the BAND is drawn and nothing the action
-  // carries is — see writeAreaMarks.
-  if (target.kind === 'write-area') return writeAreaMarks(action.action_id);
+  // like ordinary tutor support. Nothing the action carries is ever drawn, and
+  // the band that used to mark the area has been removed too.
+  if (target.kind === 'write-area') return [];
 
   // A question-text anchor is styled by the text renderer (AnchoredText), which
   // knows where the token actually wrapped to. Drawing a box on the canvas for
@@ -635,37 +543,16 @@ export function memoryActor(type: TutorCanvasAction['type']): 'TUTOR' | 'SYSTEM_
 
 
 /** Suffixes the backend gives the three elements of its write request. */
-const WRITE_HIGHLIGHT = ':write-highlight';
-const WRITE_PROMPT = ':write-prompt';
-const WRITE_ARROW = ':write-arrow';
+const WRITE_REQUEST_SUFFIXES = [':write-highlight', ':write-prompt', ':write-arrow'];
 
 /**
- * Move the backend's write-request block onto the client's layout.
+ * Drop the backend's write-request block: the yellow band, its prompt and the
+ * arrow (see WRITE_AREA for why they are gone).
  *
- * Returns the elements unchanged except for the three the backend positions by
- * hand. Matched on the id suffix, which the backend builds from the turn id
- * (`f"{turn_id}:write-highlight"` and friends) and so is stable.
- *
- * An element the backend stops sending simply never matches; one it renames
- * passes through at its original coordinates, which is visibly wrong rather
- * than silently wrong, and is the failure we want of the two.
+ * Dropped here rather than waiting for the backend to stop sending them, so the
+ * canvas is right whichever release lands first. Matched on the id suffix,
+ * which the backend builds from the turn id (`f"{turn_id}:write-highlight"`).
  */
-export function relocateWriteRequest(elements: TutorElement[]): TutorElement[] {
-  return elements.map((el) => {
-    if (el.id.endsWith(WRITE_HIGHLIGHT)) {
-      const { x, y, w, h } = WRITE_AREA;
-      return { ...el, x: undefined, y: undefined, w: undefined, h: undefined,
-        points: [x, y, x + w, y, x + w, y + h, x, y + h] };
-    }
-    if (el.id.endsWith(WRITE_PROMPT)) {
-      return { ...el, x: WRITE_PROMPT_AT.x, y: WRITE_PROMPT_AT.y, points: undefined };
-    }
-    if (el.id.endsWith(WRITE_ARROW)) {
-      return { ...el,
-        from: [WRITE_ARROW_X, WRITE_ARROW_TOP],
-        to: [WRITE_ARROW_X, WRITE_AREA.y],
-        points: undefined };
-    }
-    return el;
-  });
+export function dropWriteRequest(elements: TutorElement[]): TutorElement[] {
+  return elements.filter((el) => !WRITE_REQUEST_SUFFIXES.some((suffix) => el.id.endsWith(suffix)));
 }

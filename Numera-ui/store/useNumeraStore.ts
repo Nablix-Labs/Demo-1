@@ -29,7 +29,7 @@ import { uid } from '@/lib/uid';
 import { lastCaptureFrame, type CanvasFrame } from '@/lib/studentSnapshot';
 import {
   resolveTarget, actionMarks, showsWriteAffordance, memoryActionType, memoryActor,
-  relocateWriteRequest, RESCUE_SUFFIX,
+  dropWriteRequest, RESCUE_SUFFIX,
 } from '@/lib/tutorCanvasActions';
 import {
   isRescueAction, rescueStep, mergeStep, type RescueStep,
@@ -1746,16 +1746,13 @@ export const useNumeraStore = create<NumeraState>()(
           if (seenDrawActionIds.has(action.actionId)) continue;
           seenDrawActionIds.add(action.actionId);
         }
-        // The backend positions its write-request block by hand, on the right,
-        // where the cue and hint cards live. Layout is the client's job — see
-        // relocateWriteRequest — so it is moved onto the same geometry the
-        // reference labels use before anything is rendered or logged.
+        // The yellow write-request block is no longer drawn — dropWriteRequest.
         // A correction is placed around OCR'd ink, in the frame of the
         // snapshot OCR read — so it renders in that frame, not today's stage.
         const frame = action.actionId?.startsWith(CORRECTION_ACTION_PREFIX)
           ? lastCaptureFrame() ?? undefined
           : undefined;
-        const incoming: TutorElement[] = relocateWriteRequest(
+        const incoming: TutorElement[] = dropWriteRequest(
           (action.elements ?? []).map((el) => ({ ...el, id: el.id ?? uid(), ...(frame && { frame }) })),
         );
         for (const element of incoming) {

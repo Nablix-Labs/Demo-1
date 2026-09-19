@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   resolveTarget, actionMarks, revealsAnswer, showsWriteAffordance, memoryActionType, memoryActor,
-  overlapsWriteArea, relocateWriteRequest, WRITE_AREA,
+  overlapsWriteArea, dropWriteRequest, WRITE_AREA,
   type ResolveContext,
 } from '@/lib/tutorCanvasActions';
 import type { TutorCanvasAction, DrawnItem, TutorElement } from '@/store/useNumeraStore';
@@ -321,7 +321,7 @@ describe('a HIGHLIGHT mark', () => {
   });
 });
 
-describe('the writing block on the left', () => {
+describe('the backend write-request block', () => {
   const backendWriteRequest = (turnId: string) => ([
     { id: `${turnId}:write-highlight`, kind: 'highlight' as const,
       points: [0.58, 0.62, 0.92, 0.62, 0.92, 0.74, 0.58, 0.74] },
@@ -331,55 +331,15 @@ describe('the writing block on the left', () => {
       from: [0.75, 0.56] as [number, number], to: [0.75, 0.62] as [number, number] },
   ]);
 
-  it('moves the whole block off the right-hand column', () => {
-    // The right column holds the cue card, the hint note and the "write it
-    // down" note. The backend hardcodes the block at x 0.58-0.92, which put it
-    // underneath them — the student had nowhere to write.
-    for (const el of relocateWriteRequest(backendWriteRequest('T1'))) {
-      const xs = [
-        ...(el.points ?? []).filter((_, i) => i % 2 === 0),
-        ...(el.from ? [el.from[0]] : []),
-        ...(el.to ? [el.to[0]] : []),
-        ...(el.x !== undefined ? [el.x] : []),
-      ];
-      for (const x of xs) expect(x, `${el.id} still at x=${x}`).toBeLessThan(0.5);
-    }
-  });
-
-  it('keeps the arrow pointing into the band, not past it', () => {
-    const arrow = relocateWriteRequest(backendWriteRequest('T1'))
-      .find((e) => e.id.endsWith(':write-arrow'))!;
-    expect(arrow.from![1]).toBeLessThan(arrow.to![1]);
-    expect(arrow.to![1]).toBe(WRITE_AREA.y);
-  });
-
-  it('puts the prompt ABOVE the band, not in it', () => {
-    // It used to sit inside, at WRITE_AREA + 0.04, and the student wrote
-    // straight through it — #318's screenshot is `n + 5` in ink with "Write
-    // your rule here." crossed out underneath it. A prompt is a label for the
-    // field, not a watermark inside it.
-    const prompt = relocateWriteRequest(backendWriteRequest('T1'))
-      .find((e) => e.id.endsWith(':write-prompt'))!;
-    expect(prompt.y!).toBeLessThan(WRITE_AREA.y);
-    // Still attached to the band: left-aligned with it, and close above it.
-    expect(prompt.x!).toBe(WRITE_AREA.x);
-    expect(WRITE_AREA.y - prompt.y!).toBeLessThan(0.08);
-  });
-
-  it('keeps the arrow out of the prompt it now sits beside', () => {
-    // The arrow drops through the strip the prompt has just moved into, so
-    // moving one without the other trades an overlap for an overlap.
-    const [prompt, arrow] = ['write-prompt', 'write-arrow'].map((id) =>
-      relocateWriteRequest(backendWriteRequest('T1')).find((e) => e.id.endsWith(id))!);
-    expect(arrow.from![0]).toBeGreaterThan(prompt.x! + 0.2);
-    // ...and still lands on the band it is pointing into.
-    expect(arrow.from![0]).toBeLessThan(WRITE_AREA.x + WRITE_AREA.w);
+  it('draws none of the backend write-request block', () => {
+    // 19 Sep: the yellow band, its prompt and its arrow are removed. Dropped
+    // client-side so the canvas is right whichever release lands first.
+    expect(dropWriteRequest(backendWriteRequest('T1'))).toEqual([]);
   });
 
   it('leaves every other tutor element exactly as sent', () => {
-    // Only the three hand-positioned elements are the client's business.
     const other = { id: 'T1:something-else', kind: 'text' as const, x: 0.8, y: 0.9, text: 'hi' };
-    expect(relocateWriteRequest([other])).toEqual([other]);
+    expect(dropWriteRequest([...backendWriteRequest('T1'), other])).toEqual([other]);
   });
 
   it('keeps the reference labels clear of the relocated band', () => {
