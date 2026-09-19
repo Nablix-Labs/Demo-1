@@ -101,6 +101,7 @@ export function setStudentWriting(writing: boolean): void {
   if (writing === studentWriting) return;
   studentWriting = writing;
   if (writing) {
+    console.info('[tutorSpeech] pen down — silencing the tutor (§1)');
     cancelPending('silenced');
     stopTutorSpeech();
     reopenTurnAfterSilencing();

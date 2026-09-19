@@ -443,7 +443,10 @@ class TutorAudioStream {
       this.startMouth();
     };
     audio.onended = () => this.finish();
-    audio.onerror = () => this.finish();
+    audio.onerror = () => {
+      console.warn('[tts] streamed audio stopped: media error', audio.error?.code);
+      this.finish();
+    };
     void audio.play().catch((err: unknown) => {
       // A rejection here is a real refusal (autoplay policy / unsupported
       // src), not "no data yet" — with MSE the promise stays pending until
@@ -582,7 +585,13 @@ class TutorAudioStream {
         useMicLevel.getState().markBoundary();
         return;
       }
-      if (++stalledTicks >= STALL_TICKS) this.finish();
+      if (++stalledTicks >= STALL_TICKS) {
+        // Logged because a stall is indistinguishable, from the student's
+        // chair, from the tutor being cut off — "it only said 'I want to make
+        // sure' and stopped" (19 Sep) needs the console to say which it was.
+        console.warn('[tts] streamed audio stopped: no progress for', STALL_TICKS * MOUTH_PULSE_MS, 'ms at', audio?.currentTime);
+        this.finish();
+      }
     }, MOUTH_PULSE_MS);
   }
 
