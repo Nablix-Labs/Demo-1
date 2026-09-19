@@ -53,3 +53,39 @@ export function captureStudentLayers(stage: CapturableStage): string {
     tutorLayers.forEach((layer) => layer.show());
   }
 }
+
+/**
+ * The stage size the last snapshot was taken at.
+ *
+ * OCR reports where the ink is as a fraction of the IMAGE it was given, and the
+ * image is the stage at capture time. Student ink, though, is stored in stage
+ * pixels and never moves. So a mark placed around that ink is only right in the
+ * capture's own frame: scaled by today's stage size instead, it drifts off the
+ * ink the moment the canvas is any other size — a window resized, DevTools
+ * docked, the side panel dragged. #329: the red ring sat beside `n + 5`
+ * rather than around it, off by exactly ×1.09 across and ×1.46 down, i.e. the
+ * snapshot came from a stage that much smaller than the one on screen.
+ */
+export interface CanvasFrame { width: number; height: number }
+
+let captureFrame: CanvasFrame | null = null;
+
+export function recordCaptureFrame(frame: CanvasFrame): void {
+  captureFrame = frame;
+}
+
+export function lastCaptureFrame(): CanvasFrame | null {
+  return captureFrame;
+}
+
+/**
+ * The pixel frame a tutor mark's 0–1 geometry is relative to: its own `frame`
+ * when it was placed against captured ink, otherwise the live stage.
+ */
+export function frameFor(
+  el: { frame?: CanvasFrame },
+  width: number,
+  height: number,
+): CanvasFrame {
+  return el.frame ?? { width, height };
+}

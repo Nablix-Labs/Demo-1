@@ -21,8 +21,9 @@
 import { InlineMath } from 'react-katex';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useTutorReveal } from '@/store/useTutorReveal';
+import { frameFor } from '@/lib/studentSnapshot';
 
-export default function TutorMathOverlay({ width, height }: { width: number; height: number }) {
+export default function TutorMathOverlay({ width: stageWidth, height: stageHeight }: { width: number; height: number }) {
   const tutorElements = useNumeraStore((s) => s.tutorElements);
   const progress = useTutorReveal((s) => s.progress);
   const mathEls = tutorElements.filter((e) => e.kind === 'math');
@@ -38,6 +39,7 @@ export default function TutorMathOverlay({ width, height }: { width: number; hei
         // and the gradient is offset so p=0 hides everything and p=1 shows all of
         // it (including the feather itself).
         const p = progress[el.id] ?? 0;
+        const { width, height } = frameFor(el, stageWidth, stageHeight);
         const FEATHER = 7;
         const edge = p * (100 + FEATHER);
         const mask = `linear-gradient(90deg, #000 ${edge - FEATHER}%, rgba(0,0,0,0) ${edge}%)`;

@@ -12,6 +12,7 @@
  */
 
 import type { TutorElement } from '@/store/useNumeraStore';
+import { frameFor } from '@/lib/studentSnapshot';
 
 export type Point = { x: number; y: number };
 
@@ -132,9 +133,10 @@ function pointOnEllipse(cx: number, cy: number, rx: number, ry: number, t: numbe
 export function tipFor(
   el: TutorElement,
   p: number,
-  width: number,
-  height: number,
+  stageWidth: number,
+  stageHeight: number,
 ): Point | null {
+  const { width, height } = frameFor(el, stageWidth, stageHeight);
   const clamped = Math.max(0, Math.min(1, p));
 
   switch (el.kind) {

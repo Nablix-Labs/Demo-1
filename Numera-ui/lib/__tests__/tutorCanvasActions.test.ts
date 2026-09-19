@@ -62,7 +62,9 @@ describe('resolving a target the client cannot see', () => {
 describe('resolving a target that is there', () => {
   it('finds a student item and normalises it against the live canvas', () => {
     const target = resolveTarget(action(), CTX);
-    expect(target).toEqual({ kind: 'box', box: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 } });
+    expect(target).toEqual({
+      kind: 'box', box: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 }, frame: CTX.canvasSize,
+    });
   });
 
   it('finds a question anchor by token id', () => {

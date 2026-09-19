@@ -31,6 +31,7 @@ import {
   type CanvasBBox, type CanvasSize, type CanvasActionType,
 } from '@/lib/canvasMemory';
 import type { DrawnItem, TutorCanvasAction, TutorElement } from '@/store/useNumeraStore';
+import type { CanvasFrame } from '@/lib/studentSnapshot';
 import {
   parseRescueAnchor, answerRevealPermitted, writesToStudentCanvas,
 } from '@/lib/rescueActions';
@@ -39,8 +40,12 @@ import {
 export type ResolvedTarget =
   /** A span of the question text; the label rides on the anchor, not the canvas. */
   | { kind: 'anchor'; tokenId: string }
-  /** A box on the canvas, normalised 0–1 against the live canvas size. */
-  | { kind: 'box'; box: CanvasBBox }
+  /**
+   * A box on the canvas, normalised 0–1 against `frame` when given, else the
+   * live canvas size. Student ink is fixed in pixels, so a box around it is
+   * only true in the frame it was measured in (lib/studentSnapshot).
+   */
+  | { kind: 'box'; box: CanvasBBox; frame?: CanvasFrame }
   /** The area the student is being asked to write in. Carries no content. */
   | { kind: 'write-area' }
   /** A reserved reference slot, clear of the writing area. Text sits AT the point. */
@@ -106,14 +111,14 @@ export function resolveTarget(
     }
     const element = ctx.tutorElements.find((el) => el.id === id);
     const box = element ? tutorElementBBox(element) : null;
-    return box ? { kind: 'box', box } : null;
+    return box ? { kind: 'box', box, frame: element?.frame } : null;
   }
 
   // CANVAS_OBJECT and STUDENT_ATTEMPT both name a thing the student drew. They
   // differ in what the tutor means by it, not in how it is found.
   const item = ctx.items.find((it) => it.id === id);
   const box = item ? itemBBox(item, ctx.canvasSize) : null;
-  return box ? { kind: 'box', box } : null;
+  return box ? { kind: 'box', box, frame: { ...ctx.canvasSize } } : null;
 }
 
 /**
@@ -536,7 +541,13 @@ export function actionMarks(
     }];
   }
 
-  const box = target.box;
+  const marks = boxMarks(action, target.box);
+  const { frame } = target;
+  return frame ? marks.map((el) => ({ ...el, frame })) : marks;
+}
+
+/** The marks an action draws on or beside a box. */
+function boxMarks(action: TutorCanvasAction, box: CanvasBBox): TutorElement[] {
   const id = (suffix: string) => `${action.action_id}:${suffix}`;
 
   switch (action.type) {

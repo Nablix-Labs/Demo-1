@@ -26,6 +26,7 @@ import {
   type SessionSummary,
 } from '@/lib/api';
 import { uid } from '@/lib/uid';
+import { lastCaptureFrame, type CanvasFrame } from '@/lib/studentSnapshot';
 import {
   resolveTarget, actionMarks, showsWriteAffordance, memoryActionType, memoryActor,
   relocateWriteRequest, RESCUE_SUFFIX,
@@ -174,7 +175,16 @@ export interface TutorElement {
    */
   wrapWidth?: number;
   color?: string; strokeWidth?: number; size?: number;
+  /**
+   * Stage size (px) the geometry is relative to, when it is not the live stage.
+   * Set on marks the backend placed around OCR'd student ink — see
+   * lib/studentSnapshot `lastCaptureFrame` for why they must not rescale.
+   */
+  frame?: CanvasFrame;
 }
+
+/** Backend id prefix for marks drawn around OCR'd ink (canvas_annotations.plan_canvas_draw). */
+const CORRECTION_ACTION_PREFIX = 'canvas-correction-';
 
 /** Payload the backend/LLM sends to draw on the canvas. */
 export interface CanvasDrawPayload {
@@ -1740,8 +1750,13 @@ export const useNumeraStore = create<NumeraState>()(
         // where the cue and hint cards live. Layout is the client's job — see
         // relocateWriteRequest — so it is moved onto the same geometry the
         // reference labels use before anything is rendered or logged.
+        // A correction is placed around OCR'd ink, in the frame of the
+        // snapshot OCR read — so it renders in that frame, not today's stage.
+        const frame = action.actionId?.startsWith(CORRECTION_ACTION_PREFIX)
+          ? lastCaptureFrame() ?? undefined
+          : undefined;
         const incoming: TutorElement[] = relocateWriteRequest(
-          (action.elements ?? []).map((el) => ({ ...el, id: el.id ?? uid() })),
+          (action.elements ?? []).map((el) => ({ ...el, id: el.id ?? uid(), ...(frame && { frame }) })),
         );
         for (const element of incoming) {
           canvasEvents = appendCanvasEvent(canvasEvents, {

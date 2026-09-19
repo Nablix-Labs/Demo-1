@@ -26,7 +26,7 @@ import { Layer, Text, Line, Arrow, Rect, Ellipse, Group } from 'react-konva';
 import { useNumeraStore, type TutorElement } from '@/store/useNumeraStore';
 import { useTutorReveal } from '@/store/useTutorReveal';
 import { measureTutorTextBounds, clearTutorTextCache, tutorFontFamily } from '@/lib/tutorTip';
-import { TUTOR_LAYER_NAME } from '@/lib/studentSnapshot';
+import { TUTOR_LAYER_NAME, frameFor } from '@/lib/studentSnapshot';
 
 const INK = '#1B2A4A'; // focus-navy — readable AI-tutor ink default
 
@@ -36,7 +36,7 @@ function ellipsePerimeter(rx: number, ry: number): number {
   return Math.PI * (rx + ry) * (1 + (3 * h) / (10 + Math.sqrt(4 - 3 * h)));
 }
 
-export default function TutorLayer({ width, height }: { width: number; height: number }) {
+export default function TutorLayer({ width: stageWidth, height: stageHeight }: { width: number; height: number }) {
   const tutorElements = useNumeraStore((s) => s.tutorElements);
   const progress = useTutorReveal((s) => s.progress);
 
@@ -54,10 +54,10 @@ export default function TutorLayer({ width, height }: { width: number; height: n
     return () => { alive = false; };
   }, []);
 
-  // Map normalised pairs → pixel pairs
-  const px = (pts: number[]) => pts.map((v, i) => (i % 2 === 0 ? v * width : v * height));
-
   const render = (el: TutorElement) => {
+    const { width, height } = frameFor(el, stageWidth, stageHeight);
+    // Map normalised pairs → pixel pairs
+    const px = (pts: number[]) => pts.map((v, i) => (i % 2 === 0 ? v * width : v * height));
     const color = el.color ?? INK;
     const sw = el.strokeWidth ?? 2;
     const p = progress[el.id] ?? 0; // unknown id = not yet revealed
