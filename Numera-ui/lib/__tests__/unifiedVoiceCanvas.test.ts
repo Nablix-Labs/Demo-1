@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, sendInteraction, type InteractionPayload } from '@/lib/api';
+import { api, sendInteraction, SUBMISSION_TIMEOUT_MS, type InteractionPayload } from '@/lib/api';
 
 describe('unified voice canvas interaction', () => {
   afterEach(() => {
@@ -38,6 +38,6 @@ describe('unified voice canvas interaction', () => {
     await sendInteraction(payload);
 
     expect(post).toHaveBeenCalledOnce();
-    expect(post).toHaveBeenCalledWith('/interaction', payload);
+    expect(post).toHaveBeenCalledWith('/interaction', payload, { timeout: SUBMISSION_TIMEOUT_MS });
   });
 });

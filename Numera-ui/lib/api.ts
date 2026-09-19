@@ -1778,10 +1778,23 @@ export function activeScaffold(res: InteractionResponse | null | undefined): Act
   };
 }
 
+/**
+ * How long a graded submission may take.
+ *
+ * The attempt that finishes practice is answered only after the backend has
+ * built the session review, and that generation is retried: #326 measured 55s
+ * (two ~25s attempts) against the 30s default. The browser gave up, the server
+ * moved to REVIEW anyway, and the student was left on the finished question
+ * reading "the tutor couldn't take that submission".
+ */
+export const SUBMISSION_TIMEOUT_MS = 90_000;
+
 /** POST /interaction — core tutoring call. Requires a started, owned session. */
 export async function sendInteraction(payload: InteractionPayload): Promise<InteractionResult> {
   try {
-    const res = await api.post<InteractionResponse>('/interaction', payload);
+    const res = payload.interaction_type === 'ANSWER_SUBMISSION'
+      ? await api.post<InteractionResponse>('/interaction', payload, { timeout: SUBMISSION_TIMEOUT_MS })
+      : await api.post<InteractionResponse>('/interaction', payload);
     return res.data;
   } catch (error) {
     if (axios.isAxiosError(error) && error.response?.status === 409) {
@@ -2117,7 +2130,7 @@ export async function submitCanvas(
     // already arriving — no second frontend release in the middle of his work.
     canvas_events: canvasEventsForSubmission(canvasEvents),
     submission_role: submissionRole,
-  });
+  }, { timeout: SUBMISSION_TIMEOUT_MS });
   return res.data;
 }
 

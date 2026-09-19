@@ -501,10 +501,27 @@ export default function PracticePage() {
       setPracticeDone();
       completePhase('practice');
     } else {
+      // A failed request is not proof the attempt was lost: the server can
+      // finish it after the browser has given up (#326 — the practice-ending
+      // attempt moved the session to REVIEW 25s after our timeout). Ask
+      // before telling the student to try again.
+      if (silent && await sessionMovedToReview()) {
+        void reviewWithTutor();
+        return;
+      }
       // The canvas unlocks again — their work is untouched and retryable.
       setSubmitError(
         "The tutor couldn't take that submission. Your work is still here — try once more, or ask for a hint.",
       );
+    }
+  };
+  /** Has the backend already moved this session on to REVIEW? False when unsure. */
+  const sessionMovedToReview = async (): Promise<boolean> => {
+    if (!tutor.sessionId) return false;
+    try {
+      return reviewIsNext(await getSession(tutor.sessionId));
+    } catch {
+      return false;
     }
   };
   /** The Toolbar's "Check" — canvas work, or a pick already made. */
