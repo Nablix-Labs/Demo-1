@@ -78,6 +78,30 @@ export default function Toolbar({ onCheckWork }: ToolbarProps) {
     return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey); };
   }, [menu]);
 
+  // A dragged position is persisted, and until now it was only clamped during
+  // the drag. Restored in a narrower window — or after the support column
+  // narrowed the canvas, or on expanding from the puck — the bar ran past the
+  // canvas's `overflow: hidden` edge and Check, the last button, was clipped
+  // out of sight (1280px canvas, saved x=900: Check at 1341–1432). Re-clamp
+  // whenever the canvas or the bar itself changes size.
+  useEffect(() => {
+    const el = rootRef.current;
+    const parent = el?.offsetParent as HTMLElement | null;
+    if (!el || !parent || !toolbarPos || dragging) return;
+    const clamp = () => {
+      const pos = useNumeraStore.getState().toolbarPos;
+      if (!pos) return;
+      const x = Math.max(8, Math.min(pos.x, parent.clientWidth - el.offsetWidth - 8));
+      const y = Math.max(8, Math.min(pos.y, parent.clientHeight - el.offsetHeight - 8));
+      if (x !== pos.x || y !== pos.y) setToolbarPos({ x, y });
+    };
+    clamp();
+    const ro = new ResizeObserver(clamp);
+    ro.observe(parent);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [toolbarPos, dragging, setToolbarPos]);
+
   // ── Drag from the head — move the palette; rotate to vertical when docked ─────
   const onHeadDown = (e: React.PointerEvent) => {
     const el = rootRef.current;
