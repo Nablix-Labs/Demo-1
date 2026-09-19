@@ -7,6 +7,7 @@ from fastapi import HTTPException
 
 from app.ai_engine.classifier import (
     ClassificationRequest,
+    accept_reliable_canvas_submission_acknowledgement,
     build_guided_tutor_response,
     current_learner_response,
     required_response_aware_learner_action,
@@ -437,6 +438,61 @@ def test_voice_correction_keeps_current_words_separate_from_conflicting_canvas_w
     assert "n + 6" in merged.student_input
     assert validate_response_aware_submission(evaluation, merged).submission_state == "MISMATCHED"
     assert required_response_aware_learner_action(evaluation) == "REWRITE"
+
+
+def test_reliable_canvas_answer_completes_an_acknowledgement_turn() -> None:
+    request = ClassificationRequest(
+        question_id="REPLAY",
+        question_type="SHORT_RESPONSE",
+        question="Write the general rule.",
+        correct_answer="n + 5",
+        answer_spec=AnswerSpec(
+            answer_spec_id="REPLAY",
+            canonical_answer="n + 5",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=False,
+        ),
+        student_input="I have written it.",
+        current_phase="GUIDED_PRACTICE",
+        input_source="VOICE",
+        transcript_confidence=0.95,
+        attempt_count=0,
+        current_hint_level=None,
+        canvas_submission_required=True,
+        has_canvas_evidence=True,
+        canvas_solution_complete_candidate=True,
+    )
+    evaluation = GuidedEvaluation(
+        contribution=StudentContribution.model_validate({
+            "kind": "ACKNOWLEDGEMENT",
+            "assessment": "NOT_ASSESSED",
+            "error_category": None,
+            "error_description": None,
+            "identified_difficulty": None,
+            "learner_question": None,
+            "explained_idea": None,
+            "generated_support_text": None,
+            "support_relevance": "NOT_NEEDED",
+        }),
+        student_state="STUCK",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=["GENERAL_RULE_ADD_FIVE"],
+        contradicted_concept_ids=[],
+        missing_concept_ids=[],
+        selected_error_code=None,
+        confidence=0.98,
+        next_objective=None,
+        submission_state="MISMATCHED",
+        tutor_message="Please rewrite the rule.",
+        tutor_message_voice="Please rewrite the rule.",
+    )
+
+    completed = accept_reliable_canvas_submission_acknowledgement(evaluation, request)
+
+    assert completed.student_state == "CORRECT"
+    assert completed.submission_state == "MATCHING"
+    assert validate_response_aware_submission(completed, request) is completed
 
 
 @pytest.mark.parametrize(
