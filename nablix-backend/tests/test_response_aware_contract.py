@@ -551,6 +551,62 @@ def test_matching_canvas_expression_wins_over_earlier_conflicting_work() -> None
     assert required_response_aware_learner_action(completed) == "CONTINUE"
 
 
+def test_verified_canvas_completes_a_partial_voice_answer_when_not_required() -> None:
+    request = ClassificationRequest(
+        question_id="REPLAY",
+        question_type="SHORT_RESPONSE",
+        question="Write p × p × q in compact algebraic notation.",
+        correct_answer="p²q",
+        answer_spec=AnswerSpec(
+            answer_spec_id="REPLAY",
+            canonical_answer="p²q",
+            accepted_answers=["p^2q"],
+            verification_method="EXACT_NOTATION_MATCH",
+            explanation_required=False,
+        ),
+        student_input="The power is 2.",
+        current_phase="GUIDED_PRACTICE",
+        input_source="VOICE",
+        transcript_confidence=0.95,
+        attempt_count=0,
+        current_hint_level=None,
+        canvas_submission_required=False,
+        has_canvas_evidence=True,
+        canvas_solution_complete_candidate=True,
+    )
+    evaluation = GuidedEvaluation(
+        contribution=StudentContribution.model_validate({
+            "kind": "MATHEMATICAL_ATTEMPT",
+            "assessment": "INCOMPLETE",
+            "error_category": None,
+            "error_description": None,
+            "identified_difficulty": None,
+            "learner_question": None,
+            "explained_idea": None,
+            "generated_support_text": None,
+            "support_relevance": "NOT_NEEDED",
+        }),
+        student_state="PARTIAL",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=["COMPACT_PRODUCT_NOTATION"],
+        selected_error_code=None,
+        confidence=0.98,
+        next_objective=None,
+        submission_state="NOT_REQUIRED",
+        tutor_message="Write the compact notation.",
+        tutor_message_voice="Write the compact notation.",
+    )
+
+    completed = accept_reliable_canvas_submission(evaluation, request)
+
+    assert completed.student_state == "CORRECT"
+    assert completed.newly_confirmed_concept_ids == ["COMPACT_PRODUCT_NOTATION"]
+    assert completed.missing_concept_ids == []
+    assert completed.submission_state == "NOT_REQUIRED"
+
+
 @pytest.mark.parametrize(
     ("submission_state", "expected_action"),
     [
