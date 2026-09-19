@@ -25,6 +25,12 @@ export default function FloatingMicButton() {
   const micButtonPos = useNumeraStore((s) => s.micButtonPos);
   const setMicButtonPos = useNumeraStore((s) => s.setMicButtonPos);
   const consents = useAuthStore((s) => s.consents);
+  // #330: while the tutor is talking or thinking, the mic is not listening
+  // anyway (app/page.tsx only transmits in 'listening'), but an orange button
+  // told the student to answer — and they did, again and again, until the flow
+  // fell over. So it shows the wait and ignores taps until the floor is theirs.
+  const voiceStatus = useNumeraStore((s) => s.voiceStatus);
+  const busy = voiceStatus === 'speaking' || voiceStatus === 'processing';
 
   // Voice is a consented feature (§10): only available with voice_processing consent.
   const voiceAllowed = isConsentActive(consents, 'voice_processing');
@@ -77,6 +83,7 @@ export default function FloatingMicButton() {
       didDrag.current = false;
       return;
     }
+    if (busy) return;
     toggleMic();
   };
 
@@ -89,7 +96,13 @@ export default function FloatingMicButton() {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onClick={onClick}
-      aria-label={micMuted ? 'Unmute microphone' : 'Mute microphone'}
+      aria-label={
+        busy
+          ? (voiceStatus === 'speaking' ? 'Wait, the tutor is talking' : 'Wait, the tutor is thinking')
+          : micMuted ? 'Unmute microphone' : 'Mute microphone'
+      }
+      aria-disabled={busy}
+      title={busy ? (voiceStatus === 'speaking' ? 'The tutor is talking' : 'The tutor is thinking') : undefined}
       data-support-id="mic-toggle"
       className={cn(
         'fixed z-[55] w-14 h-14 rounded-full flex items-center justify-center transition-colors',
@@ -97,7 +110,7 @@ export default function FloatingMicButton() {
         // Default docked spot (bottom-centre, clearing the toolbar + demo bar)
         // until the student drags it somewhere.
         !positioned && 'bottom-32 left-1/2 -translate-x-1/2',
-        micMuted ? 'lg-glass text-ink' : 'bg-action-orange text-white'
+        busy ? 'lg-glass text-ink opacity-50' : micMuted ? 'lg-glass text-ink' : 'bg-action-orange text-white'
       )}
       style={positioned ? { left: micButtonPos.x, top: micButtonPos.y, boxShadow: SHADOW } : { boxShadow: SHADOW }}
     >
