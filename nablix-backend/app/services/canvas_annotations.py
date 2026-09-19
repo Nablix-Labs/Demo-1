@@ -1098,60 +1098,20 @@ def safe_written_rule_anchors(canonical_answer: str) -> list[str]:
 
 
 def plan_write_request_tutor_draw(turn_id: str) -> list[CanvasDrawPayload]:
-    """Point to a tutor-layer writing area without supplying the answer."""
+    """Writing may occur anywhere on the active canvas."""
 
-    return [
-        CanvasDrawPayload(
-            action_id=f"{turn_id}:write-request",
-            mode="append",
-            elements=[
-                TutorElement(
-                    id=f"{turn_id}:write-highlight",
-                    kind="highlight",
-                    points=[0.58, 0.62, 0.92, 0.62, 0.92, 0.74, 0.58, 0.74],
-                    color=_AFFIRMATION_COLOR,
-                    size=18.0,
-                ),
-                TutorElement(
-                    id=f"{turn_id}:write-prompt",
-                    kind="text",
-                    x=0.62,
-                    y=0.66,
-                    text="Write your rule here.",
-                    color=_CORRECTION_COLOR,
-                    size=18.0,
-                ),
-                TutorElement(
-                    id=f"{turn_id}:write-arrow",
-                    kind="arrow",
-                    from_=[0.75, 0.56],
-                    to=[0.75, 0.62],
-                    color=_CORRECTION_COLOR,
-                    stroke_width=2.0,
-                ),
-            ],
-        )
-    ]
+    del turn_id
+    return []
 
 
 def plan_write_request_tutor_actions(
     turn_id: str,
     action_index: int,
 ) -> list[TutorCanvasAction]:
-    """Describe the focused writing area for clients that use semantic actions."""
+    """Do not prescribe a canvas location for written learner work."""
 
-    return [
-        TutorCanvasAction(
-            action_id=f"{turn_id}:{action_index}:FOCUS:WRITE_AREA",
-            type="FOCUS",
-            target_kind="WRITE_AREA",
-            target_object_id=None,
-            confirmed_component_id=None,
-            text="Write your rule on the canvas.",
-            source_id=None,
-            answer_reveal_allowed=False,
-        )
-    ]
+    del turn_id, action_index
+    return []
 
 
 def _whole_region_draw(
