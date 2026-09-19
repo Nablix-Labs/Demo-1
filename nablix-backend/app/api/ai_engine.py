@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
@@ -105,7 +107,9 @@ async def generate_phase4_review_endpoint(
     request: Phase4ReviewRequest,
 ) -> Phase4ReviewResponse:
     try:
-        return generate_phase4_review(request)
+        # Off the event loop, for the reason session_service.py:1261 gives:
+        # a synchronous httpx call with a multiplying retry budget.
+        return await asyncio.to_thread(generate_phase4_review, request)
     except AdapterError:
         raise
     except Phase4ReviewValidationError as error:

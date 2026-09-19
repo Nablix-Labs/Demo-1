@@ -134,6 +134,22 @@ def _replay_item(index: int, attempt: TopicAttemptRecord) -> ReplayItem | None:
         if not value:
             skipped(reason)
             return None
+    if attempt.work_artifact is not None and not attempt.work_artifact.combined_ocr_text:
+        # Drawn work whose text we cannot read back. The replay is still built
+        # -- a review without a crossed-out step beats no review -- but the
+        # tutor is explaining work it was never shown, and
+        # _validate_board_progression has nothing to ground a struck element
+        # against. If this fires for every attempt, /topic/event-history is not
+        # returning the OCR we stored, and that is the bug to chase (#326), not
+        # the generation failure it surfaces as.
+        logger.info(
+            "phase4_replay_item_without_ocr",
+            extra={
+                "attempt_id": attempt.attempt_id,
+                "question_id": attempt.question_id,
+                "artifact_id": attempt.work_artifact.artifact_id,
+            },
+        )
     detected_errors = [
         DetectedError(error_code=error.error_code, micro_skill_id=error.micro_skill_id)
         for error in attempt.detected_errors
@@ -157,6 +173,14 @@ def _replay_item(index: int, attempt: TopicAttemptRecord) -> ReplayItem | None:
         attempt_id=attempt.attempt_id,
         question_text=attempt.question_text,
         student_answer=attempt.student_response,
+        # A canvas answer types nothing, so the OCR is the only record of what
+        # the student actually wrote -- and the only thing
+        # _validate_board_progression can check a crossed-out step against.
+        ocr_text=(
+            attempt.work_artifact.combined_ocr_text
+            if attempt.work_artifact is not None
+            else None
+        ),
         work_artifact=work_artifact,
         detected_errors=detected_errors,
         linked_misconceptions=attempt.linked_misconceptions,

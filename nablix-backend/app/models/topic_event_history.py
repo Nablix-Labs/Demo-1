@@ -31,6 +31,13 @@ class WorkArtifactRef(BaseModel):
     artifact_id: str
     pdf_url: str
     page_count: int
+    # The recognised text of the work, stored alongside the PDF on the way in
+    # (`WorkArtifactPersistRequest`, work_artifact.py:27) so Phase 4 can read
+    # the work back without rerunning OCR -- which is the whole reason the
+    # spec asks for it. Optional because attempts stored before it travelled
+    # back have none, and a review with no crossed-out step is better than a
+    # review that never generates.
+    combined_ocr_text: str | None = None
 
 
 class TopicAttemptRecord(BaseModel):
