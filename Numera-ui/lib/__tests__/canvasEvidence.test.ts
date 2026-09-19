@@ -38,7 +38,7 @@ function event(order: number): CanvasEvent {
 }
 
 function snapshot(strokes: CanvasSnapshot['strokes']): CanvasSnapshot {
-  return { snapshotDataUrl: PNG, strokes, capturedAt: '2026-08-24T10:00:00Z' };
+  return { snapshotDataUrl: PNG, strokes, capturedAt: '2026-08-24T10:00:00Z', width: 800, height: 600 };
 }
 
 describe('trimStrokes', () => {

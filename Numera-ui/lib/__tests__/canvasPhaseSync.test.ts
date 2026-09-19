@@ -46,7 +46,7 @@ describe('Canvas phase synchronization', () => {
       canvasExporter: () => ({
         snapshotDataUrl: 'data:image/png;base64,c25hcHNob3Q=',
         strokes: [],
-        capturedAt: '2026-08-11T10:29:28.000Z',
+        capturedAt: '2026-08-11T10:29:28.000Z', width: 800, height: 600,
       }),
     });
     const container = document.createElement('div');

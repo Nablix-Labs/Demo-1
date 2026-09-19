@@ -30,7 +30,7 @@ function wouldSend(sentForTurn: string | null): { send: boolean; turnId: string 
 const snapshot = () => ({
   snapshotDataUrl: 'data:image/png;base64,AAAA',
   strokes: [],
-  capturedAt: '2026-08-24T00:00:00.000Z',
+  capturedAt: '2026-08-24T00:00:00.000Z', width: 800, height: 600,
 });
 
 beforeEach(() => {

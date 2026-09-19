@@ -28,6 +28,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import { phaseAnnouncement, withTransitionVoice } from '@/lib/phaseTransition';
 import { applyVoiceSessionFrame } from '@/lib/voiceSessionSync';
 import { useNumeraStore } from '@/store/useNumeraStore';
+import type { CanvasFrame } from '@/lib/studentSnapshot';
 import { useAuthStore } from '@/store/useAuthStore';
 import { tutorAudioStream, effectiveVoice, stopTutorSpeech } from '@/lib/tts';
 import { tutorSay, setStudentWriting, isPenDown } from '@/lib/tutorSpeech';
@@ -234,6 +235,9 @@ export function useWebSocket(sessionId: string | null) {
    * or to the OCR behind it.
    */
   const canvasSentForTurnRef = useRef<string | null>(null);
+  // The frame of the snapshot sent for each turn, so the reply to THAT turn
+  // draws its corrections where the ink was (lib/studentSnapshot CanvasFrame).
+  const snapshotFrameByTurnRef = useRef(new Map<string, CanvasFrame>());
   const sendCanvasForTurn = useCallback(() => {
     const s = useNumeraStore.getState();
     const turnId = s.currentTurnId;
@@ -242,6 +246,10 @@ export function useWebSocket(sessionId: string | null) {
     const snapshot = s.canvasExporter?.();
     if (!snapshot?.snapshotDataUrl) return;
     canvasSentForTurnRef.current = turnId;
+    const frames = snapshotFrameByTurnRef.current;
+    frames.set(turnId, { width: snapshot.width, height: snapshot.height });
+    // A cancelled turn never gets its reply; keep only the recent few.
+    while (frames.size > 8) frames.delete(frames.keys().next().value!);
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       logFrame('out', {
         type: 'canvas_submission',
@@ -655,8 +663,13 @@ export function useWebSocket(sessionId: string | null) {
             // message. Kept as the stream's fallback text below.
             const spokenLine = applyInteractionSupport(voiceSupportFrame(msg));
             addTranscriptMessage({ role: 'ai', text: msg.text as string });
-            if (Array.isArray(msg.canvas_draw) && msg.canvas_draw.length > 0)
-              applyCanvasDraw(msg.canvas_draw as Parameters<typeof applyCanvasDraw>[0]);
+            {
+              const turnId = msg.accepted_turn_id as string | undefined;
+              const frame = turnId ? snapshotFrameByTurnRef.current.get(turnId) : undefined;
+              if (turnId) snapshotFrameByTurnRef.current.delete(turnId);
+              if (Array.isArray(msg.canvas_draw) && msg.canvas_draw.length > 0)
+                applyCanvasDraw(msg.canvas_draw as Parameters<typeof applyCanvasDraw>[0], frame);
+            }
             // The voice server forwards the backend's phase state; keep the
             // store in sync so usePhaseRouting can follow phase changes.
             //

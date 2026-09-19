@@ -968,6 +968,8 @@ export function useDemoTutor() {
       addTrailEntry({ kind: 'answer', text });
       const turnId = useNumeraStore.getState().beginSubmissionTurn();
       closeMicForSubmission();
+      // Held so the reply's corrections render in the frame OCR read it in.
+      const snapshot = canvasExporter?.();
       try {
         const state = useNumeraStore.getState();
         const res = await sendSynchronizedInteraction({
@@ -987,7 +989,7 @@ export function useDemoTutor() {
           // `review_canvas_math` then returns None outright, so the tutor
           // evaluated the sentence alone and re-asked what had just been
           // answered — Manjusha's "please check the Canvas", on the keyboard.
-          canvas_state: canvasEvidenceFor(canvasExporter?.(), state.canvasEvents),
+          canvas_state: canvasEvidenceFor(snapshot, state.canvasEvents),
           selected_option_id: state.selectedOptionId ?? undefined,
           // A typed answer on a choice question still carries the selection, so
           // it carries the wording too (revised handoff, frontend §1).
@@ -1048,7 +1050,7 @@ export function useDemoTutor() {
         // setCurrentPhase did not wait, so for that window the phase had moved
         // while the question, options and anchors were still the old one's.
         const drew = Boolean(res.canvas_draw?.length);
-        if (drew) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw!);
+        if (drew) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw!, snapshot);
         // §1: highlight first, pause, then speak. When the turn also drew, the
         // mark lands before it is described; when it didn't, this speaks at once.
         tutorSay(withHint(hint, spoken), { afterMarks: drew, onEnd: takeFloorForReply() });
@@ -1197,7 +1199,7 @@ export function useDemoTutor() {
         });
       }
       const drew = Boolean(res.canvas_draw?.length);
-      if (drew) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw!);
+      if (drew) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw!, canvasSnapshot);
       // The work has been read, so the student no longer holds the floor —
       // otherwise the tutor's response to a submission would be silently dropped
       // by the very rule that kept it quiet while they were writing.
@@ -1623,7 +1625,7 @@ export function useDemoTutor() {
         // left, so the marks can be read before the board clears. A bare
         // setCurrentPhase did not wait, so for that window the phase had moved
         // while the question, options and anchors were still the old one's.
-        if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw);
+        if (res.canvas_draw?.length) useNumeraStore.getState().applyCanvasDraw(res.canvas_draw, canvasSnapshot);
         // Record the tutor turn + backend gating for the next turn (contract §11).
         // Fallbacks keep the loop working before the backend sends these fields.
         useNumeraStore.getState().setTutorTurn(res.tutor_turn_id ?? null, {

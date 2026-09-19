@@ -25,7 +25,7 @@ import TutorLayer from './TutorLayer';
 import TutorMathOverlay from './TutorMathOverlay';
 import TutorHandOverlay from './TutorHandOverlay';
 import { useTutorRevealSync } from '@/store/useTutorReveal';
-import { captureStudentLayers, recordCaptureFrame } from '@/lib/studentSnapshot';
+import { captureStudentLayers } from '@/lib/studentSnapshot';
 
 interface DrawingCanvasProps {
   onExportReady?: (exportFn: CanvasExporter) => void;
@@ -132,14 +132,15 @@ export default function DrawingCanvas({ onExportReady, tutorOnly = false, readOn
           width: item.size / scale,
         }];
       });
-      // Correction marks placed against this capture render in its frame.
-      recordCaptureFrame({ width, height });
       return {
         // Student layers only — the tutor's own marks must not be OCR'd back
         // as the student's work (see lib/studentSnapshot).
         snapshotDataUrl: captureStudentLayers(stage),
         strokes,
         capturedAt: new Date().toISOString(),
+        // Correction marks placed against this capture render in its frame.
+        width,
+        height,
       };
     });
   }, [items, onExportReady]);

@@ -26,7 +26,7 @@ import {
   type SessionSummary,
 } from '@/lib/api';
 import { uid } from '@/lib/uid';
-import { lastCaptureFrame, type CanvasFrame } from '@/lib/studentSnapshot';
+import type { CanvasFrame } from '@/lib/studentSnapshot';
 import {
   resolveTarget, actionMarks, showsWriteAffordance, memoryActionType, memoryActor,
   dropWriteRequest, RESCUE_SUFFIX,
@@ -142,6 +142,9 @@ export interface CanvasSnapshot {
   snapshotDataUrl: string;
   strokes: CanvasStrokeSnapshot[];
   capturedAt: string;
+  /** Stage size (px) at capture — the frame OCR geometry is relative to. */
+  width: number;
+  height: number;
 }
 
 export type CanvasExporter = () => CanvasSnapshot | null;
@@ -178,7 +181,7 @@ export interface TutorElement {
   /**
    * Stage size (px) the geometry is relative to, when it is not the live stage.
    * Set on marks the backend placed around OCR'd student ink — see
-   * lib/studentSnapshot `lastCaptureFrame` for why they must not rescale.
+   * lib/studentSnapshot `CanvasFrame` for why they must not rescale.
    */
   frame?: CanvasFrame;
 }
@@ -898,7 +901,11 @@ export interface NumeraState {
   undo: () => void;
   redo: () => void;
   clearCanvas: () => void;
-  applyCanvasDraw: (payload: CanvasDrawPayload | CanvasDrawPayload[]) => void;
+  /**
+   * `frame` is the size of the snapshot this reply was computed from, when the
+   * request carried one. Corrections drawn around the student's ink use it.
+   */
+  applyCanvasDraw: (payload: CanvasDrawPayload | CanvasDrawPayload[], frame?: CanvasFrame | null) => void;
   applyTutorCanvasActions: (actions: TutorCanvasAction[]) => void;
   /** Tutor asked the student to write here. Never carries the answer itself. */
   clearWriteAffordance: () => void;
@@ -1715,7 +1722,7 @@ export const useNumeraStore = create<NumeraState>()(
   recordSupportEvent: (draft) =>
     set((s) => ({ canvasEvents: appendCanvasEvent(s.canvasEvents, draft, eventContext(s)) })),
 
-  applyCanvasDraw: (payload) =>
+  applyCanvasDraw: (payload, captureFrame) =>
     set((s) => {
       // Phase 3 spec §3.2/§1.5: no tutor ink or correction overlays during an
       // independent attempt, and no canvas_draw built from Phase 3 metadata.
@@ -1749,8 +1756,8 @@ export const useNumeraStore = create<NumeraState>()(
         // The yellow write-request block is no longer drawn — dropWriteRequest.
         // A correction is placed around OCR'd ink, in the frame of the
         // snapshot OCR read — so it renders in that frame, not today's stage.
-        const frame = action.actionId?.startsWith(CORRECTION_ACTION_PREFIX)
-          ? lastCaptureFrame() ?? undefined
+        const frame = captureFrame && action.actionId?.startsWith(CORRECTION_ACTION_PREFIX)
+          ? { width: captureFrame.width, height: captureFrame.height }
           : undefined;
         const incoming: TutorElement[] = dropWriteRequest(
           (action.elements ?? []).map((el) => ({ ...el, id: el.id ?? uid(), ...(frame && { frame }) })),
