@@ -6532,26 +6532,42 @@ def accept_reliable_canvas_submission(
         not request.canvas_submission_required
         or not request.has_canvas_evidence
         or not request.canvas_solution_complete_candidate
-        or evaluation.missing_concept_ids
     ):
         return evaluation
     mathematics_confirmed = (
         evaluation.student_state == "CORRECT"
+        and not evaluation.missing_concept_ids
         and not evaluation.contradicted_concept_ids
     )
-    acknowledgement_of_confirmed_work = (
+    acknowledgement_of_matching_canvas_work = (
         contribution is not None
         and contribution.assessment == "NOT_ASSESSED"
         and contribution.kind in {"ACKNOWLEDGEMENT", "TASK_CLARIFICATION"}
+        and request.answer_spec is not None
+        and not request.answer_spec.explanation_required
+        and not evaluation.contradicted_concept_ids
     )
-    if not mathematics_confirmed and not acknowledgement_of_confirmed_work:
+    if not mathematics_confirmed and not acknowledgement_of_matching_canvas_work:
         return evaluation
+    completed_from_canvas = acknowledgement_of_matching_canvas_work
     return evaluation.model_copy(update={
         "student_state": (
             "CORRECT"
-            if acknowledgement_of_confirmed_work
+            if completed_from_canvas
             else evaluation.student_state
         ),
+        "newly_confirmed_concept_ids": (
+            sorted(
+                set(evaluation.newly_confirmed_concept_ids)
+                | set(evaluation.missing_concept_ids)
+            )
+            if completed_from_canvas
+            else evaluation.newly_confirmed_concept_ids
+        ),
+        "missing_concept_ids": (
+            [] if completed_from_canvas else evaluation.missing_concept_ids
+        ),
+        "next_objective": None if completed_from_canvas else evaluation.next_objective,
         "submission_state": "MATCHING",
     })
 
