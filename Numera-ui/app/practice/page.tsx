@@ -55,6 +55,11 @@ export default function PracticePage() {
   // do. Mock mode (no backend) keeps the original coached practice screen.
   const currentPhase = useNumeraStore((s) => s.currentPhase);
   const activeQuestionId = useNumeraStore((s) => s.activeQuestionId);
+  // Primitive, not the session object: an object selector re-renders on every
+  // store write. Read here because `reviewAvailable` is derived beside `locked`.
+  const recommendedEntryPhase = useNumeraStore(
+    (s) => s.backendSession?.student_model_state?.recommended_entry_phase ?? null,
+  );
   const phase3LockedQuestionId = useNumeraStore((s) => s.phase3LockedQuestionId);
   const questionType = useNumeraStore((s) => s.questionType);
   const questionOptions = useNumeraStore((s) => s.questionOptions);
@@ -178,6 +183,20 @@ export default function PracticePage() {
   const rescueOn = useNumeraStore(rescueBlocksSubmission);
   /** The accepted attempt is frozen: no more ink, no more choices, no support. */
   const locked = silent && phase3Locked(phase3LockedQuestionId, activeQuestionId);
+  /**
+   * Is Review somewhere the student is actually allowed to go?
+   *
+   * A lock says this attempt is over; it does not say the phase is. The
+   * routing can close an attempt and promise a fresh question instead — and
+   * when that question never arrives (ST008, 19 Sep 2026) the screen offered
+   * "Review with tutor" against a session still sitting in INDEPENDENT_PRACTICE.
+   * `reviewWithTutor` re-reads the session and refuses, so the button did
+   * nothing but invite the press. Better to show no action than a false one.
+   */
+  const reviewAvailable = reviewIsNext({
+    current_phase: currentPhase,
+    recommended_entry_phase: recommendedEntryPhase,
+  });
 
   // Hands-free voice: on turn-end, fire the transcript + canvas to the backend.
   const { submitVoiceTurn } = tutor;
@@ -692,7 +711,7 @@ export default function PracticePage() {
             >
               {noticeText ?? ANSWER_RECORDED}
             </span>
-            {locked && (
+            {locked && reviewAvailable && (
               <button
                 onClick={() => void reviewWithTutor()}
                 disabled={ending}
