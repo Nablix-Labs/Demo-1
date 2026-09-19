@@ -6529,9 +6529,10 @@ def accept_reliable_canvas_submission(
 
     contribution = evaluation.contribution
     if (
-        not request.canvas_submission_required
-        or not request.has_canvas_evidence
+        not request.has_canvas_evidence
         or not request.canvas_solution_complete_candidate
+        or request.answer_spec is None
+        or request.answer_spec.explanation_required
     ):
         return evaluation
     mathematics_confirmed = (
@@ -6539,17 +6540,23 @@ def accept_reliable_canvas_submission(
         and not evaluation.missing_concept_ids
         and not evaluation.contradicted_concept_ids
     )
-    acknowledgement_of_matching_canvas_work = (
+    canvas_completion_is_authorised = (
         contribution is not None
-        and contribution.assessment == "NOT_ASSESSED"
-        and contribution.kind in {"ACKNOWLEDGEMENT", "TASK_CLARIFICATION"}
-        and request.answer_spec is not None
-        and not request.answer_spec.explanation_required
         and not evaluation.contradicted_concept_ids
+        and (
+            (
+                contribution.assessment == "NOT_ASSESSED"
+                and contribution.kind in {"ACKNOWLEDGEMENT", "TASK_CLARIFICATION"}
+            )
+            or (
+                contribution.kind == "MATHEMATICAL_ATTEMPT"
+                and contribution.assessment in {"CORRECT", "INCOMPLETE"}
+            )
+        )
     )
-    if not mathematics_confirmed and not acknowledgement_of_matching_canvas_work:
+    if not mathematics_confirmed and not canvas_completion_is_authorised:
         return evaluation
-    completed_from_canvas = acknowledgement_of_matching_canvas_work
+    completed_from_canvas = not mathematics_confirmed
     return evaluation.model_copy(update={
         "student_state": (
             "CORRECT"
@@ -6568,7 +6575,9 @@ def accept_reliable_canvas_submission(
             [] if completed_from_canvas else evaluation.missing_concept_ids
         ),
         "next_objective": None if completed_from_canvas else evaluation.next_objective,
-        "submission_state": "MATCHING",
+        "submission_state": (
+            "MATCHING" if request.canvas_submission_required else "NOT_REQUIRED"
+        ),
     })
 
 
