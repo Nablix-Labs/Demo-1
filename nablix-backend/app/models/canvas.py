@@ -108,7 +108,7 @@ class CanvasSubmitRequest(BaseModel):
     snapshot_data_url: SnapshotDataUrl
     # Pages 2..N of a multi-page submission, in order. Page 1 stays
     # `snapshot_data_url`, so single-page submissions are unchanged.
-    additional_pages: list[SnapshotDataUrl] = Field(default_factory=list)
+    additional_pages: list[SnapshotDataUrl] = Field(default_factory=list, max_length=4)
     strokes: list[CanvasStroke] = Field(default_factory=list)
     canvas_events: list[CanvasEvent] = Field(default_factory=list)
     # Optional spoken transcript to grade alongside the canvas (VAD turn). Omitted by

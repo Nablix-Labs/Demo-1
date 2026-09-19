@@ -121,6 +121,11 @@ async def collect_canvas_evidence(
     additional_pages: list[str] | None = None,
 ) -> CanvasEvidence:
     settings = get_settings()
+    if additional_pages and len(additional_pages) > 4:
+        raise HTTPException(
+            status_code=422,
+            detail="Exceeded maximum of 4 additional pages (5 pages total).",
+        )
     pages = [snapshot_data_url, *(additional_pages or [])]
     for page in pages:
         if len(page) > settings.max_snapshot_bytes:
@@ -132,7 +137,13 @@ async def collect_canvas_evidence(
     snapshot_reference = build_reference(submission_id)
     store_snapshot(snapshot_reference, snapshot_data_url)
     started = perf_counter()
-    page_results = await asyncio.gather(*(vision.recognize(page) for page in pages))
+    semaphore = asyncio.Semaphore(3)
+
+    async def _recognize_bounded(page: str) -> VisionOCRResult:
+        async with semaphore:
+            return await vision.recognize(page)
+
+    page_results = await asyncio.gather(*(_recognize_bounded(page) for page in pages))
     ocr = page_results[0]
     ocr = ocr.model_copy(
         update={"detected_regions": assign_step_ids(ocr.detected_regions)}

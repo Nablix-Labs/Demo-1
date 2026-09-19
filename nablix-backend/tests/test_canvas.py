@@ -6,6 +6,7 @@ from io import BytesIO
 
 import pytest
 from PIL import Image
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.api import canvas as canvas_api
@@ -3133,6 +3134,106 @@ def test_collect_canvas_evidence_starts_every_page_ocr_concurrently() -> None:
 
     assert vision.started == pages
     assert evidence.page_ocr_texts == [page[-1] for page in pages]
+
+
+def test_five_pages_are_accepted_and_retain_original_order() -> None:
+    pages = [
+        f"{VALID_SNAPSHOT_DATA_URL}1",
+        f"{VALID_SNAPSHOT_DATA_URL}2",
+        f"{VALID_SNAPSHOT_DATA_URL}3",
+        f"{VALID_SNAPSHOT_DATA_URL}4",
+        f"{VALID_SNAPSHOT_DATA_URL}5",
+    ]
+
+    class OrderedVision:
+        async def recognize(self, snapshot_data_url: str) -> VisionOCRResult:
+            return VisionOCRResult(
+                raw_ocr_text=f"page-{snapshot_data_url[-1]}",
+                detected_equation="",
+                detected_steps=[],
+                confidence=0.95,
+                provider="mock",
+            )
+
+    evidence = asyncio.run(
+        canvas_evidence.collect_canvas_evidence(
+            pages[0], [], "SUB-5PAGES", OrderedVision(), pages[1:]
+        )
+    )
+
+    assert evidence.page_ocr_texts == [f"page-{i}" for i in range(1, 6)]
+
+
+def test_six_pages_are_rejected_before_ocr() -> None:
+    pages = [
+        f"{VALID_SNAPSHOT_DATA_URL}1",
+        f"{VALID_SNAPSHOT_DATA_URL}2",
+        f"{VALID_SNAPSHOT_DATA_URL}3",
+        f"{VALID_SNAPSHOT_DATA_URL}4",
+        f"{VALID_SNAPSHOT_DATA_URL}5",
+        f"{VALID_SNAPSHOT_DATA_URL}6",
+    ]
+
+    class UnexpectedVision:
+        async def recognize(self, snapshot_data_url: str) -> VisionOCRResult:
+            raise AssertionError(f"OCR called unexpectedly for {snapshot_data_url}")
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            canvas_evidence.collect_canvas_evidence(
+                pages[0], [], "SUB-6PAGES", UnexpectedVision(), pages[1:]
+            )
+        )
+    assert exc_info.value.status_code == 422
+
+    session_id = _start_session("ST414")
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST414",
+            "snapshot_data_url": pages[0],
+            "additional_pages": pages[1:],
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_five_page_request_never_exceeds_three_active_ocr_calls() -> None:
+    pages = [
+        f"{VALID_SNAPSHOT_DATA_URL}1",
+        f"{VALID_SNAPSHOT_DATA_URL}2",
+        f"{VALID_SNAPSHOT_DATA_URL}3",
+        f"{VALID_SNAPSHOT_DATA_URL}4",
+        f"{VALID_SNAPSHOT_DATA_URL}5",
+    ]
+    active_calls = 0
+    max_active_calls = 0
+
+    class BoundedVision:
+        async def recognize(self, snapshot_data_url: str) -> VisionOCRResult:
+            nonlocal active_calls, max_active_calls
+            active_calls += 1
+            max_active_calls = max(max_active_calls, active_calls)
+            await asyncio.sleep(0.01)
+            active_calls -= 1
+            return VisionOCRResult(
+                raw_ocr_text="x = 5",
+                detected_equation="x = 5",
+                detected_steps=["x = 5"],
+                confidence=0.95,
+                provider="mock",
+            )
+
+    evidence = asyncio.run(
+        canvas_evidence.collect_canvas_evidence(
+            pages[0], [], "SUB-BOUNDED", BoundedVision(), pages[1:]
+        )
+    )
+
+    assert max_active_calls <= 3
+    assert max_active_calls == 3
+    assert len(evidence.page_ocr_texts) == 5
 
 
 def test_canvas_does_not_store_work_for_an_unreadable_page(
