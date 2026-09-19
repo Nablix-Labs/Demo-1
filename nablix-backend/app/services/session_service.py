@@ -1258,7 +1258,11 @@ async def generate_phase4_review_for(
             event.journey_state.mastery_status,
             event.routing.next_action,
         )
-        review = generate_phase4_review(request)
+        # Off the event loop: this is a synchronous httpx call whose retry
+        # budget multiplies (3 HTTP attempts x a grounded retry x
+        # MATERIALIZATION_ATTEMPTS). Awaited inline it froze every other
+        # request on the worker for the whole of it -- 55s, measured (#326).
+        review = await asyncio.to_thread(generate_phase4_review, request)
     except (*DOWNSTREAM_FAILURE, ValueError) as error:
         logger.warning(
             "phase4_review_not_generated",

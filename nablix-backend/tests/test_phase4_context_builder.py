@@ -9,6 +9,7 @@ from app.models.topic_event_history import (
     TopicEventHistoryResponse,
     WorkArtifactRef,
 )
+from app.services import phase4_context_builder
 from app.services.phase4_context_builder import (
     STUDENT_FACING_NEXT_ACTIONS,
     Phase4ContextError,
@@ -419,3 +420,60 @@ def test_routing_verbs_never_reach_the_student_as_a_next_action() -> None:
         ).topic_outcome.recommended_next_action
         == "CONTINUE"
     )
+
+
+def _canvas_attempt(ocr: str | None) -> TopicAttemptRecord:
+    """A canvas submission: the work was drawn, so nothing was typed."""
+
+    return _attempt("A1", "INCORRECT").model_copy(
+        update={
+            "student_response": None,
+            "work_artifact": WorkArtifactRef(
+                artifact_id="ART-A1",
+                pdf_url="https://blob.example/submission.pdf",
+                page_count=2,
+                combined_ocr_text=ocr,
+            ),
+        }
+    )
+
+
+def test_a_canvas_only_attempt_is_grounded_by_its_ocr() -> None:
+    """The #326 shape: nothing typed, so the OCR is the only record of the work.
+
+    Canvas OCR is stored with the artifact on the way in
+    (`canvas_service.py:242`) precisely so Phase 4 can read it back without
+    rerunning it. It was never read back, so both `student_answer` and
+    `ocr_text` arrived null and `_validate_board_progression` had an empty
+    `submitted_work` to check a crossed-out step against -- every generated
+    replay failed its guardrail and the review never arrived.
+    """
+
+    item = _build(_history([_canvas_attempt("t + 3")])).replay_items[0]
+
+    assert item.student_answer is None
+    assert item.ocr_text == "t + 3"
+
+
+def test_stored_work_without_ocr_is_replayed_but_logged(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Drawn work we cannot read back still replays, and says so.
+
+    The replay is worth building without it, but the tutor is then explaining
+    work it was never shown. If this fires for every attempt the OCR is not
+    coming back on /topic/event-history at all -- which is the bug to chase,
+    not the generation failure it surfaces as.
+    """
+
+    monkeypatch.setattr(
+        phase4_context_builder.logger,
+        "handlers",
+        [*phase4_context_builder.logger.handlers, caplog.handler],
+    )
+
+    item = _build(_history([_canvas_attempt(None)])).replay_items[0]
+
+    assert item.ocr_text is None
+    assert "phase4_replay_item_without_ocr" in caplog.messages

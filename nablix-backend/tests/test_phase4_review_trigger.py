@@ -1,6 +1,7 @@
 """Entering Review generates and stores the tutor review."""
 
 import asyncio
+import time
 
 import pytest
 from fastapi import HTTPException
@@ -710,3 +711,52 @@ def test_review_unavailable_reaches_the_client_as_a_readable_error_code(
     read = client.get(f"/session/{session_id}", params={"student_id": "ST001"})
     assert read.status_code == 503
     assert read.json()["error_code"] == "PHASE4_REVIEW_UNAVAILABLE"
+
+
+def test_generation_does_not_block_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Generation is a blocking HTTP call and must not stall the whole worker.
+
+    It runs inside the request that enters Review, and its retry budget
+    multiplies: 3 HTTP attempts x a grounded retry x MATERIALIZATION_ATTEMPTS.
+    #326 measured 55s of it. Called straight from the coroutine, every other
+    request on the worker froze for that entire time.
+    """
+
+    async def fetch(
+        adapter: StudentModelServiceAdapter,
+        student_id: str,
+        topic_id: str,
+    ) -> TopicEventHistoryResponse:
+        del adapter, student_id, topic_id
+        return _history()
+
+    monkeypatch.setattr(
+        StudentModelServiceAdapter, "fetch_topic_event_history", fetch
+    )
+
+    def blocking(request: object) -> Phase4ReviewResponse:
+        del request
+        time.sleep(0.2)
+        return _review()
+
+    monkeypatch.setattr(session_service, "generate_phase4_review", blocking)
+
+    async def scenario() -> int:
+        ticks = 0
+
+        async def heartbeat() -> None:
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.01)
+                ticks += 1
+
+        beat = asyncio.create_task(heartbeat())
+        await session_service.generate_phase4_review_for(
+            _review_ready_session(), _event("REVIEW")
+        )
+        beat.cancel()
+        return ticks
+
+    assert asyncio.run(scenario()) > 0
