@@ -1,12 +1,29 @@
-from app.models.adapters import VisualCue
+from typing import TYPE_CHECKING
+from fastapi import HTTPException
+
+from app.models.adapters import Phase2PromptContext, VisualCue
 from app.models.fields import Phase
 from app.models.student_model_session import (
     JourneyPhaseState,
     StudentModelCoreState,
     StudentModelPhase,
+    StudentModelQuestion,
     StudentModelSessionEventResponse,
+    SupportUsed,
 )
 
+if TYPE_CHECKING:
+    from app.models.session import SessionRecord
+
+
+SUPPORT_RANK: tuple[SupportUsed, ...] = (
+    "NONE",
+    "HINT",
+    "VISUAL_CUE",
+    "SCAFFOLD",
+    "PARALLEL_EXAMPLE",
+    "TUTOR_SOLVED",
+)
 
 PHASE_FROM_STUDENT_MODEL: dict[StudentModelPhase, Phase] = {
     "PHASE_0_DIAGNOSTIC": "DIAGNOSTIC",
@@ -69,9 +86,10 @@ def schema_hint(event: StudentModelSessionEventResponse | None) -> str | None:
     return None
 
 
-def schema_support_steps(
+def schema_all_support_steps(
     event: StudentModelSessionEventResponse | None,
 ) -> list[str]:
+    """Extract all catalog support and rescue steps for session initialization."""
     if event is None or event.phase_payload is None:
         return []
     support = event.phase_payload.support_to_serve
@@ -96,6 +114,36 @@ def schema_support_steps(
     if isinstance(solved, dict) and isinstance(solved.get("explanation"), str):
         result.append(solved["explanation"])
     return result
+
+
+schema_support_steps = schema_all_support_steps
+
+
+def schema_active_support_steps(
+    event: StudentModelSessionEventResponse | None,
+) -> list[str]:
+    """Extract the prompt for the active/current scaffold step."""
+    if event is None or event.phase_payload is None:
+        return []
+    support = event.phase_payload.support_to_serve
+    if support is not None:
+        current_prompt = support.get("prompt")
+        if isinstance(current_prompt, str):
+            return [current_prompt]
+        current_step_id = support.get("current_step_id")
+        steps = support.get("steps")
+        if isinstance(steps, list):
+            for step in steps:
+                if not isinstance(step, dict):
+                    continue
+                if current_step_id is not None and step.get("step_id") != current_step_id:
+                    continue
+                prompt = step.get("prompt")
+                if isinstance(prompt, str):
+                    return [prompt]
+                if current_step_id is not None:
+                    break
+    return []
 
 
 def _active_phase_state(
@@ -139,4 +187,117 @@ def project_student_model_state(
         transition_reason=event.routing.reason,
         next_topic_recommendation=event.routing.next_topic_id,
         next_topic_entry_phase=event.routing.next_topic_entry_phase,
+    )
+
+
+def schema_question(session: "SessionRecord") -> StudentModelQuestion:
+    event = session.student_model_event
+    if event is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Schema 3.0 session state is missing.",
+        )
+    question_set = (
+        event.phase_payload.question_set
+        if event.phase_payload is not None
+        else None
+    )
+    if question_set is None and session.active_student_model_question is not None:
+        return session.active_student_model_question
+    if question_set is None:
+        raise HTTPException(status_code=503, detail="Student Model returned no active question set.")
+    if session.question_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="The current phase has no active question.",
+        )
+    question: StudentModelQuestion | None = next(
+        (
+            item
+            for item in question_set.questions
+            if item.question_id == session.question_id
+        ),
+        None,
+    )
+    if question is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Student Model did not return metadata for {session.question_id}.",
+        )
+    return question
+
+
+def schema_question_mapped_micro_skills(session: "SessionRecord") -> list[str]:
+    question = schema_question(session)
+    skills = [mapping.micro_skill_id for mapping in question.micro_skill_mappings]
+    if not skills:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Student Model returned no micro-skills for {session.question_id}.",
+        )
+    return skills
+
+
+def schema_event_micro_skills(session: "SessionRecord") -> list[str]:
+    event = session.student_model_event
+    if event is None:
+        raise RuntimeError("Schema event skill lookup requires stored journey state.")
+    if session.current_phase != "GUIDED_PRACTICE":
+        return schema_question_mapped_micro_skills(session)
+    skills = (
+        event.journey_state.phase_2_guided_learning
+        .current_question_target_micro_skill_ids
+    )
+    if not skills:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Student Model returned no active Phase 2 target micro-skills "
+                f"for {session.question_id}."
+            ),
+        )
+    return skills
+
+
+def schema_support_used(
+    session: "SessionRecord",
+    micro_skill_ids: list[str],
+) -> SupportUsed:
+    event = session.student_model_event
+    if event is None:
+        raise RuntimeError("Schema support lookup requires a stored Student Model event.")
+    support_by_skill = (
+        event.journey_state.phase_2_guided_learning.highest_support_used_by_skill
+    )
+    supports = [support_by_skill.get(skill, "NONE") for skill in micro_skill_ids]
+    return max(supports, key=SUPPORT_RANK.index)
+
+
+def phase_2_prompt_context(
+    session: "SessionRecord",
+) -> Phase2PromptContext | None:
+    event = session.student_model_event
+    if event is None or session.current_phase != "GUIDED_PRACTICE":
+        return None
+    question = schema_question(session)
+    guided = event.journey_state.phase_2_guided_learning
+    support = (
+        event.phase_payload.support_to_serve
+        if event.phase_payload is not None
+        else None
+    )
+    return Phase2PromptContext(
+        target_micro_skill_ids=guided.current_question_target_micro_skill_ids,
+        support_state={
+            "highest_support_used_by_skill": guided.highest_support_used_by_skill,
+            "completed_micro_skill_ids": guided.completed_micro_skill_ids,
+            "remaining_micro_skill_ids": guided.remaining_micro_skill_ids,
+            "support_catalog": question.tutor_view.support_catalog,
+            "potential_errors": question.tutor_view.potential_errors,
+        },
+        potential_errors=question.tutor_view.potential_errors,
+        support_catalog=question.tutor_view.support_catalog,
+        current_support=support,
+        current_scaffold_step_number=session.scaffold_step_number,
+        consecutive_stuck_count=session.stuck_count,
     )

@@ -1,14 +1,20 @@
 import asyncio
 from dataclasses import dataclass, field
+import re
 from time import perf_counter
+from typing import TYPE_CHECKING
 
 from fastapi import HTTPException
 
 from app.adapters.base import VisionOCRAdapter
+from app.ai_engine.classifier import normalize_exact_notation
 from app.core.config import get_settings
 from app.models.adapters import OCRTextRegion, SpatialMathToken, VisionOCRResult
 from app.models.canvas import CanvasStroke
 from app.models.canvas_memory import CanvasEvent
+
+if TYPE_CHECKING:
+    from app.models.session import SessionRecord
 from app.services.canvas_annotations import assign_step_ids
 from app.services.canvas_spatial import (
     align_step_tokens,
@@ -212,3 +218,128 @@ async def collect_canvas_evidence(
         page_ocr_texts=page_ocr_texts,
         page_data_urls=pages,
     )
+
+
+_SPOKEN_DIGITS: dict[str, str] = {
+    "zero": "0",
+    "one": "1",
+    "two": "2",
+    "three": "3",
+    "four": "4",
+    "five": "5",
+    "six": "6",
+    "seven": "7",
+    "eight": "8",
+    "nine": "9",
+    "ten": "10",
+    "eleven": "11",
+    "twelve": "12",
+    "thirteen": "13",
+    "fourteen": "14",
+    "fifteen": "15",
+    "sixteen": "16",
+    "seventeen": "17",
+    "eighteen": "18",
+    "nineteen": "19",
+    "twenty": "20",
+}
+
+_EXPLICIT_ASSIGNMENT = re.compile(
+    r"\b([A-Za-z])\s*=\s*(-?(?:\d+(?:\.\d*)?|\.\d+))\b"
+)
+_SPOKEN_NUMERIC_ANSWER = re.compile(
+    r"\b(?:got|answer\s*(?:=|is)?|solution\s*(?:=|is)?)\s*"
+    r"(-?(?:\d+(?:\.\d*)?|\.\d+))\b",
+    flags=re.IGNORECASE,
+)
+
+
+def normalize_voice_transcript(transcript: str) -> str:
+    normalized = " ".join(transcript.split())
+    for word, digit in _SPOKEN_DIGITS.items():
+        normalized = re.sub(rf"\b{word}\b", digit, normalized, flags=re.IGNORECASE)
+    normalized = re.sub(
+        r"\b(?:is\s+)?equals?\s+to\b",
+        "=",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    normalized = re.sub(r"\bequals?\b", "=", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\s*=\s*", " = ", normalized)
+    return " ".join(normalized.split())
+
+
+def spoken_answer_conflicts_with_canvas(
+    student_message: str,
+    canvas_final_answer: str | None,
+) -> bool:
+    """Detect a plainly stated numeric answer that disagrees with the board."""
+
+    if canvas_final_answer is None:
+        return False
+    normalized_message = normalize_voice_transcript(student_message)
+    spoken = _EXPLICIT_ASSIGNMENT.search(normalized_message)
+    board = _EXPLICIT_ASSIGNMENT.search(canvas_final_answer)
+    if board is None:
+        return False
+    if spoken is not None:
+        return (
+            spoken.group(1).lower() == board.group(1).lower()
+            and spoken.group(2) != board.group(2)
+        )
+    spoken_number = _SPOKEN_NUMERIC_ANSWER.search(normalized_message)
+    if spoken_number is not None:
+        return spoken_number.group(1) != board.group(2)
+    return False
+
+
+def contains_complete_notation(candidate: str, expected: str) -> bool:
+    """Match an exact expression even when earlier canvas work remains visible."""
+
+    normalized = normalize_exact_notation(candidate)
+    if normalized == expected:
+        return True
+    if expected == "":
+        return False
+    start_boundary = r"(?<![A-Za-z0-9])" if expected[0].isalnum() else ""
+    end_boundary = r"(?![A-Za-z0-9])" if expected[-1].isalnum() else ""
+    return re.search(f"{start_boundary}{re.escape(expected)}{end_boundary}", normalized) is not None
+
+
+def is_complete_correct_canvas(
+    ocr: VisionOCRResult | None,
+    correct_answer: str | None,
+) -> bool:
+    if ocr is None or ocr.needs_clarification or correct_answer is None:
+        return False
+    expected = normalize_exact_notation(correct_answer)
+    candidates = [
+        ocr.final_answer,
+        ocr.detected_equation,
+        *ocr.detected_steps,
+        ocr.raw_ocr_text,
+        *(region.text for region in ocr.detected_regions),
+        *(region.text for region in ocr.word_regions),
+    ]
+    return any(
+        candidate is not None and contains_complete_notation(candidate, expected)
+        for candidate in candidates
+    )
+
+
+def canvas_submission_is_pending(session: "SessionRecord") -> bool:
+    """Return whether the active question still needs its required canvas work."""
+
+    return (
+        session.question_id is not None
+        and session.pending_canvas_submission_question_id == session.question_id
+    )
+
+
+def legacy_ocr_needs_writing(
+    ocr: VisionOCRResult,
+    minimum_ocr_confidence: float,
+) -> bool:
+    """Reject uncertain canvas evidence before the legacy tutor records a turn."""
+
+    return ocr.needs_clarification or ocr.confidence < minimum_ocr_confidence

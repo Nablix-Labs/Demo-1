@@ -41,28 +41,35 @@ from app.services.canvas_evidence import (
     CanvasEvidence,
     canvas_events_are_stale,
     collect_canvas_evidence,
+    is_complete_correct_canvas,
     validate_canvas_payload,
 )
 from app.services.guided_question_opening import guided_question_opening
 from app.services.pdf_assembly import PdfAssemblyError, assemble_pdf
 from app.models.work_artifact import WorkArtifactPersistRequest
-from app.services.interaction_service import (
-    _current_hint_level_from,
-    _conversation_state_for,
-    _independent_attempt_updates,
-    _independent_correct_in_session,
-    _is_complete_correct_canvas,
-    _initialize_restored_schema_phase,
-    _phase_2_prompt_context,
-    _schema_visual_cue,
-    _schema_question,
-    _stale_turn_response,
-    _turn_updates,
-    _guided_rescue,
-    _scaffold_evaluation_context,
-    process_answer_with_session_event,
-    _response_from,
+from app.services.interaction_response import (
+    conversation_state_for,
+    current_hint_level_from,
+    independent_attempt_updates,
+    independent_correct_in_session,
+    project_interaction_response,
     replayed_turn_response,
+    stale_turn_response,
+    turn_updates,
+)
+from app.services.journey_lifecycle import initialize_restored_schema_phase
+from app.services.rescue_presentation import (
+    guided_rescue,
+    scaffold_evaluation_context,
+    schema_visual_cue,
+)
+from app.services.student_model_session import (
+    phase_2_prompt_context,
+    schema_question as get_schema_question,
+)
+from app.services.student_turn import (
+    StudentTurnResult,
+    process_student_turn,
 )
 from app.services.session_service import (
     _get_owned_session,
@@ -87,6 +94,15 @@ _CANVAS_RELATION_PATTERN = re.compile(
 )
 _UNRELIABLE_EVIDENCE_MESSAGE = "Please write out that step so I can check it."
 _MISSING_OPERATION_CANVAS_PATTERN = re.compile(r"^[a-z]\s+\d+$", re.IGNORECASE)
+
+
+async def process_answer_with_session_event(
+    context: AdapterContext,
+    session: SessionRecord,
+    access_token: str,
+) -> StudentTurnResult:
+    """Module-level wrapper for student turn processing to support testing monkeypatches."""
+    return await process_student_turn(context, session, access_token)
 
 
 def _canvas_request_fingerprint(request: CanvasSubmitRequest) -> str:
@@ -326,7 +342,7 @@ async def submit_canvas(
             )
     require_learning_active(session)
     validate_canvas_payload(request.strokes, request.canvas_events)
-    session = await _initialize_restored_schema_phase(
+    session = await initialize_restored_schema_phase(
         session,
         get_adapters().student_model,
         access_token,
@@ -348,8 +364,8 @@ async def submit_canvas(
                 ),
             },
         )
-        return _stale_turn_response(session)
-    schema_question = _schema_question(session)
+        return stale_turn_response(session)
+    schema_question = get_schema_question(session)
     turn_session = session
     submission_id = request.turn_id or uuid4().hex
     canvas_evidence = await collect_canvas_evidence(
@@ -416,16 +432,16 @@ async def submit_canvas(
         answer_spec=(
             None if scaffold_turn else schema_question.tutor_view.answer_spec
         ),
-        phase_2_prompt_context=_phase_2_prompt_context(session),
+        phase_2_prompt_context=phase_2_prompt_context(session),
         current_phase=session.current_phase,
         input_source="CANVAS",
         transcript_confidence=request.transcript_confidence,
         attempt_count=attempt_count,
-        independent_correct_in_session=_independent_correct_in_session(session),
+        independent_correct_in_session=independent_correct_in_session(session),
         question_completed=session.question_completed,
         answer_value_confirmed=session.answer_value_confirmed,
         question_number=session.question_number,
-        current_hint_level=_current_hint_level_from(session.hint_count),
+        current_hint_level=current_hint_level_from(session.hint_count),
         concept_id=session.concept_id,
         detected_equation=ocr.detected_equation,
         detected_steps=ocr.detected_steps,
@@ -440,10 +456,10 @@ async def submit_canvas(
         active_teaching_objective=session.active_teaching_objective,
         guided_teaching_state=session.guided_teaching_state,
         scaffold_evaluation_context=(
-            _scaffold_evaluation_context(session) if scaffold_turn else None
+            scaffold_evaluation_context(session) if scaffold_turn else None
         ),
         has_canvas_evidence=True,
-        canvas_solution_complete_candidate=_is_complete_correct_canvas(
+        canvas_solution_complete_candidate=is_complete_correct_canvas(
             ocr,
             session.correct_answer,
         ),
@@ -490,13 +506,16 @@ async def submit_canvas(
         updated_session = session
     else:
         try:
-            student_result, tutor, schema_content_response, _schema_response, updated_session = (
-                await process_answer_with_session_event(
-                    context,
-                    session,
-                    access_token,
-                )
+            turn_result = await process_student_turn(
+                context,
+                session,
+                access_token,
             )
+            student_result = turn_result.student_model_result
+            tutor = turn_result.tutor_result
+            schema_content_response = turn_result.content_event
+            _schema_response = turn_result.applied_event
+            updated_session = turn_result.session
         except JourneyVersionConflict as conflict:
             await reconcile_journey_conflict(
                 request.session_id, request.student_id, conflict
@@ -568,7 +587,7 @@ async def submit_canvas(
             request.canvas_events,
         )
     else:
-        last_tutor_action, expected_student_response = _conversation_state_for(
+        last_tutor_action, expected_student_response = conversation_state_for(
             response_action,
             updated_session.question_completed,
             tutor.evaluation,
@@ -580,12 +599,12 @@ async def submit_canvas(
                     None
                     if (
                         updated_session.question_id != turn_session.question_id
-                        or _is_complete_correct_canvas(ocr, turn_session.correct_answer)
+                        or is_complete_correct_canvas(ocr, turn_session.correct_answer)
                     )
                     else updated_session.pending_canvas_submission_question_id
                 ),
-                **_independent_attempt_updates(turn_session, tutor),
-                **_turn_updates(
+                **independent_attempt_updates(turn_session, tutor),
+                **turn_updates(
                     submission_id,
                     last_tutor_action,
                     expected_student_response,
@@ -615,9 +634,9 @@ async def submit_canvas(
     visual_cue = (
         tutor.visual_cue
         if tutor.visual_cue.show
-        else _schema_visual_cue(updated_session.student_model_event)
+        else schema_visual_cue(updated_session.student_model_event)
     )
-    response = _response_from(
+    response = project_interaction_response(
         session_id=request.session_id,
         student_id=request.student_id,
         turn_id=submission_id,
@@ -670,7 +689,7 @@ async def submit_canvas(
     response.guided_rescue = (
         None
         if load_classifier_rules().guided_learning.canvas_rescue_presentation_enabled
-        else _guided_rescue(schema_content_response)
+        else guided_rescue(schema_content_response)
     )
     response.advance_to_next_question = question_advanced
     if phase3_silent:
