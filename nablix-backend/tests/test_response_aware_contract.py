@@ -7,7 +7,7 @@ from fastapi import HTTPException
 
 from app.ai_engine.classifier import (
     ClassificationRequest,
-    accept_reliable_canvas_submission_acknowledgement,
+    accept_reliable_canvas_submission,
     build_guided_tutor_response,
     current_learner_response,
     required_response_aware_learner_action,
@@ -488,11 +488,65 @@ def test_reliable_canvas_answer_completes_an_acknowledgement_turn() -> None:
         tutor_message_voice="Please rewrite the rule.",
     )
 
-    completed = accept_reliable_canvas_submission_acknowledgement(evaluation, request)
+    completed = accept_reliable_canvas_submission(evaluation, request)
 
     assert completed.student_state == "CORRECT"
     assert completed.submission_state == "MATCHING"
     assert validate_response_aware_submission(completed, request) is completed
+
+
+def test_matching_canvas_expression_wins_over_earlier_conflicting_work() -> None:
+    request = ClassificationRequest(
+        question_id="REPLAY",
+        question_type="SHORT_RESPONSE",
+        question="Write the general rule.",
+        correct_answer="n + 5",
+        answer_spec=AnswerSpec(
+            answer_spec_id="REPLAY",
+            canonical_answer="n + 5",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=False,
+        ),
+        student_input="n plus 5",
+        current_phase="GUIDED_PRACTICE",
+        input_source="CANVAS",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+        canvas_submission_required=True,
+        has_canvas_evidence=True,
+        canvas_solution_complete_candidate=True,
+    )
+    evaluation = GuidedEvaluation(
+        contribution=StudentContribution.model_validate({
+            "kind": "MATHEMATICAL_ATTEMPT",
+            "assessment": "CORRECT",
+            "error_category": None,
+            "error_description": None,
+            "identified_difficulty": None,
+            "learner_question": None,
+            "explained_idea": None,
+            "generated_support_text": None,
+            "support_relevance": "NOT_NEEDED",
+        }),
+        student_state="CORRECT",
+        newly_confirmed_concept_ids=["GENERAL_RULE_ADD_FIVE"],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=[],
+        selected_error_code=None,
+        confidence=0.98,
+        next_objective=None,
+        submission_state="MISMATCHED",
+        tutor_message="Please remove the earlier rule.",
+        tutor_message_voice="Please remove the earlier rule.",
+    )
+
+    completed = accept_reliable_canvas_submission(evaluation, request)
+
+    assert completed.submission_state == "MATCHING"
+    assert required_response_aware_learner_action(completed) == "CONTINUE"
 
 
 @pytest.mark.parametrize(
