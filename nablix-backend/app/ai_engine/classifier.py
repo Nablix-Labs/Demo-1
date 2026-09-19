@@ -106,6 +106,7 @@ class ClassificationRequest(StrictSchema):
     answer_spec: AnswerSpec | None = None
     phase_2_prompt_context: Phase2PromptContext | None = None
     student_input: str
+    learner_response: str | None = None
     current_phase: LearningPhase
     input_source: InputSource
     transcript_confidence: float | None = Field(ge=0.0, le=1.0)
@@ -2604,6 +2605,7 @@ def request_with_reliable_canvas_evidence(
 ) -> ClassificationRequest:
     """Make reliable current-turn OCR available to the guided evidence controller."""
 
+    learner_response = request.learner_response or request.student_input
     reliable_text = [
         region.text.strip()
         for region in request.canvas_regions
@@ -2632,7 +2634,16 @@ def request_with_reliable_canvas_evidence(
             "region_count": len(reliable_text),
         },
     )
-    return request.model_copy(update={"student_input": merged_input})
+    return request.model_copy(update={
+        "student_input": merged_input,
+        "learner_response": learner_response,
+    })
+
+
+def current_learner_response(request: ClassificationRequest) -> str:
+    """Return the learner's own words without appended OCR evidence."""
+
+    return request.learner_response or request.student_input
 
 
 def has_reliable_canvas_operator_evidence(
@@ -3687,7 +3698,7 @@ def classify_guided_learning_response(
                     generated_rubric=rubric,
                     active_objective=objective,
                     guided_tutor_context=guided_tutor_context,
-                    student_response=request.student_input,
+                    student_response=current_learner_response(request),
                     input_source=request.input_source,
                     allowed_error_codes=allowed_errors,
                     recent_conversation=request.conversation_history[
@@ -3706,7 +3717,7 @@ def classify_guided_learning_response(
                     generated_rubric=rubric,
                     active_objective=objective,
                     guided_tutor_context=guided_tutor_context,
-                    student_response=request.student_input,
+                    student_response=current_learner_response(request),
                     input_source=request.input_source,
                     allowed_error_codes=allowed_errors,
                     recent_conversation=request.conversation_history[
@@ -4310,7 +4321,9 @@ def write_redacted_response_aware_message(
     writer = openai_client.write_guided_fact_budget_message
     context = {
         "question": request.question,
-        "student_response": request.student_input,
+        "student_response": current_learner_response(request),
+        "input_source": request.input_source,
+        "canvas_ocr_text": request.canvas_ocr_text,
         "contribution_kind": contribution.kind,
         "assessment": contribution.assessment,
         "error_category": contribution.error_category,

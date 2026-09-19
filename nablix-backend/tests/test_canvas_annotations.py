@@ -957,11 +957,8 @@ def test_non_rescue_action_rejects_rescue_metadata_and_reveal() -> None:
         )
 
 
-def test_write_request_marks_a_tutor_owned_area_without_revealing_the_rule() -> None:
-    draw = plan_write_request_tutor_draw("TURN-1")
-
-    assert [element.kind for element in draw[0].elements] == ["highlight", "text", "arrow"]
-    assert all("s + 6" not in (element.text or "") for element in draw[0].elements)
+def test_write_request_does_not_prescribe_a_tutor_owned_area() -> None:
+    assert plan_write_request_tutor_draw("TURN-1") == []
 
 
 def test_write_request_on_first_attempt_has_no_rule_anchors() -> None:
@@ -981,9 +978,7 @@ def test_write_request_on_first_attempt_has_no_rule_anchors() -> None:
         tutor, [], [], "TURN-1", "s + 6", _fallback_labels(), wrong_attempt_count=0, student_response=""
     )
 
-    assert [(action.type, action.text) for action in actions] == [
-        ("FOCUS", "Write your rule on the canvas."),
-    ]
+    assert actions == []
 
 
 def test_stuck_turn_does_not_focus_an_arbitrary_question_token() -> None:
@@ -1026,7 +1021,6 @@ def test_written_rule_request_adds_safe_tutor_anchors_not_the_final_rule() -> No
     assert [(action.type, action.text) for action in actions] == [
         ("INSERT_LABEL", "Start: s"),
         ("INSERT_LABEL", "Gain: +6"),
-        ("FOCUS", "Write your rule on the canvas."),
     ]
     assert all(action.text != "s + 6" for action in actions)
 

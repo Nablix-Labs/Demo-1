@@ -537,3 +537,22 @@ cases:
     input: "five stays the same"
     kind: MATHEMATICAL_ATTEMPT
     assessment: INCORRECT
+  - id: voice_correction_rewrites_stale_canvas_rule
+    question: "A player starts with score s and gains 6 bonus points. Write the new-score rule."
+    answer: "s + 6"
+    prior: "You included the 6-point gain. Check the letter used for the starting score in the question."
+    input: "Oh yes, it is s plus 6."
+    source: VOICE
+    kind: MATHEMATICAL_ATTEMPT
+    assessment: CORRECT
+    concepts:
+      - {concept_id: GENERAL_RULE, description: "Writes the starting-score rule using s and adding six", required: true}
+    expected_confirmed: [GENERAL_RULE]
+    canvas_submission_required: true
+    has_canvas_evidence: true
+    canvas_ocr_text: "n + 6"
+    canvas_ocr_confidence: 0.98
+    expected_write: true
+    forbidden_content:
+      - "(?i)parallel example"
+      - "(?i)compare the cases"
