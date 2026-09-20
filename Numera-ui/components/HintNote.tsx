@@ -20,12 +20,17 @@
 
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { isPhase3 } from '@/lib/phase3';
+import { hintLabel } from '@/lib/hintHistory';
 import StickyNote from '@/components/StickyNote';
 
 export default function HintNote() {
   const hint = useNumeraStore((s) => s.visibleHint);
+  // The whole ladder for this question, not just the latest rung. Hint 3 is
+  // written assuming hints 1 and 2 are in front of the student (#312).
+  const hints = useNumeraStore(useShallow((s) => s.visibleHints));
   const collapseSupportDeck = useNumeraStore((s) => s.collapseSupportDeck);
   const currentPhase = useNumeraStore((s) => s.currentPhase);
 
@@ -66,7 +71,13 @@ export default function HintNote() {
         <X size={13} strokeWidth={2.2} />
       </button>
 
-      <StickyNote tone="amber" label="Hint">{hint}</StickyNote>
+      <div className="flex flex-col gap-2">
+        {hints.map((text, i) => (
+          <StickyNote key={`${i}-${text}`} tone="amber" label={hintLabel(i, hints.length)}>
+            {text}
+          </StickyNote>
+        ))}
+      </div>
     </div>
   );
 }

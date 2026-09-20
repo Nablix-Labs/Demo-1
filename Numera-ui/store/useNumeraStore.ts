@@ -38,6 +38,7 @@ import {
 import { emitRenderAck } from '@/lib/rescueEvents';
 import type { SupportRung } from '@/lib/supportLadder';
 import { withRung, type DeckRung } from '@/lib/supportDeck';
+import { appendHint } from '@/lib/hintHistory';
 import type { InterventionInputRequest } from '@/lib/phase3Routing';
 import { EMPTY_APPLIED, type AppliedState } from '@/lib/responseGate';
 import type { InactivityPolicy } from '@/lib/inactivity';
@@ -520,6 +521,17 @@ export interface NumeraState {
    * restored on reload would contradict the Student Model.
    */
   visibleHint: string | null;
+  /**
+   * Every hint served on the CURRENT question, oldest first.
+   *
+   * `visibleHint` is the latest one and stays the answer to "is the hint rung
+   * live". This is what the card renders, because the ladder is cumulative:
+   * hint 3 is written on the assumption the student has just read 1 and 2, so
+   * showing it alone reads as a non-sequitur (#312, Sanya). Independent
+   * practice has kept this list since 15 Sep; guided practice never did, which
+   * is why the same complaint came back for Phase 2 on 21 Sep.
+   */
+  visibleHints: string[];
   /**
    * The instruction shown when the tutor could not read the student and needs
    * the answer in writing (revised handoff, frontend §5).
@@ -1056,6 +1068,7 @@ const initial: Omit<
   activeScaffold: null as ActiveScaffold | null,
   scaffoldSeen: [] as SeenScaffoldStep[],
   visibleHint: null as string | null,
+  visibleHints: [] as string[],
   writeInstruction: null as string | null,
   guidedRescue: null as GuidedRescuePayload | null,
   rescueSteps: [] as RescueStep[],
@@ -1260,6 +1273,7 @@ export const useNumeraStore = create<NumeraState>()(
               // A hint is about the question it was given on. Left up, it would
               // sit beside the next question nudging the wrong step.
               visibleHint: null,
+              visibleHints: [] as string[],
               // So is a rescue. Left standing, Q1's solved answer sat in bold
               // beside Q2 — and its queued actions would be retried against a
               // board they were never resolved for, with the dedupe window just
@@ -1405,6 +1419,9 @@ export const useNumeraStore = create<NumeraState>()(
   setVisibleHint: (visibleHint) =>
     set((s) => ({
       visibleHint,
+      // Kept, not replaced. `appendHint` drops a blank and a repeat of the one
+      // already at the bottom, so a replayed rung cannot make the tutor stutter.
+      visibleHints: visibleHint ? appendHint(s.visibleHints, visibleHint) : s.visibleHints,
       supportDeck: visibleHint ? withRung(s.supportDeck, 'HINT') : s.supportDeck,
       // A new offer is the answer to whatever the student just did, so it takes
       // the view back from any chip they were reading.

@@ -57,9 +57,9 @@ export type DeckRung = 'HINT' | 'VISUAL_CUE' | 'PARALLEL_EXAMPLE' | 'TUTOR_SOLVE
  * Ladder rank. Breaks ties between rungs that arrive together, and answers
  * which rung is CURRENT — the one rung allowed on screen.
  *
- * SCAFFOLD is not a deck rung and never becomes one, but it IS a rung of the
- * ladder and sits between the cue and the walkthroughs, so the exclusivity rule
- * has to be able to place it. Hence the gap at 2.
+ * The gap at 2 is where SCAFFOLD sits on the ladder. It is not a deck rung and
+ * never becomes one, but leaving its place open keeps these numbers readable
+ * against the ladder they describe.
  */
 const RANK: Record<DeckRung, number> = {
   HINT: 0,
@@ -67,7 +67,6 @@ const RANK: Record<DeckRung, number> = {
   PARALLEL_EXAMPLE: 3,
   TUTOR_SOLVED: 4,
 };
-const SCAFFOLD_RANK = 2;
 
 /** What the student sees on a chip. Short — these sit in a row. */
 const LABEL: Record<DeckRung, string> = {
@@ -203,21 +202,6 @@ export function railRungs(state: DeckState): DeckRung[] {
 }
 
 /**
- * The rung the tutor is offering RIGHT NOW — the highest one live, on any
- * surface.
- *
- * Highest, not latest: the backend escalates upwards and clears what it has
- * escalated past, so the top of what is live is what the student is being
- * given. Returns the SCAFFOLD rank as a plain number because a scaffold is a
- * rung of the ladder without being a rung of this deck.
- */
-function currentRank(state: DeckState): number | null {
-  const held = deckRungs(state).map((rung) => RANK[rung]);
-  if (state.activeScaffold) held.push(SCAFFOLD_RANK);
-  return held.length === 0 ? null : Math.max(...held);
-}
-
-/**
  * The one rung the column renders: the chip the student opened, else the
  * CURRENT rung — the highest one live, on any surface.
  *
@@ -236,14 +220,25 @@ export function visibleRung(state: DeckState): DeckRung | null {
   if (state.deckCollapsed) return null;
   const opened = state.openedRung;
   if (opened && rungs.includes(opened)) return opened;
-  // Exactly one rung is on screen at a time, and it is the HIGHEST one live --
-  // not the latest to arrive. A hint whose cue, scaffold or walkthrough has
-  // since been served is not "the latest help" any more; it is the rung the
-  // ladder escalated past, and standing beside its replacement it reads as two
-  // competing offers. It keeps its chip, so nothing is lost. Null when the
-  // current rung is one this column does not render (a scaffold, a walkthrough).
-  const top = rungs.reduce((highest, rung) => (RANK[rung] > RANK[highest] ? rung : highest));
-  return RANK[top] === currentRank(state) ? top : null;
+  // Exactly one rung is on screen at a time, and it is the one served MOST
+  // RECENTLY -- not the highest-ranked one live.
+  //
+  // It used to be the highest, on the reasoning that the backend only
+  // escalates upwards and clears what it escalates past. It does not. It comes
+  // back DOWN the ladder: Sanya, 21 Sep 2026, "when it's turn for hint 3,
+  // that's hidden. And visual cue gets displayed on the screen. But the tutor
+  // is explaining hint 3." A cue outranks a hint, so a hint served after one
+  // could never take the card, and the student read a cue while the tutor
+  // talked about something else. Whatever the tutor just served is what the
+  // tutor is talking about, and that is the only card that can be right.
+  const latest = rungs[rungs.length - 1];
+  // Null when the CURRENT rung is one this column does not render. A scaffold
+  // has its own panel and a walkthrough is drawn on the canvas, so in both
+  // cases the column stands down rather than showing a rung underneath them.
+  if (state.activeScaffold) return null;
+  const all = deckRungs(state);
+  if (all.indexOf(latest) < all.length - 1) return null;
+  return latest;
 }
 
 /** The rest, for the "Earlier help" strip, in the order they were offered. */

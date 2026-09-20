@@ -44,15 +44,42 @@ describe('deckRungs', () => {
     expect(deckRungs(s)).toEqual(['HINT', 'VISUAL_CUE']);
   });
 
-  it('records arrival order but shows the HIGHEST rung', () => {
-    // Order is the arrival record and stays as it arrived. What is on screen is
-    // a separate question with a separate answer: exactly one rung, the highest
-    // one live, because a lower rung standing beside it is help the ladder has
-    // already escalated past.
+  it('shows the rung served LAST, even when a higher one is still live', () => {
+    // Sanya, 21 Sep 2026: "when it's turn for hint 3, that's hidden. And
+    // visual cue gets displayed on the screen. But the tutor is explaining
+    // hint 3." The backend comes back down the ladder; the card has to follow
+    // it. The cue keeps its chip.
     const s = withCue(withHint({ ...base, supportDeck: ['VISUAL_CUE', 'HINT'] }));
     expect(deckRungs(s)).toEqual(['VISUAL_CUE', 'HINT']);
+    expect(visibleRung(s)).toBe('HINT');
+    expect(collapsedRungs(s)).toEqual(['VISUAL_CUE']);
+  });
+
+  it('still shows the cue when the cue is what was served last', () => {
+    const s = withCue(withHint({ ...base, supportDeck: ['HINT', 'VISUAL_CUE'] }));
     expect(visibleRung(s)).toBe('VISUAL_CUE');
     expect(collapsedRungs(s)).toEqual(['HINT']);
+  });
+
+  it('stands down for a walkthrough served after the hint', () => {
+    // The worked example is drawn on the canvas; the column must not keep a
+    // hint card up underneath it.
+    const s = withHint({
+      ...base,
+      rescueSteps: [step('PARALLEL')],
+      supportDeck: ['HINT', 'PARALLEL_EXAMPLE'],
+    });
+    expect(visibleRung(s)).toBeNull();
+    expect(collapsedRungs(s)).toEqual(['HINT']);
+  });
+
+  it('shows a hint served after a walkthrough', () => {
+    const s = withHint({
+      ...base,
+      rescueSteps: [step('PARALLEL')],
+      supportDeck: ['PARALLEL_EXAMPLE', 'HINT'],
+    });
+    expect(visibleRung(s)).toBe('HINT');
   });
 
   it('drops a rung whose content has gone, without being told', () => {
