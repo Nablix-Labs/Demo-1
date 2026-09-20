@@ -9458,6 +9458,45 @@ def test_a_scaffold_reply_that_leaks_the_answer_gets_one_corrective_retry() -> N
     assert "4y" not in response.tutor_message
 
 
+def test_scaffold_rejects_an_unsupplied_visual_cue_reference() -> None:
+    rules = load_classifier_rules()
+    context = ScaffoldEvaluationContext(
+        scaffold_id="SCF-T01-ROLES",
+        step_id="SCF-T01-ROLES-S1",
+        original_question="In m + 7, identify the changing quantity, fixed value, and operation.",
+        canonical_answer="m changes and 7 stays fixed",
+        accepted_answers=[],
+        verification_method="STRUCTURED_TEXT_MATCH",
+        step_prompt="Which part can take different possible values?",
+        expected_response_criterion="Identifies m as the changing quantity",
+        completed_step_ids=[],
+    )
+    candidate = ScaffoldStepEvaluation(
+        contribution=StudentContribution(
+            kind="MATHEMATICAL_ATTEMPT",
+            assessment="INCOMPLETE",
+            error_category=None,
+            error_description=None,
+            identified_difficulty=None,
+            learner_question=None,
+            explained_idea=None,
+            generated_support_text=None,
+            generated_visual_rows=None,
+            support_relevance="NOT_NEEDED",
+        ),
+        step_satisfied=False,
+        original_answer_correct=False,
+        demonstrated_fact=None,
+        confidence=0.97,
+        tutor_message="The visual cue compares different cases. Which part changes?",
+        tutor_message_voice="The visual cue compares different cases. Which part changes?",
+    )
+
+    assert classifier.scaffold_response_rejection_reason(candidate, context, rules) == (
+        "UNSUPPORTED_VISUAL_CUE_REFERENCE"
+    )
+
+
 def test_a_scaffold_reply_that_leaks_twice_raises_its_own_error() -> None:
     """No fallback wording. A rung that cannot be said safely is not served."""
 

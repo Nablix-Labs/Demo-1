@@ -420,30 +420,40 @@ def classify_scaffold_response(
                 },
             )
             continue
-        if candidate.contribution is not None and message_reveals_answer(
-            candidate.tutor_message,
-            candidate.tutor_message_voice,
-            context.canonical_answer,
+        rejection_reason = scaffold_response_rejection_reason(
+            candidate,
+            context,
             rules,
-        ):
+        )
+        if rejection_reason is not None:
             logger.warning(
-                "scaffold_answer_reveal_rejected",
+                "scaffold_response_rejected",
                 extra={
                     "question_id": request.question_id,
                     "scaffold_id": context.scaffold_id,
                     "step_id": context.step_id,
                     "attempt": attempt,
                     "corrective_retry_left": corrective_retries_left,
+                    "rejection_reason": rejection_reason,
                 },
             )
             if corrective_retries_left == 0:
+                detail = (
+                    "Scaffold response reveals the active answer before authorisation."
+                    if rejection_reason == "ANSWER_REVEAL"
+                    else f"Scaffold response failed grounding validation: {rejection_reason}."
+                )
                 raise AdapterError(
                     "openai_ai_engine",
-                    "Scaffold response reveals the active answer before authorisation.",
+                    detail,
                 )
             corrective_retries_left -= 1
             attempts_left += 1
-            validation_feedback = rules.guided_learning.answer_reveal_retry_feedback
+            validation_feedback = (
+                rules.guided_learning.answer_reveal_retry_feedback
+                if rejection_reason == "ANSWER_REVEAL"
+                else rules.guided_learning.response_aware_quality_retry_feedback
+            )
             continue
         result = candidate
         break
@@ -624,6 +634,34 @@ def classify_scaffold_response(
                and not satisfied else {}),
         }
     )
+
+
+def scaffold_response_rejection_reason(
+    candidate: ScaffoldStepEvaluation,
+    context: ScaffoldEvaluationContext,
+    rules: ClassifierRulesConfig,
+) -> str | None:
+    """Keep a scaffold reply grounded in its own active step."""
+
+    if candidate.contribution is not None and message_reveals_answer(
+        candidate.tutor_message,
+        candidate.tutor_message_voice,
+        context.canonical_answer,
+        rules,
+    ):
+        return "ANSWER_REVEAL"
+    message = f"{candidate.tutor_message} {candidate.tutor_message_voice}".casefold()
+    scaffold_context = " ".join(
+        value for value in (
+            context.original_question,
+            context.step_prompt,
+            context.next_step_prompt,
+        )
+        if value is not None
+    ).casefold()
+    if "visual cue" in message and "visual cue" not in scaffold_context:
+        return "UNSUPPORTED_VISUAL_CUE_REFERENCE"
+    return None
 
 
 def classify_independent_practice_response(

@@ -111,6 +111,9 @@ guided_learning:
   response_aware_scaffold_prompt: |
     For this scaffold request return ScaffoldStepEvaluation, not GuidedEvaluation.
     Apply the same contribution and teaching policy to the actual learner response.
+    The active scaffold step is the only support context. Do not refer to an
+    earlier hint, visual cue, comparison, or other support unless it is named in
+    step_prompt, next_step_prompt, or original_question.
     The expected_response_criterion describes one fact to assess, not wording to
     repeat. step_satisfied is true only if the learner demonstrates that fact.
     A correct full answer can satisfy it too. original_answer_correct requires
