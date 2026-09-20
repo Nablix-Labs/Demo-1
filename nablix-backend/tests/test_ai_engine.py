@@ -2907,6 +2907,32 @@ def test_compact_expression_component_gets_a_general_rule_prompt() -> None:
     )
 
 
+def test_general_rule_component_does_not_request_an_untracked_role() -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-001",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="GENERAL_RULE_ADD_FIVE",
+                description="Uses n for the changing starting number and adds five",
+                required=True,
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="expression-rubric",
+        prompt_version="1.0.0",
+    )
+    objective = ActiveTeachingObjective(
+        objective_type="ANSWER_QUESTION",
+        target_concept_ids=["GENERAL_RULE_ADD_FIVE"],
+        confirmed_concept_ids=[],
+        missing_concept_ids=["GENERAL_RULE_ADD_FIVE"],
+    )
+
+    assert classifier.focused_unresolved_prompt(rubric, objective, "fallback") == (
+        "What general rule represents this situation?"
+    )
+
+
 def test_wrong_choice_comparison_does_not_treat_yes_as_progress() -> None:
     objective = ActiveTeachingObjective(
         objective_type="ANSWER_QUESTION",

@@ -1177,12 +1177,12 @@ def focused_unresolved_prompt(
     ).casefold()
     if any(term in component_kind for term in ("explanation", "explain", "reason", "why")):
         return "What mathematical reason shows that this choice works for every starting value?"
+    if any(term in component_kind for term in ("general_rule", "general rule", "expression")):
+        return "What general rule represents this situation?"
     if any(term in component_kind for term in ("changing", "changes", "variable")):
         return "Which value can change from one example to another?"
     if any(term in component_kind for term in ("fixed", "increment", "constant")):
         return "What operation or amount stays fixed?"
-    if any(term in component_kind for term in ("general_rule", "general rule", "expression")):
-        return "What general rule represents this situation?"
     if re.search(
         r"\b[a-z]\s*(?:[+\-*/]|add|subtract|multiply|divide)\s*\d+\b",
         component_kind,
@@ -6520,6 +6520,11 @@ def normalize_production_assessment(evaluation: GuidedEvaluation) -> GuidedEvalu
             "contradicted_concept_ids": [],
             "selected_error_code": None,
         })
+    if (
+        contribution.assessment == "INCOMPLETE"
+        and evaluation.submission_state == "MISSING"
+    ):
+        return evaluation.model_copy(update={"submission_state": "NOT_REQUIRED"})
     if contribution.assessment == "INCORRECT" and contribution.support_relevance == "NOT_NEEDED":
         normalized_contribution = contribution.model_copy(update={
             "support_relevance": "UNMAPPED",

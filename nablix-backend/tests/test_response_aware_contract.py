@@ -11,6 +11,7 @@ from app.ai_engine.classifier import (
     apply_reliable_canvas_rule_evidence,
     build_guided_tutor_response,
     current_learner_response,
+    normalize_production_assessment,
     required_response_aware_learner_action,
     request_with_reliable_canvas_evidence,
     response_aware_fallback_message,
@@ -427,6 +428,63 @@ def test_incomplete_canvas_question_does_not_request_submission_yet() -> None:
 
     assert validate_response_aware_submission(evaluation, request).submission_state == "NOT_REQUIRED"
     assert required_response_aware_learner_action(evaluation) == "CONTINUE"
+
+
+def test_incomplete_assessment_normalizes_an_early_canvas_request() -> None:
+    request = ClassificationRequest(
+        question_id="REPLAY",
+        question_type="SHORT_RESPONSE",
+        question="Write the general rule.",
+        correct_answer="n + 5",
+        answer_spec=AnswerSpec(
+            answer_spec_id="REPLAY",
+            canonical_answer="n + 5",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=False,
+        ),
+        student_input="n can change",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+        canvas_submission_required=True,
+    )
+    evaluation = GuidedEvaluation(
+        contribution=StudentContribution(
+            kind="MATHEMATICAL_ATTEMPT",
+            assessment="INCOMPLETE",
+            error_category=None,
+            error_description=None,
+            identified_difficulty=None,
+            learner_question=None,
+            explained_idea="n represents the changing starting number.",
+            generated_support_text=None,
+            support_relevance="NOT_NEEDED",
+        ),
+        student_state="PARTIAL",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=[],
+        missing_concept_ids=["GENERAL_RULE_ADD_FIVE"],
+        selected_error_code=None,
+        confidence=0.94,
+        next_objective=ActiveTeachingObjective(
+            objective_type="ANSWER_QUESTION",
+            target_concept_ids=["GENERAL_RULE_ADD_FIVE"],
+            confirmed_concept_ids=[],
+            missing_concept_ids=["GENERAL_RULE_ADD_FIVE"],
+        ),
+        submission_state="MISSING",
+        tutor_message="What operation should connect the parts?",
+        tutor_message_voice="What operation should connect the parts?",
+    )
+
+    normalized = normalize_production_assessment(evaluation)
+
+    assert normalized.submission_state == "NOT_REQUIRED"
+    assert validate_response_aware_submission(normalized, request) is normalized
 
 
 def test_conflicting_canvas_work_can_request_rewrite_before_math_is_complete() -> None:
