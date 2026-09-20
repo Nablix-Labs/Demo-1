@@ -300,6 +300,17 @@ export default function ReviewPage() {
         goStage(next.unlock, next.topicId);
         return;
       }
+      // Live and no hand-off: the backend has said there is nothing next, so
+      // the curriculum has ended. decideReview walks the LOCAL topic table
+      // (algebra → number → geometry); a real student's ids are backend codes
+      // the table has never heard of, and stepping it from one of the table's
+      // own ids sent a session start with topic_code "number", which the
+      // Student Model rejects as UNKNOWN_TOPIC (ST015, 21 Sep). Mock mode keeps
+      // the table.
+      if (apiEnabled) {
+        router.push('/complete');
+        return;
+      }
       decideReview(outcome);
       return;
     }

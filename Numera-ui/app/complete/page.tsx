@@ -58,9 +58,11 @@ export default function CompletePage() {
         <p className="text-[13px] text-slate-blue mt-2 leading-relaxed">
           {mastered === 0
             ? 'Finish a topic and it will appear here, with everything you covered.'
-            : `You’ve mastered ${mastered} of ${total} ${
-                total === 1 ? 'topic' : 'topics'
-              }. Every concept checked, practised, and reviewed with the tutor.`}
+            : `You’ve mastered ${
+                // "1 of 1" reads as a quiz score. When the rows ARE the
+                // mastered list (real topics), the count is the whole claim.
+                rows.every((r) => r.done) ? `${mastered}` : `${mastered} of ${total}`
+              } ${mastered === 1 ? 'topic' : 'topics'}. Every concept checked, practised, and reviewed with the tutor.`}
         </p>
 
         {/* Mastered-topic recap */}
