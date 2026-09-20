@@ -155,9 +155,11 @@ export default function DrawingCanvas({ onExportReady, tutorOnly = false, readOn
       if (!pos) return;
       isDrawing.current = true;
       // §1: "Remain silent while the student writes." The pen touching down is
-      // the earliest honest signal that the student has the floor, and it stops
-      // the tutor mid-sentence rather than at the end of it. The floor goes back
-      // when the work is submitted (see useDemoTutor.submitCanvasWork).
+      // the earliest honest signal that the student has the floor. It is also a
+      // rough one — this fires on any pointer-down, before a point of ink
+      // exists — so it stops the tutor STARTING anything more rather than
+      // cutting off the line already playing (#305). The floor goes back when
+      // the work is submitted (see useDemoTutor.submitCanvasWork).
       setStudentWriting(true);
       setPenDown(true);
       startPos.current = { x: pos.x, y: pos.y };

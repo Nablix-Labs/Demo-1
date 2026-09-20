@@ -9,10 +9,11 @@
  *   "Highlight first, pause briefly, then speak."
  *
  * The first rule is a *drop*, not a queue. The spec is explicit — once the
- * student starts writing the tutor stops speaking, does not repeat instructions
- * and does not surface hints; it waits for them to submit or ask. A queued
- * utterance that fires the moment they lift the pen would break exactly the
- * concentration the rule exists to protect.
+ * student starts writing the tutor does not repeat instructions and does not
+ * surface hints; it waits for them to submit or ask. A queued utterance that
+ * fires the moment they lift the pen would break exactly the concentration the
+ * rule exists to protect. What it does NOT do is cut off the line already in
+ * the air — see `setStudentWriting` for why that reads as a fault (#305).
  *
  * The second rule matters because a mark and its narration arriving together
  * gives the student nothing to look at while the words play. Drawing lands
@@ -23,7 +24,7 @@
  * from inside a Konva pointer handler without a subscription.
  */
 
-import { speakTutor, stopTutorSpeech } from '@/lib/tts';
+import { speakTutor } from '@/lib/tts';
 import { useNumeraStore } from '@/store/useNumeraStore';
 
 /**
@@ -93,53 +94,47 @@ export function setPenDown(down: boolean): void {
 /**
  * Hand the floor to the student, or take it back.
  *
- * Taking it (`true`) silences the tutor immediately — including an utterance
- * that was waiting out its settle delay. Handing it back does NOT resume
- * anything; whatever was dropped stays dropped.
+ * Taking it (`true`) stops the tutor STARTING anything else — including an
+ * utterance that was waiting out its settle delay — but lets a line that is
+ * already playing reach its end. Handing it back does NOT resume anything;
+ * whatever was dropped stays dropped.
+ *
+ * ── Why it finishes the line rather than cutting (#305, 20 Sep 2026) ───────
+ *
+ * This used to call `stopTutorSpeech()`, which reads straight from §1 and was
+ * wrong in practice for two reasons.
+ *
+ * The first is what it sounded like: the tutor stopped mid-word. Manjusha's
+ * report is a tutor that said "I want to make sure" and nothing more. A
+ * sentence cut in half is not silence, it is a fault — the student cannot tell
+ * a deliberate pause from a broken feature, and several of these came in as
+ * bug reports rather than as the behaviour the spec intended.
+ *
+ * The second is that the trigger is not writing. `DrawingCanvas.handleDown`
+ * fires this on any pointer-down, before a single point of ink exists, so a
+ * stray tap, a palm, or a click to focus the canvas silenced the tutor — which
+ * is exactly her "I didn't even write on the canvas".
+ *
+ * §1's intent is that the tutor does not talk OVER a student who is working.
+ * Letting the current line land and saying nothing after it serves that; the
+ * drop rule below still holds for everything that has not started.
+ *
+ * Note for whoever reinstates a hard stop here: `stopTutorSpeech()` calls
+ * `tutorAudioStream.hardStop()`, which by design tears the stream down WITHOUT
+ * firing `onIdle`. That left `voiceStatus` stuck at 'speaking' with no audio
+ * and nothing still to come, and since `app/page.tsx` gates `setTransmitting`
+ * on 'listening', the student's mic frames stopped being sent for the rest of
+ * the session. It needed an explicit turn reopen to undo. Letting the audio end
+ * on its own reaches `onIdle` through the ordinary path, so none of that
+ * applies now.
  */
 export function setStudentWriting(writing: boolean): void {
   if (writing === studentWriting) return;
   studentWriting = writing;
   if (writing) {
-    console.info('[tutorSpeech] pen down — silencing the tutor (§1)');
+    console.info('[tutorSpeech] pen down — tutor finishes this line, then stays quiet (#305)');
     cancelPending('silenced');
-    stopTutorSpeech();
-    reopenTurnAfterSilencing();
   }
-}
-
-/**
- * Give the student's turn back after the pen silenced the tutor.
- *
- * This is the other half of `stopTutorSpeech`, and it was missing.
- *
- * On the server transport `stopTutorSpeech` calls `tutorAudioStream.hardStop()`,
- * which by explicit design tears the stream down WITHOUT firing `onIdle` —
- * "callers own what happens next" (lib/tts.ts). The caller here owned nothing.
- * Every other hardStop site in useWebSocket follows it with `beginListeningTurn()`;
- * pen-down was the one that did not.
- *
- * That left `voiceStatus` at 'speaking' with no audio playing and no onIdle
- * still to come — and because app/page.tsx gates `setTransmitting` on
- * `voiceStatus === 'listening'`, the student's microphone frames stopped being
- * SENT for the rest of the session. Not a muted mic: an open one whose audio
- * went nowhere. Tapping "Check my work" does not recover it either, because
- * submitCanvasWork never touches voiceStatus.
- *
- * So: student writes while the tutor is talking — which §1 actively invites —
- * and is never heard again. That is Manjusha's "after tutor writing something
- * breaks from frontend, it's not listening", and it is a better fit for the
- * report than the transcript_final fix, which cannot even fire once the frames
- * have stopped being transmitted.
- *
- * Only from 'speaking': that is the state this function just caused. Reopening
- * from 'processing' would abandon a turn the server is still working on, and
- * reopening from 'listening' would mint a fresh turn id on every pen stroke.
- */
-function reopenTurnAfterSilencing(): void {
-  const store = useNumeraStore.getState();
-  if (store.voiceStatus !== 'speaking') return;
-  store.beginListeningTurn();
 }
 
 export interface TutorSayOptions {

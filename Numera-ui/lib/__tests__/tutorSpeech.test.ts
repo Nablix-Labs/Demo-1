@@ -43,10 +43,30 @@ describe('silence while the student writes (§1)', () => {
     expect(spoken).toEqual([]);
   });
 
-  it('stops speech already in progress the moment writing starts', () => {
+  it('lets a line already in the air finish (#305)', () => {
+    // Cutting mid-word is not heard as silence, it is heard as a fault — the
+    // report behind #305 is a tutor that said "I want to make sure" and
+    // stopped. And the trigger is any pointer-down, not ink, so a stray tap
+    // used to kill the audio outright.
     tutorSay('Look across the three cases.');
     setStudentWriting(true);
-    expect(stopTutorSpeech).toHaveBeenCalled();
+    expect(stopTutorSpeech).not.toHaveBeenCalled();
+  });
+
+  it('still says nothing NEW once the student has the floor', () => {
+    tutorSay('Look across the three cases.');
+    setStudentWriting(true);
+    expect(tutorSay('Which part changes?')).toBe(false);
+    expect(spoken).toEqual(['Look across the three cases.']);
+  });
+
+  it('drops a line still waiting out its settle delay', () => {
+    // It has not started, so there is nothing to finish — and §1's drop rule
+    // applies in full.
+    tutorSay('The n is right.', { afterMarks: true });
+    setStudentWriting(true);
+    vi.advanceTimersByTime(10_000);
+    expect(spoken).toEqual([]);
   });
 
   it('does NOT replay the dropped line when writing stops', () => {
@@ -66,10 +86,14 @@ describe('silence while the student writes (§1)', () => {
     expect(isStudentWriting()).toBe(false);
   });
 
-  it('only silences once for repeated writing signals', () => {
+  it('treats a repeated writing signal as no change', () => {
+    const settled: string[] = [];
+    tutorSay('The n is right.', { afterMarks: true, onEnd: () => settled.push('ended') });
     setStudentWriting(true);
     setStudentWriting(true);
-    expect(stopTutorSpeech).toHaveBeenCalledTimes(1);
+    // The pending line is dropped once, so its onEnd runs once — a second
+    // drop would reopen the mic twice and race the turn.
+    expect(settled).toEqual(['ended']);
   });
 });
 
