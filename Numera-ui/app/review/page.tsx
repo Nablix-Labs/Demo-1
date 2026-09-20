@@ -21,6 +21,7 @@ import PhaseGate from '@/components/PhaseGate';
 import { planReviewCompletion, runReviewFinish } from '@/lib/reviewCompletion';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useDemoTutor, resetSessionStart } from '@/hooks/useDemoTutor';
+import { useRouter } from 'next/navigation';
 import { useFlowNav } from '@/lib/useFlowNav';
 import { demoFor, type DemoWorksheet } from '@/lib/demoContent';
 import { cn } from '@/lib/cn';
@@ -90,6 +91,7 @@ export default function ReviewPage() {
   const backendSession = useNumeraStore((s) => s.backendSession);
   const sessionReview = useNumeraStore((s) => s.sessionReview);
   const { decideReview, goStage } = useFlowNav();
+  const router = useRouter();
   const tutor = useDemoTutor();
 
   const { apiEnabled, sessionId, end } = tutor;
