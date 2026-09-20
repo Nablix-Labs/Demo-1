@@ -127,7 +127,7 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
     started.current = true;
     setStatus('loading');
     setError(null);
-    const rec = await tutor.start(activeConceptId, 'TEXT');
+    const rec = await tutor.start(activeConceptId, 'TEXT', topicId);
     if (!rec) {
       // Prefer the backend's own reason (e.g. the sign-in mismatch) over the
       // generic network copy, which sends the student off retrying forever.
@@ -141,7 +141,7 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
       return;
     }
     setStatus('ready');
-  }, [tutor, activeConceptId]);
+  }, [tutor, activeConceptId, topicId]);
 
   // The auth store persists with skipHydration, so a session started before it
   // rehydrates sends the anonymous bearer instead of the student's real token —
