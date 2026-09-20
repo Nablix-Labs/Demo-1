@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react';
 import { ClipboardCheck, ArrowRight, Check } from 'lucide-react';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useFlowNav } from '@/lib/useFlowNav';
+import { useRouter } from 'next/navigation';
 import { cn } from '@/lib/cn';
 import { CenteredScreen, ScreenIcon } from '@/components/CenteredScreen';
 import { CelebrationMark, PlacementMark } from '@/components/ScreenMarks';
@@ -38,6 +39,14 @@ export default function DiagnosticPage() {
   const completePhase = useNumeraStore((s) => s.completePhase);
   const studentName = useNumeraStore((s) => s.studentName);
   const { placeAtTopic } = useFlowNav();
+  const router = useRouter();
+  // With a backend, placement is the backend's: every topic opens with its own
+  // diagnostic and /session/start decides the phase. This wizard's placement
+  // ids (algebra / number / geometry) are the mock curriculum's, and handing
+  // one to the live orientation sends a session start the Student Model
+  // rejects as UNKNOWN_TOPIC. Live mode therefore ends the wizard on the
+  // student's real lesson instead of a made-up starting topic.
+  const live = Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
   // Reaching the result clears the diagnostic phase → unlocks orientation.
   useEffect(() => {
@@ -133,13 +142,20 @@ export default function DiagnosticPage() {
           <div className="text-center">
             <ScreenIcon mark={CelebrationMark} />
             <h1 className="text-[22px] font-semibold text-ink">You&apos;re all set</h1>
-            <p className="text-[13px] text-slate-blue mt-2">{placement.note}</p>
-            <div className="mt-5 rounded-lg border border-focus-navy bg-reading-surface px-5 py-4 text-left">
-              <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-1">We&apos;ll start you at</div>
-              <div className="text-[16px] font-semibold text-ink">{placement.topic} <span className="text-slate-blue font-normal">· {placement.ks}</span></div>
-            </div>
-            <button onClick={() => placeAtTopic(placement.id)} className="mt-5 w-full inline-flex items-center justify-center gap-2 rounded-md bg-focus-navy text-white px-4 py-3 text-[13px] font-semibold hover:opacity-80 transition-opacity">
-              Begin orientation <ArrowRight size={16} strokeWidth={2} />
+            <p className="text-[13px] text-slate-blue mt-2">
+              {live ? 'Numera will place you from your first topic check.' : placement.note}
+            </p>
+            {!live && (
+              <div className="mt-5 rounded-lg border border-focus-navy bg-reading-surface px-5 py-4 text-left">
+                <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-1">We&apos;ll start you at</div>
+                <div className="text-[16px] font-semibold text-ink">{placement.topic} <span className="text-slate-blue font-normal">· {placement.ks}</span></div>
+              </div>
+            )}
+            <button
+              onClick={() => (live ? router.push('/') : placeAtTopic(placement.id))}
+              className="mt-5 w-full inline-flex items-center justify-center gap-2 rounded-md bg-focus-navy text-white px-4 py-3 text-[13px] font-semibold hover:opacity-80 transition-opacity"
+            >
+              {live ? 'Start my lesson' : 'Begin orientation'} <ArrowRight size={16} strokeWidth={2} />
             </button>
           </div>
         )}
