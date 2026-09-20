@@ -3761,6 +3761,12 @@ def classify_guided_learning_response(
                 rules,
             )
             if response_aware_mode_enabled:
+                evaluation = apply_reliable_canvas_rule_evidence(
+                    evaluation,
+                    request,
+                    rubric,
+                    objective,
+                )
                 evaluation = accept_reliable_canvas_submission(
                     evaluation,
                     request,
@@ -3863,6 +3869,7 @@ def classify_guided_learning_response(
             if rejected_evaluation is not None:
                 fallback_message = response_aware_fallback_message(
                     rejected_evaluation,
+                    rubric,
                     rules,
                 )
                 fallback = rejected_evaluation.model_copy(update={
@@ -6521,6 +6528,68 @@ def normalize_production_assessment(evaluation: GuidedEvaluation) -> GuidedEvalu
     return evaluation
 
 
+def apply_reliable_canvas_rule_evidence(
+    evaluation: GuidedEvaluation,
+    request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
+    objective: ActiveTeachingObjective,
+) -> GuidedEvaluation:
+    """Record an exact current canvas rule without claiming unanswered roles."""
+
+    contribution = evaluation.contribution
+    if (
+        not request.has_canvas_evidence
+        or not request.canvas_solution_complete_candidate
+        or contribution is None
+        or contribution.kind != "ACKNOWLEDGEMENT"
+        or contribution.assessment != "NOT_ASSESSED"
+    ):
+        return evaluation
+    rule_component_id = _component_for_step(request, rubric, "GENERAL_RULE")
+    if rule_component_id is None:
+        return evaluation
+    required_ids = {
+        component.concept_id
+        for component in rubric.required_concepts
+        if component.required
+    }
+    if rule_component_id not in required_ids:
+        return evaluation
+    contradicted_ids = set(evaluation.contradicted_concept_ids)
+    contradicted_ids.discard(rule_component_id)
+    confirmed_ids = (
+        set(objective.confirmed_concept_ids)
+        | set(evaluation.newly_confirmed_concept_ids)
+        | {rule_component_id}
+    ) - contradicted_ids
+    missing_ids = required_ids - confirmed_ids
+    next_objective = (
+        None
+        if not missing_ids
+        else objective.model_copy(update={
+            "confirmed_concept_ids": sorted(confirmed_ids),
+            "missing_concept_ids": sorted(missing_ids),
+            "target_concept_ids": sorted(missing_ids),
+        })
+    )
+    mathematics_complete = not missing_ids
+    return evaluation.model_copy(update={
+        "student_state": "CORRECT" if mathematics_complete else "PARTIAL",
+        "newly_confirmed_concept_ids": sorted(
+            set(evaluation.newly_confirmed_concept_ids) | {rule_component_id}
+        ),
+        "preserved_concept_ids": sorted(set(objective.confirmed_concept_ids)),
+        "contradicted_concept_ids": sorted(contradicted_ids),
+        "missing_concept_ids": sorted(missing_ids),
+        "next_objective": next_objective,
+        "submission_state": (
+            "MATCHING"
+            if mathematics_complete and request.canvas_submission_required
+            else "NOT_REQUIRED"
+        ),
+    })
+
+
 def accept_reliable_canvas_submission(
     evaluation: GuidedEvaluation,
     request: ClassificationRequest,
@@ -6648,6 +6717,7 @@ def required_response_aware_learner_action(
 
 def response_aware_fallback_message(
     evaluation: GuidedEvaluation,
+    rubric: GeneratedQuestionRubric,
     rules: ClassifierRulesConfig,
 ) -> str:
     """Keep a rejected writer from replacing a completed turn with generic prose."""
@@ -6658,6 +6728,12 @@ def response_aware_fallback_message(
         if evaluation.submission_state in {"MISMATCHED", "UNCLEAR"}:
             return "Please rewrite the rule clearly on the canvas, then press Check."
         return rules.messages.CORRECT
+    if evaluation.next_objective is not None:
+        return focused_unresolved_prompt(
+            rubric,
+            evaluation.next_objective,
+            rules.guided_learning.production_boundary_safe_wording_message,
+        )
     return rules.guided_learning.production_boundary_safe_wording_message
 
 
