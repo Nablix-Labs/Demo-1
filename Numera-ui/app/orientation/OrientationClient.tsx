@@ -653,10 +653,6 @@ function BackendOrientation({ topicId }: { topicId: string }) {
   const load = useCallback(async () => {
     if (requested.current) return;
     requested.current = true;
-    // A local mock topic id (algebra / number / geometry) cannot open a live
-    // session — the Student Model answers UNKNOWN_TOPIC. Links from the mock
-    // Workbook still carry them; send the student to their real lesson instead.
-    if (topicById(topicId)) { router.replace('/'); return; }
     setStatus('loading');
     setError(null);
     try {
@@ -664,6 +660,13 @@ function BackendOrientation({ topicId }: { topicId: string }) {
         await resumeSession();
       }
       const currentSessionId = useNumeraStore.getState().sessionId;
+      // No session yet AND a local mock topic id (algebra / number / geometry):
+      // starting one would be rejected as UNKNOWN_TOPIC. Links from the mock
+      // Workbook still carry those ids; send the student to their real lesson.
+      // With a session already open the session is the authority — the phase
+      // router may have built this URL from a stale local id, and refusing
+      // here left the page on its skeleton for good (21 Sep).
+      if (!currentSessionId && topicById(topicId)) { router.replace('/'); return; }
       // No local session — a returning student on a fresh load. Open one; the
       // backend always starts it in DIAGNOSTIC, and usePhaseRouting then moves
       // them to the phase it actually reports. (A true mid-journey resume needs

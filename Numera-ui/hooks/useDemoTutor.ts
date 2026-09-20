@@ -744,7 +744,13 @@ export async function beginSession(
       // the store's — a session started by topic_code carries a concept the
       // screen never set, and without this its own first record was dropped
       // as belonging to "a topic the student has left" (#283, 21 Sep).
-      if (rec.concept_id?.trim()) s.setActiveConceptId(rec.concept_id.trim());
+      if (rec.concept_id?.trim()) {
+        s.setActiveConceptId(rec.concept_id.trim());
+        // usePhaseRouting builds the topic-scoped routes from currentTopicId;
+        // left at the local default ('algebra') it sent a live student to
+        // /orientation/?topic=algebra, a mock id no live screen can open.
+        s.setCurrentTopic(rec.concept_id.trim());
+      }
       s.setBackendSession(rec);
       syncBackendSession(rec);
       if (rec.current_question) s.addTrailEntry({ kind: 'question', text: rec.current_question });
@@ -805,7 +811,10 @@ export async function resumeSession(): Promise<void> {
       // refresh inside any topic but the default one resumed a record whose
       // concept the store did not hold, and the guard dropped it — blank
       // lesson after refresh in topic 2.
-      if (rec.concept_id?.trim()) s.setActiveConceptId(rec.concept_id.trim());
+      if (rec.concept_id?.trim()) {
+        s.setActiveConceptId(rec.concept_id.trim());
+        s.setCurrentTopic(rec.concept_id.trim());
+      }
       s.setBackendSession(rec);
       syncBackendSession(rec);
       // Restore the cue the backend still has open for this question.

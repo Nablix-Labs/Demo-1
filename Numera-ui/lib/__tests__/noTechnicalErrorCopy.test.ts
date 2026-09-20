@@ -23,7 +23,7 @@ describe('topic routes refuse a local mock topic id in live mode', () => {
   for (const f of ['app/topic-diagnostic/DiagnosticClient.tsx', 'app/orientation/OrientationClient.tsx']) {
     it(`${f} sends the student to the lesson instead`, () => {
       const src = readFileSync(join(process.cwd(), f), 'utf8');
-      expect(src).toMatch(/if \(topicById\(topicId\)\) \{ router\.replace\('\/'\); return; \}/);
+      expect(src).toMatch(/if \(!(currentSessionId|useNumeraStore\.getState\(\)\.sessionId) && topicById\(topicId\)\) \{ router\.replace\('\/'\); return; \}/);
     });
   }
 });

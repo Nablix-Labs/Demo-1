@@ -130,7 +130,7 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
     // A local mock topic id (algebra / number / geometry) cannot open a live
     // session — the Student Model answers UNKNOWN_TOPIC. Links from the mock
     // Workbook still carry them; send the student to their real lesson instead.
-    if (topicById(topicId)) { router.replace('/'); return; }
+    if (!useNumeraStore.getState().sessionId && topicById(topicId)) { router.replace('/'); return; }
     setStatus('loading');
     setError(null);
     const rec = await tutor.start(activeConceptId, 'TEXT', topicId);

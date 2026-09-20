@@ -158,6 +158,7 @@ describe('a session for another topic is the student\'s own', () => {
     useNumeraStore.setState({ activeConceptId: 'ALG_LINEAR_ONE_STEP', currentPhase: 'DIAGNOSTIC' });
     await beginSession('ALG_LINEAR_ONE_STEP', 'TEXT', 'ALG-ORI-02');
     expect(useNumeraStore.getState().activeConceptId).toBe('ALG-ORI-02');
+    expect(useNumeraStore.getState().currentTopicId).toBe('ALG-ORI-02');
     expect(useNumeraStore.getState().currentPhase).toBe('GUIDED_PRACTICE');
   });
 
