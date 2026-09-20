@@ -794,6 +794,7 @@ export async function resumeSession(): Promise<void> {
     try {
       const rec = await getSession(store.sessionId!, studentId());
       const s = useNumeraStore.getState();
+      s.setSessionResumeFailed(false);
       s.setBackendSession(rec);
       syncBackendSession(rec);
       // Restore the cue the backend still has open for this question.
@@ -840,6 +841,9 @@ export async function resumeSession(): Promise<void> {
         useNumeraStore.getState().clearSessionId();
       } else {
         console.warn('✗ session resume failed (will stay on the stored session):', err);
+        // Say so. The id is kept so a retry re-reads the same session, but the
+        // lesson must not render as a blank canvas under a live mic.
+        useNumeraStore.getState().setSessionResumeFailed(true);
       }
     } finally {
       resumeInFlight = null;

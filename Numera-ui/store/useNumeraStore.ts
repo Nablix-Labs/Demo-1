@@ -470,6 +470,14 @@ export interface NumeraState {
    * identity it returned has been checked (see lib/sessionRecovery).
    */
   sessionRecovering: boolean;
+  /**
+   * The stored session could not be re-read on load (timeout, 5xx). Not a
+   * dead session — a 404 clears the id instead — so the id is kept and the
+   * student is told, with a retry. Without this the lesson rendered a blank
+   * canvas under a live mic and said nothing (ST015, 21 Sep: GET /session
+   * took 55s and 503'd while the backend failed to build a Phase 4 review).
+   */
+  sessionResumeFailed: boolean;
 
   /**
    * The topic is paused because the authored question does not exist.
@@ -863,6 +871,7 @@ export interface NumeraState {
   markTutorTurnFailed: () => void;
   /** A conflict invalidated the question: block submissions until recovery lands. */
   setSessionRecovering: (recovering: boolean) => void;
+  setSessionResumeFailed: (failed: boolean) => void;
   /** No authored question exists: render the pause and stop asking. */
   setContentGapPaused: (paused: boolean) => void;
   /** The progression could not finish: offer try-again, never a resubmit. */
@@ -1001,7 +1010,7 @@ export interface NumeraState {
 const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
-  | 'setQuestionText' | 'setQuestionAnchors' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'setEndedSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'noteTutorLineage' | 'markTutorTurnFailed' | 'setSessionRecovering' | 'setContentGapPaused' | 'setProgressionRetry'
+  | 'setQuestionText' | 'setQuestionAnchors' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'setEndedSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'noteTutorLineage' | 'markTutorTurnFailed' | 'setSessionRecovering' | 'setSessionResumeFailed' | 'setContentGapPaused' | 'setProgressionRetry'
   | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue' | 'setVisibleHint' | 'setWriteInstruction' | 'setGuidedRescue' | 'openSupportRung' | 'collapseSupportDeck' | 'clearRescueSteps' | 'noteRescueAdvanceFailed' | 'noteRescueCompleted'
   | 'setSupportShown' | 'setLastHintText' | 'lockPhase3Attempt' | 'setInterventionState'
   | 'setPendingTutorSpeech' | 'claimPendingTutorSpeech' | 'setQuestionProgress' | 'setAppliedResponse' | 'setInactivityPolicy'
@@ -1063,6 +1072,7 @@ const initial: Omit<
   allowVoiceInput: true,
   tutorTurnFailed: false,
   sessionRecovering: false,
+  sessionResumeFailed: false,
   contentGapPaused: false,
   progressionRetry: false,
   activeScaffold: null as ActiveScaffold | null,
@@ -1410,6 +1420,7 @@ export const useNumeraStore = create<NumeraState>()(
 
   markTutorTurnFailed: () => set({ tutorTurnFailed: true }),
   setSessionRecovering: (recovering) => set({ sessionRecovering: recovering }),
+  setSessionResumeFailed: (failed) => set({ sessionResumeFailed: failed }),
   setContentGapPaused: (paused) => set({ contentGapPaused: paused }),
   setProgressionRetry: (retry) => set({ progressionRetry: retry }),
 

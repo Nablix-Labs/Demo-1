@@ -121,6 +121,7 @@ export default function LessonPage() {
   // Refetch the record; a 404 inside resumeSession drops the dead session,
   // sessionId goes null, and the start effect takes over with a fresh one.
   const backendSession = useNumeraStore((s) => s.backendSession);
+  const resumeFailed = useNumeraStore((s) => s.sessionResumeFailed);
   useEffect(() => {
     if (hydrated && apiEnabled && sessionId && !backendSession) void resumeSession();
   }, [hydrated, apiEnabled, sessionId, backendSession]);
@@ -261,19 +262,30 @@ export default function LessonPage() {
   // Navigation off this page is backend-phase-driven (usePhaseRouting follows
   // the session's current_phase), so the lesson chrome carries no manual
   // stage buttons.
-  if (startError) {
+  if (startError || resumeFailed) {
     // An auth failure can't be fixed by retrying — the token is expired or
     // rejected. Send the student to log in (and clear the stale login so the
     // AuthGate doesn't bounce them straight back here). Screenshot report,
     // 31 Jul: "why is it opening this instead of login".
-    const needsLogin = startError.includes('signed in');
+    const needsLogin = startError?.includes('signed in') ?? false;
     return (
       <main className="flex-1 min-w-0 flex items-center justify-center bg-white p-8" aria-label="Lesson unavailable">
         <div className="w-[420px] max-w-full text-center">
-          <h1 className="text-[18px] font-semibold text-ink">Couldn&apos;t start your lesson</h1>
-          <p className="text-[13px] text-slate-blue mt-2 leading-relaxed">{startError}</p>
+          <h1 className="text-[18px] font-semibold text-ink">
+            {startError ? "Couldn't start your lesson" : "Couldn't reload your lesson"}
+          </h1>
+          <p className="text-[13px] text-slate-blue mt-2 leading-relaxed">
+            {startError ?? 'Your lesson is taking too long to load. Your progress is saved.'}
+          </p>
           <button
             onClick={() => {
+              // A failed RESUME keeps the session: the record is intact on
+              // the server, it just did not arrive. Re-read it.
+              if (!startError) {
+                useNumeraStore.getState().setSessionResumeFailed(false);
+                void resumeSession();
+                return;
+              }
               resetSessionStart();
               setStartError(null);
               useNumeraStore.getState().clearSessionId();
