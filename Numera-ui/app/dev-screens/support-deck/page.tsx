@@ -21,7 +21,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { deckRungs, visibleRung, collapsedRungs } from '@/lib/supportDeck';
 import SupportDeck from '@/components/SupportDeck';
-import ScaffoldMargin from '@/components/ScaffoldMargin';
+import ScaffoldTrail from '@/components/ScaffoldTrail';
 import WriteNote from '@/components/WriteNote';
 import HintNote from '@/components/HintNote';
 import VisualCue from '@/components/VisualCue';
@@ -132,8 +132,8 @@ export default function SupportDeckDevScreen() {
           <p className="mb-3 font-serif text-[19px] text-ink">
             5 + 2, 11 + 2, 18 + 2. Use n for the changing starting number.
           </p>
-          {on.scaffold && !(before && on.rescue) && <ScaffoldMargin />}
-          <div className="ml-[196px] mt-10 pl-6 font-serif text-[44px] text-ink/80">n + 2</div>
+          {on.scaffold && !(before && on.rescue) && <ScaffoldTrail />}
+          <div className="mt-10 font-serif text-[44px] text-ink/80">n + 2</div>
         </div>
 
         <div className="w-[300px] shrink-0">

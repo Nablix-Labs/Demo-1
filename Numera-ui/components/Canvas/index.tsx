@@ -22,7 +22,7 @@ import { useDemoTutor } from '@/hooks/useDemoTutor';
 import { gridBackground, GRID_OPTIONS } from '@/lib/canvasGrid';
 import { tutorSay } from '@/lib/tutorSpeech';
 import QuestionDisplay from '@/components/QuestionDisplay';
-import ScaffoldMargin from '@/components/ScaffoldMargin';
+import ScaffoldTrail from '@/components/ScaffoldTrail';
 import RescueNote from '@/components/RescueNote';
 import RescueSteps from '@/components/RescueSteps';
 import Toolbar from './Toolbar';
@@ -255,11 +255,11 @@ export default function CanvasStage() {
           one line of it. A question that wrapped to two lines, or carried
           multiple-choice options, was covered by the card that was supposed to
           be helping with it (Manjusha, 10 Aug). */}
-      {/* The guided step is no longer a card in this flow — it is written down
-          the page's margin instead (ScaffoldMargin, below the question strip).
-          A card here was a second block of text immediately under the question,
-          competing with it for the same slot, and it could only ever show one
-          step. The margin shows the path. */}
+      {/* The guided steps, as one written line under the question rather than
+          the card that used to sit here. A card was a second block of text
+          competing with the question for this slot and could only show one
+          step; the trail is a rule-height band that shows the path. */}
+      {!silentPhase3 && !rescueOn && <ScaffoldTrail />}
 
       {/* The worked example, on the canvas rather than in the support column
           (Manjusha, 7 Sep: "the rest of the stuff's should come in the canvas
@@ -301,11 +301,6 @@ export default function CanvasStage() {
         <DrawingCanvas onExportReady={handleExportReady} />
       </div>
 
-      {/* Over the canvas rather than beside it: the stage is full-bleed, and
-          narrowing it would change the coordinate space the tutor's marks and
-          the OCR snapshot are measured in. The column is pointer-transparent,
-          so the pen still reaches every part of the page. */}
-      {!silentPhase3 && !rescueOn && <ScaffoldMargin />}
 
       {/* Teaching-back prompt */}
       <TeachBack onSubmit={submitTeachBack} />
