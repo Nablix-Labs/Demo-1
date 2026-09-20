@@ -110,6 +110,40 @@ describe('phase3Destination — with the routing block (once it is forwarded)', 
     }).kind).toBe('COLLECT_INTERVENTION');
   });
 
+  /**
+   * #341 (Chiru, 20 Sep 2026) — "intervention is triggered without going to
+   * the prerequisite".
+   *
+   * `intervention_required` is a standing flag: it stays true while the case
+   * is open, including on the very reply that resolves it by routing the
+   * student to a prerequisite. Read before the destinations, it swallowed
+   * that reply and showed the popup instead.
+   */
+  it('#341: a named prerequisite route wins over the standing intervention flag', () => {
+    const d = phase3Destination({
+      student_model_event: { phase_payload: { payload_type: 'PREREQUISITE_REMEDIATION' } },
+      status: { intervention_required: true, status_code: 'INTERVENTION_REQUIRED' },
+      routing: {
+        reason_code: 'PREREQUISITE_REMEDIATION_REQUIRED',
+        next_action: 'START_PREREQUISITE_ORIENTATION',
+        next_topic_id: 'ALG-KS3-01',
+      },
+    });
+    expect(d.kind).toBe('GO_TO_PREREQUISITE');
+  });
+
+  it('#341: so does a named repair, resume or review route', () => {
+    const withFlag = (next_action: string, payload_type: string) => phase3Destination({
+      student_model_event: { phase_payload: { payload_type } },
+      status: { intervention_required: true, status_code: 'INTERVENTION_REQUIRED' },
+      routing: { next_action },
+    });
+    expect(withFlag('RETURN_TO_GUIDED_LEARNING', 'GUIDED_REPAIR').kind).toBe('GO_TO_GUIDED_REPAIR');
+    expect(withFlag('RETURN_TO_SAME_PHASE_3_QUESTION', 'RESUME_SAME_INDEPENDENT_QUESTION').kind)
+      .toBe('RESUME_CHECKPOINT');
+    expect(withFlag('START_REVIEW', 'REVIEW_SUMMARY').kind).toBe('START_REVIEW');
+  });
+
   it('TC-35: the earliest topic with no backward route is the same destination', () => {
     expect(phase3Destination({
       status: { intervention_required: true },

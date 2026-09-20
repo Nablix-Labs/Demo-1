@@ -187,13 +187,12 @@ export function phase3Destination(src: Phase3RoutingSource | null | undefined): 
   const payloadType = norm(payload?.payload_type);
   const nextAction = norm(routing?.next_action);
 
-  // Intervention first: it is the only destination that is also a status, and
-  // a student owed the popup must get it even if the payload type is one we
-  // don't recognise. Missing the popup strands them with no visible reason.
+  // Intervention first, but only where the backend ASKED for it here. The
+  // `intervention_required` status is deliberately not in this condition —
+  // see the fallback at the end of the function.
   if (
     payloadType === 'INTERVENTION_INPUT_REQUIRED'
     || nextAction === 'COLLECT_INTERVENTION_INPUT'
-    || (status?.intervention_required === true && nextAction !== 'AWAIT_INTERVENTION_REVIEW')
   ) {
     return { kind: 'COLLECT_INTERVENTION', request: payload?.intervention_input_request ?? null };
   }
@@ -229,6 +228,20 @@ export function phase3Destination(src: Phase3RoutingSource | null | undefined): 
   if (payloadType === 'FRESH_INDEPENDENT_QUESTION'
     || nextAction === 'DELIVER_REDUCED_DIFFICULTY_FRESH_RETRY') {
     return { kind: 'SERVE_QUESTION' };
+  }
+
+  // Intervention as a STATUS, once no destination has named itself.
+  //
+  // It sits last rather than first because it is a standing flag, not an
+  // instruction: it stays true for as long as the case is open, including on
+  // the reply that resolves it by sending the student somewhere to learn. Read
+  // first, it swallowed those replies — a `START_PREREQUISITE_ORIENTATION`
+  // became the intervention popup and the student never reached the
+  // prerequisite (#341, Chiru). Read last it still does its job, which was
+  // always the narrower one in the original note: a student owed the popup
+  // gets it even when the payload type is one this build does not recognise.
+  if (status?.intervention_required === true && nextAction !== 'AWAIT_INTERVENTION_REVIEW') {
+    return { kind: 'COLLECT_INTERVENTION', request: payload?.intervention_input_request ?? null };
   }
 
   return { kind: 'UNKNOWN' };
