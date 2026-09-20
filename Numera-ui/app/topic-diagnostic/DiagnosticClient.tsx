@@ -17,7 +17,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { notFound } from 'next/navigation';
+import { notFound, useRouter } from 'next/navigation';
+import { topicById } from '@/lib/topics';
 import { Compass, ArrowRight, Check, AlertTriangle, RotateCw } from 'lucide-react';
 import { getTopic } from '@/lib/curriculum';
 import { useFlowNav } from '@/lib/useFlowNav';
@@ -97,6 +98,7 @@ type Status = 'loading' | 'ready' | 'submitting' | 'error';
 
 function BackendDiagnostic({ topicId }: { topicId: string }) {
   const tutor = useDemoTutor();
+  const router = useRouter();
   const sessionId = useNumeraStore((s) => s.sessionId);
   const backendSession = useNumeraStore((s) => s.backendSession);
   // The curriculum entry when this id happens to be a mock one, the name the
@@ -125,6 +127,10 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
 
   const openSession = useCallback(async () => {
     started.current = true;
+    // A local mock topic id (algebra / number / geometry) cannot open a live
+    // session — the Student Model answers UNKNOWN_TOPIC. Links from the mock
+    // Workbook still carry them; send the student to their real lesson instead.
+    if (topicById(topicId)) { router.replace('/'); return; }
     setStatus('loading');
     setError(null);
     const rec = await tutor.start(activeConceptId, 'TEXT', topicId);

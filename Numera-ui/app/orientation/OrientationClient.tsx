@@ -19,7 +19,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { notFound } from 'next/navigation';
+import { notFound, useRouter } from 'next/navigation';
+import { topicById } from '@/lib/topics';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import {
@@ -601,6 +602,7 @@ function orientationFailure(err: unknown, call: string, fallback: string): strin
  * has the student in PHASE_1_ORIENTATION, and they land back here next session.
  */
 function BackendOrientation({ topicId }: { topicId: string }) {
+  const router = useRouter();
   const sessionId = useNumeraStore((s) => s.sessionId);
   const activeConceptId = useNumeraStore((s) => s.activeConceptId);
   const backendSession = useNumeraStore((s) => s.backendSession);
@@ -651,6 +653,10 @@ function BackendOrientation({ topicId }: { topicId: string }) {
   const load = useCallback(async () => {
     if (requested.current) return;
     requested.current = true;
+    // A local mock topic id (algebra / number / geometry) cannot open a live
+    // session — the Student Model answers UNKNOWN_TOPIC. Links from the mock
+    // Workbook still carry them; send the student to their real lesson instead.
+    if (topicById(topicId)) { router.replace('/'); return; }
     setStatus('loading');
     setError(null);
     try {

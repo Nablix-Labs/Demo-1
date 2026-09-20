@@ -368,9 +368,15 @@ export function studentFacingError(err: unknown): string | null {
     return 'This session belongs to a different student, so the tutor will not mark it.';
   }
   if (status >= 400) {
-    return backendMessage
-      ? `The tutor could not process that. ${backendMessage}`
-      : 'The tutor could not process that request.';
+    // A backend message that carries adapter URLs, request payloads or
+    // student ids is a diagnostic, not a sentence for a learner — a 404
+    // UNKNOWN_TOPIC put "url=https://… payload={'request_id': …, 'student_id':
+    // 'ST015' …}" on the screen (21 Sep). It stays in the console/network
+    // panel; the student gets plain wording.
+    if (backendMessage && !/url=|payload=|status=|\{|request_id/i.test(backendMessage)) {
+      return `The tutor could not process that. ${backendMessage}`;
+    }
+    return 'The tutor could not process that request.';
   }
   return null;
 }
