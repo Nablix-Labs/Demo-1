@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from app.ai_engine.classifier import (
     ClassificationRequest,
     accept_reliable_canvas_submission,
+    apply_reliable_canvas_rule_evidence,
     build_guided_tutor_response,
     current_learner_response,
     required_response_aware_learner_action,
@@ -745,8 +746,116 @@ def test_completed_canvas_turn_never_falls_back_to_generic_wording() -> None:
 
     assert response_aware_fallback_message(
         evaluation,
+        GeneratedQuestionRubric(
+            question_id="REPLAY",
+            required_concepts=[],
+            completion_rule="ALL_REQUIRED_CONCEPTS",
+            cache_key="replay",
+            prompt_version="replay",
+        ),
         load_classifier_rules(),
     ) == "You have the rule. Now write it on the canvas, then press Check."
+
+
+def test_canvas_correction_confirms_only_the_rule_before_the_remaining_role() -> None:
+    rubric = GeneratedQuestionRubric(
+        question_id="REPLAY",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="GENERAL_RULE",
+                description="Writes the general rule c + 4.",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="CHANGING_VALUE",
+                description="Identifies c as changing.",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="FIXED_VALUE",
+                description="Identifies 4 as fixed.",
+                required=True,
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="replay",
+        prompt_version="replay",
+    )
+    objective = ActiveTeachingObjective(
+        objective_type="EXPLAIN_CONCEPT",
+        target_concept_ids=["GENERAL_RULE", "FIXED_VALUE"],
+        confirmed_concept_ids=["CHANGING_VALUE"],
+        missing_concept_ids=["GENERAL_RULE", "FIXED_VALUE"],
+    )
+    request = ClassificationRequest(
+        question_id="REPLAY",
+        question_type="MULTI_PART_SHORT_RESPONSE",
+        question=(
+            "A counter starts at any value c and increases by 4. Write the "
+            "general rule and state what changes and what stays fixed."
+        ),
+        correct_answer="c + 4",
+        answer_spec=AnswerSpec(
+            answer_spec_id="REPLAY",
+            canonical_answer="c + 4",
+            accepted_answers=[],
+            verification_method="STRUCTURED_TEXT_MATCH",
+            explanation_required=True,
+        ),
+        student_input="I wrote it.",
+        current_phase="GUIDED_PRACTICE",
+        input_source="VOICE",
+        transcript_confidence=0.95,
+        attempt_count=1,
+        current_hint_level=None,
+        canvas_submission_required=True,
+        has_canvas_evidence=True,
+        canvas_solution_complete_candidate=True,
+    )
+    evaluation = GuidedEvaluation(
+        contribution=StudentContribution.model_validate({
+            "kind": "ACKNOWLEDGEMENT",
+            "assessment": "NOT_ASSESSED",
+            "error_category": None,
+            "error_description": None,
+            "identified_difficulty": None,
+            "learner_question": None,
+            "explained_idea": None,
+            "generated_support_text": None,
+            "support_relevance": "NOT_NEEDED",
+        }),
+        student_state="STUCK",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=["CHANGING_VALUE"],
+        contradicted_concept_ids=[],
+        missing_concept_ids=["GENERAL_RULE", "FIXED_VALUE"],
+        selected_error_code=None,
+        confidence=0.98,
+        next_objective=objective,
+        submission_state="MISMATCHED",
+        tutor_message="I want to make sure I follow you.",
+        tutor_message_voice="I want to make sure I follow you.",
+    )
+
+    corrected = apply_reliable_canvas_rule_evidence(
+        evaluation,
+        request,
+        rubric,
+        objective,
+    )
+
+    assert corrected.student_state == "PARTIAL"
+    assert corrected.newly_confirmed_concept_ids == ["GENERAL_RULE"]
+    assert corrected.preserved_concept_ids == ["CHANGING_VALUE"]
+    assert corrected.missing_concept_ids == ["FIXED_VALUE"]
+    assert corrected.submission_state == "NOT_REQUIRED"
+    assert corrected.next_objective is not None
+    assert corrected.next_objective.target_concept_ids == ["FIXED_VALUE"]
+    assert response_aware_fallback_message(
+        corrected,
+        rubric,
+        load_classifier_rules(),
+    ) == "What operation or amount stays fixed?"
 
 
 def test_model_evidence_survives_wrong_rule_then_correct_rule_canvas_handoff() -> None:
