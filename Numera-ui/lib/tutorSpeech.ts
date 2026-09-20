@@ -302,3 +302,34 @@ export function reopenFloorAfterFailure(): void {
   if (store.voiceStatus !== 'processing') return;
   store.beginListeningTurn();
 }
+
+/**
+ * The submission SUCCEEDED and nothing will be spoken for it.
+ *
+ * The third case, and the one that was missing. `takeFloorForReply` is wrong
+ * here — it returns an onEnd that only runs when audio ends, so calling it for
+ * a reply that is never voiced sets 'speaking' and holds the floor for good.
+ * That is why `submitInterventionInput` was exempted from it. But the
+ * exemption left the success path releasing nothing at all: the mic was closed
+ * on the way in and never reopened, so `voiceStatus` stayed 'processing'
+ * forever.
+ *
+ * What that looks like is the whole screen hanging. The transcript renders
+ * "waiting for the tutor…" off 'processing' and the panel reads
+ * "Status: Processing…", while `app/page.tsx` gates `setTransmitting` on
+ * 'listening' — so the student is also no longer being heard. A reply had
+ * already arrived; nothing was coming (Manjusha, 21 Sep).
+ *
+ * Parks rather than reopens when the reply expects no answer, which is the
+ * same decision `takeFloorForReply`'s onEnd makes from the same two fields —
+ * after filing an intervention the student is awaiting review, not answering.
+ */
+export function releaseFloorAfterSilentReply(): void {
+  const store = useNumeraStore.getState();
+  if (store.voiceStatus !== 'processing') return;
+  if (!store.expectsStudentResponse || !store.allowVoiceInput) {
+    store.setVoiceStatus('waiting');
+    return;
+  }
+  store.beginListeningTurn();
+}

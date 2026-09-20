@@ -55,6 +55,7 @@ import { useNumeraStore, type TrailKind, type TutorCanvasAction } from '@/store/
 import {
   tutorSay, setStudentWriting,
   closeMicForSubmission, takeFloorForReply, reopenFloorAfterFailure,
+  releaseFloorAfterSilentReply,
 } from '@/lib/tutorSpeech';
 import { phaseAnnouncement, withTransitionVoice } from '@/lib/phaseTransition';
 import { speakBrowser } from '@/lib/tts';
@@ -1889,6 +1890,11 @@ export function useDemoTutor() {
     // routing block is ever missing, the student must still not be shown the
     // popup they have just answered.
     useNumeraStore.getState().setInterventionState({ stage: 'AWAITING_REVIEW' });
+    // The mic was closed on the way in and nothing here speaks, so this is the
+    // one path that has to release the floor by hand. Without it voiceStatus
+    // sat on 'processing' for the rest of the session: "waiting for the
+    // tutor…" on screen, and the student's audio no longer transmitted.
+    releaseFloorAfterSilentReply();
   }, [sessionId]);
 
   const end = useCallback(async (): Promise<SessionSummary | null> => {

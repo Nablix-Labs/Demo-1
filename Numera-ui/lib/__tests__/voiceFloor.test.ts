@@ -33,6 +33,7 @@ vi.mock('@/lib/tts', () => ({
 const { useNumeraStore } = await import('@/store/useNumeraStore');
 const {
   closeMicForSubmission, takeFloorForReply, reopenFloorAfterFailure,
+  releaseFloorAfterSilentReply,
 } = await import('@/lib/tutorSpeech');
 
 const status = () => useNumeraStore.getState().voiceStatus;
@@ -142,10 +143,51 @@ describe('every submission hands the floor back', () => {
     // submitInterventionInput is the exemption, and it is exempt because it
     // speaks nothing. It is not a turn in the lesson: it files what the student
     // says is hard on a topic the backend has already paused, and §11 is
-    // explicit that it resumes no learning. It closes the mic (the popup does
-    // its own listening, and two open mics is the bug) and reopens it on
-    // failure, so both invariants above still bind it — but taking a reply
-    // floor for a reply that is never spoken would hold the floor forever.
+    // explicit that it resumes no learning. Taking a reply floor for a reply
+    // that is never spoken would hold the floor forever — the onEnd only runs
+    // when audio ends, and no audio is coming.
     expect(count('takeFloorForReply()')).toBe(count('closeMicForSubmission()') - 1);
+  });
+
+  it('releases the floor on EVERY success path, spoken or not', () => {
+    // The hole the exemption above left open. submitInterventionInput was
+    // excused from takeFloorForReply and then released nothing at all, so a
+    // SUCCESSFUL submission left voiceStatus on 'processing' for the rest of
+    // the session — "waiting for the tutor…" on screen and the mic no longer
+    // transmitting (Manjusha, 21 Sep). Exempt from speaking is not exempt from
+    // handing the floor back.
+    expect(count('takeFloorForReply()') + count('releaseFloorAfterSilentReply()'))
+      .toBe(count('closeMicForSubmission()'));
+  });
+});
+
+describe('releaseFloorAfterSilentReply', () => {
+  it('reopens listening when the reply expects an answer', () => {
+    useNumeraStore.setState({ voiceStatus: 'processing' });
+    releaseFloorAfterSilentReply();
+    expect(status()).toBe('listening');
+    expect(turnId()).toBeTruthy();
+  });
+
+  it('parks when the reply expects no answer', () => {
+    // After filing an intervention the student is awaiting review, not
+    // answering — minting a listening turn would invite a rejected reply.
+    useNumeraStore.setState({ voiceStatus: 'processing', expectsStudentResponse: false });
+    releaseFloorAfterSilentReply();
+    expect(status()).toBe('waiting');
+  });
+
+  it('parks when voice is not allowed back', () => {
+    useNumeraStore.setState({ voiceStatus: 'processing', allowVoiceInput: false });
+    releaseFloorAfterSilentReply();
+    expect(status()).toBe('waiting');
+  });
+
+  it('never treads on a state something else owns', () => {
+    for (const held of ['speaking', 'listening', 'idle', 'waiting'] as const) {
+      useNumeraStore.setState({ voiceStatus: held });
+      releaseFloorAfterSilentReply();
+      expect(status()).toBe(held);
+    }
   });
 });
