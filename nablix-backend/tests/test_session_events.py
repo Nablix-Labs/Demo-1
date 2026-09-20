@@ -164,6 +164,51 @@ def test_empty_support_keeps_the_tutor_response_available(
     assert support_used is None
 
 
+def test_scaffold_turn_appends_the_authored_partial_content() -> None:
+    response = _event_response("GUIDED_STUCK_SUPPORT_REQUIRED", "REQ-SCAFFOLD-PARTIAL")
+    payload = response["phase_payload"]
+    assert isinstance(payload, dict)
+    payload["support_to_serve"] = {
+        "support_type": "SCAFFOLD",
+        "scaffold_id": "SCF-T01-RULE",
+        "current_step_id": "SCF-T01-RULE-S1",
+        "prompt": "What changes?",
+        "partial_content": "ignored top-level content",
+        "expected_response": "The starting number",
+        "steps": [
+            {
+                "step_id": "SCF-T01-RULE-S1",
+                "prompt": "What changes?",
+                "partial_content": "3 + 5 | 9 + 5 | 14 + 5",
+                "expected_response": "The starting number",
+            },
+            {
+                "step_id": "SCF-T01-RULE-S2",
+                "prompt": "What stays fixed?",
+                "partial_content": "+5",
+                "expected_response": "Add 5",
+            },
+        ],
+    }
+    event = session_service.StudentModelSessionEventResponse.model_validate(response)
+    session = session_service.SessionRecord.model_construct(
+        student_model_event=event,
+        scaffold_id="SCF-T01-RULE",
+        current_scaffold_step_id="SCF-T01-RULE-S1",
+        delivered_scaffold_step_ids=[],
+    )
+
+    steps = interaction_service._schema_support_steps(event)
+    next_step, _ = interaction_service._next_scaffold_state(session)
+
+    assert steps == ["What changes? 3 + 5 | 9 + 5 | 14 + 5"]
+    assert interaction_service._scaffold_chat_line(
+        "Yes — look at the examples.",
+        steps[0],
+    ) == "Yes — look at the examples. What changes? 3 + 5 | 9 + 5 | 14 + 5"
+    assert next_step == "What stays fixed? +5"
+
+
 def test_missing_support_content_is_not_reported_as_active_support() -> None:
     response = _event_response("INCORRECT_ATTEMPT", "REQ-MISSING-HINT")
     phase_payload = response["phase_payload"]

@@ -1892,9 +1892,6 @@ def _schema_support_steps(
         return []
     support = event.phase_payload.support_to_serve
     if support is not None:
-        current_prompt = support.get("prompt")
-        if isinstance(current_prompt, str):
-            return [current_prompt]
         current_step_id = support.get("current_step_id")
         steps = support.get("steps")
         if isinstance(steps, list):
@@ -1905,12 +1902,35 @@ def _schema_support_steps(
                     continue
                 prompt = step.get("prompt")
                 if isinstance(prompt, str):
-                    return [prompt]
+                    return [_scaffold_step_line(
+                        prompt,
+                        step.get("partial_content"),
+                    )]
                 if current_step_id is not None:
                     break
+        current_prompt = support.get("prompt")
+        if isinstance(current_prompt, str):
+            return [_scaffold_step_line(
+                current_prompt,
+                support.get("partial_content"),
+            )]
     # Rescue catalogues contain final answers and future teaching steps. They stay
     # private until the dedicated parallel/tutor-solved conversation is active.
     return []
+
+
+def _scaffold_step_line(prompt: str, partial_content: object) -> str:
+    """Build the authored scaffold prompt with its visible partial work."""
+
+    prompt_text = prompt.strip()
+    partial_text = (
+        partial_content.strip()
+        if isinstance(partial_content, str)
+        else ""
+    )
+    if not partial_text or partial_text == prompt_text:
+        return prompt_text
+    return f"{prompt_text} {partial_text}"
 
 
 def _validate_scaffold_prompt(
@@ -2006,7 +2026,7 @@ def _next_scaffold_state(
         expected = next_step.get("expected_response")
         if not isinstance(next_id, str) or not isinstance(prompt, str):
             raise RuntimeError("Student Model returned a malformed scaffold step.")
-        return prompt, {
+        return _scaffold_step_line(prompt, next_step.get("partial_content")), {
             "scaffold_id": session.scaffold_id,
             "current_scaffold_step_id": next_id,
             "scaffold_step_number": index + 2,
@@ -4707,8 +4727,6 @@ async def _process_interaction(
                     turn_session.correct_answer,
                     rules,
                 )
-                tutor_message = next_prompt
-                tutor_message_voice = next_prompt
                 scaffold_steps = [next_prompt]
         else:
             scaffold_steps = list(turn_session.scaffold_steps)
