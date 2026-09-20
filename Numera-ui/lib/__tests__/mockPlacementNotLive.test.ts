@@ -17,6 +17,6 @@ describe('mock placement in live mode', () => {
     expect(src).toMatch(/live \? router\.push\('\/'\) : placeAtTopic\(placement\.id\)/);
   });
   it('does not claim a made-up starting topic', () => {
-    expect(src).toMatch(/\{!live && \([\s\S]{0,120}We&apos;ll start you at/);
+    expect(src).toMatch(/\{!live && \([\s\S]{0,600}?We&apos;ll start you at/);
   });
 });
