@@ -216,3 +216,60 @@ describe('authored question opening actions', () => {
     }]);
   });
 });
+
+/**
+ * #340 — "Highlight is missing or not proper for some question" (Manjusha,
+ * 20 Sep 2026). The DB authors `Highlight ½ and x` for the question below and
+ * nothing was marked on screen.
+ *
+ * "Some" was the clue. Installing an arriving question's anchors used to
+ * require the reply to ALSO carry an opening canvas action, so a question
+ * authored with anchors and no opening action lost them: applyBackendPhase
+ * clears the previous question's offsets, and nothing put the new ones back.
+ */
+describe('an arriving question that has anchors but no opening action', () => {
+  it('still installs its anchors, so the authored tokens are marked', () => {
+    useNumeraStore.setState({
+      currentPhase: 'GUIDED_PRACTICE',
+      activeQuestionId: 'Q-OLD',
+      questionAnchors: [],
+      tutorElements: [],
+    });
+
+    syncBackendSession({
+      current_phase: 'GUIDED_PRACTICE',
+      current_question:
+        'Write ½ × x using compact algebraic notation with the fractional coefficient directly before the letter.',
+      question_id: 'Q-T02-011',
+      question_anchors: [
+        { token_id: 'Q-T02-011:QTOKEN:1', text: '½', char_start: 6, char_end: 7 },
+        { token_id: 'Q-T02-011:QTOKEN:2', text: 'x', char_start: 10, char_end: 11 },
+      ],
+      // No question_opening_canvas_actions — this is the case that was lost.
+    });
+
+    expect(useNumeraStore.getState().questionAnchors.map((a) => a.text)).toEqual(['½', 'x']);
+  });
+
+  it('leaves the anchors alone when the reply carries none', () => {
+    // `undefined` means "this reply says nothing about anchors", which must not
+    // be read as "clear them" — the same-question path relies on that too.
+    useNumeraStore.setState({
+      currentPhase: 'GUIDED_PRACTICE',
+      activeQuestionId: 'Q-T02-011',
+      questionAnchors: [
+        { token_id: 'Q-T02-011:QTOKEN:1', text: '½', char_start: 6, char_end: 7 },
+      ],
+      tutorElements: [],
+    });
+
+    syncBackendSession({
+      current_phase: 'GUIDED_PRACTICE',
+      current_question:
+        'Write ½ × x using compact algebraic notation with the fractional coefficient directly before the letter.',
+      question_id: 'Q-T02-011',
+    });
+
+    expect(useNumeraStore.getState().questionAnchors.map((a) => a.text)).toEqual(['½']);
+  });
+});

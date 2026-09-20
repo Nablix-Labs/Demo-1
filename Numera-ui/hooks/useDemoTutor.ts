@@ -537,11 +537,21 @@ export function syncBackendSession(response: {
       questionText: response.current_question,
       questionType: response.question_type ?? null,
     });
-    if (openingActions.length > 0 && response.question_anchors !== undefined) {
+    // `applyBackendPhase` has just cleared the anchors, because they are raw
+    // offsets into the question being left. The arriving question's own
+    // anchors travel on this same reply, so they go back on here.
+    //
+    // This used to require `openingActions` as well, which coupled two
+    // unrelated things: a question is highlightable because the content author
+    // marked its tokens, not because it also happens to open with a tutor
+    // action. A question authored with anchors and no opening action rendered
+    // with nothing marked at all — "Write ½ × x using compact algebraic
+    // notation…" was one (#340), which is why only SOME questions highlighted.
+    if (response.question_anchors !== undefined) {
       const current = useNumeraStore.getState();
       if (current.activeQuestionId === response.question_id) {
         current.setQuestionAnchors(response.question_anchors);
-        current.applyTutorCanvasActions(openingActions);
+        if (openingActions.length > 0) current.applyTutorCanvasActions(openingActions);
       }
     }
   };
