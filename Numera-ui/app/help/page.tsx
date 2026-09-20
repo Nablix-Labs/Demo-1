@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import PageShell, { IconBadge } from '@/components/PageShell';
 import { ChevronDown, Mail, MessageCircle, BookOpen } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { useSupportStore } from '@/store/useSupportStore';
 
 const FAQS = [
   {
@@ -28,14 +29,24 @@ const FAQS = [
   },
 ];
 
+// Each card DOES something. They were rendered as <button>s with no handler,
+// so a student who tapped "Chat with support" got nothing at all (21 Sep).
 const CONTACTS = [
-  { icon: MessageCircle, title: 'Chat with support', detail: 'Typical reply in a few minutes' },
-  { icon: Mail, title: 'Email us', detail: 'support@nablix.com' },
-  { icon: BookOpen, title: 'Browse guides', detail: 'Step-by-step help articles' },
-];
+  { icon: MessageCircle, title: 'Chat with support', detail: 'Typical reply in a few minutes', action: 'chat' },
+  { icon: Mail, title: 'Email us', detail: 'support@nablix.com', action: 'email' },
+  { icon: BookOpen, title: 'Browse guides', detail: 'The answers to common questions', action: 'faq' },
+] as const;
 
 export default function HelpPage() {
   const [open, setOpen] = useState<number | null>(0);
+  const openSupport = useSupportStore((s) => s.openSupport);
+  const faqRef = useRef<HTMLDivElement | null>(null);
+  const act = (action: (typeof CONTACTS)[number]['action']) => {
+    if (action === 'chat') { openSupport(); return; }
+    if (action === 'email') { window.location.href = 'mailto:support@nablix.com'; return; }
+    setOpen(0);
+    faqRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
   return (
     <PageShell
@@ -48,7 +59,7 @@ export default function HelpPage() {
           <div className="text-[11px] font-semibold tracking-widest uppercase text-slate-blue mb-3">
             Frequently asked
           </div>
-          <div className="rounded-lg border border-muted-gray divide-y divide-muted-gray overflow-hidden">
+          <div ref={faqRef} className="rounded-lg border border-muted-gray divide-y divide-muted-gray overflow-hidden">
             {FAQS.map((f, i) => {
               const isOpen = open === i;
               return (
@@ -87,6 +98,7 @@ export default function HelpPage() {
               return (
                 <button
                   key={c.title}
+                  onClick={() => act(c.action)}
                   className="flex items-center gap-3.5 rounded-lg border border-muted-gray bg-white px-4 py-3.5 text-left hover:border-muted-gray transition-colors"
                 >
                   <IconBadge>
