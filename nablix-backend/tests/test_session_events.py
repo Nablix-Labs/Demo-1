@@ -3021,3 +3021,113 @@ def test_session_start_without_either_identifier_is_rejected() -> None:
         json={"student_id": "ST001", "interaction_mode": "TEXT"},
     )
     assert started.status_code == 422
+
+
+def test_the_diagnostic_is_recorded_as_answered_work(monkeypatch) -> None:
+    """Phase 0 answers must reach per_question_history like every other phase.
+
+    They did not. The diagnostic is submitted as one batch to
+    /session/diagnostic/complete, and only /interaction was appending attempt
+    records -- so a student who sat a seven-question diagnostic left no
+    per-question trace in this service at all. The review reads exactly that
+    list (session_summary.per_question_history -> outcomes), which is how a
+    finished topic showed "nothing to review yet" over real work.
+
+    Asserted through the transition that ends Phase 0, because the records are
+    written on the session that _apply_schema_event then copies: written on the
+    wrong side of it, they vanish exactly when the diagnostic ends.
+    """
+
+    async def fake_post_json(
+        adapter_name: str,
+        url: str,
+        payload: dict[str, object],
+        headers: dict[str, str],
+        timeout_seconds: int,
+        retry_count: int,
+    ) -> dict[str, object]:
+        del adapter_name, url, headers, timeout_seconds, retry_count
+        if payload["event_type"] != "DIAGNOSTIC_COMPLETED":
+            response = _diagnostic_started_response()
+            response["request_id"] = payload["request_id"]
+            return response
+        response = deepcopy(_diagnostic_started_response())
+        response["request_id"] = payload["request_id"]
+        journey = response["journey_state"]
+        phase_payload = response["phase_payload"]
+        routing = response["routing"]
+        assert isinstance(journey, dict)
+        assert isinstance(phase_payload, dict)
+        assert isinstance(routing, dict)
+        journey["mastery_status"] = "NEARLY_MASTERED"
+        journey["current_phase"] = "PHASE_3_INDEPENDENT_PRACTICE"
+        journey["recommended_entry_phase"] = "PHASE_3_INDEPENDENT_PRACTICE"
+        journey["phase_3_independent_practice"] = {
+            "status": "IN_PROGRESS",
+            "phase_visit_no": 1,
+            "target_micro_skill_ids": ["T02.M1"],
+            "verified_micro_skill_ids": [],
+            "unresolved_micro_skill_ids": [],
+            "remaining_micro_skill_ids": ["T02.M1"],
+            "current_question_id": "Q-T02-I01",
+            "used_question_ids": ["Q-T02-D01"],
+        }
+        question_set = deepcopy(phase_payload["question_set"])
+        assert isinstance(question_set, dict)
+        question = question_set["questions"][0]
+        assert isinstance(question, dict)
+        question["question_id"] = "Q-T02-I01"
+        question["question_usage_id"] = "QU-T02-I01-P3"
+        question["question_role"] = "INDEPENDENT"
+        phase_payload.update({
+            "phase": "PHASE_3_INDEPENDENT_PRACTICE",
+            "payload_type": "QUESTION_SET",
+            "question_set": question_set,
+        })
+        routing.update({
+            "reason_code": "DIAGNOSTIC_NO_GAPS",
+            "reason": "No diagnostic gaps.",
+            "next_action": "START_INDEPENDENT",
+        })
+        return response
+
+    settings = Settings(
+        student_model_url="https://student-model.example",
+        student_model_topic_codes={"ALG_LINEAR_ONE_STEP": "ALG-ORI-02"},
+        use_mock_student_model=False,
+    )
+    monkeypatch.setattr(provider, "get_settings", lambda: settings)
+    monkeypatch.setattr(session_service, "get_settings", lambda: settings)
+    monkeypatch.setattr(student_model, "post_json", fake_post_json)
+
+    started = client.post(
+        "/session/start",
+        json={
+            "student_id": "ST001",
+            "concept_id": "ALG_LINEAR_ONE_STEP",
+            "interaction_mode": "TEXT",
+        },
+    ).json()
+    served = started["student_model_event"]["phase_payload"]["question_set"]["questions"][0]
+    completed = client.post(
+        f"/session/{started['session_id']}/diagnostic/complete",
+        json={
+            "student_id": "ST001",
+            "answers": [{"question_id": "Q-T02-D01", "student_response": "B"}],
+        },
+    )
+    assert completed.status_code == 200, completed.text
+
+    history = session_service._sessions[started["session_id"]].per_question_history
+    assert len(history) == 1, "the answered diagnostic question was not recorded"
+    attempt = history[0]
+    assert attempt.question_id == "Q-T02-D01"
+    assert attempt.phase == "DIAGNOSTIC"
+    # The grade the student actually earned, not a placeholder: the same
+    # verdict this service sent upstream as the micro-skill result.
+    assert attempt.evaluation in {"CORRECT", "INCORRECT"}
+    # Phase 0 runs no tutor, so there is no diagnosis to claim and no hint.
+    assert attempt.error_type is None
+    assert attempt.hint_level_used == 0
+    # Real text, so the review shows a question rather than an id.
+    assert attempt.question_text == served["student_view"]["question_text"]

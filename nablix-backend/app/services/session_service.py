@@ -1946,10 +1946,19 @@ def _orientation_entry_message(event: StudentModelSessionEventResponse) -> str:
     return messages.transition_to_orientation_message
 
 
-def _diagnostic_results(
+def _graded_diagnostic_answers(
     session: SessionRecord,
     request: DiagnosticCompleteRequest,
-) -> list[MicroSkillResult]:
+) -> list[tuple[StudentModelQuestion, str]]:
+    """Every diagnostic question with the grade its answer earned.
+
+    Split out of _diagnostic_results because that function immediately rolls
+    the per-question grades up into per-micro-skill results and drops them --
+    which is why a diagnostic the student actually sat left no per-question
+    trace anywhere in this service. Graded in one place, used twice: the
+    roll-up Student Model needs, and the attempt records the review reads.
+    """
+
     event = session.student_model_event
     if event is None or event.phase_payload is None:
         raise RuntimeError("Diagnostic grading requires the stored start event.")
@@ -1969,7 +1978,7 @@ def _diagnostic_results(
             detail="Answers must include every served diagnostic question exactly once.",
         )
 
-    results: dict[str, DiagnosticResult] = {}
+    graded: list[tuple[StudentModelQuestion, str]] = []
     for question in question_set.questions:
         answer_spec = question.tutor_view.answer_spec
         if answer_spec.verification_method != "EXACT_CHOICE_MATCH":
@@ -1980,11 +1989,67 @@ def _diagnostic_results(
                     f"{answer_spec.verification_method} for {question.question_id}."
                 ),
             )
-        result = (
+        graded.append((
+            question,
             "CORRECT"
             if answers[question.question_id] in answer_spec.accepted_answers
-            else "INCORRECT"
+            else "INCORRECT",
+        ))
+    return graded
+
+
+def _diagnostic_attempts(
+    session: SessionRecord,
+    request: DiagnosticCompleteRequest,
+    graded: list[tuple[StudentModelQuestion, str]],
+) -> list[QuestionAttemptRecord]:
+    """The diagnostic, written down the way every other phase writes itself.
+
+    Phase 0 is the one phase whose answers never reached
+    `session.per_question_history`: it is submitted in a single batch to
+    /session/diagnostic/complete rather than a turn at a time through
+    /interaction, and only /interaction was recording. The review reads that
+    list (`session_summary.per_question_history` -> `outcomes`), so a student
+    who answered seven diagnostic questions and then opened Review was told
+    there was nothing to look back over.
+
+    Nothing is re-graded here; these are the same verdicts sent upstream.
+    """
+
+    responses = {answer.question_id: answer.student_response for answer in request.answers}
+    attempted_at = datetime.now(timezone.utc)
+    return [
+        QuestionAttemptRecord(
+            question_id=question.question_id,
+            question_text=question.student_view.question_text,
+            phase="DIAGNOSTIC",
+            evaluation=result,
+            # Phase 0 runs no tutor and no error classification -- it grades a
+            # choice against the answer spec. Claiming an error_type here would
+            # invent a diagnosis nothing made.
+            error_type=None,
+            # The diagnostic screen is multiple choice, and the batch carries
+            # no per-answer source, so this is the one honest value.
+            input_source="CHOICE",
+            hint_level_used=0,
+            attempted_at=attempted_at,
         )
+        for question, result in graded
+        if question.question_id in responses
+    ]
+
+
+def _diagnostic_results(
+    session: SessionRecord,
+    request: DiagnosticCompleteRequest,
+    graded: list[tuple[StudentModelQuestion, str]],
+) -> list[MicroSkillResult]:
+    event = session.student_model_event
+    if event is None:
+        raise RuntimeError("Diagnostic grading requires the stored start event.")
+
+    results: dict[str, DiagnosticResult] = {}
+    for question, result in graded:
         for mapping in question.micro_skill_mappings:
             previous = results.get(mapping.micro_skill_id)
             results[mapping.micro_skill_id] = (
@@ -2016,6 +2081,17 @@ async def complete_diagnostic(
     stored_event = session.student_model_event
     if stored_event is None:
         raise RuntimeError("Schema 3.0 session is missing its stored event.")
+    graded = _graded_diagnostic_answers(session, request)
+    # Recorded BEFORE the event goes upstream, and on `session`, because
+    # _apply_schema_event below copies whatever it is handed: written after it,
+    # the records would be dropped by the very phase change that ends Phase 0.
+    session = session.model_copy(update={
+        "per_question_history": [
+            *session.per_question_history,
+            *_diagnostic_attempts(session, request, graded),
+        ],
+    })
+    _sessions[session.session_id] = session
     event = await get_adapters().student_model.send_session_event(
         DiagnosticCompletedEvent(
             request_id=_schema_request_id(
@@ -2029,7 +2105,7 @@ async def complete_diagnostic(
             topic_id=stored_event.journey_state.topic_id,
             student_id=session.student_id,
             timestamp=_schema_timestamp(),
-            micro_skill_results=_diagnostic_results(session, request),
+            micro_skill_results=_diagnostic_results(session, request, graded),
         ),
         access_token,
     )
