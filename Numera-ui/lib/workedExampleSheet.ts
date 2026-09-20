@@ -96,10 +96,18 @@ export function rowY(index: number, total: number): number {
  * is unaffected by this — Konva already renders `\n`.
  */
 export function stepLines(content: string): string {
-  const parts = content.split(' / ');
+  const parts = content.split(' / ').map((part) => part.trim());
   if (parts.length < 2) return content;
-  if (!parts.every((part) => part.includes('='))) return content;
-  return parts.map((part) => part.trim()).join('\n');
+  // A spaced " / " between non-empty parts is the authored case separator
+  // ("2 + 4 / 7 + 4 / 12 + 4"); a fraction is written without spaces (a/b).
+  // It used to require an '=' in every part, which left the three-case
+  // opening of a worked example on one line with slashes (#303, 21 Sep).
+  if (parts.some((part) => !part)) return content;
+  // Mixed parts — one statement with a spaced division in it ('6 / 2 = 3')
+  // — stay as written. All-equations or all-expressions are separate cases.
+  const withEquals = parts.filter((part) => part.includes('=')).length;
+  if (withEquals !== 0 && withEquals !== parts.length) return content;
+  return parts.join('\n');
 }
 
 /**

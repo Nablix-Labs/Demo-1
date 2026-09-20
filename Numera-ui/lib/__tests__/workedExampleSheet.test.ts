@@ -128,3 +128,12 @@ describe('a step authored as two lines in one string', () => {
     expect(stepLines('3n + 4 = 19')).toBe('3n + 4 = 19');
   });
 });
+
+describe('stepLines — cases without an equals sign', () => {
+  it('puts each authored case on its own line', () => {
+    expect(stepLines('2 + 4 / 7 + 4 / 12 + 4')).toBe('2 + 4\n7 + 4\n12 + 4');
+  });
+  it('leaves a fraction alone', () => {
+    expect(stepLines('x/2 = 3')).toBe('x/2 = 3');
+  });
+});
