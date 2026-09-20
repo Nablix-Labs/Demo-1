@@ -14,6 +14,7 @@ import ContinuityCheck from '@/components/ContinuityCheck';
 import FloatingMicButton from '@/components/FloatingMicButton';
 import SupportLane from '@/components/SupportLane';
 import { useFlowNav } from '@/lib/useFlowNav';
+import { liveTopicCode } from '@/lib/topics';
 import { useRouter } from 'next/navigation';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { useAuthStore } from '@/store/useAuthStore';
@@ -131,7 +132,7 @@ export default function LessonPage() {
   useEffect(() => {
     if (!hydrated || !apiEnabled || sessionId) return;
     setMicMuted(true);
-    void startSession(activeConceptId, 'VOICE').then((rec) => {
+    void startSession(activeConceptId, 'VOICE', liveTopicCode(currentTopicId)).then((rec) => {
       if (!rec) {
         // The lesson used to swallow this entirely, leaving the student on a
         // blank canvas with no question, no message and no way to retry — which

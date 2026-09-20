@@ -27,6 +27,7 @@ import { rescueBlocksSubmission } from '@/lib/rescueMode';
 import { optionsMissing } from '@/lib/questionOptions';
 import { stalledWithNothingToAnswer } from '@/lib/phase3Stall';
 import { appendHint, hintLabel } from '@/lib/hintHistory';
+import { liveTopicCode } from '@/lib/topics';
 import QuestionDisplay from '@/components/QuestionDisplay';
 import InterventionInputModal, { type InterventionInputSubmission } from '@/components/InterventionInputModal';
 import InterventionPaused from '@/components/InterventionPaused';
@@ -368,7 +369,7 @@ export default function PracticePage() {
 
   useEffect(() => {
     if (!tutor.apiEnabled || tutor.sessionId || handedToReview.current) return;
-    void tutor.start(DEMO_CONCEPT_ID, 'TEXT').then((rec) => {
+    void tutor.start(DEMO_CONCEPT_ID, 'TEXT', liveTopicCode(currentTopicId)).then((rec) => {
       if (!rec) {
         setStartError(sessionStartError() ?? "We couldn't load your practice question.");
         return;
