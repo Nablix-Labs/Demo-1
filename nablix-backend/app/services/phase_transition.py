@@ -17,9 +17,15 @@ VALID_TRANSITIONS: dict[Phase, tuple[Phase, ...]] = {
         "GUIDED_PRACTICE",
         "INDEPENDENT_PRACTICE",
     ),
-    "CONCEPT_ORIENTATION": ("GUIDED_PRACTICE", "DIAGNOSTIC", "REVIEW"),
+    # INDEPENDENT_PRACTICE <-> CONCEPT_ORIENTATION is the prerequisite loop
+    # (TC-31/TC-32) and only that: a checkpoint that has spent both Guided
+    # repairs goes back to orientation on an EARLIER topic, and comes back to
+    # the same checkpoint question when the chain is repaired. Without both
+    # edges the authoritative route 409s here as an invalid transition, which
+    # is what the backend's deliberate pause was standing in for.
+    "CONCEPT_ORIENTATION": ("GUIDED_PRACTICE", "DIAGNOSTIC", "REVIEW", "INDEPENDENT_PRACTICE"),
     "GUIDED_PRACTICE": ("INDEPENDENT_PRACTICE", "DIAGNOSTIC", "REVIEW"),
-    "INDEPENDENT_PRACTICE": ("GUIDED_PRACTICE", "REVIEW"),
+    "INDEPENDENT_PRACTICE": ("GUIDED_PRACTICE", "REVIEW", "CONCEPT_ORIENTATION"),
     "REVIEW": ("GUIDED_PRACTICE", "CONCEPT_ORIENTATION"),
 }
 

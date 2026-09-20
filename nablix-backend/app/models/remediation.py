@@ -187,3 +187,33 @@ def intervention_input_request(state: StudentModelIntervention) -> InterventionI
             for code, label in INTERVENTION_OPTIONS
         ],
     )
+
+
+class PrerequisiteRemediationContext(BaseModel):
+    """Where a prerequisite journey is, held by the tutor backend.
+
+    The source journey's identity (topic, checkpoint) is Student Model's and is
+    never overwritten here: this records only what THIS service needs to serve
+    the detour and to know which stop the student is on -- so `/orientation/start`
+    and `/orientation/complete` can do the right thing without the client
+    telling them which mode they are in.
+
+    `source_topic_id` is the topic the student CAME FROM and will go back to;
+    `active_stop_topic_id` is the earlier topic being taught right now. Keeping
+    both is the point -- collapse them and the return checkpoint is lost.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_topic_id: NonEmptyText
+    source_micro_skill_id: NonEmptyText
+    active_stop_topic_id: NonEmptyText
+    active_stop_micro_skill_ids: list[str] = Field(default_factory=list)
+    # Reported back on the stop completion. Student Model is the one that
+    # accumulates them across stops; this is the current stop's contribution.
+    completed_micro_skill_ids: list[str] = Field(default_factory=list)
+    return_topic_id: NonEmptyText
+    return_question_id: NonEmptyText
+    # Set by /orientation/start. /orientation/complete refuses a stop that was
+    # never started, exactly as the ordinary orientation lifecycle does.
+    orientation_started: bool = False

@@ -5137,9 +5137,17 @@ async def _process_interaction(
             "routing_reason_code": (
                 # A halt is decided by the Student Model, and the schema content
                 # for the turn still carries the route that led into the halt --
-                # the stale one. Every other turn keeps its own content's code.
+                # the stale one. A prerequisite detour is the same shape: this
+                # turn's content is the MAX_GUIDED_REPAIRS_EXHAUSTED escalation,
+                # and the route that answered it landed afterwards, so reading
+                # the content here published the question instead of the answer
+                # -- disagreeing with student_model_event.routing beside it.
+                # Every other turn keeps its own content's code.
                 updated_session.student_model_event.routing.reason_code
-                if independent_practice_is_halted(updated_session)
+                if (
+                    independent_practice_is_halted(updated_session)
+                    or updated_session.prerequisite_remediation is not None
+                )
                 and updated_session.student_model_event is not None
                 else schema_content_response.routing.reason_code
                 if schema_content_response is not None

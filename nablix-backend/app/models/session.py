@@ -15,7 +15,11 @@ from app.models.adapters import (
 from app.models.canvas import CanvasQuestionMemory, CanvasSubmissionRecord
 from app.models.phase4_review import Phase4ReviewResponse
 from app.models.question_anchor import QuestionTextAnchor
-from app.models.remediation import InterventionFeedback, StudentModelIntervention
+from app.models.remediation import (
+    InterventionFeedback,
+    PrerequisiteRemediationContext,
+    StudentModelIntervention,
+)
 from app.models.fields import (
     ConceptId,
     InputSource,
@@ -444,6 +448,11 @@ class SessionRecord(BaseModel):
     intervention: StudentModelIntervention | None = None
     pending_intervention_input: InterventionInputSubmittedEvent | None = None
     content_gap_detected: bool = False
+    # Internal only, like `intervention`: the student is routed by the payload
+    # and routing that Student Model published, not by this. It exists so the
+    # orientation lifecycle can tell "teaching an earlier topic on the way back
+    # to a checkpoint" from an ordinary Phase 1, which the phase alone cannot.
+    prerequisite_remediation: PrerequisiteRemediationContext | None = None
 
 
 class SessionResponse(SessionRecord):
@@ -455,6 +464,7 @@ class SessionResponse(SessionRecord):
     routing: PublicStudentModelRouting | None = None
     intervention: StudentModelIntervention | None = Field(default=None, exclude=True)
     pending_intervention_input: InterventionInputSubmittedEvent | None = Field(default=None, exclude=True)
+    prerequisite_remediation: PrerequisiteRemediationContext | None = Field(default=None, exclude=True)
 
     @model_validator(mode="after")
     def publish_routing(self) -> "SessionResponse":
