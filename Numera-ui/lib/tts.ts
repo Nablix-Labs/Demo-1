@@ -193,8 +193,23 @@ let speakToken = 0; // invalidates in-flight TTS fetches when superseded/stopped
  * navigation) left the streamed reply talking underneath, and a REST-voiced
  * line then played ON TOP of it: two tutor voices at once. hardStop() silences
  * without firing onIdle, so callers keep owning what happens next. */
+/**
+ * The line currently being fetched or played, so the same one is not bought
+ * twice. Cleared by `stopTutorSpeech` and when the line finishes.
+ *
+ * Every call here is a paid synthesis. `stopTutorSpeech` supersedes the
+ * previous request CLIENT-side, but the HTTP request has already gone and the
+ * provider still bills it — so a component that re-renders while its line is
+ * in flight pays for a stack of identical audio and throws all but the last
+ * away. The VM journal for 20 Sep has bursts of exactly that: one student,
+ * one screen, the same 47-character line synthesised seven times inside three
+ * seconds, twice over (11:31:46, and again at 09:30, 11:22 and 11:42).
+ */
+let inFlightText: string | null = null;
+
 export function stopTutorSpeech(): void {
   speakToken++;
+  inFlightText = null;
   if (typeof window !== 'undefined') window.speechSynthesis?.cancel();
   if (currentAudio) {
     try { currentAudio.pause(); } catch { /* noop */ }
@@ -293,20 +308,33 @@ const coolingOff = (provider: string | null): boolean => {
  * the cool-off passes. Switching a student to a voice their plan doesn't
  * include is never the right answer.
  */
+
 export function speakTutor(text: string, onEnd?: () => void): void {
   if (!text) { onEnd?.(); return; }
   // Speak the words, not the markdown the tutor wrote them in. The chat bubble
   // renders the same string with the emphasis applied (lib/tutorMarkdown).
   text = stripTutorMarkdown(text);
+  // Already on its way. Returning without calling onEnd is deliberate and is
+  // what happens today: a superseded request never reaches `playBase64Mp3`,
+  // so its callback is already dropped. One request now plays and fires one
+  // callback, as before — it is just the first rather than the seventh.
+  if (text === inFlightText) return;
   stopTutorSpeech();
   if (!ttsApiEnabled()) { speakBrowser(text, onEnd); return; }
   const token = speakToken;
+  inFlightText = text;
+  // Release the line once it has been heard, so a later, deliberate repeat —
+  // a student pressing "read that again" — is not mistaken for a duplicate.
+  const done = () => {
+    if (inFlightText === text) inFlightText = null;
+    onEnd?.();
+  };
   // effectiveVoice() already accounts for an active degradation window, so a
   // student whose provider is down asks for the replacement voice up front.
   const { provider, voice } = effectiveVoice();
 
   // Don't spend a request on a provider that failed moments ago.
-  if (coolingOff(provider)) { speakBrowser(text, onEnd); return; }
+  if (coolingOff(provider)) { speakBrowser(text, done); return; }
 
   const attemptWith = (
     p: string | null,
@@ -318,7 +346,7 @@ export function speakTutor(text: string, onEnd?: () => void): void {
         if (token !== speakToken) return; // superseded while fetching
         if (audioBase64) {
           failedAt.delete(p ?? '');
-          playBase64Mp3(audioBase64, text, onEnd);
+          playBase64Mp3(audioBase64, text, done);
           return;
         }
         onFail();
@@ -340,12 +368,12 @@ export function speakTutor(text: string, onEnd?: () => void): void {
         attemptWith(replacement.provider, replacement.voice, () => {
           failedAt.set(replacement.provider, Date.now());
           console.warn('[tts] replacement voice also unavailable; using browser speech');
-          speakBrowser(text, onEnd);
+          speakBrowser(text, done);
         });
         return;
       }
       console.warn(`[tts] ${provider ?? 'default'} unavailable; using browser speech`);
-      speakBrowser(text, onEnd);
+      speakBrowser(text, done);
     });
   });
 }

@@ -62,9 +62,22 @@ function stopSpeaking() {
 }
 
 /** Human labels for the engine's five review categories, in delivery order. */
-/** How often, and how many times, to re-ask for a review still being built. */
-const REVIEW_RETRY_MS = 5_000;
-const REVIEW_AUTO_RETRIES = 24; // two minutes
+/**
+ * When to re-ask for a review that is still being built.
+ *
+ * Backing off rather than a fixed interval, because asking is NOT free. Every
+ * `GET /session/{id}` on a session in REVIEW makes the backend attempt to
+ * materialise the review, and that attempt is an OpenAI call. The first
+ * version of this polled every 5s for two minutes — 24 model calls per student
+ * per visit — and on the evening of 20 Sep, with the account's monthly quota
+ * exhausted, it turned one failed review into 118 `insufficient_quota` errors
+ * in ten minutes (VM journal, boot -2, 17:08–17:20 UTC).
+ *
+ * These waits cover the same two minutes in five calls instead of twenty-four.
+ * #326 took 55s to generate, so the third and fourth attempts are the ones
+ * that matter; the fixed 5s ticks in between only ever cost money.
+ */
+const REVIEW_RETRY_WAITS_MS = [4_000, 9_000, 20_000, 40_000, 60_000];
 
 export default function ReviewPage() {
   const [i, setI] = useState(0);
@@ -135,15 +148,15 @@ export default function ReviewPage() {
   // 55s on #326. So keep asking on our own for a while before handing the
   // student a button — pressing "try again" every few seconds is our job.
   const [autoRetries, setAutoRetries] = useState(0);
-  const waitingForReview = reviewBlocked && autoRetries < REVIEW_AUTO_RETRIES;
+  const waitingForReview = reviewBlocked && autoRetries < REVIEW_RETRY_WAITS_MS.length;
   useEffect(() => {
     if (!waitingForReview || retrying) return;
     const timer = setTimeout(() => {
       setAutoRetries((n) => n + 1);
       void retryReview();
-    }, REVIEW_RETRY_MS);
+    }, REVIEW_RETRY_WAITS_MS[autoRetries]);
     return () => clearTimeout(timer);
-  }, [waitingForReview, retrying, retryReview]);
+  }, [waitingForReview, retrying, retryReview, autoRetries]);
 
   // Ask once on arrival: a student routed here by the backend has not been
   // through the practice screen's readiness check.
