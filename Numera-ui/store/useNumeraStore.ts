@@ -232,6 +232,21 @@ export interface TutorCanvasAction {
 // (not React state) since it's plumbing, not UI.
 const seenDrawActionIds = new Set<string>();
 const seenTutorCanvasActionIds = new Set<string>();
+/**
+ * Confirmed components already written on THIS question.
+ *
+ * `seenTutorCanvasActionIds` only stops the same action being replayed. It
+ * cannot stop the backend confirming the same component again on a later turn
+ * under a fresh action id — and when that happens the ladder allocates a new
+ * slot, so "Start: n / Gain: +5" is written a second time across the first
+ * (Sanya, 21 Sep: it should be shown once).
+ *
+ * A confirmed component is a fact about the student's work, not a per-turn
+ * remark: once it is on the page it stays there, so writing it twice is always
+ * wrong. Cleared with the action ids whenever the question changes, because
+ * the same component id on the next question IS a new fact.
+ */
+const writtenComponentIds = new Set<string>();
 
 /**
  * How many unresolvable rescue actions may wait at once.
@@ -1211,7 +1226,11 @@ export const useNumeraStore = create<NumeraState>()(
       // question boundary would be swallowed as a duplicate, and Sanya's own
       // instruction is that an old action must never be applied to the next
       // question's anchors.
-      if (questionChanged) { seenDrawActionIds.clear(); seenTutorCanvasActionIds.clear(); }
+      if (questionChanged) {
+        seenDrawActionIds.clear();
+        seenTutorCanvasActionIds.clear();
+        writtenComponentIds.clear();
+      }
       return {
         currentPhase: phase,
         activeQuestionId: nextQuestionId,
@@ -1830,6 +1849,16 @@ export const useNumeraStore = create<NumeraState>()(
         // Idempotency: a reconnect or replay must not render the same
         // intervention twice.
         if (seenTutorCanvasActionIds.has(action.action_id)) continue;
+        // And the same CONFIRMED COMPONENT must not be written twice on one
+        // question, however many action ids it arrives under — see
+        // `writtenComponentIds`.
+        if (action.confirmed_component_id) {
+          if (writtenComponentIds.has(action.confirmed_component_id)) {
+            seenTutorCanvasActionIds.add(action.action_id);
+            continue;
+          }
+          writtenComponentIds.add(action.confirmed_component_id);
+        }
 
         if (action.target_kind === 'QUESTION_OPTION' && action.target_object_id) {
           const expectedPrefix = `${s.activeQuestionId}:OPTION:`;
@@ -2021,6 +2050,8 @@ export const useNumeraStore = create<NumeraState>()(
   clearTutorMarks: () => {
     seenDrawActionIds.clear();
     seenTutorCanvasActionIds.clear();
+    // The marks are going, so what was written is no longer written.
+    writtenComponentIds.clear();
     set({ tutorElements: [] });
   },
 
