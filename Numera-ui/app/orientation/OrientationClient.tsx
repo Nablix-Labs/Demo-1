@@ -662,7 +662,12 @@ function BackendOrientation({ topicId }: { topicId: string }) {
       // backend always starts it in DIAGNOSTIC, and usePhaseRouting then moves
       // them to the phase it actually reports. (A true mid-journey resume needs
       // the backend change tracked as ask #3.)
-      const active = currentSessionId ?? (await beginSession(activeConceptId, 'TEXT'))?.session_id;
+      // Send the route's topic, not the store's default concept. activeConceptId
+      // is not persisted, so a direct load of /orientation/?topic=ALG-ORI-03
+      // started ALG_LINEAR_ONE_STEP instead — the wrong topic, and for a
+      // student who has finished it, a 42s review-blocked start that timed
+      // out (ST015, 21 Sep). Same fix as the diagnostic (#353).
+      const active = currentSessionId ?? (await beginSession(activeConceptId, 'TEXT', topicId))?.session_id;
       if (!active) {
         setError(sessionStartError() ?? "Couldn't reach the tutor to load this topic.");
         setStatus('error');
@@ -678,7 +683,7 @@ function BackendOrientation({ topicId }: { topicId: string }) {
       // diagnostic screen once fired thousands of requests. Only the retry
       // button below clears it.
     }
-  }, [sessionId, activeConceptId, setBackendSession]);
+  }, [sessionId, activeConceptId, topicId, setBackendSession]);
 
   // Always call /orientation/start once per session — even though
   // /diagnostic/complete already returned an orientation_bundle.
