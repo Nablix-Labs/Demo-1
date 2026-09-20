@@ -83,7 +83,6 @@ export default function ReviewPage() {
   const [i, setI] = useState(0);
   const [showMarks, setShowMarks] = useState(false);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
-  const [endFailed, setEndFailed] = useState<'empty' | 'failed' | null>(null);
 
   const completePhase = useNumeraStore((s) => s.completePhase);
   const currentTopicId = useNumeraStore((s) => s.currentTopicId);
@@ -522,33 +521,50 @@ export default function ReviewPage() {
     );
   }
 
-  // Nothing to look back over — showing demo worksheets here would present
+  // No outcomes to look back over — showing demo worksheets here would present
   // fabricated results as the student's own.
   //
-  // Two ways to arrive: the end failed outright, or it succeeded and graded
-  // nothing. The second was falling through to the demo, because it has a
-  // sessionSummary and no endFailed — it just has an empty outcome list.
-  // Phase 4 has already returned above, so this cannot hide a real review.
+  // What this state must NOT do is explain the gap. An empty outcome list is
+  // simply what arrives when the backend has not put the summary together; it
+  // is not evidence about the student. This used to read "This session ended
+  // before any questions were completed", which is a claim the frontend has no
+  // way to check — and it was shown to Manjusha (20 Sep) immediately after she
+  // finished a whole topic: "successfully reached phase 4, but something wrong
+  // here". Telling someone who has just done the work that they did none of it
+  // is worse than saying nothing.
+  //
+  // So it reports what is actually known — the results are not here — and
+  // offers the same retry the blocked state does. Manual only: re-reading the
+  // session makes the backend attempt to generate the review, which is a model
+  // call (#346), so this must never poll on its own.
   const nothingGraded = source === 'none';
-  if (apiEnabled && ((endFailed && !sessionSummary) || nothingGraded)) {
+  if (apiEnabled && nothingGraded) {
     return (
       <PhaseGate phase="review">
         <PageShell title="Review & feedback" subtitle={subtitle}>
           <div className="rounded-lg border border-muted-gray bg-white px-6 py-8 flex flex-col items-start gap-3">
             <div className="text-[11px] font-semibold tracking-widest uppercase text-slate-blue">
-              {endFailed === 'empty' || nothingGraded ? 'Nothing to review yet' : 'Review unavailable'}
+              Results not ready
             </div>
             <p className="text-[14px] text-ink leading-relaxed max-w-prose">
-              {endFailed === 'empty' || nothingGraded
-                ? 'This session ended before any questions were completed, so there is no work to look back over. Head back to the lesson and solve a question or two — the review will be waiting.'
-                : 'Your session review could not be loaded. Head back to the lesson and try again in a moment.'}
+              Your work is saved. We could not load your results just now — try again in a moment.
             </p>
-            <button
-              onClick={() => void backToLesson()}
-              className="mt-2 inline-flex items-center gap-1.5 rounded-md bg-focus-navy text-white px-5 py-2.5 text-[13px] font-semibold hover:opacity-80 transition-opacity"
-            >
-              Back to the lesson <ChevronRight size={15} strokeWidth={1.8} />
-            </button>
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                onClick={() => void retryReview()}
+                disabled={retrying}
+                aria-busy={retrying}
+                className="inline-flex items-center gap-1.5 rounded-md bg-focus-navy text-white px-5 py-2.5 text-[13px] font-semibold hover:opacity-80 transition-opacity disabled:opacity-60"
+              >
+                {retrying ? 'Trying again…' : <>Try again <ChevronRight size={15} strokeWidth={1.8} /></>}
+              </button>
+              <button
+                onClick={() => void backToLesson()}
+                className="inline-flex items-center gap-1.5 rounded-md border border-muted-gray px-5 py-2.5 text-[13px] font-semibold text-ink hover:bg-reading-surface transition-colors"
+              >
+                Back to the lesson
+              </button>
+            </div>
           </div>
         </PageShell>
       </PhaseGate>
