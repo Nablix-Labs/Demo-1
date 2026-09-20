@@ -64,3 +64,27 @@ export class SpeechSettleTimer {
     }
   }
 }
+
+/**
+ * May a settled silence close the mic?
+ *
+ * Only once a reply is actually owed — a student FINAL has been seen for the
+ * current turn (that is what arms the watchdog). A partial alone is not that:
+ * the server has not taken the turn, and Deepgram Flux decides end-of-turn
+ * from the audio it keeps receiving.
+ *
+ * Closing the mic on a partial was a deadlock, and a permanent one. The
+ * client went PROCESSING 1.5s after a partial, `app/page.tsx` stopped sending
+ * mic frames because it gates them on LISTENING, Flux then never heard the
+ * silence it needs to emit EndOfTurn, no turn reached the backend, and the
+ * watchdog — armed by finals only — never fired. Manjusha, 21 Sep 2026: mic
+ * off, "Status: Processing…", the student bubble reading "two waiting for the
+ * tutor…", and the voice server logging nothing after `Connected` for four
+ * minutes. "This is always the same transcript."
+ */
+export function settleClosesMic(
+  voiceStatus: string,
+  replyOwed: boolean,
+): boolean {
+  return voiceStatus === 'listening' && replyOwed;
+}

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SpeechSettleTimer, UTTERANCE_END_MS } from '@/lib/speechSettle';
+import { settleClosesMic } from '@/lib/speechSettle';
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
@@ -55,5 +56,24 @@ describe('a turn has settled only when the student has actually stopped', () => 
     // If Deepgram's utterance_end_ms changes server-side, this must move with
     // it — the same number the turn watchdog's budget is derived from.
     expect(UTTERANCE_END_MS).toBe(1_500);
+  });
+});
+
+describe('settleClosesMic — a partial alone never closes the mic', () => {
+  it('closes it once a final has been seen and the student has gone quiet', () => {
+    expect(settleClosesMic('listening', true)).toBe(true);
+  });
+
+  it('keeps it open after a partial with no final (Manjusha, 21 Sep)', () => {
+    // The server has not taken the turn. Cutting mic frames here starves
+    // Deepgram of the silence it needs to end the turn, and nothing else on
+    // either side can ever resolve it.
+    expect(settleClosesMic('listening', false)).toBe(false);
+  });
+
+  it('never fires from a state that is not LISTENING', () => {
+    expect(settleClosesMic('speaking', true)).toBe(false);
+    expect(settleClosesMic('processing', true)).toBe(false);
+    expect(settleClosesMic('idle', true)).toBe(false);
   });
 });

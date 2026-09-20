@@ -42,7 +42,7 @@ import { resetSessionStart, resyncSession } from '@/hooks/useDemoTutor';
 import { applyInteractionSupport, acceptResponse } from '@/lib/interactionPresentation';
 import { voiceSupportFrame } from '@/lib/voiceSupportFrame';
 import { TurnWatchdog } from '@/lib/turnWatchdog';
-import { SpeechSettleTimer } from '@/lib/speechSettle';
+import { SpeechSettleTimer, settleClosesMic } from '@/lib/speechSettle';
 import { turnContextFrame } from '@/lib/voiceTurnContext';
 import { reopensStudentTurn, type TutorAudioCancelFrame } from '@/lib/tutorAudioCancel';
 import { committedLineage, type TutorTurnCommittedFrame } from '@/lib/tutorTurnCommitted';
@@ -313,7 +313,10 @@ export function useWebSocket(sessionId: string | null) {
       const store = useNumeraStore.getState();
       // Only from LISTENING: if the tutor already started speaking, or a newer
       // turn opened, this settle belongs to a turn that is no longer current.
-      if (store.voiceStatus !== 'listening') return;
+      // And only once a FINAL has been seen (the watchdog is armed). A partial
+      // followed by silence must keep the mic open — see settleClosesMic for
+      // the deadlock closing it caused.
+      if (!settleClosesMic(store.voiceStatus, watchdogRef.current?.armed ?? false)) return;
       store.setVoiceStatus('processing');
     });
 
