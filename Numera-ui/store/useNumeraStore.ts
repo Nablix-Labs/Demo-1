@@ -27,6 +27,7 @@ import {
 } from '@/lib/api';
 import { uid } from '@/lib/uid';
 import type { CanvasFrame } from '@/lib/studentSnapshot';
+import { rememberScaffoldStep, type SeenScaffoldStep } from '@/lib/scaffoldTrail';
 import {
   resolveTarget, actionMarks, showsWriteAffordance, memoryActionType, memoryActor,
   dropWriteRequest, RESCUE_SUFFIX,
@@ -485,6 +486,8 @@ export interface NumeraState {
    * step restored on reload would contradict the Student Model.
    */
   activeScaffold: ActiveScaffold | null;
+  /** Scaffold steps already shown, so the margin can draw the path. */
+  scaffoldSeen: SeenScaffoldStep[];
   /**
    * The authorised hint currently ON SCREEN, or null.
    *
@@ -1036,6 +1039,7 @@ const initial: Omit<
   contentGapPaused: false,
   progressionRetry: false,
   activeScaffold: null as ActiveScaffold | null,
+  scaffoldSeen: [] as SeenScaffoldStep[],
   visibleHint: null as string | null,
   writeInstruction: null as string | null,
   guidedRescue: null as GuidedRescuePayload | null,
@@ -1446,6 +1450,10 @@ export const useNumeraStore = create<NumeraState>()(
   setActiveScaffold: (activeScaffold) =>
     set((s) => ({
       activeScaffold,
+      // The margin draws the whole path, and only the arriving step is on this
+      // reply — lib/scaffoldTrail.ts has why remembering is allowed and
+      // reading ahead is not.
+      scaffoldSeen: rememberScaffoldStep(s.scaffoldSeen, s.activeScaffold, activeScaffold),
       canvasEvents: activeScaffold
         ? appendCanvasEvent(s.canvasEvents, {
             actor: 'SYSTEM_SUPPORT',
@@ -1940,6 +1948,7 @@ export const useNumeraStore = create<NumeraState>()(
               // competing with the one thing the tutor is actually doing.
               writeInstruction: null,
               activeScaffold: null,
+              scaffoldSeen: [] as SeenScaffoldStep[],
               // The OFFERS do not. They used to be cleared here, which is why a
               // student sent to a walkthrough could never re-read the hint that
               // preceded it. The rescue becomes the latest rung and they

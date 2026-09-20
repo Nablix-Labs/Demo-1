@@ -21,7 +21,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { deckRungs, visibleRung, collapsedRungs } from '@/lib/supportDeck';
 import SupportDeck from '@/components/SupportDeck';
-import ScaffoldPanel from '@/components/ScaffoldPanel';
+import ScaffoldMargin from '@/components/ScaffoldMargin';
 import WriteNote from '@/components/WriteNote';
 import HintNote from '@/components/HintNote';
 import VisualCue from '@/components/VisualCue';
@@ -33,8 +33,8 @@ const WRITE = 'Write the next line of your working.';
 const SCAFFOLD = {
   scaffoldId: 'SC-1',
   currentStepId: 'ST-1',
-  stepNumber: 1,
-  stepText: 'What changes?',
+  stepNumber: 2,
+  stepText: 'What stays the same?',
   stepVoice: null,
   totalSteps: 4,
 };
@@ -67,6 +67,14 @@ export default function SupportDeckDevScreen() {
       guidedRescue: null,
       writeInstruction: on.write ? WRITE : null,
       activeScaffold: on.scaffold ? SCAFFOLD : null,
+      // Step 1 already answered, so the margin shows a path rather than a
+      // single step — the state the card could never reach.
+      scaffoldSeen: on.scaffold
+        ? [
+            { stepId: 'ST-0', stepNumber: 1, stepText: 'What changes?' },
+            { stepId: 'ST-1', stepNumber: 2, stepText: 'What stays the same?' },
+          ]
+        : [],
     });
     // Through the setters, in ladder order, so the deck records the arrivals
     // exactly as a real session would.
@@ -120,12 +128,12 @@ export default function SupportDeckDevScreen() {
       <div className="flex gap-6">
         {/* Stands in for the canvas: the question and the guided step sit here,
             which is where they are on the real screen. */}
-        <div className="relative min-h-[520px] flex-1 rounded-xl border border-muted-gray bg-white p-6">
+        <div className="relative min-h-[520px] flex-1 overflow-hidden rounded-xl border border-muted-gray bg-white p-6">
           <p className="mb-3 font-serif text-[19px] text-ink">
             5 + 2, 11 + 2, 18 + 2. Use n for the changing starting number.
           </p>
-          {on.scaffold && !(before && on.rescue) && <ScaffoldPanel scaffold={SCAFFOLD} />}
-          <div className="mt-10 font-serif text-[44px] text-ink/80">n + 5</div>
+          {on.scaffold && !(before && on.rescue) && <ScaffoldMargin />}
+          <div className="ml-[196px] mt-10 pl-6 font-serif text-[44px] text-ink/80">n + 2</div>
         </div>
 
         <div className="w-[300px] shrink-0">

@@ -22,7 +22,7 @@ import { useDemoTutor } from '@/hooks/useDemoTutor';
 import { gridBackground, GRID_OPTIONS } from '@/lib/canvasGrid';
 import { tutorSay } from '@/lib/tutorSpeech';
 import QuestionDisplay from '@/components/QuestionDisplay';
-import ScaffoldPanel from '@/components/ScaffoldPanel';
+import ScaffoldMargin from '@/components/ScaffoldMargin';
 import RescueNote from '@/components/RescueNote';
 import RescueSteps from '@/components/RescueSteps';
 import Toolbar from './Toolbar';
@@ -63,7 +63,6 @@ export default function CanvasStage() {
     backendSession, activeQuestionId, questionNumber,
   );
 
-  const activeScaffold = useNumeraStore((s) => s.activeScaffold);
   // Phase 3 spec §3.2: no scaffold panels during an independent attempt. Read
   // from the phase rather than the route — the phase is what decides whether
   // the tutor is allowed to be helping right now.
@@ -256,11 +255,11 @@ export default function CanvasStage() {
           one line of it. A question that wrapped to two lines, or carried
           multiple-choice options, was covered by the card that was supposed to
           be helping with it (Manjusha, 10 Aug). */}
-      {!silentPhase3 && !rescueOn && activeScaffold && (
-        <div className="mt-3 w-[min(560px,100%)]">
-          <ScaffoldPanel scaffold={activeScaffold} />
-        </div>
-      )}
+      {/* The guided step is no longer a card in this flow — it is written down
+          the page's margin instead (ScaffoldMargin, below the question strip).
+          A card here was a second block of text immediately under the question,
+          competing with it for the same slot, and it could only ever show one
+          step. The margin shows the path. */}
 
       {/* The worked example, on the canvas rather than in the support column
           (Manjusha, 7 Sep: "the rest of the stuff's should come in the canvas
@@ -301,6 +300,12 @@ export default function CanvasStage() {
       <div className="absolute inset-0 z-[1]">
         <DrawingCanvas onExportReady={handleExportReady} />
       </div>
+
+      {/* Over the canvas rather than beside it: the stage is full-bleed, and
+          narrowing it would change the coordinate space the tutor's marks and
+          the OCR snapshot are measured in. The column is pointer-transparent,
+          so the pen still reaches every part of the page. */}
+      {!silentPhase3 && !rescueOn && <ScaffoldMargin />}
 
       {/* Teaching-back prompt */}
       <TeachBack onSubmit={submitTeachBack} />
