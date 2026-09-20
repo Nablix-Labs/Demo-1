@@ -13,6 +13,12 @@ import { join } from 'node:path';
 
 const login = readFileSync(join(process.cwd(), 'app/login/page.tsx'), 'utf8');
 
+describe('login drops the stored tutoring session', () => {
+  it('clears the session id, the ended id and the stale phase', () => {
+    expect(login).toMatch(/store\.clearSessionId\(\);\s*\n\s*store\.setEndedSessionId\(null\);\s*\n\s*store\.setCurrentPhase\(''\);/);
+  });
+});
+
 describe('login seeds the pending topic code', () => {
   it('takes the topic from last_journey_state and hands it to the next start', () => {
     expect(login).toMatch(/last_journey_state\?\.topic_id/);

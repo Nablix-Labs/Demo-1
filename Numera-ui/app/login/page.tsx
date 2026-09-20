@@ -70,6 +70,14 @@ export default function LoginPage() {
       // pending topic code so beginSession sends topic_code for it.
       const journeyTopic = res.last_journey_state?.topic_id?.trim() || null;
       if (journeyTopic) store.setPendingTopicCode(journeyTopic);
+      // A login is a fresh authority on where the student is. A tutoring
+      // session id left in storage from before it would otherwise be resumed
+      // — and the backend still serves it after a journey reset (#359), so a
+      // student whose journey was wiped came back into their OLD topic's
+      // Phase 4 review (ST015, 21 Sep; Manjusha's 'phase 4 on re-login').
+      store.clearSessionId();
+      store.setEndedSessionId(null);
+      store.setCurrentPhase('');
       const { href, unlock } = landingRoute(
         res.last_journey_state?.current_phase,
         journeyTopic ?? store.currentTopicId,
