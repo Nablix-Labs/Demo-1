@@ -16,10 +16,21 @@ import { CelebrationMark, EncourageMark } from '@/components/ScreenMarks';
 export default function CompletePage() {
   const router = useRouter();
   const masteryByTopic = useNumeraStore((s) => s.masteryByTopic);
+  const topicTitles = useNumeraStore((s) => s.topicTitles);
   const studentName = useNumeraStore((s) => s.studentName);
   const reset = useNumeraStore((s) => s.reset);
 
-  const mastered = TOPICS.filter((t) => masteryByTopic[t.id]).length;
+  // Every topic the student has mastered, whatever it is called. Real topics
+  // are backend codes (ALG-ORI-03) that the local table does not list, and
+  // counting only the table's ids showed a student who had just mastered three
+  // topics 'Nothing finished yet' (21 Sep). The table is kept for mock mode;
+  // a mastered backend topic is listed by the title the review gave it.
+  const masteredIds = Object.keys(masteryByTopic).filter((id) => masteryByTopic[id]);
+  const mastered = masteredIds.length;
+  const rows = masteredIds.some((id) => !TOPICS.some((t) => t.id === id))
+    ? masteredIds.map((id) => ({ id, name: topicTitles[id] ?? id, done: true }))
+    : TOPICS.map((t) => ({ id: t.id, name: t.name, done: Boolean(masteryByTopic[t.id]) }));
+  const total = rows.length;
 
   const startOver = () => {
     reset();
@@ -47,17 +58,17 @@ export default function CompletePage() {
         <p className="text-[13px] text-slate-blue mt-2 leading-relaxed">
           {mastered === 0
             ? 'Finish a topic and it will appear here, with everything you covered.'
-            : `You’ve mastered ${mastered} of ${TOPICS.length} ${
-                TOPICS.length === 1 ? 'topic' : 'topics'
+            : `You’ve mastered ${mastered} of ${total} ${
+                total === 1 ? 'topic' : 'topics'
               }. Every concept checked, practised, and reviewed with the tutor.`}
         </p>
 
         {/* Mastered-topic recap */}
         <div className="mt-5 rounded-lg border border-muted-gray divide-y divide-muted-gray text-left">
-          {TOPICS.map((t) => (
+          {rows.map((t) => (
             <div key={t.id} className="flex items-center justify-between px-4 py-3">
               <span className="text-[14px] font-semibold text-ink">{t.name}</span>
-              {masteryByTopic[t.id] ? (
+              {t.done ? (
                 <span className="flex items-center gap-1.5 text-[12px] font-semibold text-ink">
                   <span className="w-5 h-5 rounded-full bg-focus-navy text-white flex items-center justify-center">
                     <Check size={12} strokeWidth={2.4} />

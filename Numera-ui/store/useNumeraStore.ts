@@ -793,6 +793,13 @@ export interface NumeraState {
   currentTopicId: string;                 // topic the student is on right now
   flowStage: FlowStage;                   // stage within the current topic
   masteryByTopic: Record<string, boolean>; // topics the student has mastered
+  /**
+   * Display titles for mastered topics, keyed like masteryByTopic. Real topic
+   * ids are backend curriculum codes (ALG-ORI-03) that the local curriculum
+   * table has never heard of, so without this the completion screen could only
+   * print the raw code.
+   */
+  topicTitles: Record<string, string>;
 
   // Student profile (persisted) — age drives the Key Stage they're shown
   studentAge: number;
@@ -995,7 +1002,7 @@ export interface NumeraState {
   pendingTopicCode: string | null;
   setPendingTopicCode: (code: string | null) => void;
   setFlowStage: (stage: FlowStage) => void;
-  setMastery: (id: string, value: boolean) => void;
+  setMastery: (id: string, value: boolean, title?: string | null) => void;
   startChallenge: (problem: string) => void;
   endChallenge: () => void;
   setReviewStatus: (s: ReviewStatus) => void;
@@ -1148,6 +1155,7 @@ const initial: Omit<
   pendingTopicCode: null,
   flowStage: 'orientation',
   masteryByTopic: {},
+  topicTitles: {} as Record<string, string>,
   studentAge: 14,
   studentName: '',
   challengeActive: false,
@@ -2154,8 +2162,11 @@ export const useNumeraStore = create<NumeraState>()(
   setCurrentTopic: (currentTopicId) => set({ currentTopicId }),
   setPendingTopicCode: (pendingTopicCode) => set({ pendingTopicCode }),
   setFlowStage: (flowStage) => set({ flowStage }),
-  setMastery: (id, value) =>
-    set((s) => ({ masteryByTopic: { ...s.masteryByTopic, [id]: value } })),
+  setMastery: (id, value, title) =>
+    set((s) => ({
+      masteryByTopic: { ...s.masteryByTopic, [id]: value },
+      ...(title?.trim() ? { topicTitles: { ...s.topicTitles, [id]: title.trim() } } : {}),
+    })),
 
   startChallenge: (challengeProblem) =>
     set({
@@ -2243,6 +2254,7 @@ export const useNumeraStore = create<NumeraState>()(
         pendingTopicCode: s.pendingTopicCode,
         flowStage: s.flowStage,
         masteryByTopic: s.masteryByTopic,
+        topicTitles: s.topicTitles,
         studentAge: s.studentAge,
         studentName: s.studentName,
       }),

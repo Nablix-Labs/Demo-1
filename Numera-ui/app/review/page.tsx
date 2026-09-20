@@ -265,6 +265,16 @@ export default function ReviewPage() {
     });
     setLeaving(false);
     if (outcomeOf.ok) {
+      // Record the mastered topic under its BACKEND id, with the title the
+      // review showed. The completion screen used to count mastery against
+      // the local three-strand table only, so a student who had just mastered
+      // three real topics arrived at 'Nothing finished yet' with three dashes
+      // (ST015, 21 Sep). Mastery is the backend's verdict, not a local one.
+      if (outcome === 'pass') {
+        const st = useNumeraStore.getState();
+        const masteredId = backendSession?.concept_id?.trim() || st.currentTopicId;
+        st.setMastery(masteredId, true, phase4?.topic_title ?? sessionTopicTitle(backendSession));
+      }
       // The backend decides what comes next. `decideReview` walks a hardcoded
       // TOPICS table, which handed the student a topic the Student Model had
       // already completed — so it reopened in REVIEW and they came straight
