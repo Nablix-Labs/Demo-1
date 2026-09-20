@@ -50,7 +50,9 @@ def active_rescue_from(
         steps=steps,
         return_target_object_id=f"TUTOR_ANCHOR:QUESTION:{question_id}",
         final_reveal_approved=rescue.rescue_type == "TUTOR_SOLVED",
-        pending_phase3_transition=False,
+        # Tutor-Solved completes the Guided rung after its final step is shown.
+        # Parallel examples return to the active Guided question instead.
+        pending_phase3_transition=rescue.rescue_type == "TUTOR_SOLVED",
     )
 
 

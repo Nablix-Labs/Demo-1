@@ -211,7 +211,12 @@ _seeded = itertools.count(900)
 def _seed_session(active: ActiveGuidedRescue) -> str:
     session_id = f"SESSION{next(_seeded)}"
     event = session_service.StudentModelSessionEventResponse.model_validate(
-        _event_response("ORIENTATION_COMPLETED", "REQ-SEED")
+        _event_response(
+            "MAXIMUM_GUIDED_SUPPORT_REQUIRED"
+            if active.rescue_type == "TUTOR_SOLVED"
+            else "ORIENTATION_COMPLETED",
+            "REQ-SEED",
+        )
     )
     session_service._sessions[session_id] = SessionRecord.model_construct(
         session_id=session_id,
@@ -390,7 +395,7 @@ def _drive_to_final(session_id: str, active: ActiveGuidedRescue) -> ActiveGuided
     return current
 
 
-def test_final_tutor_solved_acknowledgement_returns_to_the_original_question(
+def test_final_tutor_solved_acknowledgement_starts_independent_practice(
     monkeypatch,
 ) -> None:
     active = _tutor_solved_active()
@@ -401,18 +406,19 @@ def test_final_tutor_solved_acknowledgement_returns_to_the_original_question(
     result = _ack(session_id, final)
 
     assert result.completed is True
-    assert stub.events == []
+    assert len(stub.events) == 1
+    assert stub.events[0].event_type == "INDEPENDENT_QUESTION_SET_REQUESTED"
     session = session_service._sessions[session_id]
     assert session.active_guided_rescue is None
-    assert session.current_phase == "GUIDED_PRACTICE"
+    assert session.current_phase == "INDEPENDENT_PRACTICE"
     assert session.question_id == "Q-T02-004"
 
-    # Replay after completion is idempotent and does not advance the question.
+    # Replay after completion is idempotent and does not request another question.
     assert _ack(session_id, final).completed is True
-    assert stub.events == []
+    assert len(stub.events) == 1
 
 
-def test_final_tutor_solved_acknowledgement_does_not_depend_on_student_model(
+def test_final_tutor_solved_acknowledgement_retries_when_student_model_is_unavailable(
     monkeypatch,
 ) -> None:
     active = _tutor_solved_active()
@@ -420,9 +426,10 @@ def test_final_tutor_solved_acknowledgement_does_not_depend_on_student_model(
     stub = _stub_adapters(monkeypatch, RuntimeError("student model down"))
     final = _drive_to_final(session_id, active)
 
-    assert _ack(session_id, final).completed is True
-    assert session_service._sessions[session_id].active_guided_rescue is None
-    assert stub.events == []
+    with pytest.raises(HTTPException, match="PROGRESSION_RETRY_REQUIRED"):
+        _ack(session_id, final)
+    assert session_service._sessions[session_id].active_guided_rescue is not None
+    assert len(stub.events) == 1
 
 
 def test_snapshots_restore_rescue_state() -> None:
