@@ -826,6 +826,7 @@ export interface NumeraState {
   setQuestionNumber: (n: number) => void;
   setActiveEquation: (conceptId: string, questionId: string, label?: string) => void;
   setCurrentPhase: (phase: string) => void;
+  setActiveConceptId: (activeConceptId: string) => void;
   setBackendSession: (record: SessionRecord | null) => void;
   setSessionSummary: (summary: SessionSummary | null) => void;
   setSessionReview: (review: SessionReview | null) => void;
@@ -1010,7 +1011,7 @@ export interface NumeraState {
 const initial: Omit<
   NumeraState,
   | 'setSessionId' | 'setSessionState' | 'setActiveSlide' | 'setTotalSlides'
-  | 'setQuestionText' | 'setQuestionAnchors' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'setEndedSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'noteTutorLineage' | 'markTutorTurnFailed' | 'setSessionRecovering' | 'setSessionResumeFailed' | 'setContentGapPaused' | 'setProgressionRetry'
+  | 'setQuestionText' | 'setQuestionAnchors' | 'applyBackendPhase' | 'setSelectedOption' | 'setQuestionNumber' | 'setActiveEquation' | 'setCurrentPhase' | 'setActiveConceptId' | 'setBackendSession' | 'setSessionSummary' | 'setSessionReview' | 'clearSessionId' | 'setEndedSessionId' | 'toggleMic' | 'setMicMuted' | 'setVoiceStatus' | 'beginListeningTurn' | 'beginSubmissionTurn' | 'setTutorTurn' | 'noteTutorLineage' | 'markTutorTurnFailed' | 'setSessionRecovering' | 'setSessionResumeFailed' | 'setContentGapPaused' | 'setProgressionRetry'
   | 'setVisualCueVisible' | 'setVisualCue' | 'toggleVisualCue' | 'setVisibleHint' | 'setWriteInstruction' | 'setGuidedRescue' | 'openSupportRung' | 'collapseSupportDeck' | 'clearRescueSteps' | 'noteRescueAdvanceFailed' | 'noteRescueCompleted'
   | 'setSupportShown' | 'setLastHintText' | 'lockPhase3Attempt' | 'setInterventionState'
   | 'setPendingTutorSpeech' | 'claimPendingTutorSpeech' | 'setQuestionProgress' | 'setAppliedResponse' | 'setInactivityPolicy'
@@ -1348,6 +1349,13 @@ export const useNumeraStore = create<NumeraState>()(
     }),
 
   setCurrentPhase: (currentPhase) => set({ currentPhase }),
+  // The topic the OPEN session is for. Written from the session record itself
+  // when a session starts or resumes, because /session/start is authoritative
+  // (Chirudeva, 11 Sep) and the ownership guard in syncBackendSession compares
+  // replies against this — a session opened by topic_code came back with a
+  // concept_id the store had never heard of, and its own first record was
+  // dropped as "a topic the student has left" (#283, 21 Sep).
+  setActiveConceptId: (activeConceptId) => set({ activeConceptId }),
   /**
    * Store the session record — and backfill the options that depend on it.
    *

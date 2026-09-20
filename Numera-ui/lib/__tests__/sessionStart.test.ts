@@ -136,3 +136,40 @@ describe('session start', () => {
     ]);
   });
 });
+
+describe('a session for another topic is the student\'s own', () => {
+  // #283, 21 Sep 2026 (ST015, ALG-ORI-02): started by topic_code, the record
+  // came back concept_id "ALG-ORI-02" while the store still held the default
+  // concept, and syncBackendSession's ownership guard dropped it — phase never
+  // applied, router never moved, the diagnostic screen drew a Phase 2
+  // short-response question with no options to tap.
+  const TOPIC_TWO = {
+    ...RECORD,
+    session_id: 'SESSION-T02',
+    concept_id: 'ALG-ORI-02',
+    current_phase: 'GUIDED_PRACTICE',
+    question_id: 'Q-T02-003',
+    current_question: 'Write p × p × q in compact algebraic notation.',
+  } as unknown as SessionRecord;
+
+  it('adopts the record\'s topic on start, so its phase is applied', async () => {
+    startSession.mockResolvedValue(TOPIC_TWO);
+    const { beginSession, useNumeraStore } = await loadTutor();
+    useNumeraStore.setState({ activeConceptId: 'ALG_LINEAR_ONE_STEP', currentPhase: 'DIAGNOSTIC' });
+    await beginSession('ALG_LINEAR_ONE_STEP', 'TEXT', 'ALG-ORI-02');
+    expect(useNumeraStore.getState().activeConceptId).toBe('ALG-ORI-02');
+    expect(useNumeraStore.getState().currentPhase).toBe('GUIDED_PRACTICE');
+  });
+
+  it('adopts the record\'s topic on resume too — activeConceptId is not persisted', async () => {
+    getSession.mockResolvedValue(TOPIC_TWO);
+    const { resumeSession, useNumeraStore } = await loadTutor();
+    useNumeraStore.setState({
+      sessionId: 'SESSION-T02', backendSession: null,
+      activeConceptId: 'ALG_LINEAR_ONE_STEP', currentPhase: 'DIAGNOSTIC',
+    });
+    await resumeSession();
+    expect(useNumeraStore.getState().activeConceptId).toBe('ALG-ORI-02');
+    expect(useNumeraStore.getState().currentPhase).toBe('GUIDED_PRACTICE');
+  });
+});

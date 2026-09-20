@@ -739,6 +739,12 @@ export async function beginSession(
       const s = useNumeraStore.getState();
       s.clearTrail();
       s.setSessionId(rec.session_id);
+      // The record names the topic this session is for. Adopt it BEFORE the
+      // sync, whose ownership guard compares the reply's concept_id against
+      // the store's — a session started by topic_code carries a concept the
+      // screen never set, and without this its own first record was dropped
+      // as belonging to "a topic the student has left" (#283, 21 Sep).
+      if (rec.concept_id?.trim()) s.setActiveConceptId(rec.concept_id.trim());
       s.setBackendSession(rec);
       syncBackendSession(rec);
       if (rec.current_question) s.addTrailEntry({ kind: 'question', text: rec.current_question });
@@ -795,6 +801,11 @@ export async function resumeSession(): Promise<void> {
       const rec = await getSession(store.sessionId!, studentId());
       const s = useNumeraStore.getState();
       s.setSessionResumeFailed(false);
+      // Same reason as beginSession: activeConceptId is not persisted, so a
+      // refresh inside any topic but the default one resumed a record whose
+      // concept the store did not hold, and the guard dropped it — blank
+      // lesson after refresh in topic 2.
+      if (rec.concept_id?.trim()) s.setActiveConceptId(rec.concept_id.trim());
       s.setBackendSession(rec);
       syncBackendSession(rec);
       // Restore the cue the backend still has open for this question.
@@ -820,7 +831,7 @@ export async function resumeSession(): Promise<void> {
         }));
         if (restored.length > 0) {
           s.setTranscript(restored);
-        } else if (rec.message.trim()) {
+        } else if (rec.message?.trim()) {
           s.setTranscript([{ role: 'ai', text: rec.message }]);
         }
       }
@@ -831,7 +842,9 @@ export async function resumeSession(): Promise<void> {
       // product (Sanya, 11 Aug — "we need it spoken on every session resume").
       // Only the CURRENT line is spoken, never the restored history — replaying
       // a whole conversation aloud would be worse than saying nothing.
-      if (rec.message.trim()) {
+      // Optional: a record without a message must not throw AFTER it has been
+      // applied — that turned a good resume into "Couldn't reload your lesson".
+      if (rec.message?.trim()) {
         useNumeraStore.getState().setPendingTutorSpeech(rec.message.trim());
       }
     } catch (err) {
