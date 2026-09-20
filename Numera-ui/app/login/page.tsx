@@ -63,9 +63,16 @@ export default function LoginPage() {
       // Land on the phase the backend says this student is in — for a new
       // student that's the topic diagnostic, not the guided lesson.
       const store = useNumeraStore.getState();
+      // The topic the student is actually on. Without this the next session
+      // start sent the hard-coded default concept, and a student mid-way
+      // through topic 2 was opened into topic 1's finished review — "it took
+      // me to phase 4 when re login" (Manjusha, ST008, 21 Sep). Seeded as the
+      // pending topic code so beginSession sends topic_code for it.
+      const journeyTopic = res.last_journey_state?.topic_id?.trim() || null;
+      if (journeyTopic) store.setPendingTopicCode(journeyTopic);
       const { href, unlock } = landingRoute(
         res.last_journey_state?.current_phase,
-        store.currentTopicId,
+        journeyTopic ?? store.currentTopicId,
       );
       phasesToUnlock(unlock).forEach(store.completePhase);
       router.push(href);

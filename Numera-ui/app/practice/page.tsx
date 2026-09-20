@@ -300,7 +300,17 @@ export default function PracticePage() {
     // Says why a GET appeared mid-lesson. Sanya's stall showed nothing in the
     // console at all, which is half of why it read as a frontend hang.
     console.warn('[phase3] the last reply left no question on screen — re-reading the session');
-    void resyncSession();
+    void resyncSession().finally(() => {
+      // Still nothing after the re-read: the backend has moved the student
+      // into Phase 3 without serving a question (ST008, 21 Sep — the record
+      // had question_id null and every voice turn 500'd on it). Say so. The
+      // screen used to read "Loading question…" indefinitely, which is a hang
+      // to anyone looking at it.
+      const s = useNumeraStore.getState();
+      if (!s.activeQuestionId && !s.questionText.trim()) {
+        setStallNotice("Your practice question hasn't arrived yet.");
+      }
+    });
   }, [stalled, tutor.apiEnabled]);
 
   // Speak the line queued by a phase handoff or a session resume.
@@ -320,6 +330,7 @@ export default function PracticePage() {
   // with it — leaving it up would read as a comment on the new question.
   useEffect(() => {
     setNotice(null);
+    setStallNotice(null);
     // The support ladder resets with the question, so the notes must too — a
     // hint about the question the student has just left, sitting beside a new
     // one, is worse than no hint at all (#312).
@@ -333,6 +344,10 @@ export default function PracticePage() {
   // forever with no error and no way to retry — which is what a failed session
   // start actually looked like to a tester (2026-07-28).
   const [startError, setStartError] = useState<string | null>(null);
+  // A Phase 3 entry the backend served with no question. Distinct from a
+  // failed START: the session is fine, so its retry re-reads it rather than
+  // opening a new one (which, from here, would start the default topic).
+  const [stallNotice, setStallNotice] = useState<string | null>(null);
 
   // A surviving sessionId with no session record is the state a refresh leaves
   // behind — and, far more often, what a BACKEND RESTART leaves behind, since
@@ -591,6 +606,16 @@ export default function PracticePage() {
               <span className="text-[14px] font-semibold text-ink">{startError}</span>
               <button
                 onClick={() => { resetSessionStart(); setStartError(null); clearSessionId(); }}
+                className="text-[12px] font-semibold text-learning-blue hover:underline"
+              >
+                Try again
+              </button>
+            </div>
+          ) : !QUESTION && stallNotice ? (
+            <div className="flex items-center gap-3">
+              <span className="text-[14px] font-semibold text-ink">{stallNotice}</span>
+              <button
+                onClick={() => { setStallNotice(null); stallResyncSent.current = false; void resyncSession(); }}
                 className="text-[12px] font-semibold text-learning-blue hover:underline"
               >
                 Try again
