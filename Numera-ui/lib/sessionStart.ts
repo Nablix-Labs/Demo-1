@@ -27,3 +27,21 @@ export function startPayloadFor(
   if (code) return { student_id: studentId, topic_code: code, interaction_mode: mode };
   return { student_id: studentId, concept_id: conceptId, interaction_mode: mode };
 }
+
+/**
+ * Did the Student Model reject the topic we named?
+ *
+ * The tutor backend forwards SESSION_OPENED with our `topic_code`; an id it
+ * does not know comes back 404 `UNKNOWN_TOPIC`. That happened with the
+ * session's own `concept_id` (`ALG_LINEAR_ONE_STEP`), which the tutor backend
+ * accepts as a concept but the Student Model does not know as a topic
+ * (ST030, 21 Sep). Starting again WITHOUT the code lets the backend open the
+ * journey's current topic itself.
+ */
+export function unknownTopicRejection(err: unknown): boolean {
+  const e = err as { response?: { status?: number; data?: { error_code?: string; message?: string } } };
+  const res = e?.response;
+  if (res?.status !== 404) return false;
+  const body = `${res.data?.error_code ?? ''} ${res.data?.message ?? ''}`;
+  return /UNKNOWN_TOPIC/i.test(body);
+}

@@ -253,6 +253,32 @@ export default function ReviewPage() {
   /** The outcome to retry with, set only when a step actually failed. */
   const [retryOutcome, setRetryOutcome] = useState<Parameters<typeof decideReview>[0] | null>(null);
 
+  /**
+   * Leave this review for the topic the backend handed off to. False when
+   * there is no hand-off, so the caller decides what "next" means.
+   */
+  const leaveForHandoff = useCallback((handoff: NextTopicHandoff | null): boolean => {
+    const next = handoffDestination(handoff);
+    if (!next) return false;
+    resetSessionStart();
+    const store = useNumeraStore.getState();
+    store.clearSessionId();
+    store.setEndedSessionId(null);
+    store.completePhase('review');
+    // Unlock the gate for the phase the backend is sending them to, or
+    // PhaseGate bounces them straight back out of it.
+    store.setCurrentTopic(next.topicId);
+    store.setPendingTopicCode(next.topicId);
+    // The finished session's phase must not outlive it. Left at REVIEW,
+    // usePhaseRouting reads it as the new page mounts and pushes the
+    // student straight back here — the next topic never opens. The next
+    // /session/start is what sets it again, and it is the authority
+    // (Chirudeva, 11 Sep 2026).
+    store.setCurrentPhase('');
+    goStage(next.unlock, next.topicId);
+    return true;
+  }, [goStage]);
+
   const finishReview = useCallback(async (outcome: Parameters<typeof decideReview>[0]) => {
     setLeaveError(null);
     setRetryOutcome(null);
@@ -282,26 +308,7 @@ export default function ReviewPage() {
       // already completed — so it reopened in REVIEW and they came straight
       // back here, every time. It is kept only for mock mode and for a genuinely
       // absent handoff, which means the curriculum has ended.
-      const next = handoffDestination(handoff);
-      if (next) {
-        resetSessionStart();
-        const store = useNumeraStore.getState();
-        store.clearSessionId();
-        store.setEndedSessionId(null);
-        store.completePhase('review');
-        // Unlock the gate for the phase the backend is sending them to, or
-        // PhaseGate bounces them straight back out of it.
-        store.setCurrentTopic(next.topicId);
-        store.setPendingTopicCode(next.topicId);
-        // The finished session's phase must not outlive it. Left at REVIEW,
-        // usePhaseRouting reads it as the new page mounts and pushes the
-        // student straight back here — the next topic never opens. The next
-        // /session/start is what sets it again, and it is the authority
-        // (Chirudeva, 11 Sep 2026).
-        store.setCurrentPhase('');
-        goStage(next.unlock, next.topicId);
-        return;
-      }
+      if (leaveForHandoff(handoff)) return;
       // Live and no hand-off: the backend has said there is nothing next, so
       // the curriculum has ended. decideReview walks the LOCAL topic table
       // (algebra → number → geometry); a real student's ids are backend codes
@@ -322,14 +329,19 @@ export default function ReviewPage() {
         ? "We couldn't record that you finished this review. Your work is saved — try again."
         : "Your review is recorded, but we couldn't close the session. Try again.",
     );
-  }, [reportReviewFinished, decideReview, apiEnabled, sessionId, end]);
+  }, [reportReviewFinished, decideReview, apiEnabled, sessionId, end, leaveForHandoff]);
 
   const backToLesson = useCallback(async () => {
-    await reportReviewFinished().catch(() => undefined);
+    // Reporting the review finished is what moves the journey on, and the
+    // reply can carry a hand-off to the NEXT topic. Ignoring it restarted the
+    // finished topic by its concept id, which the Student Model rejects as
+    // UNKNOWN_TOPIC — "Couldn't start your lesson" (ST030, 21 Sep).
+    const handoff = await reportReviewFinished().catch(() => null);
+    if (leaveForHandoff(handoff)) return;
     resetSessionStart();
     useNumeraStore.getState().clearSessionId();
     goStage('guided', currentTopicId);
-  }, [reportReviewFinished, goStage, currentTopicId]);
+  }, [reportReviewFinished, leaveForHandoff, goStage, currentTopicId]);
 
   // Real session outcomes when the backend sent them; demo worksheets otherwise.
   const demo = demoFor(currentTopicId);

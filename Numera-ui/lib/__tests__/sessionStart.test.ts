@@ -174,3 +174,28 @@ describe('a session for another topic is the student\'s own', () => {
     expect(useNumeraStore.getState().currentPhase).toBe('GUIDED_PRACTICE');
   });
 });
+
+describe('a topic code the Student Model does not know', () => {
+  // ST030, 21 Sep: the session's own concept_id was sent back as topic_code
+  // and rejected 404 UNKNOWN_TOPIC — "Couldn't start your lesson".
+  const rejection = { response: { status: 404, data: { error_code: 'UNKNOWN_TOPIC', message: 'Unknown topic_id.' } } };
+  beforeEach(() => { startSession.mockReset(); getSession.mockReset(); });
+  afterEach(() => { delete process.env.NEXT_PUBLIC_API_BASE_URL; });
+
+  it('starts again by concept alone so the backend picks the journey topic', async () => {
+    startSession.mockRejectedValueOnce(rejection).mockResolvedValue(RECORD);
+    const { beginSession } = await loadTutor();
+    expect(await beginSession('ALG_LINEAR_ONE_STEP', 'TEXT', 'ALG_LINEAR_ONE_STEP')).toEqual(RECORD);
+    expect(startSession).toHaveBeenCalledTimes(2);
+    expect(startSession.mock.calls[0][0]).toMatchObject({ topic_code: 'ALG_LINEAR_ONE_STEP' });
+    expect(startSession.mock.calls[1][0]).toMatchObject({ concept_id: 'ALG_LINEAR_ONE_STEP' });
+    expect(startSession.mock.calls[1][0]).not.toHaveProperty('topic_code');
+  });
+
+  it('does not retry any other failure, or a start that named no topic', async () => {
+    startSession.mockRejectedValue(rejection);
+    const { beginSession } = await loadTutor();
+    expect(await beginSession('ALG_LINEAR_ONE_STEP')).toBeNull();
+    expect(startSession).toHaveBeenCalledTimes(1);
+  });
+});

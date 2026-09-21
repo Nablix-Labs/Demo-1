@@ -67,7 +67,7 @@ import {
   type SubmissionRole,
 } from '@/lib/canvasSubmission';
 import { canvasEvidenceFor } from '@/lib/canvasEvidence';
-import { startPayloadFor } from '@/lib/sessionStart';
+import { startPayloadFor, unknownTopicRejection } from '@/lib/sessionStart';
 import type { QuestionAnchor } from '@/lib/questionAnchors';
 import { isPhase3 } from '@/lib/phase3';
 import { phase3Destination } from '@/lib/phase3Routing';
@@ -734,7 +734,13 @@ export async function beginSession(
     try {
       const rec = await startSession(
         startPayloadFor(studentId(), conceptId, handoffTopic, mode),
-      );
+      ).catch(async (err: unknown) => {
+        // The topic we named is one the Student Model does not know. Try
+        // once by concept alone; the backend then opens the journey's own
+        // current topic. See unknownTopicRejection.
+        if (!handoffTopic || !unknownTopicRejection(err)) throw err;
+        return startSession(startPayloadFor(studentId(), conceptId, null, mode));
+      });
       if (handoffTopic) useNumeraStore.getState().setPendingTopicCode(null);
       const s = useNumeraStore.getState();
       s.clearTrail();
