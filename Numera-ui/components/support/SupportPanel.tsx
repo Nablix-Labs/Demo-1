@@ -29,6 +29,7 @@ import { getPreferredMicId, setPreferredMicId } from '@/lib/support/micPreferenc
 import ConsentModal from './ConsentModal';
 import EscalationPanel from './EscalationPanel';
 import { cn } from '@/lib/cn';
+import { flowScreen } from '@/lib/usePhaseRouting';
 
 const GREETING =
   "Hi, I'm Nablix Assist. Tell me what's going wrong — for example \"my mic isn't working\" or \"I can't submit my answer\".";
@@ -186,6 +187,15 @@ export default function SupportPanel() {
     stopVoice();
     clearHighlight();
     closeSupport();
+  };
+
+  // The button says "Return to lesson". From a lesson screen that is closing
+  // the panel; from Help or any dock page it also has to GO there (ST030, 21
+  // Sep: it only closed the panel). '/' is enough — the phase router then
+  // puts the student on whichever phase the session is in.
+  const returnToLesson = () => {
+    close();
+    if (!flowScreen(pathname)) router.push('/');
   };
 
   const sendText = (e: FormEvent) => {
@@ -446,7 +456,7 @@ export default function SupportPanel() {
             Contact support
           </button>
           <button
-            onClick={close}
+            onClick={returnToLesson}
             className="rounded-full bg-focus-navy text-white px-4 py-1.5 text-[11px] font-semibold
                        shadow-[0_4px_14px_rgba(27,42,74,0.35),inset_0_1px_0_rgba(255,255,255,0.18)]
                        transition-all duration-150 hover:brightness-[1.15] active:scale-[0.97]

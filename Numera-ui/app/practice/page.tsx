@@ -45,7 +45,11 @@ type AIMode = 'observing' | 'hint' | 'quiet';
 export default function PracticePage() {
   const items = useNumeraStore((s) => s.items);
   const setCanvasExporter = useNumeraStore((s) => s.setCanvasExporter);
-  const practiceCompleted = useNumeraStore((s) => s.practiceCompleted);
+  // "Completed practice BEFORE" means before this visit. The flag is also set
+  // the moment a first attempt is graded (so the group gate opens), which
+  // told a brand-new student mid-question that they had been here before
+  // (ST030, 21 Sep). Read it once, on the way in.
+  const returningStudent = useRef(useNumeraStore.getState().practiceCompleted).current;
   const setPracticeDone = useNumeraStore((s) => s.setPracticeDone);
   const completePhase = useNumeraStore((s) => s.completePhase);
   const currentTopicId = useNumeraStore((s) => s.currentTopicId);
@@ -851,7 +855,7 @@ export default function PracticePage() {
         )}
       </main>
 
-      {practiceCompleted && !done && (
+      {returningStudent && !done && (
         <div className="flex-shrink-0 border-t border-muted-gray px-6 py-2.5 text-[11.5px] text-slate-blue">
           You&apos;ve completed practice before — group chat is unlocked.
         </div>
