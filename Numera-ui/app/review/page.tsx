@@ -26,7 +26,7 @@ import { useFlowNav } from '@/lib/useFlowNav';
 import { demoFor, type DemoWorksheet } from '@/lib/demoContent';
 import { cn } from '@/lib/cn';
 import {
-  sessionTopicTitle, completeReview, studentId, getSession,
+  sessionTopicTitle, sessionTopicId, completeReview, studentId, getSession,
   type QuestionOutcome, type NextTopicHandoff,
 } from '@/lib/api';
 import { reviewCategories, reviewHook, reviewSummaryText } from '@/lib/sessionReview';
@@ -245,8 +245,20 @@ export default function ReviewPage() {
     // stays — but the caller must still know, or the retry it offers is a
     // button for a failure it never sees.
     if (res === null) throw new Error('review/complete did not land');
+    // Mastery is the backend's verdict, and this reply carries it. Recording
+    // it here, not only on the Continue path, means a review left through
+    // "Back to the lesson" still counts on the completion screen — ST030
+    // (21 Sep) mastered three topics and the end screen said one.
+    if (res.student_model_state?.mastery_status === 'MASTERED') {
+      const st = useNumeraStore.getState();
+      st.setMastery(
+        sessionTopicId(res) ?? st.currentTopicId,
+        true,
+        sessionTopicTitle(res) ?? sessionTopicTitle(backendSession),
+      );
+    }
     return res.next_topic_handoff ?? null;
-  }, [apiEnabled]);
+  }, [apiEnabled, backendSession]);
 
   const [leaving, setLeaving] = useState(false);
   const [leaveError, setLeaveError] = useState<string | null>(null);
@@ -300,7 +312,7 @@ export default function ReviewPage() {
       // (ST015, 21 Sep). Mastery is the backend's verdict, not a local one.
       if (outcome === 'pass') {
         const st = useNumeraStore.getState();
-        const masteredId = backendSession?.concept_id?.trim() || st.currentTopicId;
+        const masteredId = sessionTopicId(backendSession) ?? st.currentTopicId;
         st.setMastery(masteredId, true, phase4?.topic_title ?? sessionTopicTitle(backendSession));
       }
       // The backend decides what comes next. `decideReview` walks a hardcoded

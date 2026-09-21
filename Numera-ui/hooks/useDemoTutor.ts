@@ -34,8 +34,7 @@ import {
   type StudentModelEvent,
   isStaleTurnResponse,
   isStaleSessionError,
-  isInterventionPausedError,
-} from '@/lib/api';
+  isInterventionPausedError, sessionTopicId } from '@/lib/api';
 import {
   requiresSessionRefresh, identityOf, identityMatches, belongsToActiveSession,
   isProgressionRetryRequired,
@@ -755,7 +754,9 @@ export async function beginSession(
         // usePhaseRouting builds the topic-scoped routes from currentTopicId;
         // left at the local default ('algebra') it sent a live student to
         // /orientation/?topic=algebra, a mock id no live screen can open.
-        s.setCurrentTopic(rec.concept_id.trim());
+        // The JOURNEY topic, not the concept id: only the former is a topic
+        // the Student Model accepts back as topic_code (see sessionTopicId).
+        s.setCurrentTopic(sessionTopicId(rec) ?? rec.concept_id.trim());
       }
       s.setBackendSession(rec);
       syncBackendSession(rec);
@@ -819,7 +820,7 @@ export async function resumeSession(): Promise<void> {
       // lesson after refresh in topic 2.
       if (rec.concept_id?.trim()) {
         s.setActiveConceptId(rec.concept_id.trim());
-        s.setCurrentTopic(rec.concept_id.trim());
+        s.setCurrentTopic(sessionTopicId(rec) ?? rec.concept_id.trim());
       }
       s.setBackendSession(rec);
       syncBackendSession(rec);

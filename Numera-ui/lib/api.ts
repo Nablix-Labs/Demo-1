@@ -840,6 +840,23 @@ export function sessionTopicCode(record: SessionRecord | null | undefined): stri
  * because the screen fell back to mock content instead of admitting it had
  * nothing.
  */
+/**
+ * The workbook topic a session belongs to, as the Student Model names it.
+ *
+ * `concept_id` is the tutor backend's name for the concept and is NOT always
+ * a topic the Student Model knows: topic 1 comes back as `ALG_LINEAR_ONE_STEP`
+ * while its journey topic is `ALG-KS3-01`. Sent back as `topic_code`, the
+ * concept id was rejected 404 UNKNOWN_TOPIC (ST030, 21 Sep). The journey
+ * state on the record carries the real topic id; the concept id is only the
+ * fallback for a record that has no journey state.
+ */
+export function sessionTopicId(record: SessionRecord | null | undefined): string | null {
+  const journey = record?.student_model_event?.journey_state?.topic_id?.trim();
+  if (journey) return journey;
+  const concept = record?.concept_id?.trim();
+  return concept || null;
+}
+
 export function sessionTopicTitle(record: SessionRecord | null | undefined): string | null {
   // The optional chain used to stop one link early. By review time this record
   // carries a Phase 4 payload, where a bundle without a delivery_sequence is

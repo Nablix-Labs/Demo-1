@@ -199,3 +199,28 @@ describe('a topic code the Student Model does not know', () => {
     expect(startSession).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('the topic a session is for', () => {
+  // Topic 1 comes back as concept ALG_LINEAR_ONE_STEP with journey topic
+  // ALG-KS3-01; only the latter is a topic_code the Student Model accepts.
+  const TOPIC_ONE = {
+    ...RECORD,
+    concept_id: 'ALG_LINEAR_ONE_STEP',
+    student_model_event: { phase_payload: null, journey_state: { topic_id: 'ALG-KS3-01' } },
+  } as unknown as SessionRecord;
+
+  it('is the journey topic when the record carries one', async () => {
+    startSession.mockResolvedValue(TOPIC_ONE);
+    const { beginSession, useNumeraStore } = await loadTutor();
+    await beginSession('ALG_LINEAR_ONE_STEP');
+    expect(useNumeraStore.getState().activeConceptId).toBe('ALG_LINEAR_ONE_STEP');
+    expect(useNumeraStore.getState().currentTopicId).toBe('ALG-KS3-01');
+  });
+
+  it('falls back to the concept id when there is no journey state', async () => {
+    startSession.mockResolvedValue({ ...RECORD, concept_id: 'ALG-ORI-02' } as unknown as SessionRecord);
+    const { beginSession, useNumeraStore } = await loadTutor();
+    await beginSession('ALG_LINEAR_ONE_STEP');
+    expect(useNumeraStore.getState().currentTopicId).toBe('ALG-ORI-02');
+  });
+});
