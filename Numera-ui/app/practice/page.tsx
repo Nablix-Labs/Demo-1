@@ -15,8 +15,8 @@ import type { SchemaQuestionOption } from '@/lib/api';
 import { useFlowNav } from '@/lib/useFlowNav';
 import { useDemoTutor, resetSessionStart, resumeSession, sessionStartError, repairQuestionOptions, resyncSession } from '@/hooks/useDemoTutor';
 import { useVoiceTurn } from '@/hooks/useVoiceTurn';
-import { DEMO_CONCEPT_ID, DEMO_PHASE, getSession } from '@/lib/api';
-import { reviewIsReady, isReviewUnavailable } from '@/lib/reviewReady';
+import { DEMO_CONCEPT_ID, DEMO_PHASE, getSession, studentId } from '@/lib/api';
+import { reviewIsReady, isReviewUnavailable, REVIEW_READ_TIMEOUT_MS } from '@/lib/reviewReady';
 import { demoFor } from '@/lib/demoContent';
 import { LADDER_EXHAUSTED, hintFailureMessage, type SupportRung } from '@/lib/supportLadder';
 import {
@@ -115,7 +115,10 @@ export default function PracticePage() {
     setEnding(true);
     handedToReview.current = true;
     try {
-      const session = await getSession(tutor.sessionId);
+      // This read is what makes the backend BUILD the review (25–55 s inside
+      // the request, #346). At the ordinary 30 s it gave up mid-build and the
+      // student had to refresh to find the review that finished behind them.
+      const session = await getSession(tutor.sessionId, studentId(), { timeout: REVIEW_READ_TIMEOUT_MS });
       useNumeraStore.getState().setBackendSession(session);
       if (reviewIsReady(session)) {
         // Assert the phase we just VERIFIED, before navigating.

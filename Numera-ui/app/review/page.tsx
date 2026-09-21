@@ -203,7 +203,7 @@ export default function ReviewPage() {
     if (!apiEnabled || sessionId || backendSession || !endedSessionId) return;
     if (restoring.current) return;
     restoring.current = true;
-    getSession(endedSessionId, studentId())
+    getSession(endedSessionId, studentId(), { timeout: REVIEW_READ_TIMEOUT_MS })
       .then((rec) => setBackendSession(rec))
       // Degrade to the empty state, which is what this screen already shows
       // when there is nothing to review. A session the backend has forgotten

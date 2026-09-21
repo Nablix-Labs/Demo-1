@@ -15,8 +15,13 @@ describe('reading a review session', () => {
     expect(REVIEW_READ_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000);
   });
 
-  it('is the timeout the review page actually reads with', () => {
-    const page = readFileSync(join(process.cwd(), 'app/review/page.tsx'), 'utf8');
-    expect(page).toContain('getSession(id, studentId(), { timeout: REVIEW_READ_TIMEOUT_MS })');
+  it('is the timeout every read that can build a review uses', () => {
+    const review = readFileSync(join(process.cwd(), 'app/review/page.tsx'), 'utf8');
+    expect(review).toContain('getSession(id, studentId(), { timeout: REVIEW_READ_TIMEOUT_MS })');
+    expect(review).toContain('getSession(endedSessionId, studentId(), { timeout: REVIEW_READ_TIMEOUT_MS })');
+    // The hand-over at the end of Phase 3 is the read that triggers the build
+    // in the first place (Chiru, 21 Sep: the timeout there forced a refresh).
+    const practice = readFileSync(join(process.cwd(), 'app/practice/page.tsx'), 'utf8');
+    expect(practice).toContain('getSession(tutor.sessionId, studentId(), { timeout: REVIEW_READ_TIMEOUT_MS })');
   });
 });
