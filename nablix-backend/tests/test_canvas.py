@@ -135,10 +135,49 @@ def test_canvas_completion_handles_empty_correct_answer() -> None:
         confidence=0.98,
         needs_clarification=False,
     )
+    ocr_blank = VisionOCRResult(
+        raw_ocr_text="",
+        detected_equation="",
+        final_answer=None,
+        confidence=0.98,
+        needs_clarification=False,
+    )
 
     assert not interaction_service._is_complete_correct_canvas(ocr, "")
     assert not interaction_service._is_complete_correct_canvas(ocr, "   ")
+    assert not interaction_service._is_complete_correct_canvas(ocr, "; ;")
     assert not interaction_service._is_complete_correct_canvas(ocr, None)
+    assert not interaction_service._is_complete_correct_canvas(ocr_blank, "")
+    assert not interaction_service._is_complete_correct_canvas(ocr_blank, "   ")
+    assert not interaction_service._is_complete_correct_canvas(ocr_blank, "; ;")
+    assert not interaction_service._is_complete_correct_canvas(ocr_blank, None)
+    assert not interaction_service._is_complete_correct_canvas(None, "c + 4")
+
+
+def test_contains_complete_notation_rejects_empty_expected() -> None:
+    assert not interaction_service._contains_complete_notation("", "")
+    assert not interaction_service._contains_complete_notation("   ", "")
+    assert not interaction_service._contains_complete_notation("c + 4", "")
+
+
+def test_canvas_completion_handles_non_math_answer() -> None:
+    ocr_match = VisionOCRResult(
+        raw_ocr_text="Option A",
+        detected_equation="",
+        final_answer="Option A",
+        confidence=0.98,
+        needs_clarification=False,
+    )
+    ocr_mismatch = VisionOCRResult(
+        raw_ocr_text="Option B",
+        detected_equation="",
+        final_answer="Option B",
+        confidence=0.98,
+        needs_clarification=False,
+    )
+
+    assert interaction_service._is_complete_correct_canvas(ocr_match, "Option A")
+    assert not interaction_service._is_complete_correct_canvas(ocr_mismatch, "Option A")
 
 
 def test_canvas_completion_requires_all_math_expressions_when_multiple_present() -> None:

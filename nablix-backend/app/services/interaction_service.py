@@ -265,7 +265,12 @@ def _is_complete_correct_canvas(
     ocr: VisionOCRResult | None,
     correct_answer: str | None,
 ) -> bool:
-    if ocr is None or ocr.needs_clarification or correct_answer is None:
+    if (
+        ocr is None
+        or ocr.needs_clarification
+        or not correct_answer
+        or not correct_answer.strip()
+    ):
         return False
     candidates = [
         ocr.final_answer,
@@ -277,7 +282,7 @@ def _is_complete_correct_canvas(
     ]
     answer_parts = [part.strip() for part in correct_answer.split(";") if part.strip()]
     canvas_parts = [part for part in answer_parts if _looks_like_canvas_expression(part)]
-    target_parts = canvas_parts if canvas_parts else answer_parts or [correct_answer.strip()]
+    target_parts = canvas_parts or answer_parts
     if not target_parts:
         return False
     return all(
@@ -293,11 +298,11 @@ def _is_complete_correct_canvas(
 def _contains_complete_notation(candidate: str, expected: str) -> bool:
     """Match an exact expression even when earlier canvas work remains visible."""
 
+    if not expected:
+        return False
     normalized = normalize_exact_notation(candidate)
     if normalized == expected:
         return True
-    if expected == "":
-        return False
     start_boundary = r"(?<![A-Za-z0-9])" if expected[0].isalnum() else ""
     end_boundary = r"(?![A-Za-z0-9])" if expected[-1].isalnum() else ""
     return re.search(f"{start_boundary}{re.escape(expected)}{end_boundary}", normalized) is not None
