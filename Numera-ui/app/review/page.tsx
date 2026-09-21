@@ -30,7 +30,7 @@ import {
   type QuestionOutcome, type NextTopicHandoff,
 } from '@/lib/api';
 import { reviewCategories, reviewHook, reviewSummaryText } from '@/lib/sessionReview';
-import { reviewIsReady, isReviewUnavailable } from '@/lib/reviewReady';
+import { reviewIsReady, isReviewUnavailable, REVIEW_READ_TIMEOUT_MS } from '@/lib/reviewReady';
 import { phase4FromSession, type SessionForPhase4 } from '@/lib/phase4FromSession';
 import { handoffDestination } from '@/lib/usePhaseRouting';
 import { reviewSource } from '@/lib/reviewContent';
@@ -131,7 +131,7 @@ export default function ReviewPage() {
     if (!id) return;
     setRetrying(true);
     try {
-      const fresh = await getSession(id);
+      const fresh = await getSession(id, studentId(), { timeout: REVIEW_READ_TIMEOUT_MS });
       useNumeraStore.getState().setBackendSession(fresh);
       // Only clear the blocked state when the review is genuinely there;
       // otherwise the screen would fall through to a Phase 4 it cannot render.

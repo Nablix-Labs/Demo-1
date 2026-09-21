@@ -85,3 +85,17 @@ export function reviewReadPending(s: {
   if (s.hasReviewSession && !s.reviewReady) return true;
   return !s.sessionId && !s.hasBackendSession && Boolean(s.endedSessionId);
 }
+
+/**
+ * How long one read of a REVIEW session is allowed to take.
+ *
+ * The backend builds the Phase 4 review INSIDE the request — two model calls,
+ * 25–55 s measured on 21 Sep (#346). The client's ordinary 30 s timeout gave
+ * up in the middle of that, the server carried on regardless, and the next
+ * automatic retry started a second generation on top of the first. The
+ * student saw "Results not ready" until a refresh happened to land after one
+ * had finished (Chiru, 21 Sep: "after the timeout occurs, we need to refresh
+ * again to see the review page"). Waiting long enough for ONE build to
+ * return is cheaper than starting several.
+ */
+export const REVIEW_READ_TIMEOUT_MS = 90_000;

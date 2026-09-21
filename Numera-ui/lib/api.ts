@@ -982,9 +982,14 @@ export function requiredOrientationContent(record: SessionRecord | null | undefi
 
 // ── GET /session/{session_id} ─────────────────────────────────────────────────
 /** GET /session/{session_id} — restore one student-owned session. */
-export async function getSession(sessionId: string, student: string = studentId()) {
+export async function getSession(
+  sessionId: string,
+  student: string = studentId(),
+  options: { timeout?: number } = {},
+) {
   const res = await api.get<SessionRecord>(`/session/${sessionId}`, {
     params: { student_id: student },
+    ...(options.timeout ? { timeout: options.timeout } : {}),
   });
   return res.data;
 }
