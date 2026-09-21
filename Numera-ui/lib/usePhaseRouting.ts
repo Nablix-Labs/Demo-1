@@ -135,6 +135,25 @@ export function routeForPhase(phase: string, topicId: string): string | null {
   return stage ? routeFor(stage, topicId) : null;
 }
 
+/**
+ * The screens the lesson flow owns — the ones `routeFor` produces, plus the
+ * placement diagnostic. The backend's phase corrects a student who is on the
+ * WRONG one of these (on /practice when the session says REVIEW). It has no
+ * business with any other page.
+ *
+ * ST030, 21 Sep 2026: with a phase active, every dock link — Workbook, Help,
+ * Profile, History — opened and was pushed straight back to the lesson before
+ * it painted, so nothing outside the flow could be reached during a lesson.
+ * The hook compared the target against the CURRENT path and treated any
+ * mismatch as a student who had wandered, when a student on /help has not
+ * wandered at all.
+ */
+const FLOW_PATHS = ['/', '/practice', '/review', '/topic-diagnostic', '/orientation', '/teach', '/diagnostic'];
+
+export function flowScreen(pathname: string): boolean {
+  return FLOW_PATHS.some((p) => pathname === p || (p !== '/' && pathname.startsWith(`${p}/`)));
+}
+
 const apiEnabled = Boolean(process.env.NEXT_PUBLIC_API_BASE_URL);
 
 export function usePhaseRouting(): void {
@@ -153,6 +172,6 @@ export function usePhaseRouting(): void {
       phasesToUnlock(stage).forEach(completePhase);
     }
     const target = routeForPhase(currentPhase, currentTopicId);
-    if (target && target !== pathname) router.push(target);
+    if (target && target !== pathname && flowScreen(pathname)) router.push(target);
   }, [currentPhase, currentTopicId, pathname, router]);
 }

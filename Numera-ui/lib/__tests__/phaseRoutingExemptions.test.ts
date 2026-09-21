@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { followsBackendPhase } from '@/lib/usePhaseRouting';
+import { followsBackendPhase, flowScreen } from '@/lib/usePhaseRouting';
 
 describe('routes the backend phase may move', () => {
   it('moves the ordinary flow screens', () => {
@@ -33,5 +33,20 @@ describe('routes the backend phase may move', () => {
   it('does not exempt a real route that merely starts with the same letters', () => {
     // Prefix matching on '/dev-screens' alone would also catch this.
     expect(followsBackendPhase('/dev-screenshots')).toBe(true);
+  });
+});
+
+describe('which screens the phase may pull a student off', () => {
+  it('corrects a student on the wrong flow screen', () => {
+    for (const path of ['/', '/practice', '/review', '/topic-diagnostic', '/orientation', '/teach', '/diagnostic', '/orientation/statistics']) {
+      expect(flowScreen(path), path).toBe(true);
+    }
+  });
+
+  it('leaves the dock pages alone during a lesson', () => {
+    // ST030, 21 Sep: every dock link bounced back to the lesson before it painted.
+    for (const path of ['/workbook', '/help', '/profile', '/history', '/keynotes', '/files', '/flagged', '/notifications', '/people', '/challenge', '/complete', '/login']) {
+      expect(flowScreen(path), path).toBe(false);
+    }
   });
 });
