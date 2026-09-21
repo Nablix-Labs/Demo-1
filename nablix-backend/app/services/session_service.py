@@ -24,6 +24,7 @@ from app.models.fields import Phase
 from app.models.guided_learning import ActiveGuidedRescue
 from app.models.remediation import (
     InterventionFeedback,
+    PrerequisiteRemediationContext,
     StudentModelIntervention,
     intervention_input_request,
 )
@@ -56,6 +57,9 @@ from app.models.session import (
 from app.models.student_model_session import (
     DiagnosticResult,
     DiagnosticCompletedEvent,
+    Phase3Checkpoint,
+    PrerequisiteRemediationBundle,
+    PrerequisiteRemediationCompletedEvent,
     IndependentQuestionSetRequestedEvent,
     GuidedRepairCompletedEvent,
     GuidedSupportEvent,
@@ -585,6 +589,66 @@ def _project_for_frontend(
             "routing": event.routing.model_copy(update=routing_updates) if routing_updates else event.routing,
             "status": event.status.model_copy(update=status_updates) if status_updates else event.status,
         }
+    )
+
+
+def _remediation_preserves_checkpoint(
+    remediation: PrerequisiteRemediationContext | None,
+    checkpoint: Phase3Checkpoint,
+) -> bool:
+    """True when the detour is carrying exactly the checkpoint we already hold.
+
+    Not "a remediation is happening" -- the identity has to match, or a route
+    that named some other question would be waved through by the very guard
+    meant to catch it.
+    """
+
+    return (
+        remediation is not None
+        and remediation.return_topic_id == checkpoint.topic_id
+        and remediation.source_micro_skill_id == checkpoint.micro_skill_id
+        and remediation.return_question_id == checkpoint.checkpoint_question_id
+    )
+
+
+def _remediation_context(
+    event: StudentModelSessionEventResponse,
+) -> PrerequisiteRemediationContext | None:
+    """The prerequisite stop this event puts the student on, if any.
+
+    Derived from the published route every time rather than carried forward and
+    patched: Student Model owns which stop is active (it holds the plan and the
+    cursor), so re-reading it is what keeps a reload, a second stop and a
+    resume from disagreeing. Returning None is how the detour ENDS -- the
+    checkpoint resume is not a remediation route, so the context clears itself.
+    """
+
+    payload = event.phase_payload
+    if event.routing.reason_code != "PREREQUISITE_REMEDIATION_REQUIRED":
+        return None
+    bundle = payload.orientation_bundle if payload is not None else None
+    if not isinstance(bundle, PrerequisiteRemediationBundle):
+        raise HTTPException(
+            status_code=503,
+            detail="Student Model routed to prerequisite remediation without naming the topic to teach.",
+        )
+    routing = event.routing
+    if not (routing.return_topic_id and routing.return_micro_skill_id and routing.return_question_id):
+        # Without all three there is no way back, and a detour you cannot
+        # return from is worse than the pause this replaced: the student would
+        # be moved to an earlier topic and simply left there.
+        raise HTTPException(
+            status_code=503,
+            detail="Student Model routed to prerequisite remediation without a return checkpoint.",
+        )
+    return PrerequisiteRemediationContext(
+        source_topic_id=routing.return_topic_id,
+        source_micro_skill_id=routing.return_micro_skill_id,
+        active_stop_topic_id=bundle.topic_id,
+        active_stop_micro_skill_ids=list(bundle.target_micro_skill_ids),
+        completed_micro_skill_ids=list(bundle.target_micro_skill_ids),
+        return_topic_id=routing.return_topic_id,
+        return_question_id=routing.return_question_id,
     )
 
 
@@ -1225,15 +1289,14 @@ CONTENT_GAP_MESSAGE = (
 
 
 # Shown when a checkpoint has used both Guided repair cycles and Student Model
-# has routed the topic to prerequisite remediation (TC-31). The route itself --
-# running the earlier topic and returning to this checkpoint (TC-32) -- is not
-# built yet, so the honest thing is to stop here with the work saved rather than
-# open a journey that cannot be finished. Deliberately vague about the cause,
-# like the content-gap message: a routing limit is ours to fix, not something to
+# has routed the topic to prerequisite remediation (TC-31). This is now a
+# handover, not a stop: the student is taken back to the earlier topic named in
+# the route and returns to this same checkpoint once it is repaired (TC-32).
+# Still vague about the cause -- which skill is missing is not something to
 # explain to a child mid-lesson.
 PREREQUISITE_REMEDIATION_MESSAGE = (
-    "Let us pause this topic here. I want to go back over some earlier steps "
-    "with you before we try this one again. Your work so far is saved."
+    "Let us go back over some earlier steps together before we try this one "
+    "again. Your work so far is saved."
 )
 
 
@@ -1531,27 +1594,6 @@ async def _apply_schema_event(
         await save_session(updated)
         _sessions[session.session_id] = updated
         return updated
-    if event.routing.reason_code == "PREREQUISITE_REMEDIATION_REQUIRED":
-        event = _project_for_frontend(event)
-        updated = session.model_copy(update={
-            "student_model_event": event,
-            "student_model_state": project_student_model_state(event),
-            "content_gap_detected": event.routing.content_gap_detected,
-            "current_phase": session.current_phase,
-            "ui_state": session.current_phase,
-            "message": PREREQUISITE_REMEDIATION_MESSAGE,
-            "recommended_entry_phase": None,
-            "current_question": None,
-            "question_id": None,
-            "question_type": None,
-            "correct_answer": None,
-            "active_student_model_question": None,
-            **_LOCKED_SCREEN_UI_FLAGS,
-            "active_guided_rescue": None,
-        })
-        await save_session(updated)
-        _sessions[session.session_id] = updated
-        return updated
     payload = event.phase_payload
     previous_phase3 = (
         session.student_model_event.journey_state.phase_3_independent_practice
@@ -1562,11 +1604,18 @@ async def _apply_schema_event(
         or (previous_phase3.return_checkpoint if previous_phase3 is not None else None)
     ) if session.student_model_event is not None else None
     incoming_phase3 = event.journey_state.phase_3_independent_practice
+    remediation = _remediation_context(event)
     if (
         previous_checkpoint is not None
         and previous_checkpoint.micro_skill_id not in incoming_phase3.verified_micro_skill_ids
         and (event.journey_state.return_checkpoint or incoming_phase3.return_checkpoint) != previous_checkpoint
         and intervention is None
+        # A prerequisite route does not drop the checkpoint, it CARRIES it:
+        # Student Model moves return_checkpoint into the remediation plan's
+        # return_target, so journey_state stops reporting one while the route
+        # keeps naming it. Reading that as a replacement is what made the
+        # authoritative route look like data loss.
+        and not _remediation_preserves_checkpoint(remediation, previous_checkpoint)
     ):
         raise HTTPException(status_code=503, detail="Student Model replaced an unresolved Phase 3 checkpoint.")
     # Student Model raises these when it cannot serve content and a human has to
@@ -1676,6 +1725,7 @@ async def _apply_schema_event(
     updates: dict[str, object] = {
         "intervention": None,
         "pending_intervention_input": None,
+        "prerequisite_remediation": remediation,
         "content_gap_detected": event.routing.content_gap_detected,
         "journey_recovery_required": False,
         "pending_guided_progression": None,
@@ -1726,6 +1776,23 @@ async def _apply_schema_event(
         updates["orientation_messages"] = phase1_messages
         if next_phase == session.current_phase:
             updates["message"] = phase1_messages.before_video_message
+    if remediation is not None:
+        # routing.reason is written for a log ("Routing T02.M4's unresolved
+        # prerequisites to Phase 1 Orientation at Difficulty 1"), which is not
+        # what a child is told about their own lesson.
+        updates["message"] = PREREQUISITE_REMEDIATION_MESSAGE
+        logger.info(
+            "prerequisite_remediation_stop",
+            extra={
+                "session_id": session.session_id,
+                "source_topic_id": remediation.source_topic_id,
+                "source_micro_skill_id": remediation.source_micro_skill_id,
+                "destination_topic_id": remediation.active_stop_topic_id,
+                "weak_micro_skill_ids": remediation.active_stop_micro_skill_ids,
+                "return_question_id": remediation.return_question_id,
+                "next_action": event.routing.next_action,
+            },
+        )
     # A content gap that leaves no question to answer is the one case where the
     # student cannot act and cannot be told why by the tutor: the last thing they
     # heard was a promise of a fresh question that Student Model has just said it
@@ -1879,10 +1946,19 @@ def _orientation_entry_message(event: StudentModelSessionEventResponse) -> str:
     return messages.transition_to_orientation_message
 
 
-def _diagnostic_results(
+def _graded_diagnostic_answers(
     session: SessionRecord,
     request: DiagnosticCompleteRequest,
-) -> list[MicroSkillResult]:
+) -> list[tuple[StudentModelQuestion, str]]:
+    """Every diagnostic question with the grade its answer earned.
+
+    Split out of _diagnostic_results because that function immediately rolls
+    the per-question grades up into per-micro-skill results and drops them --
+    which is why a diagnostic the student actually sat left no per-question
+    trace anywhere in this service. Graded in one place, used twice: the
+    roll-up Student Model needs, and the attempt records the review reads.
+    """
+
     event = session.student_model_event
     if event is None or event.phase_payload is None:
         raise RuntimeError("Diagnostic grading requires the stored start event.")
@@ -1902,7 +1978,7 @@ def _diagnostic_results(
             detail="Answers must include every served diagnostic question exactly once.",
         )
 
-    results: dict[str, DiagnosticResult] = {}
+    graded: list[tuple[StudentModelQuestion, str]] = []
     for question in question_set.questions:
         answer_spec = question.tutor_view.answer_spec
         if answer_spec.verification_method != "EXACT_CHOICE_MATCH":
@@ -1913,11 +1989,67 @@ def _diagnostic_results(
                     f"{answer_spec.verification_method} for {question.question_id}."
                 ),
             )
-        result = (
+        graded.append((
+            question,
             "CORRECT"
             if answers[question.question_id] in answer_spec.accepted_answers
-            else "INCORRECT"
+            else "INCORRECT",
+        ))
+    return graded
+
+
+def _diagnostic_attempts(
+    session: SessionRecord,
+    request: DiagnosticCompleteRequest,
+    graded: list[tuple[StudentModelQuestion, str]],
+) -> list[QuestionAttemptRecord]:
+    """The diagnostic, written down the way every other phase writes itself.
+
+    Phase 0 is the one phase whose answers never reached
+    `session.per_question_history`: it is submitted in a single batch to
+    /session/diagnostic/complete rather than a turn at a time through
+    /interaction, and only /interaction was recording. The review reads that
+    list (`session_summary.per_question_history` -> `outcomes`), so a student
+    who answered seven diagnostic questions and then opened Review was told
+    there was nothing to look back over.
+
+    Nothing is re-graded here; these are the same verdicts sent upstream.
+    """
+
+    responses = {answer.question_id: answer.student_response for answer in request.answers}
+    attempted_at = datetime.now(timezone.utc)
+    return [
+        QuestionAttemptRecord(
+            question_id=question.question_id,
+            question_text=question.student_view.question_text,
+            phase="DIAGNOSTIC",
+            evaluation=result,
+            # Phase 0 runs no tutor and no error classification -- it grades a
+            # choice against the answer spec. Claiming an error_type here would
+            # invent a diagnosis nothing made.
+            error_type=None,
+            # The diagnostic screen is multiple choice, and the batch carries
+            # no per-answer source, so this is the one honest value.
+            input_source="CHOICE",
+            hint_level_used=0,
+            attempted_at=attempted_at,
         )
+        for question, result in graded
+        if question.question_id in responses
+    ]
+
+
+def _diagnostic_results(
+    session: SessionRecord,
+    request: DiagnosticCompleteRequest,
+    graded: list[tuple[StudentModelQuestion, str]],
+) -> list[MicroSkillResult]:
+    event = session.student_model_event
+    if event is None:
+        raise RuntimeError("Diagnostic grading requires the stored start event.")
+
+    results: dict[str, DiagnosticResult] = {}
+    for question, result in graded:
         for mapping in question.micro_skill_mappings:
             previous = results.get(mapping.micro_skill_id)
             results[mapping.micro_skill_id] = (
@@ -1949,6 +2081,17 @@ async def complete_diagnostic(
     stored_event = session.student_model_event
     if stored_event is None:
         raise RuntimeError("Schema 3.0 session is missing its stored event.")
+    graded = _graded_diagnostic_answers(session, request)
+    # Recorded BEFORE the event goes upstream, and on `session`, because
+    # _apply_schema_event below copies whatever it is handed: written after it,
+    # the records would be dropped by the very phase change that ends Phase 0.
+    session = session.model_copy(update={
+        "per_question_history": [
+            *session.per_question_history,
+            *_diagnostic_attempts(session, request, graded),
+        ],
+    })
+    _sessions[session.session_id] = session
     event = await get_adapters().student_model.send_session_event(
         DiagnosticCompletedEvent(
             request_id=_schema_request_id(
@@ -1962,7 +2105,7 @@ async def complete_diagnostic(
             topic_id=stored_event.journey_state.topic_id,
             student_id=session.student_id,
             timestamp=_schema_timestamp(),
-            micro_skill_results=_diagnostic_results(session, request),
+            micro_skill_results=_diagnostic_results(session, request, graded),
         ),
         access_token,
     )
@@ -2103,6 +2246,8 @@ async def start_orientation(
     event = session.student_model_event
     if event is None:
         raise RuntimeError("Schema 3.0 session is missing its stored event.")
+    if session.prerequisite_remediation is not None:
+        return await _start_prerequisite_stop(session)
     response = await get_adapters().student_model.send_session_event(
         WorkedExampleRequestedEvent(
             request_id=_schema_request_id(
@@ -2146,6 +2291,8 @@ async def complete_orientation(
     event = session.student_model_event
     if event is None:
         raise RuntimeError("Schema 3.0 session is missing its stored event.")
+    if session.prerequisite_remediation is not None:
+        return await _complete_prerequisite_stop(session, event, request, access_token)
     if event.journey_state.phase_1_orientation.status != "IN_PROGRESS":
         raise HTTPException(
             status_code=409,
@@ -2179,6 +2326,114 @@ async def complete_orientation(
             status_code=503,
             detail="Student Model returned no guided-practice questions.",
         )
+    return await _apply_schema_event(session, response)
+
+
+async def _start_prerequisite_stop(session: SessionRecord) -> SessionRecord:
+    """Serve the prerequisite stop the student was routed to (TC-31).
+
+    No upstream call. The ordinary path asks Student Model for the orientation
+    bundle of the journey's OWN topic -- which during a detour is the source
+    topic, the one the student has already finished. Asking for the earlier
+    topic instead would seed a second journey there that the source journey
+    never hears back from, and the checkpoint would be stranded.
+
+    So this serves what the route already published and validates it, which is
+    the whole reason the bundle carries its delivery sequence: the stop is
+    playable from the stored payload, and a reload re-serves the identical one.
+    """
+
+    remediation = session.prerequisite_remediation
+    assert remediation is not None
+    payload = session.student_model_event.phase_payload if session.student_model_event else None
+    bundle = payload.orientation_bundle if payload is not None else None
+    if not isinstance(bundle, PrerequisiteRemediationBundle) or not bundle.delivery_sequence:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Student Model published no orientation content for prerequisite topic "
+                f"{remediation.active_stop_topic_id}."
+            ),
+        )
+    if bundle.topic_id != remediation.active_stop_topic_id:
+        raise HTTPException(
+            status_code=503,
+            detail="Student Model changed the prerequisite topic mid-stop.",
+        )
+    if remediation.orientation_started:
+        # Idempotent: a retried start must not look like a second stop.
+        return session
+    updated = session.model_copy(update={
+        "prerequisite_remediation": remediation.model_copy(update={"orientation_started": True}),
+        "orientation_messages": load_phase1_tutor_messages(),
+    })
+    await save_session(updated)
+    _sessions[session.session_id] = updated
+    return updated
+
+
+async def _complete_prerequisite_stop(
+    session: SessionRecord,
+    event: StudentModelSessionEventResponse,
+    request: OrientationCompletionRequest,
+    access_token: str,
+) -> SessionRecord:
+    """Report one prerequisite TOPIC finished (TC-31/TC-32).
+
+    Deliberately NOT ORIENTATION_COMPLETED: that event advances the journey's
+    own topic into Phase 2 Guided, and the journey here is the SOURCE topic,
+    which is not where the student is and has no Guided phase left to enter.
+    Student Model decides from its own plan whether this was the last stop --
+    another stop comes back as a fresh PREREQUISITE_REMEDIATION route, the last
+    one as the checkpoint resume.
+    """
+
+    remediation = session.prerequisite_remediation
+    assert remediation is not None
+    if not remediation.orientation_started:
+        raise HTTPException(
+            status_code=409,
+            detail="The prerequisite orientation must be started before it can be completed.",
+        )
+    # The same gate as an ordinary orientation, against the same stored bundle:
+    # a stop is finished when its own content is, and the stop carries that
+    # content. Skipping it here would make the detour the one lesson a student
+    # could claim without watching.
+    _validate_orientation_completion(session, request)
+    response = await get_adapters().student_model.send_session_event(
+        PrerequisiteRemediationCompletedEvent(
+            request_id=_schema_request_id(
+                session,
+                "PREREQUISITE_REMEDIATION_COMPLETED",
+                "PREREQUISITE_REMEDIATION_COMPLETED",
+            ),
+            event_type="PREREQUISITE_REMEDIATION_COMPLETED",
+            source_turn_id="PREREQUISITE_REMEDIATION_COMPLETED",
+            expected_journey_version=event.journey_state.version,
+            # The SOURCE topic: that is the journey holding the remediation
+            # plan and the return checkpoint. The topic just taught has no
+            # journey of its own here, by design.
+            topic_id=remediation.source_topic_id,
+            student_id=session.student_id,
+            timestamp=_schema_timestamp(),
+            source_micro_skill_id=remediation.source_micro_skill_id,
+            completed_prerequisite_micro_skill_ids=list(remediation.completed_micro_skill_ids),
+        ),
+        access_token,
+    )
+    _require_schema_phase(response, ("PHASE_1_ORIENTATION", "PHASE_3_INDEPENDENT_PRACTICE"))
+    logger.info(
+        "prerequisite_remediation_stop_completed",
+        extra={
+            "session_id": session.session_id,
+            "source_topic_id": remediation.source_topic_id,
+            "source_micro_skill_id": remediation.source_micro_skill_id,
+            "completed_topic_id": remediation.active_stop_topic_id,
+            "completed_micro_skill_ids": remediation.completed_micro_skill_ids,
+            "checkpoint_question_id": remediation.return_question_id,
+            "next_action": response.routing.next_action,
+        },
+    )
     return await _apply_schema_event(session, response)
 
 

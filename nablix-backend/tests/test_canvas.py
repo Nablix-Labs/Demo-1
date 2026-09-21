@@ -99,6 +99,109 @@ def test_canvas_completion_rejects_ambiguous_expression() -> None:
     assert not interaction_service._is_complete_correct_canvas(ocr, "n + 5")
 
 
+def test_canvas_completion_accepts_multipart_answer_with_math_expression() -> None:
+    ocr = VisionOCRResult(
+        raw_ocr_text="c + 4",
+        detected_equation="c + 4",
+        final_answer=None,
+        confidence=0.98,
+        needs_clarification=False,
+    )
+
+    assert interaction_service._is_complete_correct_canvas(
+        ocr, "c + 4; c changes; +4 stays fixed"
+    )
+
+
+def test_canvas_completion_rejects_multipart_answer_with_incorrect_math_expression() -> None:
+    ocr = VisionOCRResult(
+        raw_ocr_text="c + 5",
+        detected_equation="c + 5",
+        final_answer=None,
+        confidence=0.98,
+        needs_clarification=False,
+    )
+
+    assert not interaction_service._is_complete_correct_canvas(
+        ocr, "c + 4; c changes; +4 stays fixed"
+    )
+
+
+def test_canvas_completion_handles_empty_correct_answer() -> None:
+    ocr = VisionOCRResult(
+        raw_ocr_text="c + 4",
+        detected_equation="c + 4",
+        final_answer=None,
+        confidence=0.98,
+        needs_clarification=False,
+    )
+    ocr_blank = VisionOCRResult(
+        raw_ocr_text="",
+        detected_equation="",
+        final_answer=None,
+        confidence=0.98,
+        needs_clarification=False,
+    )
+
+    assert not interaction_service._is_complete_correct_canvas(ocr, "")
+    assert not interaction_service._is_complete_correct_canvas(ocr, "   ")
+    assert not interaction_service._is_complete_correct_canvas(ocr, "; ;")
+    assert not interaction_service._is_complete_correct_canvas(ocr, None)
+    assert not interaction_service._is_complete_correct_canvas(ocr_blank, "")
+    assert not interaction_service._is_complete_correct_canvas(ocr_blank, "   ")
+    assert not interaction_service._is_complete_correct_canvas(ocr_blank, "; ;")
+    assert not interaction_service._is_complete_correct_canvas(ocr_blank, None)
+    assert not interaction_service._is_complete_correct_canvas(None, "c + 4")
+
+
+def test_contains_complete_notation_rejects_empty_expected() -> None:
+    assert not interaction_service._contains_complete_notation("", "")
+    assert not interaction_service._contains_complete_notation("   ", "")
+    assert not interaction_service._contains_complete_notation("c + 4", "")
+
+
+def test_canvas_completion_handles_non_math_answer() -> None:
+    ocr_match = VisionOCRResult(
+        raw_ocr_text="Option A",
+        detected_equation="",
+        final_answer="Option A",
+        confidence=0.98,
+        needs_clarification=False,
+    )
+    ocr_mismatch = VisionOCRResult(
+        raw_ocr_text="Option B",
+        detected_equation="",
+        final_answer="Option B",
+        confidence=0.98,
+        needs_clarification=False,
+    )
+
+    assert interaction_service._is_complete_correct_canvas(ocr_match, "Option A")
+    assert not interaction_service._is_complete_correct_canvas(ocr_mismatch, "Option A")
+
+
+def test_canvas_completion_requires_all_math_expressions_when_multiple_present() -> None:
+    ocr_partial = VisionOCRResult(
+        raw_ocr_text="x = 2",
+        detected_equation="x = 2",
+        detected_steps=["x = 2"],
+        final_answer=None,
+        confidence=0.98,
+        needs_clarification=False,
+    )
+    ocr_complete = VisionOCRResult(
+        raw_ocr_text="x = 2\ny = 3",
+        detected_equation="x = 2",
+        detected_steps=["x = 2", "y = 3"],
+        final_answer=None,
+        confidence=0.98,
+        needs_clarification=False,
+    )
+
+    assert not interaction_service._is_complete_correct_canvas(ocr_partial, "x = 2; y = 3")
+    assert interaction_service._is_complete_correct_canvas(ocr_complete, "x = 2; y = 3")
+
+
 def test_pending_canvas_submission_returns_direct_prompt_for_empty_submit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2051,6 +2154,180 @@ def test_tc21_canvas_failure_requests_fresh_content_and_keeps_gap_neutral(
     assert stored.student_model_event is not None
     assert stored.student_model_event.status.status_code == "CONTENT_GAP"
     assert stored.student_model_event.routing.missing_micro_skill_ids == ["T02.M1"]
+
+
+def _phase3_incorrect_gap_sender(
+    events: list[StudentModelSessionEvent],
+) -> object:
+    """Student Model that pauses on the failing attempt itself.
+
+    This is the post-fix shape: exhausting a skill's Phase 3 content is
+    reported by the INCORRECT_ATTEMPT response, not by a follow-up
+    FRESH_INDEPENDENT_QUESTION_REQUESTED round trip.
+    """
+
+    async def send_session_event(
+        adapter: StudentModelServiceAdapter,
+        event: StudentModelSessionEvent,
+        access_token: str,
+    ) -> StudentModelSessionEventResponse:
+        del adapter, access_token
+        events.append(event)
+        body = _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+        body["request_id"] = event.request_id
+        if event.event_type == "INCORRECT_ATTEMPT":
+            body["phase_payload"] = None
+            body["journey_state"]["phase_3_independent_practice"].update(
+                {
+                    "retry_required_micro_skill_ids": ["T02.M1"],
+                    "used_question_ids": ["Q-T02-004"],
+                    "current_question_id": None,
+                }
+            )
+            body["routing"].update(
+                {
+                    "reason_code": "FRESH_CONTENT_UNAVAILABLE",
+                    "reason": "No fresh independent question is available for T02.M1.",
+                    "next_action": "WAIT_FOR_CONTENT",
+                    "content_gap_detected": True,
+                    "missing_micro_skill_ids": ["T02.M1"],
+                }
+            )
+            body["status"].update(
+                {
+                    "status_code": "CONTENT_GAP",
+                    "intervention_required": True,
+                    "intervention_reason": "Missing fresh independent question for T02.M1.",
+                }
+            )
+        return StudentModelSessionEventResponse.model_validate(body)
+
+    return send_session_event
+
+
+async def _incorrect_independent_pipeline(
+    context: AdapterContext,
+) -> tuple[StudentModelResult, TutorResult]:
+    del context
+    return (
+        StudentModelResult(
+            mastery_status="DEVELOPING",
+            continuity_status="on_track",
+            recommended_entry_phase="INDEPENDENT_PRACTICE",
+            hint_dependency_score=0.0,
+            intervention_required=False,
+        ),
+        _incorrect_independent_tutor(),
+    )
+
+
+def test_content_gap_on_the_attempt_itself_pauses_without_a_second_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Session 48's fix, replayed across the contract.
+
+    The Student Model now pauses on the INCORRECT_ATTEMPT response. The backend
+    must take that at face value: no redundant fresh-question round trip, no
+    question to answer, and no advancement -- the question identity never
+    changed.
+    """
+    events: list[StudentModelSessionEvent] = []
+    monkeypatch.setattr(
+        StudentModelServiceAdapter, "send_session_event", _phase3_incorrect_gap_sender(events)
+    )
+    monkeypatch.setattr(
+        interaction_service, "run_tutor_pipeline", _incorrect_independent_pipeline
+    )
+    session_id = _start_session("ST025")
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST025",
+            "turn_id": "TURN-GAP-ON-ATTEMPT",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    # The pause is believed on the first response; nothing is asked twice.
+    assert events[-1].event_type == "INCORRECT_ATTEMPT"
+    assert "FRESH_INDEPENDENT_QUESTION_REQUESTED" not in [e.event_type for e in events]
+    body = response.json()
+    assert body["current_phase"] == "INDEPENDENT_PRACTICE"
+    assert body["question_id"] is None
+    assert body["advance_to_next_question"] is False
+    # Neutral about correctness: Phase 3 never tells the student they were wrong.
+    assert body["tutor"] is None
+    assert body["selected_error_code"] is None
+    assert body["first_error_step"] is None
+    assert body["phase3_review_evidence"] is None
+    stored = session_service._sessions[session_id]
+    assert stored.student_model_event is not None
+    assert stored.student_model_event.status.status_code == "CONTENT_GAP"
+    assert stored.student_model_event.routing.missing_micro_skill_ids == ["T02.M1"]
+
+
+def test_a_fresh_payload_repeating_the_same_question_never_advances(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The contradictory upstream shape that produced the stall.
+
+    A FRESH_INDEPENDENT_QUESTION payload whose question id is the one just
+    failed is self-contradictory. Advancement is decided by question identity,
+    not by the payload's own label, so this must stay false -- reading the
+    label instead would reopen a terminal attempt and double-count the
+    evidence.
+    """
+    events: list[StudentModelSessionEvent] = []
+
+    async def send_session_event(
+        adapter: StudentModelServiceAdapter,
+        event: StudentModelSessionEvent,
+        access_token: str,
+    ) -> StudentModelSessionEventResponse:
+        del adapter, access_token
+        events.append(event)
+        body = _session_opened_response("PHASE_3_INDEPENDENT_PRACTICE")
+        body["request_id"] = event.request_id
+        if event.event_type == "INCORRECT_ATTEMPT":
+            # Same id in, same id out, labelled FRESH.
+            body["phase_payload"]["payload_type"] = "FRESH_INDEPENDENT_QUESTION"
+            body["journey_state"]["phase_3_independent_practice"].update(
+                {
+                    "retry_required_micro_skill_ids": ["T02.M1"],
+                    "current_question_id": "Q-T02-004",
+                    "current_attempt_type": "FRESH_RETRY",
+                }
+            )
+            body["routing"].update(
+                {
+                    "reason_code": "INDEPENDENT_FAILURE",
+                    "reason": "Serving a fresh question at reduced difficulty.",
+                    "next_action": "DELIVER_REDUCED_DIFFICULTY_FRESH_RETRY",
+                }
+            )
+        return StudentModelSessionEventResponse.model_validate(body)
+
+    monkeypatch.setattr(StudentModelServiceAdapter, "send_session_event", send_session_event)
+    monkeypatch.setattr(
+        interaction_service, "run_tutor_pipeline", _incorrect_independent_pipeline
+    )
+    session_id = _start_session("ST025")
+    response = client.post(
+        "/canvas/submit",
+        json={
+            "session_id": session_id,
+            "student_id": "ST025",
+            "turn_id": "TURN-FRESH-SAME-ID",
+            "snapshot_data_url": VALID_SNAPSHOT_DATA_URL,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["question_id"] == "Q-T02-004"
+    assert body["advance_to_next_question"] is False
 
 
 def test_tc20_failed_checkpoint_repairs_the_same_skill_not_a_prerequisite(

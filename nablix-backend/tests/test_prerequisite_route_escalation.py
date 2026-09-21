@@ -121,11 +121,15 @@ def _tc29_escalation(request_id: str) -> dict[str, object]:
 
 
 def _tc31_route_applied(request_id: str) -> dict[str, object]:
-    """TC-31: a route exists. Note the orientation_bundle's real shape.
+    """TC-31: a route exists, and it is playable.
 
-    Student Model sends {topic_id, target_micro_skill_ids, difficulty,
-    remediation_reason} here -- no delivery_sequence, which is what the
-    orientation bundles everywhere else in the schema carry.
+    The stop names the earlier topic AND carries that topic's own delivery
+    sequence, serialized by the same Phase 1 serializer. It has to: the source
+    journey is the only one Student Model holds, so there is nowhere else the
+    destination topic's content can honestly be asked for.
+
+    `return_micro_skill_id` is the other half of the return address -- which
+    skill's checkpoint this detour comes back to.
     """
 
     body = _independent_practice_response(request_id)
@@ -146,6 +150,18 @@ def _tc31_route_applied(request_id: str) -> dict[str, object]:
             "target_micro_skill_ids": ["T01.M3"],
             "difficulty": 1,
             "remediation_reason": "PREREQUISITE_GAP",
+            "delivery_sequence": [
+                {
+                    "sequence_no": 1,
+                    "content_type": "ORIENTATION_VIDEO",
+                    "video": {
+                        "video_id": "VID-ALG-KS3-01",
+                        "title": "Collecting like terms",
+                        "asset_url": "https://example.invalid/ALG-KS3-01.mp4",
+                        "duration_seconds": 68,
+                    },
+                },
+            ],
         },
     }
     routing.update(
@@ -157,7 +173,9 @@ def _tc31_route_applied(request_id: str) -> dict[str, object]:
             ),
             "next_action": "START_PREREQUISITE_ORIENTATION",
             "next_topic_id": "ALG-KS3-01",
+            "next_topic_entry_phase": "PHASE_1_ORIENTATION",
             "return_topic_id": journey["topic_id"],
+            "return_micro_skill_id": SKILL,
             "return_question_id": CHECKPOINT,
             "prerequisite_check_required": False,
         }
@@ -312,16 +330,19 @@ def test_the_escalation_is_answered_with_the_resolved_route(
     assert [s.micro_skill_id for s in resolved[0].prerequisite_micro_skills] == ["T01.M3"]
 
 
-def test_a_resolved_route_pauses_the_topic_with_the_work_saved(
+def test_a_resolved_route_sends_the_student_to_the_prerequisite_topic(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """TC-31 arrives and is persisted as a pause, not as a dead screen.
+    """TC-31 is applied as the route it is, not held as a pause.
 
-    The route itself (TC-32: run the earlier topic, return to this checkpoint)
-    is not built, so the student is stopped with an explanation rather than sent
-    into a journey that cannot finish. What must NOT happen is the old
-    behaviour: a session left in Independent Practice with no question and no
-    message.
+    Until the detour existed, the honest thing here was to stop with the work
+    saved: opening a journey that cannot be finished is worse than saying so.
+    Now it can be finished -- the earlier topic is served, and TC-32 brings the
+    student back to this same checkpoint -- so holding the route would be
+    throwing away an answer Student Model has already given.
+
+    What must still NOT happen is the original bug: a session left in
+    Independent Practice with no question and no message.
     """
 
     _exhausted_checkpoint(monkeypatch, PREREQUISITE_CHAIN, _tc31_route_applied)
@@ -330,23 +351,115 @@ def test_a_resolved_route_pauses_the_topic_with_the_work_saved(
     answered = _fail_the_checkpoint(session_id)
     assert answered.status_code == 200, answered.text
     response = answered.json()
-    assert response["message"] == session_service.PREREQUISITE_REMEDIATION_MESSAGE
     assert response["student_model_event"]["routing"]["reason_code"] == (
         "PREREQUISITE_REMEDIATION_REQUIRED"
     )
     assert response["routing_reason_code"] == "PREREQUISITE_REMEDIATION_REQUIRED"
+    # The destination, published where the frontend reads it.
+    assert response["student_model_event"]["routing"]["next_topic_id"] == "ALG-KS3-01"
 
     session = session_service._sessions[session_id]
+    assert session.current_phase == "CONCEPT_ORIENTATION"
     assert session.question_id is None
     assert session.message == session_service.PREREQUISITE_REMEDIATION_MESSAGE
-    # The frontend gates its paused panel on exactly this pair.
-    assert session.student_model_event is not None
-    assert (
-        session.student_model_event.routing.reason_code
-        == "PREREQUISITE_REMEDIATION_REQUIRED"
+
+    # The detour's own state: where the student is, and where they come back to.
+    # The source journey identity is not overwritten by either.
+    remediation = session.prerequisite_remediation
+    assert remediation is not None
+    assert remediation.active_stop_topic_id == "ALG-KS3-01"
+    assert remediation.active_stop_micro_skill_ids == ["T01.M3"]
+    assert remediation.source_micro_skill_id == SKILL
+    assert remediation.return_question_id == CHECKPOINT
+    assert remediation.orientation_started is False
+    # Internal only: the student is routed by the published payload.
+    assert "prerequisite_remediation" not in response
+
+
+def test_the_prerequisite_stop_is_served_from_the_published_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`/orientation/start` plays the stop without asking for it again.
+
+    The ordinary path asks Student Model for the orientation of the journey's
+    OWN topic, which during a detour is the source topic -- the one already
+    finished. Asking for the earlier topic instead would seed a second journey
+    there that the source journey never hears back from, stranding the
+    checkpoint. So the stop is played from what the route already published.
+    """
+
+    sent = _exhausted_checkpoint(monkeypatch, PREREQUISITE_CHAIN, _tc31_route_applied)
+    session_id = _start_session(STUDENT)
+    assert _fail_the_checkpoint(session_id).status_code == 200
+    before = len(sent)
+
+    started = client.post(
+        f"/session/{session_id}/orientation/start",
+        json={"student_id": STUDENT},
     )
-    assert session.allow_text_input is False
-    assert session.allow_voice_input is False
+    assert started.status_code == 200, started.text
+    assert len(sent) == before, "starting a prerequisite stop must not ask for new content"
+    session = session_service._sessions[session_id]
+    assert session.prerequisite_remediation is not None
+    assert session.prerequisite_remediation.orientation_started is True
+
+    # Idempotent: a retried start is not a second stop.
+    assert client.post(
+        f"/session/{session_id}/orientation/start",
+        json={"student_id": STUDENT},
+    ).status_code == 200
+    assert session_service._sessions[session_id].prerequisite_remediation is not None
+
+
+def test_completing_a_stop_reports_it_as_remediation_not_as_orientation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ORIENTATION_COMPLETED would advance the SOURCE topic into Phase 2.
+
+    That topic is not where the student is, and it has no Guided phase left to
+    enter -- it is parked on a checkpoint. PREREQUISITE_REMEDIATION_COMPLETED is
+    the event that names what actually happened, and Student Model decides from
+    its own plan whether that stop was the last one.
+    """
+
+    sent = _exhausted_checkpoint(monkeypatch, PREREQUISITE_CHAIN, _tc31_route_applied)
+    session_id = _start_session(STUDENT)
+    assert _fail_the_checkpoint(session_id).status_code == 200
+
+    # Not started yet: nothing to complete.
+    completion = {
+        "student_id": STUDENT,
+        "completed_video_ids": ["VID-ALG-KS3-01"],
+        "completed_worked_example_ids": [],
+    }
+    assert client.post(
+        f"/session/{session_id}/orientation/complete", json=completion
+    ).status_code == 409
+
+    assert client.post(
+        f"/session/{session_id}/orientation/start",
+        json={"student_id": STUDENT},
+    ).status_code == 200
+    # The stop's own content gates it, exactly as an ordinary orientation is
+    # gated: claiming a stop finished without watching it is refused.
+    assert client.post(
+        f"/session/{session_id}/orientation/complete",
+        json={**completion, "completed_video_ids": []},
+    ).status_code == 409
+    completed = client.post(
+        f"/session/{session_id}/orientation/complete", json=completion
+    )
+    assert completed.status_code == 200, completed.text
+
+    reported = [e for e in sent if e.event_type == "PREREQUISITE_REMEDIATION_COMPLETED"]
+    assert len(reported) == 1
+    assert not [e for e in sent if e.event_type == "ORIENTATION_COMPLETED"]
+    # Addressed to the SOURCE topic: that is the journey holding the plan and
+    # the return checkpoint. The topic just taught has no journey of its own.
+    assert reported[0].topic_id == "ALG-ORI-02"
+    assert reported[0].topic_id != "ALG-KS3-01", "the topic just taught holds no journey"
+    assert reported[0].source_micro_skill_id == SKILL
+    assert reported[0].completed_prerequisite_micro_skill_ids == ["T01.M3"]
 
 
 def test_an_empty_route_still_reports_back_and_raises_the_intervention(

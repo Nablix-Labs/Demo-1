@@ -13,6 +13,7 @@ from app.adapters.base import StudentModelAdapter
 from app.adapters.provider import get_adapters
 from app.ai_engine.classifier import (
     ClassificationRequest,
+    _looks_like_canvas_expression,
     build_openai_ai_engine_client,
     classify_student_response,
     contains_answer_reveal,
@@ -264,9 +265,13 @@ def _is_complete_correct_canvas(
     ocr: VisionOCRResult | None,
     correct_answer: str | None,
 ) -> bool:
-    if ocr is None or ocr.needs_clarification or correct_answer is None:
+    if (
+        ocr is None
+        or ocr.needs_clarification
+        or not correct_answer
+        or not correct_answer.strip()
+    ):
         return False
-    expected = normalize_exact_notation(correct_answer)
     candidates = [
         ocr.final_answer,
         ocr.detected_equation,
@@ -275,20 +280,29 @@ def _is_complete_correct_canvas(
         *(region.text for region in ocr.detected_regions),
         *(region.text for region in ocr.word_regions),
     ]
-    return any(
-        candidate is not None and _contains_complete_notation(candidate, expected)
-        for candidate in candidates
+    answer_parts = [part.strip() for part in correct_answer.split(";") if part.strip()]
+    canvas_parts = [part for part in answer_parts if _looks_like_canvas_expression(part)]
+    target_parts = canvas_parts or answer_parts
+    if not target_parts:
+        return False
+    return all(
+        any(
+            candidate is not None
+            and _contains_complete_notation(candidate, normalize_exact_notation(expected))
+            for candidate in candidates
+        )
+        for expected in target_parts
     )
 
 
 def _contains_complete_notation(candidate: str, expected: str) -> bool:
     """Match an exact expression even when earlier canvas work remains visible."""
 
+    if not expected:
+        return False
     normalized = normalize_exact_notation(candidate)
     if normalized == expected:
         return True
-    if expected == "":
-        return False
     start_boundary = r"(?<![A-Za-z0-9])" if expected[0].isalnum() else ""
     end_boundary = r"(?![A-Za-z0-9])" if expected[-1].isalnum() else ""
     return re.search(f"{start_boundary}{re.escape(expected)}{end_boundary}", normalized) is not None
@@ -5177,9 +5191,17 @@ async def _process_interaction(
             "routing_reason_code": (
                 # A halt is decided by the Student Model, and the schema content
                 # for the turn still carries the route that led into the halt --
-                # the stale one. Every other turn keeps its own content's code.
+                # the stale one. A prerequisite detour is the same shape: this
+                # turn's content is the MAX_GUIDED_REPAIRS_EXHAUSTED escalation,
+                # and the route that answered it landed afterwards, so reading
+                # the content here published the question instead of the answer
+                # -- disagreeing with student_model_event.routing beside it.
+                # Every other turn keeps its own content's code.
                 updated_session.student_model_event.routing.reason_code
-                if independent_practice_is_halted(updated_session)
+                if (
+                    independent_practice_is_halted(updated_session)
+                    or updated_session.prerequisite_remediation is not None
+                )
                 and updated_session.student_model_event is not None
                 else schema_content_response.routing.reason_code
                 if schema_content_response is not None

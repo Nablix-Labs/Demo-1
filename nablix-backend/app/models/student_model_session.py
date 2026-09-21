@@ -162,20 +162,31 @@ class OrientationBundle(BaseModel):
 
 
 class PrerequisiteRemediationBundle(BaseModel):
-    """TC-31's bundle, which is NOT an orientation bundle despite the key.
+    """TC-31's bundle: one stop on the prerequisite chain, ready to play.
 
     Student Model sends this under `orientation_bundle` when it routes a topic
-    to prerequisite remediation, and it carries no delivery_sequence: it names
-    the earlier topic and the skills to teach there, and that topic's content is
-    fetched separately. Modelled as its own type rather than by relaxing
-    OrientationBundle, because an orientation bundle with no delivery sequence
-    is a real fault -- it renders a blank lesson -- and must keep failing.
+    to prerequisite remediation. It names the EARLIER topic and the skills to
+    teach there, and carries that topic's own delivery sequence, serialized by
+    the same Phase 1 serializer -- so the stop is playable from the payload
+    alone and nothing downstream has to go looking for content in a topic that
+    is not the journey's own.
+
+    Still its own type rather than a relaxed OrientationBundle: `topic_id` is
+    the whole point here (an ordinary orientation is always the journey's own
+    topic, so it has no such field), and keeping them apart is what stops a
+    remediation stop being mistaken for the source topic's orientation.
+
+    delivery_sequence defaults to empty so a Student Model that has not shipped
+    the content half yet still parses; `start_orientation` is where an empty one
+    is refused, because that is the point at which it would render a blank
+    lesson.
     """
 
     topic_id: str
     target_micro_skill_ids: list[str]
     difficulty: int | None = None
     remediation_reason: str | None = None
+    delivery_sequence: list[OrientationDeliveryItem] = Field(default_factory=list)
 
 
 class StudentModelPhasePayload(BaseModel):
@@ -201,6 +212,11 @@ class StudentModelRouting(BaseModel):
     # send these; where it doesn't, the tutor backend fills them from the
     # frozen checkpoint, which carries the same two facts.
     return_topic_id: str | None = None
+    # The skill whose checkpoint the detour comes back to. Student Model has
+    # always sent it on the prerequisite route; not declaring it meant the one
+    # field that says WHOSE checkpoint this is was dropped on parse, and the
+    # stop completion has to name it.
+    return_micro_skill_id: str | None = None
     return_question_id: str | None = None
     resume_question_id: str | None = None
     resume_policy: str | None = None
@@ -537,6 +553,21 @@ class PrerequisiteRouteResolvedEvent(MutatingSessionEventBase):
     prerequisite_micro_skills: list[PrerequisiteMicroSkill]
 
 
+class PrerequisiteRemediationCompletedEvent(MutatingSessionEventBase):
+    """TC-31/TC-32: one prerequisite TOPIC is finished.
+
+    The same event for every stop. Which stop it lands on, and whether that
+    stop was the last, is decided upstream from the stored remediation plan --
+    never from a flag set here, because then two sides would have to agree
+    about how far along the chain the student is, and the one that is wrong is
+    the one that skips a topic.
+    """
+
+    event_type: Literal["PREREQUISITE_REMEDIATION_COMPLETED"]
+    source_micro_skill_id: str
+    completed_prerequisite_micro_skill_ids: list[str]
+
+
 class PrerequisiteRouteLookup(BaseModel):
     """TC-30's answer: the prerequisite chain, possibly empty."""
 
@@ -549,6 +580,7 @@ class ReviewCompletedEvent(MutatingSessionEventBase):
 
 StudentModelSessionEvent: TypeAlias = (
     PrerequisiteRouteResolvedEvent
+    | PrerequisiteRemediationCompletedEvent
     | SessionOpenedEvent
     | InterventionInputSubmittedEvent
     | DiagnosticQuestionSetRequestedEvent
