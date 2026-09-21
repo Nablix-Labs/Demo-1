@@ -23,7 +23,7 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { useNumeraStore } from '@/store/useNumeraStore';
+import { useNumeraStore, type TutorElement } from '@/store/useNumeraStore';
 import { useTutorReveal } from '@/store/useTutorReveal';
 import { basePath } from '@/lib/runtimeConfig';
 import { tipFor } from '@/lib/tutorTip';
@@ -53,8 +53,24 @@ function prefersReducedMotion(): boolean {
     Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
 }
 
-export default function TutorHandOverlay({ width, height }: { width: number; height: number }) {
+export default function TutorHandOverlay({
+  width,
+  height,
+  marks,
+}: {
+  width: number;
+  height: number;
+  /**
+   * Where the marks being written live. The canvas leaves this unset and the
+   * hand follows the tutor layer; the Phase 4 replay board passes its own
+   * marks, which never enter the canvas store (there is no canvas on that
+   * screen), so the same hand writes both surfaces.
+   */
+  marks?: () => readonly TutorElement[];
+}) {
   const ref = useRef<HTMLImageElement>(null);
+  const marksRef = useRef(marks);
+  marksRef.current = marks;
 
   useEffect(() => {
     // With reduced motion the store completes every mark instantly, so nothing
@@ -69,7 +85,7 @@ export default function TutorHandOverlay({ width, height }: { width: number; hei
       const node = ref.current;
       if (!node) return;
 
-      const elements = useNumeraStore.getState().tutorElements;
+      const elements = marksRef.current?.() ?? useNumeraStore.getState().tutorElements;
       const progress = useTutorReveal.getState().progress;
 
       let active: (typeof elements)[number] | undefined;

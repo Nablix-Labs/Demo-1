@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { writeLine, boardDraw, boardElementsThrough } from '@/lib/phase4Board';
+import { writeLine, boardDraw, boardElementsThrough, boardRevealMarks } from '@/lib/phase4Board';
 import type { Phase4ReplayStep } from '@/lib/api';
 
 const steps = (n: number): Phase4ReplayStep[] =>
@@ -163,5 +163,33 @@ describe('using the height of a board built to dominate the screen', () => {
     const last = writeLine(11, 12).y;
     expect(last).toBeLessThanOrEqual(0.9);
     expect(writeLine(0, 12).y).toBeLessThanOrEqual(0.3);
+  });
+});
+
+describe('writing a structured board with the handwriting engine', () => {
+  // Chiru/Sanya, 21 Sep: "the voice explains it but there's no animation".
+  const elements = [
+    { kind: 'expression', text: 'a × a = a²' },
+    { kind: 'boxed', text: 'a²b', tone: 'correct' },
+  ] as const;
+  const boxes = [
+    { x: 100, y: 40, w: 200, h: 30 },
+    { x: 150, y: 100, w: 100, h: 40 },
+  ];
+
+  it('hands each new element to the reveal store as a DOM-measured mark', () => {
+    const marks = boardRevealMarks(elements, 0, boxes, 400, 200);
+    expect(marks.map((m) => m.id)).toEqual(['board-0', 'board-1']);
+    expect(marks[0]).toMatchObject({ kind: 'math', text: 'a × a = a²', x: 0.25, y: 0.275 });
+    expect(marks[1]).toMatchObject({ x: 0.375, y: 0.6 });
+  });
+
+  it('leaves elements from earlier steps at rest', () => {
+    const marks = boardRevealMarks(elements, 1, boxes, 400, 200);
+    expect(marks.map((m) => m.id)).toEqual(['board-1']);
+  });
+
+  it('writes nothing until the board has a size', () => {
+    expect(boardRevealMarks(elements, 0, boxes, 0, 0)).toEqual([]);
   });
 });

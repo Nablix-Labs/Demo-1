@@ -131,3 +131,63 @@ export function boardElementsThrough(
   }
   return elements;
 }
+
+/**
+ * The marks the writing engine sequences for a structured board.
+ *
+ * Chiru and Sanya, 21 Sep 2026: "the voice explains it but there's no
+ * animation." Since PR #257 a boarded replay stamped every element of the
+ * step at once — the ink reveal and the writing hand only ever ran on the
+ * handwriting canvas, which the backend no longer sends. The board now hands
+ * its new elements to the SAME engine (`useTutorReveal` sequences them,
+ * `TutorHandOverlay` rides the nib), so Phase 4 writes the way Phase 1 does.
+ *
+ * Each board element becomes one `math` mark: that is the kind whose pen tip
+ * is read from the DOM box tagged `data-tutor-math-id` (see `tipFor`), which
+ * is exactly what a laid-out board element is. `text` only sets how long the
+ * mark takes to write. Positions are the element's box on the board, in the
+ * board's 0–1 space, so the nib touches down at its left edge and sits on its
+ * vertical centre. Elements before `from` were written in an earlier step and
+ * get no mark: they are already on the board, at rest.
+ */
+export interface BoardBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export function boardMarkId(index: number): string {
+  return `board-${index}`;
+}
+
+function elementText(el: Phase4BoardElement): string {
+  switch (el.kind) {
+    case 'value_row': return el.values.join(' ') + el.arrow_label;
+    case 'brace':     return el.labels.join(' ');
+    default:          return 'text' in el ? el.text : '';
+  }
+}
+
+export function boardRevealMarks(
+  elements: readonly Phase4BoardElement[],
+  from: number,
+  boxes: readonly BoardBox[],
+  width: number,
+  height: number,
+): TutorElement[] {
+  if (width <= 0 || height <= 0) return [];
+  const marks: TutorElement[] = [];
+  elements.forEach((el, i) => {
+    const box = boxes[i];
+    if (i < from || !box) return;
+    marks.push({
+      id: boardMarkId(i),
+      kind: 'math',
+      text: elementText(el),
+      x: box.x / width,
+      y: (box.y + box.h / 2) / height,
+    });
+  });
+  return marks;
+}

@@ -23,9 +23,14 @@
  *   duplicated rescue panels.
  */
 
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Star } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { braceFit, columnsAbove } from '@/lib/phase4BoardLayout';
+import { boardMarkId, boardRevealMarks, type BoardBox } from '@/lib/phase4Board';
+import { useTutorReveal } from '@/store/useTutorReveal';
+import TutorHandOverlay from '@/components/Canvas/TutorHandOverlay';
+import type { TutorElement } from '@/store/useNumeraStore';
 import type { Phase4BoardElement } from '@/lib/api';
 
 /** The tutor's hand. Same stack the canvas ink uses, so the two read as one voice. */
@@ -183,8 +188,15 @@ function Element({
 export default function ReplayBoard({
   elements,
   fallbackText,
+  revealFrom = 0,
 }: {
   elements: readonly Phase4BoardElement[];
+  /**
+   * How many leading elements were already on the board before this step.
+   * Those sit at rest; the rest are written in by the handwriting engine —
+   * the same reveal store and writing hand the Phase 1 canvas uses.
+   */
+  revealFrom?: number;
   /**
    * `tutor_write` for a step inside a boarded replay that has no board of its
    * own. Shown as the step's heading rather than switching the whole panel back
@@ -192,6 +204,55 @@ export default function ReplayBoard({
    */
   fallbackText?: string;
 }) {
+  const boardRef = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const marksRef = useRef<TutorElement[]>([]);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    const node = boardRef.current;
+    if (!node) return;
+    const ro = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      setSize((s) => (s.width === width && s.height === height ? s : { width, height }));
+    });
+    ro.observe(node);
+    return () => ro.disconnect();
+  }, []);
+
+  // Hand the new elements to the writing engine once they are laid out, and
+  // wipe each one in as its progress advances — imperatively, since progress
+  // ticks every frame and only these nodes care.
+  useLayoutEffect(() => {
+    const board = boardRef.current;
+    if (!board) return;
+    const origin = board.getBoundingClientRect();
+    const boxes: BoardBox[] = elements.map((_, i) => {
+      const r = itemRefs.current[i]?.getBoundingClientRect();
+      return r
+        ? { x: r.left - origin.left, y: r.top - origin.top + board.scrollTop, w: r.width, h: r.height }
+        : { x: 0, y: 0, w: 0, h: 0 };
+    });
+    const marks = boardRevealMarks(elements, revealFrom, boxes, size.width, size.height);
+    marksRef.current = marks;
+    const reveal = useTutorReveal.getState();
+    reveal.sync(marks);
+
+    const paint = () => {
+      const progress = useTutorReveal.getState().progress;
+      elements.forEach((_, i) => {
+        const node = itemRefs.current[i];
+        if (!node) return;
+        const p = i < revealFrom ? 1 : progress[boardMarkId(i)] ?? 0;
+        // Pad top and bottom so ascenders and the box border are not shaved.
+        node.style.clipPath = p >= 1 ? '' : `inset(-8px ${(1 - p) * 100}% -8px -8px)`;
+      });
+    };
+    paint();
+    const unsub = useTutorReveal.subscribe(paint);
+    return () => { unsub(); useTutorReveal.getState().sync([]); };
+  }, [elements, revealFrom, size]);
+
   if (elements.length === 0) {
     return (
       <div className="flex-1 min-h-0 flex items-center justify-center p-6">
@@ -203,16 +264,30 @@ export default function ReplayBoard({
   }
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto">
+    <div ref={boardRef} className="relative flex-1 min-h-0 overflow-y-auto">
       <div className="flex flex-col items-stretch justify-center gap-4 min-h-full px-6 py-7">
         {elements.map((element, i) => (
-          <Element
+          <div
             key={i}
-            element={element}
-            columns={element.kind === 'brace' ? columnsAbove(elements, i) : 0}
-          />
+            ref={(n) => { itemRefs.current[i] = n; }}
+            // The nib is read from this box (`tipFor`, kind 'math'), so it has
+            // to be the ink's width. A row and its brace keep the full width:
+            // their columns align to the row, and their ink spans it anyway.
+            data-tutor-math-id={boardMarkId(i)}
+            className={cn(
+              element.kind === 'value_row' || element.kind === 'brace'
+                ? 'w-full'
+                : 'w-fit max-w-full mx-auto',
+            )}
+          >
+            <Element
+              element={element}
+              columns={element.kind === 'brace' ? columnsAbove(elements, i) : 0}
+            />
+          </div>
         ))}
       </div>
+      <TutorHandOverlay width={size.width} height={size.height} marks={() => marksRef.current} />
     </div>
   );
 }

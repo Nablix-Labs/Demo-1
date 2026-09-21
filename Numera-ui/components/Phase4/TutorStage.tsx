@@ -167,6 +167,11 @@ export default function TutorStage({
     () => boardElementsThrough(replay.replay_steps, index),
     [replay, index],
   );
+  // What was already written before this step; only the rest animates in.
+  const boardRevealFrom = useMemo(
+    () => boardElementsThrough(replay.replay_steps, index - 1).length,
+    [replay, index],
+  );
 
   const changeSpeed = useCallback(() => {
     const next = SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.length];
@@ -300,6 +305,7 @@ export default function TutorStage({
               // element-by-element into the previous step's shape.
               key={currentStep?.sequence_no ?? index}
               elements={boardElements}
+              revealFrom={boardRevealFrom}
               fallbackText={currentStep?.tutor_write}
             />
           ) : (
