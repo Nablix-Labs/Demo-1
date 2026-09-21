@@ -13,6 +13,7 @@ from app.adapters.base import StudentModelAdapter
 from app.adapters.provider import get_adapters
 from app.ai_engine.classifier import (
     ClassificationRequest,
+    _looks_like_canvas_expression,
     build_openai_ai_engine_client,
     classify_student_response,
     contains_answer_reveal,
@@ -266,7 +267,6 @@ def _is_complete_correct_canvas(
 ) -> bool:
     if ocr is None or ocr.needs_clarification or correct_answer is None:
         return False
-    expected = normalize_exact_notation(correct_answer)
     candidates = [
         ocr.final_answer,
         ocr.detected_equation,
@@ -275,9 +275,18 @@ def _is_complete_correct_canvas(
         *(region.text for region in ocr.detected_regions),
         *(region.text for region in ocr.word_regions),
     ]
-    return any(
-        candidate is not None and _contains_complete_notation(candidate, expected)
-        for candidate in candidates
+    answer_parts = [part.strip() for part in correct_answer.split(";") if part.strip()]
+    canvas_parts = [part for part in answer_parts if _looks_like_canvas_expression(part)]
+    target_parts = canvas_parts if canvas_parts else answer_parts or [correct_answer.strip()]
+    if not target_parts:
+        return False
+    return all(
+        any(
+            candidate is not None
+            and _contains_complete_notation(candidate, normalize_exact_notation(expected))
+            for candidate in candidates
+        )
+        for expected in target_parts
     )
 
 
