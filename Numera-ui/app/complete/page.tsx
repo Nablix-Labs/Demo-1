@@ -19,6 +19,11 @@ export default function CompletePage() {
   const topicTitles = useNumeraStore((s) => s.topicTitles);
   const studentName = useNumeraStore((s) => s.studentName);
   const reset = useNumeraStore((s) => s.reset);
+  // "Start over" wipes the LOCAL journey and opens sign-up. That is the mock
+  // curriculum's restart; a live student's journey belongs to the backend,
+  // and the button sent a signed-in student to "Create your account"
+  // (ST030, 21 Sep). Mock mode only.
+  const canStartOver = !process.env.NEXT_PUBLIC_API_BASE_URL;
 
   // Every topic the student has mastered, whatever it is called. Real topics
   // are backend codes (ALG-ORI-03) that the local table does not list, and
@@ -91,12 +96,14 @@ export default function CompletePage() {
           >
             Browse topics
           </button>
-          <button
-            onClick={startOver}
-            className="w-full rounded-md border border-muted-gray bg-white px-4 py-2.5 text-[13px] font-semibold text-slate-blue hover:text-ink hover:border-muted-gray transition-colors"
-          >
-            Start over
-          </button>
+          {canStartOver && (
+            <button
+              onClick={startOver}
+              className="w-full rounded-md border border-muted-gray bg-white px-4 py-2.5 text-[13px] font-semibold text-slate-blue hover:text-ink hover:border-muted-gray transition-colors"
+            >
+              Start over
+            </button>
+          )}
         </div>
       </div>
     </CenteredScreen>
