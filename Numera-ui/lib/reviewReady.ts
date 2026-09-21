@@ -98,4 +98,4 @@ export function reviewReadPending(s: {
  * again to see the review page"). Waiting long enough for ONE build to
  * return is cheaper than starting several.
  */
-export const REVIEW_READ_TIMEOUT_MS = 90_000;
+export const REVIEW_READ_TIMEOUT_MS = 45_000;

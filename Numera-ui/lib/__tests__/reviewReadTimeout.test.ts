@@ -11,8 +11,8 @@ import { describe, expect, it } from 'vitest';
 import { REVIEW_READ_TIMEOUT_MS } from '@/lib/reviewReady';
 
 describe('reading a review session', () => {
-  it('waits longer than one review build takes', () => {
-    expect(REVIEW_READ_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000);
+  it('is the 45 s Chiru asked for (21 Sep)', () => {
+    expect(REVIEW_READ_TIMEOUT_MS).toBe(45_000);
   });
 
   it('is the timeout every read that can build a review uses', () => {
