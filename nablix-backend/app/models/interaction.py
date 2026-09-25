@@ -12,6 +12,7 @@ from app.models.adapters import (
     VisionOCRResult,
 )
 from app.models.canvas import CanvasDrawPayload, CanvasLatency, CanvasStroke
+from app.models.canvas_teaching import CanvasTeachingPlan
 from app.models.canvas_memory import CanvasEvent, validate_canvas_event_order
 from app.models.fields import (
     BoundedInteractionText,
@@ -249,6 +250,7 @@ class InteractionResponse(BaseModel):
     inactivity_policy: InactivityPolicy | None = None
     nudge_delivery: NudgeDeliveryRecord | None = None
     canvas_draw: list[CanvasDrawPayload] = Field(default_factory=list)
+    canvas_teaching_plan: CanvasTeachingPlan | None = None
     tutor_canvas_actions: list[TutorCanvasAction] = Field(default_factory=list)
     # Authored visual cues for the question that has just arrived. These are
     # separate from turn actions, which annotate the question being left.

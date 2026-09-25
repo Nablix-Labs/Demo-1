@@ -7,6 +7,7 @@ from app.models.adapters import TutorResult, VisionOCRResult
 from app.models.canvas_memory import CanvasEvent, validate_canvas_event_order
 from app.models.fields import Phase, SessionId, SnapshotDataUrl, StudentId, TurnId
 from app.models.guided_learning import GuidedRescue
+from app.models.canvas_teaching import CanvasTeachingPlan
 
 TutorElementKind = Literal[
     "text", "math", "line", "arrow", "rect", "ellipse", "freehand", "highlight"
@@ -160,6 +161,7 @@ class CanvasSubmitResponse(BaseModel):
     tutor: TutorResult
     latency: CanvasLatency
     canvas_draw: list[CanvasDrawPayload] = Field(default_factory=list)
+    canvas_teaching_plan: CanvasTeachingPlan | None = None
     guided_rescue: GuidedRescue | None = None
     # Phase state after this submission — same contract as InteractionResponse,
     # so canvas turns can drive the frontend's phase routing.
