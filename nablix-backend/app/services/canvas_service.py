@@ -35,6 +35,7 @@ from app.services.canvas_annotations import (
     plan_write_request_tutor_actions,
     plan_write_request_tutor_draw,
 )
+from app.services.canvas_teaching_planner import plan_canvas_teaching
 from app.models.session import SessionRecord
 from app.models.student_model_session import StudentModelQuestion
 from app.services.canvas_evidence import (
@@ -632,6 +633,21 @@ async def submit_canvas(
             "visual_cue": visual_cue or tutor.visual_cue,
         }
     )
+    if response.current_phase == "GUIDED_PRACTICE":
+        response.canvas_teaching_plan = plan_canvas_teaching(
+            question_id=response.question_id,
+            question=response.current_question,
+            source_turn_id=request.turn_id,
+            tutor_turn_id=response.tutor_turn_id,
+            scene_revision=response.interaction_state_version,
+            tutor_message_voice=response.message_voice,
+            tutor=tutor,
+            question_anchors=response.question_anchors,
+            student_response=request.transcript or "",
+            canonical_answer=updated_session.correct_answer or "",
+            active_support_level=None,
+            current_unresolved_component_id=None,
+        )
     response.next_expected_input = (
         "WRITE" if tutor.requires_written_math_evidence else None
     )

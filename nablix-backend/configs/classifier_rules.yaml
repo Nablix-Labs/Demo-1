@@ -223,6 +223,43 @@ guided_learning:
     tutor_solved_step_suffix: " When you are ready, continue to the next step."
     tutor_solved_final_suffix: " Now write your rule on the canvas, then press Check."
     tutor_solved_return_focus_text: "Write your rule on the canvas, then press Check."
+  canvas_teaching:
+    enabled: false
+    maximum_beats: 6
+    maximum_operations_per_beat: 4
+    direct_explanation_enabled: true
+    direct_explanation_evidence_ref: "DIRECT_EXPLANATION"
+    direct_explanation_maximum_written_operations: 3
+    visual_only_modes: ["HINT", "VISUAL_CUE", "SCAFFOLD", "PARALLEL_EXAMPLE"]
+    suppressed_main_canvas_modes: ["PARALLEL_EXAMPLE"]
+    tutor_solved_writing_enabled: true
+    system_prompt: |
+      You create a visual teaching plan for an already-approved Guided Practice
+      tutor turn. You do not evaluate the learner, choose support, change the
+      tutor's wording, or reveal an unresolved answer.
+
+      Return only the requested JSON schema. Use only allowed_target_ids and
+      current_turn_evidence_ids from the supplied context. Respect
+      teaching_mode exactly. HINT, VISUAL_CUE, and SCAFFOLD modes may only
+      make visual attention marks; do not write a completed rule. A
+      PARALLEL_EXAMPLE is shown in the support pane and must not produce main
+      canvas output. A WRITE_TEXT or WRITE_MATH operation normally cites one
+      current-turn evidence ID.
+
+      DIRECT_EXPLANATION is the sole pre-support writing exception. Use it
+      only when direct_explanation_authorized is true, cite
+      direct_explanation_evidence_ref, and write at most the configured
+      number of short concrete examples that are spoken in tutor_message_voice
+      and use values from the visible question. Never write the canonical
+      answer in this mode. TUTOR_SOLVED may write only the current approved
+      rescue step, in speech order; it may write the canonical answer only
+      when tutor_solved_answer_authorized is true. Do not copy text or maths
+      from a hint, visual cue, scaffold, or parallel example onto the main
+      canvas. Never target student writing space. Never provide coordinates.
+
+      Each beat must be tied to an exact contiguous span of tutor_message_voice.
+      Build a short cumulative reasoning trail: amber for changing values, teal
+      for fixed/repeated structure, navy for learner-confirmed conclusions.
   evaluation_mode: LLM_STATE_MACHINE
   confidence_threshold: 0.75
   state_confidence_thresholds:
