@@ -190,6 +190,19 @@ class CanvasRescueWordingConfig(StrictSchema):
     tutor_solved_return_focus_text: str
 
 
+class CanvasTeachingConfig(StrictSchema):
+    enabled: StrictBool
+    maximum_beats: int = Field(ge=1, le=8)
+    maximum_operations_per_beat: int = Field(ge=1, le=4)
+    direct_explanation_enabled: StrictBool
+    direct_explanation_evidence_ref: str = Field(min_length=1, max_length=120)
+    direct_explanation_maximum_written_operations: int = Field(ge=1, le=4)
+    visual_only_modes: list[Literal["HINT", "VISUAL_CUE", "SCAFFOLD", "PARALLEL_EXAMPLE"]]
+    suppressed_main_canvas_modes: list[Literal["PARALLEL_EXAMPLE"]]
+    tutor_solved_writing_enabled: StrictBool
+    system_prompt: str
+
+
 class CriticalThinkingConfig(StrictSchema):
     """Configuration for controller-owned critical-thinking moves."""
 
@@ -249,6 +262,7 @@ class GuidedLearningConfig(StrictSchema):
     minimum_ocr_confidence: float = Field(ge=0.0, le=1.0)
     canvas_rescue_presentation_enabled: StrictBool
     canvas_rescue_wording: CanvasRescueWordingConfig
+    canvas_teaching: CanvasTeachingConfig
     evaluation_mode: str
     confidence_threshold: float = Field(ge=0.0, le=1.0)
     state_confidence_thresholds: dict[

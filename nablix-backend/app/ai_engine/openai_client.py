@@ -50,6 +50,7 @@ from app.models.guided_learning import (
     GuidedWorkedPresentation,
 )
 from app.models.student_model_session import AnswerSpec, QuestionType
+from app.models.canvas_teaching import CanvasTeachingPlanDraft
 
 
 _OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
@@ -505,6 +506,27 @@ class OpenAIAIEngineClient:
             return GuidedWorkedPresentation.model_validate(content)
         except ValidationError as error:
             raise AdapterError("openai_ai_engine", f"Invalid worked presentation: {error}") from error
+
+    def plan_canvas_teaching(
+        self,
+        system_prompt: str,
+        context: dict[str, object],
+    ) -> CanvasTeachingPlanDraft:
+        """Generate visual-only steps after the tutor turn is already final."""
+
+        content = self._request_guided_json(
+            name="canvas_teaching_plan",
+            schema=CanvasTeachingPlanDraft.model_json_schema(),
+            system_prompt=system_prompt,
+            user_payload=context,
+        )
+        try:
+            return CanvasTeachingPlanDraft.model_validate(content)
+        except ValidationError as error:
+            raise AdapterError(
+                "openai_ai_engine",
+                f"invalid canvas teaching plan: {error}",
+            ) from error
 
     def evaluate_guided_turn(
         self,

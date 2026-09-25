@@ -113,6 +113,7 @@ from app.services.canvas_annotations import (
     rescue_tutor_wording,
 )
 from app.services.question_anchors import plan_canvas_action_anchors
+from app.services.canvas_teaching_planner import plan_canvas_teaching
 from app.services.canvas_evidence import (
     CanvasEvidence,
     canvas_events_are_stale,
@@ -5315,6 +5316,25 @@ async def _process_interaction(
             "phase3_review_evidence": tutor.phase3_review_evidence,
         }
     )
+    if response.current_phase == "GUIDED_PRACTICE":
+        response = response.model_copy(
+            update={
+                "canvas_teaching_plan": plan_canvas_teaching(
+                    question_id=response.question_id,
+                    question=response.current_question,
+                    source_turn_id=request.turn_id,
+                    tutor_turn_id=response.tutor_turn_id,
+                    scene_revision=response.interaction_state_version,
+                    tutor_message_voice=response.message_voice,
+                    tutor=tutor,
+                    question_anchors=tutor_action_anchors,
+                    student_response=request.text_input or request.voice_transcript or "",
+                    canonical_answer=canonical_answer,
+                    active_support_level=response.active_support_level,
+                    current_unresolved_component_id=response.first_unresolved_concept_id,
+                )
+            }
+        )
     # Both sides of the turn must be a live Phase 3 question: turn_session keeps
     # the guided -> independent transition turn audible, updated_session keeps a
     # halted topic (no question) audible so the pause message survives.
