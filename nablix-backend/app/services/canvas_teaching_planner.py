@@ -14,6 +14,7 @@ from app.models.canvas_teaching import (
     CanvasTeachingOperation,
     CanvasTeachingPlan,
     CanvasTeachingPlanDraft,
+    CanvasSpeechAnchor,
 )
 from app.models.question_anchor import QuestionTextAnchor
 
@@ -190,8 +191,8 @@ def _validate_draft(
     for beat in draft.beats:
         if len(beat.operations) > config.maximum_operations_per_beat:
             return None
-        anchor = beat.speech_anchor
-        if anchor.end_char > len(narration) or narration[anchor.start_char:anchor.end_char] != anchor.text:
+        anchor = synchronize_speech_anchor(beat.speech_anchor, narration)
+        if anchor is None:
             return None
         operations = [
             operation
@@ -219,7 +220,11 @@ def _validate_draft(
         )
         if direct_explanation and direct_explanation_writes > config.direct_explanation_maximum_written_operations:
             return None
-        accepted.append(beat.model_copy(update={"operations": operations}))
+        accepted.append(
+            beat.model_copy(
+                update={"speech_anchor": anchor, "operations": operations}
+            )
+        )
     return accepted
 
 
@@ -283,6 +288,26 @@ def _numeric_terms_come_from_question(content: str, question: str) -> bool:
     content_numbers = set(re.findall(r"\d+(?:\.\d+)?", content))
     question_numbers = set(re.findall(r"\d+(?:\.\d+)?", question))
     return content_numbers.issubset(question_numbers)
+
+
+def synchronize_speech_anchor(
+    anchor: CanvasSpeechAnchor,
+    narration: str,
+) -> CanvasSpeechAnchor | None:
+    first_match = narration.find(anchor.text)
+    if first_match < 0:
+        return None
+    second_match = narration.find(anchor.text, first_match + 1)
+    if second_match >= 0:
+        if narration[anchor.start_char:anchor.end_char] != anchor.text:
+            return None
+        return anchor
+    return anchor.model_copy(
+        update={
+            "start_char": first_match,
+            "end_char": first_match + len(anchor.text),
+        }
+    )
 
 
 def _teaching_mode(
