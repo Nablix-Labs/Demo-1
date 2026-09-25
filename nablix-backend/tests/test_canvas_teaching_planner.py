@@ -219,6 +219,47 @@ def test_planner_rejects_a_beat_not_present_in_narration(monkeypatch) -> None:
     assert _plan(draft) is None
 
 
+def test_planner_corrects_a_unique_speech_anchor_offset(monkeypatch) -> None:
+    voice = "Look at the first numbers. What do you notice about them?"
+    draft = CanvasTeachingPlanDraft.model_validate(
+        {
+            "beats": [
+                {
+                    "beat_id": "focus-first-values",
+                    "sequence": 1,
+                    "speech_anchor": {
+                        "start_char": 0,
+                        "end_char": len(voice) - 2,
+                        "text": voice,
+                    },
+                    "operations": [
+                        {
+                            "operation_id": "focus-first-values",
+                            "kind": "FOCUS",
+                            "target_kind": "QUESTION_ANCHOR",
+                            "target_ids": ["Q1:QTOKEN:1"],
+                            "zone": "QUESTION",
+                            "persistence": "PULSE",
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
+    monkeypatch.setattr(
+        canvas_teaching_planner,
+        "build_openai_ai_engine_client",
+        lambda _: FakeCanvasTeachingClient(draft),
+    )
+
+    plan = _plan(draft, voice=voice)
+
+    assert plan is not None
+    anchor = plan.beats[0].speech_anchor
+    assert voice[anchor.start_char:anchor.end_char] == anchor.text
+
+
 def _direct_explanation_contribution() -> StudentContribution:
     return StudentContribution(
         kind="EXPLANATION_REQUEST",

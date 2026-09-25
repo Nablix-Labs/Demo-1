@@ -65,6 +65,8 @@ def force_mock_adapters(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("NABLIX_USE_OPENAI_AI_ENGINE", "false")
     monkeypatch.setenv("NABLIX_QDRANT_URL", "https://qdrant.test")
     monkeypatch.setenv("NABLIX_QDRANT_API_KEY", "test-key")
+    monkeypatch.delenv("NABLIX_STUDENT_MODEL_TOPIC_IDS", raising=False)
+    monkeypatch.delenv("NABLIX_STUDENT_MODEL_TOPIC_CODES", raising=False)
     get_settings.cache_clear()
     test_settings = Settings(
         student_model_url="",

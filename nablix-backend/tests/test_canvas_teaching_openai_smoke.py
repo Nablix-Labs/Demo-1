@@ -1,3 +1,4 @@
+import json
 import os
 
 import pytest
@@ -5,6 +6,8 @@ import pytest
 from app.ai_engine.classifier_config import load_classifier_rules
 from app.ai_engine.openai_client import OpenAIAIEngineClient
 from app.core.config import Settings
+from app.models.canvas_teaching import CanvasTeachingBeat
+from app.services.canvas_teaching_planner import synchronize_speech_anchor
 
 
 def test_openai_canvas_teaching_plan_smoke() -> None:
@@ -68,9 +71,12 @@ def test_openai_canvas_teaching_plan_smoke() -> None:
     )
 
     assert plan.beats
+    synchronized_beats: list[CanvasTeachingBeat] = []
     for beat in plan.beats:
-        anchor = beat.speech_anchor
+        anchor = synchronize_speech_anchor(beat.speech_anchor, narration)
+        assert anchor is not None
         assert narration[anchor.start_char:anchor.end_char] == anchor.text
+        synchronized_beats.append(beat.model_copy(update={"speech_anchor": anchor}))
         for operation in beat.operations:
             assert operation.kind not in {"WRITE_TEXT", "WRITE_MATH"}
             assert set(operation.target_ids).issubset(
@@ -81,3 +87,6 @@ def test_openai_canvas_teaching_plan_smoke() -> None:
                     "ZONE:TUTOR_SOLUTION",
                 }
             )
+    if os.getenv("NABLIX_PRINT_CANVAS_TEACHING_PLAN") == "true":
+        synchronized_plan = plan.model_copy(update={"beats": synchronized_beats})
+        print(json.dumps(synchronized_plan.model_dump(), indent=2))
