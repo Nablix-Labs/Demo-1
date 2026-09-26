@@ -218,20 +218,42 @@ def _plan_confirmed_generic_scene(
     if teaching_mode != "GUIDED" or not current_evidence:
         return None
     anchor_by_id = {anchor.token_id: anchor for anchor in question_anchors}
-    actions = [
-        action
+    confirmation_messages = _confirmation_messages(tutor, tutor_message_voice)
+    action_targets = [
+        ([anchor_by_id[action.target_object_id or ""]], anchor_by_id[action.target_object_id or ""].text, action.confirmed_component_id)
         for action in tutor.tutor_canvas_actions
         if action.target_kind == "QUESTION_ANCHOR"
         and action.target_object_id in anchor_by_id
         and action.confirmed_component_id in current_evidence
     ]
-    for action in actions:
-        anchor = anchor_by_id[action.target_object_id or ""]
-        statement = _spoken_confirmation_statement(
-            tutor_message_voice,
-            anchor.text,
-            canonical_answer,
-            tutor.answer_value_confirmed,
+    voice_target = next(
+        (
+            target
+            for message in confirmation_messages
+            if (target := _confirmed_voice_target(question_anchors, message)) is not None
+        ),
+        None,
+    )
+    targets = action_targets or (
+        [(*voice_target, next(iter(sorted(current_evidence))))]
+        if voice_target is not None
+        else []
+    )
+    for anchors, anchor_text, evidence_ref in targets:
+        statement = next(
+            (
+                candidate
+                for message in confirmation_messages
+                if (
+                    candidate := _spoken_confirmation_statement(
+                        message,
+                        anchor_text,
+                        canonical_answer,
+                        tutor.answer_value_confirmed,
+                    )
+                ) is not None
+            ),
+            None,
         )
         if statement is None:
             continue
@@ -240,7 +262,7 @@ def _plan_confirmed_generic_scene(
                 operation_id="generic-confirmed-focus",
                 kind="HIGHLIGHT",
                 target_kind="QUESTION_ANCHOR",
-                target_ids=[anchor.token_id],
+                target_ids=[anchor.token_id for anchor in anchors],
                 zone="QUESTION",
                 persistence="PERSIST",
                 color_role="NAVY",
@@ -252,12 +274,12 @@ def _plan_confirmed_generic_scene(
                 target_ids=["ZONE:REASONING"],
                 zone="REASONING",
                 persistence="PERSIST",
-                evidence_ref=action.confirmed_component_id,
+                evidence_ref=evidence_ref,
                 text=statement,
                 color_role="NAVY",
                 scene_slot=(
                     f"{config.generic_confirmation_scene_slot}:"
-                    f"{action.confirmed_component_id}"
+                    f"{evidence_ref}"
                 ),
             ),
         ]
@@ -283,6 +305,58 @@ def _plan_confirmed_generic_scene(
             ],
         )
     return None
+
+
+def _confirmation_messages(tutor: TutorResult, voice: str) -> list[str]:
+    messages = [tutor.tutor_message.strip(), voice.strip()]
+    return list(dict.fromkeys(message for message in messages if message))
+
+
+def _confirmed_voice_target(
+    question_anchors: list[QuestionTextAnchor],
+    narration: str,
+) -> tuple[list[QuestionTextAnchor], str] | None:
+    """Select the most specific visible mathematical token named in a confirmation."""
+
+    for sentence in re.findall(r"[^.!?]+[.!?]?", narration):
+        statement = sentence.strip()
+        if not statement or statement.endswith("?"):
+            continue
+        candidates = [
+            (anchors, anchor_text)
+            for anchors, anchor_text in _confirmable_anchor_groups(question_anchors)
+            if _statement_names_anchor(statement, anchor_text)
+        ]
+        if candidates:
+            return max(candidates, key=lambda candidate: len(candidate[1]))
+    return None
+
+
+def _confirmable_anchor_groups(
+    question_anchors: list[QuestionTextAnchor],
+) -> list[tuple[list[QuestionTextAnchor], str]]:
+    groups: list[tuple[list[QuestionTextAnchor], str]] = []
+    for start, anchor in enumerate(question_anchors):
+        if not _is_confirmable_anchor(anchor.text):
+            continue
+        group = [anchor]
+        groups.append((group, anchor.text))
+        for candidate in question_anchors[start + 1 : start + 4]:
+            previous = group[-1]
+            if candidate.char_start != previous.char_end:
+                break
+            if not _is_confirmable_anchor(candidate.text):
+                break
+            group = [*group, candidate]
+            groups.append((group, "".join(item.text for item in group)))
+    return groups
+
+
+def _is_confirmable_anchor(value: str) -> bool:
+    normalized = value.strip()
+    if re.search(r"\d", normalized) or re.search(r"[²³⁴⁵⁶⁷⁸⁹+\-−×÷/*=()]", normalized):
+        return True
+    return re.fullmatch(r"[A-Za-z]{1,3}", normalized) is not None
 
 
 def _spoken_confirmation_statement(
