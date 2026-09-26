@@ -27,8 +27,58 @@ class FakeCanvasTeachingClient:
         context: dict[str, object],
     ) -> CanvasTeachingPlanDraft:
         assert system_prompt
-        assert context["question_id"] == "Q1"
+        assert context["question_id"]
         return self.draft
+
+
+def _confirmed_example_draft(
+    voice: str,
+    target_ids: list[str],
+    evidence_ref: str,
+    expression: str,
+) -> CanvasTeachingPlanDraft:
+    connectors = [
+        {
+            "operation_id": f"connect-confirmed-example-{index}",
+            "kind": "CONNECT",
+            "target_kind": "QUESTION_ANCHOR",
+            "target_ids": target_ids[index:index + 4],
+            "zone": "QUESTION",
+            "persistence": "PERSIST",
+            "evidence_ref": evidence_ref,
+            "color_role": "NAVY",
+        }
+        for index in range(0, len(target_ids), 4)
+    ]
+    return CanvasTeachingPlanDraft.model_validate(
+        {
+            "beats": [
+                {
+                    "beat_id": "confirmed-example",
+                    "sequence": 1,
+                    "speech_anchor": {
+                        "start_char": 0,
+                        "end_char": len(voice),
+                        "text": voice,
+                    },
+                    "operations": [
+                        *connectors,
+                        {
+                            "operation_id": "write-confirmed-example",
+                            "kind": "WRITE_MATH",
+                            "target_kind": "CANVAS_ZONE",
+                            "target_ids": ["ZONE:REASONING"],
+                            "zone": "REASONING",
+                            "persistence": "PERSIST",
+                            "evidence_ref": evidence_ref,
+                            "latex": expression,
+                            "color_role": "NAVY",
+                        },
+                    ],
+                }
+            ]
+        }
+    )
 
 
 def _tutor(contribution: StudentContribution | None = None) -> TutorResult:
@@ -306,7 +356,7 @@ def test_pattern_scene_writes_only_after_the_learner_names_the_changing_part(mon
     assert operations[0].target_ids == ["Q1:QTOKEN:1", "Q1:QTOKEN:4", "Q1:QTOKEN:7"]
     assert operations[1].target_ids == operations[0].target_ids
     assert operations[1].scene_slot == "changing_conclusion"
-    assert operations[2].text == "starting number → changes"
+    assert operations[2].text == "3, 9, 14 → changing starts"
     assert operations[2].scene_slot == "changing_conclusion"
 
 
@@ -323,7 +373,7 @@ def test_pattern_scene_connects_the_student_named_variable_to_its_meaning(monkey
     assert [operation.kind for operation in operations] == ["HIGHLIGHT", "CONNECT", "WRITE_TEXT"]
     assert operations[0].target_ids == operations[1].target_ids
     assert operations[1].scene_slot == "variable_conclusion"
-    assert operations[2].text == "n = changing starting number"
+    assert operations[2].text == "3, 9, 14 → n changes"
 
 
 def test_pattern_scene_pulses_a_bare_fixed_value_without_writing_a_conclusion(monkeypatch) -> None:
@@ -808,7 +858,7 @@ def test_planner_allows_a_spoken_current_tutor_solved_step(monkeypatch) -> None:
     assert plan.teaching_mode == "TUTOR_SOLVED"
 
 
-def test_planner_writes_a_confirmed_notation_statement_without_openai(monkeypatch) -> None:
+def test_planner_writes_a_confirmed_notation_example_and_connects_its_source(monkeypatch) -> None:
     question = "Decode pq and r² without calculating."
     anchors = question_text_tokens("Q-NOTATION", question)
     pq_anchor = next(anchor for anchor in anchors if anchor.text == "pq")
@@ -860,10 +910,17 @@ def test_planner_writes_a_confirmed_notation_statement_without_openai(monkeypatc
         }
     )
     monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
+    draft = _confirmed_example_draft(
+        voice=tutor.tutor_message_voice,
+        target_ids=[pq_anchor.token_id],
+        evidence_ref="JUXTAPOSITION",
+        expression=r"p \times q",
+    )
+    client = FakeCanvasTeachingClient(draft)
     monkeypatch.setattr(
         canvas_teaching_planner,
         "build_openai_ai_engine_client",
-        lambda _: pytest.fail("confirmed generic scenes must not call OpenAI"),
+        lambda _: client,
     )
 
     plan = canvas_teaching_planner.plan_canvas_teaching(
@@ -883,11 +940,166 @@ def test_planner_writes_a_confirmed_notation_statement_without_openai(monkeypatc
 
     assert plan is not None
     assert [(operation.kind, operation.scene_slot) for operation in plan.beats[0].operations] == [
-        ("HIGHLIGHT", None),
         ("CONNECT", "generic_confirmation:JUXTAPOSITION"),
-        ("WRITE_TEXT", "generic_confirmation:JUXTAPOSITION"),
+        ("WRITE_MATH", "generic_confirmation:JUXTAPOSITION"),
     ]
-    assert plan.beats[0].operations[2].text == "pq means p multiplied by q."
+    assert plan.beats[0].operations[1].latex == r"p \times q"
+
+    client.draft = _confirmed_example_draft(
+        voice=tutor.tutor_message_voice,
+        target_ids=[next(anchor.token_id for anchor in anchors if anchor.text == "r")],
+        evidence_ref="JUXTAPOSITION",
+        expression=r"p \times q",
+    )
+    assert canvas_teaching_planner.plan_canvas_teaching(
+        question_id="Q-NOTATION",
+        question=question,
+        source_turn_id="TURN-NOTATION",
+        tutor_turn_id="TUTOR-NOTATION",
+        scene_revision=1,
+        tutor_message_voice=tutor.tutor_message_voice,
+        tutor=tutor,
+        question_anchors=anchors,
+        student_response="p multiplied by q",
+        canonical_answer="p × q; r × r",
+        active_support_level=None,
+        current_unresolved_component_id="EXPONENT",
+    ) is None
+
+    client.draft = _confirmed_example_draft(
+        voice=tutor.tutor_message_voice,
+        target_ids=[pq_anchor.token_id],
+        evidence_ref="JUXTAPOSITION",
+        expression="pq means p multiplied by q",
+    )
+    assert canvas_teaching_planner.plan_canvas_teaching(
+        question_id="Q-NOTATION",
+        question=question,
+        source_turn_id="TURN-NOTATION",
+        tutor_turn_id="TUTOR-NOTATION",
+        scene_revision=1,
+        tutor_message_voice=tutor.tutor_message_voice,
+        tutor=tutor,
+        question_anchors=anchors,
+        student_response="p multiplied by q",
+        canonical_answer="p × q; r × r",
+        active_support_level=None,
+        current_unresolved_component_id="EXPONENT",
+    ) is None
+
+
+@pytest.mark.parametrize(
+    ("expression", "student_response", "board_expression"),
+    [
+        ("4n", "4 multiplied by n", r"4 \times n"),
+        ("pq", "p multiplied by q", r"p \times q"),
+        ("r²", "r multiplied by itself", r"r \times r"),
+        ("c/d", "c divided by d", r"c \div d"),
+        ("2(x + 1)", "2 multiplied by the group x plus 1", r"2 \times (x + 1)"),
+        ("x + 6", "subtract 6 to undo the addition", r"+6 \leftrightarrow -6"),
+        ("3x + 2", "subtract 2 from both sides", r"+2 \leftrightarrow -2"),
+        ("5x", "5 multiplied by x", r"5 \times x"),
+        ("x / 3", "divide x by 3", r"x \div 3"),
+    ],
+)
+def test_confirmed_math_families_produce_source_linked_examples(
+    monkeypatch,
+    expression: str,
+    student_response: str,
+    board_expression: str,
+) -> None:
+    question_id = "Q-FAMILY"
+    question = f"Show the relationship in {expression}."
+    anchors = question_text_tokens(question_id, question)
+    expression_start = question.index(expression)
+    expression_end = expression_start + len(expression)
+    source_anchors = [
+        anchor
+        for anchor in anchors
+        if anchor.char_start < expression_end and anchor.char_end > expression_start
+    ]
+    source_ids = [anchor.token_id for anchor in source_anchors]
+    voice = "Yes, that is the relationship you identified."
+    evidence_ref = "CONFIRMED_MATH_RELATIONSHIP"
+    state = _tutor().guided_teaching_state
+    assert state is not None
+    tutor = _tutor().model_copy(
+        update={
+            "tutor_message": voice,
+            "tutor_message_voice": voice,
+            "guided_teaching_state": state.model_copy(
+                update={
+                    "question_id": question_id,
+                    "objective_component_ids": [evidence_ref],
+                    "confirmed_component_ids": [evidence_ref],
+                    "missing_component_ids": [],
+                    "active_component_id": None,
+                    "last_turn_evidence": [
+                        GuidedEvidenceClaim(
+                            concept_id=evidence_ref,
+                            status="DEMONSTRATED",
+                            source="TEXT",
+                        )
+                    ],
+                }
+            ),
+            "tutor_canvas_actions": [
+                TutorCanvasAction(
+                    action_id=f"{question_id}:{index}:HIGHLIGHT",
+                    type="HIGHLIGHT",
+                    target_kind="QUESTION_ANCHOR",
+                    target_object_id=anchor.token_id,
+                    confirmed_component_id=evidence_ref,
+                    text=None,
+                    source_id=None,
+                    answer_reveal_allowed=False,
+                )
+                for index, anchor in enumerate(source_anchors, start=1)
+            ],
+        }
+    )
+    draft = _confirmed_example_draft(
+        voice=voice,
+        target_ids=source_ids,
+        evidence_ref=evidence_ref,
+        expression=board_expression,
+    )
+    monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
+    monkeypatch.setattr(
+        canvas_teaching_planner,
+        "build_openai_ai_engine_client",
+        lambda _: FakeCanvasTeachingClient(draft),
+    )
+
+    plan = canvas_teaching_planner.plan_canvas_teaching(
+        question_id=question_id,
+        question=question,
+        source_turn_id="TURN-MATH-FAMILY",
+        tutor_turn_id="TUTOR-MATH-FAMILY",
+        scene_revision=1,
+        tutor_message_voice=voice,
+        tutor=tutor,
+        question_anchors=anchors,
+        student_response=student_response,
+        canonical_answer="unresolved complete answer",
+        active_support_level=None,
+        current_unresolved_component_id=None,
+    )
+
+    assert plan is not None
+    connectors = [
+        operation
+        for operation in plan.beats[0].operations
+        if operation.kind == "CONNECT"
+    ]
+    writes = [
+        operation
+        for operation in plan.beats[0].operations
+        if operation.kind == "WRITE_MATH"
+    ]
+    assert [target_id for connector in connectors for target_id in connector.target_ids] == source_ids
+    assert len(writes) == 1
+    assert writes[0].latex == board_expression
 
 
 def test_planner_uses_the_spoken_confirmation_when_the_rubric_has_no_literal_token(monkeypatch) -> None:
@@ -917,10 +1129,17 @@ def test_planner_uses_the_spoken_confirmation_when_the_rubric_has_no_literal_tok
         }
     )
     monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
+    target_ids = ["Q-NOTATION:QTOKEN:2", "Q-NOTATION:QTOKEN:3"]
+    draft = _confirmed_example_draft(
+        voice=tutor.tutor_message_voice,
+        target_ids=target_ids,
+        evidence_ref="JUXTAPOSITION",
+        expression=r"4 \times n",
+    )
     monkeypatch.setattr(
         canvas_teaching_planner,
         "build_openai_ai_engine_client",
-        lambda _: pytest.fail("voice-grounded generic scenes must not call OpenAI"),
+        lambda _: FakeCanvasTeachingClient(draft),
     )
 
     plan = canvas_teaching_planner.plan_canvas_teaching(
@@ -939,12 +1158,9 @@ def test_planner_uses_the_spoken_confirmation_when_the_rubric_has_no_literal_tok
     )
 
     assert plan is not None
-    assert plan.beats[0].operations[0].target_ids == [
-        "Q-NOTATION:QTOKEN:2",
-        "Q-NOTATION:QTOKEN:3",
-    ]
-    assert plan.beats[0].operations[1].scene_slot == "generic_confirmation:JUXTAPOSITION"
-    assert plan.beats[0].operations[2].text == "you read 4n as multiplication."
+    assert plan.beats[0].operations[0].target_ids == target_ids
+    assert plan.beats[0].operations[0].scene_slot == "generic_confirmation:JUXTAPOSITION"
+    assert plan.beats[0].operations[1].latex == r"4 \times n"
 
 
 def test_planner_uses_the_confirmed_label_when_speech_is_indirect(monkeypatch) -> None:
@@ -997,10 +1213,16 @@ def test_planner_uses_the_confirmed_label_when_speech_is_indirect(monkeypatch) -
         }
     )
     monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
+    draft = _confirmed_example_draft(
+        voice=tutor.tutor_message_voice,
+        target_ids=[fixed_anchor.token_id],
+        evidence_ref="FIXED_VALUE",
+        expression=r"+7",
+    )
     monkeypatch.setattr(
         canvas_teaching_planner,
         "build_openai_ai_engine_client",
-        lambda _: pytest.fail("confirmed label scenes must not call OpenAI"),
+        lambda _: FakeCanvasTeachingClient(draft),
     )
 
     plan = canvas_teaching_planner.plan_canvas_teaching(
@@ -1020,8 +1242,8 @@ def test_planner_uses_the_confirmed_label_when_speech_is_indirect(monkeypatch) -
 
     assert plan is not None
     assert plan.beats[0].operations[0].target_ids == [fixed_anchor.token_id]
-    assert plan.beats[0].operations[1].scene_slot == "generic_confirmation:FIXED_VALUE"
-    assert plan.beats[0].operations[2].text == "7 → stays fixed"
+    assert plan.beats[0].operations[0].scene_slot == "fixed_conclusion"
+    assert plan.beats[0].operations[1].latex == "+7"
 
 
 def test_planner_writes_an_explicit_confirmation_without_evidence_ledger(monkeypatch) -> None:
@@ -1046,10 +1268,17 @@ def test_planner_writes_an_explicit_confirmation_without_evidence_ledger(monkeyp
         }
     )
     monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
+    target_ids = ["Q-NOTATION:QTOKEN:2", "Q-NOTATION:QTOKEN:3"]
+    draft = _confirmed_example_draft(
+        voice=tutor.tutor_message_voice,
+        target_ids=target_ids,
+        evidence_ref="VOICE_CONFIRMED:2:3",
+        expression=r"4 \times n",
+    )
     monkeypatch.setattr(
         canvas_teaching_planner,
         "build_openai_ai_engine_client",
-        lambda _: pytest.fail("spoken confirmations must not call OpenAI"),
+        lambda _: FakeCanvasTeachingClient(draft),
     )
 
     plan = canvas_teaching_planner.plan_canvas_teaching(
@@ -1068,9 +1297,6 @@ def test_planner_writes_an_explicit_confirmation_without_evidence_ledger(monkeyp
     )
 
     assert plan is not None
-    assert plan.beats[0].operations[0].target_ids == [
-        "Q-NOTATION:QTOKEN:2",
-        "Q-NOTATION:QTOKEN:3",
-    ]
-    assert plan.beats[0].operations[1].scene_slot == "generic_confirmation:VOICE_CONFIRMED:2:3"
-    assert plan.beats[0].operations[2].text == "4n means 4 multiplied by n."
+    assert plan.beats[0].operations[0].target_ids == target_ids
+    assert plan.beats[0].operations[0].scene_slot == "generic_confirmation:VOICE_CONFIRMED:2:3"
+    assert plan.beats[0].operations[1].latex == r"4 \times n"

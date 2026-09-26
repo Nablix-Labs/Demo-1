@@ -1,5 +1,6 @@
 import json
 import os
+import re
 
 import pytest
 
@@ -92,8 +93,8 @@ def test_openai_canvas_teaching_plan_smoke() -> None:
         print(json.dumps(synchronized_plan.model_dump(), indent=2))
 
 
-def test_openai_canvas_teaching_evidence_ink_smoke() -> None:
-    """Verify the model writes one learner-confirmed idea into the reasoning trail."""
+def test_openai_canvas_teaching_confirmed_math_example_smoke() -> None:
+    """Verify the model writes math and connects it to the confirmed question source."""
 
     if os.getenv("NABLIX_RUN_OPENAI_SMOKE") != "true":
         pytest.skip("Set NABLIX_RUN_OPENAI_SMOKE=true to run the billed OpenAI smoke test.")
@@ -117,28 +118,39 @@ def test_openai_canvas_teaching_evidence_ink_smoke() -> None:
         guided_verbosity=rules.guided_learning.verbosity,
     )
 
-    narration = "Yes. The first numbers change."
+    question_id = "SMOKE-NOTATION-1"
+    narration = "Yes — pq means p multiplied by q. What does r² mean?"
+    source_ids = [f"{question_id}:QTOKEN:4", f"{question_id}:QTOKEN:5"]
     plan = client.plan_canvas_teaching(
         system_prompt=rules.guided_learning.canvas_teaching.system_prompt,
         context={
-            "question_id": "SMOKE-PATTERN-2",
-            "question": "3 + 5 | 9 + 5 | 14 + 5. Use n for the changing starting number.",
+            "question_id": question_id,
+            "question": "Decode 4n, pq, r², c/d and 2(x + 1).",
             "tutor_message_voice": narration,
-            "student_response": "The first numbers change.",
+            "student_response": "p multiplied by q",
             "allowed_target_ids": [
-                "SMOKE-PATTERN-2:QTOKEN:1",
+                *[f"{question_id}:QTOKEN:{index}" for index in range(1, 32)],
                 "ZONE:QUESTION",
                 "ZONE:REASONING",
                 "ZONE:TUTOR_SOLUTION",
             ],
             "allowed_question_anchors": [
-                {"id": "SMOKE-PATTERN-2:QTOKEN:1", "text": "3"},
+                {"id": source_ids[0], "text": "p"},
+                {"id": source_ids[1], "text": "q"},
             ],
-            "current_turn_evidence_ids": ["CHANGING_VALUE"],
+            "confirmed_source_targets": [
+                {
+                    "evidence_ref": "JUXTAPOSITION",
+                    "target_ids": source_ids,
+                    "anchor_text": "p q",
+                }
+            ],
+            "current_turn_evidence_ids": ["JUXTAPOSITION"],
+            "authorized_evidence_ids": ["JUXTAPOSITION"],
             "require_guided_evidence_ink": True,
             "teaching_mode": "GUIDED",
             "active_support_level": None,
-            "current_unresolved_component_id": "FIXED_VALUE",
+            "current_unresolved_component_id": "EXPONENT",
             "direct_explanation_authorized": False,
             "direct_explanation_evidence_ref": rules.guided_learning.canvas_teaching.direct_explanation_evidence_ref,
             "direct_explanation_maximum_written_operations": rules.guided_learning.canvas_teaching.direct_explanation_maximum_written_operations,
@@ -164,7 +176,25 @@ def test_openai_canvas_teaching_evidence_ink_smoke() -> None:
     ]
     assert len(evidence_writes) == 1
     write = evidence_writes[0]
-    assert write.evidence_ref == "CHANGING_VALUE"
+    assert write.evidence_ref == "JUXTAPOSITION"
     assert write.target_ids == ["ZONE:REASONING"]
     assert write.persistence == "PERSIST"
     assert write.color_role == "NAVY"
+    board_content = write.latex or write.text or ""
+    assert "p" in board_content.casefold() and "q" in board_content.casefold()
+    assert re.search(r"(?:\\times|\\cdot|×|\*)", board_content)
+    assert "multiplied by" not in board_content.casefold()
+
+    connectors = [
+        operation
+        for beat in plan.beats
+        for operation in beat.operations
+        if operation.kind == "CONNECT"
+    ]
+    connected_ids = [
+        target_id
+        for operation in connectors
+        for target_id in operation.target_ids
+        if operation.evidence_ref == "JUXTAPOSITION"
+    ]
+    assert connected_ids == source_ids

@@ -33,10 +33,16 @@ class PatternAddConstantScene(TypedDict):
     variable: str
     operator: str
     fixed_value: str
+    starting_values: list[str]
     changing_ids: list[str]
-    variable_ids: list[str]
     fixed_ids: list[str]
     operator_ids: list[str]
+
+
+class ConfirmedCanvasSource(TypedDict):
+    evidence_ref: str
+    target_ids: list[str]
+    anchor_text: str
 
 
 def plan_canvas_teaching(
@@ -77,11 +83,6 @@ def plan_canvas_teaching(
     )
     tutor_solved = _tutor_solved_active(tutor)
     answer_reveal = _approved_tutor_solved_answer(tutor)
-    require_guided_evidence_ink = (
-        config.guided_evidence_writing_enabled
-        and teaching_mode == "GUIDED"
-        and bool(current_evidence)
-    )
     pattern_matched, pattern_plan = _plan_pattern_add_constant_scene(
         question_id=question_id,
         source_turn_id=source_turn_id,
@@ -100,21 +101,22 @@ def plan_canvas_teaching(
     )
     if pattern_matched:
         return pattern_plan
-    generic_plan = _plan_confirmed_generic_scene(
-        question_id=question_id,
-        source_turn_id=source_turn_id,
-        tutor_turn_id=tutor_turn_id,
-        scene_revision=scene_revision,
-        tutor_message_voice=tutor_message_voice,
+    confirmed_source_targets = _confirmed_source_targets(
         tutor=tutor,
+        voice=tutor_message_voice,
         question_anchors=question_anchors,
-        canonical_answer=canonical_answer or "",
-        teaching_mode=teaching_mode,
         current_evidence=current_evidence,
-        config=config,
     )
-    if generic_plan is not None:
-        return generic_plan
+    authorized_evidence = current_evidence | {
+        source["evidence_ref"]
+        for source in confirmed_source_targets
+        if source["evidence_ref"].startswith("VOICE_CONFIRMED:")
+    }
+    require_guided_evidence_ink = (
+        config.guided_evidence_writing_enabled
+        and teaching_mode == "GUIDED"
+        and bool(authorized_evidence)
+    )
     guided_settings = get_settings().model_copy(
         update={"openai_ai_engine_model": rules.guided_learning.model}
     )
@@ -141,7 +143,9 @@ def plan_canvas_teaching(
                     {"id": anchor.token_id, "text": anchor.text}
                     for anchor in question_anchors
                 ],
+                "confirmed_source_targets": confirmed_source_targets,
                 "current_turn_evidence_ids": sorted(current_evidence),
+                "authorized_evidence_ids": sorted(authorized_evidence),
                 "require_guided_evidence_ink": require_guided_evidence_ink,
                 "direct_explanation_authorized": direct_explanation,
                 "direct_explanation_evidence_ref": config.direct_explanation_evidence_ref,
@@ -174,9 +178,11 @@ def plan_canvas_teaching(
         draft=draft,
         config=config,
         narration=tutor_message_voice,
+        student_response=student_response,
         allowed_targets=set(allowed_targets),
         question_anchor_texts=question_anchor_texts,
-        current_evidence=current_evidence,
+        confirmed_source_targets=confirmed_source_targets,
+        current_evidence=authorized_evidence,
         require_guided_evidence_ink=require_guided_evidence_ink,
         teaching_mode=teaching_mode,
         direct_explanation=direct_explanation,
@@ -201,169 +207,60 @@ def plan_canvas_teaching(
     )
 
 
-def _plan_confirmed_generic_scene(
-    question_id: str,
-    source_turn_id: str,
-    tutor_turn_id: str | None,
-    scene_revision: int,
-    tutor_message_voice: str,
+def _confirmed_source_targets(
     tutor: TutorResult,
+    voice: str,
     question_anchors: list[QuestionTextAnchor],
-    canonical_answer: str,
-    teaching_mode: CanvasTeachingMode,
     current_evidence: set[str],
-    config: CanvasTeachingConfig,
-) -> CanvasTeachingPlan | None:
-    """Write a grounded, learner-confirmed statement for every question family."""
+) -> list[ConfirmedCanvasSource]:
+    """Return only question tokens linked to evidence confirmed on this turn."""
 
-    if teaching_mode != "GUIDED":
-        return None
     anchor_by_id = {anchor.token_id: anchor for anchor in question_anchors}
-    confirmation_messages = _confirmation_messages(tutor, tutor_message_voice)
-    action_targets = [
-        ([anchor_by_id[action.target_object_id or ""]], anchor_by_id[action.target_object_id or ""].text, action.confirmed_component_id)
-        for action in tutor.tutor_canvas_actions
-        if action.target_kind == "QUESTION_ANCHOR"
-        and action.target_object_id in anchor_by_id
-        and action.confirmed_component_id in current_evidence
-    ]
-    voice_target = next(
-        (
-            target
-            for message in confirmation_messages
-            if (target := _confirmed_voice_target(question_anchors, message)) is not None
-        ),
-        None,
-    )
-    targets = action_targets
-    if not targets and voice_target is not None and _learner_confirmation(tutor):
-        voice_evidence_ref = (
-            next(iter(sorted(current_evidence)))
-            if current_evidence
-            else _spoken_confirmation_evidence_ref(voice_target[0])
-        )
-        targets = [(*voice_target, voice_evidence_ref)]
-    for anchors, anchor_text, evidence_ref in targets:
-        statement = next(
-            (
-                candidate
-                for message in confirmation_messages
-                if (
-                    candidate := _spoken_confirmation_statement(
-                        message,
-                        anchor_text,
-                        canonical_answer,
-                        tutor.answer_value_confirmed,
-                    )
-                ) is not None
-            ),
-            None,
-        )
-        if statement is None:
-            statement = _confirmed_canvas_label(
-                tutor=tutor,
-                evidence_ref=evidence_ref,
-                canonical_answer=canonical_answer,
-            )
-        if statement is None:
-            continue
-        operations = [
-            CanvasTeachingOperation(
-                operation_id="generic-confirmed-focus",
-                kind="HIGHLIGHT",
-                target_kind="QUESTION_ANCHOR",
-                target_ids=[anchor.token_id for anchor in anchors],
-                zone="QUESTION",
-                persistence="PERSIST",
-                color_role="NAVY",
-            ),
-            CanvasTeachingOperation(
-                operation_id="generic-confirmed-connect",
-                kind="CONNECT",
-                target_kind="QUESTION_ANCHOR",
-                target_ids=[anchor.token_id for anchor in anchors],
-                zone="QUESTION",
-                persistence="PERSIST",
-                color_role="NAVY",
-                scene_slot=(
-                    f"{config.generic_confirmation_scene_slot}:"
-                    f"{evidence_ref}"
-                ),
-            ),
-            CanvasTeachingOperation(
-                operation_id="generic-confirmed-note",
-                kind="WRITE_TEXT",
-                target_kind="CANVAS_ZONE",
-                target_ids=["ZONE:REASONING"],
-                zone="REASONING",
-                persistence="PERSIST",
-                evidence_ref=evidence_ref,
-                text=statement,
-                color_role="NAVY",
-                scene_slot=(
-                    f"{config.generic_confirmation_scene_slot}:"
-                    f"{evidence_ref}"
-                ),
-            ),
-        ]
-        return CanvasTeachingPlan(
-            plan_id=f"{question_id}:{source_turn_id}:canvas-teaching",
-            question_id=question_id,
-            source_turn_id=source_turn_id,
-            tutor_turn_id=tutor_turn_id,
-            scene_revision=scene_revision,
-            mode="append",
-            teaching_mode=teaching_mode,
-            beats=[
-                CanvasTeachingBeat(
-                    beat_id="confirmed-generic-scene",
-                    sequence=1,
-                    speech_anchor=CanvasSpeechAnchor(
-                        start_char=0,
-                        end_char=len(tutor_message_voice),
-                        text=tutor_message_voice,
-                    ),
-                    operations=operations,
-                )
-            ],
-        )
-    return None
-
-
-def _confirmation_messages(tutor: TutorResult, voice: str) -> list[str]:
-    messages = [tutor.tutor_message.strip(), voice.strip()]
-    return list(dict.fromkeys(message for message in messages if message))
-
-
-def _confirmed_canvas_label(
-    tutor: TutorResult,
-    evidence_ref: str,
-    canonical_answer: str,
-) -> str | None:
-    """Use the turn's evidence-linked label when the spoken confirmation is indirect."""
-
+    anchors_by_evidence: dict[str, list[QuestionTextAnchor]] = {}
     for action in tutor.tutor_canvas_actions:
         if (
-            action.type != "INSERT_LABEL"
-            or action.confirmed_component_id != evidence_ref
-            or action.text is None
+            action.target_kind != "QUESTION_ANCHOR"
+            or action.target_object_id not in anchor_by_id
+            or action.confirmed_component_id not in current_evidence
         ):
             continue
-        label = action.text.strip()
-        if not label:
-            continue
-        if (
-            canonical_answer
-            and _normalized(label) == _normalized(canonical_answer)
-            and not tutor.answer_value_confirmed
-        ):
-            continue
-        return label
-    return None
+        evidence_ref = action.confirmed_component_id
+        if evidence_ref is not None:
+            anchors_by_evidence.setdefault(evidence_ref, []).append(
+                anchor_by_id[action.target_object_id]
+            )
+    sources = [
+        ConfirmedCanvasSource(
+            evidence_ref=evidence_ref,
+            target_ids=list(dict.fromkeys(anchor.token_id for anchor in anchors)),
+            anchor_text=" ".join(dict.fromkeys(anchor.text for anchor in anchors)),
+        )
+        for evidence_ref, anchors in anchors_by_evidence.items()
+    ]
+    if sources:
+        return sources
+
+    voice_target = _voice_confirmation_target(
+        question_anchors,
+        f"{tutor.tutor_message} {voice}",
+    )
+    if voice_target is None or not _learner_confirmation(tutor):
+        return []
+    anchors, anchor_text = voice_target
+    evidence_ref = next(iter(sorted(current_evidence)), None)
+    if evidence_ref is None:
+        evidence_ref = _spoken_confirmation_evidence_ref(anchors)
+    return [
+        ConfirmedCanvasSource(
+            evidence_ref=evidence_ref,
+            target_ids=[anchor.token_id for anchor in anchors],
+            anchor_text=anchor_text,
+        )
+    ]
 
 
 def _learner_confirmation(tutor: TutorResult) -> bool:
-    """Allow a spoken canvas note only after the evaluator accepts learner work."""
+    """Permit voice-derived evidence only after the learner's work is accepted."""
 
     if tutor.guided_student_state in {"PARTIAL", "CORRECT"}:
         return True
@@ -373,18 +270,14 @@ def _learner_confirmation(tutor: TutorResult) -> bool:
 def _spoken_confirmation_evidence_ref(
     anchors: list[QuestionTextAnchor],
 ) -> str:
-    """Give a voice-confirmed note a stable, question-specific canvas slot."""
-
     anchor_ids = ":".join(anchor.token_id.rsplit(":", maxsplit=1)[-1] for anchor in anchors)
     return f"VOICE_CONFIRMED:{anchor_ids}"
 
 
-def _confirmed_voice_target(
+def _voice_confirmation_target(
     question_anchors: list[QuestionTextAnchor],
     narration: str,
 ) -> tuple[list[QuestionTextAnchor], str] | None:
-    """Select the most specific visible mathematical token named in a confirmation."""
-
     for sentence in re.findall(r"[^.!?]+[.!?]?", narration):
         statement = sentence.strip()
         if not statement or statement.endswith("?"):
@@ -426,41 +319,12 @@ def _is_confirmable_anchor(value: str) -> bool:
     return re.fullmatch(r"[A-Za-z]{1,3}", normalized) is not None
 
 
-def _spoken_confirmation_statement(
-    narration: str,
-    anchor_text: str,
-    canonical_answer: str,
-    answer_value_confirmed: bool,
-) -> str | None:
-    """Keep only a declarative tutor sentence that names the confirmed anchor."""
-
-    for sentence in re.findall(r"[^.!?]+[.!?]?", narration):
-        statement = sentence.strip()
-        if not statement or statement.endswith("?"):
-            continue
-        if not _statement_names_anchor(statement, anchor_text):
-            continue
-        statement = re.sub(
-            r"^(?:yes|right|exactly|correct|good)[,!—–\-\s]+",
-            "",
-            statement,
-            flags=re.IGNORECASE,
-        )
-        if (
-            canonical_answer
-            and _normalized(canonical_answer) == _normalized(statement)
-            and not answer_value_confirmed
-        ):
-            continue
-        return statement
-    return None
-
-
 def _statement_names_anchor(statement: str, anchor_text: str) -> bool:
     normalized_anchor = _normalized(anchor_text)
     if re.fullmatch(r"[A-Za-z0-9]+", normalized_anchor):
+        anchor_pattern = r"\s*".join(re.escape(character) for character in normalized_anchor)
         return re.search(
-            rf"(?<![A-Za-z0-9]){re.escape(normalized_anchor)}(?![A-Za-z0-9])",
+            rf"(?<![A-Za-z0-9]){anchor_pattern}(?![A-Za-z0-9])",
             statement,
             flags=re.IGNORECASE,
         ) is not None
@@ -586,10 +450,8 @@ def _pattern_add_constant_scene(
         "variable": variable,
         "operator": canonical_operator,
         "fixed_value": canonical_fixed,
+        "starting_values": [match.group("starting") for match in cases],
         "changing_ids": [token_id for token_id in changing_ids if token_id is not None],
-        "variable_ids": [
-            anchor.token_id for anchor in question_anchors if anchor.text == variable
-        ],
         "fixed_ids": [token_id for token_id in fixed_ids if token_id is not None],
         "operator_ids": [token_id for token_id in operator_ids if token_id is not None],
     }
@@ -650,7 +512,10 @@ def _pattern_guided_operations(
                 _pattern_write(
                     operation_id="write-variable-meaning",
                     kind="WRITE_TEXT",
-                    content=pattern_config.variable_note.format(variable=scene["variable"]),
+                    content=pattern_config.variable_note.format(
+                        variable=scene["variable"],
+                        starting_values=", ".join(scene["starting_values"]),
+                    ),
                     evidence_ref="CHANGING_VALUE",
                     scene_slot="variable_conclusion",
                 )
@@ -676,7 +541,9 @@ def _pattern_guided_operations(
             _pattern_write(
                 operation_id="write-changing-conclusion",
                 kind="WRITE_TEXT",
-                content=pattern_config.changing_note,
+                content=pattern_config.changing_note.format(
+                    starting_values=", ".join(scene["starting_values"]),
+                ),
                 evidence_ref="CHANGING_VALUE",
                 scene_slot="changing_conclusion",
             ),
@@ -730,7 +597,12 @@ def _pattern_guided_operations(
                 operation_id="write-pattern-structure",
                 kind="WRITE_TEXT",
                 content=pattern_config.structure_note.format(
-                    operator=scene["operator"], fixed_value=scene["fixed_value"]
+                    operator=scene["operator"],
+                    fixed_value=scene["fixed_value"],
+                    examples=" | ".join(
+                        f"{value} {scene['operator']} {scene['fixed_value']}"
+                        for value in scene["starting_values"]
+                    ),
                 ),
                 evidence_ref="OPERATION",
                 scene_slot="operation_conclusion",
@@ -788,7 +660,9 @@ def _pattern_tutor_solved_operations(
             _pattern_write(
                 operation_id="tutor-solved-changing-conclusion",
                 kind="WRITE_TEXT",
-                content=pattern_config.changing_note,
+                content=pattern_config.changing_note.format(
+                    starting_values=", ".join(scene["starting_values"]),
+                ),
                 evidence_ref="CHANGING_VALUE",
                 scene_slot="changing_conclusion",
             ),
@@ -838,7 +712,12 @@ def _pattern_tutor_solved_operations(
                 operation_id="tutor-solved-pattern-structure",
                 kind="WRITE_TEXT",
                 content=pattern_config.structure_note.format(
-                    operator=scene["operator"], fixed_value=scene["fixed_value"]
+                    operator=scene["operator"],
+                    fixed_value=scene["fixed_value"],
+                    examples=" | ".join(
+                        f"{value} {scene['operator']} {scene['fixed_value']}"
+                        for value in scene["starting_values"]
+                    ),
                 ),
                 evidence_ref="OPERATION",
                 scene_slot="operation_conclusion",
@@ -853,7 +732,10 @@ def _pattern_tutor_solved_operations(
         _pattern_write(
             operation_id="tutor-solved-variable-meaning",
             kind="WRITE_TEXT",
-            content=pattern_config.variable_note.format(variable=scene["variable"]),
+            content=pattern_config.variable_note.format(
+                variable=scene["variable"],
+                starting_values=", ".join(scene["starting_values"]),
+            ),
             evidence_ref="CHANGING_VALUE",
             scene_slot="variable_conclusion",
         )
@@ -864,14 +746,14 @@ def _variable_scene_emphasis(
     scene: PatternAddConstantScene,
     operation_prefix: str,
 ) -> list[CanvasTeachingOperation]:
-    variable_ids = scene["variable_ids"]
-    if not variable_ids:
+    changing_ids = scene["changing_ids"]
+    if not changing_ids:
         return []
     return [
         *_question_marks(
             operation_id=f"highlight-{operation_prefix}",
             kind="HIGHLIGHT",
-            target_ids=variable_ids,
+            target_ids=changing_ids,
             color_role="AMBER",
             persistence="PERSIST",
         ),
@@ -879,7 +761,7 @@ def _variable_scene_emphasis(
             operation_id=f"connect-{operation_prefix}",
             kind="CONNECT",
             target_kind="QUESTION_ANCHOR",
-            target_ids=variable_ids,
+            target_ids=changing_ids,
             zone="QUESTION",
             persistence="PERSIST",
             color_role="AMBER",
@@ -1003,8 +885,10 @@ def _validate_draft(
     draft: CanvasTeachingPlanDraft,
     config: CanvasTeachingConfig,
     narration: str,
+    student_response: str,
     allowed_targets: set[str],
     question_anchor_texts: dict[str, str],
+    confirmed_source_targets: list[ConfirmedCanvasSource],
     current_evidence: set[str],
     require_guided_evidence_ink: bool,
     teaching_mode: CanvasTeachingMode,
@@ -1034,6 +918,7 @@ def _validate_draft(
                 operation=operation,
                 allowed_targets=allowed_targets,
                 question_anchor_texts=question_anchor_texts,
+                confirmed_source_targets=confirmed_source_targets,
                 current_evidence=current_evidence,
                 learner_answer_confirmed=learner_answer_confirmed,
                 teaching_mode=teaching_mode,
@@ -1043,6 +928,7 @@ def _validate_draft(
                 canonical_answer=canonical_answer,
                 narration=narration,
                 question=question,
+                student_response=student_response,
                 tutor_solved_step_texts=tutor_solved_step_texts,
                 config=config,
             )
@@ -1065,10 +951,48 @@ def _validate_draft(
                 update={"speech_anchor": anchor, "operations": operations}
             )
         )
+    accepted_operations = [
+        operation for beat in accepted for operation in beat.operations
+    ]
     if require_guided_evidence_ink and guided_evidence_writes == 0:
         return None
     if guided_evidence_writes > config.guided_evidence_maximum_written_operations:
         return None
+    if require_guided_evidence_ink and confirmed_source_targets:
+        writes = [
+            operation
+            for operation in accepted_operations
+            if operation.kind in {"WRITE_TEXT", "WRITE_MATH"}
+        ]
+        if len(writes) != 1:
+            return None
+        source = next(
+            (
+                item
+                for item in confirmed_source_targets
+                if item["evidence_ref"] == writes[0].evidence_ref
+            ),
+            None,
+        )
+        if source is None:
+            return None
+        connectors = [
+            operation
+            for operation in accepted_operations
+            if operation.kind == "CONNECT"
+            and operation.evidence_ref == source["evidence_ref"]
+        ]
+        connected_ids = [
+            target_id
+            for operation in connectors
+            for target_id in operation.target_ids
+        ]
+        if (
+            not connectors
+            or len(connected_ids) != len(set(connected_ids))
+            or set(connected_ids) != set(source["target_ids"])
+        ):
+            return None
     return accepted
 
 
@@ -1078,16 +1002,15 @@ def _with_scene_slot(
 ) -> CanvasTeachingOperation:
     """Attach a configured visual slot to an approved learner-confirmed note."""
 
-    if operation.kind not in {"WRITE_TEXT", "WRITE_MATH"}:
+    if operation.kind not in {"WRITE_TEXT", "WRITE_MATH", "CONNECT"}:
         return operation.model_copy(update={"scene_slot": None})
     if operation.evidence_ref is None:
         return operation.model_copy(update={"scene_slot": None})
+    scene_slot = config.guided_evidence_scene_slots.get(operation.evidence_ref)
+    if scene_slot is None:
+        scene_slot = f"{config.generic_confirmation_scene_slot}:{operation.evidence_ref}"
     return operation.model_copy(
-        update={
-            "scene_slot": config.guided_evidence_scene_slots.get(
-                operation.evidence_ref
-            )
-        }
+        update={"scene_slot": scene_slot}
     )
 
 
@@ -1095,6 +1018,7 @@ def _operation_is_authorized(
     operation: CanvasTeachingOperation,
     allowed_targets: set[str],
     question_anchor_texts: dict[str, str],
+    confirmed_source_targets: list[ConfirmedCanvasSource],
     current_evidence: set[str],
     learner_answer_confirmed: bool,
     teaching_mode: CanvasTeachingMode,
@@ -1104,12 +1028,11 @@ def _operation_is_authorized(
     canonical_answer: str,
     narration: str,
     question: str,
+    student_response: str,
     tutor_solved_step_texts: list[str],
     config: CanvasTeachingConfig,
 ) -> bool:
     if not set(operation.target_ids).issubset(allowed_targets):
-        return False
-    if operation.kind == "CONNECT":
         return False
     if operation.target_kind == "QUESTION_ANCHOR" and not all(
         _is_math_bearing_question_token(question_anchor_texts.get(target_id, ""))
@@ -1118,6 +1041,19 @@ def _operation_is_authorized(
         return False
     if operation.zone == "QUESTION" and operation.kind in {"WRITE_TEXT", "WRITE_MATH"}:
         return False
+    if operation.kind == "CONNECT":
+        return (
+            teaching_mode == "GUIDED"
+            and operation.target_kind == "QUESTION_ANCHOR"
+            and operation.zone == "QUESTION"
+            and operation.evidence_ref in current_evidence
+            and operation.persistence == "PERSIST"
+            and any(
+                source["evidence_ref"] == operation.evidence_ref
+                and set(operation.target_ids).issubset(source["target_ids"])
+                for source in confirmed_source_targets
+            )
+        )
     if operation.kind not in {"WRITE_TEXT", "WRITE_MATH"}:
         return operation.evidence_ref is None
     if teaching_mode in config.visual_only_modes:
@@ -1146,12 +1082,22 @@ def _operation_is_authorized(
             and _content_terms_are_spoken(content, " ".join(tutor_solved_step_texts))
         )
     if teaching_mode == "GUIDED":
+        matching_sources = [
+            source
+            for source in confirmed_source_targets
+            if source["evidence_ref"] == operation.evidence_ref
+        ]
+        source_text = " ".join(source["anchor_text"] for source in matching_sources)
         return (
             operation.evidence_ref in current_evidence
             and operation.zone == "REASONING"
             and operation.persistence == "PERSIST"
             and operation.color_role == "NAVY"
-            and _content_terms_are_spoken(content, narration)
+            and _content_is_not_spoken_sentence(content, narration)
+            and _content_terms_are_grounded(
+                content,
+                f"{narration} {student_response} {source_text}",
+            )
         )
     if operation.evidence_ref not in current_evidence:
         return False
@@ -1178,6 +1124,29 @@ def _content_terms_are_spoken(content: str, narration: str) -> bool:
     content_terms = set(re.findall(r"[A-Za-z]+|\d+(?:\.\d+)?", without_latex_commands.casefold()))
     narration_terms = set(re.findall(r"[A-Za-z]+|\d+(?:\.\d+)?", narration.casefold()))
     return bool(content_terms) and content_terms.issubset(narration_terms)
+
+
+def _content_terms_are_grounded(content: str, evidence: str) -> bool:
+    without_latex_commands = re.sub(r"\\[A-Za-z]+", " ", content)
+    content_terms = set(re.findall(r"[A-Za-z]+|\d+(?:\.\d+)?", without_latex_commands.casefold()))
+    evidence_terms = set(re.findall(r"[A-Za-z]+|\d+(?:\.\d+)?", evidence.casefold()))
+    return bool(content_terms) and content_terms.issubset(evidence_terms)
+
+
+def _content_is_not_spoken_sentence(content: str, narration: str) -> bool:
+    normalized_content = _normalized(content).strip(".,;:!?—–-").casefold()
+    spoken_sentences = []
+    for sentence in re.findall(r"[^.!?]+[.!?]?", narration):
+        normalized_sentence = re.sub(
+            r"^(?:yes|right|exactly|correct|good)[,!—–\-\s]+",
+            "",
+            sentence.strip(),
+            flags=re.IGNORECASE,
+        )
+        spoken_sentences.append(
+            _normalized(normalized_sentence).strip(".,;:!?—–-").casefold()
+        )
+    return normalized_content not in spoken_sentences
 
 
 def _numeric_terms_come_from_question(content: str, question: str) -> bool:
