@@ -331,6 +331,12 @@ guided_learning:
       a highlight or circle. The content must be supported by the tutor's
       spoken confirmation, must not be an unearned final answer, and should
       extend the existing reasoning trail rather than restart it.
+      When the demonstrated evidence is CHANGING_VALUE, also circle the exact
+      changing values in amber when each is available as a question anchor.
+      When it is FIXED_VALUE, highlight the exact repeated value or operation
+      in teal when it is available as a question anchor. These are optional
+      only when the relevant mathematical tokens are not addressable; never
+      decorate question instructions to compensate.
       For QUESTION_ANCHOR operations, use allowed_question_anchors to target
       only mathematical values, variables, operators, or expressions. Never
       decorate instruction or prose words such as "Write", "without", or
