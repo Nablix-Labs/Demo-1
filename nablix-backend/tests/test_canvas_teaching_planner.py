@@ -875,7 +875,8 @@ def test_planner_uses_the_spoken_confirmation_when_the_rubric_has_no_literal_tok
     question = "Decode 4n, pq, r², c/d and 2(x + 1)."
     tutor = _tutor().model_copy(
         update={
-            "tutor_message_voice": "Yes — you read 4n as multiplication. How would you read pq?",
+            "tutor_message": "Yes — you read 4n as multiplication. How would you read pq?",
+            "tutor_message_voice": "Yes — you read 4 n as multiplication. How would you read p q?",
             "guided_teaching_state": GuidedTeachingState(
                 question_id="Q-NOTATION",
                 objective_component_ids=["JUXTAPOSITION"],

@@ -218,6 +218,7 @@ def _plan_confirmed_generic_scene(
     if teaching_mode != "GUIDED" or not current_evidence:
         return None
     anchor_by_id = {anchor.token_id: anchor for anchor in question_anchors}
+    confirmation_messages = _confirmation_messages(tutor, tutor_message_voice)
     action_targets = [
         ([anchor_by_id[action.target_object_id or ""]], anchor_by_id[action.target_object_id or ""].text, action.confirmed_component_id)
         for action in tutor.tutor_canvas_actions
@@ -225,18 +226,34 @@ def _plan_confirmed_generic_scene(
         and action.target_object_id in anchor_by_id
         and action.confirmed_component_id in current_evidence
     ]
-    voice_target = _confirmed_voice_target(question_anchors, tutor_message_voice)
+    voice_target = next(
+        (
+            target
+            for message in confirmation_messages
+            if (target := _confirmed_voice_target(question_anchors, message)) is not None
+        ),
+        None,
+    )
     targets = action_targets or (
         [(*voice_target, next(iter(sorted(current_evidence))))]
         if voice_target is not None
         else []
     )
     for anchors, anchor_text, evidence_ref in targets:
-        statement = _spoken_confirmation_statement(
-            tutor_message_voice,
-            anchor_text,
-            canonical_answer,
-            tutor.answer_value_confirmed,
+        statement = next(
+            (
+                candidate
+                for message in confirmation_messages
+                if (
+                    candidate := _spoken_confirmation_statement(
+                        message,
+                        anchor_text,
+                        canonical_answer,
+                        tutor.answer_value_confirmed,
+                    )
+                ) is not None
+            ),
+            None,
         )
         if statement is None:
             continue
@@ -288,6 +305,11 @@ def _plan_confirmed_generic_scene(
             ],
         )
     return None
+
+
+def _confirmation_messages(tutor: TutorResult, voice: str) -> list[str]:
+    messages = [tutor.tutor_message.strip(), voice.strip()]
+    return list(dict.fromkeys(message for message in messages if message))
 
 
 def _confirmed_voice_target(
