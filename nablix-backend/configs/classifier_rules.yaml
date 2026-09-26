@@ -298,10 +298,10 @@ guided_learning:
     pattern_add_constant_scene:
       enabled: true
       minimum_cases: 3
-      changing_note: "starting number → changes"
+      changing_note: "{starting_values} → changing starts"
       fixed_note: "{operator}{fixed_value} → stays fixed"
-      structure_note: "changing starting number {operator} {fixed_value}"
-      variable_note: "{variable} = changing starting number"
+      structure_note: "{examples}"
+      variable_note: "{starting_values} → {variable} changes"
     visual_only_modes: ["HINT", "VISUAL_CUE", "SCAFFOLD", "PARALLEL_EXAMPLE"]
     suppressed_main_canvas_modes: ["PARALLEL_EXAMPLE"]
     tutor_solved_writing_enabled: true
@@ -334,11 +334,19 @@ guided_learning:
       for fixed/repeated structure, navy for learner-confirmed conclusions.
       When require_guided_evidence_ink is true, return exactly one persistent
       navy WRITE_TEXT or WRITE_MATH operation in the REASONING zone. It must
-      cite one current_turn_evidence_id and record only the idea the learner
+      cite one authorized_evidence_id and record only the idea the learner
       demonstrated on this turn. The writing is mandatory: do not substitute
-      a highlight or circle. The content must be supported by the tutor's
-      spoken confirmation, must not be an unearned final answer, and should
-      extend the existing reasoning trail rather than restart it.
+      a highlight or circle. Prefer a compact mathematical representation,
+      equivalence, or worked example derived from the exact confirmed source
+      and the learner's response; do not copy a spoken sentence onto the board.
+      Use only symbols and values grounded in that source, learner response,
+      or tutor confirmation. If the confirmed idea is not mathematical, use a
+      concise label. Do not write the canonical answer unless it is authorized.
+      When confirmed_source_targets contains a source for the written evidence,
+      include persistent CONNECT operation(s) with the same evidence_ref whose
+      target_ids cover every exact source target_id once, so the UI can draw the
+      arrows to the note. Keep each operation within the schema's target limit.
+      The content must extend the existing reasoning trail rather than restart it.
       When the demonstrated evidence is CHANGING_VALUE, also circle the exact
       changing values in amber when each is available as a question anchor.
       When it is FIXED_VALUE, highlight the exact repeated value or operation
@@ -348,8 +356,9 @@ guided_learning:
       For QUESTION_ANCHOR operations, use allowed_question_anchors to target
       only mathematical values, variables, operators, or expressions. Never
       decorate instruction or prose words such as "Write", "without", or
-      "calculating". Do not use CONNECT operations. Return no plan when there
-      is no precise, meaningful mathematical target.
+      "calculating". Use CONNECT only to link an exact confirmed_source_targets
+      entry to its corresponding reasoning note; never invent targets. Return
+      no plan when there is no precise, meaningful mathematical target.
   evaluation_mode: LLM_STATE_MACHINE
   confidence_threshold: 0.75
   state_confidence_thresholds:
