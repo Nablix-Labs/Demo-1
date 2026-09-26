@@ -35,12 +35,16 @@ def plan_canvas_teaching(
 ) -> CanvasTeachingPlan | None:
     """Create a visual-only Guided Practice plan from an already-final tutor turn."""
 
-    config = load_classifier_rules().guided_learning.canvas_teaching
+    rules = load_classifier_rules()
+    config = rules.guided_learning.canvas_teaching
     if not config.enabled or question_id is None or question is None or tutor is None:
         return None
     if source_turn_id is None or not tutor_message_voice.strip():
         return None
-    client = build_openai_ai_engine_client(get_settings())
+    guided_settings = get_settings().model_copy(
+        update={"openai_ai_engine_model": rules.guided_learning.model}
+    )
+    client = build_openai_ai_engine_client(guided_settings)
     if client is None:
         logger.warning(
             "canvas_teaching_plan_not_generated",

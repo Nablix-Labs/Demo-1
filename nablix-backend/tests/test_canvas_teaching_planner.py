@@ -1,4 +1,5 @@
 from app.ai_engine.classifier_config import load_classifier_rules
+from app.core.config import Settings
 from app.models.adapters import TutorResult
 from app.models.canvas_teaching import CanvasTeachingPlanDraft
 from app.models.guided_learning import (
@@ -131,11 +132,23 @@ def test_planner_returns_a_grounded_attention_beat(monkeypatch) -> None:
             ]
         }
     )
-    monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
+    rules = _enabled_rules()
+    requested_models: list[str] = []
+
+    def build_client(settings: Settings) -> FakeCanvasTeachingClient:
+        requested_models.append(settings.openai_ai_engine_model)
+        return FakeCanvasTeachingClient(draft)
+
+    monkeypatch.setattr(
+        canvas_teaching_planner, "load_classifier_rules", lambda: rules
+    )
     monkeypatch.setattr(
         canvas_teaching_planner,
-        "build_openai_ai_engine_client",
-        lambda _: FakeCanvasTeachingClient(draft),
+        "get_settings",
+        lambda: Settings(openai_ai_engine_model="general-purpose-model"),
+    )
+    monkeypatch.setattr(
+        canvas_teaching_planner, "build_openai_ai_engine_client", build_client
     )
 
     plan = _plan(draft)
@@ -143,6 +156,7 @@ def test_planner_returns_a_grounded_attention_beat(monkeypatch) -> None:
     assert plan is not None
     assert plan.plan_id == "Q1:TURN-1:canvas-teaching"
     assert plan.beats[0].operations[0].target_ids == ["Q1:QTOKEN:1"]
+    assert requested_models == [rules.guided_learning.model]
 
 
 def test_planner_rejects_an_unapproved_final_rule(monkeypatch) -> None:
