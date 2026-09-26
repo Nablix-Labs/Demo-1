@@ -10,6 +10,12 @@ interface SceneSlot {
   box: boolean;
 }
 
+export interface SceneNotePlacement {
+  x: number;
+  y: number;
+  slot: SceneSlot;
+}
+
 const SCENE_ROW_GAP = 0.12;
 const NOTE_SIZE = 24;
 const BOX_WIDTH = 0.2;
@@ -40,33 +46,44 @@ export function sceneNoteElements(
   colors: Record<CanvasTeachingColor, string>,
   existing: TutorElement[],
 ): TutorElement[] | null {
-  const slot = sceneSlot(slotId);
-  if (slot === null) return null;
-
   const id = `ctp:scene:${questionId}:${slotId}`;
   if (existing.some((element) => element.id === `${id}:note`)) return [];
-
-  const genericRows = slotId.startsWith('generic_confirmation:')
-    ? existing.filter((element) => element.id.startsWith(`ctp:scene:${questionId}:generic_confirmation:`) && element.id.endsWith(':note')).length
-    : 0;
-  const y = top + (slot.row + genericRows) * SCENE_ROW_GAP;
+  const placement = sceneNotePlacement(questionId, slotId, top, existing);
+  if (placement === null) return null;
+  const { slot, x, y } = placement;
   const ink = colors.NAVY;
   const note: TutorElement = operationKind === 'WRITE_MATH' && slot.format === 'typeset'
-    ? { id: `${id}:note`, kind: 'math', x: slot.x, y, tex: content, color: ink, size: NOTE_SIZE }
+    ? { id: `${id}:note`, kind: 'math', x, y, tex: content, color: ink, size: NOTE_SIZE }
     : {
-        id: `${id}:note`, kind: 'text', x: slot.x, y, text: content, color: ink,
+        id: `${id}:note`, kind: 'text', x, y, text: content, color: ink,
         size: NOTE_SIZE,
       };
   const arrow: TutorElement = {
     id: `${id}:arrow`, kind: 'arrow', color: colors[slot.accent], strokeWidth: 2,
-    from: [slot.x + 0.035, Math.max(0, y - ARROW_GAP)],
-    to: [slot.x + 0.035, y - 0.012],
+    from: [x + 0.035, Math.max(0, y - ARROW_GAP)],
+    to: [x + 0.035, y - 0.012],
   };
   const box: TutorElement[] = slot.box
     ? [{
-        id: `${id}:box`, kind: 'rect', x: slot.x - 0.018, y: y - BOX_HEIGHT / 2,
+        id: `${id}:box`, kind: 'rect', x: x - 0.018, y: y - BOX_HEIGHT / 2,
         w: BOX_WIDTH, h: BOX_HEIGHT, color: ink, strokeWidth: 2,
       }]
     : [];
   return [arrow, ...box, note];
+}
+
+export function sceneNotePlacement(
+  questionId: string,
+  slotId: string,
+  top: number,
+  existing: TutorElement[],
+): SceneNotePlacement | null {
+  const slot = sceneSlot(slotId);
+  if (slot === null) return null;
+  const id = `ctp:scene:${questionId}:${slotId}`;
+  if (existing.some((element) => element.id === `${id}:note`)) return null;
+  const genericRows = slotId.startsWith('generic_confirmation:')
+    ? existing.filter((element) => element.id.startsWith(`ctp:scene:${questionId}:generic_confirmation:`) && element.id.endsWith(':note')).length
+    : 0;
+  return { x: slot.x, y: top + (slot.row + genericRows) * SCENE_ROW_GAP, slot };
 }

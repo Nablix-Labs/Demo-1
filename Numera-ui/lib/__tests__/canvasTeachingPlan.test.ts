@@ -152,7 +152,33 @@ describe('question-anchor marks', () => {
 
   it('connects tokens in order', () => {
     const fx = beatEffects(plan(), beat([op({ kind: 'CONNECT', target_ids: ['Q1:QTOKEN:1', 'Q1:QTOKEN:2'], color_role: 'TEAL' })]), ctx());
-    expect(fx.connectors).toEqual([expect.objectContaining({ fromTokenId: 'Q1:QTOKEN:1', toTokenId: 'Q1:QTOKEN:2', color: 'TEAL' })]);
+    expect(fx.connectors).toEqual([expect.objectContaining({ kind: 'token', fromTokenId: 'Q1:QTOKEN:1', toTokenId: 'Q1:QTOKEN:2', color: 'TEAL' })]);
+  });
+
+  it('connects separated question sources to their configured tutor note', () => {
+    const fx = beatEffects(plan(), beat([op({
+      kind: 'CONNECT',
+      target_ids: ['Q1:QTOKEN:1', 'Q1:QTOKEN:2'],
+      scene_slot: 'changing_conclusion',
+    })]), ctx());
+    expect(fx.connectors).toEqual([
+      expect.objectContaining({ kind: 'scene', fromTokenIds: ['Q1:QTOKEN:1'], color: 'AMBER' }),
+      expect.objectContaining({ kind: 'scene', fromTokenIds: ['Q1:QTOKEN:2'], color: 'AMBER' }),
+    ]);
+  });
+
+  it('keeps adjacent tokens together for one source-to-note connector', () => {
+    const fx = beatEffects(plan(), beat([op({
+      kind: 'CONNECT',
+      target_ids: ['Q1:QTOKEN:1', 'Q1:QTOKEN:2'],
+      scene_slot: 'generic_confirmation:JUXTAPOSITION',
+    })]), ctx({ anchors: [
+      anchor('Q1:QTOKEN:1', { char_start: 0, char_end: 1 }),
+      anchor('Q1:QTOKEN:2', { char_start: 1, char_end: 2 }),
+    ] }));
+    expect(fx.connectors).toEqual([
+      expect.objectContaining({ kind: 'scene', fromTokenIds: ['Q1:QTOKEN:1', 'Q1:QTOKEN:2'] }),
+    ]);
   });
 
   it('in a scaffold, points only at tokens the learner has confirmed', () => {

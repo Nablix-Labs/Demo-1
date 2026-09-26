@@ -100,7 +100,8 @@ the next server response before drawing another one.
 | --- | --- |
 | `FOCUS`, `HIGHLIGHT` | temporary emphasis of the resolved target |
 | `CIRCLE`, `BOX` | tutor-layer outline around the resolved target |
-| `CONNECT` | arrow/bracket between the listed resolved targets |
+| `CONNECT` without `scene_slot` | arrow/bracket between the listed resolved targets |
+| `CONNECT` with `scene_slot` | draw one source-to-note arrow for each separated source group, from the resolved question token(s) into the configured tutor-note slot; the frontend derives geometry from the live DOM and canvas stage |
 | `WRITE_TEXT`, `WRITE_MATH` | left-aligned tutor ink in the requested non-student zone |
 | `CHECK` | tutor-layer substitution/check line in the reasoning or Tutor Solved zone |
 
@@ -121,6 +122,10 @@ the next server response before drawing another one.
    speech-synchronised step, and only the approved final step may contain the
    canonical answer.
 7. Verify no plan is returned in Independent Practice.
+8. After a learner-confirmed statement, verify the source expression visibly
+   connects to its tutor note: `4n → 4n means 4 multiplied by n`, and each
+   separated changing value connects to `starting number → changes`. Resize the
+   browser once to verify the connector follows the rewrapped question.
 
 Run the billed planner smoke test directly on the VM with:
 

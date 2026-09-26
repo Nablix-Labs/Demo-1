@@ -34,6 +34,7 @@ class PatternAddConstantScene(TypedDict):
     operator: str
     fixed_value: str
     changing_ids: list[str]
+    variable_ids: list[str]
     fixed_ids: list[str]
     operator_ids: list[str]
 
@@ -275,6 +276,19 @@ def _plan_confirmed_generic_scene(
                 zone="QUESTION",
                 persistence="PERSIST",
                 color_role="NAVY",
+            ),
+            CanvasTeachingOperation(
+                operation_id="generic-confirmed-connect",
+                kind="CONNECT",
+                target_kind="QUESTION_ANCHOR",
+                target_ids=[anchor.token_id for anchor in anchors],
+                zone="QUESTION",
+                persistence="PERSIST",
+                color_role="NAVY",
+                scene_slot=(
+                    f"{config.generic_confirmation_scene_slot}:"
+                    f"{evidence_ref}"
+                ),
             ),
             CanvasTeachingOperation(
                 operation_id="generic-confirmed-note",
@@ -573,6 +587,9 @@ def _pattern_add_constant_scene(
         "operator": canonical_operator,
         "fixed_value": canonical_fixed,
         "changing_ids": [token_id for token_id in changing_ids if token_id is not None],
+        "variable_ids": [
+            anchor.token_id for anchor in question_anchors if anchor.text == variable
+        ],
         "fixed_ids": [token_id for token_id in fixed_ids if token_id is not None],
         "operator_ids": [token_id for token_id in operator_ids if token_id is not None],
     }
@@ -624,7 +641,12 @@ def _pattern_guided_operations(
         ]
     if "CHANGING_VALUE" in current_evidence:
         if _student_names_variable(student_response, scene["variable"]):
+            variable_emphasis = _variable_scene_emphasis(
+                scene=scene,
+                operation_prefix="variable",
+            )
             return [
+                *variable_emphasis,
                 _pattern_write(
                     operation_id="write-variable-meaning",
                     kind="WRITE_TEXT",
@@ -640,6 +662,16 @@ def _pattern_guided_operations(
                 target_ids=scene["changing_ids"],
                 color_role="AMBER",
                 persistence="PERSIST",
+            ),
+            CanvasTeachingOperation(
+                operation_id="connect-changing-values-to-conclusion",
+                kind="CONNECT",
+                target_kind="QUESTION_ANCHOR",
+                target_ids=scene["changing_ids"],
+                zone="QUESTION",
+                persistence="PERSIST",
+                color_role="AMBER",
+                scene_slot="changing_conclusion",
             ),
             _pattern_write(
                 operation_id="write-changing-conclusion",
@@ -670,6 +702,7 @@ def _pattern_guided_operations(
                 zone="QUESTION",
                 persistence="PERSIST",
                 color_role="TEAL",
+                scene_slot="fixed_conclusion",
             ),
             _pattern_write(
                 operation_id="write-fixed-conclusion",
@@ -691,6 +724,7 @@ def _pattern_guided_operations(
                 zone="QUESTION",
                 persistence="PERSIST",
                 color_role="AMBER",
+                scene_slot="operation_conclusion",
             ),
             _pattern_write(
                 operation_id="write-pattern-structure",
@@ -741,6 +775,16 @@ def _pattern_tutor_solved_operations(
                 color_role="AMBER",
                 persistence="PERSIST",
             ),
+            CanvasTeachingOperation(
+                operation_id="tutor-solved-connect-changing-values",
+                kind="CONNECT",
+                target_kind="QUESTION_ANCHOR",
+                target_ids=scene["changing_ids"],
+                zone="QUESTION",
+                persistence="PERSIST",
+                color_role="AMBER",
+                scene_slot="changing_conclusion",
+            ),
             _pattern_write(
                 operation_id="tutor-solved-changing-conclusion",
                 kind="WRITE_TEXT",
@@ -766,6 +810,7 @@ def _pattern_tutor_solved_operations(
                 zone="QUESTION",
                 persistence="PERSIST",
                 color_role="TEAL",
+                scene_slot="fixed_conclusion",
             ),
             _pattern_write(
                 operation_id="tutor-solved-fixed-conclusion",
@@ -787,6 +832,7 @@ def _pattern_tutor_solved_operations(
                 zone="QUESTION",
                 persistence="PERSIST",
                 color_role="AMBER",
+                scene_slot="operation_conclusion",
             ),
             _pattern_write(
                 operation_id="tutor-solved-pattern-structure",
@@ -798,7 +844,12 @@ def _pattern_tutor_solved_operations(
                 scene_slot="operation_conclusion",
             ),
         ]
+    variable_emphasis = _variable_scene_emphasis(
+        scene=scene,
+        operation_prefix="tutor-solved-variable",
+    )
     return [
+        *variable_emphasis,
         _pattern_write(
             operation_id="tutor-solved-variable-meaning",
             kind="WRITE_TEXT",
@@ -806,6 +857,34 @@ def _pattern_tutor_solved_operations(
             evidence_ref="CHANGING_VALUE",
             scene_slot="variable_conclusion",
         )
+    ]
+
+
+def _variable_scene_emphasis(
+    scene: PatternAddConstantScene,
+    operation_prefix: str,
+) -> list[CanvasTeachingOperation]:
+    variable_ids = scene["variable_ids"]
+    if not variable_ids:
+        return []
+    return [
+        *_question_marks(
+            operation_id=f"highlight-{operation_prefix}",
+            kind="HIGHLIGHT",
+            target_ids=variable_ids,
+            color_role="AMBER",
+            persistence="PERSIST",
+        ),
+        CanvasTeachingOperation(
+            operation_id=f"connect-{operation_prefix}",
+            kind="CONNECT",
+            target_kind="QUESTION_ANCHOR",
+            target_ids=variable_ids,
+            zone="QUESTION",
+            persistence="PERSIST",
+            color_role="AMBER",
+            scene_slot="variable_conclusion",
+        ),
     ]
 
 
@@ -865,7 +944,18 @@ def _student_names_complete_fixed_term(
 
 
 def _student_names_variable(student_response: str, variable: str) -> bool:
-    return bool(re.fullmatch(rf"\s*(?:it(?:'s| is)\s*)?{re.escape(variable)}\s*[.!]?\s*", student_response, re.IGNORECASE))
+    named_variable = re.escape(variable)
+    concise_response = re.fullmatch(
+        rf"\s*(?:it(?:'s| is)\s*)?{named_variable}\s*[.!]?\s*",
+        student_response,
+        re.IGNORECASE,
+    )
+    explained_response = re.search(
+        rf"\b{named_variable}\b.*\b(changes|changing|varies|variable)\b|\b(changes|changing|varies|variable)\b.*\b{named_variable}\b",
+        student_response,
+        re.IGNORECASE,
+    )
+    return concise_response is not None or explained_response is not None
 
 
 def _current_turn_evidence(tutor: TutorResult) -> set[str]:

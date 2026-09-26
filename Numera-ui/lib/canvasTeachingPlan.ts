@@ -30,7 +30,7 @@ import { itemBBox, type CanvasBBox, type CanvasSize } from '@/lib/canvasMemory';
 import {
   RESCUE_GAP, RESCUE_SUFFIX, RESCUE_WRAP_WIDTH, ladderTop,
 } from '@/lib/tutorCanvasActions';
-import { sceneNoteElements } from '@/lib/canvasTeachingScene';
+import { sceneNoteElements, sceneNotePlacement } from '@/lib/canvasTeachingScene';
 import type { DrawnItem, TutorElement } from '@/store/useNumeraStore';
 
 // ─── Contract (nablix-backend/app/models/canvas_teaching.py) ────────────────
@@ -96,14 +96,27 @@ export interface TeachingTokenMark {
   pulse: boolean;
 }
 
-/** An arrow between two question tokens (CONNECT). */
-export interface TeachingConnector {
+/** An arrow between two question tokens (CONNECT without a scene slot). */
+export interface TokenTeachingConnector {
+  kind: 'token';
   id: string;
   fromTokenId: string;
   toTokenId: string;
   color: CanvasTeachingColor;
   pulse: boolean;
 }
+
+/** An arrow from one or more source question tokens into tutor handwriting. */
+export interface SceneTeachingConnector {
+  kind: 'scene';
+  id: string;
+  fromTokenIds: string[];
+  toCanvasPoint: [number, number];
+  color: CanvasTeachingColor;
+  pulse: boolean;
+}
+
+export type TeachingConnector = TokenTeachingConnector | SceneTeachingConnector;
 
 export interface TeachingEffects {
   tokenMarks: TeachingTokenMark[];
@@ -290,9 +303,33 @@ export function beatEffects(
       if (tokens.length !== op.target_ids.length) continue;
 
       if (op.kind === 'CONNECT') {
+        if (op.scene_slot) {
+          const placement = sceneNotePlacement(
+            plan.question_id,
+            op.scene_slot,
+            top,
+            [...ctx.tutorElements, ...out.elements],
+          );
+          if (placement === null) continue;
+          tokenGroups(tokens, ctx.anchors).forEach((fromTokenIds, i) => {
+            const connectorId = `${id}:scene:${i}`;
+            out.connectors.push({
+              kind: 'scene',
+              id: connectorId,
+              fromTokenIds,
+              toCanvasPoint: [placement.x + 0.035, Math.max(0, placement.y - 0.012)],
+              color,
+              pulse,
+            });
+            if (pulse) out.pulseIds.push(connectorId);
+          });
+          continue;
+        }
         for (let i = 1; i < tokens.length; i += 1) {
           const connectorId = `${id}:${i}`;
-          out.connectors.push({ id: connectorId, fromTokenId: tokens[i - 1], toTokenId: tokens[i], color, pulse });
+          out.connectors.push({
+            kind: 'token', id: connectorId, fromTokenId: tokens[i - 1], toTokenId: tokens[i], color, pulse,
+          });
           if (pulse) out.pulseIds.push(connectorId);
         }
         continue;
@@ -367,6 +404,26 @@ export function beatEffects(
     }
   }
   return out;
+}
+
+function tokenGroups(tokenIds: string[], anchors: QuestionAnchor[]): string[][] {
+  const positions = new Map(anchors.map((anchor) => [anchor.token_id, anchor]));
+  return tokenIds.reduce<string[][]>((groups, tokenId) => {
+    const anchor = positions.get(tokenId);
+    const previousGroup = groups.at(-1);
+    const previousId = previousGroup?.at(-1);
+    const previous = previousId ? positions.get(previousId) : null;
+    if (
+      anchor === undefined
+      || previousGroup === undefined
+      || previous === undefined
+      || previous === null
+      || anchor.char_start !== previous.char_end
+    ) {
+      return [...groups, [tokenId]];
+    }
+    return [...groups.slice(0, -1), [...previousGroup, tokenId]];
+  }, []);
 }
 
 /** Tutor-layer marks around the student's own ink. */

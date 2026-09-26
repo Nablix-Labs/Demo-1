@@ -302,10 +302,28 @@ def test_pattern_scene_writes_only_after_the_learner_names_the_changing_part(mon
 
     assert plan is not None
     operations = plan.beats[0].operations
-    assert [operation.kind for operation in operations] == ["CIRCLE", "WRITE_TEXT"]
+    assert [operation.kind for operation in operations] == ["CIRCLE", "CONNECT", "WRITE_TEXT"]
     assert operations[0].target_ids == ["Q1:QTOKEN:1", "Q1:QTOKEN:4", "Q1:QTOKEN:7"]
-    assert operations[1].text == "starting number → changes"
+    assert operations[1].target_ids == operations[0].target_ids
     assert operations[1].scene_slot == "changing_conclusion"
+    assert operations[2].text == "starting number → changes"
+    assert operations[2].scene_slot == "changing_conclusion"
+
+
+def test_pattern_scene_connects_the_student_named_variable_to_its_meaning(monkeypatch) -> None:
+    monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
+
+    plan = _pattern_plan(
+        tutor=_pattern_tutor("CHANGING_VALUE", ["CHANGING_VALUE"]),
+        student_response="n is the part that changes.",
+    )
+
+    assert plan is not None
+    operations = plan.beats[0].operations
+    assert [operation.kind for operation in operations] == ["HIGHLIGHT", "CONNECT", "WRITE_TEXT"]
+    assert operations[0].target_ids == operations[1].target_ids
+    assert operations[1].scene_slot == "variable_conclusion"
+    assert operations[2].text == "n = changing starting number"
 
 
 def test_pattern_scene_pulses_a_bare_fixed_value_without_writing_a_conclusion(monkeypatch) -> None:
@@ -866,9 +884,10 @@ def test_planner_writes_a_confirmed_notation_statement_without_openai(monkeypatc
     assert plan is not None
     assert [(operation.kind, operation.scene_slot) for operation in plan.beats[0].operations] == [
         ("HIGHLIGHT", None),
+        ("CONNECT", "generic_confirmation:JUXTAPOSITION"),
         ("WRITE_TEXT", "generic_confirmation:JUXTAPOSITION"),
     ]
-    assert plan.beats[0].operations[1].text == "pq means p multiplied by q."
+    assert plan.beats[0].operations[2].text == "pq means p multiplied by q."
 
 
 def test_planner_uses_the_spoken_confirmation_when_the_rubric_has_no_literal_token(monkeypatch) -> None:
@@ -924,7 +943,8 @@ def test_planner_uses_the_spoken_confirmation_when_the_rubric_has_no_literal_tok
         "Q-NOTATION:QTOKEN:2",
         "Q-NOTATION:QTOKEN:3",
     ]
-    assert plan.beats[0].operations[1].text == "you read 4n as multiplication."
+    assert plan.beats[0].operations[1].scene_slot == "generic_confirmation:JUXTAPOSITION"
+    assert plan.beats[0].operations[2].text == "you read 4n as multiplication."
 
 
 def test_planner_uses_the_confirmed_label_when_speech_is_indirect(monkeypatch) -> None:
@@ -1001,7 +1021,7 @@ def test_planner_uses_the_confirmed_label_when_speech_is_indirect(monkeypatch) -
     assert plan is not None
     assert plan.beats[0].operations[0].target_ids == [fixed_anchor.token_id]
     assert plan.beats[0].operations[1].scene_slot == "generic_confirmation:FIXED_VALUE"
-    assert plan.beats[0].operations[1].text == "7 → stays fixed"
+    assert plan.beats[0].operations[2].text == "7 → stays fixed"
 
 
 def test_planner_writes_an_explicit_confirmation_without_evidence_ledger(monkeypatch) -> None:
@@ -1053,4 +1073,4 @@ def test_planner_writes_an_explicit_confirmation_without_evidence_ledger(monkeyp
         "Q-NOTATION:QTOKEN:3",
     ]
     assert plan.beats[0].operations[1].scene_slot == "generic_confirmation:VOICE_CONFIRMED:2:3"
-    assert plan.beats[0].operations[1].text == "4n means 4 multiplied by n."
+    assert plan.beats[0].operations[2].text == "4n means 4 multiplied by n."
