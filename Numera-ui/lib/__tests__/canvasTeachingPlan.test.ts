@@ -166,6 +166,38 @@ describe('question-anchor marks', () => {
 });
 
 describe('the reasoning trail', () => {
+  it('renders a learner-confirmed note in its configured teacher scene slot', () => {
+    const fx = beatEffects(plan(), beat([write({
+      evidence_ref: 'CHANGING_VALUE',
+      scene_slot: 'changing_conclusion',
+      text: 'first numbers are different',
+      latex: null,
+      kind: 'WRITE_TEXT',
+    })]), ctx());
+    expect(fx.elements).toEqual([
+      expect.objectContaining({ id: 'ctp:scene:Q1:changing_conclusion:arrow', kind: 'arrow', color: '#FF9F1C' }),
+      expect.objectContaining({ id: 'ctp:scene:Q1:changing_conclusion:note', kind: 'text', text: 'first numbers are different', color: '#1B2A4A' }),
+    ]);
+  });
+
+  it('keeps a final learner-confirmed rule boxed in its configured scene slot', () => {
+    const fx = beatEffects(plan(), beat([write({
+      evidence_ref: 'GENERAL_RULE', scene_slot: 'rule_conclusion', latex: 'n + 5',
+    })]), ctx());
+    expect(fx.elements).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'ctp:scene:Q1:rule_conclusion:arrow', kind: 'arrow' }),
+      expect.objectContaining({ id: 'ctp:scene:Q1:rule_conclusion:box', kind: 'rect' }),
+      expect.objectContaining({ id: 'ctp:scene:Q1:rule_conclusion:note', kind: 'text', text: 'n + 5' }),
+    ]));
+  });
+
+  it('falls back to the normal trail for an unknown scene slot', () => {
+    const fx = beatEffects(plan(), beat([write({ scene_slot: 'not-a-configured-slot' })]), ctx());
+    expect(fx.elements).toEqual([
+      expect.objectContaining({ kind: 'math', tex: '9 + 5 = 14', x: 0.44 }),
+    ]);
+  });
+
   it('writes clear of the student writing area', () => {
     const fx = beatEffects(plan('DIRECT_EXPLANATION'), beat([write()]), ctx());
     expect(fx.elements).toHaveLength(1);

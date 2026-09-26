@@ -190,6 +190,15 @@ class CanvasRescueWordingConfig(StrictSchema):
     tutor_solved_return_focus_text: str
 
 
+class PatternAddConstantSceneConfig(StrictSchema):
+    enabled: StrictBool
+    minimum_cases: int = Field(ge=3, le=6)
+    changing_note: str = Field(min_length=1, max_length=160)
+    fixed_note: str = Field(min_length=1, max_length=160)
+    structure_note: str = Field(min_length=1, max_length=160)
+    variable_note: str = Field(min_length=1, max_length=160)
+
+
 class CanvasTeachingConfig(StrictSchema):
     enabled: StrictBool
     maximum_beats: int = Field(ge=1, le=8)
@@ -197,6 +206,10 @@ class CanvasTeachingConfig(StrictSchema):
     direct_explanation_enabled: StrictBool
     direct_explanation_evidence_ref: str = Field(min_length=1, max_length=120)
     direct_explanation_maximum_written_operations: int = Field(ge=1, le=4)
+    guided_evidence_writing_enabled: StrictBool
+    guided_evidence_maximum_written_operations: int = Field(ge=1, le=4)
+    guided_evidence_scene_slots: dict[str, str]
+    pattern_add_constant_scene: PatternAddConstantSceneConfig
     visual_only_modes: list[Literal["HINT", "VISUAL_CUE", "SCAFFOLD", "PARALLEL_EXAMPLE"]]
     suppressed_main_canvas_modes: list[Literal["PARALLEL_EXAMPLE"]]
     tutor_solved_writing_enabled: StrictBool

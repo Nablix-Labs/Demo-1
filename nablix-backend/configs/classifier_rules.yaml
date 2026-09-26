@@ -285,6 +285,22 @@ guided_learning:
     direct_explanation_enabled: true
     direct_explanation_evidence_ref: "DIRECT_EXPLANATION"
     direct_explanation_maximum_written_operations: 3
+    guided_evidence_writing_enabled: true
+    guided_evidence_maximum_written_operations: 1
+    guided_evidence_scene_slots:
+      CHANGING_VALUE: changing_conclusion
+      FIXED_VALUE: fixed_conclusion
+      OPERATION: operation_conclusion
+      GENERAL_RULE: rule_conclusion
+      GENERAL_RULE_CHANGING_VALUE: rule_conclusion
+      GENERAL_RULE_FIXED_VALUE: rule_conclusion
+    pattern_add_constant_scene:
+      enabled: true
+      minimum_cases: 3
+      changing_note: "starting number → changes"
+      fixed_note: "{operator}{fixed_value} → stays fixed"
+      structure_note: "changing starting number {operator} {fixed_value}"
+      variable_note: "{variable} = changing starting number"
     visual_only_modes: ["HINT", "VISUAL_CUE", "SCAFFOLD", "PARALLEL_EXAMPLE"]
     suppressed_main_canvas_modes: ["PARALLEL_EXAMPLE"]
     tutor_solved_writing_enabled: true
@@ -315,6 +331,24 @@ guided_learning:
       Each beat must be tied to an exact contiguous span of tutor_message_voice.
       Build a short cumulative reasoning trail: amber for changing values, teal
       for fixed/repeated structure, navy for learner-confirmed conclusions.
+      When require_guided_evidence_ink is true, return exactly one persistent
+      navy WRITE_TEXT or WRITE_MATH operation in the REASONING zone. It must
+      cite one current_turn_evidence_id and record only the idea the learner
+      demonstrated on this turn. The writing is mandatory: do not substitute
+      a highlight or circle. The content must be supported by the tutor's
+      spoken confirmation, must not be an unearned final answer, and should
+      extend the existing reasoning trail rather than restart it.
+      When the demonstrated evidence is CHANGING_VALUE, also circle the exact
+      changing values in amber when each is available as a question anchor.
+      When it is FIXED_VALUE, highlight the exact repeated value or operation
+      in teal when it is available as a question anchor. These are optional
+      only when the relevant mathematical tokens are not addressable; never
+      decorate question instructions to compensate.
+      For QUESTION_ANCHOR operations, use allowed_question_anchors to target
+      only mathematical values, variables, operators, or expressions. Never
+      decorate instruction or prose words such as "Write", "without", or
+      "calculating". Do not use CONNECT operations. Return no plan when there
+      is no precise, meaningful mathematical target.
   evaluation_mode: LLM_STATE_MACHINE
   confidence_threshold: 0.75
   state_confidence_thresholds:

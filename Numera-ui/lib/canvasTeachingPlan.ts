@@ -30,6 +30,7 @@ import { itemBBox, type CanvasBBox, type CanvasSize } from '@/lib/canvasMemory';
 import {
   RESCUE_GAP, RESCUE_SUFFIX, RESCUE_WRAP_WIDTH, ladderTop,
 } from '@/lib/tutorCanvasActions';
+import { sceneNoteElements } from '@/lib/canvasTeachingScene';
 import type { DrawnItem, TutorElement } from '@/store/useNumeraStore';
 
 // ─── Contract (nablix-backend/app/models/canvas_teaching.py) ────────────────
@@ -54,6 +55,8 @@ export interface CanvasTeachingOperation {
   text?: string | null;
   latex?: string | null;
   color_role?: CanvasTeachingColor;
+  /** Server-assigned slot for a learner-confirmed note; never a coordinate. */
+  scene_slot?: string | null;
 }
 
 export interface CanvasTeachingBeat {
@@ -329,6 +332,22 @@ export function beatEffects(
     if (WRITES.has(op.kind)) {
       const content = (op.kind === 'WRITE_MATH' ? op.latex ?? op.text : op.text ?? op.latex)?.trim();
       if (!content) continue;
+      if (op.scene_slot) {
+        const sceneElements = sceneNoteElements(
+          plan.question_id,
+          op.scene_slot,
+          op.kind,
+          content,
+          top,
+          TEACHING_COLORS,
+          [...ctx.tutorElements, ...out.elements],
+        );
+        if (sceneElements !== null) {
+          out.elements.push(...sceneElements);
+          if (pulse) out.pulseIds.push(...sceneElements.map((element) => element.id));
+          continue;
+        }
+      }
       const rowId = `${id}${ROW_SUFFIX}`;
       const y = nextTrailRow([...ctx.tutorElements, ...out.elements], top);
       out.elements.push(op.kind === 'WRITE_MATH'
