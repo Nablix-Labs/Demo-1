@@ -191,6 +191,25 @@ describe('the reasoning trail', () => {
     ]));
   });
 
+  it('stacks generic confirmations instead of replacing an earlier one', () => {
+    const first = beatEffects(plan(), beat([write({
+      kind: 'WRITE_TEXT', latex: null, text: 'pq means p multiplied by q.',
+      evidence_ref: 'JUXTAPOSITION', scene_slot: 'generic_confirmation:JUXTAPOSITION',
+    })]), ctx());
+    const second = beatEffects(plan(), beat([write({
+      kind: 'WRITE_TEXT', latex: null, text: 'r² means r multiplied by r.',
+      evidence_ref: 'EXPONENT', scene_slot: 'generic_confirmation:EXPONENT',
+    })]), ctx({ tutorElements: first.elements }));
+
+    const firstNote = first.elements.find((element) => element.id.endsWith(':note'));
+    const secondNote = second.elements.find((element) => element.id.endsWith(':note'));
+    expect(secondNote).toMatchObject({
+      id: 'ctp:scene:Q1:generic_confirmation:EXPONENT:note',
+      text: 'r² means r multiplied by r.',
+    });
+    expect(secondNote?.y).toBeGreaterThan(firstNote?.y ?? 0);
+  });
+
   it('falls back to the normal trail for an unknown scene slot', () => {
     const fx = beatEffects(plan(), beat([write({ scene_slot: 'not-a-configured-slot' })]), ctx());
     expect(fx.elements).toEqual([

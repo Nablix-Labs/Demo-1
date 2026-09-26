@@ -33,5 +33,12 @@
     "accent": "NAVY",
     "format": "handwritten",
     "box": true
+  },
+  "generic_confirmation": {
+    "x": 0.44,
+    "row": 0,
+    "accent": "NAVY",
+    "format": "handwritten",
+    "box": false
   }
 }

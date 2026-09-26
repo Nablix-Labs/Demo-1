@@ -319,6 +319,68 @@ def test_accepted_statement_marks_the_question_without_an_llm_intention() -> Non
     ]
 
 
+def test_non_expression_confirmation_marks_the_current_notation_token() -> None:
+    tutor = _tutor_result(
+        TutorMistakeClassification(status="no_mistake", confidence=0.9),
+        [],
+    ).model_copy(
+        update={
+            "guided_student_state": "PARTIAL",
+            "generated_question_rubric": GeneratedQuestionRubric(
+                question_id="Q-NOTATION",
+                required_concepts=[
+                    GeneratedConcept(
+                        concept_id="JUXTAPOSITION",
+                        description="pq means p multiplied by q",
+                        required=True,
+                    )
+                ],
+                completion_rule="ALL_REQUIRED_CONCEPTS",
+                cache_key="notation",
+                prompt_version="1.0",
+            ),
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-NOTATION",
+                objective_component_ids=["JUXTAPOSITION", "EXPONENT"],
+                confirmed_component_ids=["JUXTAPOSITION"],
+                missing_component_ids=["EXPONENT"],
+                active_component_id="EXPONENT",
+                last_tutor_question_type="COMPONENT",
+                selected_option_id=None,
+                awaiting_response=True,
+                last_turn_evidence=_demonstrated("JUXTAPOSITION"),
+            ),
+        }
+    )
+    anchor = QuestionTextAnchor(
+        token_id="Q-NOTATION:QTOKEN:1",
+        text="pq",
+        char_start=0,
+        char_end=2,
+    )
+
+    actions = plan_tutor_canvas_actions(
+        tutor=tutor,
+        question_anchors=[anchor],
+        canvas_events=[],
+        turn_id="TURN-NOTATION",
+        canonical_answer="p × q; r × r",
+        fallback_labels=_fallback_labels(),
+        wrong_attempt_count=0,
+        student_response="p multiplied by q",
+    )
+
+    assert [(action.type, action.target_object_id, action.text) for action in actions] == [
+        ("HIGHLIGHT", "Q-NOTATION:QTOKEN:1", None),
+        ("INSERT_LABEL", "Q-NOTATION:QTOKEN:1", "pq → confirmed"),
+        (
+            "INSERT_LABEL",
+            "TUTOR_ANCHOR:CONFIRMED:Q-NOTATION:2",
+            "pq → confirmed",
+        ),
+    ]
+
+
 def test_legacy_partial_evaluation_keeps_an_accepted_component_visible() -> None:
     tutor = _tutor_result(
         TutorMistakeClassification(status="no_mistake", confidence=0.9),

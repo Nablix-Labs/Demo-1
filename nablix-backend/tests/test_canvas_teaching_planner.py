@@ -1,8 +1,12 @@
+import pytest
+
 from app.ai_engine.classifier_config import load_classifier_rules
 from app.core.config import Settings
 from app.models.adapters import TutorResult
 from app.models.canvas_teaching import CanvasTeachingPlanDraft
 from app.models.guided_learning import (
+    GeneratedConcept,
+    GeneratedQuestionRubric,
     GuidedEvidenceClaim,
     GuidedTeachingState,
     StudentContribution,
@@ -784,3 +788,84 @@ def test_planner_allows_a_spoken_current_tutor_solved_step(monkeypatch) -> None:
 
     assert plan is not None
     assert plan.teaching_mode == "TUTOR_SOLVED"
+
+
+def test_planner_writes_a_confirmed_notation_statement_without_openai(monkeypatch) -> None:
+    question = "Decode pq and r² without calculating."
+    anchors = question_text_tokens("Q-NOTATION", question)
+    pq_anchor = next(anchor for anchor in anchors if anchor.text == "pq")
+    tutor = _tutor().model_copy(
+        update={
+            "tutor_message_voice": "Yes — pq means p multiplied by q. What does r² mean?",
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-NOTATION",
+                objective_component_ids=["JUXTAPOSITION", "EXPONENT"],
+                confirmed_component_ids=["JUXTAPOSITION"],
+                missing_component_ids=["EXPONENT"],
+                active_component_id="EXPONENT",
+                last_tutor_question_type="COMPONENT",
+                selected_option_id=None,
+                awaiting_response=True,
+                last_turn_evidence=[
+                    GuidedEvidenceClaim(
+                        concept_id="JUXTAPOSITION",
+                        status="DEMONSTRATED",
+                        source="TEXT",
+                    )
+                ],
+            ),
+            "generated_question_rubric": GeneratedQuestionRubric(
+                question_id="Q-NOTATION",
+                required_concepts=[
+                    GeneratedConcept(
+                        concept_id="JUXTAPOSITION",
+                        description="pq means p multiplied by q",
+                        required=True,
+                    )
+                ],
+                completion_rule="ALL_REQUIRED_CONCEPTS",
+                cache_key="notation",
+                prompt_version="1.0",
+            ),
+            "tutor_canvas_actions": [
+                TutorCanvasAction(
+                    action_id="TURN-NOTATION:1:HIGHLIGHT",
+                    type="HIGHLIGHT",
+                    target_kind="QUESTION_ANCHOR",
+                    target_object_id=pq_anchor.token_id,
+                    confirmed_component_id="JUXTAPOSITION",
+                    text=None,
+                    source_id=None,
+                    answer_reveal_allowed=False,
+                )
+            ],
+        }
+    )
+    monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
+    monkeypatch.setattr(
+        canvas_teaching_planner,
+        "build_openai_ai_engine_client",
+        lambda _: pytest.fail("confirmed generic scenes must not call OpenAI"),
+    )
+
+    plan = canvas_teaching_planner.plan_canvas_teaching(
+        question_id="Q-NOTATION",
+        question=question,
+        source_turn_id="TURN-NOTATION",
+        tutor_turn_id="TUTOR-NOTATION",
+        scene_revision=1,
+        tutor_message_voice=tutor.tutor_message_voice,
+        tutor=tutor,
+        question_anchors=anchors,
+        student_response="p multiplied by q",
+        canonical_answer="p × q; r × r",
+        active_support_level=None,
+        current_unresolved_component_id="EXPONENT",
+    )
+
+    assert plan is not None
+    assert [(operation.kind, operation.scene_slot) for operation in plan.beats[0].operations] == [
+        ("HIGHLIGHT", None),
+        ("WRITE_TEXT", "generic_confirmation:JUXTAPOSITION"),
+    ]
+    assert plan.beats[0].operations[1].text == "pq means p multiplied by q."
