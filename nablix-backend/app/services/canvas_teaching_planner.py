@@ -68,6 +68,11 @@ def plan_canvas_teaching(
     )
     tutor_solved = _tutor_solved_active(tutor)
     answer_reveal = _approved_tutor_solved_answer(tutor)
+    require_guided_evidence_ink = (
+        config.guided_evidence_writing_enabled
+        and teaching_mode == "GUIDED"
+        and bool(current_evidence)
+    )
     try:
         draft = client.plan_canvas_teaching(
             system_prompt=config.system_prompt,
@@ -85,6 +90,7 @@ def plan_canvas_teaching(
                     for anchor in question_anchors
                 ],
                 "current_turn_evidence_ids": sorted(current_evidence),
+                "require_guided_evidence_ink": require_guided_evidence_ink,
                 "direct_explanation_authorized": direct_explanation,
                 "direct_explanation_evidence_ref": config.direct_explanation_evidence_ref,
                 "direct_explanation_maximum_written_operations": config.direct_explanation_maximum_written_operations,
@@ -119,10 +125,12 @@ def plan_canvas_teaching(
         allowed_targets=set(allowed_targets),
         question_anchor_texts=question_anchor_texts,
         current_evidence=current_evidence,
+        require_guided_evidence_ink=require_guided_evidence_ink,
         teaching_mode=teaching_mode,
         direct_explanation=direct_explanation,
         tutor_solved=tutor_solved,
         answer_reveal=answer_reveal,
+        learner_answer_confirmed=tutor.answer_value_confirmed,
         canonical_answer=canonical_answer or "",
         question=question,
         tutor_solved_step_texts=_current_tutor_solved_step_texts(tutor),
@@ -189,10 +197,12 @@ def _validate_draft(
     allowed_targets: set[str],
     question_anchor_texts: dict[str, str],
     current_evidence: set[str],
+    require_guided_evidence_ink: bool,
     teaching_mode: CanvasTeachingMode,
     direct_explanation: bool,
     tutor_solved: bool,
     answer_reveal: bool,
+    learner_answer_confirmed: bool,
     canonical_answer: str,
     question: str,
     tutor_solved_step_texts: list[str],
@@ -200,6 +210,7 @@ def _validate_draft(
     if len(draft.beats) > config.maximum_beats:
         return None
     direct_explanation_writes = 0
+    guided_evidence_writes = 0
     accepted: list[CanvasTeachingBeat] = []
     for beat in draft.beats:
         if len(beat.operations) > config.maximum_operations_per_beat:
@@ -215,6 +226,7 @@ def _validate_draft(
                 allowed_targets=allowed_targets,
                 question_anchor_texts=question_anchor_texts,
                 current_evidence=current_evidence,
+                learner_answer_confirmed=learner_answer_confirmed,
                 teaching_mode=teaching_mode,
                 direct_explanation=direct_explanation,
                 tutor_solved=tutor_solved,
@@ -232,6 +244,11 @@ def _validate_draft(
             operation.kind in {"WRITE_TEXT", "WRITE_MATH"}
             for operation in operations
         )
+        if teaching_mode == "GUIDED":
+            guided_evidence_writes += sum(
+                operation.kind in {"WRITE_TEXT", "WRITE_MATH"}
+                for operation in operations
+            )
         if direct_explanation and direct_explanation_writes > config.direct_explanation_maximum_written_operations:
             return None
         accepted.append(
@@ -239,6 +256,10 @@ def _validate_draft(
                 update={"speech_anchor": anchor, "operations": operations}
             )
         )
+    if require_guided_evidence_ink and guided_evidence_writes == 0:
+        return None
+    if guided_evidence_writes > config.guided_evidence_maximum_written_operations:
+        return None
     return accepted
 
 
@@ -247,6 +268,7 @@ def _operation_is_authorized(
     allowed_targets: set[str],
     question_anchor_texts: dict[str, str],
     current_evidence: set[str],
+    learner_answer_confirmed: bool,
     teaching_mode: CanvasTeachingMode,
     direct_explanation: bool,
     tutor_solved: bool,
@@ -273,7 +295,12 @@ def _operation_is_authorized(
     if teaching_mode in config.visual_only_modes:
         return False
     content = operation.latex or operation.text or ""
-    if canonical_answer and _normalized(content) == _normalized(canonical_answer) and not answer_reveal:
+    if (
+        canonical_answer
+        and _normalized(content) == _normalized(canonical_answer)
+        and not answer_reveal
+        and not learner_answer_confirmed
+    ):
         return False
     if operation.target_kind != "CANVAS_ZONE" or operation.target_ids != [f"ZONE:{operation.zone}"]:
         return False
@@ -289,6 +316,14 @@ def _operation_is_authorized(
             config.tutor_solved_writing_enabled
             and _content_terms_are_spoken(content, narration)
             and _content_terms_are_spoken(content, " ".join(tutor_solved_step_texts))
+        )
+    if teaching_mode == "GUIDED":
+        return (
+            operation.evidence_ref in current_evidence
+            and operation.zone == "REASONING"
+            and operation.persistence == "PERSIST"
+            and operation.color_role == "NAVY"
+            and _content_terms_are_spoken(content, narration)
         )
     if operation.evidence_ref not in current_evidence:
         return False

@@ -146,6 +146,17 @@ def test_planner_returns_a_grounded_attention_beat(monkeypatch) -> None:
                             "zone": "QUESTION",
                             "persistence": "PULSE",
                             "color_role": "AMBER",
+                        },
+                        {
+                            "operation_id": "write-confirmed-observation",
+                            "kind": "WRITE_TEXT",
+                            "target_kind": "CANVAS_ZONE",
+                            "target_ids": ["ZONE:REASONING"],
+                            "zone": "REASONING",
+                            "persistence": "PERSIST",
+                            "evidence_ref": "CHANGING_VALUE",
+                            "text": "first numbers are different",
+                            "color_role": "NAVY",
                         }
                     ],
                 }
@@ -176,7 +187,45 @@ def test_planner_returns_a_grounded_attention_beat(monkeypatch) -> None:
     assert plan is not None
     assert plan.plan_id == "Q1:TURN-1:canvas-teaching"
     assert plan.beats[0].operations[0].target_ids == ["Q1:QTOKEN:1"]
+    assert plan.beats[0].operations[1].kind == "WRITE_TEXT"
     assert requested_models == [rules.guided_learning.model]
+
+
+def test_planner_rejects_attention_only_after_confirmed_guided_evidence(monkeypatch) -> None:
+    draft = CanvasTeachingPlanDraft.model_validate(
+        {
+            "beats": [
+                {
+                    "beat_id": "focus-first-values",
+                    "sequence": 1,
+                    "speech_anchor": {
+                        "start_char": 0,
+                        "end_char": 19,
+                        "text": "Those first numbers",
+                    },
+                    "operations": [
+                        {
+                            "operation_id": "circle-first-values",
+                            "kind": "CIRCLE",
+                            "target_kind": "QUESTION_ANCHOR",
+                            "target_ids": ["Q1:QTOKEN:1"],
+                            "zone": "QUESTION",
+                            "persistence": "PULSE",
+                            "color_role": "AMBER",
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
+    monkeypatch.setattr(
+        canvas_teaching_planner,
+        "build_openai_ai_engine_client",
+        lambda _: FakeCanvasTeachingClient(draft),
+    )
+
+    assert _plan(draft) is None
 
 
 def test_planner_rejects_a_prose_question_annotation(monkeypatch) -> None:
@@ -283,6 +332,17 @@ def test_planner_rejects_a_beat_not_present_in_narration(monkeypatch) -> None:
                             "target_ids": ["Q1:QTOKEN:1"],
                             "zone": "QUESTION",
                             "persistence": "PULSE",
+                        },
+                        {
+                            "operation_id": "write-confirmed-observation",
+                            "kind": "WRITE_TEXT",
+                            "target_kind": "CANVAS_ZONE",
+                            "target_ids": ["ZONE:REASONING"],
+                            "zone": "REASONING",
+                            "persistence": "PERSIST",
+                            "evidence_ref": "CHANGING_VALUE",
+                            "text": "first numbers",
+                            "color_role": "NAVY",
                         }
                     ],
                 }
@@ -320,6 +380,17 @@ def test_planner_corrects_a_unique_speech_anchor_offset(monkeypatch) -> None:
                             "target_ids": ["Q1:QTOKEN:1"],
                             "zone": "QUESTION",
                             "persistence": "PULSE",
+                        },
+                        {
+                            "operation_id": "write-confirmed-observation",
+                            "kind": "WRITE_TEXT",
+                            "target_kind": "CANVAS_ZONE",
+                            "target_ids": ["ZONE:REASONING"],
+                            "zone": "REASONING",
+                            "persistence": "PERSIST",
+                            "evidence_ref": "CHANGING_VALUE",
+                            "text": "first numbers",
+                            "color_role": "NAVY",
                         }
                     ],
                 }

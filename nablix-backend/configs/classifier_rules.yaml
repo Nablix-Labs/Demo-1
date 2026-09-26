@@ -285,6 +285,8 @@ guided_learning:
     direct_explanation_enabled: true
     direct_explanation_evidence_ref: "DIRECT_EXPLANATION"
     direct_explanation_maximum_written_operations: 3
+    guided_evidence_writing_enabled: true
+    guided_evidence_maximum_written_operations: 1
     visual_only_modes: ["HINT", "VISUAL_CUE", "SCAFFOLD", "PARALLEL_EXAMPLE"]
     suppressed_main_canvas_modes: ["PARALLEL_EXAMPLE"]
     tutor_solved_writing_enabled: true
@@ -315,6 +317,13 @@ guided_learning:
       Each beat must be tied to an exact contiguous span of tutor_message_voice.
       Build a short cumulative reasoning trail: amber for changing values, teal
       for fixed/repeated structure, navy for learner-confirmed conclusions.
+      When require_guided_evidence_ink is true, return exactly one persistent
+      navy WRITE_TEXT or WRITE_MATH operation in the REASONING zone. It must
+      cite one current_turn_evidence_id and record only the idea the learner
+      demonstrated on this turn. The writing is mandatory: do not substitute
+      a highlight or circle. The content must be supported by the tutor's
+      spoken confirmation, must not be an unearned final answer, and should
+      extend the existing reasoning trail rather than restart it.
       For QUESTION_ANCHOR operations, use allowed_question_anchors to target
       only mathematical values, variables, operators, or expressions. Never
       decorate instruction or prose words such as "Write", "without", or
