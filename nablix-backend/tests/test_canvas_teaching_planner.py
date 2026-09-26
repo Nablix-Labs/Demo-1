@@ -925,3 +925,80 @@ def test_planner_uses_the_spoken_confirmation_when_the_rubric_has_no_literal_tok
         "Q-NOTATION:QTOKEN:3",
     ]
     assert plan.beats[0].operations[1].text == "you read 4n as multiplication."
+
+
+def test_planner_uses_the_confirmed_label_when_speech_is_indirect(monkeypatch) -> None:
+    question = "Use m as the changing quantity and add 7."
+    anchors = question_text_tokens("Q-GENERIC", question)
+    fixed_anchor = next(anchor for anchor in anchors if anchor.text == "7")
+    tutor = _tutor().model_copy(
+        update={
+            "tutor_message": "Yes — that stays fixed. What changes next?",
+            "tutor_message_voice": "Yes, that stays fixed. What changes next?",
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-GENERIC",
+                objective_component_ids=["CHANGING_VALUE", "FIXED_VALUE"],
+                confirmed_component_ids=["FIXED_VALUE"],
+                missing_component_ids=["CHANGING_VALUE"],
+                active_component_id="CHANGING_VALUE",
+                last_tutor_question_type="COMPONENT",
+                selected_option_id=None,
+                awaiting_response=True,
+                last_turn_evidence=[
+                    GuidedEvidenceClaim(
+                        concept_id="FIXED_VALUE",
+                        status="DEMONSTRATED",
+                        source="TEXT",
+                    )
+                ],
+            ),
+            "tutor_canvas_actions": [
+                TutorCanvasAction(
+                    action_id="TURN-GENERIC:1:HIGHLIGHT",
+                    type="HIGHLIGHT",
+                    target_kind="QUESTION_ANCHOR",
+                    target_object_id=fixed_anchor.token_id,
+                    confirmed_component_id="FIXED_VALUE",
+                    text=None,
+                    source_id=None,
+                    answer_reveal_allowed=False,
+                ),
+                TutorCanvasAction(
+                    action_id="TURN-GENERIC:2:INSERT_LABEL",
+                    type="INSERT_LABEL",
+                    target_kind="TUTOR_ANCHOR",
+                    target_object_id="TUTOR_ANCHOR:CONFIRMED:Q-GENERIC:2",
+                    confirmed_component_id="FIXED_VALUE",
+                    text="7 → stays fixed",
+                    source_id=None,
+                    answer_reveal_allowed=False,
+                ),
+            ],
+        }
+    )
+    monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
+    monkeypatch.setattr(
+        canvas_teaching_planner,
+        "build_openai_ai_engine_client",
+        lambda _: pytest.fail("confirmed label scenes must not call OpenAI"),
+    )
+
+    plan = canvas_teaching_planner.plan_canvas_teaching(
+        question_id="Q-GENERIC",
+        question=question,
+        source_turn_id="TURN-GENERIC",
+        tutor_turn_id="TUTOR-GENERIC",
+        scene_revision=1,
+        tutor_message_voice=tutor.tutor_message_voice,
+        tutor=tutor,
+        question_anchors=anchors,
+        student_response="7 stays fixed",
+        canonical_answer="m + 7",
+        active_support_level=None,
+        current_unresolved_component_id="CHANGING_VALUE",
+    )
+
+    assert plan is not None
+    assert plan.beats[0].operations[0].target_ids == [fixed_anchor.token_id]
+    assert plan.beats[0].operations[1].scene_slot == "generic_confirmation:FIXED_VALUE"
+    assert plan.beats[0].operations[1].text == "7 → stays fixed"

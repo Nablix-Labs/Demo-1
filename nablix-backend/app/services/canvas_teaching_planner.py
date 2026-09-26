@@ -256,6 +256,12 @@ def _plan_confirmed_generic_scene(
             None,
         )
         if statement is None:
+            statement = _confirmed_canvas_label(
+                tutor=tutor,
+                evidence_ref=evidence_ref,
+                canonical_answer=canonical_answer,
+            )
+        if statement is None:
             continue
         operations = [
             CanvasTeachingOperation(
@@ -310,6 +316,33 @@ def _plan_confirmed_generic_scene(
 def _confirmation_messages(tutor: TutorResult, voice: str) -> list[str]:
     messages = [tutor.tutor_message.strip(), voice.strip()]
     return list(dict.fromkeys(message for message in messages if message))
+
+
+def _confirmed_canvas_label(
+    tutor: TutorResult,
+    evidence_ref: str,
+    canonical_answer: str,
+) -> str | None:
+    """Use the turn's evidence-linked label when the spoken confirmation is indirect."""
+
+    for action in tutor.tutor_canvas_actions:
+        if (
+            action.type != "INSERT_LABEL"
+            or action.confirmed_component_id != evidence_ref
+            or action.text is None
+        ):
+            continue
+        label = action.text.strip()
+        if not label:
+            continue
+        if (
+            canonical_answer
+            and _normalized(label) == _normalized(canonical_answer)
+            and not tutor.answer_value_confirmed
+        ):
+            continue
+        return label
+    return None
 
 
 def _confirmed_voice_target(
