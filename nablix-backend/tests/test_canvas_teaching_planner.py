@@ -869,3 +869,58 @@ def test_planner_writes_a_confirmed_notation_statement_without_openai(monkeypatc
         ("WRITE_TEXT", "generic_confirmation:JUXTAPOSITION"),
     ]
     assert plan.beats[0].operations[1].text == "pq means p multiplied by q."
+
+
+def test_planner_uses_the_spoken_confirmation_when_the_rubric_has_no_literal_token(monkeypatch) -> None:
+    question = "Decode 4n, pq, r², c/d and 2(x + 1)."
+    tutor = _tutor().model_copy(
+        update={
+            "tutor_message_voice": "Yes — you read 4n as multiplication. How would you read pq?",
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-NOTATION",
+                objective_component_ids=["JUXTAPOSITION"],
+                confirmed_component_ids=["JUXTAPOSITION"],
+                missing_component_ids=[],
+                active_component_id=None,
+                last_tutor_question_type="COMPONENT",
+                selected_option_id=None,
+                awaiting_response=True,
+                last_turn_evidence=[
+                    GuidedEvidenceClaim(
+                        concept_id="JUXTAPOSITION",
+                        status="DEMONSTRATED",
+                        source="TEXT",
+                    )
+                ],
+            ),
+            "tutor_canvas_actions": [],
+        }
+    )
+    monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
+    monkeypatch.setattr(
+        canvas_teaching_planner,
+        "build_openai_ai_engine_client",
+        lambda _: pytest.fail("voice-grounded generic scenes must not call OpenAI"),
+    )
+
+    plan = canvas_teaching_planner.plan_canvas_teaching(
+        question_id="Q-NOTATION",
+        question=question,
+        source_turn_id="TURN-NOTATION",
+        tutor_turn_id="TUTOR-NOTATION",
+        scene_revision=1,
+        tutor_message_voice=tutor.tutor_message_voice,
+        tutor=tutor,
+        question_anchors=question_text_tokens("Q-NOTATION", question),
+        student_response="4 multiplied by n",
+        canonical_answer="4 × n; p × q; r × r; c ÷ d; 2 × (x + 1)",
+        active_support_level=None,
+        current_unresolved_component_id=None,
+    )
+
+    assert plan is not None
+    assert plan.beats[0].operations[0].target_ids == [
+        "Q-NOTATION:QTOKEN:2",
+        "Q-NOTATION:QTOKEN:3",
+    ]
+    assert plan.beats[0].operations[1].text == "you read 4n as multiplication."
