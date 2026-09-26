@@ -294,6 +294,13 @@ guided_learning:
       GENERAL_RULE: rule_conclusion
       GENERAL_RULE_CHANGING_VALUE: rule_conclusion
       GENERAL_RULE_FIXED_VALUE: rule_conclusion
+    pattern_add_constant_scene:
+      enabled: true
+      minimum_cases: 3
+      changing_note: "starting number → changes"
+      fixed_note: "{operator}{fixed_value} → stays fixed"
+      structure_note: "changing starting number {operator} {fixed_value}"
+      variable_note: "{variable} = changing starting number"
     visual_only_modes: ["HINT", "VISUAL_CUE", "SCAFFOLD", "PARALLEL_EXAMPLE"]
     suppressed_main_canvas_modes: ["PARALLEL_EXAMPLE"]
     tutor_solved_writing_enabled: true

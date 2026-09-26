@@ -9,6 +9,7 @@ from app.models.guided_learning import (
     TutorCanvasAction,
 )
 from app.models.question_anchor import QuestionTextAnchor
+from app.services.question_anchors import question_text_tokens
 from app.services import canvas_teaching_planner
 
 
@@ -125,6 +126,56 @@ def _plan_for_question_anchor(
     )
 
 
+def _pattern_tutor(
+    evidence_id: str,
+    confirmed_ids: list[str],
+    answer_value_confirmed: bool = False,
+) -> TutorResult:
+    tutor = _tutor()
+    state = tutor.guided_teaching_state
+    assert state is not None
+    return tutor.model_copy(
+        update={
+            "answer_value_confirmed": answer_value_confirmed,
+            "guided_teaching_state": state.model_copy(
+                update={
+                    "confirmed_component_ids": confirmed_ids,
+                    "last_turn_evidence": [
+                        GuidedEvidenceClaim(
+                            concept_id=evidence_id,
+                            status="DEMONSTRATED",
+                            source="TEXT",
+                        )
+                    ],
+                }
+            ),
+        }
+    )
+
+
+def _pattern_plan(
+    tutor: TutorResult,
+    student_response: str,
+    active_support_level: str | None = None,
+    unresolved_component_id: str | None = None,
+) -> object:
+    question = "3 + 5 | 9 + 5 | 14 + 5. Use n for the changing starting number."
+    return canvas_teaching_planner.plan_canvas_teaching(
+        question_id="Q1",
+        question=question,
+        source_turn_id="TURN-1",
+        tutor_turn_id="TUTOR-1",
+        scene_revision=3,
+        tutor_message_voice="Let us record that on the canvas.",
+        tutor=tutor,
+        question_anchors=question_text_tokens("Q1", question),
+        student_response=student_response,
+        canonical_answer="n + 5",
+        active_support_level=active_support_level,
+        current_unresolved_component_id=unresolved_component_id,
+    )
+
+
 def test_planner_returns_a_grounded_attention_beat(monkeypatch) -> None:
     draft = CanvasTeachingPlanDraft.model_validate(
         {
@@ -191,6 +242,76 @@ def test_planner_returns_a_grounded_attention_beat(monkeypatch) -> None:
     assert plan.beats[0].operations[1].kind == "WRITE_TEXT"
     assert plan.beats[0].operations[1].scene_slot == "changing_conclusion"
     assert requested_models == [rules.guided_learning.model]
+
+
+def test_pattern_scene_writes_only_after_the_learner_names_the_changing_part(monkeypatch) -> None:
+    monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
+    monkeypatch.setattr(
+        canvas_teaching_planner,
+        "build_openai_ai_engine_client",
+        lambda _: (_ for _ in ()).throw(AssertionError("pattern scene must not call OpenAI")),
+    )
+
+    plan = _pattern_plan(
+        tutor=_pattern_tutor("CHANGING_VALUE", ["CHANGING_VALUE"]),
+        student_response="The starting numbers are different.",
+    )
+
+    assert plan is not None
+    operations = plan.beats[0].operations
+    assert [operation.kind for operation in operations] == ["CIRCLE", "WRITE_TEXT"]
+    assert operations[0].target_ids == ["Q1:QTOKEN:1", "Q1:QTOKEN:4", "Q1:QTOKEN:7"]
+    assert operations[1].text == "starting number → changes"
+    assert operations[1].scene_slot == "changing_conclusion"
+
+
+def test_pattern_scene_pulses_a_bare_fixed_value_without_writing_a_conclusion(monkeypatch) -> None:
+    monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
+
+    plan = _pattern_plan(
+        tutor=_pattern_tutor("FIXED_VALUE", ["CHANGING_VALUE"]),
+        student_response="5",
+    )
+
+    assert plan is not None
+    operations = plan.beats[0].operations
+    assert all(operation.kind == "HIGHLIGHT" for operation in operations)
+    assert all(operation.persistence == "PULSE" for operation in operations)
+
+
+def test_pattern_scene_writes_the_fixed_conclusion_only_after_plus_value(monkeypatch) -> None:
+    monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
+
+    plan = _pattern_plan(
+        tutor=_pattern_tutor("FIXED_VALUE", ["CHANGING_VALUE", "FIXED_VALUE"]),
+        student_response="Plus 5.",
+    )
+
+    assert plan is not None
+    operations = plan.beats[0].operations
+    assert any(operation.kind == "CONNECT" for operation in operations)
+    write = next(operation for operation in operations if operation.kind == "WRITE_TEXT")
+    assert write.text == "+5 → stays fixed"
+    assert write.scene_slot == "fixed_conclusion"
+
+
+def test_pattern_scene_boxes_only_the_confirmed_final_rule(monkeypatch) -> None:
+    monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
+
+    plan = _pattern_plan(
+        tutor=_pattern_tutor(
+            "GENERAL_RULE",
+            ["CHANGING_VALUE", "FIXED_VALUE", "OPERATION", "GENERAL_RULE"],
+            answer_value_confirmed=True,
+        ),
+        student_response="n + 5",
+    )
+
+    assert plan is not None
+    operation = plan.beats[0].operations[0]
+    assert operation.kind == "WRITE_MATH"
+    assert operation.latex == "n + 5"
+    assert operation.scene_slot == "rule_conclusion"
 
 
 def test_planner_rejects_attention_only_after_confirmed_guided_evidence(monkeypatch) -> None:

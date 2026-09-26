@@ -3,24 +3,35 @@
     "x": 0.44,
     "row": 0,
     "accent": "AMBER",
+    "format": "handwritten",
     "box": false
   },
   "fixed_conclusion": {
     "x": 0.68,
     "row": 0,
     "accent": "TEAL",
+    "format": "handwritten",
     "box": false
   },
   "operation_conclusion": {
     "x": 0.44,
     "row": 1,
     "accent": "NAVY",
+    "format": "handwritten",
+    "box": false
+  },
+  "variable_conclusion": {
+    "x": 0.44,
+    "row": 2,
+    "accent": "NAVY",
+    "format": "handwritten",
     "box": false
   },
   "rule_conclusion": {
     "x": 0.68,
-    "row": 1,
+    "row": 2,
     "accent": "NAVY",
+    "format": "handwritten",
     "box": true
   }
 }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import Literal, TypedDict
 
 from app.ai_engine.classifier import build_openai_ai_engine_client
 from app.ai_engine.classifier_config import CanvasTeachingConfig, load_classifier_rules
@@ -17,6 +18,24 @@ from app.models.canvas_teaching import (
     CanvasSpeechAnchor,
 )
 from app.models.question_anchor import QuestionTextAnchor
+
+
+_PATTERN_CASE_RE = re.compile(
+    r"(?P<starting>\d+)\s*(?P<operator>[+−-])\s*(?P<fixed>\d+)"
+)
+_CANONICAL_PATTERN_RE = re.compile(
+    r"(?P<variable>[a-z])\s*(?P<operator>[+−-])\s*(?P<fixed>\d+)",
+    re.IGNORECASE,
+)
+
+
+class PatternAddConstantScene(TypedDict):
+    variable: str
+    operator: str
+    fixed_value: str
+    changing_ids: list[str]
+    fixed_ids: list[str]
+    operator_ids: list[str]
 
 
 def plan_canvas_teaching(
@@ -44,17 +63,6 @@ def plan_canvas_teaching(
     question_anchor_texts = {
         anchor.token_id: anchor.text for anchor in question_anchors
     }
-    guided_settings = get_settings().model_copy(
-        update={"openai_ai_engine_model": rules.guided_learning.model}
-    )
-    client = build_openai_ai_engine_client(guided_settings)
-    if client is None:
-        logger.warning(
-            "canvas_teaching_plan_not_generated",
-            extra={"question_id": question_id, "reason": "openai_client_unavailable"},
-        )
-        return None
-
     teaching_mode = _teaching_mode(tutor, active_support_level, config)
     if teaching_mode in config.suppressed_main_canvas_modes:
         return None
@@ -73,6 +81,34 @@ def plan_canvas_teaching(
         and teaching_mode == "GUIDED"
         and bool(current_evidence)
     )
+    pattern_matched, pattern_plan = _plan_pattern_add_constant_scene(
+        question_id=question_id,
+        source_turn_id=source_turn_id,
+        tutor_turn_id=tutor_turn_id,
+        scene_revision=scene_revision,
+        tutor_message_voice=tutor_message_voice,
+        tutor=tutor,
+        question=question,
+        question_anchors=question_anchors,
+        student_response=student_response,
+        canonical_answer=canonical_answer or "",
+        teaching_mode=teaching_mode,
+        current_unresolved_component_id=current_unresolved_component_id,
+        current_evidence=current_evidence,
+        config=config,
+    )
+    if pattern_matched:
+        return pattern_plan
+    guided_settings = get_settings().model_copy(
+        update={"openai_ai_engine_model": rules.guided_learning.model}
+    )
+    client = build_openai_ai_engine_client(guided_settings)
+    if client is None:
+        logger.warning(
+            "canvas_teaching_plan_not_generated",
+            extra={"question_id": question_id, "reason": "openai_client_unavailable"},
+        )
+        return None
     try:
         draft = client.plan_canvas_teaching(
             system_prompt=config.system_prompt,
@@ -147,6 +183,308 @@ def plan_canvas_teaching(
         teaching_mode=teaching_mode,
         beats=accepted,
     )
+
+
+def _plan_pattern_add_constant_scene(
+    question_id: str,
+    source_turn_id: str,
+    tutor_turn_id: str | None,
+    scene_revision: int,
+    tutor_message_voice: str,
+    tutor: TutorResult,
+    question: str,
+    question_anchors: list[QuestionTextAnchor],
+    student_response: str,
+    canonical_answer: str,
+    teaching_mode: CanvasTeachingMode,
+    current_unresolved_component_id: str | None,
+    current_evidence: set[str],
+    config: CanvasTeachingConfig,
+) -> tuple[bool, CanvasTeachingPlan | None]:
+    scene = _pattern_add_constant_scene(
+        question=question,
+        question_anchors=question_anchors,
+        canonical_answer=canonical_answer,
+        minimum_cases=config.pattern_add_constant_scene.minimum_cases,
+    )
+    if not config.pattern_add_constant_scene.enabled or scene is None:
+        return False, None
+    if teaching_mode == "PARALLEL_EXAMPLE":
+        return True, None
+
+    operations: list[CanvasTeachingOperation] = []
+    if teaching_mode in config.visual_only_modes:
+        operations = _pattern_attention_operations(
+            scene=scene,
+            unresolved_component_id=current_unresolved_component_id,
+        )
+    elif teaching_mode == "GUIDED":
+        operations = _pattern_guided_operations(
+            scene=scene,
+            student_response=student_response,
+            tutor=tutor,
+            current_evidence=current_evidence,
+            config=config,
+            canonical_answer=canonical_answer,
+        )
+    else:
+        return False, None
+
+    if not operations:
+        return True, None
+    return True, CanvasTeachingPlan(
+        plan_id=f"{question_id}:{source_turn_id}:canvas-teaching",
+        question_id=question_id,
+        source_turn_id=source_turn_id,
+        tutor_turn_id=tutor_turn_id,
+        scene_revision=scene_revision,
+        mode="append",
+        teaching_mode=teaching_mode,
+        beats=[
+            CanvasTeachingBeat(
+                beat_id="pattern-scene",
+                sequence=1,
+                speech_anchor=CanvasSpeechAnchor(
+                    start_char=0,
+                    end_char=len(tutor_message_voice),
+                    text=tutor_message_voice,
+                ),
+                operations=operations,
+            )
+        ],
+    )
+
+
+def _pattern_add_constant_scene(
+    question: str,
+    question_anchors: list[QuestionTextAnchor],
+    canonical_answer: str,
+    minimum_cases: int,
+) -> PatternAddConstantScene | None:
+    canonical = _CANONICAL_PATTERN_RE.fullmatch(canonical_answer.strip())
+    if canonical is None:
+        return None
+    variable, canonical_operator, canonical_fixed = canonical.groups()
+    cases = list(_PATTERN_CASE_RE.finditer(question))
+    if len(cases) < minimum_cases:
+        return None
+    if any(
+        match.group("operator") != canonical_operator
+        or match.group("fixed") != canonical_fixed
+        for match in cases
+    ):
+        return None
+
+    by_span = {
+        (anchor.char_start, anchor.char_end): anchor.token_id
+        for anchor in question_anchors
+    }
+    changing_ids = [
+        by_span.get((match.start("starting"), match.end("starting")))
+        for match in cases
+    ]
+    fixed_ids = [
+        by_span.get((match.start("fixed"), match.end("fixed")))
+        for match in cases
+    ]
+    operator_ids = [
+        by_span.get((match.start("operator"), match.end("operator")))
+        for match in cases
+    ]
+    if any(token_id is None for token_id in [*changing_ids, *fixed_ids, *operator_ids]):
+        return None
+    return {
+        "variable": variable,
+        "operator": canonical_operator,
+        "fixed_value": canonical_fixed,
+        "changing_ids": [token_id for token_id in changing_ids if token_id is not None],
+        "fixed_ids": [token_id for token_id in fixed_ids if token_id is not None],
+        "operator_ids": [token_id for token_id in operator_ids if token_id is not None],
+    }
+
+
+def _pattern_attention_operations(
+    scene: PatternAddConstantScene,
+    unresolved_component_id: str | None,
+) -> list[CanvasTeachingOperation]:
+    if unresolved_component_id == "CHANGING_VALUE":
+        return _question_marks(
+            operation_id="focus-changing-values",
+            kind="CIRCLE",
+            target_ids=scene["changing_ids"],
+            color_role="AMBER",
+            persistence="PULSE",
+        )
+    if unresolved_component_id in {"FIXED_VALUE", "OPERATION"}:
+        return _question_marks(
+            operation_id="focus-fixed-terms",
+            kind="HIGHLIGHT",
+            target_ids=[*scene["operator_ids"], *scene["fixed_ids"]],
+            color_role="TEAL",
+            persistence="PULSE",
+        )
+    return []
+
+
+def _pattern_guided_operations(
+    scene: PatternAddConstantScene,
+    student_response: str,
+    tutor: TutorResult,
+    current_evidence: set[str],
+    config: CanvasTeachingConfig,
+    canonical_answer: str,
+) -> list[CanvasTeachingOperation]:
+    state = tutor.guided_teaching_state
+    confirmed = set(state.confirmed_component_ids) if state is not None else set()
+    pattern_config = config.pattern_add_constant_scene
+    if tutor.answer_value_confirmed or _normalized(student_response) == _normalized(canonical_answer):
+        return [
+            _pattern_write(
+                operation_id="write-final-rule",
+                kind="WRITE_MATH",
+                content=canonical_answer,
+                evidence_ref="GENERAL_RULE",
+                scene_slot="rule_conclusion",
+            )
+        ]
+    if "CHANGING_VALUE" in current_evidence:
+        if _student_names_variable(student_response, scene["variable"]):
+            return [
+                _pattern_write(
+                    operation_id="write-variable-meaning",
+                    kind="WRITE_TEXT",
+                    content=pattern_config.variable_note.format(variable=scene["variable"]),
+                    evidence_ref="CHANGING_VALUE",
+                    scene_slot="variable_conclusion",
+                )
+            ]
+        return [
+            *_question_marks(
+                operation_id="circle-changing-values",
+                kind="CIRCLE",
+                target_ids=scene["changing_ids"],
+                color_role="AMBER",
+                persistence="PERSIST",
+            ),
+            _pattern_write(
+                operation_id="write-changing-conclusion",
+                kind="WRITE_TEXT",
+                content=pattern_config.changing_note,
+                evidence_ref="CHANGING_VALUE",
+                scene_slot="changing_conclusion",
+            ),
+        ]
+    if "FIXED_VALUE" in current_evidence:
+        complete_term = _student_names_complete_fixed_term(student_response, scene)
+        fixed_marks = _question_marks(
+            operation_id="highlight-fixed-terms",
+            kind="HIGHLIGHT",
+            target_ids=[*scene["operator_ids"], *scene["fixed_ids"]],
+            color_role="TEAL",
+            persistence="PERSIST" if complete_term else "PULSE",
+        )
+        if not complete_term:
+            return fixed_marks
+        return [
+            *fixed_marks,
+            CanvasTeachingOperation(
+                operation_id="connect-fixed-values",
+                kind="CONNECT",
+                target_kind="QUESTION_ANCHOR",
+                target_ids=scene["fixed_ids"],
+                zone="QUESTION",
+                persistence="PERSIST",
+                color_role="TEAL",
+            ),
+            _pattern_write(
+                operation_id="write-fixed-conclusion",
+                kind="WRITE_TEXT",
+                content=pattern_config.fixed_note.format(
+                    operator=scene["operator"], fixed_value=scene["fixed_value"]
+                ),
+                evidence_ref="FIXED_VALUE",
+                scene_slot="fixed_conclusion",
+            ),
+        ]
+    if "OPERATION" in current_evidence and {"CHANGING_VALUE", "FIXED_VALUE"}.issubset(confirmed):
+        return [
+            CanvasTeachingOperation(
+                operation_id="connect-changing-values",
+                kind="CONNECT",
+                target_kind="QUESTION_ANCHOR",
+                target_ids=scene["changing_ids"],
+                zone="QUESTION",
+                persistence="PERSIST",
+                color_role="AMBER",
+            ),
+            _pattern_write(
+                operation_id="write-pattern-structure",
+                kind="WRITE_TEXT",
+                content=pattern_config.structure_note.format(
+                    operator=scene["operator"], fixed_value=scene["fixed_value"]
+                ),
+                evidence_ref="OPERATION",
+                scene_slot="operation_conclusion",
+            ),
+        ]
+    return []
+
+
+def _question_marks(
+    operation_id: str,
+    kind: Literal["CIRCLE", "HIGHLIGHT"],
+    target_ids: list[str],
+    color_role: Literal["AMBER", "TEAL"],
+    persistence: Literal["PULSE", "PERSIST"],
+) -> list[CanvasTeachingOperation]:
+    return [
+        CanvasTeachingOperation(
+            operation_id=f"{operation_id}-{index}",
+            kind=kind,
+            target_kind="QUESTION_ANCHOR",
+            target_ids=target_ids[index:index + 4],
+            zone="QUESTION",
+            persistence=persistence,
+            color_role=color_role,
+        )
+        for index in range(0, len(target_ids), 4)
+    ]
+
+
+def _pattern_write(
+    operation_id: str,
+    kind: Literal["WRITE_TEXT", "WRITE_MATH"],
+    content: str,
+    evidence_ref: str,
+    scene_slot: str,
+) -> CanvasTeachingOperation:
+    return CanvasTeachingOperation(
+        operation_id=operation_id,
+        kind=kind,
+        target_kind="CANVAS_ZONE",
+        target_ids=["ZONE:REASONING"],
+        zone="REASONING",
+        persistence="PERSIST",
+        evidence_ref=evidence_ref,
+        text=content if kind == "WRITE_TEXT" else None,
+        latex=content if kind == "WRITE_MATH" else None,
+        color_role="NAVY",
+        scene_slot=scene_slot,
+    )
+
+
+def _student_names_complete_fixed_term(
+    student_response: str,
+    scene: PatternAddConstantScene,
+) -> bool:
+    normalized = student_response.casefold().replace("−", "-")
+    if scene["operator"] == "+":
+        return bool(re.search(rf"(?:\+|plus)\s*{re.escape(scene['fixed_value'])}\b", normalized))
+    return bool(re.search(rf"(?:-|minus)\s*{re.escape(scene['fixed_value'])}\b", normalized))
+
+
+def _student_names_variable(student_response: str, variable: str) -> bool:
+    return bool(re.fullmatch(rf"\s*(?:it(?:'s| is)\s*)?{re.escape(variable)}\s*[.!]?\s*", student_response, re.IGNORECASE))
 
 
 def _current_turn_evidence(tutor: TutorResult) -> set[str]:

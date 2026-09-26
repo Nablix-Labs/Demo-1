@@ -6,6 +6,7 @@ interface SceneSlot {
   x: number;
   row: number;
   accent: CanvasTeachingColor;
+  format: 'handwritten' | 'typeset';
   box: boolean;
 }
 
@@ -17,12 +18,16 @@ const ARROW_GAP = 0.055;
 
 function sceneSlot(slotId: string): SceneSlot | null {
   const slot = sceneSlots[slotId as keyof typeof sceneSlots];
-  if (!slot || !isCanvasTeachingColor(slot.accent)) return null;
-  return { ...slot, accent: slot.accent };
+  if (!slot || !isCanvasTeachingColor(slot.accent) || !isSceneFormat(slot.format)) return null;
+  return { ...slot, accent: slot.accent, format: slot.format };
 }
 
 function isCanvasTeachingColor(value: string): value is CanvasTeachingColor {
   return value === 'AMBER' || value === 'TEAL' || value === 'NAVY';
+}
+
+function isSceneFormat(value: string): value is SceneSlot['format'] {
+  return value === 'handwritten' || value === 'typeset';
 }
 
 export function sceneNoteElements(
@@ -42,7 +47,7 @@ export function sceneNoteElements(
 
   const y = top + slot.row * SCENE_ROW_GAP;
   const ink = colors.NAVY;
-  const note: TutorElement = operationKind === 'WRITE_MATH'
+  const note: TutorElement = operationKind === 'WRITE_MATH' && slot.format === 'typeset'
     ? { id: `${id}:note`, kind: 'math', x: slot.x, y, tex: content, color: ink, size: NOTE_SIZE }
     : {
         id: `${id}:note`, kind: 'text', x: slot.x, y, text: content, color: ink,

@@ -187,7 +187,7 @@ describe('the reasoning trail', () => {
     expect(fx.elements).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'ctp:scene:Q1:rule_conclusion:arrow', kind: 'arrow' }),
       expect.objectContaining({ id: 'ctp:scene:Q1:rule_conclusion:box', kind: 'rect' }),
-      expect.objectContaining({ id: 'ctp:scene:Q1:rule_conclusion:note', kind: 'math', tex: 'n + 5' }),
+      expect.objectContaining({ id: 'ctp:scene:Q1:rule_conclusion:note', kind: 'text', text: 'n + 5' }),
     ]));
   });
 
