@@ -99,6 +99,21 @@ def plan_canvas_teaching(
     )
     if pattern_matched:
         return pattern_plan
+    generic_plan = _plan_confirmed_generic_scene(
+        question_id=question_id,
+        source_turn_id=source_turn_id,
+        tutor_turn_id=tutor_turn_id,
+        scene_revision=scene_revision,
+        tutor_message_voice=tutor_message_voice,
+        tutor=tutor,
+        question_anchors=question_anchors,
+        canonical_answer=canonical_answer or "",
+        teaching_mode=teaching_mode,
+        current_evidence=current_evidence,
+        config=config,
+    )
+    if generic_plan is not None:
+        return generic_plan
     guided_settings = get_settings().model_copy(
         update={"openai_ai_engine_model": rules.guided_learning.model}
     )
@@ -183,6 +198,132 @@ def plan_canvas_teaching(
         teaching_mode=teaching_mode,
         beats=accepted,
     )
+
+
+def _plan_confirmed_generic_scene(
+    question_id: str,
+    source_turn_id: str,
+    tutor_turn_id: str | None,
+    scene_revision: int,
+    tutor_message_voice: str,
+    tutor: TutorResult,
+    question_anchors: list[QuestionTextAnchor],
+    canonical_answer: str,
+    teaching_mode: CanvasTeachingMode,
+    current_evidence: set[str],
+    config: CanvasTeachingConfig,
+) -> CanvasTeachingPlan | None:
+    """Write a grounded, learner-confirmed statement for every question family."""
+
+    if teaching_mode != "GUIDED" or not current_evidence:
+        return None
+    anchor_by_id = {anchor.token_id: anchor for anchor in question_anchors}
+    actions = [
+        action
+        for action in tutor.tutor_canvas_actions
+        if action.target_kind == "QUESTION_ANCHOR"
+        and action.target_object_id in anchor_by_id
+        and action.confirmed_component_id in current_evidence
+    ]
+    for action in actions:
+        anchor = anchor_by_id[action.target_object_id or ""]
+        statement = _spoken_confirmation_statement(
+            tutor_message_voice,
+            anchor.text,
+            canonical_answer,
+            tutor.answer_value_confirmed,
+        )
+        if statement is None:
+            continue
+        operations = [
+            CanvasTeachingOperation(
+                operation_id="generic-confirmed-focus",
+                kind="HIGHLIGHT",
+                target_kind="QUESTION_ANCHOR",
+                target_ids=[anchor.token_id],
+                zone="QUESTION",
+                persistence="PERSIST",
+                color_role="NAVY",
+            ),
+            CanvasTeachingOperation(
+                operation_id="generic-confirmed-note",
+                kind="WRITE_TEXT",
+                target_kind="CANVAS_ZONE",
+                target_ids=["ZONE:REASONING"],
+                zone="REASONING",
+                persistence="PERSIST",
+                evidence_ref=action.confirmed_component_id,
+                text=statement,
+                color_role="NAVY",
+                scene_slot=(
+                    f"{config.generic_confirmation_scene_slot}:"
+                    f"{action.confirmed_component_id}"
+                ),
+            ),
+        ]
+        return CanvasTeachingPlan(
+            plan_id=f"{question_id}:{source_turn_id}:canvas-teaching",
+            question_id=question_id,
+            source_turn_id=source_turn_id,
+            tutor_turn_id=tutor_turn_id,
+            scene_revision=scene_revision,
+            mode="append",
+            teaching_mode=teaching_mode,
+            beats=[
+                CanvasTeachingBeat(
+                    beat_id="confirmed-generic-scene",
+                    sequence=1,
+                    speech_anchor=CanvasSpeechAnchor(
+                        start_char=0,
+                        end_char=len(tutor_message_voice),
+                        text=tutor_message_voice,
+                    ),
+                    operations=operations,
+                )
+            ],
+        )
+    return None
+
+
+def _spoken_confirmation_statement(
+    narration: str,
+    anchor_text: str,
+    canonical_answer: str,
+    answer_value_confirmed: bool,
+) -> str | None:
+    """Keep only a declarative tutor sentence that names the confirmed anchor."""
+
+    for sentence in re.findall(r"[^.!?]+[.!?]?", narration):
+        statement = sentence.strip()
+        if not statement or statement.endswith("?"):
+            continue
+        if not _statement_names_anchor(statement, anchor_text):
+            continue
+        statement = re.sub(
+            r"^(?:yes|right|exactly|correct|good)[,!—–\-\s]+",
+            "",
+            statement,
+            flags=re.IGNORECASE,
+        )
+        if (
+            canonical_answer
+            and _normalized(canonical_answer) == _normalized(statement)
+            and not answer_value_confirmed
+        ):
+            continue
+        return statement
+    return None
+
+
+def _statement_names_anchor(statement: str, anchor_text: str) -> bool:
+    normalized_anchor = _normalized(anchor_text)
+    if re.fullmatch(r"[A-Za-z0-9]+", normalized_anchor):
+        return re.search(
+            rf"(?<![A-Za-z0-9]){re.escape(normalized_anchor)}(?![A-Za-z0-9])",
+            statement,
+            flags=re.IGNORECASE,
+        ) is not None
+    return normalized_anchor in _normalized(statement)
 
 
 def _plan_pattern_add_constant_scene(

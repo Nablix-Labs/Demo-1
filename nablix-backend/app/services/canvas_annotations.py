@@ -395,6 +395,15 @@ def plan_tutor_canvas_actions(
         canonical_answer,
         fallback_labels,
     )
+    if not actions and confirmation_expression_parts(canonical_answer) is None:
+        actions = generic_confirmation_actions(
+            tutor,
+            question_anchors,
+            canvas_events,
+            turn_id,
+            current_turn_confirmed,
+            fallback_labels,
+        )
     seen = {(action.type, action.target_object_id, action.text) for action in actions}
     for position, intention in enumerate(tutor.canvas_intentions, start=len(actions) + 1):
         if intention.action_type in {"TUTOR_SOLVED_STEP", "SHOW_CUE", "OPEN_SCAFFOLD_STEP", "SHOW_PARALLEL"}:
@@ -977,20 +986,19 @@ def generic_confirmation_actions(
     actions: list[TutorCanvasAction] = []
     for component_id in sorted(confirmed):
         role = confirmation_role(component_id, tutor)
-        if role == "generic":
-            # A generic component description often shares words with the
-            # question prose (for example, "changes"). Labeling that prose as
-            # "confirmed" is not a mathematical intervention and can replace a
-            # more useful existing label on the same anchor.
-            continue
         text_template = (
             labels.changing_value
             if role == "changing_value"
             else labels.fixed_value
             if role == "fixed_value"
             else labels.operation
+            if role == "operation"
+            else labels.generic
         )
-        for target in generic_component_targets(component_id, tutor, question_anchors):
+        targets = generic_component_targets(component_id, tutor, question_anchors)
+        if role == "generic":
+            targets = [target for target in targets if _is_math_token(target.text)]
+        for target in targets:
             text = text_template.format(
                 value=target.text,
                 operation=labels.operation_names.get(target.text, "the operation"),
@@ -1002,6 +1010,21 @@ def generic_confirmation_actions(
                 text,
             ):
                 continue
+            position = len(actions) + 1
+            actions.append(
+                TutorCanvasAction(
+                    action_id=(
+                        f"{turn_id}:{position}:HIGHLIGHT:{target.token_id}"
+                    ),
+                    type="HIGHLIGHT",
+                    target_kind="QUESTION_ANCHOR",
+                    target_object_id=target.token_id,
+                    confirmed_component_id=component_id,
+                    text=None,
+                    source_id=None,
+                    answer_reveal_allowed=False,
+                )
+            )
             position = len(actions) + 1
             actions.append(
                 TutorCanvasAction(
@@ -1018,6 +1041,15 @@ def generic_confirmation_actions(
                 )
             )
     return actions
+
+
+def _is_math_token(value: str) -> bool:
+    normalized = value.strip()
+    return bool(
+        re.fullmatch(r"[A-Za-z]{1,2}", normalized)
+        or re.fullmatch(r"\d+(?:\.\d+)?", normalized)
+        or re.search(r"[²³⁴⁵⁶⁷⁸⁹+\-−×÷/*=()]", normalized)
+    )
 
 
 def confirmation_role(component_id: str, tutor: TutorResult) -> str:

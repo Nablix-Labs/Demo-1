@@ -17,7 +17,8 @@ const BOX_HEIGHT = 0.07;
 const ARROW_GAP = 0.055;
 
 function sceneSlot(slotId: string): SceneSlot | null {
-  const slot = sceneSlots[slotId as keyof typeof sceneSlots];
+  const baseSlotId = slotId.split(':', 1)[0];
+  const slot = sceneSlots[baseSlotId as keyof typeof sceneSlots];
   if (!slot || !isCanvasTeachingColor(slot.accent) || !isSceneFormat(slot.format)) return null;
   return { ...slot, accent: slot.accent, format: slot.format };
 }
@@ -45,7 +46,10 @@ export function sceneNoteElements(
   const id = `ctp:scene:${questionId}:${slotId}`;
   if (existing.some((element) => element.id === `${id}:note`)) return [];
 
-  const y = top + slot.row * SCENE_ROW_GAP;
+  const genericRows = slotId.startsWith('generic_confirmation:')
+    ? existing.filter((element) => element.id.startsWith(`ctp:scene:${questionId}:generic_confirmation:`) && element.id.endsWith(':note')).length
+    : 0;
+  const y = top + (slot.row + genericRows) * SCENE_ROW_GAP;
   const ink = colors.NAVY;
   const note: TutorElement = operationKind === 'WRITE_MATH' && slot.format === 'typeset'
     ? { id: `${id}:note`, kind: 'math', x: slot.x, y, tex: content, color: ink, size: NOTE_SIZE }

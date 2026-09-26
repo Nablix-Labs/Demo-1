@@ -209,6 +209,7 @@ class CanvasTeachingConfig(StrictSchema):
     guided_evidence_writing_enabled: StrictBool
     guided_evidence_maximum_written_operations: int = Field(ge=1, le=4)
     guided_evidence_scene_slots: dict[str, str]
+    generic_confirmation_scene_slot: str = Field(min_length=1, max_length=120)
     pattern_add_constant_scene: PatternAddConstantSceneConfig
     visual_only_modes: list[Literal["HINT", "VISUAL_CUE", "SCAFFOLD", "PARALLEL_EXAMPLE"]]
     suppressed_main_canvas_modes: list[Literal["PARALLEL_EXAMPLE"]]

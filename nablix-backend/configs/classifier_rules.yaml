@@ -294,6 +294,7 @@ guided_learning:
       GENERAL_RULE: rule_conclusion
       GENERAL_RULE_CHANGING_VALUE: rule_conclusion
       GENERAL_RULE_FIXED_VALUE: rule_conclusion
+    generic_confirmation_scene_slot: generic_confirmation
     pattern_add_constant_scene:
       enabled: true
       minimum_cases: 3

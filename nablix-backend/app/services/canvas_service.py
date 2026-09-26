@@ -32,10 +32,12 @@ from app.models.canvas import (
 from app.models.interaction import InteractionResponse, StaleTurnResponse
 from app.services.canvas_annotations import (
     plan_canvas_draw,
+    plan_tutor_canvas_actions,
     plan_write_request_tutor_actions,
     plan_write_request_tutor_draw,
 )
 from app.services.canvas_teaching_planner import plan_canvas_teaching
+from app.services.question_anchors import plan_canvas_action_anchors
 from app.models.session import SessionRecord
 from app.models.student_model_session import StudentModelQuestion
 from app.services.canvas_evidence import (
@@ -618,6 +620,34 @@ async def submit_canvas(
         if tutor.visual_cue.show
         else _schema_visual_cue(updated_session.student_model_event)
     )
+    answer_spec = _schema_question(turn_session).tutor_view.answer_spec
+    canonical_answer = (
+        answer_spec.canonical_answer
+        if answer_spec is not None
+        else turn_session.correct_answer or ""
+    )
+    tutor_action_anchors = plan_canvas_action_anchors(
+        turn_session.question_id,
+        turn_session.current_question,
+    )
+    tutor_canvas_actions = (
+        tutor.tutor_canvas_actions
+        if any(
+            action.type in {"TUTOR_SOLVED_STEP", "SHOW_PARALLEL"}
+            for action in tutor.tutor_canvas_actions
+        )
+        else plan_tutor_canvas_actions(
+            tutor=tutor,
+            question_anchors=tutor_action_anchors,
+            canvas_events=request.canvas_events,
+            turn_id=submission_id,
+            canonical_answer=canonical_answer,
+            fallback_labels=rules.guided_learning.fallback_canvas_labels,
+            wrong_attempt_count=turn_session.wrong_attempt_count,
+            student_response=request.transcript or written_work,
+        )
+    )
+    tutor = tutor.model_copy(update={"tutor_canvas_actions": tutor_canvas_actions})
     response = _response_from(
         session_id=request.session_id,
         student_id=request.student_id,
@@ -654,9 +684,9 @@ async def submit_canvas(
             scene_revision=response.interaction_state_version,
             tutor_message_voice=response.message_voice,
             tutor=tutor,
-            question_anchors=response.question_anchors,
+            question_anchors=tutor_action_anchors,
             student_response=request.transcript or "",
-            canonical_answer=updated_session.correct_answer or "",
+            canonical_answer=canonical_answer,
             active_support_level=None,
             current_unresolved_component_id=None,
         )
@@ -670,7 +700,7 @@ async def submit_canvas(
     response.tutor_canvas_actions = (
         plan_write_request_tutor_actions(request.turn_id or "TURN-0000", 1)
         if tutor.requires_written_math_evidence
-        else tutor.tutor_canvas_actions
+        else tutor_canvas_actions
     )
     response.question_opening_canvas_actions = (
         updated_session.question_opening_canvas_actions if question_advanced else []
