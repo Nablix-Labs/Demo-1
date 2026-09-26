@@ -105,6 +105,26 @@ def _plan(
     )
 
 
+def _plan_for_question_anchor(
+    draft: CanvasTeachingPlanDraft,
+    question_anchor: QuestionTextAnchor,
+) -> object:
+    return canvas_teaching_planner.plan_canvas_teaching(
+        question_id="Q1",
+        question="Write p × q in compact algebraic notation.",
+        source_turn_id="TURN-1",
+        tutor_turn_id="TUTOR-1",
+        scene_revision=3,
+        tutor_message_voice="Write p times q in compact algebraic notation.",
+        tutor=_tutor(),
+        question_anchors=[question_anchor],
+        student_response="I do not know.",
+        canonical_answer="pq",
+        active_support_level=None,
+        current_unresolved_component_id="FIXED_VALUE",
+    )
+
+
 def test_planner_returns_a_grounded_attention_beat(monkeypatch) -> None:
     draft = CanvasTeachingPlanDraft.model_validate(
         {
@@ -157,6 +177,52 @@ def test_planner_returns_a_grounded_attention_beat(monkeypatch) -> None:
     assert plan.plan_id == "Q1:TURN-1:canvas-teaching"
     assert plan.beats[0].operations[0].target_ids == ["Q1:QTOKEN:1"]
     assert requested_models == [rules.guided_learning.model]
+
+
+def test_planner_rejects_a_prose_question_annotation(monkeypatch) -> None:
+    draft = CanvasTeachingPlanDraft.model_validate(
+        {
+            "beats": [
+                {
+                    "beat_id": "mark-instruction",
+                    "sequence": 1,
+                    "speech_anchor": {
+                        "start_char": 0,
+                        "end_char": 5,
+                        "text": "Write",
+                    },
+                    "operations": [
+                        {
+                            "operation_id": "highlight-write",
+                            "kind": "HIGHLIGHT",
+                            "target_kind": "QUESTION_ANCHOR",
+                            "target_ids": ["Q1:QTOKEN:1"],
+                            "zone": "QUESTION",
+                            "persistence": "PULSE",
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
+    monkeypatch.setattr(
+        canvas_teaching_planner,
+        "build_openai_ai_engine_client",
+        lambda _: FakeCanvasTeachingClient(draft),
+    )
+
+    plan = _plan_for_question_anchor(
+        draft,
+        QuestionTextAnchor(
+            token_id="Q1:QTOKEN:1",
+            text="Write",
+            char_start=0,
+            char_end=5,
+        ),
+    )
+
+    assert plan is None
 
 
 def test_planner_rejects_an_unapproved_final_rule(monkeypatch) -> None:

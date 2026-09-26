@@ -315,6 +315,11 @@ guided_learning:
       Each beat must be tied to an exact contiguous span of tutor_message_voice.
       Build a short cumulative reasoning trail: amber for changing values, teal
       for fixed/repeated structure, navy for learner-confirmed conclusions.
+      For QUESTION_ANCHOR operations, use allowed_question_anchors to target
+      only mathematical values, variables, operators, or expressions. Never
+      decorate instruction or prose words such as "Write", "without", or
+      "calculating". Do not use CONNECT operations. Return no plan when there
+      is no precise, meaningful mathematical target.
   evaluation_mode: LLM_STATE_MACHINE
   confidence_threshold: 0.75
   state_confidence_thresholds:

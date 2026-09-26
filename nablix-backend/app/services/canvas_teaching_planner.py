@@ -41,6 +41,9 @@ def plan_canvas_teaching(
         return None
     if source_turn_id is None or not tutor_message_voice.strip():
         return None
+    question_anchor_texts = {
+        anchor.token_id: anchor.text for anchor in question_anchors
+    }
     guided_settings = get_settings().model_copy(
         update={"openai_ai_engine_model": rules.guided_learning.model}
     )
@@ -77,6 +80,10 @@ def plan_canvas_teaching(
                 "active_support_level": active_support_level,
                 "current_unresolved_component_id": current_unresolved_component_id,
                 "allowed_target_ids": allowed_targets,
+                "allowed_question_anchors": [
+                    {"id": anchor.token_id, "text": anchor.text}
+                    for anchor in question_anchors
+                ],
                 "current_turn_evidence_ids": sorted(current_evidence),
                 "direct_explanation_authorized": direct_explanation,
                 "direct_explanation_evidence_ref": config.direct_explanation_evidence_ref,
@@ -110,6 +117,7 @@ def plan_canvas_teaching(
         config=config,
         narration=tutor_message_voice,
         allowed_targets=set(allowed_targets),
+        question_anchor_texts=question_anchor_texts,
         current_evidence=current_evidence,
         teaching_mode=teaching_mode,
         direct_explanation=direct_explanation,
@@ -179,6 +187,7 @@ def _validate_draft(
     config: CanvasTeachingConfig,
     narration: str,
     allowed_targets: set[str],
+    question_anchor_texts: dict[str, str],
     current_evidence: set[str],
     teaching_mode: CanvasTeachingMode,
     direct_explanation: bool,
@@ -204,6 +213,7 @@ def _validate_draft(
             if _operation_is_authorized(
                 operation=operation,
                 allowed_targets=allowed_targets,
+                question_anchor_texts=question_anchor_texts,
                 current_evidence=current_evidence,
                 teaching_mode=teaching_mode,
                 direct_explanation=direct_explanation,
@@ -235,6 +245,7 @@ def _validate_draft(
 def _operation_is_authorized(
     operation: CanvasTeachingOperation,
     allowed_targets: set[str],
+    question_anchor_texts: dict[str, str],
     current_evidence: set[str],
     teaching_mode: CanvasTeachingMode,
     direct_explanation: bool,
@@ -247,6 +258,13 @@ def _operation_is_authorized(
     config: CanvasTeachingConfig,
 ) -> bool:
     if not set(operation.target_ids).issubset(allowed_targets):
+        return False
+    if operation.kind == "CONNECT":
+        return False
+    if operation.target_kind == "QUESTION_ANCHOR" and not all(
+        _is_math_bearing_question_token(question_anchor_texts.get(target_id, ""))
+        for target_id in operation.target_ids
+    ):
         return False
     if operation.zone == "QUESTION" and operation.kind in {"WRITE_TEXT", "WRITE_MATH"}:
         return False
@@ -275,6 +293,17 @@ def _operation_is_authorized(
     if operation.evidence_ref not in current_evidence:
         return False
     return operation.zone in {"REASONING", "TUTOR_SOLUTION"}
+
+
+def _is_math_bearing_question_token(token: str) -> bool:
+    normalized = token.strip()
+    if re.fullmatch(r"\d+(?:\.\d+)?", normalized):
+        return True
+    if re.fullmatch(r"[A-Za-z]", normalized):
+        return True
+    if re.fullmatch(r"[b-df-hj-np-tv-z]{2,}", normalized.casefold()):
+        return True
+    return normalized in {"+", "−", "-", "×", "/", "=", "(", ")"}
 
 
 def _normalized(value: str) -> str:
