@@ -219,7 +219,7 @@ def _validate_draft(
         if anchor is None:
             return None
         operations = [
-            operation
+            _with_scene_slot(operation, config)
             for operation in beat.operations
             if _operation_is_authorized(
                 operation=operation,
@@ -261,6 +261,25 @@ def _validate_draft(
     if guided_evidence_writes > config.guided_evidence_maximum_written_operations:
         return None
     return accepted
+
+
+def _with_scene_slot(
+    operation: CanvasTeachingOperation,
+    config: CanvasTeachingConfig,
+) -> CanvasTeachingOperation:
+    """Attach a configured visual slot to an approved learner-confirmed note."""
+
+    if operation.kind not in {"WRITE_TEXT", "WRITE_MATH"}:
+        return operation.model_copy(update={"scene_slot": None})
+    if operation.evidence_ref is None:
+        return operation.model_copy(update={"scene_slot": None})
+    return operation.model_copy(
+        update={
+            "scene_slot": config.guided_evidence_scene_slots.get(
+                operation.evidence_ref
+            )
+        }
+    )
 
 
 def _operation_is_authorized(

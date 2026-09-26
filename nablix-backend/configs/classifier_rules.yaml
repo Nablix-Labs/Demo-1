@@ -287,6 +287,13 @@ guided_learning:
     direct_explanation_maximum_written_operations: 3
     guided_evidence_writing_enabled: true
     guided_evidence_maximum_written_operations: 1
+    guided_evidence_scene_slots:
+      CHANGING_VALUE: changing_conclusion
+      FIXED_VALUE: fixed_conclusion
+      OPERATION: operation_conclusion
+      GENERAL_RULE: rule_conclusion
+      GENERAL_RULE_CHANGING_VALUE: rule_conclusion
+      GENERAL_RULE_FIXED_VALUE: rule_conclusion
     visual_only_modes: ["HINT", "VISUAL_CUE", "SCAFFOLD", "PARALLEL_EXAMPLE"]
     suppressed_main_canvas_modes: ["PARALLEL_EXAMPLE"]
     tutor_solved_writing_enabled: true

@@ -199,6 +199,7 @@ class CanvasTeachingConfig(StrictSchema):
     direct_explanation_maximum_written_operations: int = Field(ge=1, le=4)
     guided_evidence_writing_enabled: StrictBool
     guided_evidence_maximum_written_operations: int = Field(ge=1, le=4)
+    guided_evidence_scene_slots: dict[str, str]
     visual_only_modes: list[Literal["HINT", "VISUAL_CUE", "SCAFFOLD", "PARALLEL_EXAMPLE"]]
     suppressed_main_canvas_modes: list[Literal["PARALLEL_EXAMPLE"]]
     tutor_solved_writing_enabled: StrictBool

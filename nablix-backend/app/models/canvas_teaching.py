@@ -52,6 +52,7 @@ class CanvasTeachingOperation(BaseModel):
     text: str | None = Field(default=None, max_length=160)
     latex: str | None = Field(default=None, max_length=160)
     color_role: Literal["NAVY", "AMBER", "TEAL"] = "NAVY"
+    scene_slot: str | None = Field(default=None, min_length=1, max_length=80)
 
     @model_validator(mode="after")
     def validate_content(self) -> "CanvasTeachingOperation":

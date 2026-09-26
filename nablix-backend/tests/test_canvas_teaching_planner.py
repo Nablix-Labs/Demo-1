@@ -157,6 +157,7 @@ def test_planner_returns_a_grounded_attention_beat(monkeypatch) -> None:
                             "evidence_ref": "CHANGING_VALUE",
                             "text": "first numbers are different",
                             "color_role": "NAVY",
+                            "scene_slot": "untrusted-model-slot",
                         }
                     ],
                 }
@@ -188,6 +189,7 @@ def test_planner_returns_a_grounded_attention_beat(monkeypatch) -> None:
     assert plan.plan_id == "Q1:TURN-1:canvas-teaching"
     assert plan.beats[0].operations[0].target_ids == ["Q1:QTOKEN:1"]
     assert plan.beats[0].operations[1].kind == "WRITE_TEXT"
+    assert plan.beats[0].operations[1].scene_slot == "changing_conclusion"
     assert requested_models == [rules.guided_learning.model]
 
 
