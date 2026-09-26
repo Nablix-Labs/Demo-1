@@ -215,7 +215,7 @@ def _plan_confirmed_generic_scene(
 ) -> CanvasTeachingPlan | None:
     """Write a grounded, learner-confirmed statement for every question family."""
 
-    if teaching_mode != "GUIDED" or not current_evidence:
+    if teaching_mode != "GUIDED":
         return None
     anchor_by_id = {anchor.token_id: anchor for anchor in question_anchors}
     confirmation_messages = _confirmation_messages(tutor, tutor_message_voice)
@@ -234,11 +234,14 @@ def _plan_confirmed_generic_scene(
         ),
         None,
     )
-    targets = action_targets or (
-        [(*voice_target, next(iter(sorted(current_evidence))))]
-        if voice_target is not None
-        else []
-    )
+    targets = action_targets
+    if not targets and voice_target is not None and _learner_confirmation(tutor):
+        voice_evidence_ref = (
+            next(iter(sorted(current_evidence)))
+            if current_evidence
+            else _spoken_confirmation_evidence_ref(voice_target[0])
+        )
+        targets = [(*voice_target, voice_evidence_ref)]
     for anchors, anchor_text, evidence_ref in targets:
         statement = next(
             (
@@ -343,6 +346,23 @@ def _confirmed_canvas_label(
             continue
         return label
     return None
+
+
+def _learner_confirmation(tutor: TutorResult) -> bool:
+    """Allow a spoken canvas note only after the evaluator accepts learner work."""
+
+    if tutor.guided_student_state in {"PARTIAL", "CORRECT"}:
+        return True
+    return tutor.evaluation in {"PARTIALLY_CORRECT", "CORRECT"}
+
+
+def _spoken_confirmation_evidence_ref(
+    anchors: list[QuestionTextAnchor],
+) -> str:
+    """Give a voice-confirmed note a stable, question-specific canvas slot."""
+
+    anchor_ids = ":".join(anchor.token_id.rsplit(":", maxsplit=1)[-1] for anchor in anchors)
+    return f"VOICE_CONFIRMED:{anchor_ids}"
 
 
 def _confirmed_voice_target(

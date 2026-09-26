@@ -1002,3 +1002,55 @@ def test_planner_uses_the_confirmed_label_when_speech_is_indirect(monkeypatch) -
     assert plan.beats[0].operations[0].target_ids == [fixed_anchor.token_id]
     assert plan.beats[0].operations[1].scene_slot == "generic_confirmation:FIXED_VALUE"
     assert plan.beats[0].operations[1].text == "7 → stays fixed"
+
+
+def test_planner_writes_an_explicit_confirmation_without_evidence_ledger(monkeypatch) -> None:
+    question = "Decode 4n, pq, r², c/d and 2(x + 1)."
+    tutor = _tutor().model_copy(
+        update={
+            "guided_student_state": "PARTIAL",
+            "tutor_message": "Yes—4n means 4 multiplied by n. What does pq mean?",
+            "tutor_message_voice": "Yes—four n means four multiplied by n. What does p q mean?",
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-NOTATION",
+                objective_component_ids=["REQUIRED_COMPONENT_1"],
+                confirmed_component_ids=["REQUIRED_COMPONENT_1"],
+                missing_component_ids=[],
+                active_component_id=None,
+                last_tutor_question_type="COMPONENT",
+                selected_option_id=None,
+                awaiting_response=True,
+                last_turn_evidence=[],
+            ),
+            "tutor_canvas_actions": [],
+        }
+    )
+    monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
+    monkeypatch.setattr(
+        canvas_teaching_planner,
+        "build_openai_ai_engine_client",
+        lambda _: pytest.fail("spoken confirmations must not call OpenAI"),
+    )
+
+    plan = canvas_teaching_planner.plan_canvas_teaching(
+        question_id="Q-NOTATION",
+        question=question,
+        source_turn_id="TURN-NOTATION",
+        tutor_turn_id="TUTOR-NOTATION",
+        scene_revision=1,
+        tutor_message_voice=tutor.tutor_message_voice,
+        tutor=tutor,
+        question_anchors=question_text_tokens("Q-NOTATION", question),
+        student_response="4 multiplied by n",
+        canonical_answer="4 × n; p × q; r × r; c ÷ d; 2 × (x + 1)",
+        active_support_level=None,
+        current_unresolved_component_id=None,
+    )
+
+    assert plan is not None
+    assert plan.beats[0].operations[0].target_ids == [
+        "Q-NOTATION:QTOKEN:2",
+        "Q-NOTATION:QTOKEN:3",
+    ]
+    assert plan.beats[0].operations[1].scene_slot == "generic_confirmation:VOICE_CONFIRMED:2:3"
+    assert plan.beats[0].operations[1].text == "4n means 4 multiplied by n."
