@@ -176,6 +176,45 @@ def _pattern_plan(
     )
 
 
+def _multiplication_pattern_plan(
+    tutor: TutorResult,
+    student_response: str,
+) -> object:
+    question = "2 × 4 | 7 × 4 | 11 × 4. Use n for the changing starting number. Write the general rule."
+    return canvas_teaching_planner.plan_canvas_teaching(
+        question_id="Q2",
+        question=question,
+        source_turn_id="TURN-2",
+        tutor_turn_id="TUTOR-2",
+        scene_revision=4,
+        tutor_message_voice="Let us record that on the canvas.",
+        tutor=tutor,
+        question_anchors=question_text_tokens("Q2", question),
+        student_response=student_response,
+        canonical_answer="n × 4",
+        active_support_level=None,
+        current_unresolved_component_id=None,
+    )
+
+
+def _tutor_solved_action(step_index: int, total_steps: int, final_step: bool) -> TutorCanvasAction:
+    return TutorCanvasAction(
+        action_id=f"RESCUE:step:{step_index}",
+        type="TUTOR_SOLVED_STEP",
+        target_kind="TUTOR_ANCHOR",
+        target_object_id=f"TUTOR_ANCHOR:RESCUE:RESCUE:STEP:{step_index}",
+        confirmed_component_id=None,
+        text="Tutor solved pattern step.",
+        source_id="pattern-rescue",
+        answer_reveal_allowed=final_step,
+        rescue_id="RESCUE",
+        step_index=step_index,
+        total_steps=total_steps,
+        presentation_mode="TUTOR_SOLVED",
+        return_target_object_id="TUTOR_ANCHOR:QUESTION:Q1",
+    )
+
+
 def test_planner_returns_a_grounded_attention_beat(monkeypatch) -> None:
     draft = CanvasTeachingPlanDraft.model_validate(
         {
@@ -311,6 +350,52 @@ def test_pattern_scene_boxes_only_the_confirmed_final_rule(monkeypatch) -> None:
     operation = plan.beats[0].operations[0]
     assert operation.kind == "WRITE_MATH"
     assert operation.latex == "n + 5"
+    assert operation.scene_slot == "rule_conclusion"
+
+
+def test_multiplication_pattern_scene_uses_the_same_evidence_gates(monkeypatch) -> None:
+    monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
+
+    plan = _multiplication_pattern_plan(
+        tutor=_pattern_tutor("FIXED_VALUE", ["CHANGING_VALUE", "FIXED_VALUE"]),
+        student_response="times 4",
+    )
+
+    assert plan is not None
+    write = next(
+        operation for operation in plan.beats[0].operations if operation.kind == "WRITE_TEXT"
+    )
+    assert write.text == "×4 → stays fixed"
+    assert write.scene_slot == "fixed_conclusion"
+
+
+def test_tutor_solved_pattern_scene_reveals_only_the_current_step(monkeypatch) -> None:
+    monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
+    tutor = _pattern_tutor("CHANGING_VALUE", [])
+    tutor = tutor.model_copy(
+        update={"tutor_canvas_actions": [_tutor_solved_action(2, 4, False)]}
+    )
+
+    plan = _pattern_plan(tutor=tutor, student_response="I do not know")
+
+    assert plan is not None
+    operations = plan.beats[0].operations
+    assert any(operation.operation_id == "tutor-solved-connect-fixed-values" for operation in operations)
+    assert all(operation.scene_slot != "rule_conclusion" for operation in operations)
+
+
+def test_tutor_solved_pattern_scene_boxes_the_rule_only_on_final_step(monkeypatch) -> None:
+    monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
+    tutor = _pattern_tutor("GENERAL_RULE", [])
+    tutor = tutor.model_copy(
+        update={"tutor_canvas_actions": [_tutor_solved_action(4, 4, True)]}
+    )
+
+    plan = _pattern_plan(tutor=tutor, student_response="I do not know")
+
+    assert plan is not None
+    operation = plan.beats[0].operations[0]
+    assert operation.operation_id == "tutor-solved-final-rule"
     assert operation.scene_slot == "rule_conclusion"
 
 

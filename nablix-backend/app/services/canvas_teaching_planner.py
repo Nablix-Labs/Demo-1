@@ -21,10 +21,10 @@ from app.models.question_anchor import QuestionTextAnchor
 
 
 _PATTERN_CASE_RE = re.compile(
-    r"(?P<starting>\d+)\s*(?P<operator>[+−-])\s*(?P<fixed>\d+)"
+    r"(?P<starting>\d+)\s*(?P<operator>[+−×*\-])\s*(?P<fixed>\d+)"
 )
 _CANONICAL_PATTERN_RE = re.compile(
-    r"(?P<variable>[a-z])\s*(?P<operator>[+−-])\s*(?P<fixed>\d+)",
+    r"(?P<variable>[a-z])\s*(?P<operator>[+−×*\-])\s*(?P<fixed>\d+)",
     re.IGNORECASE,
 )
 
@@ -224,6 +224,13 @@ def _plan_pattern_add_constant_scene(
             student_response=student_response,
             tutor=tutor,
             current_evidence=current_evidence,
+            config=config,
+            canonical_answer=canonical_answer,
+        )
+    elif teaching_mode == "TUTOR_SOLVED":
+        operations = _pattern_tutor_solved_operations(
+            scene=scene,
+            tutor=tutor,
             config=config,
             canonical_answer=canonical_answer,
         )
@@ -430,6 +437,110 @@ def _pattern_guided_operations(
     return []
 
 
+def _pattern_tutor_solved_operations(
+    scene: PatternAddConstantScene,
+    tutor: TutorResult,
+    config: CanvasTeachingConfig,
+    canonical_answer: str,
+) -> list[CanvasTeachingOperation]:
+    action = next(
+        (
+            item
+            for item in tutor.tutor_canvas_actions
+            if item.type == "TUTOR_SOLVED_STEP"
+        ),
+        None,
+    )
+    if action is None or action.step_index is None:
+        return []
+    pattern_config = config.pattern_add_constant_scene
+    if action.answer_reveal_allowed:
+        return [
+            _pattern_write(
+                operation_id="tutor-solved-final-rule",
+                kind="WRITE_MATH",
+                content=canonical_answer,
+                evidence_ref="GENERAL_RULE",
+                scene_slot="rule_conclusion",
+            )
+        ]
+    if action.step_index == 1:
+        return [
+            *_question_marks(
+                operation_id="tutor-solved-circle-changing-values",
+                kind="CIRCLE",
+                target_ids=scene["changing_ids"],
+                color_role="AMBER",
+                persistence="PERSIST",
+            ),
+            _pattern_write(
+                operation_id="tutor-solved-changing-conclusion",
+                kind="WRITE_TEXT",
+                content=pattern_config.changing_note,
+                evidence_ref="CHANGING_VALUE",
+                scene_slot="changing_conclusion",
+            ),
+        ]
+    if action.step_index == 2:
+        return [
+            *_question_marks(
+                operation_id="tutor-solved-highlight-fixed-terms",
+                kind="HIGHLIGHT",
+                target_ids=[*scene["operator_ids"], *scene["fixed_ids"]],
+                color_role="TEAL",
+                persistence="PERSIST",
+            ),
+            CanvasTeachingOperation(
+                operation_id="tutor-solved-connect-fixed-values",
+                kind="CONNECT",
+                target_kind="QUESTION_ANCHOR",
+                target_ids=scene["fixed_ids"],
+                zone="QUESTION",
+                persistence="PERSIST",
+                color_role="TEAL",
+            ),
+            _pattern_write(
+                operation_id="tutor-solved-fixed-conclusion",
+                kind="WRITE_TEXT",
+                content=pattern_config.fixed_note.format(
+                    operator=scene["operator"], fixed_value=scene["fixed_value"]
+                ),
+                evidence_ref="FIXED_VALUE",
+                scene_slot="fixed_conclusion",
+            ),
+        ]
+    if action.step_index == 3:
+        return [
+            CanvasTeachingOperation(
+                operation_id="tutor-solved-connect-changing-values",
+                kind="CONNECT",
+                target_kind="QUESTION_ANCHOR",
+                target_ids=scene["changing_ids"],
+                zone="QUESTION",
+                persistence="PERSIST",
+                color_role="AMBER",
+            ),
+            _pattern_write(
+                operation_id="tutor-solved-pattern-structure",
+                kind="WRITE_TEXT",
+                content=pattern_config.structure_note.format(
+                    operator=scene["operator"], fixed_value=scene["fixed_value"]
+                ),
+                evidence_ref="OPERATION",
+                scene_slot="operation_conclusion",
+            ),
+        ]
+    return [
+        _pattern_write(
+            operation_id="tutor-solved-variable-meaning",
+            kind="WRITE_TEXT",
+            content=pattern_config.variable_note.format(variable=scene["variable"]),
+            evidence_ref="CHANGING_VALUE",
+            scene_slot="variable_conclusion",
+        )
+    ]
+
+
 def _question_marks(
     operation_id: str,
     kind: Literal["CIRCLE", "HIGHLIGHT"],
@@ -480,6 +591,8 @@ def _student_names_complete_fixed_term(
     normalized = student_response.casefold().replace("−", "-")
     if scene["operator"] == "+":
         return bool(re.search(rf"(?:\+|plus)\s*{re.escape(scene['fixed_value'])}\b", normalized))
+    if scene["operator"] in {"×", "*"}:
+        return bool(re.search(rf"(?:×|\*|times)\s*{re.escape(scene['fixed_value'])}\b", normalized))
     return bool(re.search(rf"(?:-|minus)\s*{re.escape(scene['fixed_value'])}\b", normalized))
 
 
