@@ -6,6 +6,8 @@ import { writePrompt } from '@/lib/writtenEvidence';
 import { opensRescue } from '@/lib/rescueTranscript';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import type { TutorCanvasAction } from '@/store/useNumeraStore';
+import type { CanvasTeachingPlan } from '@/lib/canvasTeachingPlan';
+import { scheduleTeachingPlan } from '@/lib/canvasTeachingScheduler';
 import {
   shouldApply,
   noteApplied,
@@ -58,6 +60,14 @@ export type SupportPresentation = Pick<
    * scaffold that is still open.
    */
   active_scaffold?: InteractionResponse['active_scaffold'];
+  /**
+   * What the tutor draws while it talks (lib/canvasTeachingPlan). Carried with
+   * the two fields it is matched against, so a transport that builds this
+   * payload by allow-list cannot drop the plan OR its identity.
+   */
+  canvas_teaching_plan?: CanvasTeachingPlan | null;
+  interaction_state_version?: number | null;
+  accepted_turn_id?: string | null;
 };
 
 /**
@@ -243,6 +253,12 @@ export function applyInteractionSupport(response: SupportPresentation): string {
     ?? (response as InteractionResponse).tutor_canvas_actions
     ?? [];
   useNumeraStore.getState().applyTutorCanvasActions(tutorCanvasActions);
+
+  // The visual plan for this turn, drawn in step with the voice. Scheduled on
+  // EVERY reply, including one without a plan: a new reply supersedes the last
+  // one's unspoken beats either way. Separate from the actions above — it adds
+  // to the board and never stands in for support state (handoff rule 6).
+  scheduleTeachingPlan(response.canvas_teaching_plan, response, response.message_voice);
 
   // The reliability gate fired: the tutor could not read the student and is
   // asking for the answer in writing. Set unconditionally — clearing it on an

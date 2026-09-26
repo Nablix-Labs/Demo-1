@@ -29,6 +29,11 @@ import { uid } from '@/lib/uid';
 import type { CanvasFrame } from '@/lib/studentSnapshot';
 import { rememberScaffoldStep, type SeenScaffoldStep } from '@/lib/scaffoldTrail';
 import {
+  beatEffects, PULSE_MS, TEACHING_ID_PREFIX,
+  type CanvasTeachingBeat, type CanvasTeachingPlan, type TeachingConnector, type TeachingTokenMark,
+} from '@/lib/canvasTeachingPlan';
+import { questionStripBottom } from '@/lib/tutorCanvasActions';
+import {
   resolveTarget, actionMarks, showsWriteAffordance, memoryActionType, memoryActor,
   dropWriteRequest, RESCUE_SUFFIX,
 } from '@/lib/tutorCanvasActions';
@@ -250,6 +255,13 @@ const seenTutorCanvasActionIds = new Set<string>();
 const writtenComponentIds = new Set<string>();
 
 /**
+ * Teaching-plan beats already drawn on THIS question, as `plan_id:beat_id`
+ * (handoff rule 1: de-duplicate by both). A replayed response re-sends the same
+ * plan, and drawing its beats twice would stack a second circle on the first.
+ */
+const drawnTeachingBeats = new Set<string>();
+
+/**
  * How many unresolvable rescue actions may wait at once.
  *
  * A rescue is a handful of authored steps, so this is generous for the real
@@ -378,6 +390,13 @@ export interface NumeraState {
    * word in the next one.
    */
   questionAnchors: QuestionAnchor[];
+  /**
+   * Canvas teaching plan marks on question tokens (circle, box, highlight,
+   * check) and arrows between them. Drawn by AnchoredText / TeachingConnectors,
+   * not the canvas, so they move with the text. Cleared with the question.
+   */
+  teachingMarks: TeachingTokenMark[];
+  teachingConnectors: TeachingConnector[];
   tutorOptionActionIds: string[];
   questionNumber: number;
 
@@ -954,6 +973,10 @@ export interface NumeraState {
    */
   applyCanvasDraw: (payload: CanvasDrawPayload | CanvasDrawPayload[], frame?: CanvasFrame | null) => void;
   applyTutorCanvasActions: (actions: TutorCanvasAction[]) => void;
+  /** Draw one beat of a canvas teaching plan (lib/canvasTeachingPlan). */
+  applyTeachingBeat: (plan: CanvasTeachingPlan, beat: CanvasTeachingBeat) => void;
+  /** `mode: replace` — drop the plan's own marks; never student ink or other tutor marks. */
+  replaceTeachingLayer: () => void;
   /** Tutor asked the student to write here. Never carries the answer itself. */
   clearWriteAffordance: () => void;
   clearTutorMarks: () => void;
@@ -1026,7 +1049,7 @@ const initial: Omit<
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
   | 'setShapeKind' | 'setEraserMode'
   | 'setStrokeColor' | 'setStrokeWidth' | 'addItem' | 'removeItem' | 'undo' | 'redo'
-  | 'clearCanvas' | 'applyCanvasDraw' | 'applyTutorCanvasActions' | 'clearWriteAffordance' | 'clearTutorMarks' | 'setCanvasSize' | 'recordSupportEvent'
+  | 'clearCanvas' | 'applyCanvasDraw' | 'applyTutorCanvasActions' | 'applyTeachingBeat' | 'replaceTeachingLayer' | 'clearWriteAffordance' | 'clearTutorMarks' | 'setCanvasSize' | 'recordSupportEvent'
   | 'setInputMode' | 'setTextInput' | 'setPanelSide' | 'setPanelWidth' | 'resetPanelWidth' | 'togglePanelSide' | 'togglePanelCollapsed'
   | 'toggleTranscript' | 'setToolbarPos' | 'toggleToolbarCollapsed' | 'setToolbarOrientation' | 'setMicButtonPos' | 'setCanvasGrid' | 'setTtsVoice' | 'setActiveScaffold'
   | 'setCanvasExporter' | 'startGroupSession' | 'endGroupSession'
@@ -1051,6 +1074,8 @@ const initial: Omit<
   // it loads so a stale demo equation never flashes on the live build.
   questionText: '',
   questionAnchors: [] as QuestionAnchor[],
+  teachingMarks: [] as TeachingTokenMark[],
+  teachingConnectors: [] as TeachingConnector[],
   tutorOptionActionIds: [] as string[],
   questionNumber: 0,
   // The concept to open a session on. Still a constant because the frontend has
@@ -1262,6 +1287,7 @@ export const useNumeraStore = create<NumeraState>()(
         seenDrawActionIds.clear();
         seenTutorCanvasActionIds.clear();
         writtenComponentIds.clear();
+        drawnTeachingBeats.clear();
       }
       return {
         currentPhase: phase,
@@ -1328,6 +1354,9 @@ export const useNumeraStore = create<NumeraState>()(
               // over highlights whatever happens to sit at those positions in
               // the next one.
               questionAnchors: [] as QuestionAnchor[],
+              // Teaching marks sit on those same tokens.
+              teachingMarks: [] as TeachingTokenMark[],
+              teachingConnectors: [] as TeachingConnector[],
               tutorOptionActionIds: [] as string[],
               // Ordered memory is scoped to one question (§8: it exists so the
               // tutor can resume at the first unresolved step of the CURRENT
@@ -2088,6 +2117,42 @@ export const useNumeraStore = create<NumeraState>()(
         ...clearedRungs,
       };
     }),
+
+  applyTeachingBeat: (plan, beat) => {
+    const key = `${plan.plan_id}:${beat.beat_id}`;
+    if (drawnTeachingBeats.has(key)) return;
+    drawnTeachingBeats.add(key);
+    const s = get();
+    const effects = beatEffects(plan, beat, {
+      anchors: s.questionAnchors,
+      items: s.items,
+      tutorElements: s.tutorElements,
+      canvasSize: s.canvasSize,
+      stripBottomPx: questionStripBottom(typeof document === 'undefined' ? undefined : document),
+    });
+    if (!effects.tokenMarks.length && !effects.connectors.length && !effects.elements.length) return;
+    set({
+      teachingMarks: [...s.teachingMarks, ...effects.tokenMarks],
+      teachingConnectors: [...s.teachingConnectors, ...effects.connectors],
+      tutorElements: [...s.tutorElements, ...effects.elements],
+    });
+    // PULSE is temporary (handoff rule 4). Filtered by id, so a question change
+    // in the meantime — which has already cleared everything — is a no-op.
+    if (effects.pulseIds.length) {
+      const gone = new Set(effects.pulseIds);
+      setTimeout(() => set((cur) => ({
+        teachingMarks: cur.teachingMarks.filter((m) => !gone.has(m.id)),
+        teachingConnectors: cur.teachingConnectors.filter((c) => !gone.has(c.id)),
+        tutorElements: cur.tutorElements.filter((el) => !gone.has(el.id)),
+      })), PULSE_MS);
+    }
+  },
+
+  replaceTeachingLayer: () => set((s) => ({
+    teachingMarks: [],
+    teachingConnectors: [],
+    tutorElements: s.tutorElements.filter((el) => !el.id.startsWith(TEACHING_ID_PREFIX)),
+  })),
 
   clearWriteAffordance: () => set({ writeAffordance: false }),
 

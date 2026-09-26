@@ -275,7 +275,7 @@ const RESCUE_FIRST_Y = 0.14;
  * RESCUE_SIZE that is ~67px against the 62px this used to allow, and rows
  * collided. 0.11 is ~76px on a 692px canvas, which clears three.
  */
-const RESCUE_GAP = 0.11;
+export const RESCUE_GAP = 0.11;
 const RESCUE_LAST_Y = 0.68;
 /**
  * The right-hand limit for rescue ink.

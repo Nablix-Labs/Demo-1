@@ -72,10 +72,13 @@ export function speakBrowser(text: string, onEnd?: () => void): void {
   // The tutor emphasises with **…**; an engine must never be handed the markers.
   const utterance = new SpeechSynthesisUtterance(stripTutorMarkdown(text));
   utterance.rate = tutorRate;
-  utterance.onstart = () => useMicLevel.getState().setAiSpeaking(true);
-  utterance.onboundary = () => useMicLevel.getState().markBoundary();
-  utterance.onend = () => { useMicLevel.getState().setAiSpeaking(false); onEnd?.(); };
-  utterance.onerror = () => { useMicLevel.getState().setAiSpeaking(false); onEnd?.(); };
+  let spokenTo = 0;
+  const reader = () => spokenTo / Math.max(1, utterance.text.length);
+  const release = () => { if (progressReader === reader) progressReader = null; };
+  utterance.onstart = () => { progressReader = reader; useMicLevel.getState().setAiSpeaking(true); };
+  utterance.onboundary = (event) => { spokenTo = event.charIndex; useMicLevel.getState().markBoundary(); };
+  utterance.onend = () => { release(); useMicLevel.getState().setAiSpeaking(false); onEnd?.(); };
+  utterance.onerror = () => { release(); useMicLevel.getState().setAiSpeaking(false); onEnd?.(); };
   window.speechSynthesis.cancel();
   useMicLevel.getState().setAiSpeaking(false); // reset before the new utterance starts
   window.speechSynthesis.speak(utterance);
@@ -185,6 +188,46 @@ export function resetVoiceDegradation(): void {
 let currentAudio: HTMLAudioElement | null = null;
 let speakToken = 0; // invalidates in-flight TTS fetches when superseded/stopped
 
+/* ── How far through its line the tutor is ──────────────────────────────────
+ *
+ * The canvas teaching plan (lib/canvasTeachingPlan) draws each beat when the
+ * tutor reaches the phrase it belongs to, so it needs a playback position.
+ * None of the engines give word timings: the browser engine reports character
+ * boundaries, and generated MP3 only has currentTime. So the position is a
+ * FRACTION of the line, from whichever of those the engine has — exact for
+ * browser speech and a finished clip, an estimate at a normal speaking pace
+ * while a stream is still arriving and its duration is unknown.
+ */
+
+/** A normal speaking pace, used only when an audio clip's length is unknown. */
+const CHARS_PER_SECOND = 14;
+
+let progressReader: (() => number) | null = null;
+
+/** 0–1 through the line being voiced right now, or null when nothing is. */
+export function tutorSpeechProgress(): number | null {
+  if (!progressReader) return null;
+  const value = progressReader();
+  return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : null;
+}
+
+function audioProgress(audio: HTMLAudioElement, textLength: number): number {
+  if (Number.isFinite(audio.duration) && audio.duration > 0) return audio.currentTime / audio.duration;
+  return textLength > 0 ? (audio.currentTime * CHARS_PER_SECOND) / textLength : 0;
+}
+
+const stopListeners = new Set<() => void>();
+
+/**
+ * Called whenever the tutor is cut off (stopTutorSpeech), before the engines
+ * are silenced — so a listener can tell an interruption from a line that
+ * finished. Returns the unsubscribe.
+ */
+export function onTutorSpeechStop(listener: () => void): () => void {
+  stopListeners.add(listener);
+  return () => { stopListeners.delete(listener); };
+}
+
 /** Stop whichever engine is currently voicing the tutor.
  *
  * "Whichever" includes the STREAMING player. It didn't used to — this only
@@ -208,6 +251,7 @@ let speakToken = 0; // invalidates in-flight TTS fetches when superseded/stopped
 let inFlightText: string | null = null;
 
 export function stopTutorSpeech(): void {
+  stopListeners.forEach((listener) => listener());
   speakToken++;
   inFlightText = null;
   if (typeof window !== 'undefined') window.speechSynthesis?.cancel();
@@ -229,7 +273,9 @@ function playBase64Mp3(
   currentAudio = audio;
   let mouthTimer: ReturnType<typeof setInterval> | null = null;
   let settled = false;
+  const reader = () => audioProgress(audio, fallbackText.length);
   const cleanUp = () => {
+    if (progressReader === reader) progressReader = null;
     if (mouthTimer) clearInterval(mouthTimer);
     mouthTimer = null;
     useMicLevel.getState().setAiSpeaking(false);
@@ -249,6 +295,7 @@ function playBase64Mp3(
     speakBrowser(fallbackText, onEnd);
   };
   audio.onplaying = () => {
+    progressReader = reader;
     useMicLevel.getState().setAiSpeaking(true);
     if (mouthTimer) return;
     // Same rule as the streaming path: the mouth follows real audio progress,
@@ -465,6 +512,7 @@ class TutorAudioStream {
     });
 
     audio.onplaying = () => {
+      progressReader = this.readProgress;
       this.playbackStarted = true;
       this.clearArrivalGuard();
       useMicLevel.getState().setAiSpeaking(true);
@@ -656,7 +704,11 @@ class TutorAudioStream {
     this.mouthTimer = null;
   }
 
+  private readProgress = (): number =>
+    this.audio ? audioProgress(this.audio, this.fallbackText?.length ?? 0) : 1;
+
   private teardown(): void {
+    if (progressReader === this.readProgress) progressReader = null;
     this.stopMouth();
     this.clearArrivalGuard();
     this.playbackStarted = false;

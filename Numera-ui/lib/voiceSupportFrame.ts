@@ -72,6 +72,16 @@ export function voiceSupportFrame(msg: VoiceTutorFrame): SupportPresentation {
       ? (msg.tutor_canvas_actions as SupportPresentation['tutor_canvas_actions'])
       : undefined,
 
+    // What the tutor draws while it talks (Sanya, PR #364), and the two ids it
+    // is matched against. Guided Practice is voice-led, so a plan dropped here
+    // would be a plan that never draws for most students.
+    canvas_teaching_plan:
+      msg.canvas_teaching_plan && typeof msg.canvas_teaching_plan === 'object'
+        ? (msg.canvas_teaching_plan as SupportPresentation['canvas_teaching_plan'])
+        : null,
+    interaction_state_version: msg.interaction_state_version as number | null | undefined,
+    accepted_turn_id: str(msg.accepted_turn_id),
+
     show_visual_cue: msg.show_visual_cue as boolean | undefined,
     visual_cue: msg.visual_cue as SupportPresentation['visual_cue'],
 

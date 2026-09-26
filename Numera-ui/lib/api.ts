@@ -15,6 +15,7 @@ import axios from 'axios';
 import type { QuestionAnchor } from '@/lib/questionAnchors';
 import type { CanvasDrawPayload, CanvasStrokeSnapshot } from '@/store/useNumeraStore';
 import type { TutorCanvasAction } from '@/store/useNumeraStore';
+import type { CanvasTeachingPlan } from '@/lib/canvasTeachingPlan';
 import type { CanvasEvent } from '@/lib/canvasMemory';
 import { useAuthStore } from '@/store/useAuthStore';
 import { allowAnonTutorCalls } from '@/lib/runtimeConfig';
@@ -1666,6 +1667,8 @@ export interface InteractionResponse extends GuidedStateFields, Phase3ResponseFi
   canvas_draw?: CanvasDrawPayload[];
   /** Coordinate-free Guided Practice tutor-layer actions. */
   tutor_canvas_actions?: TutorCanvasAction[];
+  /** Voice-synchronised visual plan (Sanya, PR #364). Guided Practice only; null when off. */
+  canvas_teaching_plan?: CanvasTeachingPlan | null;
   /** OCR from the frozen voice-turn canvas. */
   ocr?: OcrResult | null;
   /** Whether to show the supporting visual cue after this turn. The backend also
@@ -2023,6 +2026,7 @@ export interface CanvasSubmissionResult extends Phase3ResponseFields {
   question_anchors?: QuestionAnchor[];
   tutor_canvas_actions?: TutorCanvasAction[];
   question_opening_canvas_actions?: TutorCanvasAction[];
+  canvas_teaching_plan?: CanvasTeachingPlan | null;
   tutor_turn_id?: string | null;
   expected_previous_tutor_turn_id?: string | null;
   expected_student_response?: string;

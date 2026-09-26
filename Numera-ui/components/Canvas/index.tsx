@@ -27,6 +27,7 @@ import RescueNote from '@/components/RescueNote';
 import RescueSteps from '@/components/RescueSteps';
 import Toolbar from './Toolbar';
 import TeachBack from './TeachBack';
+import TeachingConnectors from '@/components/TeachingConnectors';
 import { displayedQuestionNumber } from '@/lib/questionNumber';
 
 // react-konva requires client-only rendering (no SSR)
@@ -226,6 +227,8 @@ export default function CanvasStage() {
           onSelectOption={pickOption}
           optionsPending={optionSelectionPending}
         />
+        {/* CONNECT arrows from the canvas teaching plan, between tokens above. */}
+        <TeachingConnectors />
         {/* §2: "Explain Again — replays the current concept visually without
             counting as an attempt." The backend generates the re-expression;
             while that request is in flight the disabled busy state prevents a

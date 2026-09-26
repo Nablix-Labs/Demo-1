@@ -10,9 +10,13 @@
  * is one that resolves differently, including the two that must NOT highlight.
  */
 
+import { useEffect } from 'react';
 import Link from 'next/link';
 import QuestionDisplay from '@/components/QuestionDisplay';
+import TeachingConnectors from '@/components/TeachingConnectors';
 import type { QuestionAnchor } from '@/lib/questionAnchors';
+import type { TeachingConnector, TeachingTokenMark } from '@/lib/canvasTeachingPlan';
+import { useNumeraStore } from '@/store/useNumeraStore';
 
 const CASES: Array<{ title: string; note: string; question: string; anchors: QuestionAnchor[] }> = [
   {
@@ -62,6 +66,18 @@ const CASES: Array<{ title: string; note: string; question: string; anchors: Que
     anchors: [{ token_id: 'J', text: 'm', char_start: 3, char_end: 4, label: 'changes' }],
   },
   {
+    title: 'Canvas teaching plan marks',
+    note: 'Sanya, PR #364. Amber circle on the changing values, teal boxes on the fixed +5, an arrow from 9 down to n, navy check on n. Not labels — marks.',
+    question: '3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number.',
+    anchors: [
+      { token_id: 'T1', text: '3', char_start: 0, char_end: 1 },
+      { token_id: 'T2', text: '9', char_start: 7, char_end: 8 },
+      { token_id: 'T3', text: '5', char_start: 4, char_end: 5 },
+      { token_id: 'T4', text: '5', char_start: 11, char_end: 12 },
+      { token_id: 'T5', text: 'n', char_start: 26, char_end: 27 },
+    ],
+  },
+  {
     title: 'A span that does not slice back',
     note: 'Contract breach — dropped, warned to console, question still renders.',
     question: 'Ravi scores n points and then scores 4 more.',
@@ -69,7 +85,26 @@ const CASES: Array<{ title: string; note: string; question: string; anchors: Que
   },
 ];
 
+/** What a plan's beats leave on the teaching-marks case above. */
+const TEACHING_MARKS: TeachingTokenMark[] = [
+  { id: 'm1', tokenId: 'T1', style: 'circle', color: 'AMBER', pulse: false },
+  { id: 'm2', tokenId: 'T2', style: 'circle', color: 'AMBER', pulse: false },
+  { id: 'm3', tokenId: 'T3', style: 'box', color: 'TEAL', pulse: false },
+  { id: 'm4', tokenId: 'T4', style: 'box', color: 'TEAL', pulse: false },
+  { id: 'm5', tokenId: 'T5', style: 'highlight', color: 'AMBER', pulse: false },
+  { id: 'm6', tokenId: 'T5', style: 'check', color: 'NAVY', pulse: false },
+];
+const TEACHING_CONNECTORS: TeachingConnector[] = [
+  { id: 'c1', fromTokenId: 'T3', toTokenId: 'T4', color: 'TEAL', pulse: false },
+  { id: 'c2', fromTokenId: 'T2', toTokenId: 'T5', color: 'AMBER', pulse: false },
+];
+
 export default function AnchorsDevScreen() {
+  useEffect(() => {
+    useNumeraStore.setState({ teachingMarks: TEACHING_MARKS, teachingConnectors: TEACHING_CONNECTORS });
+    return () => { useNumeraStore.setState({ teachingMarks: [], teachingConnectors: [] }); };
+  }, []);
+
   return (
     <div className="min-h-screen w-full bg-white p-6">
       <Link href="/dev-screens" className="text-[12px] font-semibold text-slate-blue hover:text-ink">
@@ -93,6 +128,7 @@ export default function AnchorsDevScreen() {
           </section>
         ))}
       </div>
+      <TeachingConnectors />
     </div>
   );
 }

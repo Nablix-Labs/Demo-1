@@ -49,6 +49,36 @@ const FULL = {
     source_id: null,
     answer_reveal_allowed: false,
   }],
+  // The canvas teaching plan (PR #364) and the two ids it is matched against.
+  // Lost on voice, the tutor would draw on REST turns only.
+  canvas_teaching_plan: {
+    plan_id: 'Q1:TURN-1:canvas-teaching',
+    question_id: 'Q1',
+    source_turn_id: 'TURN-1',
+    tutor_turn_id: 'TUTOR-1',
+    scene_revision: 3,
+    mode: 'append',
+    teaching_mode: 'DIRECT_EXPLANATION',
+    beats: [{
+      beat_id: 'focus-first-values',
+      sequence: 1,
+      speech_anchor: { start_char: 0, end_char: 6, text: 'So the' },
+      operations: [{
+        operation_id: 'circle-first-values',
+        kind: 'CIRCLE',
+        target_kind: 'QUESTION_ANCHOR',
+        target_ids: ['TOK-1'],
+        zone: 'QUESTION',
+        persistence: 'PULSE',
+        evidence_ref: null,
+        text: null,
+        latex: null,
+        color_role: 'AMBER',
+      }],
+    }],
+  },
+  interaction_state_version: 3,
+  accepted_turn_id: 'TURN-1',
   active_scaffold: {
     scaffold_id: 'SC-1',
     current_step_id: 'STEP-2',
