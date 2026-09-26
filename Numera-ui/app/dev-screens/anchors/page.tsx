@@ -95,8 +95,8 @@ const TEACHING_MARKS: TeachingTokenMark[] = [
   { id: 'm6', tokenId: 'T5', style: 'check', color: 'NAVY', pulse: false },
 ];
 const TEACHING_CONNECTORS: TeachingConnector[] = [
-  { id: 'c1', fromTokenId: 'T3', toTokenId: 'T4', color: 'TEAL', pulse: false },
-  { id: 'c2', fromTokenId: 'T2', toTokenId: 'T5', color: 'AMBER', pulse: false },
+  { kind: 'token', id: 'c1', fromTokenId: 'T3', toTokenId: 'T4', color: 'TEAL', pulse: false },
+  { kind: 'token', id: 'c2', fromTokenId: 'T2', toTokenId: 'T5', color: 'AMBER', pulse: false },
 ];
 
 export default function AnchorsDevScreen() {

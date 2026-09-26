@@ -145,7 +145,11 @@ export default function AnchoredText({
   const teachingMarks = useNumeraStore((s) => s.teachingMarks);
   const teachingConnectors = useNumeraStore((s) => s.teachingConnectors);
   const linkColor = (tokenId: string) =>
-    teachingConnectors.find((c) => c.fromTokenId === tokenId || c.toTokenId === tokenId)?.color ?? null;
+    teachingConnectors.find((connector) => (
+      connector.kind === 'token'
+        ? connector.fromTokenId === tokenId || connector.toTokenId === tokenId
+        : connector.fromTokenIds.includes(tokenId)
+    ))?.color ?? null;
 
   // Nothing anchored in this fragment: render it as plain text, so an ordinary
   // question carries no extra markup at all.

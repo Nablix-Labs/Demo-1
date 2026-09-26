@@ -337,7 +337,7 @@ export default function DrawingCanvas({ onExportReady, tutorOnly = false, readOn
     : 'copy';
 
   return (
-    <div ref={containerRef} className="w-full h-full relative" aria-label="Drawing canvas">
+    <div ref={containerRef} data-canvas-stage className="w-full h-full relative" aria-label="Drawing canvas">
       <Stage
         ref={stageRef}
         width={containerSize.width}
