@@ -86,6 +86,7 @@ def test_a_stored_session_carrying_that_block_still_loads(
 
     stored = session_service._sessions[session_id].model_dump(mode="json")
     assert stored["session_summary"] is not None
+    stored.pop("student_name", None)
     # What a writer from before 2 Sep 2026 would have persisted.
     del stored["session_summary"]["session_performance"]["independent_attempts"]
     del stored["independent_attempt_count"]
@@ -98,6 +99,7 @@ def test_a_stored_session_carrying_that_block_still_loads(
     assert session.session_summary is not None
     assert session.session_summary.session_performance.independent_attempts == 0
     assert session.independent_attempt_count == 0
+    assert session.student_name is None
 
 
 def test_a_session_written_before_the_recovery_fields_still_loads(

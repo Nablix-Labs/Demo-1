@@ -1140,6 +1140,7 @@ def test_session_start_uses_schema_3_diagnostic_contract_by_default(monkeypatch)
         "/session/start",
         json={
             "student_id": "ST001",
+            "student_name": "  Maya Chen  ",
             "concept_id": "ALG_LINEAR_ONE_STEP",
             "interaction_mode": "VOICE",
         },
@@ -1197,6 +1198,7 @@ def test_session_start_uses_schema_3_diagnostic_contract_by_default(monkeypatch)
     assert '"reason_code"' in public_json
     assert '"reason":' not in public_json
     stored = session_service._sessions[body["session_id"]]
+    assert stored.student_name == "Maya Chen"
     assert stored.correct_answer == "B"
     assert stored.student_model_event is not None
     internal_question_set = stored.student_model_event.phase_payload.question_set

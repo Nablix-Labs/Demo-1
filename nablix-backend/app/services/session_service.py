@@ -834,6 +834,7 @@ async def start_session(
 
     session_id = _build_session_id()
     started_at = datetime.now(timezone.utc)
+    student_name = (request.student_name.strip() or None) if request.student_name else None
     timestamp = started_at.isoformat().replace("+00:00", "Z")
     session_event = SessionOpenedEvent(
         request_id=_student_model_request_id(
@@ -858,6 +859,7 @@ async def start_session(
         session = SessionRecord(
             session_id=session_id,
             student_id=request.student_id,
+            student_name=student_name,
             concept_id=concept_id,
             started_at=started_at,
             current_phase=phase,
@@ -902,6 +904,7 @@ async def start_session(
     session = SessionRecord(
         session_id=session_id,
         student_id=request.student_id,
+        student_name=student_name,
         concept_id=concept_id,
         started_at=started_at,
         last_tutor_response_at=started_at,
