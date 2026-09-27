@@ -108,6 +108,7 @@ class SessionStartRequest(BaseModel):
     """Validated input required to start a tutoring session."""
 
     student_id: StudentId
+    student_name: str | None = Field(default=None, min_length=1, max_length=80)
     # Saravanan's Student Model owns topic identity. When topic_code is sent it
     # IS the topic -- no lookup, so a new topic never needs a Nablix deploy.
     # Older clients that send concept_id alone still resolve through
@@ -331,6 +332,7 @@ class SessionRecord(BaseModel):
 
     session_id: SessionId
     student_id: StudentId
+    student_name: str | None = None
     concept_id: ConceptId
     started_at: datetime
     current_phase: Phase

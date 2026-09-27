@@ -3489,6 +3489,7 @@ async def _option_selected_interaction_response(
     classification = classify_student_response(
         ClassificationRequest(
             experiment_subject_id=request.session_id,
+            student_name=session.student_name,
             question_id=session.question_id,
             question_type=session.question_type,
             question=session.current_question or "",
@@ -4428,6 +4429,7 @@ async def _process_interaction(
     context = AdapterContext(
         session_id=request.session_id,
         student_id=request.student_id,
+        student_name=session.student_name,
         source_turn_id=request.turn_id,
         question_id=session.question_id,
         question_type=None if scaffold_turn else session.question_type,

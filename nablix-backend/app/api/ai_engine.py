@@ -23,6 +23,7 @@ router = APIRouter()
 
 class AiEngineClassifyRequest(BaseModel):
     experiment_subject_id: str | None = None
+    student_name: str | None = None
     student_input: str
     current_phase: LearningPhase
     question: str
@@ -74,6 +75,7 @@ def _combined_student_input(request: AiEngineClassifyRequest) -> str:
 def _classification_request_from(request: AiEngineClassifyRequest) -> ClassificationRequest:
     return ClassificationRequest(
         experiment_subject_id=request.experiment_subject_id,
+        student_name=request.student_name,
         question_type=request.question_type,
         question=request.question,
         correct_answer=request.correct_answer,

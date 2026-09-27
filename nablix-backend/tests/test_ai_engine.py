@@ -1607,9 +1607,11 @@ def test_production_boundary_rewrites_an_unsafe_writer_reply_once() -> None:
     class Writer:
         def __init__(self) -> None:
             self.calls = 0
+            self.contexts: list[dict[str, object]] = []
 
         def write_guided_fact_budget_message(self, **kwargs: object) -> openai_client.OpenAIGuidedWording:
             self.calls += 1
+            self.contexts.append(cast(dict[str, object], kwargs["wording_context"]))
             message = (
                 "The fixed amount is 5."
                 if self.calls == 1
@@ -1627,7 +1629,13 @@ def test_production_boundary_rewrites_an_unsafe_writer_reply_once() -> None:
                 confidence=0.9,
             )
 
-    request = _plain_general_rule_request("n + 6")
+    request = _plain_general_rule_request("n + 6").model_copy(update={
+        "student_name": "Maya",
+        "conversation_history": [
+            ConversationMessage(role="assistant", content="What changes in the examples?"),
+            ConversationMessage(role="user", content="I am not sure where to start."),
+        ],
+    })
     rubric = _plain_general_rule_rubric()
     objective = classifier.initial_guided_objective(rubric)
     contribution = StudentContribution(
@@ -1672,6 +1680,20 @@ def test_production_boundary_rewrites_an_unsafe_writer_reply_once() -> None:
     assert rewritten.contribution.generated_support_text == (
         "Compare the amount in the visible examples with the amount in your rule."
     )
+    assert writer.contexts[0]["student_name"] == "Maya"
+    assert writer.contexts[0]["recent_conversation"] == [
+        {"role": "assistant", "content": "What changes in the examples?"},
+        {"role": "user", "content": "I am not sure where to start."},
+    ]
+
+
+def test_response_aware_writer_prompt_adapts_and_requires_a_concrete_next_move() -> None:
+    prompt = load_classifier_rules().guided_learning.response_aware_writer_system_prompt
+
+    assert "recent conversation" in prompt
+    assert "smallest useful next step" in prompt
+    assert "one specific thing to do" in prompt
+    assert "state the remaining idea in your own words" in prompt
 
 
 def test_guided_writer_schema_requires_replacement_support_for_mixed_turn() -> None:
@@ -6942,7 +6964,9 @@ def test_guided_partial_without_confirmed_concepts_becomes_safe_unclear(
     assert response.student_model_events == []
     assert response.attempt_increment == 0
     assert response.question_completed is False
-    assert response.tutor_message == "State the remaining idea in your own words."
+    assert response.tutor_message == (
+        "What operation is implied by the factors written together here?"
+    )
 
 
 def test_guided_error_definitions_preserve_student_model_metadata() -> None:

@@ -99,6 +99,7 @@ _CANVAS_EXPRESSION_FRAGMENT = re.compile(
 
 class ClassificationRequest(StrictSchema):
     experiment_subject_id: str | None = None
+    student_name: str | None = None
     question_id: str | None = None
     question_type: QuestionType | None = None
     question: str
@@ -1181,6 +1182,14 @@ def focused_unresolved_prompt(
         return "What general rule represents this situation?"
     if any(term in component_kind for term in ("changing", "changes", "variable")):
         return "Which value can change from one example to another?"
+    if any(term in component_kind for term in ("multiplication", "multiply", "product")):
+        return "What operation is implied by the factors written together here?"
+    if any(term in component_kind for term in ("division", "divide", "quotient")):
+        return "What does the fraction bar tell you to do?"
+    if any(term in component_kind for term in ("addition", "add", "sum")):
+        return "Which quantities are being added?"
+    if any(term in component_kind for term in ("subtraction", "subtract", "difference")):
+        return "Which quantity is being taken away?"
     if any(term in component_kind for term in ("fixed", "increment", "constant")):
         return "What operation or amount stays fixed?"
     if re.search(
@@ -1192,7 +1201,7 @@ def focused_unresolved_prompt(
         return "What do the letters represent when the expression is expanded?"
     if any(term in component_kind for term in ("choice", "selection", "option")):
         return "Which option represents every possible starting value?"
-    return "State the remaining idea in your own words."
+    return default_message
 
 
 def active_component_id(
@@ -4333,6 +4342,7 @@ def write_redacted_response_aware_message(
     context = {
         "question": request.question,
         "student_response": current_learner_response(request),
+        "student_name": request.student_name.strip() if request.student_name else None,
         "input_source": request.input_source,
         "canvas_ocr_text": request.canvas_ocr_text,
         "contribution_kind": contribution.kind,
@@ -4348,10 +4358,12 @@ def write_redacted_response_aware_message(
         "authorised_support": support_context_text(
             request.phase_2_prompt_context.current_support
         ) if request.phase_2_prompt_context and request.phase_2_prompt_context.current_support else None,
-        "recent_tutor_questions": [
-            message.content for message in request.conversation_history[-4:]
-            if message.role == "assistant"
-        ],
+        "recent_conversation": [
+            message.model_dump()
+            for message in request.conversation_history[
+                -rules.guided_learning.maximum_recent_history_turns:
+            ]
+        ] if rules.guided_learning.maximum_recent_history_turns > 0 else [],
         "answer_reveal_allowed": False,
         "submission_state": evaluation.submission_state,
         "canvas_submission_required": request.canvas_submission_required,

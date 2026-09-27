@@ -95,6 +95,7 @@ class AdapterContext(BaseModel):
 
     session_id: str
     student_id: str
+    student_name: str | None = None
     source_turn_id: str | None = None
     question_id: str | None = None
     question_type: QuestionType | None = None
