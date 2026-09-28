@@ -1240,7 +1240,19 @@ export const useNumeraStore = create<NumeraState>()(
   // now, which does not (#321). `mergeQuestionAnchors` draws that line, and the
   // clear on a question change stays where it belongs, in `applyBackendPhase`.
   setQuestionAnchors: (incoming) =>
-    set((s) => ({ questionAnchors: mergeQuestionAnchors(s.questionAnchors, incoming) })),
+    set((s) => ({
+      questionAnchors: mergeQuestionAnchors(
+        s.questionAnchors,
+        // A reply that moves to a new question has been seen carrying the
+        // previous question's tokens too (Q-T02-001 ids, with its offsets, in
+        // Q-T02-003's list — live, 28 Sep). They can never slice back to the
+        // new text; drop them here instead of warning on every render.
+        (incoming ?? []).filter((a) => {
+          const owner = a?.token_id?.match(/^(.+):QTOKEN:\d+$/)?.[1];
+          return !owner || !s.activeQuestionId || owner === s.activeQuestionId;
+        }),
+      ),
+    })),
 
   /**
    * Apply the phase/question the backend just reported.
@@ -1932,18 +1944,29 @@ export const useNumeraStore = create<NumeraState>()(
       // an ack means "this is on screen", and inside `set` it is not yet.
       const acks: Array<{ actionId: string; targetObjectId: string }> = [];
 
+      // Components confirmed by THIS batch. One confirmation is often several
+      // actions sharing a component id — a highlight and a label on each of
+      // the four `y`s of y + y + y + y, plus the written notes. Deduping them
+      // against each other kept only the first highlight and dropped every
+      // label and note (live, 28 Sep: 1 of 15 actions shown). The rule below
+      // is about a component coming back on a LATER turn.
+      const confirmedThisBatch = new Set<string>();
       for (const action of [...pending, ...actions]) {
         // Idempotency: a reconnect or replay must not render the same
         // intervention twice.
         if (seenTutorCanvasActionIds.has(action.action_id)) continue;
-        // And the same CONFIRMED COMPONENT must not be written twice on one
-        // question, however many action ids it arrives under — see
-        // `writtenComponentIds`.
+        // And a CONFIRMED COMPONENT already written by an earlier turn must not
+        // be written again on this question, however many action ids it arrives
+        // under — see `writtenComponentIds`.
         if (action.confirmed_component_id) {
-          if (writtenComponentIds.has(action.confirmed_component_id)) {
+          if (
+            writtenComponentIds.has(action.confirmed_component_id)
+            && !confirmedThisBatch.has(action.confirmed_component_id)
+          ) {
             seenTutorCanvasActionIds.add(action.action_id);
             continue;
           }
+          confirmedThisBatch.add(action.confirmed_component_id);
           writtenComponentIds.add(action.confirmed_component_id);
         }
 

@@ -71,6 +71,22 @@ slot ids.
 CONNECT, since it has no zone-level meaning), and drop failing operations
 individually. Either one alone would have put all five notes on screen.
 
+## Advance turns (live, 28 Sep, `4y` on Q-T02-001 → Q-T02-003)
+
+- **Previous question's tokens in the new question's `question_anchors`.** The
+  reply that moves to Q-T02-003 lists `Q-T02-001:QTOKEN:2/4/6/8/12` with
+  Q-T02-001's offsets alongside Q-T02-003's own tokens. They can never slice
+  back to the new text. The frontend now drops foreign-question tokens, but the
+  list should only carry the new question's anchors.
+- **Confirmation content.** The same reply writes `y → changes` as four
+  separate notes (one per `y`) and also `notation → changes`. "notation" isn't
+  a changing quantity, so that's wrong teaching content. One note per idea
+  would read better.
+- Frontend side, fixed: all 15 parts of that confirmation share one
+  `confirmed_component_id`, and a dedupe meant for re-confirmation on a later
+  turn kept only the first highlight. Every part of a batch now applies, and
+  the question is held on screen while they are written.
+
 ## Frontend: fixed in this commit
 
 - **Raw LaTeX on the board.** A `WRITE_MATH` in a `handwritten` scene slot

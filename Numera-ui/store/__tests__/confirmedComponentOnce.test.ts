@@ -81,3 +81,41 @@ describe('the same component confirmed twice', () => {
     expect(marks().length).toBeGreaterThan(afterFirst);
   });
 });
+
+describe('one confirmation in several parts (live, 28 Sep 2026)', () => {
+  // `4y` for y + y + y + y: a highlight and a label on each of the four `y`s,
+  // all under one component id. Only the first highlight used to survive.
+  const Q = 'Write y + y + y + y in compact algebraic notation.';
+  const yAt = [6, 10, 14, 18];
+  const anchors = yAt.map((at, i) => ({
+    token_id: `Q-T02-001:QTOKEN:${2 * i + 2}`, text: 'y', char_start: at, char_end: at + 1,
+  }));
+  const part = (n: number, type: 'HIGHLIGHT' | 'INSERT_LABEL', token: string) => ({
+    action_id: `TURN-d24:${n}:${type}:${token}`,
+    type,
+    target_kind: 'QUESTION_ANCHOR' as const,
+    target_object_id: token,
+    confirmed_component_id: 'REPEATED_ADDITION_TO_COEFFICIENT_NOTATION',
+    text: type === 'INSERT_LABEL' ? 'y → changes' : null,
+    source_id: null,
+    answer_reveal_allowed: false,
+  });
+
+  beforeEach(() => {
+    state().applyBackendPhase({ phase: 'GUIDED_PRACTICE', questionId: 'Q-T02-001', questionText: Q, questionType: null });
+    state().setQuestionAnchors(anchors);
+  });
+
+  it('applies every part that arrives together', () => {
+    const batch = anchors.flatMap((a, i) => [part(2 * i + 1, 'HIGHLIGHT', a.token_id), part(2 * i + 2, 'INSERT_LABEL', a.token_id)]);
+    state().applyTutorCanvasActions(batch);
+    const marked = state().questionAnchors.filter((a) => a.highlighted && a.label === 'y → changes');
+    expect(marked.map((a) => a.token_id)).toEqual(anchors.map((a) => a.token_id));
+  });
+
+  it('still skips the same component on a later turn', () => {
+    state().applyTutorCanvasActions([part(1, 'HIGHLIGHT', anchors[0].token_id)]);
+    state().applyTutorCanvasActions([{ ...part(2, 'INSERT_LABEL', anchors[1].token_id), action_id: 'TURN-next:1' }]);
+    expect(state().questionAnchors.find((a) => a.token_id === anchors[1].token_id)?.label ?? null).toBeNull();
+  });
+});
