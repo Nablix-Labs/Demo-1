@@ -256,6 +256,12 @@ body {
   to   { opacity: 1; }
 }
 .lg-anim-sheet { animation: lg-sheet-in 380ms cubic-bezier(0.32, 0.72, 0.24, 1) both; }
+/* The Need-help drawer slides the whole way in from the right edge. */
+@keyframes lg-drawer-in {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+.lg-anim-drawer { animation: lg-drawer-in 320ms cubic-bezier(0.32, 0.72, 0.24, 1) both; }
 .lg-anim-pop   { animation: lg-pop-in 240ms cubic-bezier(0.34, 1.28, 0.44, 1) both; }
 .lg-anim-rise  { animation: lg-rise-in 220ms cubic-bezier(0.32, 0.72, 0.24, 1) both; }
 .lg-anim-fade  { animation: lg-fade-in 200ms ease both; }
@@ -301,7 +307,7 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .teaching-in, .teaching-pulse { animation: none; }
-  .lg-aura, .lg-anim-sheet, .lg-anim-pop, .lg-anim-rise, .lg-anim-fade { animation: none; }
+  .lg-aura, .lg-anim-sheet, .lg-anim-drawer, .lg-anim-pop, .lg-anim-rise, .lg-anim-fade { animation: none; }
   .lg-chip, .lg-chip:hover:not(:disabled), .lg-chip:active:not(:disabled) { transform: none; }
 }
 

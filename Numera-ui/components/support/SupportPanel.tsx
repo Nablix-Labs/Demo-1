@@ -261,11 +261,15 @@ export default function SupportPanel() {
   return (
     <>
       <aside
-        className="lg-sheet lg-anim-sheet fixed top-2 bottom-14 right-2 z-[70] w-[312px] rounded-[26px] flex flex-col overflow-hidden"
+        // A drawer, not a floating card: full height, a third of the window,
+        // square edges, sliding in from the right (28 Sep). The floor keeps
+        // the chat readable on a narrow window; the cap keeps it on screen.
+        className="lg-anim-drawer fixed inset-y-0 right-0 z-[70] w-1/3 min-w-[360px] max-w-full flex flex-col overflow-hidden
+                   bg-white/[0.97] backdrop-blur-xl border-l border-muted-gray shadow-[-18px_0_48px_rgba(11,16,32,0.18)]"
         aria-label="Nablix Assist support panel"
       >
         {/* Header — the assist identity */}
-        <div className="flex items-center justify-between pl-3.5 pr-3 py-3 border-b border-white/45 flex-shrink-0">
+        <div className="flex items-center justify-between pl-3.5 pr-3 py-3 border-b border-muted-gray flex-shrink-0">
           <div className="flex items-center gap-2.5">
             <span className="lg-lens lg-aura w-9 h-9 rounded-full flex items-center justify-center text-white flex-shrink-0">
               <LifeBuoy size={17} strokeWidth={1.9} aria-hidden="true" />
@@ -406,7 +410,7 @@ export default function SupportPanel() {
         {/* Input row — text always available; voice unless the mic IS the issue */}
         <form
           onSubmit={sendText}
-          className="flex items-center gap-2 px-3 pb-2.5 pt-2.5 border-t border-white/45 flex-shrink-0"
+          className="flex items-center gap-2 px-3 pb-2.5 pt-2.5 border-t border-muted-gray flex-shrink-0"
         >
           <input
             value={text}
