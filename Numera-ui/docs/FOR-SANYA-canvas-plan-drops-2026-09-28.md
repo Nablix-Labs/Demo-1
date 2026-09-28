@@ -41,6 +41,36 @@ Asks (backend, Sanya):
    it the exact rule, or accept REASONING-zone CONNECT when it has a
    `scene_slot`.
 
+## Live run, 28 Sep 06:18–06:27 UTC: 5 of 5 confirmation plans dropped
+
+Logged in as `sanya1` on Demo 1, session `SESSION3b1e51a3ae9846dfb811625e7e88e616`,
+Q-T02-005. Each correct answer was typed in the UI, and I read the response
+and the planner draft for every turn:
+
+| Student said | Planner drafted | Response `canvas_teaching_plan` |
+|---|---|---|
+| 4n means 4 multiplied by n | `WRITE_MATH 4n=4\times n` + `CONNECT` QTOKEN:8,9 in **REASONING** | `null` |
+| pq means p multiplied by q | `WRITE_MATH p\times q` + `CONNECT` QTOKEN:10 in **REASONING** | `null` |
+| r squared means r multiplied by r | `WRITE_MATH r^2=r\times r` + `CONNECT` QTOKEN:11 in **REASONING** | `null` |
+| c/d means c divided by d | `WRITE_MATH \frac{c}{d}=c\div d` + `CONNECT` QTOKEN:12–14 in **REASONING** | `null` |
+| 2(x + 1) means … | `WRITE_MATH 2(x+1)` + `CONNECT` QTOKEN:17–19 in **REASONING** | `null` |
+
+The drafts are exactly the teaching we want: a confirmed note plus an arrow
+from the token it came from. Every one is lost to a single rule in
+`_operation_is_authorized`: `CONNECT` requires `zone == "QUESTION"`. The model
+always says REASONING, because the arrow ends in the reasoning note. Because
+`_validate_draft` is all-or-nothing, the valid `WRITE_MATH` goes too.
+
+The model also invents `scene_slot` names (`reasoning_4n`, `confirmed_pq_meaning`,
+`reasoning-note-1`, `reasoning_trail`). The frontend only knows the six slots in
+`config/canvasTeachingSceneSlots.json`. It falls back to the reasoning trail for
+any other name, so this is harmless, but the prompt should list the allowed
+slot ids.
+
+**Smallest fix:** accept `CONNECT` with `zone` REASONING (or ignore `zone` for
+CONNECT, since it has no zone-level meaning), and drop failing operations
+individually. Either one alone would have put all five notes on screen.
+
 ## Frontend: fixed in this commit
 
 - **Raw LaTeX on the board.** A `WRITE_MATH` in a `handwritten` scene slot
