@@ -338,6 +338,100 @@ def test_planner_returns_a_grounded_attention_beat(monkeypatch) -> None:
     assert requested_models == [rules.guided_learning.model]
 
 
+def test_planner_logs_when_required_confirmed_ink_is_missing(monkeypatch) -> None:
+    voice = "Yes, 3 is the changing value."
+    anchor = QuestionTextAnchor(
+        token_id="Q1:QTOKEN:1",
+        text="3",
+        char_start=0,
+        char_end=1,
+    )
+    tutor = _tutor().model_copy(
+        update={
+            "tutor_message": voice,
+            "tutor_message_voice": voice,
+            "tutor_canvas_actions": [
+                TutorCanvasAction(
+                    action_id="TURN-1:1:HIGHLIGHT",
+                    type="HIGHLIGHT",
+                    target_kind="QUESTION_ANCHOR",
+                    target_object_id=anchor.token_id,
+                    confirmed_component_id="CHANGING_VALUE",
+                    text=None,
+                    source_id=None,
+                    answer_reveal_allowed=False,
+                )
+            ],
+        }
+    )
+    draft = CanvasTeachingPlanDraft.model_validate(
+        {
+            "beats": [
+                {
+                    "beat_id": "focus-confirmed-value",
+                    "sequence": 1,
+                    "speech_anchor": {
+                        "start_char": 0,
+                        "end_char": len(voice),
+                        "text": voice,
+                    },
+                    "operations": [
+                        {
+                            "operation_id": "focus-confirmed-value",
+                            "kind": "FOCUS",
+                            "target_kind": "QUESTION_ANCHOR",
+                            "target_ids": [anchor.token_id],
+                            "zone": "QUESTION",
+                            "persistence": "PULSE",
+                            "color_role": "AMBER",
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    logged: list[tuple[str, dict[str, object]]] = []
+
+    def capture_warning(event: str, extra: dict[str, object]) -> None:
+        logged.append((event, extra))
+
+    monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
+    monkeypatch.setattr(
+        canvas_teaching_planner,
+        "build_openai_ai_engine_client",
+        lambda _: FakeCanvasTeachingClient(draft),
+    )
+    monkeypatch.setattr(canvas_teaching_planner.logger, "warning", capture_warning)
+
+    plan = canvas_teaching_planner.plan_canvas_teaching(
+        question_id="Q1",
+        question="What changes in 3 + 5?",
+        source_turn_id="TURN-1",
+        tutor_turn_id="TUTOR-1",
+        scene_revision=1,
+        tutor_message_voice=voice,
+        tutor=tutor,
+        question_anchors=[anchor],
+        student_response="3 changes",
+        canonical_answer="n + 5",
+        active_support_level=None,
+        current_unresolved_component_id="FIXED_VALUE",
+    )
+
+    assert plan is None
+    event, extra = next(
+        item
+        for item in logged
+        if item[1].get("reason") == "guided_evidence_ink_required_but_not_accepted"
+    )
+    assert event == "canvas_teaching_plan_not_generated"
+    assert extra["question_id"] == "Q1"
+    assert extra["source_turn_id"] == "TURN-1"
+    assert extra["accepted_beat_count"] == 1
+    assert extra["accepted_operation_kinds"] == ["FOCUS"]
+    assert extra["authorized_evidence_ids"] == ["CHANGING_VALUE"]
+
+
 def test_pattern_scene_writes_only_after_the_learner_names_the_changing_part(monkeypatch) -> None:
     monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
     monkeypatch.setattr(

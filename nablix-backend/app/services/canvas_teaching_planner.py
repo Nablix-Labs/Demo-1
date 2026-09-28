@@ -1038,6 +1038,21 @@ def _validate_draft(
     if not accepted:
         return None
     if require_guided_evidence_ink and guided_evidence_writes == 0:
+        logger.warning(
+            "canvas_teaching_plan_not_generated",
+            extra={
+                "question_id": question_id,
+                "source_turn_id": source_turn_id,
+                "reason": "guided_evidence_ink_required_but_not_accepted",
+                "accepted_beat_count": len(accepted),
+                "accepted_operation_kinds": [
+                    operation.kind
+                    for beat in accepted
+                    for operation in beat.operations
+                ],
+                "authorized_evidence_ids": sorted(current_evidence),
+            },
+        )
         return None
     return accepted
 
