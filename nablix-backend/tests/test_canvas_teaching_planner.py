@@ -28,6 +28,7 @@ class FakeCanvasTeachingClient:
     ) -> CanvasTeachingPlanDraft:
         assert system_prompt
         assert context["question_id"]
+        assert context["allowed_scene_slots"]
         return self.draft
 
 
@@ -43,7 +44,7 @@ def _confirmed_example_draft(
             "kind": "CONNECT",
             "target_kind": "QUESTION_ANCHOR",
             "target_ids": target_ids[index:index + 4],
-            "zone": "QUESTION",
+            "zone": "REASONING",
             "persistence": "PERSIST",
             "evidence_ref": evidence_ref,
             "color_role": "NAVY",
@@ -951,7 +952,7 @@ def test_planner_writes_a_confirmed_notation_example_and_connects_its_source(mon
         evidence_ref="JUXTAPOSITION",
         expression=r"p \times q",
     )
-    assert canvas_teaching_planner.plan_canvas_teaching(
+    partial_plan = canvas_teaching_planner.plan_canvas_teaching(
         question_id="Q-NOTATION",
         question=question,
         source_turn_id="TURN-NOTATION",
@@ -964,8 +965,11 @@ def test_planner_writes_a_confirmed_notation_example_and_connects_its_source(mon
         canonical_answer="p × q; r × r",
         active_support_level=None,
         current_unresolved_component_id="EXPONENT",
-    ) is None
-
+    )
+    assert partial_plan is not None
+    assert [operation.kind for operation in partial_plan.beats[0].operations] == [
+        "WRITE_MATH"
+    ]
     client.draft = _confirmed_example_draft(
         voice=tutor.tutor_message_voice,
         target_ids=[pq_anchor.token_id],
@@ -987,6 +991,145 @@ def test_planner_writes_a_confirmed_notation_example_and_connects_its_source(mon
         current_unresolved_component_id="EXPONENT",
     ) is None
 
+
+def test_planner_keeps_a_valid_note_when_a_reasoning_arrow_is_malformed(monkeypatch) -> None:
+    voice = "Yes, pq means p multiplied by q."
+    anchors = question_text_tokens("Q-NOTATION", "Decode pq.")
+    pq_anchor = next(anchor for anchor in anchors if anchor.text == "pq")
+    old_anchor = question_text_tokens("Q-OLD", "Earlier question")[0]
+    tutor = _tutor().model_copy(
+        update={
+            "tutor_message_voice": voice,
+            "guided_teaching_state": GuidedTeachingState(
+                question_id="Q-NOTATION",
+                objective_component_ids=["JUXTAPOSITION"],
+                confirmed_component_ids=["JUXTAPOSITION"],
+                missing_component_ids=[],
+                active_component_id=None,
+                last_tutor_question_type="COMPONENT",
+                selected_option_id=None,
+                awaiting_response=True,
+                last_turn_evidence=[
+                    GuidedEvidenceClaim(
+                        concept_id="JUXTAPOSITION",
+                        status="DEMONSTRATED",
+                        source="TEXT",
+                    )
+                ],
+            ),
+            "tutor_canvas_actions": [
+                TutorCanvasAction(
+                    action_id="TURN-NOTATION:1:HIGHLIGHT",
+                    type="HIGHLIGHT",
+                    target_kind="QUESTION_ANCHOR",
+                    target_object_id=pq_anchor.token_id,
+                    confirmed_component_id="JUXTAPOSITION",
+                    text=None,
+                    source_id=None,
+                    answer_reveal_allowed=False,
+                )
+            ],
+        }
+    )
+    draft = _confirmed_example_draft(
+        voice=voice,
+        target_ids=[pq_anchor.token_id],
+        evidence_ref="JUXTAPOSITION",
+        expression=r"p \times q",
+    )
+    beat = draft.beats[0]
+    malformed_connector = beat.operations[0].model_copy(update={"zone": "TUTOR_SOLUTION"})
+    draft = draft.model_copy(
+        update={
+            "beats": [
+                beat.model_copy(
+                    update={
+                        "operations": [
+                            malformed_connector,
+                            beat.operations[1].model_copy(
+                                update={
+                                    "operation_id": "stale-question-highlight",
+                                    "kind": "HIGHLIGHT",
+                                    "target_ids": [old_anchor.token_id],
+                                    "evidence_ref": None,
+                                    "latex": None,
+                                }
+                            ),
+                            beat.operations[1].model_copy(
+                                update={
+                                    "operation_id": "evidence-bearing-highlight",
+                                    "kind": "HIGHLIGHT",
+                                    "target_ids": [pq_anchor.token_id],
+                                    "latex": None,
+                                }
+                            ),
+                            beat.operations[1],
+                        ]
+                    }
+                )
+            ]
+        }
+    )
+    rejected_operations: list[dict[str, object]] = []
+
+    def capture_warning(event: str, *, extra: dict[str, object]) -> None:
+        if event == "canvas_teaching_operation_rejected":
+            rejected_operations.append(extra)
+
+    monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
+    monkeypatch.setattr(canvas_teaching_planner.logger, "warning", capture_warning)
+    monkeypatch.setattr(
+        canvas_teaching_planner,
+        "build_openai_ai_engine_client",
+        lambda _: FakeCanvasTeachingClient(draft),
+    )
+
+    plan = canvas_teaching_planner.plan_canvas_teaching(
+        question_id="Q-NOTATION",
+        question="Decode pq.",
+        source_turn_id="TURN-NOTATION",
+        tutor_turn_id="TUTOR-NOTATION",
+        scene_revision=1,
+        tutor_message_voice=voice,
+        tutor=tutor,
+        question_anchors=[*anchors, old_anchor],
+        student_response="p multiplied by q",
+        canonical_answer="p × q",
+        active_support_level=None,
+        current_unresolved_component_id=None,
+    )
+
+    assert plan is not None
+    assert [operation.kind for operation in plan.beats[0].operations] == ["WRITE_MATH"]
+    assert rejected_operations == [
+        {
+            "question_id": "Q-NOTATION",
+            "source_turn_id": "TURN-NOTATION",
+            "beat_id": "confirmed-example",
+            "operation_id": "connect-confirmed-example-0",
+            "operation_kind": "CONNECT",
+            "target_ids": [pq_anchor.token_id],
+            "rule": "connect_zone_must_identify_question_or_reasoning",
+        },
+        {
+            "question_id": "Q-NOTATION",
+            "source_turn_id": "TURN-NOTATION",
+            "beat_id": "confirmed-example",
+            "operation_id": "stale-question-highlight",
+            "operation_kind": "HIGHLIGHT",
+            "target_ids": [old_anchor.token_id],
+            "rule": "target_not_in_current_question_or_canvas_zones",
+        },
+        {
+            "question_id": "Q-NOTATION",
+            "source_turn_id": "TURN-NOTATION",
+            "beat_id": "confirmed-example",
+            "operation_id": "evidence-bearing-highlight",
+            "operation_kind": "HIGHLIGHT",
+            "target_ids": [pq_anchor.token_id],
+            "rule": "attention_mark_must_not_reference_evidence",
+        },
+    ]
 
 @pytest.mark.parametrize(
     ("expression", "student_response", "board_expression"),
