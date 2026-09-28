@@ -34,6 +34,7 @@ import {
   type TeachingZoneFocus,
 } from '@/lib/canvasTeachingPlan';
 import { questionStripBottom } from '@/lib/tutorCanvasActions';
+import type { LoginReview } from '@/lib/loginReview';
 import {
   resolveTarget, actionMarks, showsWriteAffordance, memoryActionType, memoryActor,
   dropWriteRequest, RESCUE_SUFFIX,
@@ -1026,6 +1027,13 @@ export interface NumeraState {
    * value only one of them ever has.
    */
   pendingTopicCode: string | null;
+  /**
+   * A finished topic's review, as login reported it (lib/loginReview). Shown by
+   * the Review screen when there is no session to read. Persisted so a refresh
+   * of that screen keeps it.
+   */
+  loginReview: LoginReview | null;
+  setLoginReview: (review: LoginReview | null) => void;
   setPendingTopicCode: (code: string | null) => void;
   setFlowStage: (stage: FlowStage) => void;
   setMastery: (id: string, value: boolean, title?: string | null) => void;
@@ -1052,7 +1060,7 @@ const initial: Omit<
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
   | 'setShapeKind' | 'setEraserMode'
   | 'setStrokeColor' | 'setStrokeWidth' | 'addItem' | 'removeItem' | 'undo' | 'redo'
-  | 'clearCanvas' | 'applyCanvasDraw' | 'applyTutorCanvasActions' | 'applyTeachingBeat' | 'replaceTeachingLayer' | 'clearWriteAffordance' | 'clearTutorMarks' | 'setCanvasSize' | 'recordSupportEvent'
+  | 'clearCanvas' | 'applyCanvasDraw' | 'applyTutorCanvasActions' | 'applyTeachingBeat' | 'replaceTeachingLayer' | 'setLoginReview' | 'clearWriteAffordance' | 'clearTutorMarks' | 'setCanvasSize' | 'recordSupportEvent'
   | 'setInputMode' | 'setTextInput' | 'setPanelSide' | 'setPanelWidth' | 'resetPanelWidth' | 'togglePanelSide' | 'togglePanelCollapsed'
   | 'toggleTranscript' | 'setToolbarPos' | 'toggleToolbarCollapsed' | 'setToolbarOrientation' | 'setMicButtonPos' | 'setCanvasGrid' | 'setTtsVoice' | 'setActiveScaffold'
   | 'setCanvasExporter' | 'startGroupSession' | 'endGroupSession'
@@ -1182,6 +1190,7 @@ const initial: Omit<
   entryTopicId: null,
   currentTopicId: TOPICS[0].id,
   pendingTopicCode: null,
+  loginReview: null,
   flowStage: 'orientation',
   masteryByTopic: {},
   topicTitles: {} as Record<string, string>,
@@ -2155,6 +2164,8 @@ export const useNumeraStore = create<NumeraState>()(
     }
   },
 
+  setLoginReview: (loginReview) => set({ loginReview }),
+
   replaceTeachingLayer: () => set((s) => ({
     teachingMarks: [],
     teachingConnectors: [],
@@ -2325,6 +2336,7 @@ export const useNumeraStore = create<NumeraState>()(
         // Set on /review from a handoff, read by beginSession on the screen the
         // student lands on — it has to survive that navigation.
         pendingTopicCode: s.pendingTopicCode,
+        loginReview: s.loginReview,
         flowStage: s.flowStage,
         masteryByTopic: s.masteryByTopic,
         topicTitles: s.topicTitles,

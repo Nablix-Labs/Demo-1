@@ -35,14 +35,14 @@ describe('the empty-review state', () => {
   it('offers a retry, because an empty list is usually a missing review', () => {
     // Previously the only way out was "Back to the lesson", which throws away
     // a review that was merely late.
-    const block = source.slice(source.indexOf('const nothingGraded'));
+    const block = source.slice(source.indexOf('if (apiEnabled && nothingGraded) {'));
     expect(block.slice(0, 2200)).toMatch(/retryReview\(\)/);
   });
 
   it('does not poll on its own from this state', () => {
     // Re-reading the session makes the backend attempt generation, and that is
     // a model call (#346). The retry here must stay user-initiated.
-    const block = source.slice(source.indexOf('const nothingGraded'));
+    const block = source.slice(source.indexOf('if (apiEnabled && nothingGraded) {'));
     expect(block.slice(0, 2200)).not.toMatch(/setInterval|setTimeout/);
   });
 

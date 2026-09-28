@@ -1430,7 +1430,14 @@ export function useDemoTutor() {
    */
   const presentInactivityNudge = useCallback(
     (delivery: NudgeDelivery): void => {
-      addTranscriptMessage({ role: 'ai', text: delivery.message });
+      // The policy allows a second nudge on the same turn, and the backend can
+      // word it identically ("I'm still here with you…" twice in a row, live
+      // 28 Sep). Spoken again it is a reminder; printed again it reads as the
+      // chat glitching. So the repeat is heard but not re-posted.
+      const last = useNumeraStore.getState().transcript.at(-1);
+      if (!(last?.role === 'ai' && last.text.trim() === delivery.message.trim())) {
+        addTranscriptMessage({ role: 'ai', text: delivery.message });
+      }
       tutorSay(delivery.message, { afterMarks: true });
     },
     [addTranscriptMessage],

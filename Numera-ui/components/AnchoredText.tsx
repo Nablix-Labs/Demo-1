@@ -17,7 +17,7 @@
  */
 
 import type { CSSProperties, ReactNode } from 'react';
-import { DrawablyCircle, DrawablyHighlight } from 'drawably/react';
+import { DrawablyCircle } from 'drawably/react';
 import 'drawably/style.css';
 import { anchorSegments, usableAnchors, type QuestionAnchor } from '@/lib/questionAnchors';
 import { TEACHING_COLORS, type CanvasTeachingColor, type TeachingTokenMark } from '@/lib/canvasTeachingPlan';
@@ -170,36 +170,24 @@ export default function AnchoredText({
           </span>
         ) : (
           <span key={i} data-qtoken={segment.anchor.token_id} className="relative inline whitespace-nowrap">
-            {/* A drawn marker wash rather than a CSS background, because that
-                is what a tutor pointing at a word actually does. `drawably`
-                gives a decoration that wraps one drawing PER LINE, which is
-                the failure this file's header warns about for floating
-                arrows — the wash cannot separate from the word it is on.
-
-                Wrapping the <mark> rather than replacing it: DrawablyHighlight
-                renders a <span> and takes no `as`, and the element is the whole
-                point here — a screen reader announces marked text, which is the
-                meaning. So the semantics stay and the drawing goes behind them.
-
-                `boil={0}` for one static path. This sits inside the question a
-                student is reading; flickering the word they are trying to read
-                is the one place motion is clearly wrong. `seed` is derived from
-                the token so the wash is stable across re-renders instead of
-                re-drawing itself every time the turn updates. */}
+            {/* The tutor pointing at this token. See the note on the <mark>. */}
             {withTeachingMarks(segment.anchor.token_id, (
-            <DrawablyHighlight
-              boil={0}
-              seed={seedFor(segment.anchor.token_id)}
-              fill="var(--drawably-anchor-wash)"
-            >
               <mark
-                // Background comes from the drawn wash now; a CSS fill behind it
-                // too would print one highlight on top of another.
-                className="bg-transparent px-[2px] py-[1px] text-ink"
+                // A flat rounded wash, not a drawn one. The sketched wash
+                // rendered on a single character as a blob over half the
+                // glyph — the four `y`s of Q-T02-001 on 28 Sep — and a
+                // teaching highlight on the same token then stacked on top of
+                // it. When the teaching plan is highlighting this token, its
+                // wash is the only one drawn.
+                className="rounded-[4px] px-[3px] py-[1px] text-ink"
+                style={{
+                  background: teachingMarks.some((m) => m.tokenId === segment.anchor!.token_id && m.style === 'highlight')
+                    ? 'transparent'
+                    : 'rgb(255 159 28 / 0.3)',
+                }}
               >
                 {segment.text}
               </mark>
-            </DrawablyHighlight>
             ), teachingMarks, linkColor(segment.anchor.token_id))}
             {/* The label is NOT written here. It used to be an inline chip
                 immediately after the word, which reads acceptably in prose but

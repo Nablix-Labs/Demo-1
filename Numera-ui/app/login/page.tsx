@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { loginReviewFrom } from '@/lib/loginReview';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, Mail, Phone } from 'lucide-react';
 import { useAuthStore, accessDecision, type SsoProvider, type Role } from '@/store/useAuthStore';
@@ -78,6 +79,10 @@ export default function LoginPage() {
       store.clearSessionId();
       store.setEndedSessionId(null);
       store.setCurrentPhase('');
+      // A finished topic's results, so the Review screen this may land on has
+      // something to show without a session (lib/loginReview). Null for anyone
+      // not in REVIEW, which also clears a previous student's on this device.
+      store.setLoginReview(loginReviewFrom(res.last_journey_state));
       const { href, unlock } = landingRoute(
         res.last_journey_state?.current_phase,
         journeyTopic ?? store.currentTopicId,

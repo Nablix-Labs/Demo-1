@@ -25,6 +25,7 @@ import TutorLayer from './TutorLayer';
 import TutorMathOverlay from './TutorMathOverlay';
 import TutorHandOverlay from './TutorHandOverlay';
 import { useTutorRevealSync } from '@/store/useTutorReveal';
+import { useTeachingLayerPersistence } from '@/lib/teachingLayerPersistence';
 import { captureStudentLayers } from '@/lib/studentSnapshot';
 
 interface DrawingCanvasProps {
@@ -83,6 +84,8 @@ export default function DrawingCanvas({ onExportReady, tutorOnly = false, readOn
 
   // Sequence tutor marks so they draw on like handwriting (see useTutorReveal).
   useTutorRevealSync();
+  // Keep the teaching plan's notes across a reload of the same question.
+  useTeachingLayerPersistence();
 
   const setDraftItem = useCallback((item: DrawnItem | null) => {
     draftRef.current = item;

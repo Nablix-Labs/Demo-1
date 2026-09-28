@@ -52,6 +52,10 @@ export interface LoginResponse {
     topic_id?: string | null;
     current_phase?: string | null;
     recommended_entry_phase?: string | null;
+    topic_status?: string | null;
+    mastery_status?: string | null;
+    /** Carries `review_summary` for a student in REVIEW — lib/loginReview. */
+    phase_payload?: unknown;
   } | null;
 }
 

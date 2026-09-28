@@ -30,6 +30,7 @@ import {
   type QuestionOutcome, type NextTopicHandoff,
 } from '@/lib/api';
 import { reviewCategories, reviewHook, reviewSummaryText } from '@/lib/sessionReview';
+import { skillOutcomeLabel } from '@/lib/loginReview';
 import { reviewIsReady, isReviewUnavailable, REVIEW_READ_TIMEOUT_MS } from '@/lib/reviewReady';
 import { phase4FromSession, type SessionForPhase4 } from '@/lib/phase4FromSession';
 import { handoffDestination } from '@/lib/usePhaseRouting';
@@ -197,6 +198,7 @@ export default function ReviewPage() {
   // Guarded on `!sessionId` so the two never both fire: a live session belongs
   // to retryReview, which also knows how to report a failed generation.
   const endedSessionId = useNumeraStore((s) => s.endedSessionId);
+  const loginReview = useNumeraStore((s) => s.loginReview);
   const setBackendSession = useNumeraStore((s) => s.setBackendSession);
   const restoring = useRef(false);
   useEffect(() => {
@@ -585,6 +587,48 @@ export default function ReviewPage() {
   // session makes the backend attempt to generate the review, which is a model
   // call (#346), so this must never poll on its own.
   const nothingGraded = source === 'none';
+  // A topic finished before this login: no session to read, but login brought
+  // the results with it (lib/loginReview). Shown instead of "Results not
+  // ready", which told a student with seven verified skills to try again.
+  if (apiEnabled && nothingGraded && loginReview && !sessionId && !endedSessionId) {
+    const mastered = loginReview.masteryStatus === 'MASTERED';
+    return (
+      <PhaseGate phase="review">
+        <PageShell title="Review & feedback" subtitle={subtitle}>
+          <div className="rounded-lg border border-muted-gray bg-white px-6 py-6 flex flex-col gap-4">
+            <div>
+              <div className="text-[11px] font-semibold tracking-widest uppercase text-slate-blue">
+                {loginReview.topicStatus === 'COMPLETED' ? 'Topic complete' : 'Your results'}
+              </div>
+              <p className="mt-1 text-[15px] text-ink font-semibold">
+                {mastered
+                  ? 'You mastered this topic.'
+                  : 'Here is how each part of the topic went.'}
+              </p>
+            </div>
+            <ul className="flex flex-col divide-y divide-muted-gray border-t border-muted-gray">
+              {loginReview.skills.map((skill) => (
+                <li key={skill.id} className="flex items-center justify-between gap-4 py-2.5 text-[13px]">
+                  <span className="font-medium text-ink">{skill.id}</span>
+                  <span className={skill.status === 'INDEPENDENTLY_VERIFIED' ? 'text-dark-cyan font-semibold' : 'text-slate-blue'}>
+                    {skillOutcomeLabel(skill.status)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <div>
+              <button
+                onClick={() => void backToLesson()}
+                className="inline-flex items-center gap-1.5 rounded-md border border-muted-gray px-5 py-2.5 text-[13px] font-semibold text-ink hover:bg-reading-surface transition-colors"
+              >
+                Back to the lesson
+              </button>
+            </div>
+          </div>
+        </PageShell>
+      </PhaseGate>
+    );
+  }
   if (apiEnabled && nothingGraded) {
     return (
       <PhaseGate phase="review">
