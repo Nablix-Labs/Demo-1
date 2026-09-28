@@ -123,8 +123,19 @@ export interface TeachingEffects {
   connectors: TeachingConnector[];
   /** Tutor-layer canvas marks. Every id starts with TEACHING_ID_PREFIX. */
   elements: TutorElement[];
-  /** Ids (of any of the three) that are temporary. */
+  /**
+   * "Look at the question": FOCUS/HIGHLIGHT aimed at the QUESTION zone rather
+   * than a token. The strip itself pulses. Always temporary.
+   */
+  zoneFocus: TeachingZoneFocus[];
+  /** Ids (of any of the above) that are temporary. */
   pulseIds: string[];
+}
+
+export interface TeachingZoneFocus {
+  id: string;
+  zone: CanvasTeachingZone;
+  color: CanvasTeachingColor;
 }
 
 /** How long a PULSE stays up. */
@@ -279,7 +290,7 @@ export function beatEffects(
   beat: CanvasTeachingBeat,
   ctx: TeachingContext,
 ): TeachingEffects {
-  const out: TeachingEffects = { tokenMarks: [], connectors: [], elements: [], pulseIds: [] };
+  const out: TeachingEffects = { tokenMarks: [], connectors: [], elements: [], zoneFocus: [], pulseIds: [] };
   const top = ladderTop(TRAIL_FIRST_Y, ctx.stripBottomPx ?? null, ctx.canvasSize.height);
   const frame = { ...ctx.canvasSize };
 
@@ -364,8 +375,16 @@ export function beatEffects(
       continue;
     }
 
-    // CANVAS_ZONE. Only writing and checking have a zone-level meaning; a
-    // circle round "the reasoning zone" points at nothing in particular.
+    // CANVAS_ZONE. A FOCUS or HIGHLIGHT on the question zone is the tutor
+    // saying "look at the question" — the most common zone-level mark in the
+    // planner's output (8 of 9 zone marks on 26–27 Sep), and it used to draw
+    // nothing. Other zone-level attention points at nothing in particular.
+    if ((op.kind === 'FOCUS' || op.kind === 'HIGHLIGHT') && op.zone === 'QUESTION') {
+      const focusId = `${id}:zone`;
+      out.zoneFocus.push({ id: focusId, zone: op.zone, color });
+      out.pulseIds.push(focusId);
+      continue;
+    }
     if (WRITES.has(op.kind)) {
       const content = (op.kind === 'WRITE_MATH' ? op.latex ?? op.text : op.text ?? op.latex)?.trim();
       if (!content) continue;

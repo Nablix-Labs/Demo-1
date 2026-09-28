@@ -66,7 +66,17 @@ export function scheduleTeachingPlan(
   // A new reply supersedes the previous plan whether or not it carries one:
   // its unstarted beats belonged to words that are no longer being said.
   cancelTeachingPlan();
-  if (!plan || !planMatchesResponse(plan, response)) return false;
+  if (!plan) return false;
+  if (!planMatchesResponse(plan, response)) {
+    // One line, so "the backend sent it but nothing showed" is answerable
+    // from the console instead of from a reproduction.
+    console.info('[canvas-plan] not drawn: does not match this response', {
+      plan_id: plan.plan_id, teaching_mode: plan.teaching_mode, scene_revision: plan.scene_revision,
+      source_turn_id: plan.source_turn_id, response_version: response.interaction_state_version,
+      accepted_turn_id: response.accepted_turn_id,
+    });
+    return false;
+  }
   const accepted = plan;
 
   if (accepted.mode === 'replace') useNumeraStore.getState().replaceTeachingLayer();
@@ -104,6 +114,7 @@ export function scheduleTeachingPlan(
       const s = useNumeraStore.getState();
       const scene = { phase: s.currentPhase, questionId: s.activeQuestionId, version: s.appliedResponse.version };
       if (!planStillVisible(accepted, scene)) {
+        console.info('[canvas-plan] stopped: the scene moved on', { plan_id: accepted.plan_id, ...scene });
         entry.pending = [];
         return;
       }

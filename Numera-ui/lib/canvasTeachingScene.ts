@@ -52,10 +52,15 @@ export function sceneNoteElements(
   if (placement === null) return null;
   const { slot, x, y } = placement;
   const ink = colors.NAVY;
-  const note: TutorElement = operationKind === 'WRITE_MATH' && slot.format === 'typeset'
+  // A handwritten slot writes maths as ink, so the LaTeX has to become the
+  // symbols a hand would write. Anything that does not reduce cleanly is set
+  // with KaTeX instead: before this, a WRITE_MATH in a handwritten slot put
+  // the source itself on the board — `\frac{c}{d}=c\div d` (live, 28 Sep).
+  const handwritten = operationKind === 'WRITE_MATH' ? handwrittenMath(content) : content;
+  const note: TutorElement = handwritten === null || (operationKind === 'WRITE_MATH' && slot.format === 'typeset')
     ? { id: `${id}:note`, kind: 'math', x, y, tex: content, color: ink, size: NOTE_SIZE }
     : {
-        id: `${id}:note`, kind: 'text', x, y, text: content, color: ink,
+        id: `${id}:note`, kind: 'text', x, y, text: handwritten, color: ink,
         size: NOTE_SIZE,
       };
   const arrow: TutorElement = {
@@ -70,6 +75,31 @@ export function sceneNoteElements(
       }]
     : [];
   return [arrow, ...box, note];
+}
+
+/**
+ * Simple LaTeX as the characters a hand would write, or null when it does not
+ * reduce to plain symbols (the caller then typesets it).
+ */
+export function handwrittenMath(tex: string): string | null {
+  let out = tex;
+  // Innermost first, so a fraction inside a fraction still reduces.
+  for (let i = 0; i < 4; i += 1) {
+    out = out.replace(/\\[dt]?frac\{([^{}]*)\}\{([^{}]*)\}/g, (_m, a: string, b: string) => {
+      const wrap = (v: string) => (/^[\w²³]+$/.test(v.trim()) ? v.trim() : `(${v.trim()})`);
+      return `${wrap(a)}/${wrap(b)}`;
+    });
+  }
+  out = out
+    .replace(/\\left|\\right/g, '')
+    .replace(/\\times/g, '×').replace(/\\div/g, '÷').replace(/\\cdot/g, '·')
+    .replace(/\\neq/g, '≠').replace(/\\leq?/g, '≤').replace(/\\geq?/g, '≥').replace(/\\pm/g, '±')
+    .replace(/\^\{?2\}?/g, '²').replace(/\^\{?3\}?/g, '³')
+    .replace(/\\[,;:! ]/g, ' ')
+    .replace(/\s*([=×÷+−·≠≤≥])\s*/g, ' $1 ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return /[\\{}^_]/.test(out) || !out ? null : out;
 }
 
 export function sceneNotePlacement(

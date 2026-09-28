@@ -31,6 +31,7 @@ import { rememberScaffoldStep, type SeenScaffoldStep } from '@/lib/scaffoldTrail
 import {
   beatEffects, PULSE_MS, TEACHING_ID_PREFIX,
   type CanvasTeachingBeat, type CanvasTeachingPlan, type TeachingConnector, type TeachingTokenMark,
+  type TeachingZoneFocus,
 } from '@/lib/canvasTeachingPlan';
 import { questionStripBottom } from '@/lib/tutorCanvasActions';
 import {
@@ -397,6 +398,8 @@ export interface NumeraState {
    */
   teachingMarks: TeachingTokenMark[];
   teachingConnectors: TeachingConnector[];
+  /** "Look at the question" pulses on the question strip. Temporary. */
+  teachingZoneFocus: TeachingZoneFocus[];
   tutorOptionActionIds: string[];
   questionNumber: number;
 
@@ -1076,6 +1079,7 @@ const initial: Omit<
   questionAnchors: [] as QuestionAnchor[],
   teachingMarks: [] as TeachingTokenMark[],
   teachingConnectors: [] as TeachingConnector[],
+  teachingZoneFocus: [] as TeachingZoneFocus[],
   tutorOptionActionIds: [] as string[],
   questionNumber: 0,
   // The concept to open a session on. Still a constant because the frontend has
@@ -1357,6 +1361,7 @@ export const useNumeraStore = create<NumeraState>()(
               // Teaching marks sit on those same tokens.
               teachingMarks: [] as TeachingTokenMark[],
               teachingConnectors: [] as TeachingConnector[],
+              teachingZoneFocus: [] as TeachingZoneFocus[],
               tutorOptionActionIds: [] as string[],
               // Ordered memory is scoped to one question (§8: it exists so the
               // tutor can resume at the first unresolved step of the CURRENT
@@ -2130,10 +2135,11 @@ export const useNumeraStore = create<NumeraState>()(
       canvasSize: s.canvasSize,
       stripBottomPx: questionStripBottom(typeof document === 'undefined' ? undefined : document),
     });
-    if (!effects.tokenMarks.length && !effects.connectors.length && !effects.elements.length) return;
+    if (!effects.tokenMarks.length && !effects.connectors.length && !effects.elements.length && !effects.zoneFocus.length) return;
     set({
       teachingMarks: [...s.teachingMarks, ...effects.tokenMarks],
       teachingConnectors: [...s.teachingConnectors, ...effects.connectors],
+      teachingZoneFocus: [...s.teachingZoneFocus, ...effects.zoneFocus],
       tutorElements: [...s.tutorElements, ...effects.elements],
     });
     // PULSE is temporary (handoff rule 4). Filtered by id, so a question change
@@ -2143,6 +2149,7 @@ export const useNumeraStore = create<NumeraState>()(
       setTimeout(() => set((cur) => ({
         teachingMarks: cur.teachingMarks.filter((m) => !gone.has(m.id)),
         teachingConnectors: cur.teachingConnectors.filter((c) => !gone.has(c.id)),
+        teachingZoneFocus: cur.teachingZoneFocus.filter((f) => !gone.has(f.id)),
         tutorElements: cur.tutorElements.filter((el) => !gone.has(el.id)),
       })), PULSE_MS);
     }
@@ -2151,6 +2158,7 @@ export const useNumeraStore = create<NumeraState>()(
   replaceTeachingLayer: () => set((s) => ({
     teachingMarks: [],
     teachingConnectors: [],
+    teachingZoneFocus: [],
     tutorElements: s.tutorElements.filter((el) => !el.id.startsWith(TEACHING_ID_PREFIX)),
   })),
 

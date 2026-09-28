@@ -3,6 +3,7 @@
  * (docs/FRONTEND_CANVAS_TEACHING_HANDOFF.md).
  */
 
+import { handwrittenMath } from '@/lib/canvasTeachingScene';
 import { describe, expect, it } from 'vitest';
 import {
   beatEffects, beatStart, nextTrailRow, operationPermitted, planMatchesResponse, planStillVisible,
@@ -291,5 +292,38 @@ describe('student tokens', () => {
   it('ignores ink that is not on the board', () => {
     const fx = beatEffects(plan(), beat([op({ target_kind: 'STUDENT_TOKEN', target_ids: ['gone'], zone: 'REASONING' })]), ctx());
     expect(fx.elements).toEqual([]);
+  });
+});
+
+describe('what the live planner sent (Q-T02-005, 28 Sep 2026)', () => {
+  it('pulses the question strip for a FOCUS on the question zone', () => {
+    const fx = beatEffects(plan(), beat([op({
+      kind: 'FOCUS', target_kind: 'CANVAS_ZONE', target_ids: ['ZONE:QUESTION'], zone: 'QUESTION', persistence: 'PULSE',
+    })]), ctx());
+    expect(fx.zoneFocus).toEqual([expect.objectContaining({ zone: 'QUESTION' })]);
+    expect(fx.pulseIds).toContain(fx.zoneFocus[0].id);
+  });
+
+  it('never writes LaTeX source onto the board in a handwritten slot', () => {
+    const fx = beatEffects(plan(), beat([write({
+      evidence_ref: 'REQUIRED_COMPONENT_4', color_role: 'NAVY',
+      latex: '\\frac{c}{d}=c\\div d', scene_slot: 'generic_confirmation:REQUIRED_COMPONENT_4',
+    })]), ctx());
+    const note = fx.elements.find((el) => el.id.endsWith(':note'))!;
+    expect(note).toMatchObject({ kind: 'text', text: 'c/d = c ÷ d' });
+  });
+});
+
+describe('handwrittenMath', () => {
+  it.each([
+    ['r\\times r', 'r × r'],
+    ['\\frac{c}{d}=c\\div d', 'c/d = c ÷ d'],
+    ['r^2', 'r²'],
+    ['\\frac{x+1}{2}', '(x + 1)/2'],
+    ['4n', '4n'],
+  ])('%s → %s', (tex, hand) => expect(handwrittenMath(tex)).toBe(hand));
+
+  it('hands anything it cannot reduce to KaTeX', () => {
+    expect(handwrittenMath('\\sqrt{x}')).toBeNull();
   });
 });

@@ -10,7 +10,7 @@
  *   • Pen FAB bottom-left, Help FAB bottom-right
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import dynamic from 'next/dynamic';
 import { useShallow } from 'zustand/react/shallow';
 import { useNumeraStore, type CanvasExporter } from '@/store/useNumeraStore';
@@ -29,6 +29,7 @@ import Toolbar from './Toolbar';
 import TeachBack from './TeachBack';
 import TeachingConnectors from '@/components/TeachingConnectors';
 import { displayedQuestionNumber } from '@/lib/questionNumber';
+import { TEACHING_COLORS } from '@/lib/canvasTeachingPlan';
 
 // react-konva requires client-only rendering (no SSR)
 const DrawingCanvas = dynamic(() => import('./DrawingCanvas'), { ssr: false });
@@ -54,6 +55,8 @@ export default function CanvasStage() {
     })),
   );
   const questionAnchors = useNumeraStore((s) => s.questionAnchors);
+  // The teaching plan's "look at the question": the strip pulses (lib/canvasTeachingPlan).
+  const questionFocus = useNumeraStore((s) => s.teachingZoneFocus.find((f) => f.zone === 'QUESTION') ?? null);
   const tutorOptionActionIds = useNumeraStore((s) => s.tutorOptionActionIds);
   const activeQuestionId = useNumeraStore((s) => s.activeQuestionId);
   const backendSession = useNumeraStore((s) => s.backendSession);
@@ -209,7 +212,11 @@ export default function CanvasStage() {
           see lib/rescueReturn.ts. A data attribute rather than an id because
           this block is rendered once per screen and an id would collide the
           moment a second question strip appears anywhere. */}
-      <div data-question-text className="flex items-start gap-3 pr-[150px]">
+      <div
+        data-question-text
+        className={`flex items-start gap-3 pr-[150px] rounded-lg ${questionFocus ? 'teaching-pulse' : ''}`}
+        style={questionFocus ? { '--teaching-pulse': `${TEACHING_COLORS[questionFocus.color]}73` } as CSSProperties : undefined}
+      >
         {shownQuestionNumber !== null && (
           <div className="w-[30px] h-[30px] rounded-md border border-muted-gray bg-reading-surface flex items-center justify-center text-xs font-semibold text-slate-blue flex-shrink-0">
             {shownQuestionNumber}
