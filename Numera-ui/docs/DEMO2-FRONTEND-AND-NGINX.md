@@ -9,12 +9,12 @@ owned by Chirudeva, Aditya and Saravanan.
 Paths on the existing `nablix.ai` HTTPS server, as the roadmap proposes. No new
 DNS record or certificate is needed.
 
-| Path | Goes to | Status (28 Sep) |
+| Path | Goes to | Status (28 Sep, after reload 05:47 UTC) |
 |---|---|---|
-| `/demo2/` | static export in `/var/www/numera/demo2` | uploaded, not routed |
-| `/demo2-api/` | Demo 2 backend `127.0.0.1:8011` | backend healthy, not routed |
-| `/demo2-voice` | Demo 2 voice `127.0.0.1:8014/voice/stream` | **no process on 8014 yet** (Aditya) |
-| `/demo2-auth/` | Demo 2 auth / Student Model | **no isolated endpoint yet** (Saravanan) |
+| `/demo2/` | static export in `/var/www/numera/demo2` | **live**: 200, nested routes 200, console clean, redirects to `/demo2/login/` |
+| `/demo2-api/` | Demo 2 backend `127.0.0.1:8011` | **live**: `/demo2-api/health` 200 |
+| `/demo2-voice` | Demo 2 voice `127.0.0.1:8014/voice/stream` | routed; **502 until a process listens on 8014** (Aditya) |
+| `/demo2-auth/` | Demo 2 auth / Student Model | routed; **503 `DEMO2_AUTH_NOT_ISOLATED` by design** until Saravanan's endpoint exists |
 
 The frontend is built against these four paths and nothing else, so it never
 calls a Demo 1 path directly. Where `/demo2-auth/` points is an nginx
@@ -104,6 +104,10 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://nablix.ai/api/docs    # 200
 curl -sS -o /dev/null -w '%{http_code}\n' https://nablix.ai/demo2/      # 200
 curl -sS https://nablix.ai/demo2-api/health                             # 200 from 8011
 ```
+
+Applied 28 Sep 05:47 UTC. Backup: `/etc/nginx/sites-available/fastapi.bak.20260928-054745-pre-demo2`.
+Demo 1 re-checked straight after: `/app/` 200, `/app/workbook/` 200, `/api/docs` 200,
+`/app/models/tutor.glb` 200, `/api/voice/stream` WebSocket 101, build id unchanged.
 
 Rollback: restore the backup of `sites-available/fastapi`, then
 `sudo nginx -t && sudo systemctl reload nginx`. The static directory can stay;
