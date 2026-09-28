@@ -19,6 +19,7 @@ const effectiveBasePath = isPages ? `/${repo}` : exportBasePath || '';
 // Auth server host to proxy to. The platform auth API doesn't send CORS headers,
 // so the browser reaches it same-origin via /nablix-auth (see lib/auth/authApi).
 const authUpstream = process.env.NABLIX_AUTH_UPSTREAM || 'https://nablix.ai:8080';
+const apiUpstream = (process.env.NABLIX_API_UPSTREAM || '').replace(/\/+$/, '');
 
 const nextConfig = {
   // Dev/server-mode proxy for the auth server (rewrites don't apply to static
@@ -28,7 +29,14 @@ const nextConfig = {
     ? {}
     : {
         async rewrites() {
-          return [{ source: '/nablix-auth/:path*', destination: `${authUpstream}/:path*` }];
+          return [
+            { source: '/nablix-auth/:path*', destination: `${authUpstream}/:path*` },
+            // Opt-in, for running the UI locally against a deployed backend:
+            // that API only allows its own origin, so localhost must go through
+            // the dev server, e.g. NABLIX_API_UPSTREAM=https://nablix.ai/api
+            // with NEXT_PUBLIC_API_BASE_URL=/api.
+            ...(apiUpstream ? [{ source: '/api/:path*', destination: `${apiUpstream}/:path*` }] : []),
+          ];
         },
       }),
   ...(isPages
