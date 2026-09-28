@@ -2360,6 +2360,10 @@ export const useNumeraStore = create<NumeraState>()(
         // student lands on — it has to survive that navigation.
         pendingTopicCode: s.pendingTopicCode,
         loginReview: s.loginReview,
+        // A student who muted stays muted across a reload. It used to come back
+        // live on every refresh, and on 28 Sep a reloaded lesson streamed a
+        // conversation in the room into the tutor as the student's answer.
+        micMuted: s.micMuted,
         flowStage: s.flowStage,
         masteryByTopic: s.masteryByTopic,
         topicTitles: s.topicTitles,

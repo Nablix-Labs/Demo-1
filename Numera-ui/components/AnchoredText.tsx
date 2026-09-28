@@ -224,16 +224,36 @@ export function AnchorLegend({
 }) {
   // `usableAnchors` orders by position and drops the unrenderable, so the
   // legend lists exactly the tokens that are washed above it, left to right.
-  const labelled = usableAnchors(question, anchors).filter((a) => a.label);
+  // One line per distinct thing said. The backend labels each occurrence —
+  // `p × p × q` gets "p → confirmed" on both `p`s — and its labels often
+  // already start with the token, so "p — p → confirmed" printed twice
+  // (live, 28 Sep). The token is only prefixed when the label doesn't name it.
+  const seen = new Set<string>();
+  const labelled = usableAnchors(question, anchors)
+    .filter((a) => a.label)
+    .map((a) => ({
+      key: a.token_id,
+      line: a.label!.trim().startsWith(a.text.trim()) ? { token: null, label: a.label! } : { token: a.text, label: a.label! },
+    }))
+    .filter(({ line }) => {
+      const id = `${line.token ?? ''}|${line.label}`;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
   if (!labelled.length) return null;
 
   return (
     <p className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[12px] text-slate-blue">
-      {labelled.map((anchor) => (
-        <span key={anchor.token_id}>
-          <span className="font-semibold text-ink">{anchor.text}</span>
-          {' — '}
-          {anchor.label}
+      {labelled.map(({ key, line }) => (
+        <span key={key}>
+          {line.token !== null && (
+            <>
+              <span className="font-semibold text-ink">{line.token}</span>
+              {' — '}
+            </>
+          )}
+          {line.label}
         </span>
       ))}
     </p>
