@@ -84,9 +84,14 @@ export default function SupportLane() {
         // An ordinary flex child beside the canvas, which is `flex-1 min-w-0`
         // and so simply takes the rest. Nothing here is positioned over the
         // work surface any more.
-        'lg-glass relative shrink-0 flex flex-col min-h-0 rounded-2xl my-2',
-        // Opposite the tutor panel: the canvas keeps the middle.
-        panelSide === 'right' ? 'order-first ml-2' : 'mr-2',
+        // Neutral frosted glass: `lg-glass` is translucent enough that the
+        // ambient gradient behind it tinted the whole column blue-violet.
+        'relative shrink-0 flex flex-col min-h-0 rounded-2xl my-2',
+        'bg-white/[0.97] backdrop-blur-xl border border-white/70',
+        'shadow-[0_10px_34px_rgba(11,16,32,0.18),inset_0_1px_0_rgba(255,255,255,0.8)]',
+        // Opposite the tutor panel, and mirroring it: flush to the window
+        // edge, with the 8px gap on the canvas side.
+        panelSide === 'right' ? 'order-first mr-2' : 'ml-2',
         dragging ? 'transition-none' : 'transition-[width] duration-200 ease-in-out',
       )}
       // Re-capped at render: a width saved on a wide monitor is only clamped
