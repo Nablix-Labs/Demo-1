@@ -87,6 +87,23 @@ individually. Either one alone would have put all five notes on screen.
   turn kept only the first highlight. Every part of a batch now applies, and
   the question is held on screen while they are written.
 
+## Two more from the same live run
+
+- **Check on the canvas → 503 on Q-T02-010** (`½ × x`, written `x/2`):
+  `/canvas/submit` returned `ADAPTER_UNAVAILABLE`, "Canvas submission state must
+  be NOT_REQUIRED for this question." (`request_id` in the console dump;
+  `classifier.py` `validate_response_aware_submission`). The model reported a
+  submission state on a question with `canvas_submission_required` false, and the
+  validator raises instead of coercing to `NOT_REQUIRED`. So writing an answer
+  and pressing Check fails outright on this question type. This is live only
+  because the VM checkout has uncommitted edits turning on
+  `response_aware_enabled` and `production_boundary_enabled` in
+  `classifier_rules.yaml`. The student sees "The tutor service hit an error on
+  its side".
+- **Internal label in the hint card.** The hint for Q-T02-010 reads
+  "Generated support: In compact algebra, …". The `Generated support:`
+  provenance prefix is reaching the student.
+
 ## Frontend: fixed in this commit
 
 - **Raw LaTeX on the board.** A `WRITE_MATH` in a `handwritten` scene slot
