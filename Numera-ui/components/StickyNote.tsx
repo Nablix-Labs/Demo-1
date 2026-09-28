@@ -84,7 +84,7 @@ export default function StickyNote({
   const t = TONES[tone];
 
   return (
-    <div className={`w-[264px] ${className}`}>
+    <div className={`w-full ${className}`}>
       <div className="relative">
         {/* The note rests on the surface — shadow sits under and slightly left,
             inset so it never shows past the curl. */}

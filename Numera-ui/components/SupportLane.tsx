@@ -35,14 +35,23 @@
  * There is no `pointer-events-none` dance any more either. That existed so an
  * empty overlay could not swallow a click meant for the canvas underneath it;
  * nothing is underneath it now.
+ *
+ * Glass, and resizable from its inner edge (28 Sep), to match the tutor panel
+ * on the other side. The cards inside are fluid, so a sticky note reflows its
+ * text to whatever width the student drags the column to. Resizing does change
+ * the canvas width, but ink is stored from the canvas's top-left, so a drag
+ * only moves the right-hand edge — the same as resizing the window, never a
+ * shift of the working already on the page.
  */
 
+import { useEffect, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { useNumeraStore } from '@/store/useNumeraStore';
+import { useNumeraStore, supportWidthMax } from '@/store/useNumeraStore';
 import { deckRungs } from '@/lib/supportDeck';
 import { cn } from '@/lib/cn';
 import WriteNote from '@/components/WriteNote';
 import SupportDeck from '@/components/SupportDeck';
+import ResizeHandle from '@/components/MediaPanel/ResizeHandle';
 
 export default function SupportLane() {
   const panelSide = useNumeraStore((s) => s.panelSide);
@@ -52,6 +61,21 @@ export default function SupportLane() {
   const rungs = useNumeraStore(useShallow(deckRungs));
   const writeInstruction = useNumeraStore((s) => s.writeInstruction);
   const empty = rungs.length === 0 && !writeInstruction;
+  const supportWidth = useNumeraStore((s) => s.supportWidth);
+  const [dragging, setDragging] = useState(false);
+  // The window cap, measured after mount (and on resize): reading `window`
+  // during render gives the server and the browser different widths and
+  // breaks hydration.
+  const [maxWidth, setMaxWidth] = useState<number | null>(null);
+  useEffect(() => {
+    const measure = () => setMaxWidth(supportWidthMax());
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, []);
+  // The column docks opposite the tutor panel, so its drag edge is its inner
+  // side: on the left of the column when it sits at the window's right.
+  const dockedSide = panelSide === 'right' ? 'left' : 'right';
 
   return (
     <aside
@@ -60,12 +84,16 @@ export default function SupportLane() {
         // An ordinary flex child beside the canvas, which is `flex-1 min-w-0`
         // and so simply takes the rest. Nothing here is positioned over the
         // work surface any more.
-        'w-[320px] shrink-0 flex flex-col',
-        'border-muted-gray bg-reading-surface',
+        'lg-glass relative shrink-0 flex flex-col min-h-0 rounded-2xl my-2',
         // Opposite the tutor panel: the canvas keeps the middle.
-        panelSide === 'right' ? 'order-first border-r' : 'border-l',
+        panelSide === 'right' ? 'order-first ml-2' : 'mr-2',
+        dragging ? 'transition-none' : 'transition-[width] duration-200 ease-in-out',
       )}
+      // Re-capped at render: a width saved on a wide monitor is only clamped
+      // when it is written, and must not squeeze the canvas on a laptop.
+      style={{ width: maxWidth === null ? supportWidth : Math.min(supportWidth, maxWidth) }}
     >
+      <ResizeHandle side={dockedSide} target="support" onDraggingChange={setDragging} />
       {/* The column is reserved and therefore usually empty, so it needs to say
           what it is. Without a heading it reads as canvas that stops early. */}
       <div className="flex-shrink-0 px-4 pt-4 pb-2">

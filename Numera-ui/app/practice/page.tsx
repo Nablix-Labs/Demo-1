@@ -710,7 +710,7 @@ export default function PracticePage() {
             ladder, or a failed request — last and unnumbered, because it is not
             support. */}
         {!silent && mode === 'hint' && !done && (visibleHints.length > 0 || hintNotice) && (
-          <div className="absolute top-5 left-6 z-20 flex flex-col gap-2 max-w-sm">
+          <div className="absolute top-5 left-6 z-20 flex flex-col gap-2 w-[264px]">
             {visibleHints.map((hint, i) => (
               <StickyNote key={`${i}-${hint}`} tone="amber" label={hintLabel(i, visibleHints.length)}>
                 {hint}

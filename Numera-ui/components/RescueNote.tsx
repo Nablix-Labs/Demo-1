@@ -69,7 +69,7 @@ export default function RescueNote() {
   const done = fullyRevealed(view.steps, revealed);
 
   return (
-    <aside className="relative max-w-[22rem]" aria-label={TITLE[view.kind]}>
+    <aside className="relative w-full" aria-label={TITLE[view.kind]}>
       {/* Sky is the worked-example tone: "here is one done", modelled rather
           than asked. Both rungs are exactly that. */}
       <StickyNote tone="sky" label={TITLE[view.kind]}>

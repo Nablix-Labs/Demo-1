@@ -20,7 +20,7 @@ import Link from 'next/link';
 import { useShallow } from 'zustand/react/shallow';
 import { useNumeraStore } from '@/store/useNumeraStore';
 import { deckRungs, visibleRung, collapsedRungs } from '@/lib/supportDeck';
-import SupportDeck from '@/components/SupportDeck';
+import SupportLane from '@/components/SupportLane';
 import ScaffoldTrail from '@/components/ScaffoldTrail';
 import WriteNote from '@/components/WriteNote';
 import HintNote from '@/components/HintNote';
@@ -136,21 +136,19 @@ export default function SupportDeckDevScreen() {
           <div className="mt-10 font-serif text-[44px] text-ink/80">n + 2</div>
         </div>
 
-        <div className="w-[300px] shrink-0">
-          {before ? (
-            // What the lane used to do: every rung, stacked, all at once.
+        {before ? (
+          <div className="w-[300px] shrink-0">
+            {/* What the lane used to do: every rung, stacked, all at once. */}
             <div className="flex flex-col gap-3">
               {on.write && <WriteNote />}
               {!on.rescue && <><HintNote /><VisualCue /></>}
               {on.rescue && <RescueSteps />}
             </div>
-          ) : (
-            <div className="flex flex-col gap-3">
-              {on.write && <WriteNote />}
-              <SupportDeck />
-            </div>
-          )}
-        </div>
+          </div>
+        ) : (
+          // The real lane, so its glass and drag edge can be tried here.
+          <SupportLane />
+        )}
       </div>
 
       <div className="mt-5 rounded-lg border border-muted-gray bg-white px-4 py-3 text-[12px] text-slate-blue">

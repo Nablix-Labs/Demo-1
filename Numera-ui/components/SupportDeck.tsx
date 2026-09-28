@@ -67,7 +67,7 @@ export default function SupportDeck() {
       )}
 
       {earlier.length > 0 && (
-        <div className="w-[264px]">
+        <div className="w-full">
           {/* Named rather than a row of bare chips: "Earlier help" says what
               the row IS. Without it the chips read as things to do next, which
               is the opposite of what they are. */}

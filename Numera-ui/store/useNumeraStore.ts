@@ -107,6 +107,28 @@ export function clampPanelWidth(px: number, viewportWidth?: number): number {
   return Math.round(Math.min(Math.max(px, PANEL_WIDTH_MIN), panelWidthMax(viewportWidth)));
 }
 
+/**
+ * The Support column's width, dragged from its inner edge. Same rules as the
+ * tutor panel: clamped on write, rounded, and capped at a fraction of the
+ * window so a width saved on a wide monitor cannot squeeze the canvas on a
+ * laptop. The floor is the narrowest a sticky note still reads at.
+ */
+export const SUPPORT_WIDTH_DEFAULT = 320;
+export const SUPPORT_WIDTH_MIN = 240;
+const SUPPORT_WIDTH_MAX_FRACTION = 0.4;
+export const SUPPORT_WIDTH_MAX_FALLBACK = 520;
+
+export function supportWidthMax(viewportWidth?: number): number {
+  const w = viewportWidth ?? (typeof window === 'undefined' ? undefined : window.innerWidth);
+  if (w === undefined) return SUPPORT_WIDTH_MAX_FALLBACK;
+  return Math.max(SUPPORT_WIDTH_MIN, Math.round(w * SUPPORT_WIDTH_MAX_FRACTION));
+}
+
+export function clampSupportWidth(px: number, viewportWidth?: number): number {
+  if (!Number.isFinite(px)) return SUPPORT_WIDTH_DEFAULT;
+  return Math.round(Math.min(Math.max(px, SUPPORT_WIDTH_MIN), supportWidthMax(viewportWidth)));
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type SessionState =
@@ -782,6 +804,7 @@ export interface NumeraState {
    * student would have to find the handle to get their work back.
    */
   panelWidth: number;
+  supportWidth: number;               // Support column width, px (see clampSupportWidth)
   transcriptVisible: boolean;         // transcript can be hidden
   toolbarPos: { x: number; y: number } | null; // null = default docked position
   toolbarCollapsed: boolean;          // collapsed to a small bubble
@@ -994,6 +1017,8 @@ export interface NumeraState {
   setPanelWidth: (px: number) => void;
   /** Back to the designed width (double-click the handle). */
   resetPanelWidth: () => void;
+  setSupportWidth: (px: number) => void;
+  resetSupportWidth: () => void;
   togglePanelSide: () => void;
   togglePanelCollapsed: () => void;
   toggleTranscript: () => void;
@@ -1061,7 +1086,7 @@ const initial: Omit<
   | 'setShapeKind' | 'setEraserMode'
   | 'setStrokeColor' | 'setStrokeWidth' | 'addItem' | 'removeItem' | 'undo' | 'redo'
   | 'clearCanvas' | 'applyCanvasDraw' | 'applyTutorCanvasActions' | 'applyTeachingBeat' | 'replaceTeachingLayer' | 'setLoginReview' | 'clearWriteAffordance' | 'clearTutorMarks' | 'setCanvasSize' | 'recordSupportEvent'
-  | 'setInputMode' | 'setTextInput' | 'setPanelSide' | 'setPanelWidth' | 'resetPanelWidth' | 'togglePanelSide' | 'togglePanelCollapsed'
+  | 'setInputMode' | 'setTextInput' | 'setPanelSide' | 'setPanelWidth' | 'resetPanelWidth' | 'setSupportWidth' | 'resetSupportWidth' | 'togglePanelSide' | 'togglePanelCollapsed'
   | 'toggleTranscript' | 'setToolbarPos' | 'toggleToolbarCollapsed' | 'setToolbarOrientation' | 'setMicButtonPos' | 'setCanvasGrid' | 'setTtsVoice' | 'setActiveScaffold'
   | 'setCanvasExporter' | 'startGroupSession' | 'endGroupSession'
   | 'upsertParticipant' | 'removeParticipant' | 'setParticipantCursor'
@@ -1172,6 +1197,7 @@ const initial: Omit<
   panelSide: 'left',
   panelCollapsed: false,
   panelWidth: PANEL_WIDTH_DEFAULT,
+  supportWidth: SUPPORT_WIDTH_DEFAULT,
   transcriptVisible: true,
   toolbarPos: null,
   toolbarCollapsed: false,
@@ -2211,6 +2237,8 @@ export const useNumeraStore = create<NumeraState>()(
 
   setPanelWidth: (px) => set({ panelWidth: clampPanelWidth(px) }),
   resetPanelWidth: () => set({ panelWidth: PANEL_WIDTH_DEFAULT }),
+  setSupportWidth: (px) => set({ supportWidth: clampSupportWidth(px) }),
+  resetSupportWidth: () => set({ supportWidth: SUPPORT_WIDTH_DEFAULT }),
   setPanelSide: (panelSide) => set({ panelSide }),
   togglePanelSide: () => set((s) => ({ panelSide: s.panelSide === 'left' ? 'right' : 'left' })),
   togglePanelCollapsed: () => set((s) => ({ panelCollapsed: !s.panelCollapsed })),
@@ -2341,6 +2369,7 @@ export const useNumeraStore = create<NumeraState>()(
         panelSide: s.panelSide,
         panelCollapsed: s.panelCollapsed,
         panelWidth: s.panelWidth,
+        supportWidth: s.supportWidth,
         transcriptVisible: s.transcriptVisible,
         toolbarPos: s.toolbarPos,
         toolbarCollapsed: s.toolbarCollapsed,

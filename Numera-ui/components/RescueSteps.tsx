@@ -224,7 +224,7 @@ export default function RescueSteps() {
   };
 
   return (
-    <aside className="relative max-w-[22rem]" aria-label={TITLE[current.mode]}>
+    <aside className="relative w-full" aria-label={TITLE[current.mode]}>
       <StickyNote tone="sky" label={TITLE[current.mode]}>
 
         {/* One step, replaced outright when the next one arrives.
