@@ -338,6 +338,52 @@ def test_planner_returns_a_grounded_attention_beat(monkeypatch) -> None:
     assert requested_models == [rules.guided_learning.model]
 
 
+def test_planner_skips_unclear_learner_input(monkeypatch) -> None:
+    rules = _enabled_rules()
+    contribution = StudentContribution(
+        kind="UNCLEAR_INPUT",
+        assessment="NOT_ASSESSED",
+        error_category=None,
+        error_description=None,
+        identified_difficulty=None,
+        learner_question=None,
+        explained_idea=None,
+        generated_support_text=None,
+        generated_visual_rows=None,
+        support_relevance="NOT_NEEDED",
+    )
+    tutor = _tutor(contribution).model_copy(
+        update={
+            "evaluation": "UNCLEAR",
+            "tutor_message": "I did not catch that clearly. Please say it again clearly.",
+            "tutor_message_voice": "I did not catch that clearly. Please say it again clearly.",
+        }
+    )
+
+    def unexpected_client(*args: object, **kwargs: object) -> FakeCanvasTeachingClient:
+        raise AssertionError("unclear learner input must not call the canvas planner")
+
+    monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", lambda: rules)
+    monkeypatch.setattr(
+        canvas_teaching_planner,
+        "build_openai_ai_engine_client",
+        unexpected_client,
+    )
+
+    plan = _plan(
+        _confirmed_example_draft(
+            voice=tutor.tutor_message_voice,
+            target_ids=["Q1:QTOKEN:1"],
+            evidence_ref="CHANGING_VALUE",
+            expression="c",
+        ),
+        tutor=tutor,
+        voice=tutor.tutor_message_voice,
+    )
+
+    assert plan is None
+
+
 def test_planner_logs_when_required_confirmed_ink_is_missing(monkeypatch) -> None:
     voice = "Yes, 3 is the changing value."
     anchor = QuestionTextAnchor(

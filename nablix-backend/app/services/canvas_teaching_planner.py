@@ -67,6 +67,19 @@ def plan_canvas_teaching(
         return None
     if source_turn_id is None or not tutor_message_voice.strip():
         return None
+    if (
+        tutor.evaluation.upper() in {"UNCLEAR", "INPUT_UNCLEAR"}
+        or tutor.independent_outcome == "INPUT_UNCLEAR"
+        or (
+            tutor.contribution is not None
+            and tutor.contribution.kind == "UNCLEAR_INPUT"
+        )
+    ):
+        logger.info(
+            "canvas_teaching_plan_skipped",
+            extra={"question_id": question_id, "reason": "learner_input_unclear"},
+        )
+        return None
     question_anchors = [
         anchor
         for anchor in question_anchors

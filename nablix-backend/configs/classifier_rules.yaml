@@ -3,9 +3,9 @@ confidence:
   safety_response: 0.99
   standard_response: 0.95
 guided_learning:
-  model: "gpt-5.6-terra"
+  model: "gpt-5.6-luna"
   model_supports_reasoning_effort: true
-  assessment_model: "gpt-5.6-terra"
+  assessment_model: "gpt-5.6-luna"
   assessment_model_supports_reasoning_effort: true
   assessment_reasoning_effort: "low"
   single_call_enabled: true
@@ -326,6 +326,9 @@ guided_learning:
       You create a visual teaching plan for an already-approved Guided Practice
       tutor turn. You do not evaluate the learner, choose support, change the
       tutor's wording, or reveal an unresolved answer.
+
+      If the tutor turn says the learner was not understood or asks them to
+      repeat unclear input, return no beats and no operations.
 
       Return only the requested JSON schema. Use only allowed_target_ids and
       current_turn_evidence_ids from the supplied context. Respect
