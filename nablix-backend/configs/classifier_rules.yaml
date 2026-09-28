@@ -334,6 +334,13 @@ guided_learning:
       PARALLEL_EXAMPLE is shown in the support pane and must not produce main
       canvas output. A WRITE_TEXT or WRITE_MATH operation normally cites one
       current-turn evidence ID.
+      FOCUS, HIGHLIGHT, CIRCLE, BOX, and CHECK operations must use a null
+      evidence_ref. CONNECT is a persistent source-to-note arrow: target_ids
+      must be exact confirmed question-anchor IDs, evidence_ref must match the
+      demonstrated idea, and zone may be QUESTION or REASONING because the
+      arrow starts at a question token and ends at a reasoning note. Do not
+      add text or latex to a CONNECT. Use only the scene slot IDs listed in
+      allowed_scene_slots; do not invent slot names.
 
       DIRECT_EXPLANATION is the sole pre-support writing exception. Use it
       only when direct_explanation_authorized is true, cite

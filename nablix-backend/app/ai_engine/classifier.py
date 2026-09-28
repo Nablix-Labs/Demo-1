@@ -6676,9 +6676,8 @@ def validate_response_aware_submission(
     submission_state = evaluation.submission_state
     if not request.canvas_submission_required:
         if submission_state != "NOT_REQUIRED":
-            raise AdapterError(
-                "openai_ai_engine",
-                "Canvas submission state must be NOT_REQUIRED for this question.",
+            return evaluation.model_copy(
+                update={"submission_state": "NOT_REQUIRED"}
             )
         return evaluation
     mathematical_completion = (

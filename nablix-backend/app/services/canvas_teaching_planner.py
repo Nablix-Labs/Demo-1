@@ -67,6 +67,11 @@ def plan_canvas_teaching(
         return None
     if source_turn_id is None or not tutor_message_voice.strip():
         return None
+    question_anchors = [
+        anchor
+        for anchor in question_anchors
+        if anchor.token_id.startswith(f"{question_id}:QTOKEN:")
+    ]
     question_anchor_texts = {
         anchor.token_id: anchor.text for anchor in question_anchors
     }
@@ -139,6 +144,18 @@ def plan_canvas_teaching(
                 "active_support_level": active_support_level,
                 "current_unresolved_component_id": current_unresolved_component_id,
                 "allowed_target_ids": allowed_targets,
+                "allowed_scene_slots": sorted(
+                    {
+                        *config.guided_evidence_scene_slots.values(),
+                        *{
+                            f"{config.generic_confirmation_scene_slot}:{evidence_id}"
+                            for evidence_id in (
+                                authorized_evidence
+                                | {config.direct_explanation_evidence_ref}
+                            )
+                        },
+                    }
+                ),
                 "allowed_question_anchors": [
                     {"id": anchor.token_id, "text": anchor.text}
                     for anchor in question_anchors
@@ -177,6 +194,8 @@ def plan_canvas_teaching(
     accepted = _validate_draft(
         draft=draft,
         config=config,
+        question_id=question_id,
+        source_turn_id=source_turn_id,
         narration=tutor_message_voice,
         student_response=student_response,
         allowed_targets=set(allowed_targets),
@@ -884,6 +903,8 @@ def _current_tutor_solved_step_texts(tutor: TutorResult) -> list[str]:
 def _validate_draft(
     draft: CanvasTeachingPlanDraft,
     config: CanvasTeachingConfig,
+    question_id: str,
+    source_turn_id: str,
     narration: str,
     student_response: str,
     allowed_targets: set[str],
@@ -900,21 +921,45 @@ def _validate_draft(
     question: str,
     tutor_solved_step_texts: list[str],
 ) -> list[CanvasTeachingBeat] | None:
-    if len(draft.beats) > config.maximum_beats:
-        return None
     direct_explanation_writes = 0
     guided_evidence_writes = 0
     accepted: list[CanvasTeachingBeat] = []
-    for beat in draft.beats:
-        if len(beat.operations) > config.maximum_operations_per_beat:
-            return None
+    for beat_index, beat in enumerate(draft.beats):
+        if beat_index >= config.maximum_beats:
+            logger.warning(
+                "canvas_teaching_beat_rejected",
+                extra={
+                    "question_id": question_id,
+                    "source_turn_id": source_turn_id,
+                    "beat_id": beat.beat_id,
+                    "rule": "maximum_beats_exceeded",
+                },
+            )
+            continue
         anchor = synchronize_speech_anchor(beat.speech_anchor, narration)
         if anchor is None:
-            return None
-        operations = [
-            _with_scene_slot(operation, config)
-            for operation in beat.operations
-            if _operation_is_authorized(
+            logger.warning(
+                "canvas_teaching_beat_rejected",
+                extra={
+                    "question_id": question_id,
+                    "source_turn_id": source_turn_id,
+                    "beat_id": beat.beat_id,
+                    "rule": "speech_anchor_not_in_current_narration",
+                },
+            )
+            continue
+        operations: list[CanvasTeachingOperation] = []
+        for operation_index, operation in enumerate(beat.operations):
+            if operation_index >= config.maximum_operations_per_beat:
+                _log_operation_rejection(
+                    question_id,
+                    source_turn_id,
+                    beat.beat_id,
+                    operation,
+                    "maximum_operations_per_beat_exceeded",
+                )
+                continue
+            rejection_rule = _operation_rejection_rule(
                 operation=operation,
                 allowed_targets=allowed_targets,
                 question_anchor_texts=question_anchor_texts,
@@ -932,67 +977,68 @@ def _validate_draft(
                 tutor_solved_step_texts=tutor_solved_step_texts,
                 config=config,
             )
-        ]
-        if len(operations) != len(beat.operations):
-            return None
-        direct_explanation_writes += sum(
-            operation.kind in {"WRITE_TEXT", "WRITE_MATH"}
-            for operation in operations
-        )
-        if teaching_mode == "GUIDED":
-            guided_evidence_writes += sum(
-                operation.kind in {"WRITE_TEXT", "WRITE_MATH"}
-                for operation in operations
+            if rejection_rule is not None:
+                _log_operation_rejection(
+                    question_id,
+                    source_turn_id,
+                    beat.beat_id,
+                    operation,
+                    rejection_rule,
+                )
+                continue
+            is_write = operation.kind in {"WRITE_TEXT", "WRITE_MATH"}
+            if (
+                direct_explanation
+                and is_write
+                and direct_explanation_writes
+                >= config.direct_explanation_maximum_written_operations
+            ):
+                _log_operation_rejection(
+                    question_id,
+                    source_turn_id,
+                    beat.beat_id,
+                    operation,
+                    "direct_explanation_write_limit_exceeded",
+                )
+                continue
+            if (
+                teaching_mode == "GUIDED"
+                and is_write
+                and guided_evidence_writes
+                >= config.guided_evidence_maximum_written_operations
+            ):
+                _log_operation_rejection(
+                    question_id,
+                    source_turn_id,
+                    beat.beat_id,
+                    operation,
+                    "guided_evidence_write_limit_exceeded",
+                )
+                continue
+            if is_write:
+                direct_explanation_writes += int(direct_explanation)
+                guided_evidence_writes += int(teaching_mode == "GUIDED")
+            operations.append(_with_scene_slot(operation, config))
+        if not operations:
+            logger.warning(
+                "canvas_teaching_beat_rejected",
+                extra={
+                    "question_id": question_id,
+                    "source_turn_id": source_turn_id,
+                    "beat_id": beat.beat_id,
+                    "rule": "no_authorized_operations_remaining",
+                },
             )
-        if direct_explanation and direct_explanation_writes > config.direct_explanation_maximum_written_operations:
-            return None
+            continue
         accepted.append(
             beat.model_copy(
                 update={"speech_anchor": anchor, "operations": operations}
             )
         )
-    accepted_operations = [
-        operation for beat in accepted for operation in beat.operations
-    ]
+    if not accepted:
+        return None
     if require_guided_evidence_ink and guided_evidence_writes == 0:
         return None
-    if guided_evidence_writes > config.guided_evidence_maximum_written_operations:
-        return None
-    if require_guided_evidence_ink and confirmed_source_targets:
-        writes = [
-            operation
-            for operation in accepted_operations
-            if operation.kind in {"WRITE_TEXT", "WRITE_MATH"}
-        ]
-        if len(writes) != 1:
-            return None
-        source = next(
-            (
-                item
-                for item in confirmed_source_targets
-                if item["evidence_ref"] == writes[0].evidence_ref
-            ),
-            None,
-        )
-        if source is None:
-            return None
-        connectors = [
-            operation
-            for operation in accepted_operations
-            if operation.kind == "CONNECT"
-            and operation.evidence_ref == source["evidence_ref"]
-        ]
-        connected_ids = [
-            target_id
-            for operation in connectors
-            for target_id in operation.target_ids
-        ]
-        if (
-            not connectors
-            or len(connected_ids) != len(set(connected_ids))
-            or set(connected_ids) != set(source["target_ids"])
-        ):
-            return None
     return accepted
 
 
@@ -1014,7 +1060,7 @@ def _with_scene_slot(
     )
 
 
-def _operation_is_authorized(
+def _operation_rejection_rule(
     operation: CanvasTeachingOperation,
     allowed_targets: set[str],
     question_anchor_texts: dict[str, str],
@@ -1031,33 +1077,42 @@ def _operation_is_authorized(
     student_response: str,
     tutor_solved_step_texts: list[str],
     config: CanvasTeachingConfig,
-) -> bool:
+) -> str | None:
     if not set(operation.target_ids).issubset(allowed_targets):
-        return False
+        return "target_not_in_current_question_or_canvas_zones"
     if operation.target_kind == "QUESTION_ANCHOR" and not all(
         _is_math_bearing_question_token(question_anchor_texts.get(target_id, ""))
         for target_id in operation.target_ids
     ):
-        return False
+        return "target_is_not_math_bearing"
     if operation.zone == "QUESTION" and operation.kind in {"WRITE_TEXT", "WRITE_MATH"}:
-        return False
+        return "writing_in_question_zone"
     if operation.kind == "CONNECT":
-        return (
-            teaching_mode == "GUIDED"
-            and operation.target_kind == "QUESTION_ANCHOR"
-            and operation.zone == "QUESTION"
-            and operation.evidence_ref in current_evidence
-            and operation.persistence == "PERSIST"
-            and any(
-                source["evidence_ref"] == operation.evidence_ref
-                and set(operation.target_ids).issubset(source["target_ids"])
-                for source in confirmed_source_targets
-            )
-        )
+        if teaching_mode != "GUIDED":
+            return "connect_not_allowed_outside_guided_mode"
+        if operation.target_kind != "QUESTION_ANCHOR":
+            return "connect_source_must_be_question_anchor"
+        if operation.zone not in {"QUESTION", "REASONING"}:
+            return "connect_zone_must_identify_question_or_reasoning"
+        if operation.evidence_ref not in current_evidence:
+            return "connect_evidence_not_demonstrated_this_turn"
+        if operation.persistence != "PERSIST":
+            return "connect_must_persist"
+        if not any(
+            source["evidence_ref"] == operation.evidence_ref
+            and set(operation.target_ids).issubset(source["target_ids"])
+            for source in confirmed_source_targets
+        ):
+            return "connect_targets_not_linked_to_confirmed_source"
+        return None
     if operation.kind not in {"WRITE_TEXT", "WRITE_MATH"}:
-        return operation.evidence_ref is None
+        return (
+            None
+            if operation.evidence_ref is None
+            else "attention_mark_must_not_reference_evidence"
+        )
     if teaching_mode in config.visual_only_modes:
-        return False
+        return "writing_not_allowed_in_visual_only_mode"
     content = operation.latex or operation.text or ""
     if (
         canonical_answer
@@ -1065,22 +1120,27 @@ def _operation_is_authorized(
         and not answer_reveal
         and not learner_answer_confirmed
     ):
-        return False
+        return "canonical_answer_not_yet_authorized"
     if operation.target_kind != "CANVAS_ZONE" or operation.target_ids != [f"ZONE:{operation.zone}"]:
-        return False
+        return "write_target_must_match_canvas_zone"
     if direct_explanation:
-        return (
-            operation.evidence_ref == config.direct_explanation_evidence_ref
-            and operation.zone == "REASONING"
-            and _content_terms_are_spoken(content, narration)
-            and _numeric_terms_come_from_question(content, question)
-        )
+        if operation.evidence_ref != config.direct_explanation_evidence_ref:
+            return "direct_explanation_evidence_reference_mismatch"
+        if operation.zone != "REASONING":
+            return "direct_explanation_write_must_be_reasoning"
+        if not _content_terms_are_spoken(content, narration):
+            return "direct_explanation_content_not_spoken"
+        if not _numeric_terms_come_from_question(content, question):
+            return "direct_explanation_numbers_not_in_question"
+        return None
     if tutor_solved:
-        return (
-            config.tutor_solved_writing_enabled
-            and _content_terms_are_spoken(content, narration)
-            and _content_terms_are_spoken(content, " ".join(tutor_solved_step_texts))
-        )
+        if not config.tutor_solved_writing_enabled:
+            return "tutor_solved_writing_disabled"
+        if not _content_terms_are_spoken(content, narration):
+            return "tutor_solved_content_not_spoken"
+        if not _content_terms_are_spoken(content, " ".join(tutor_solved_step_texts)):
+            return "tutor_solved_content_not_in_approved_step"
+        return None
     if teaching_mode == "GUIDED":
         matching_sources = [
             source
@@ -1088,20 +1148,48 @@ def _operation_is_authorized(
             if source["evidence_ref"] == operation.evidence_ref
         ]
         source_text = " ".join(source["anchor_text"] for source in matching_sources)
-        return (
-            operation.evidence_ref in current_evidence
-            and operation.zone == "REASONING"
-            and operation.persistence == "PERSIST"
-            and operation.color_role == "NAVY"
-            and _content_is_not_spoken_sentence(content, narration)
-            and _content_terms_are_grounded(
-                content,
-                f"{narration} {student_response} {source_text}",
-            )
-        )
+        if operation.evidence_ref not in current_evidence:
+            return "write_evidence_not_demonstrated_this_turn"
+        if operation.zone != "REASONING":
+            return "guided_write_must_be_reasoning"
+        if operation.persistence != "PERSIST":
+            return "guided_write_must_persist"
+        if operation.color_role != "NAVY":
+            return "guided_write_must_use_navy"
+        if not _content_is_not_spoken_sentence(content, narration):
+            return "guided_write_must_be_compact_not_spoken_sentence"
+        if not _content_terms_are_grounded(
+            content,
+            f"{narration} {student_response} {source_text}",
+        ):
+            return "guided_write_content_not_grounded_in_turn"
+        return None
     if operation.evidence_ref not in current_evidence:
-        return False
-    return operation.zone in {"REASONING", "TUTOR_SOLUTION"}
+        return "write_evidence_not_demonstrated_this_turn"
+    if operation.zone not in {"REASONING", "TUTOR_SOLUTION"}:
+        return "write_zone_not_allowed"
+    return None
+
+
+def _log_operation_rejection(
+    question_id: str,
+    source_turn_id: str,
+    beat_id: str,
+    operation: CanvasTeachingOperation,
+    rule: str,
+) -> None:
+    logger.warning(
+        "canvas_teaching_operation_rejected",
+        extra={
+            "question_id": question_id,
+            "source_turn_id": source_turn_id,
+            "beat_id": beat_id,
+            "operation_id": operation.operation_id,
+            "operation_kind": operation.kind,
+            "target_ids": operation.target_ids,
+            "rule": rule,
+        },
+    )
 
 
 def _is_math_bearing_question_token(token: str) -> bool:

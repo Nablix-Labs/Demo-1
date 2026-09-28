@@ -738,6 +738,14 @@ def test_verified_canvas_completes_a_partial_voice_answer_when_not_required() ->
 
     assert completed.student_state == "CORRECT"
     assert completed.newly_confirmed_concept_ids == ["COMPACT_PRODUCT_NOTATION"]
+    model_claimed_submission = evaluation.model_copy(
+        update={"submission_state": "MATCHING"}
+    )
+    normalized_submission = validate_response_aware_submission(
+        model_claimed_submission,
+        request,
+    )
+    assert normalized_submission.submission_state == "NOT_REQUIRED"
     assert completed.missing_concept_ids == []
     assert completed.submission_state == "NOT_REQUIRED"
 
