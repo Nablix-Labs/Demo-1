@@ -61,6 +61,77 @@ def plan_canvas_teaching(
 ) -> CanvasTeachingPlan | None:
     """Create a visual-only Guided Practice plan from an already-final tutor turn."""
 
+    return _plan_canvas_teaching(
+        question_id=question_id,
+        question=question,
+        source_turn_id=source_turn_id,
+        tutor_turn_id=tutor_turn_id,
+        scene_revision=scene_revision,
+        tutor_message_voice=tutor_message_voice,
+        tutor=tutor,
+        question_anchors=question_anchors,
+        student_response=student_response,
+        canonical_answer=canonical_answer,
+        active_support_level=active_support_level,
+        current_unresolved_component_id=current_unresolved_component_id,
+        composed_draft=None,
+        allow_model_generation=True,
+    )
+
+
+def plan_composed_canvas_teaching(
+    question_id: str | None,
+    question: str | None,
+    source_turn_id: str | None,
+    tutor_turn_id: str | None,
+    scene_revision: int,
+    tutor_message_voice: str,
+    tutor: TutorResult | None,
+    question_anchors: list[QuestionTextAnchor],
+    student_response: str,
+    canonical_answer: str | None,
+    active_support_level: str | None,
+    current_unresolved_component_id: str | None,
+    composed_draft: CanvasTeachingPlanDraft | None,
+) -> CanvasTeachingPlan | None:
+    """Validate a board draft composed with the learner-safe tutor response."""
+
+    return _plan_canvas_teaching(
+        question_id=question_id,
+        question=question,
+        source_turn_id=source_turn_id,
+        tutor_turn_id=tutor_turn_id,
+        scene_revision=scene_revision,
+        tutor_message_voice=tutor_message_voice,
+        tutor=tutor,
+        question_anchors=question_anchors,
+        student_response=student_response,
+        canonical_answer=canonical_answer,
+        active_support_level=active_support_level,
+        current_unresolved_component_id=current_unresolved_component_id,
+        composed_draft=composed_draft,
+        allow_model_generation=False,
+    )
+
+
+def _plan_canvas_teaching(
+    question_id: str | None,
+    question: str | None,
+    source_turn_id: str | None,
+    tutor_turn_id: str | None,
+    scene_revision: int,
+    tutor_message_voice: str,
+    tutor: TutorResult | None,
+    question_anchors: list[QuestionTextAnchor],
+    student_response: str,
+    canonical_answer: str | None,
+    active_support_level: str | None,
+    current_unresolved_component_id: str | None,
+    composed_draft: CanvasTeachingPlanDraft | None,
+    allow_model_generation: bool,
+) -> CanvasTeachingPlan | None:
+    """Create or validate a visual-only Guided Practice plan."""
+
     rules = load_classifier_rules()
     config = rules.guided_learning.canvas_teaching
     if not config.enabled or question_id is None or question is None or tutor is None:
@@ -162,74 +233,83 @@ def plan_canvas_teaching(
         and teaching_mode == "GUIDED"
         and bool(authorized_evidence)
     )
-    guided_settings = get_settings().model_copy(
-        update={"openai_ai_engine_model": rules.guided_learning.model}
-    )
-    client = build_openai_ai_engine_client(guided_settings)
-    if client is None:
-        logger.warning(
+    if composed_draft is None and not allow_model_generation:
+        logger.info(
             "canvas_teaching_plan_not_generated",
-            extra={"question_id": question_id, "reason": "openai_client_unavailable"},
+            extra={"question_id": question_id, "reason": "composer_no_action"},
         )
         return None
-    try:
-        draft = client.plan_canvas_teaching(
-            system_prompt=config.system_prompt,
-            context={
-                "question_id": question_id,
-                "question": question,
-                "tutor_message_voice": tutor_message_voice,
-                "student_response": student_response,
-                "teaching_mode": teaching_mode,
-                "active_support_level": active_support_level,
-                "current_unresolved_component_id": current_unresolved_component_id,
-                "allowed_target_ids": allowed_targets,
-                "allowed_scene_slots": sorted(
-                    {
-                        *config.guided_evidence_scene_slots.values(),
-                        *{
-                            f"{config.generic_confirmation_scene_slot}:{evidence_id}"
-                            for evidence_id in (
-                                authorized_evidence
-                                | {config.direct_explanation_evidence_ref}
-                            )
-                        },
-                    }
-                ),
-                "allowed_question_anchors": [
-                    {"id": anchor.token_id, "text": anchor.text}
-                    for anchor in question_anchors
-                ],
-                "confirmed_source_targets": confirmed_source_targets,
-                "current_turn_evidence_ids": sorted(current_evidence),
-                "authorized_evidence_ids": sorted(authorized_evidence),
-                "require_guided_evidence_ink": require_guided_evidence_ink,
-                "direct_explanation_authorized": direct_explanation,
-                "direct_explanation_evidence_ref": config.direct_explanation_evidence_ref,
-                "direct_explanation_maximum_written_operations": config.direct_explanation_maximum_written_operations,
-                "tutor_solved_active": tutor_solved,
-                "tutor_solved_answer_authorized": answer_reveal,
-                "tutor_solved_actions": [
-                    action.model_dump()
-                    for action in tutor.tutor_canvas_actions
-                    if action.type == "TUTOR_SOLVED_STEP"
-                ],
-                "maximum_beats": config.maximum_beats,
-                "maximum_operations_per_beat": config.maximum_operations_per_beat,
-                "rules": {
-                    "write_only_confirmed_ideas": True,
-                    "support_pane_content_must_not_be_copied": True,
-                    "student_write_area_is_forbidden": True,
-                    "raw_coordinates_are_forbidden": True,
+    if composed_draft is None:
+        guided_settings = get_settings().model_copy(
+            update={"openai_ai_engine_model": rules.guided_learning.model}
+        )
+        client = build_openai_ai_engine_client(guided_settings)
+        if client is None:
+            logger.warning(
+                "canvas_teaching_plan_not_generated",
+                extra={"question_id": question_id, "reason": "openai_client_unavailable"},
+            )
+            return None
+        try:
+            draft = client.plan_canvas_teaching(
+                system_prompt=config.system_prompt,
+                context={
+                    "question_id": question_id,
+                    "question": question,
+                    "tutor_message_voice": tutor_message_voice,
+                    "student_response": student_response,
+                    "teaching_mode": teaching_mode,
+                    "active_support_level": active_support_level,
+                    "current_unresolved_component_id": current_unresolved_component_id,
+                    "allowed_target_ids": allowed_targets,
+                    "allowed_scene_slots": sorted(
+                        {
+                            *config.guided_evidence_scene_slots.values(),
+                            *{
+                                f"{config.generic_confirmation_scene_slot}:{evidence_id}"
+                                for evidence_id in (
+                                    authorized_evidence
+                                    | {config.direct_explanation_evidence_ref}
+                                )
+                            },
+                        }
+                    ),
+                    "allowed_question_anchors": [
+                        {"id": anchor.token_id, "text": anchor.text}
+                        for anchor in question_anchors
+                    ],
+                    "confirmed_source_targets": confirmed_source_targets,
+                    "current_turn_evidence_ids": sorted(current_evidence),
+                    "authorized_evidence_ids": sorted(authorized_evidence),
+                    "require_guided_evidence_ink": require_guided_evidence_ink,
+                    "direct_explanation_authorized": direct_explanation,
+                    "direct_explanation_evidence_ref": config.direct_explanation_evidence_ref,
+                    "direct_explanation_maximum_written_operations": config.direct_explanation_maximum_written_operations,
+                    "tutor_solved_active": tutor_solved,
+                    "tutor_solved_answer_authorized": answer_reveal,
+                    "tutor_solved_actions": [
+                        action.model_dump()
+                        for action in tutor.tutor_canvas_actions
+                        if action.type == "TUTOR_SOLVED_STEP"
+                    ],
+                    "maximum_beats": config.maximum_beats,
+                    "maximum_operations_per_beat": config.maximum_operations_per_beat,
+                    "rules": {
+                        "write_only_confirmed_ideas": True,
+                        "support_pane_content_must_not_be_copied": True,
+                        "student_write_area_is_forbidden": True,
+                        "raw_coordinates_are_forbidden": True,
+                    },
                 },
-            },
-        )
-    except AdapterError as error:
-        logger.warning(
-            "canvas_teaching_plan_not_generated",
-            extra={"question_id": question_id, "reason": error.detail},
-        )
-        return None
+            )
+        except AdapterError as error:
+            logger.warning(
+                "canvas_teaching_plan_not_generated",
+                extra={"question_id": question_id, "reason": error.detail},
+            )
+            return None
+    else:
+        draft = composed_draft
 
     accepted = _validate_draft(
         draft=draft,

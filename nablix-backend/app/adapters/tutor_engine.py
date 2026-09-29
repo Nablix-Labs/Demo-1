@@ -298,4 +298,6 @@ def tutor_result_from_ai_response(response: TutorResponse) -> TutorResult:
         write_instruction=response.write_instruction,
         canvas_intentions=response.canvas_intentions,
         tutor_canvas_actions=response.tutor_canvas_actions,
+        canvas_teaching_draft=response.canvas_teaching_draft,
+        canvas_teaching_composer_used=response.canvas_teaching_composer_used,
     )
