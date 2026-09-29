@@ -77,6 +77,38 @@ PROSE_FIELDS = {
 }
 
 
+#: The topic id the PLATFORM holds, which is not the one the documents carry.
+#:
+#: Every source document says ALG-ORI-nn under "Topic ID". The approved
+#: workbook and the platform export both say ALG-KS3-01 for topic 1, and
+#: ALG-ORI-02 and ALG-ORI-03 for the other two, so the files disagree with
+#: each other as well as with us.
+#:
+#: Manjusha settled it on 21 September: KS3 for every topic. So this is a
+#: deliberate override of the source documents rather than a parsing change,
+#: and it is done in one place so the rest of the pipeline never sees the
+#: document's form. Reverting is deleting this function and its one call.
+#:
+#: Cheap either way: topic_id is copied, never generated, and reaches about
+#: 262 cells in a three-topic workbook.
+_DOCUMENT_TOPIC_ID_RE = re.compile(r"^ALG-ORI-(\d+)$", re.IGNORECASE)
+
+PLATFORM_TOPIC_PREFIX = "ALG-KS3-"
+
+
+def platform_topic_id(topic_id: str) -> str:
+    """The document's topic id, rewritten to the form the platform holds.
+
+    Anything not in the document's own ALG-ORI-nn shape is passed through
+    untouched, so an id that already looks like the platform's, or one from a
+    topic numbered differently later, is not mangled.
+    """
+    match = _DOCUMENT_TOPIC_ID_RE.match(str(topic_id).strip())
+    if not match:
+        return str(topic_id).strip()
+    return f"{PLATFORM_TOPIC_PREFIX}{match.group(1)}"
+
+
 class BriefMappingError(Exception):
     """The document parsed, but does not carry what the brief requires."""
 
@@ -218,6 +250,7 @@ def to_normalized_brief(doc: ParsedTopicDocument) -> NormalizedTopicBrief:
     topic_id = doc.topic_id or metadata_of(concept).get("topic id")
     if not topic_id:
         raise BriefMappingError(f"{name}: no topic ID found")
+    topic_id = platform_topic_id(topic_id)
 
     sequence_no = doc.topic_number
     if sequence_no is None:

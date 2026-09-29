@@ -26,7 +26,7 @@ this module reproduces it exactly:
     source_type            NABLIX_AUTHORED
     source_name            the document title, then its first preamble line --
                            "Topic 2 - Algebraic Notation" + "Final Content Pack"
-    source_item_id         the topic ID, ALG-ORI-02
+    source_item_id         the topic ID, ALG-KS3-02
     license_name           OWNED_ORIGINAL_CONTENT
     license_url            empty
     adapted                False   -- content is used as authored
@@ -49,7 +49,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
-from brief_mapper import items_of, prose_of
+from brief_mapper import items_of, platform_topic_id, prose_of
 from docx_parser import ParsedTopicDocument
 from id_service import IdService
 from models import (
@@ -245,7 +245,11 @@ def build_source_provenance(
         source_provenance_id=id_service.source_provenance_id(),
         source_type=SourceType.NABLIX_AUTHORED,
         source_name=source_name_for(doc),
-        source_item_id=doc.topic_id,
+        # Rewritten to the platform's KS3 form, like every other
+        # topic_id. A provenance row saying ALG-ORI-02 while the rest
+        # of the workbook says ALG-KS3-02 is the inconsistency the
+        # 21 September decision exists to remove.
+        source_item_id=platform_topic_id(doc.topic_id or "") or None,
         license_name=LicenseName.OWNED_ORIGINAL_CONTENT,
         license_url=None,
         adapted=DEFAULT_ADAPTED,

@@ -35,6 +35,7 @@ from diagnosis_generator import (                   # noqa: E402
     generate_error_types,
     generate_misconceptions,
     referenced_error_codes,
+    trim_to_cap,
 )
 from llm_client import FakeLLMClient, LLMError      # noqa: E402
 from micro_skill_generator import generate_micro_skills   # noqa: E402
@@ -174,6 +175,63 @@ def test_the_measure_is_honest_about_what_it_misses():
 # ──────────────────────────────────────────────────────────────────────
 # The prompt
 # ──────────────────────────────────────────────────────────────────────
+
+def test_a_surplus_is_trimmed_for_coverage_not_by_position():
+    """Keeping the first `cap` is arbitrary. On 19 September the model
+    returned 10 error types against a cap of 8, and whichever came first
+    were kept, which can drop the only error for a skill while keeping a
+    second one for a skill already covered."""
+    entries = [{"descriptor": f"E{i}", "micro_skill_position": position}
+               for i, position in enumerate([1, 1, 1, 2, 2, 2, 3, 4, 5, 6],
+                                            start=1)]
+    kept, _ = trim_to_cap(entries, 8, "T01 errors", "error_types",
+                          key="micro_skill_position")
+    assert len(kept) == 8
+    assert sorted({e["micro_skill_position"] for e in kept}) == [1, 2, 3, 4, 5, 6]
+    # The old rule would have kept positions 1, 1, 1, 2, 2, 2, 3, 4.
+    assert sorted({e["micro_skill_position"] for e in entries[:8]}) == [1, 2, 3, 4]
+
+
+def test_the_first_error_for_a_skill_beats_the_second_for_another():
+    entries = [{"descriptor": "A1", "micro_skill_position": 1},
+               {"descriptor": "A2", "micro_skill_position": 1},
+               {"descriptor": "B1", "micro_skill_position": 2}]
+    kept, _ = trim_to_cap(entries, 2, "T01 errors", "error_types",
+                          key="micro_skill_position")
+    assert {e["descriptor"] for e in kept} == {"A1", "B1"}
+
+
+def test_ties_within_a_skill_keep_the_models_order():
+    """Nothing here knows which of two errors on one skill is better
+    written, so the model's own ordering stands."""
+    entries = [{"descriptor": f"E{i}", "micro_skill_position": 1}
+               for i in range(1, 5)]
+    kept, _ = trim_to_cap(entries, 2, "T01 errors", "error_types",
+                          key="micro_skill_position")
+    assert [e["descriptor"] for e in kept] == ["E1", "E2"]
+
+
+def test_without_a_key_the_first_entries_are_kept():
+    entries = [{"descriptor": f"E{i}"} for i in range(1, 6)]
+    kept, _ = trim_to_cap(entries, 3, "T01", "misconceptions")
+    assert [e["descriptor"] for e in kept] == ["E1", "E2", "E3"]
+
+
+def test_the_trim_says_how_much_coverage_survived():
+    entries = [{"descriptor": f"E{i}", "micro_skill_position": i % 3}
+               for i in range(1, 8)]
+    _, issues = trim_to_cap(entries, 4, "T01 errors", "error_types",
+                            key="micro_skill_position")
+    assert "covering 3" in issues[0].message
+    assert "set aside 3" in issues[0].message
+
+
+def test_nothing_is_trimmed_when_the_count_is_within_the_cap():
+    entries = [{"descriptor": "E1", "micro_skill_position": 1}]
+    kept, issues = trim_to_cap(entries, 8, "T01", "error_types",
+                               key="micro_skill_position")
+    assert kept == entries and not issues
+
 
 def test_the_prompt_gives_a_number_rather_than_a_range():
     """Manjusha's answer of 10 September was 6 per topic, and it matches the

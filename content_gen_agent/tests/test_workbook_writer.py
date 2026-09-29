@@ -349,16 +349,37 @@ def test_the_pipeline_runs_end_to_end_and_writes_a_workbook(tmp_path, monkeypatc
         ]}
 
     def error_map_payload(question_ids):
-        """Label one wrong answer per question with an error it shows.
+        """Two wrong answers per question, mapped to an error belonging to
+        that question's OWN micro-skill.
 
-        The pattern has to be copied from the answer key exactly, which is
-        what the generator checks: a paraphrase never matches a real response.
+        Two things the generator checks. The pattern has to be copied from
+        the answer key exactly, because a paraphrase never matches a real
+        response. And since 21 September the error has to belong to the skill
+        the question assesses, so an error written for skill 3 cannot be
+        mapped to a question on skill 5.
+
+        errors_payload writes five errors, for skill positions 2 to 6, so
+        questions on skills 1 and 7 have nothing legal to map and are left
+        out. That is the case Manjusha confirmed is acceptable: a skill
+        without errors is fine, an error without a skill is not.
         """
+        code_for_skill = {
+            (i % 7) + 1: f"ERR-T01-ERROR-KIND-{i}" for i in range(1, 6)
+        }
         out = []
         for i, qid in enumerate(question_ids, start=1):
-            pattern = "B" if "-D" in qid else f"{i}n"
-            out.append({"question_id": qid, "response_pattern": pattern,
-                        "error_code": f"ERR-T01-ERROR-KIND-{(i % 5) + 1}"})
+            if "-D" in qid:
+                skill = int(qid.rsplit("-D", 1)[1])
+                patterns = ["B", "C"]
+            else:
+                number = int(qid.rsplit("-", 1)[1])
+                skill = ((number - 1) // 6) + 1
+                patterns = [f"{i}n", f"n-{i}"]
+            code = code_for_skill.get(skill)
+            if code is None:
+                continue
+            out += [{"question_id": qid, "response_pattern": pattern,
+                     "error_code": code} for pattern in patterns]
         return {"mappings": out}
 
     def hints_payload():

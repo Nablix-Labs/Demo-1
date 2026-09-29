@@ -172,6 +172,22 @@ Rules, in order of importance:
    different orderings (n+5 and 5+n), spacing, and common equivalent notations.
    Be generous here. Every form you omit is a correct student marked wrong.
 
+   GENEROSITY STOPS AT WRONG NOTATION. A form is acceptable only if it is
+   actually correct, not merely close. The commonest way to get this wrong is
+   the coefficient:
+
+     four times t   accepted: 4t, 4 x t, 4*t       NOT: t4
+     three times y  accepted: 3y, 3 x y, 3*y       NOT: y3
+
+   The coefficient is written BEFORE the variable. "t4" is not 4t written
+   backwards, it reads as a two-digit label, and "y3" normally reads as y
+   cubed. Listing both orders is not generosity, it is accepting one correct
+   answer and one wrong one, and it teaches the student that the convention
+   does not matter.
+
+   Addition and multiplication genuinely commute, so n+5 and 5+n are both
+   right and both belong. A coefficient and its variable do not.
+
 4. common_wrong_answers holds what a student who has the MISCONCEPTION would
    write. Give at least two. Base them on the misconceptions supplied with the
    topic: "5n" for reading addition as multiplication, not an arbitrary wrong

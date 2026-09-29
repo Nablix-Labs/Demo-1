@@ -204,7 +204,9 @@ def test_the_error_names_the_document():
 
 def test_topic_id_falls_back_to_the_metadata_line():
     doc = _doc(_concept_sheet(), topic_id=None)
-    assert to_normalized_brief(doc).topic_id == "ALG-ORI-09"
+    # Rewritten to the platform form on the way out. The document still
+    # says ALG-ORI-09; nothing downstream ever sees that.
+    assert to_normalized_brief(doc).topic_id == "ALG-KS3-09"
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -223,7 +225,7 @@ def test_identity_fields_are_right_for_every_topic(briefs):
     for i, brief in enumerate(briefs, start=1):
         assert brief.sequence_no == i
         assert brief.topic_code == f"T{i:02d}"
-        assert brief.topic_id == f"ALG-ORI-{i:02d}"
+        assert brief.topic_id == f"ALG-KS3-{i:02d}"
         assert brief.source_file_name == f"Topic_{i}_Formatted.docx"
         assert brief.ks_stage is KSStage.KS3
 

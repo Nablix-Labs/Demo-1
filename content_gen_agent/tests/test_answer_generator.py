@@ -216,6 +216,29 @@ def test_both_spellings_of_an_operator_are_one_form(canonical, accepted):
     assert result.is_clean, [str(i) for i in result.issues]
 
 
+def test_the_prompt_bounds_how_generous_accepted_answers_may_be():
+    """The prompt said "be generous, every form you omit is a correct student
+    marked wrong", with no limit. Ten answer keys on 9 September and two more
+    on 19 September accepted the coefficient on both sides.
+
+    STANDARD_NOTATION catches those after the fact. Nothing told the
+    generator not to write them, which is why the count fell to two rather
+    than zero.
+    """
+    text = _prompt_text()
+    assert "GENEROSITY STOPS AT WRONG NOTATION" in text
+    assert "NOT: t4" in text
+    assert "The coefficient is written BEFORE the variable" in text
+
+
+def test_the_prompt_keeps_the_forms_that_genuinely_commute():
+    """Bounding generosity must not remove the reason it existed. n+5 and
+    5+n are both right and both belong."""
+    text = _prompt_text()
+    assert "Addition and multiplication genuinely commute" in text
+    assert "A coefficient and its variable do not" in text
+
+
 def test_the_overlap_check_also_sees_through_operator_spelling():
     """The fix has to cut both ways.
 
