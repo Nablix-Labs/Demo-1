@@ -23,6 +23,7 @@ from mapping_generator import (                     # noqa: E402
     ERROR_MAP_SYSTEM_PROMPT,
     MappingError,
     build_error_map_prompt,
+    MAX_MAPPED_PER_QUESTION,
     build_misconception_errors,
     option_texts,
     unmapped_by_question,
@@ -356,17 +357,135 @@ def test_the_prompt_says_a_letter_is_not_a_mistake():
 # Coverage: the warning that was never raised
 # ──────────────────────────────────────────────────────────────────────
 
-def test_a_partly_mapped_question_is_warned_about():
-    """The gap that produced no warning at all on 7 September.
+# ──────────────────────────────────────────────────────────────────────
+# The error must belong to the skill the question assesses
+# ──────────────────────────────────────────────────────────────────────
 
-    97 questions had some wrong answers mapped and some not. The old check
-    only fired when EVERY wrong answer was unmapped, so those were silent.
-    """
+def test_an_error_from_another_skill_is_refused():
+    """Manjusha, 21 September. Before it, 53 per cent of mappings pointed at
+    a skill other than the one the question was testing, so the tutor
+    diagnosed a failure on something the student was not being assessed on."""
+    _, issues, _ = _gen_map(
+        _map_payload(_m(pattern="5n", code="ERR-T01-A")),
+        errors=[_error("ERR-T01-A", skill="T01.M2")],
+        skill_of_question={"Q-T01-001": "T01.M9"},
+        strict=False,
+    )
+    assert any("belongs to T01.M2" in i.message and "assesses T01.M9" in i.message
+               for i in issues)
+
+
+def test_an_error_from_the_questions_own_skill_is_kept():
+    rows, _, _ = _gen_map(
+        _map_payload(_m(pattern="5n", code="ERR-T01-A")),
+        errors=[_error("ERR-T01-A", skill="T01.M9")],
+        skill_of_question={"Q-T01-001": "T01.M9"},
+    )
+    assert [r.error_code for r in rows] == ["ERR-T01-A"]
+
+
+def test_only_the_questions_own_codes_are_offered():
+    """Narrowed before it is shown, not refused afterwards. A model cannot
+    pick a valid option out of an invalid list, which is the mistake the
+    answer prompt made once with answer types and verification methods."""
+    prompt = build_error_map_prompt(
+        [_answer(1), _answer(2)],
+        [_question(1), _question(2)],
+        [_error("ERR-T01-MINE", skill="T01.M4"),
+         _error("ERR-T01-THEIRS", skill="T01.M7")],
+        {"Q-T01-001": "T01.M4", "Q-T01-002": "T01.M7"},
+    )
+    first = prompt.split("Q-T01-002")[0]
+    assert "ERR-T01-MINE" in first
+    assert "ERR-T01-THEIRS" not in first
+
+
+def test_a_question_whose_skill_has_no_errors_is_left_out_of_the_prompt():
+    prompt = build_error_map_prompt(
+        [_answer(1)], [_question(1)],
+        [_error("ERR-T01-A", skill="T01.M7")],
+        {"Q-T01-001": "T01.M4"},
+    )
+    assert "Q-T01-001" not in prompt
+
+
+def test_without_a_skill_map_every_code_is_still_offered():
+    """Filtering by a mapping nobody supplied would silently produce a prompt
+    with no questions in it, and an empty prompt returns an empty answer that
+    looks like the model declining to map anything."""
+    prompt = build_error_map_prompt(
+        [_answer(1)], [_question(1)],
+        [_error("ERR-T01-A"), _error("ERR-T01-B")],
+    )
+    assert "Q-T01-001" in prompt
+    assert "ERR-T01-A" in prompt and "ERR-T01-B" in prompt
+
+
+def test_the_prompt_says_to_use_only_that_questions_codes():
+    text = " ".join(ERROR_MAP_SYSTEM_PROMPT.split())
+    assert "USE ONLY THE CODES LISTED UNDER THAT QUESTION" in text
+    assert "MAP 2 OR 3 WRONG ANSWERS PER QUESTION" in text
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Two to three per question
+# ──────────────────────────────────────────────────────────────────────
+
+def test_more_than_three_mappings_on_one_question_are_trimmed():
+    rows, issues, _ = _gen_map(
+        _map_payload(*[_m(pattern=p) for p in ["5n", "n-5", "5+n", "n5"]]),
+        answers=[_answer(wrong="5n | n-5 | 5+n | n5")], retry=False)
+    assert len(rows) == MAX_MAPPED_PER_QUESTION
+    assert any("over the maximum" in i.message for i in issues)
+
+
+def test_exactly_three_is_not_trimmed():
+    rows, _, _ = _gen_map(
+        _map_payload(*[_m(pattern=p) for p in ["5n", "n-5", "5+n"]]),
+        answers=[_answer(wrong="5n | n-5 | 5+n")], retry=False)
+    assert len(rows) == 3
+
+
+def test_a_question_whose_skill_has_no_errors_is_not_retried():
+    """Asking again can only come back empty a second time, and it costs a
+    request per topic. A skill without errors is an accepted outcome, not a
+    failure to retry."""
+    _, _, client = _gen_map_scripted_client(
+        [_map_payload()],
+        errors=[_error("ERR-T01-A", skill="T01.M7")],
+        skill_of_question={"Q-T01-001": "T01.M4"},
+    )
+    assert len(client.calls) == 1
+
+
+def test_a_question_whose_skill_has_errors_is_still_retried():
+    _, _, client = _gen_map_scripted_client(
+        [_map_payload(), _map_payload(_m(pattern="5n"))],
+        errors=[_error("ERR-T01-A", skill="T01.M4")],
+        skill_of_question={"Q-T01-001": "T01.M4"},
+    )
+    assert len(client.calls) == 2
+
+
+def test_a_question_short_of_the_minimum_is_warned_about():
+    """The target is 2 to 3 mapped wrong answers per question, so one is
+    short. It warns rather than erroring, because it cannot always be fixed:
+    a question whose skill has no error types has nothing legal to map."""
     result = _gen_map(_map_payload(_m(pattern="5n")),
                       answers=[_answer(wrong="5n | n-5")], retry=False)
-    warning = next(i for i in result[1] if "unmapped" in i.message)
+    warning = next(i for i in result[1] if "below minimum" in i.message)
     assert not warning.is_error
-    assert "1 of its 2" in warning.message
+    assert "1 wrong answer(s) mapped" in warning.message
+
+
+def test_mapping_every_wrong_answer_is_no_longer_expected():
+    """The old rule warned about each unmapped wrong answer, assuming all of
+    them should be mapped. A question with six wrong answers and three mapped
+    is now correct, not three short."""
+    result = _gen_map(
+        _map_payload(_m(pattern="5n"), _m(pattern="n-5")),
+        answers=[_answer(wrong="5n | n-5 | 5+n | n5 | 55")], retry=False)
+    assert not [i for i in result[1] if "below minimum" in i.message]
 
 
 def test_a_fully_mapped_question_is_not_warned_about():
@@ -386,6 +505,15 @@ def test_unmapped_by_question_names_what_is_missing():
 # ──────────────────────────────────────────────────────────────────────
 # The retry
 # ──────────────────────────────────────────────────────────────────────
+
+def _gen_map_scripted_client(payloads, answers=None, questions=None,
+                             errors=None, **kw):
+    """Like _gen_map_scripted, but hands back the client so the number of
+    calls can be asserted."""
+    (rows, issues, payload), client = _gen_map_scripted(
+        payloads, answers=answers, questions=questions, errors=errors, **kw)
+    return rows, issues, client
+
 
 def _gen_map_scripted(payloads, answers=None, questions=None, errors=None, **kw):
     answers = answers or [_answer()]
@@ -499,6 +627,7 @@ def test_the_skill_is_filled_in_rather_than_asked_for():
     """A question has exactly one skill, so asking would only create a way to
     get it wrong."""
     rows, _, _ = _gen_map(_map_payload(_m()),
+                          errors=[_error("ERR-T01-A", skill="T01.M4")],
                           skill_of_question={"Q-T01-001": "T01.M4"})
     assert rows[0].micro_skill_id == "T01.M4"
 
@@ -541,7 +670,8 @@ def test_one_bad_label_does_not_lose_the_good_ones():
 
 def test_a_question_with_nothing_mapped_warns():
     rows, issues, _ = _gen_map(_map_payload())
-    assert any("gets no diagnosis" in i.message for i in issues)
+    assert any("below minimum" in i.message and "0 wrong answer(s) mapped"
+               in i.message for i in issues)
 
 
 def test_mapping_with_no_error_types_is_refused():

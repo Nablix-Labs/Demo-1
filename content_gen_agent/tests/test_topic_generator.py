@@ -187,7 +187,7 @@ def test_bullets_are_marked_in_the_prompt(doc):
 def test_a_faithful_response_produces_a_clean_package(doc):
     package = generate(doc, faithful(doc), today="2026-08-21")
     assert package.is_clean
-    assert package.topic.topic_id == "ALG-ORI-02"
+    assert package.topic.topic_id == "ALG-KS3-02"
     assert package.topic.topic_code == "T02"
     assert package.topic.status is TopicStatus.ACTIVE
     assert package.topic.version == "1.0"
@@ -221,7 +221,7 @@ def test_scope_ids_are_positional_and_included_come_first(doc):
 def test_the_package_carries_its_provenance_row(doc):
     package = generate(doc, faithful(doc))
     assert package.source_provenance.source_provenance_id == "SRC-NABLIX-T02-001"
-    assert package.source_provenance.source_item_id == "ALG-ORI-02"
+    assert package.source_provenance.source_item_id == "ALG-KS3-02"
 
 
 @needs_docs
@@ -357,7 +357,7 @@ def test_non_strict_records_the_problem_instead_of_raising(doc):
 def test_non_strict_still_writes_the_documents_identity(doc):
     """A wrong topic_id would corrupt every table that references it."""
     package = generate(doc, faithful(doc, topic_id="ALG-ORI-99"), strict=False)
-    assert package.topic.topic_id == "ALG-ORI-02"
+    assert package.topic.topic_id == "ALG-KS3-02"
 
 
 @needs_docs

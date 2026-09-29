@@ -282,13 +282,15 @@ def test_identical_pairings_report_no_detail():
 # ──────────────────────────────────────────────────────────────────────
 
 @needs_reference
-def test_the_worked_example_shape_difference_is_reported():
-    """The useful output of CG-023, pinned so it cannot go quiet.
+def test_the_worked_example_shape_difference_is_now_a_decision():
+    """This test used to assert the opposite.
 
-    The reference writes one worked example PER STEP -- 22 examples, 22 steps,
-    exactly one each. We write one per topic with several steps. Same content,
-    different shape, and it will matter when the platform imports it. Nobody
-    has decided this, so it must report as unexplained rather than intentional.
+    The reference and the platform export both write one worked example PER
+    step, 22 of each, and we write one per topic containing all its steps.
+    It was the largest unexplained divergence in the comparison, pinned here
+    so it could not go quiet. Manjusha settled it on 21 September in favour
+    of what we already do, so it now reports as a decision with its reason
+    rather than as something to investigate.
     """
     reference = rc.read_any(REFERENCE_WORKBOOK)
     assert len(reference["Worked_Examples"]) == len(reference["Worked_Example_Steps"])
@@ -299,7 +301,11 @@ def test_the_worked_example_shape_difference_is_reported():
                               for i in range(1, 9)],
     )
     comparison = rc.compare_tables(reference, generated)
-    assert status_of(comparison, "steps per worked example") == rc.DIVERGES
+    assert status_of(comparison, "steps per worked example") == rc.INTENTIONAL
+
+    measure = next(m for m in comparison.measures
+                   if m.name == "steps per worked example")
+    assert "21 September" in measure.decision.source
 
 
 @needs_reference

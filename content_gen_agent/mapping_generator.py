@@ -216,7 +216,18 @@ Rules:
    one. If a wrong answer does not match any error in the list, leave it out
    rather than forcing it into the nearest code.
 
-2. Copy response_pattern exactly as it is given. It is what the student
+2. USE ONLY THE CODES LISTED UNDER THAT QUESTION. They are the errors for
+   the micro-skill it assesses. A code from another question's list is a
+   diagnosis of a skill this question is not testing, and will be refused.
+
+   A question with no codes listed is not in the list below at all. There is
+   nothing to do about it.
+
+3. MAP 2 OR 3 WRONG ANSWERS PER QUESTION, not all of them. A question with
+   six wrong answers does not need six mappings. Pick the two or three whose
+   errors are clearest. More than three is refused.
+
+4. Copy response_pattern exactly as it is given. It is what the student
    actually types, so an approximation will never match.
 
    MANY WRONG ANSWERS ARE OPTION LETTERS. A letter is not a mistake. What
@@ -230,19 +241,19 @@ Rules:
    A question where every wrong answer is a letter still needs mapping. Do
    not skip it because the letters look meaningless; look at what they say.
 
-3. EVERY QUESTION NEEDS AT LEAST ONE MAPPING. A question whose wrong answers
+5. EVERY QUESTION NEEDS AT LEAST ONE MAPPING. A question whose wrong answers
    are all unmapped is a question where a student makes a mistake and the
    tutor has nothing to say. Returning an empty list, or leaving whole
    questions out, is the one outcome that is never right: if you genuinely
    cannot match one wrong answer, match the others.
 
-4. Different wrong answers usually show DIFFERENT errors. Two options in the
+6. Different wrong answers usually show DIFFERENT errors. Two options in the
    same question landing on the same code is possible, but if every wrong
    answer in a question gets the same code you have probably not looked at
    what distinguishes them. Do not force unrelated mistakes into one generic
    error to simplify the work.
 
-5. A wrong answer shows the error a student who made THAT mistake would have.
+7. A wrong answer shows the error a student who made THAT mistake would have.
    "5n" where the rule adds 5 shows multiplication read for addition. The same
    student writing "n5" shows a missing operator. They are not the same error
    even though both are wrong.
@@ -286,19 +297,41 @@ def build_error_map_prompt(
     answers,
     questions,
     error_types: list[ErrorTypeRow],
+    skill_of_question: Optional[dict[str, str]] = None,
 ) -> str:
     """Every wrong answer that needs labelling, and the codes available.
 
     A wrong answer that is a bare option letter is shown with what that
     option says, so the model diagnoses the mistake rather than the label.
+
+    Each question is offered ONLY the error codes belonging to the micro-skill
+    it assesses. Manjusha's decision of 21 September: a mapped error must be
+    specific to the skill being assessed, not to one of its prerequisites.
+
+    Offering the whole topic's codes and then refusing most of them is the
+    mistake this module made once already, in a different place: the answer
+    prompt listed answer types and verification methods as two free lists,
+    the model chose a legal-looking combination the checker rejected, and it
+    was right to. A model cannot pick a valid option out of an invalid list.
+    So the list is narrowed before it is shown.
     """
     by_id = {q.question_id: q for q in questions}
-    lines = ["Error codes for this topic. Use only these, copied exactly:"]
-    lines += [
-        f"  {row.error_code}  {row.error_name}: {row.description}"
-        for row in error_types
+    skill_of_question = skill_of_question or {}
+    codes_by_skill: dict[str, list[ErrorTypeRow]] = {}
+    for row in error_types:
+        codes_by_skill.setdefault(row.related_micro_skill_id, []).append(row)
+
+    lines = [
+        "Each question below lists the error codes available FOR THAT "
+        "QUESTION. They are the errors belonging to the micro-skill the "
+        "question assesses. Use only the codes listed under a question, "
+        "copied exactly.",
+        "",
+        "A question with no codes listed has no error type for its skill. "
+        "Leave it out entirely rather than borrowing a code from elsewhere.",
+        "",
+        "Wrong answers to label:",
     ]
-    lines += ["", "Wrong answers to label:"]
 
     for answer in answers:
         question = by_id.get(answer.question_id)
@@ -308,13 +341,32 @@ def build_error_map_prompt(
                  if w.strip()]
         if not wrong:
             continue
+
+        # Without a skill map there is nothing to narrow by, so every code is
+        # offered, which is what this did before 21 September. The alternative
+        # is worse: filtering by a mapping nobody supplied silently produces a
+        # prompt with no questions in it, and an empty prompt returns an empty
+        # answer that looks like the model declining to map anything.
+        if skill_of_question:
+            skill = skill_of_question.get(answer.question_id)
+            available = codes_by_skill.get(skill, [])
+            if not available:
+                continue
+        else:
+            skill = None
+            available = list(error_types)
+
         options = option_texts(question.question_text)
         lines += [
             "",
-            f"  {answer.question_id}  [{question.question_type.value}]",
+            f"  {answer.question_id}  [{question.question_type.value}]"
+            + (f"  skill {skill}" if skill else ""),
             f"    {' '.join(str(question.question_text).split())[:300]}",
             f"    correct answer: {answer.canonical_answer}",
+            "    codes available for this question:",
         ]
+        lines += [f"      {row.error_code}  {row.error_name}: {row.description}"
+                  for row in available]
         for w in wrong:
             said = options.get(w.upper()) if BARE_LETTER_RE.match(w) else None
             lines.append(f"    wrong: {w}"
@@ -343,11 +395,25 @@ class MappingSet:
         return not self.errors
 
 
+#: How many wrong answers one question may have mapped to an error.
+#:
+#: Manjusha, 21 September: minimum 2, maximum 3. The minimum is a target
+#: rather than a rule, because it cannot always be met: a question whose
+#: micro-skill has no error type of its own has nothing legal to map, and she
+#: confirmed on 27 September that a skill without errors is acceptable so long
+#: as every error belongs to a skill. So a shortfall warns and a surplus is
+#: trimmed.
+MIN_MAPPED_PER_QUESTION = 2
+MAX_MAPPED_PER_QUESTION = 3
+
+
 def _check_error_map(
     name: str,
     entries: list,
     answers,
     known_codes: set[str],
+    skill_of_error: Optional[dict[str, str]] = None,
+    skill_of_question: Optional[dict[str, str]] = None,
 ) -> tuple[list[ValidationIssue], set[int]]:
     """Everything wrong with the labelling, and which rows are individually bad."""
     issues: list[ValidationIssue] = []
@@ -404,32 +470,61 @@ def _check_error_map(
                   f"error_code {code!r} does not exist in this topic", position)
             continue
 
+        # The error must belong to the skill this question assesses. Before
+        # 21 September 53 per cent of mappings pointed somewhere else, which
+        # means the tutor diagnosed a failure on a skill the student was not
+        # being tested on.
+        if skill_of_error and skill_of_question:
+            belongs_to = skill_of_error.get(code)
+            assessed = skill_of_question.get(question_id)
+            if belongs_to and assessed and belongs_to != assessed:
+                error(where,
+                      f"{code} belongs to {belongs_to}, but {question_id} "
+                      f"assesses {assessed}; a mapped error must be specific "
+                      f"to the skill being tested", position)
+                continue
+
         pair = (question_id, pattern)
         if pair in seen:
             error(where, f"{question_id} maps {pattern!r} twice", position)
             continue
         seen.add(pair)
 
-    # -- coverage, which the review asks for explicitly ----------------
+    # -- 2 to 3 mapped wrong answers per question ----------------------
     #
-    # Both cases are reported. The earlier version warned only when EVERY
-    # wrong answer went unmapped, so on 7 September the 134 questions with no
-    # diagnosis produced a warning each and the 97 with partial cover produced
-    # nothing at all. A question where two of five mistakes are diagnosed is
-    # three mistakes the tutor cannot respond to.
-    mapped = set(seen)
-    for question_id, wrong in sorted(wrong_by_question.items()):
-        unmapped = {w for w in wrong if (question_id, w) not in mapped}
-        if not unmapped:
+    # This used to warn about every unmapped wrong answer, on the assumption
+    # that all of them should be mapped. That assumption is gone: the target
+    # is 2 to 3 per question, so a question with 6 wrong answers and 3 mapped
+    # is correct, not 3 short.
+    #
+    # A question with too FEW can only be fixed where its skill has errors to
+    # map, so it warns. A question with too MANY is the model over-reaching
+    # and the surplus is dropped, newest first, since nothing here knows which
+    # mapping is the better one and the earlier ones were chosen first.
+    mapped_per_question: dict[str, list[int]] = {}
+    for position, entry in enumerate(entries, start=1):
+        if position in bad or not isinstance(entry, dict):
             continue
-        if len(unmapped) == len(wrong):
+        question_id = str(entry.get("question_id") or "")
+        if question_id in wrong_by_question:
+            mapped_per_question.setdefault(question_id, []).append(position)
+
+    for question_id in sorted(wrong_by_question):
+        positions = mapped_per_question.get(question_id, [])
+        available = len(wrong_by_question[question_id])
+
+        if len(positions) > MAX_MAPPED_PER_QUESTION:
+            surplus = positions[MAX_MAPPED_PER_QUESTION:]
+            bad.update(surplus)
             warn(question_id,
-                 f"none of its {len(wrong)} wrong answer(s) is mapped to an "
-                 f"error, so a student who makes one gets no diagnosis")
-        else:
+                 f"dropped: {len(surplus)} mapping(s) over the maximum of "
+                 f"{MAX_MAPPED_PER_QUESTION}; kept the first "
+                 f"{MAX_MAPPED_PER_QUESTION}")
+        elif len(positions) < MIN_MAPPED_PER_QUESTION:
             warn(question_id,
-                 f"{len(unmapped)} of its {len(wrong)} wrong answer(s) are "
-                 f"unmapped, so those mistakes get no diagnosis")
+                 f"below minimum: {len(positions)} wrong answer(s) mapped of "
+                 f"{available} available, against a minimum of "
+                 f"{MIN_MAPPED_PER_QUESTION}")
 
     return issues, bad
 
@@ -467,11 +562,15 @@ def _map_once(
     """One call, checked and turned into rows."""
     payload = client.complete_json(
         ERROR_MAP_SYSTEM_PROMPT,
-        build_error_map_prompt(answers, questions, error_types),
+        build_error_map_prompt(answers, questions, error_types,
+                               skill_of_question),
         purpose=purpose,
     )
     entries = payload.get("mappings")
-    issues, bad = _check_error_map(name, entries, answers, known)
+    skill_of_error = {row.error_code: row.related_micro_skill_id
+                      for row in error_types}
+    issues, bad = _check_error_map(name, entries, answers, known,
+                                   skill_of_error, skill_of_question)
 
     # A bad label is dropped, not fatal. The table is additive: a wrong answer
     # with no error attached means one less diagnosis, while refusing the whole
@@ -543,9 +642,22 @@ def generate_question_error_map(
         # Only the questions with NOTHING. A partially mapped question has a
         # diagnosis for at least one mistake, which is worth a warning but not
         # worth a second request.
+        # A question whose micro-skill has no error type of its own has
+        # nothing it is allowed to map, so asking again can only come back
+        # empty a second time. Manjusha confirmed on 27 September that a
+        # skill without errors is acceptable, which makes this a normal
+        # outcome rather than a failure to retry.
+        skills_with_errors = {row.related_micro_skill_id for row in error_types}
+        mappable = {
+            q for q in missing
+            if not skill_of_question
+            or skill_of_question.get(q) in skills_with_errors
+        }
+
         blank = {
             question_id for question_id, gap in missing.items()
-            if len(gap) == len({
+            if question_id in mappable
+            and len(gap) == len({
                 w.strip() for a in answers if a.question_id == question_id
                 for w in str(a.common_wrong_answers or "").split("|") if w.strip()
             })

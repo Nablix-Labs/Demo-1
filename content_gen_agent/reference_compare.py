@@ -108,6 +108,36 @@ DECIDED: dict[str, Decision] = {
         "assembled per topic rather than per skill.",
         "coverage_plan.plan_for_skill",
     ),
+    "question type mix": Decision(
+        "Asked and answered on 10 September: 35 per cent multiple choice "
+        "against the reference's 52 is acceptable. Her condition was that "
+        "Phase 3 questions must not be open ended, which is a separate rule "
+        "the validator enforces, so this difference is only agreed while "
+        "PHASE3_CANVAS_ONLY passes.",
+        "Manjusha, 10 September; condition enforced by validator "
+        "PHASE3_CANVAS_ONLY",
+    ),
+    "steps per worked example": Decision(
+        "Keep one worked example per topic with several ordered steps. The "
+        "approved workbook and the platform export both write one example "
+        "PER STEP, 22 of each, and this was the largest unexplained "
+        "divergence in the comparison until it was settled.",
+        "Manjusha, 21 September",
+    ),
+    "worked examples per topic": Decision(
+        "The same decision seen from the other side. One per topic rather "
+        "than one per step.",
+        "Manjusha, 21 September",
+    ),
+    "error patterns per question": Decision(
+        "2 to 3 mapped wrong answers per question, and each mapped error "
+        "must belong to the micro-skill the question assesses. The "
+        "reference's 1.52 predates both rules. A question whose skill has no "
+        "error type of its own maps nothing, which she confirmed is "
+        "acceptable so long as every error belongs to a skill.",
+        "Manjusha, 21 and 27 September; enforced by "
+        "mapping_generator.MAX_MAPPED_PER_QUESTION",
+    ),
     "TRUE_FALSE_WITH_EXPLANATION used": Decision(
         "Suppressed in generation because it appears nowhere in the approved "
         "reference. Agreeing with the reference here is the point, and it is "

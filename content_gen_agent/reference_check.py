@@ -86,10 +86,18 @@ class Status(str, Enum):
 
 # (topic_code, field) -> why the reference disagrees on purpose.
 KNOWN_DIVERGENCES: dict[tuple[str, str], str] = {
-    ("T01", "topic_id"): (
-        "Reference says ALG-KS3-01; the document, and all six documents, use "
-        "the ALG-ORI-NN form. The documents agree with each other and the "
-        "reference covers only three topics, so the document wins."
+    # T01's topic_id used to be listed here, the other way round: the
+    # reference said ALG-KS3-01, every document said ALG-ORI-NN, and the
+    # documents won. Manjusha settled it on 21 September in favour of KS3 for
+    # every topic, so T01 now MATCHES and it is topics 2 and 3 that diverge.
+    ("T02", "topic_id"): (
+        "Reference says ALG-ORI-02. We write ALG-KS3-02 because the platform "
+        "holds the KS3 form, decided 21 September. The reference is "
+        "internally inconsistent here: it uses KS3 for topic 1 and ORI for "
+        "topics 2 and 3."
+    ),
+    ("T03", "topic_id"): (
+        "Reference says ALG-ORI-03. Same decision as T02."
     ),
     ("T01", "learning_goal"): (
         "Reference is different prose, not a rewrite of the document's "

@@ -260,7 +260,7 @@ def test_provenance_row_uses_the_house_defaults():
     assert isinstance(row, SourceProvenanceRow)
     assert row.source_provenance_id == "SRC-NABLIX-T09-001"
     assert row.source_type is SourceType.NABLIX_AUTHORED
-    assert row.source_item_id == "ALG-ORI-09"
+    assert row.source_item_id == "ALG-KS3-09"
     assert row.license_name is LicenseName.OWNED_ORIGINAL_CONTENT
     assert row.license_url is None
     assert row.adapted is False
@@ -304,8 +304,10 @@ def test_all_six_produce_a_provenance_row(docs):
     assert [r.source_provenance_id for r in rows] == [
         f"SRC-NABLIX-T{i:02d}-001" for i in range(1, 7)
     ]
+    # KS3 throughout, per the 21 September decision. The documents still say
+    # ALG-ORI-NN; nothing downstream sees that form.
     assert [r.source_item_id for r in rows] == [
-        f"ALG-ORI-{i:02d}" for i in range(1, 7)
+        f"ALG-KS3-{i:02d}" for i in range(1, 7)
     ]
 
 
@@ -328,7 +330,12 @@ def test_provenance_matches_the_reference_for_topics_2_and_3(docs):
     for key in ("SRC-NABLIX-T02-001", "SRC-NABLIX-T03-001"):
         want, got = reference[key], generated[key]
         assert got.source_name == want["source_name"], key
-        assert got.source_item_id == want["source_item_id"], key
+        # source_item_id deliberately differs now: the reference says
+        # ALG-ORI-02 and ALG-ORI-03, we write the KS3 form for every topic.
+        # Everything else about the row still has to match.
+        assert got.source_item_id != want["source_item_id"], key
+        assert got.source_item_id == want["source_item_id"].replace(
+            "ALG-ORI-", "ALG-KS3-"), key
         assert got.source_type.value == want["source_type"], key
         assert got.license_name.value == want["license_name"], key
         assert got.adapted == bool(want["adapted"]), key
@@ -358,5 +365,5 @@ def test_topic_1_reference_row_is_a_known_divergence(docs):
     generated = next(r for r in build_all_source_provenance(docs)
                      if r.source_provenance_id == "SRC-NABLIX-T01-001")
     assert generated.source_name == "Topic 1 — What Is Algebra?"
-    assert generated.source_item_id == "ALG-ORI-01"
+    assert generated.source_item_id == "ALG-KS3-01"
     assert generated.review_status is ReviewStatus.APPROVED

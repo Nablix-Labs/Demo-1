@@ -90,9 +90,9 @@ def test_strip_preamble_leaves_other_text_alone():
 
 
 def test_a_listed_divergence_is_classified_as_known():
-    status, note = _classify("T01", "topic_id", "ALG-KS3-01", "ALG-ORI-01")
+    status, note = _classify("T02", "topic_id", "ALG-ORI-02", "ALG-KS3-02")
     assert status is Status.KNOWN_DIVERGENCE
-    assert "ALG-ORI" in note
+    assert "KS3" in note
 
 
 def test_a_real_difference_is_reported():
@@ -101,9 +101,20 @@ def test_a_real_difference_is_reported():
 
 
 def test_a_known_divergence_is_not_applied_to_a_different_topic():
-    """The entries are keyed by topic, so T02 must not inherit T01's excuse."""
-    status, _ = _classify("T02", "topic_id", "ALG-KS3-02", "ALG-ORI-02")
+    """The entries are keyed by topic, so T02 must not inherit T01's excuse
+    about learning_goal, which is listed for T01 and T03 only."""
+    status, _ = _classify("T02", "learning_goal", "one thing", "quite another")
     assert status is Status.DIFFERS
+
+
+def test_topic_1s_id_now_agrees_with_the_reference():
+    """It used to be a known divergence the other way round: the reference
+    said ALG-KS3-01, every document said ALG-ORI-NN, and the document won.
+    Manjusha settled it for KS3 on 21 September, so this now matches and the
+    entry has gone."""
+    status, _ = _classify("T01", "topic_id", "ALG-KS3-01", "ALG-KS3-01")
+    assert status is Status.MATCH
+    assert ("T01", "topic_id") not in KNOWN_DIVERGENCES
 
 
 # ──────────────────────────────────────────────────────────────────────

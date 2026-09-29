@@ -145,8 +145,13 @@ def trim_to_cap(
     cap: int,
     name: str,
     field_name: str,
+    key: Optional[str] = None,
 ) -> tuple[list, list[ValidationIssue]]:
-    """Keep the first `cap` entries and say what was set aside.
+    """Keep `cap` entries, preferring breadth of coverage, and say what went.
+
+    `key` names the field an entry is "about" -- the micro-skill for an error
+    type. Given one, the entries kept are those covering the most distinct
+    values of it. Without one, the first `cap` are kept.
 
     A six-topic run lost Topic 3's error types AND its misconceptions, which
     depend on them, because the model returned 11 errors against a ceiling of
@@ -163,13 +168,51 @@ def trim_to_cap(
         return entries, []
 
     surplus = len(entries) - cap
-    return entries[:cap], [
+    kept = _widest_coverage(entries, cap, key)
+    return kept, [
         ValidationIssue(
             IssueSeverity.WARNING, name, field_name,
             f"model returned {len(entries)}, more than the expected {cap}; "
-            f"kept the first {cap} and set aside {surplus}",
+            f"kept {cap} covering {len({_group_of(e, key) for e in kept})} "
+            f"{key or 'group'}(s) and set aside {surplus}",
         )
     ]
+
+
+def _group_of(entry, key: Optional[str]):
+    """What an entry is about, for coverage purposes."""
+    return entry.get(key) if isinstance(entry, dict) and key else None
+
+
+def _widest_coverage(entries: list, cap: int, key: Optional[str]) -> list:
+    """The `cap` entries covering the most distinct skills.
+
+    Keeping the first `cap` is arbitrary. On 19 September the model returned
+    10 error types against a cap of 8 and we kept whichever happened to come
+    first, which can drop the only error for a skill while keeping a second
+    one for a skill already covered. An error type's whole value is that it
+    lets a skill be diagnosed, so coverage is the thing to preserve.
+
+    One pass per skill, in the model's own order: take each skill's first
+    entry before any skill's second. Ties inside a skill keep the model's
+    ordering, because nothing here knows which of two errors on one skill is
+    the better written.
+    """
+    if not key:
+        return entries[:cap]
+
+    rounds: dict[object, list] = {}
+    for entry in entries:
+        rounds.setdefault(_group_of(entry, key), []).append(entry)
+
+    kept: list = []
+    depth = 0
+    while len(kept) < cap and any(len(v) > depth for v in rounds.values()):
+        for group in rounds.values():
+            if len(group) > depth and len(kept) < cap:
+                kept.append(group[depth])
+        depth += 1
+    return kept
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -527,7 +570,9 @@ def generate_error_types(
     entries = payload.get("error_types")
     trimmed: list[ValidationIssue] = []
     if isinstance(entries, list):
-        entries, trimmed = trim_to_cap(entries, MAX_ERRORS, name, "error_types")
+        entries, trimmed = trim_to_cap(
+            entries, MAX_ERRORS, name, "error_types",
+            key="micro_skill_position")
 
     issues, bad = _check_errors(name, entries, micro_skills)
     issues = trimmed + issues
