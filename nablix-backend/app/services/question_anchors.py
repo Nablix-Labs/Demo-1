@@ -15,8 +15,19 @@ from app.models.question_anchor import QuestionTextAnchor
 from app.models.student_model_session import AnswerSpec
 
 
-# One token per word, number, or standalone symbol, with its offsets kept.
-_TOKEN_RE = re.compile(r"[A-Za-z]+|\d+|[+\-−×÷*/=]")
+# One non-overlapping anchor per word, number, symbol, or visible mathematical
+# expression. Compound expressions stay intact so a tutor can point at `r²` or
+# `2(x + 1)` rather than a misleading fragment of either expression.
+_TOKEN_RE = re.compile(
+    r"\d+(?:\.\d+)?[A-Za-z](?:[⁰¹²³⁴⁵⁶⁷⁸⁹]+)?"
+    r"|[A-Za-z]+[⁰¹²³⁴⁵⁶⁷⁸⁹]+"
+    r"|[A-Za-z]+(?:[÷/][A-Za-z]+)+"
+    r"|\d+(?:\.\d+)?\([^()]*\)"
+    r"|[½¼¾⅓⅔⅛⅜⅝⅞]"
+    r"|[A-Za-z]+"
+    r"|\d+(?:\.\d+)?"
+    r"|[+\-−×÷*/=()]"
+)
 
 _CHANGING_LABEL = "changes"
 _FIXED_LABEL = "stays fixed"
