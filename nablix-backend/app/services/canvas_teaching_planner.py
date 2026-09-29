@@ -92,6 +92,33 @@ def plan_canvas_teaching(
     if teaching_mode in config.suppressed_main_canvas_modes:
         return None
 
+    deterministic_attention = _structural_attention_operations(
+        tutor_message_voice,
+        question_anchors,
+    )
+    if teaching_mode in config.visual_only_modes and deterministic_attention:
+        return CanvasTeachingPlan(
+            plan_id=f"{question_id}:{source_turn_id}:canvas-teaching",
+            question_id=question_id,
+            source_turn_id=source_turn_id,
+            tutor_turn_id=tutor_turn_id,
+            scene_revision=scene_revision,
+            mode="append",
+            teaching_mode=teaching_mode,
+            beats=[
+                CanvasTeachingBeat(
+                    beat_id="structural-attention",
+                    sequence=1,
+                    speech_anchor=CanvasSpeechAnchor(
+                        start_char=0,
+                        end_char=len(tutor_message_voice),
+                        text=tutor_message_voice,
+                    ),
+                    operations=deterministic_attention,
+                )
+            ],
+        )
+
     allowed_targets = [anchor.token_id for anchor in question_anchors]
     allowed_targets.extend(["ZONE:QUESTION", "ZONE:REASONING", "ZONE:TUTOR_SOLUTION"])
     current_evidence = _current_turn_evidence(tutor)
@@ -227,6 +254,11 @@ def plan_canvas_teaching(
     )
     if accepted is None:
         return None
+    accepted = _add_confirmed_source_highlights(
+        accepted,
+        confirmed_source_targets,
+        config.maximum_operations_per_beat,
+    )
     return CanvasTeachingPlan(
         plan_id=f"{question_id}:{source_turn_id}:canvas-teaching",
         question_id=question_id,
@@ -237,6 +269,127 @@ def plan_canvas_teaching(
         teaching_mode=teaching_mode,
         beats=accepted,
     )
+
+
+def _structural_attention_operations(
+    narration: str,
+    question_anchors: list[QuestionTextAnchor],
+) -> list[CanvasTeachingOperation]:
+    """Point to the exact structural notation named by a visual-only tutor turn."""
+
+    normalized_narration = narration.casefold()
+    targets: list[QuestionTextAnchor] = []
+    kind: Literal["CIRCLE", "HIGHLIGHT"] = "HIGHLIGHT"
+    if re.search(r"\b(?:raised|squared|exponent|power)\b", normalized_narration):
+        targets = [
+            anchor
+            for anchor in question_anchors
+            if re.search(r"[⁰¹²³⁴⁵⁶⁷⁸⁹]", anchor.text)
+        ]
+        kind = "CIRCLE"
+    elif re.search(r"\b(?:fraction|divid(?:e|ed|ing)|over)\b", normalized_narration):
+        targets = [
+            anchor
+            for anchor in question_anchors
+            if "/" in anchor.text or "÷" in anchor.text
+        ]
+    elif re.search(r"\b(?:parenthes|bracket|group)\b", normalized_narration):
+        targets = [
+            anchor
+            for anchor in question_anchors
+            if "(" in anchor.text or ")" in anchor.text
+        ]
+        kind = "CIRCLE"
+    else:
+        targets = [
+            anchor
+            for anchor in question_anchors
+            if _statement_names_anchor(narration, anchor.text)
+            and _is_math_bearing_question_token(anchor.text)
+        ]
+    return _attention_operations(
+        operation_id="focus-current-structure",
+        kind=kind,
+        target_ids=[anchor.token_id for anchor in targets],
+        color_role="AMBER",
+        persistence="PULSE",
+    )
+
+
+def _add_confirmed_source_highlights(
+    beats: list[CanvasTeachingBeat],
+    confirmed_source_targets: list[ConfirmedCanvasSource],
+    maximum_operations_per_beat: int,
+) -> list[CanvasTeachingBeat]:
+    """Make each demonstrated source visibly persist beside its reasoning note."""
+
+    updated = list(beats)
+    for source in confirmed_source_targets:
+        target_ids = source["target_ids"]
+        already_marked = {
+            target_id
+            for beat in updated
+            for operation in beat.operations
+            if operation.kind in {"HIGHLIGHT", "CIRCLE", "BOX", "CHECK"}
+            for target_id in operation.target_ids
+        }
+        missing_target_ids = [
+            target_id for target_id in target_ids if target_id not in already_marked
+        ]
+        kind, color_role = _confirmed_source_attention_style(source["evidence_ref"])
+        highlight_operations = _attention_operations(
+            operation_id=f"highlight-confirmed-source-{source['evidence_ref']}",
+            kind=kind,
+            target_ids=missing_target_ids,
+            color_role=color_role,
+            persistence="PERSIST",
+        )
+        if not highlight_operations:
+            continue
+        beat_index = next(
+            (
+                index
+                for index, beat in enumerate(updated)
+                if any(
+                    operation.evidence_ref == source["evidence_ref"]
+                    for operation in beat.operations
+                )
+                and len(beat.operations) + len(highlight_operations)
+                <= maximum_operations_per_beat
+            ),
+            None,
+        )
+        if beat_index is None:
+            continue
+        beat = updated[beat_index]
+        insert_at = next(
+            (
+                index
+                for index, operation in enumerate(beat.operations)
+                if operation.evidence_ref == source["evidence_ref"]
+            ),
+            len(beat.operations),
+        )
+        updated[beat_index] = beat.model_copy(
+            update={
+                "operations": [
+                    *beat.operations[:insert_at],
+                    *highlight_operations,
+                    *beat.operations[insert_at:],
+                ]
+            }
+        )
+    return updated
+
+
+def _confirmed_source_attention_style(
+    evidence_ref: str,
+) -> tuple[Literal["CIRCLE", "HIGHLIGHT"], Literal["NAVY", "AMBER", "TEAL"]]:
+    if "CHANGING_VALUE" in evidence_ref:
+        return "CIRCLE", "AMBER"
+    if "FIXED_VALUE" in evidence_ref:
+        return "HIGHLIGHT", "TEAL"
+    return "HIGHLIGHT", "NAVY"
 
 
 def _confirmed_source_targets(
@@ -345,10 +498,7 @@ def _confirmable_anchor_groups(
 
 
 def _is_confirmable_anchor(value: str) -> bool:
-    normalized = value.strip()
-    if re.search(r"\d", normalized) or re.search(r"[²³⁴⁵⁶⁷⁸⁹+\-−×÷/*=()]", normalized):
-        return True
-    return re.fullmatch(r"[A-Za-z]{1,3}", normalized) is not None
+    return _is_math_bearing_question_token(value)
 
 
 def _statement_names_anchor(statement: str, anchor_text: str) -> bool:
@@ -823,6 +973,27 @@ def _question_marks(
     ]
 
 
+def _attention_operations(
+    operation_id: str,
+    kind: Literal["CIRCLE", "HIGHLIGHT"],
+    target_ids: list[str],
+    color_role: Literal["NAVY", "AMBER", "TEAL"],
+    persistence: Literal["PULSE", "PERSIST"],
+) -> list[CanvasTeachingOperation]:
+    return [
+        CanvasTeachingOperation(
+            operation_id=f"{operation_id}-{index}",
+            kind=kind,
+            target_kind="QUESTION_ANCHOR",
+            target_ids=target_ids[index:index + 4],
+            zone="QUESTION",
+            persistence=persistence,
+            color_role=color_role,
+        )
+        for index in range(0, len(target_ids), 4)
+    ]
+
+
 def _pattern_write(
     operation_id: str,
     kind: Literal["WRITE_TEXT", "WRITE_MATH"],
@@ -1228,7 +1399,17 @@ def _is_math_bearing_question_token(token: str) -> bool:
         return True
     if re.fullmatch(r"[b-df-hj-np-tv-z]{2,}", normalized.casefold()):
         return True
-    return normalized in {"+", "−", "-", "×", "/", "=", "(", ")"}
+    if re.fullmatch(r"\d+(?:\.\d+)?[A-Za-z](?:[⁰¹²³⁴⁵⁶⁷⁸⁹]+)?", normalized):
+        return True
+    if re.fullmatch(r"[A-Za-z]+[⁰¹²³⁴⁵⁶⁷⁸⁹]+", normalized):
+        return True
+    if re.fullmatch(r"[A-Za-z]+(?:[÷/][A-Za-z]+)+", normalized):
+        return True
+    if re.fullmatch(r"\d+(?:\.\d+)?\([^()]*\)", normalized):
+        return True
+    if normalized in {"½", "¼", "¾", "⅓", "⅔", "⅛", "⅜", "⅝", "⅞"}:
+        return True
+    return normalized in {"+", "−", "-", "×", "÷", "/", "=", "(", ")"}
 
 
 def _normalized(value: str) -> str:
