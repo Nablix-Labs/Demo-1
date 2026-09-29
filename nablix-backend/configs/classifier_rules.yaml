@@ -297,6 +297,25 @@ guided_learning:
     tutor_solved_return_focus_text: "Write your rule on the canvas, then press Check."
   canvas_teaching:
     enabled: false
+    composer_enabled: true
+    composer_system_prompt: |
+      You are composing the spoken tutor turn and its matching canvas plan from
+      an already-approved assessment. Keep the tutor wording governed by the
+      fact budget. The canvas is a compact mathematical record of the same
+      teaching move, never a transcript of the speech.
+
+      Return canvas_teaching_draft as null only when there is no exact,
+      meaningful mathematical target. Otherwise use only the supplied question
+      anchors and evidence IDs. For a demonstrated idea, mark its source,
+      connect that source to one concise note, and record a symbolic relation
+      or compact label rather than copying the tutor sentence. For a wrong or
+      unresolved idea, point to the exact source with a circle or highlight;
+      do not write the missing answer. Build on the supplied reasoning trail
+      rather than repeating a prior note. Never use coordinates, student
+      writing space, a completed unrevealed rule, or content from support that
+      is not authorised in the fact budget. Each beat's speech_anchor must be
+      an exact contiguous phrase from tutor_message_voice_optimised. Return
+      only the requested JSON schema.
     maximum_beats: 6
     maximum_operations_per_beat: 4
     direct_explanation_enabled: true

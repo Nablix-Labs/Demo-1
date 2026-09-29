@@ -338,6 +338,73 @@ def test_planner_returns_a_grounded_attention_beat(monkeypatch) -> None:
     assert requested_models == [rules.guided_learning.model]
 
 
+def test_composed_draft_is_validated_without_a_second_openai_call(monkeypatch) -> None:
+    voice = "Yes, 3 is the changing value."
+    anchor = QuestionTextAnchor(
+        token_id="Q1:QTOKEN:1",
+        text="3",
+        char_start=0,
+        char_end=1,
+    )
+    tutor = _tutor().model_copy(
+        update={
+            "tutor_message": voice,
+            "tutor_message_voice": voice,
+            "tutor_canvas_actions": [
+                TutorCanvasAction(
+                    action_id="TURN-1:confirmed-changing",
+                    type="HIGHLIGHT",
+                    target_kind="QUESTION_ANCHOR",
+                    target_object_id=anchor.token_id,
+                    confirmed_component_id="CHANGING_VALUE",
+                    text=None,
+                    source_id=None,
+                    answer_reveal_allowed=False,
+                )
+            ],
+        }
+    )
+    draft = _confirmed_example_draft(
+        voice=voice,
+        target_ids=[anchor.token_id],
+        evidence_ref="CHANGING_VALUE",
+        expression="3 \\text{ changes}",
+    )
+
+    def unexpected_client(*args: object, **kwargs: object) -> FakeCanvasTeachingClient:
+        raise AssertionError("a composed draft must not make a second OpenAI call")
+
+    monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
+    monkeypatch.setattr(
+        canvas_teaching_planner,
+        "build_openai_ai_engine_client",
+        unexpected_client,
+    )
+
+    plan = canvas_teaching_planner.plan_composed_canvas_teaching(
+        question_id="Q1",
+        question="3 + 5 | 9 + 5 | 14 + 5",
+        source_turn_id="TURN-1",
+        tutor_turn_id="TUTOR-1",
+        scene_revision=3,
+        tutor_message_voice=voice,
+        tutor=tutor,
+        question_anchors=[anchor],
+        student_response="3 changes",
+        canonical_answer="n + 5",
+        active_support_level=None,
+        current_unresolved_component_id="FIXED_VALUE",
+        composed_draft=draft,
+    )
+
+    assert plan is not None
+    assert any(
+        operation.kind == "WRITE_MATH"
+        for beat in plan.beats
+        for operation in beat.operations
+    )
+
+
 def test_planner_skips_unclear_learner_input(monkeypatch) -> None:
     rules = _enabled_rules()
     contribution = StudentContribution(

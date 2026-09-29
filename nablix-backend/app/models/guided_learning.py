@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 from app.models.canvas_memory import CanvasEvent
+from app.models.canvas_teaching import CanvasTeachingPlanDraft
 from app.models.question_anchor import QuestionTextAnchor
 
 
@@ -517,6 +518,8 @@ class GuidedEvaluation(GuidedLearningModel):
     tutor_message_voice: str = Field(min_length=1)
     write_instruction: str | None = Field(default=None, max_length=160)
     canvas_intentions: list[CanvasPedagogyIntent] = Field(default_factory=list)
+    canvas_teaching_draft: CanvasTeachingPlanDraft | None = None
+    canvas_teaching_composer_used: StrictBool = False
 
 
 class FocusedComponentEvidence(GuidedLearningModel):

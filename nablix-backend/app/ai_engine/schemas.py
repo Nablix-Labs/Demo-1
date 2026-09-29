@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from app.models.adapters import ConversationAction
+from app.models.canvas_teaching import CanvasTeachingPlanDraft
 from app.models.guided_learning import (
     ActiveScaffold,
     ActiveTeachingObjective,
@@ -335,6 +336,8 @@ class TutorResponse(StrictSchema):
     write_instruction: str | None = Field(default=None, max_length=160)
     canvas_intentions: list[CanvasPedagogyIntent] = Field(default_factory=list)
     tutor_canvas_actions: list[TutorCanvasAction] = Field(default_factory=list)
+    canvas_teaching_draft: CanvasTeachingPlanDraft | None = None
+    canvas_teaching_composer_used: StrictBool = False
 
 
 class ExplainAgainResult(StrictSchema):

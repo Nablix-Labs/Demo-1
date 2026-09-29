@@ -300,12 +300,46 @@ class OpenAIGuidedWording(StrictSchema):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
+class OpenAIGuidedTeachingComposer(OpenAIGuidedWording):
+    canvas_plan_status: Literal[
+        "TEACHING_TRAIL", "VISUAL_CUE", "NO_ACTION_REQUIRED"
+    ]
+    canvas_board_goal: Literal[
+        "RECORD_CONFIRMED_IDEA",
+        "FOCUS_NEXT_SYMBOL",
+        "CONTRAST_MISCONCEPTION",
+        "EXTEND_REASONING_TRAIL",
+        "NO_ACTION_REQUIRED",
+    ]
+    canvas_teaching_draft: CanvasTeachingPlanDraft | None
+
+
 def guided_wording_schema(
     wording_context: dict[str, object],
 ) -> dict[str, object]:
     """Require replacement support when the validated turn needs it."""
 
     schema = OpenAIGuidedWording.model_json_schema()
+    if (
+        wording_context.get("assessment") == "INCORRECT"
+        and wording_context.get("support_relevance")
+        in {"UNMAPPED", "MISMATCHED"}
+    ):
+        schema["properties"]["generated_support_text"] = {
+            "title": "Generated Support Text",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 280,
+        }
+    return schema
+
+
+def guided_teaching_composer_schema(
+    wording_context: dict[str, object],
+) -> dict[str, object]:
+    """Keep composer support requirements aligned with the writer contract."""
+
+    schema = OpenAIGuidedTeachingComposer.model_json_schema()
     if (
         wording_context.get("assessment") == "INCORRECT"
         and wording_context.get("support_relevance")
@@ -685,6 +719,27 @@ class OpenAIAIEngineClient:
             raise AdapterError(
                 "openai_ai_engine",
                 f"invalid guided fact-budget wording: {error}",
+            ) from error
+
+    def write_guided_teaching_composer(
+        self,
+        system_prompt: str,
+        wording_context: dict[str, object],
+    ) -> OpenAIGuidedTeachingComposer:
+        """Compose one learner-safe tutor turn and its optional board plan."""
+
+        content = self._request_guided_json(
+            name="guided_teaching_composer",
+            schema=guided_teaching_composer_schema(wording_context),
+            system_prompt=system_prompt,
+            user_payload=wording_context,
+        )
+        try:
+            return OpenAIGuidedTeachingComposer.model_validate(content)
+        except ValidationError as error:
+            raise AdapterError(
+                "openai_ai_engine",
+                f"invalid guided teaching composer response: {error}",
             ) from error
 
     def adjudicate_component_evidence(

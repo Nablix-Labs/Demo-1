@@ -42,7 +42,7 @@ from app.ai_engine.schemas import (
     VisualCue,
 )
 from app.core.config import Settings, get_settings
-from app.services.question_anchors import plan_question_anchors
+from app.services.question_anchors import plan_question_anchors, question_text_tokens
 from app.core.exceptions import AdapterError
 from app.core.logger import logger
 from app.models.adapters import (
@@ -4338,7 +4338,12 @@ def write_redacted_response_aware_message(
     contribution = evaluation.contribution
     if contribution is None:
         raise AdapterError("openai_ai_engine", "Response-aware wording requires a validated contribution.")
-    writer = openai_client.write_guided_fact_budget_message
+    canvas_config = rules.guided_learning.canvas_teaching
+    composer_enabled = (
+        canvas_config.enabled
+        and canvas_config.composer_enabled
+        and request.question_id is not None
+    )
     context = {
         "question": request.question,
         "student_response": current_learner_response(request),
@@ -4369,6 +4374,24 @@ def write_redacted_response_aware_message(
         "canvas_submission_required": request.canvas_submission_required,
         "required_learner_action": required_response_aware_learner_action(evaluation),
     }
+    if composer_enabled:
+        composer_anchors = question_text_tokens(request.question_id, request.question)
+        context["canvas_context"] = {
+            "question_id": request.question_id,
+            "allowed_question_anchors": [
+                {"id": anchor.token_id, "text": anchor.text}
+                for anchor in composer_anchors
+            ],
+            "allowed_target_ids": [
+                *[anchor.token_id for anchor in composer_anchors],
+                "ZONE:QUESTION",
+                "ZONE:REASONING",
+                "ZONE:TUTOR_SOLUTION",
+            ],
+            "current_turn_evidence_ids": evaluation.newly_confirmed_concept_ids,
+            "maximum_beats": canvas_config.maximum_beats,
+            "maximum_operations_per_beat": canvas_config.maximum_operations_per_beat,
+        }
     explained_topic = (
         contribution.identified_difficulty or contribution.learner_question
         if contribution.kind in {"EXPLANATION_REQUEST", "EXPRESSED_DIFFICULTY"}
@@ -4379,10 +4402,35 @@ def write_redacted_response_aware_message(
         "explained_idea": explained_topic,
     })
     for attempt in range(rules.guided_learning.production_boundary_writer_maximum_retries + 1):
-        message = writer(
-            system_prompt=rules.guided_learning.response_aware_writer_system_prompt,
-            wording_context=context,
-        )
+        composer_used = False
+        if composer_enabled:
+            try:
+                message = openai_client.write_guided_teaching_composer(
+                    system_prompt=(
+                        rules.guided_learning.response_aware_writer_system_prompt
+                        + "\n\n"
+                        + canvas_config.composer_system_prompt
+                    ),
+                    wording_context=context,
+                )
+                composer_used = True
+            except AdapterError as error:
+                logger.warning(
+                    "guided_teaching_composer_not_used",
+                    extra={
+                        "question_id": request.question_id,
+                        "reason": error.detail,
+                    },
+                )
+                message = openai_client.write_guided_fact_budget_message(
+                    system_prompt=rules.guided_learning.response_aware_writer_system_prompt,
+                    wording_context=context,
+                )
+        else:
+            message = openai_client.write_guided_fact_budget_message(
+                system_prompt=rules.guided_learning.response_aware_writer_system_prompt,
+                wording_context=context,
+            )
         replacement_required = (
             contribution.assessment == "INCORRECT"
             and contribution.support_relevance in {"UNMAPPED", "MISMATCHED"}
@@ -4401,6 +4449,10 @@ def write_redacted_response_aware_message(
             "contribution": rewritten_contribution,
             "tutor_message": message.tutor_message,
             "tutor_message_voice": message.tutor_message_voice_optimised,
+            "canvas_teaching_draft": (
+                message.canvas_teaching_draft if composer_used else None
+            ),
+            "canvas_teaching_composer_used": composer_used,
         })
         writer_action = getattr(message, "learner_action", None)
         required_action = required_response_aware_learner_action(rewritten)
@@ -7240,6 +7292,8 @@ def build_guided_tutor_response(
             evaluation.tutor_message,
         ),
         canvas_intentions=evaluation.canvas_intentions,
+        canvas_teaching_draft=evaluation.canvas_teaching_draft,
+        canvas_teaching_composer_used=evaluation.canvas_teaching_composer_used,
     )
     if contribution is not None and response.guided_teaching_state is not None:
         previous = request.guided_teaching_state
