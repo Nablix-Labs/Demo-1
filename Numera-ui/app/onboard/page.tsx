@@ -3,17 +3,24 @@
 /**
  * Registration (§5) — creates the student identity, then holds access until
  * guardian consent. Step 1 picks an authentication method (SSO / email OTP /
- * password); step 2 captures the student profile. On finish the account is set
- * to consent_pending and the guardian is sent to /consent.
+ * phone OTP / password); step 2 verifies the code when the server sent one;
+ * step 3 captures the student profile. On finish the account is
+ * consent_pending and the guardian is sent to /consent.
  *
- * Mock-wired: no real auth provider — SSO/OTP "succeed" immediately. Identity is
- * modelled in useAuthStore; name/age are mirrored to the main store for the
+ * Every step goes through lib/auth/registrationApi, which runs on a local mock
+ * until the backend endpoints exist (docs/ONBOARDING-API.md). The email-OTP
+ * option used to skip straight to the profile without ever asking for a code.
+ * Identity is mirrored in useAuthStore; name/age go to the main store for the
  * existing greeting + Key Stage logic.
  */
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, Mail, Phone, KeyRound, ShieldCheck } from 'lucide-react';
+import {
+  startRegistration as apiStart, verifyRegistrationOtp, resendRegistrationOtp, submitStudentProfile,
+  RegistrationError,
+} from '@/lib/auth/registrationApi';
 import AuthShell from '@/components/auth/AuthShell';
 import { useAuthStore, type SsoProvider, type AuthMethod } from '@/store/useAuthStore';
 import { useNumeraStore } from '@/store/useNumeraStore';
@@ -41,18 +48,48 @@ export default function OnboardPage() {
   const router = useRouter();
   const startRegistration = useAuthStore((s) => s.startRegistration);
   const setStudentProfile = useAuthStore((s) => s.setStudentProfile);
+  const setRegistrationIds = useAuthStore((s) => s.setRegistrationIds);
+  const setStudentCode = useAuthStore((s) => s.setStudentCode);
   const setStudentName = useNumeraStore((s) => s.setStudentName);
   const setStudentAge = useNumeraStore((s) => s.setStudentAge);
 
-  const [step, setStep] = useState<1 | 2>(1);
+  // 1 method · 2 verify code · 3 student profile
+  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [otp, setOtp] = useState('');
+  const [sentTo, setSentTo] = useState<string | null>(null);
+  const [resent, setResent] = useState(false);
 
   // Nablix Assist's OPEN_PREVIOUS_ONBOARDING_STEP action asks this page to go
   // back a step (component state it can't reach directly).
   useEffect(() => {
-    const back = () => setStep(1);
+    const back = () => { setError(null); setStep(1); };
     window.addEventListener('nablix:onboard-back', back);
     return () => window.removeEventListener('nablix:onboard-back', back);
   }, []);
+
+  // Back from an SSO provider: the server returns here with the sign-up's id,
+  // and the identity is already verified, so it goes straight to the profile.
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get('registration_id');
+    if (!id) return;
+    setRegistrationIds({ registrationId: id });
+    setStep(3);
+  }, [setRegistrationIds]);
+
+  /** Runs one server step, showing its error on this page instead of throwing. */
+  const run = async (fn: () => Promise<void>) => {
+    setError(null);
+    setBusy(true);
+    try {
+      await fn();
+    } catch (e) {
+      setError(e instanceof RegistrationError ? e.message : 'Something went wrong. Please try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   // Step 1 — auth method
   const [authMode, setAuthMode] = useState<'email_otp' | 'phone_otp' | 'password'>('email_otp');
@@ -66,16 +103,43 @@ export default function OnboardPage() {
   const [grade, setGrade] = useState(GRADES[2]);
   const [mode, setMode] = useState<'voice' | 'balanced' | 'text'>('balanced');
 
-  const chooseSso = (ssoProvider: SsoProvider) => {
+  const chooseSso = (ssoProvider: SsoProvider) => run(async () => {
+    const res = await apiStart({ method: 'sso', sso_provider: ssoProvider });
     startRegistration('sso', { ssoProvider });
-    setStep(2);
-  };
+    setRegistrationIds({ registrationId: res.registration_id, guardianId: null });
+    if (res.redirect_url) { window.location.assign(res.redirect_url); return; }
+    setStep(3);
+  });
 
-  const continueEmail = () => {
+  const continueEmail = () => run(async () => {
     const method: AuthMethod = authMode;
+    const res = await apiStart(
+      method === 'phone_otp'
+        ? { method, phone: phone.trim() }
+        : { method, email: email.trim(), ...(method === 'password' ? { password } : {}) },
+    );
     startRegistration(method, { email: email.trim(), phone: phone.trim() });
-    setStep(2);
-  };
+    setRegistrationIds({ registrationId: res.registration_id, guardianId: null });
+    setSentTo(res.otp_sent_to);
+    setOtp('');
+    setResent(false);
+    setStep(res.otp_required ? 2 : 3);
+  });
+
+  const verifyCode = () => run(async () => {
+    const id = useAuthStore.getState().registrationId;
+    if (!id) { setStep(1); throw new RegistrationError(410, 'REGISTRATION_EXPIRED', 'This sign-up has timed out. Please start again.'); }
+    await verifyRegistrationOtp(id, otp);
+    setStep(3);
+  });
+
+  const resendCode = () => run(async () => {
+    const id = useAuthStore.getState().registrationId;
+    if (!id) return;
+    const res = await resendRegistrationOtp(id);
+    if (res.otp_sent_to) setSentTo(res.otp_sent_to);
+    setResent(true);
+  });
 
   const emailValid = /.+@.+\..+/.test(email.trim());
   const phoneValid = phone.replace(/\D/g, '').length >= 7;
@@ -84,16 +148,32 @@ export default function OnboardPage() {
       ? phoneValid
       : emailValid && (authMode === 'email_otp' || password.length >= 6);
 
-  const finish = () => {
+  const finish = () => run(async () => {
+    const id = useAuthStore.getState().registrationId;
+    if (!id) { setStep(1); throw new RegistrationError(410, 'REGISTRATION_EXPIRED', 'This sign-up has timed out. Please start again.'); }
+    const res = await submitStudentProfile({
+      registration_id: id,
+      display_name: name.trim(),
+      age_band: ageBand,
+      grade_band: grade,
+      preferred_mode: mode,
+    });
+    if (res.student_code) setStudentCode(res.student_code);
     const age = AGE_BANDS.find((a) => a.band === ageBand)?.age ?? 15;
     setStudentProfile({ name: name.trim(), ageBand, gradeBand: grade, preferredMode: mode });
     setStudentName(name.trim());
     setStudentAge(age);
     router.push('/consent');
-  };
+  });
+
+  const errorBox = error && (
+    <p role="alert" className="mt-4 rounded-[10px] border border-action-orange/25 bg-action-orange/10 px-3 py-2 text-[12.5px] text-action-orange">
+      {error}
+    </p>
+  );
 
   return (
-    <AuthShell step={step} totalSteps={2}>
+    <AuthShell step={step} totalSteps={3}>
       {step === 1 ? (
         <>
           <h1 className="text-2xl font-semibold text-ink leading-tight">Create your account</h1>
@@ -109,6 +189,7 @@ export default function OnboardPage() {
                 <button
                   key={p.id}
                   onClick={() => chooseSso(p.id)}
+                  disabled={busy}
                   className="flex items-center justify-center gap-2 rounded-btn border border-muted-gray bg-white px-4 py-3 text-[13px] font-semibold text-ink hover:bg-reading-surface hover:border-slate-blue hover:shadow-sm transition-all"
                 >
                   <Logo size={17} />
@@ -188,8 +269,10 @@ export default function OnboardPage() {
             />
           )}
 
-          <button onClick={continueEmail} disabled={!step1Ready} data-support-id="registration-continue" className="btn btn-primary w-full mt-5">
-            Continue <ArrowRight size={16} />
+          {errorBox}
+
+          <button onClick={continueEmail} disabled={!step1Ready || busy} data-support-id="registration-continue" className="btn btn-primary w-full mt-5">
+            {busy ? 'Please wait…' : <>Continue <ArrowRight size={16} /></>}
           </button>
 
           <p className="text-[12px] text-slate-blue text-center mt-4">
@@ -197,6 +280,43 @@ export default function OnboardPage() {
             <button onClick={() => router.push('/login')} className="font-semibold text-learning-blue hover:underline">
               Log in
             </button>
+          </p>
+        </>
+      ) : step === 2 ? (
+        <>
+          <h1 className="text-2xl font-semibold text-ink leading-tight">Enter your code</h1>
+          <p className="text-[13px] text-slate-blue mt-1.5 leading-relaxed">
+            We sent a 6-digit code{sentTo ? <> to <span className="font-semibold text-ink">{sentTo}</span></> : ''}.
+          </p>
+
+          <input
+            value={otp}
+            onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            data-support-id="registration-otp"
+            placeholder="000000"
+            className="mt-6 w-full rounded-btn border border-muted-gray bg-white px-4 py-3 text-center text-[22px] tracking-[0.5em] font-semibold text-ink placeholder:text-muted-gray focus:border-ai-cyan focus:outline-none transition-colors"
+          />
+
+          {errorBox}
+
+          <button onClick={verifyCode} disabled={otp.length !== 6 || busy} className="btn btn-primary w-full mt-5">
+            {busy ? 'Checking…' : <>Verify <ShieldCheck size={16} /></>}
+          </button>
+          <button onClick={() => { setError(null); setStep(1); }} data-support-id="registration-back" className="btn btn-secondary w-full mt-2.5">
+            Back
+          </button>
+
+          <p className="text-[12px] text-slate-blue text-center mt-4">
+            {resent ? 'A new code is on its way.' : (
+              <>
+                Didn&rsquo;t get the code?{' '}
+                <button onClick={resendCode} disabled={busy} data-support-id="resend-verification" className="font-semibold text-learning-blue hover:underline">
+                  Resend code
+                </button>
+              </>
+            )}
           </p>
         </>
       ) : (
@@ -260,10 +380,12 @@ export default function OnboardPage() {
             </div>
           </div>
 
-          <button onClick={finish} disabled={name.trim().length === 0} data-support-id="registration-continue" className="btn btn-primary w-full mt-6">
-            Continue to guardian consent <ArrowRight size={16} />
+          {errorBox}
+
+          <button onClick={finish} disabled={name.trim().length === 0 || busy} data-support-id="registration-continue" className="btn btn-primary w-full mt-6">
+            {busy ? 'Saving…' : <>Continue to guardian consent <ArrowRight size={16} /></>}
           </button>
-          <button onClick={() => setStep(1)} data-support-id="registration-back" className="btn btn-secondary w-full mt-2.5">
+          <button onClick={() => { setError(null); setStep(1); }} data-support-id="registration-back" className="btn btn-secondary w-full mt-2.5">
             Back
           </button>
         </>

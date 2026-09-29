@@ -124,8 +124,13 @@ interface AuthState {
   // Workbook student code (ST###) for tutoring calls. Null until the backend
   // returns it on login — see LoginResponse.student_code.
   studentCode: string | null;
+  // Server ids for an in-progress sign-up (lib/auth/registrationApi), carried
+  // from /onboard to /consent. Null once the account is active.
+  registrationId: string | null;
+  guardianId: string | null;
 
   // Registration
+  setRegistrationIds: (ids: { registrationId?: string | null; guardianId?: string | null }) => void;
   startRegistration: (method: AuthMethod, opts?: { email?: string; phone?: string; ssoProvider?: SsoProvider }) => void;
   setStudentProfile: (p: Partial<StudentProfile>) => void;
   setGuardian: (g: Partial<Guardian>) => void;
@@ -166,6 +171,8 @@ const initial = {
   accessToken: null as string | null,
   tier: null as string | null,
   studentCode: null as string | null,
+  registrationId: null as string | null,
+  guardianId: null as string | null,
 };
 
 export const useAuthStore = create<AuthState>()(
@@ -182,6 +189,11 @@ export const useAuthStore = create<AuthState>()(
           role: 'student',
           accountStatus: 'consent_pending',
         }),
+
+      setRegistrationIds: (ids) => set((s) => ({
+        registrationId: ids.registrationId !== undefined ? ids.registrationId : s.registrationId,
+        guardianId: ids.guardianId !== undefined ? ids.guardianId : s.guardianId,
+      })),
 
       setStudentProfile: (p) => set((s) => ({ student: { ...s.student, ...p } })),
       setGuardian: (g) => set((s) => ({ guardian: { ...s.guardian, ...g } })),
@@ -264,6 +276,8 @@ export const useAuthStore = create<AuthState>()(
           accessToken: null,
           tier: null,
           studentCode: null,
+          registrationId: null,
+          guardianId: null,
           role: null,
           email: '',
           phone: '',
