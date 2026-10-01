@@ -5249,11 +5249,12 @@ def guided_message_reveals_active_roles(
     changing_role_missing = bool(missing & changing_component_ids)
     fixed_role_missing = bool(missing & fixed_component_ids)
     checks: list[str] = []
-    role_components_are_described = bool(changing_component_ids or fixed_component_ids)
+    changing_role_is_described = bool(changing_component_ids)
+    fixed_role_is_described = bool(fixed_component_ids)
     role_objective_is_explicit = bool(missing.intersection({"CHANGING_VALUE", "FIXED_VALUE"}))
     if (
         changing_role_missing
-        or (not role_components_are_described and (
+        or (not changing_role_is_described and (
             not role_objective_is_explicit or "CHANGING_VALUE" in missing
         ))
     ):
@@ -5263,7 +5264,7 @@ def guided_message_reveals_active_roles(
         ))
     if (
         fixed_role_missing
-        or (not role_components_are_described and (
+        or (not fixed_role_is_described and (
             not role_objective_is_explicit or "FIXED_VALUE" in missing
         ))
     ):

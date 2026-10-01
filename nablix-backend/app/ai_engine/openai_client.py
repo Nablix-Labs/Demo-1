@@ -385,19 +385,6 @@ def canvas_operation_output_schema(
     def variant() -> dict[str, object]:
         return deepcopy(operation_schema)
 
-    write = variant()
-    write_properties = write["properties"]
-    assert isinstance(write_properties, dict)
-    write_properties.update({
-        "kind": {"type": "string", "enum": ["WRITE_TEXT", "WRITE_MATH"]},
-        "target_kind": {"type": "string", "enum": ["CANVAS_ZONE"]},
-        "target_ids": {"type": "array", "const": ["ZONE:REASONING"]},
-        "zone": {"type": "string", "enum": ["REASONING"]},
-        "persistence": {"type": "string", "enum": ["PERSIST"]},
-        "evidence_ref": {"type": "string", "enum": evidence_ids},
-        "color_role": {"type": "string", "enum": ["NAVY"]},
-    })
-
     attention = variant()
     attention_properties = attention["properties"]
     assert isinstance(attention_properties, dict)
@@ -415,6 +402,22 @@ def canvas_operation_output_schema(
         "text": {"type": "null"},
         "latex": {"type": "null"},
         "scene_slot": {"type": "null"},
+    })
+
+    if not evidence_ids:
+        return {"anyOf": [attention]}
+
+    write = variant()
+    write_properties = write["properties"]
+    assert isinstance(write_properties, dict)
+    write_properties.update({
+        "kind": {"type": "string", "enum": ["WRITE_TEXT", "WRITE_MATH"]},
+        "target_kind": {"type": "string", "enum": ["CANVAS_ZONE"]},
+        "target_ids": {"type": "array", "const": ["ZONE:REASONING"]},
+        "zone": {"type": "string", "enum": ["REASONING"]},
+        "persistence": {"type": "string", "enum": ["PERSIST"]},
+        "evidence_ref": {"type": "string", "enum": evidence_ids},
+        "color_role": {"type": "string", "enum": ["NAVY"]},
     })
 
     connector = variant()

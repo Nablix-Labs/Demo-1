@@ -1608,6 +1608,41 @@ def test_production_boundary_allows_a_confirmed_generic_fixed_role() -> None:
     )
 
 
+def test_production_boundary_rejects_missing_changing_role_when_only_fixed_role_is_described() -> None:
+    request = _topic1_request("7 stays fixed")
+    rubric = GeneratedQuestionRubric(
+        question_id="Q-T01-002",
+        required_concepts=[
+            GeneratedConcept(
+                concept_id="REQUIRED_COMPONENT_1",
+                description="Identifies the starting value.",
+                required=True,
+            ),
+            GeneratedConcept(
+                concept_id="REQUIRED_COMPONENT_2",
+                description="Identifies 7 as staying fixed.",
+                required=True,
+            ),
+        ],
+        completion_rule="ALL_REQUIRED_CONCEPTS",
+        cache_key="partially-described-role-components",
+        prompt_version="test",
+    )
+    objective = ActiveTeachingObjective(
+        objective_type="EXPLAIN_CONCEPT",
+        target_concept_ids=["REQUIRED_COMPONENT_1"],
+        confirmed_concept_ids=["REQUIRED_COMPONENT_2"],
+        missing_concept_ids=["REQUIRED_COMPONENT_1"],
+    )
+
+    assert classifier.guided_message_reveals_active_roles(
+        "The value m changes.",
+        request,
+        rubric,
+        objective,
+    )
+
+
 def test_production_boundary_discards_evaluator_generated_prose() -> None:
     contribution = StudentContribution(
         kind="MATHEMATICAL_ATTEMPT",
@@ -1940,6 +1975,32 @@ def test_composer_schema_limits_canvas_targets_and_evidence_to_turn_context() ->
         "items": {"type": "string", "enum": ["Q-T01-006:QTOKEN:7"]},
     }
     assert draft == {"$ref": "#/$defs/CanvasTeachingPlanDraft"}
+
+
+def test_composer_schema_has_only_visual_operations_without_turn_evidence() -> None:
+    schema = openai_client.guided_teaching_composer_schema(
+        {
+            "canvas_context": {
+                "allowed_target_ids": ["Q-T01-006:QTOKEN:7", "ZONE:REASONING"],
+                "authorized_evidence_ids": [],
+                "require_guided_evidence_ink": False,
+            }
+        }
+    )
+    operation_schema = cast(
+        dict[str, object],
+        cast(dict[str, object], schema["$defs"])["CanvasTeachingOperation"],
+    )
+    operation_variants = cast(list[object], operation_schema["anyOf"])
+    attention_properties = cast(
+        dict[str, object], cast(dict[str, object], operation_variants[0])["properties"]
+    )
+
+    assert len(operation_variants) == 1
+    assert attention_properties["kind"] == {
+        "type": "string",
+        "enum": ["FOCUS", "HIGHLIGHT", "CIRCLE", "BOX", "CHECK"],
+    }
 
 
 def test_response_aware_writer_prompt_adapts_and_requires_a_concrete_next_move() -> None:
