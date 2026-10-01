@@ -55,6 +55,7 @@ from app.models.guided_learning import (
     GuidedCanvasEvidence,
     StudentContribution,
 )
+from app.models.canvas_teaching import CanvasTeachingPlanDraft
 
 
 client = TestClient(app)
@@ -1685,6 +1686,109 @@ def test_production_boundary_rewrites_an_unsafe_writer_reply_once() -> None:
         {"role": "assistant", "content": "What changes in the examples?"},
         {"role": "user", "content": "I am not sure where to start."},
     ]
+
+
+def test_response_aware_composer_preserves_writer_contract_and_attaches_draft() -> None:
+    class Composer:
+        def __init__(self) -> None:
+            self.context: dict[str, object] | None = None
+
+        def write_guided_teaching_composer(
+            self,
+            **kwargs: object,
+        ) -> openai_client.OpenAIGuidedTeachingComposer:
+            self.context = cast(dict[str, object], kwargs["wording_context"])
+            message = "Compare the first number in each visible example. What changes?"
+            return openai_client.OpenAIGuidedTeachingComposer(
+                tutor_message=message,
+                tutor_message_voice_optimised=message,
+                learner_action="CONTINUE",
+                generated_support_text=(
+                    "Compare the first number in each visible example."
+                ),
+                generated_visual_rows=None,
+                confidence=0.9,
+                canvas_plan_status="VISUAL_CUE",
+                canvas_board_goal="FOCUS_NEXT_SYMBOL",
+                canvas_teaching_draft=CanvasTeachingPlanDraft.model_validate(
+                    {
+                        "beats": [
+                            {
+                                "beat_id": "focus-first-number",
+                                "sequence": 1,
+                                "speech_anchor": {
+                                    "start_char": 0,
+                                    "end_char": 42,
+                                    "text": "Compare the first number in each visible",
+                                },
+                                "operations": [
+                                    {
+                                        "operation_id": "focus-first-number",
+                                        "kind": "FOCUS",
+                                        "target_kind": "QUESTION_ANCHOR",
+                                        "target_ids": ["Q-T01-001:QTOKEN:1"],
+                                        "zone": "QUESTION",
+                                        "persistence": "PULSE",
+                                        "color_role": "AMBER",
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                ),
+            )
+
+    request = _plain_general_rule_request("n + 6")
+    rubric = _plain_general_rule_rubric()
+    objective = classifier.initial_guided_objective(rubric)
+    contribution = StudentContribution(
+        kind="MATHEMATICAL_ATTEMPT",
+        assessment="INCORRECT",
+        error_category="EXPRESSION_STRUCTURE",
+        error_description="The fixed amount does not match the examples.",
+        identified_difficulty=None,
+        learner_question=None,
+        explained_idea=None,
+        generated_support_text=None,
+        generated_visual_rows=None,
+        support_relevance="UNMAPPED",
+    )
+    evaluation = GuidedEvaluation(
+        contribution=contribution,
+        student_state="WRONG",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=["GENERAL_RULE"],
+        missing_concept_ids=["GENERAL_RULE"],
+        selected_error_code=None,
+        confidence=0.9,
+        next_objective=objective,
+        tutor_message="unused",
+        tutor_message_voice="unused",
+    )
+    rules = load_classifier_rules()
+    canvas_teaching = rules.guided_learning.canvas_teaching.model_copy(
+        update={"enabled": True, "composer_enabled": True}
+    )
+    guided_learning = rules.guided_learning.model_copy(
+        update={"canvas_teaching": canvas_teaching}
+    )
+    composer = Composer()
+
+    rewritten = classifier.write_redacted_response_aware_message(
+        evaluation,
+        request,
+        rubric,
+        objective,
+        cast(openai_client.OpenAIAIEngineClient, composer),
+        rules.model_copy(update={"guided_learning": guided_learning}),
+    )
+
+    assert rewritten.tutor_message.startswith("Compare the first number")
+    assert rewritten.canvas_teaching_composer_used is True
+    assert rewritten.canvas_teaching_draft is not None
+    assert composer.context is not None
+    assert "canvas_context" in composer.context
 
 
 def test_response_aware_writer_prompt_adapts_and_requires_a_concrete_next_move() -> None:

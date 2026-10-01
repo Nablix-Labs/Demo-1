@@ -61,6 +61,77 @@ def plan_canvas_teaching(
 ) -> CanvasTeachingPlan | None:
     """Create a visual-only Guided Practice plan from an already-final tutor turn."""
 
+    return _plan_canvas_teaching(
+        question_id=question_id,
+        question=question,
+        source_turn_id=source_turn_id,
+        tutor_turn_id=tutor_turn_id,
+        scene_revision=scene_revision,
+        tutor_message_voice=tutor_message_voice,
+        tutor=tutor,
+        question_anchors=question_anchors,
+        student_response=student_response,
+        canonical_answer=canonical_answer,
+        active_support_level=active_support_level,
+        current_unresolved_component_id=current_unresolved_component_id,
+        composed_draft=None,
+        allow_model_generation=True,
+    )
+
+
+def plan_composed_canvas_teaching(
+    question_id: str | None,
+    question: str | None,
+    source_turn_id: str | None,
+    tutor_turn_id: str | None,
+    scene_revision: int,
+    tutor_message_voice: str,
+    tutor: TutorResult | None,
+    question_anchors: list[QuestionTextAnchor],
+    student_response: str,
+    canonical_answer: str | None,
+    active_support_level: str | None,
+    current_unresolved_component_id: str | None,
+    composed_draft: CanvasTeachingPlanDraft | None,
+) -> CanvasTeachingPlan | None:
+    """Validate a board draft composed with the learner-safe tutor response."""
+
+    return _plan_canvas_teaching(
+        question_id=question_id,
+        question=question,
+        source_turn_id=source_turn_id,
+        tutor_turn_id=tutor_turn_id,
+        scene_revision=scene_revision,
+        tutor_message_voice=tutor_message_voice,
+        tutor=tutor,
+        question_anchors=question_anchors,
+        student_response=student_response,
+        canonical_answer=canonical_answer,
+        active_support_level=active_support_level,
+        current_unresolved_component_id=current_unresolved_component_id,
+        composed_draft=composed_draft,
+        allow_model_generation=False,
+    )
+
+
+def _plan_canvas_teaching(
+    question_id: str | None,
+    question: str | None,
+    source_turn_id: str | None,
+    tutor_turn_id: str | None,
+    scene_revision: int,
+    tutor_message_voice: str,
+    tutor: TutorResult | None,
+    question_anchors: list[QuestionTextAnchor],
+    student_response: str,
+    canonical_answer: str | None,
+    active_support_level: str | None,
+    current_unresolved_component_id: str | None,
+    composed_draft: CanvasTeachingPlanDraft | None,
+    allow_model_generation: bool,
+) -> CanvasTeachingPlan | None:
+    """Create or validate a visual-only Guided Practice plan."""
+
     rules = load_classifier_rules()
     config = rules.guided_learning.canvas_teaching
     if not config.enabled or question_id is None or question is None or tutor is None:
@@ -91,6 +162,33 @@ def plan_canvas_teaching(
     teaching_mode = _teaching_mode(tutor, active_support_level, config)
     if teaching_mode in config.suppressed_main_canvas_modes:
         return None
+
+    deterministic_attention = _structural_attention_operations(
+        tutor_message_voice,
+        question_anchors,
+    )
+    if teaching_mode in config.visual_only_modes and deterministic_attention:
+        return CanvasTeachingPlan(
+            plan_id=f"{question_id}:{source_turn_id}:canvas-teaching",
+            question_id=question_id,
+            source_turn_id=source_turn_id,
+            tutor_turn_id=tutor_turn_id,
+            scene_revision=scene_revision,
+            mode="append",
+            teaching_mode=teaching_mode,
+            beats=[
+                CanvasTeachingBeat(
+                    beat_id="structural-attention",
+                    sequence=1,
+                    speech_anchor=CanvasSpeechAnchor(
+                        start_char=0,
+                        end_char=len(tutor_message_voice),
+                        text=tutor_message_voice,
+                    ),
+                    operations=deterministic_attention,
+                )
+            ],
+        )
 
     allowed_targets = [anchor.token_id for anchor in question_anchors]
     allowed_targets.extend(["ZONE:QUESTION", "ZONE:REASONING", "ZONE:TUTOR_SOLUTION"])
@@ -135,74 +233,83 @@ def plan_canvas_teaching(
         and teaching_mode == "GUIDED"
         and bool(authorized_evidence)
     )
-    guided_settings = get_settings().model_copy(
-        update={"openai_ai_engine_model": rules.guided_learning.model}
-    )
-    client = build_openai_ai_engine_client(guided_settings)
-    if client is None:
-        logger.warning(
+    if composed_draft is None and not allow_model_generation:
+        logger.info(
             "canvas_teaching_plan_not_generated",
-            extra={"question_id": question_id, "reason": "openai_client_unavailable"},
+            extra={"question_id": question_id, "reason": "composer_no_action"},
         )
         return None
-    try:
-        draft = client.plan_canvas_teaching(
-            system_prompt=config.system_prompt,
-            context={
-                "question_id": question_id,
-                "question": question,
-                "tutor_message_voice": tutor_message_voice,
-                "student_response": student_response,
-                "teaching_mode": teaching_mode,
-                "active_support_level": active_support_level,
-                "current_unresolved_component_id": current_unresolved_component_id,
-                "allowed_target_ids": allowed_targets,
-                "allowed_scene_slots": sorted(
-                    {
-                        *config.guided_evidence_scene_slots.values(),
-                        *{
-                            f"{config.generic_confirmation_scene_slot}:{evidence_id}"
-                            for evidence_id in (
-                                authorized_evidence
-                                | {config.direct_explanation_evidence_ref}
-                            )
-                        },
-                    }
-                ),
-                "allowed_question_anchors": [
-                    {"id": anchor.token_id, "text": anchor.text}
-                    for anchor in question_anchors
-                ],
-                "confirmed_source_targets": confirmed_source_targets,
-                "current_turn_evidence_ids": sorted(current_evidence),
-                "authorized_evidence_ids": sorted(authorized_evidence),
-                "require_guided_evidence_ink": require_guided_evidence_ink,
-                "direct_explanation_authorized": direct_explanation,
-                "direct_explanation_evidence_ref": config.direct_explanation_evidence_ref,
-                "direct_explanation_maximum_written_operations": config.direct_explanation_maximum_written_operations,
-                "tutor_solved_active": tutor_solved,
-                "tutor_solved_answer_authorized": answer_reveal,
-                "tutor_solved_actions": [
-                    action.model_dump()
-                    for action in tutor.tutor_canvas_actions
-                    if action.type == "TUTOR_SOLVED_STEP"
-                ],
-                "maximum_beats": config.maximum_beats,
-                "maximum_operations_per_beat": config.maximum_operations_per_beat,
-                "rules": {
-                    "write_only_confirmed_ideas": True,
-                    "support_pane_content_must_not_be_copied": True,
-                    "student_write_area_is_forbidden": True,
-                    "raw_coordinates_are_forbidden": True,
+    if composed_draft is None:
+        guided_settings = get_settings().model_copy(
+            update={"openai_ai_engine_model": rules.guided_learning.model}
+        )
+        client = build_openai_ai_engine_client(guided_settings)
+        if client is None:
+            logger.warning(
+                "canvas_teaching_plan_not_generated",
+                extra={"question_id": question_id, "reason": "openai_client_unavailable"},
+            )
+            return None
+        try:
+            draft = client.plan_canvas_teaching(
+                system_prompt=config.system_prompt,
+                context={
+                    "question_id": question_id,
+                    "question": question,
+                    "tutor_message_voice": tutor_message_voice,
+                    "student_response": student_response,
+                    "teaching_mode": teaching_mode,
+                    "active_support_level": active_support_level,
+                    "current_unresolved_component_id": current_unresolved_component_id,
+                    "allowed_target_ids": allowed_targets,
+                    "allowed_scene_slots": sorted(
+                        {
+                            *config.guided_evidence_scene_slots.values(),
+                            *{
+                                f"{config.generic_confirmation_scene_slot}:{evidence_id}"
+                                for evidence_id in (
+                                    authorized_evidence
+                                    | {config.direct_explanation_evidence_ref}
+                                )
+                            },
+                        }
+                    ),
+                    "allowed_question_anchors": [
+                        {"id": anchor.token_id, "text": anchor.text}
+                        for anchor in question_anchors
+                    ],
+                    "confirmed_source_targets": confirmed_source_targets,
+                    "current_turn_evidence_ids": sorted(current_evidence),
+                    "authorized_evidence_ids": sorted(authorized_evidence),
+                    "require_guided_evidence_ink": require_guided_evidence_ink,
+                    "direct_explanation_authorized": direct_explanation,
+                    "direct_explanation_evidence_ref": config.direct_explanation_evidence_ref,
+                    "direct_explanation_maximum_written_operations": config.direct_explanation_maximum_written_operations,
+                    "tutor_solved_active": tutor_solved,
+                    "tutor_solved_answer_authorized": answer_reveal,
+                    "tutor_solved_actions": [
+                        action.model_dump()
+                        for action in tutor.tutor_canvas_actions
+                        if action.type == "TUTOR_SOLVED_STEP"
+                    ],
+                    "maximum_beats": config.maximum_beats,
+                    "maximum_operations_per_beat": config.maximum_operations_per_beat,
+                    "rules": {
+                        "write_only_confirmed_ideas": True,
+                        "support_pane_content_must_not_be_copied": True,
+                        "student_write_area_is_forbidden": True,
+                        "raw_coordinates_are_forbidden": True,
+                    },
                 },
-            },
-        )
-    except AdapterError as error:
-        logger.warning(
-            "canvas_teaching_plan_not_generated",
-            extra={"question_id": question_id, "reason": error.detail},
-        )
-        return None
+            )
+        except AdapterError as error:
+            logger.warning(
+                "canvas_teaching_plan_not_generated",
+                extra={"question_id": question_id, "reason": error.detail},
+            )
+            return None
+    else:
+        draft = composed_draft
 
     accepted = _validate_draft(
         draft=draft,
@@ -227,6 +334,11 @@ def plan_canvas_teaching(
     )
     if accepted is None:
         return None
+    accepted = _add_confirmed_source_highlights(
+        accepted,
+        confirmed_source_targets,
+        config.maximum_operations_per_beat,
+    )
     return CanvasTeachingPlan(
         plan_id=f"{question_id}:{source_turn_id}:canvas-teaching",
         question_id=question_id,
@@ -237,6 +349,127 @@ def plan_canvas_teaching(
         teaching_mode=teaching_mode,
         beats=accepted,
     )
+
+
+def _structural_attention_operations(
+    narration: str,
+    question_anchors: list[QuestionTextAnchor],
+) -> list[CanvasTeachingOperation]:
+    """Point to the exact structural notation named by a visual-only tutor turn."""
+
+    normalized_narration = narration.casefold()
+    targets: list[QuestionTextAnchor] = []
+    kind: Literal["CIRCLE", "HIGHLIGHT"] = "HIGHLIGHT"
+    if re.search(r"\b(?:raised|squared|exponent|power)\b", normalized_narration):
+        targets = [
+            anchor
+            for anchor in question_anchors
+            if re.search(r"[⁰¹²³⁴⁵⁶⁷⁸⁹]", anchor.text)
+        ]
+        kind = "CIRCLE"
+    elif re.search(r"\b(?:fraction|divid(?:e|ed|ing)|over)\b", normalized_narration):
+        targets = [
+            anchor
+            for anchor in question_anchors
+            if "/" in anchor.text or "÷" in anchor.text
+        ]
+    elif re.search(r"\b(?:parenthes|bracket|group)\b", normalized_narration):
+        targets = [
+            anchor
+            for anchor in question_anchors
+            if "(" in anchor.text or ")" in anchor.text
+        ]
+        kind = "CIRCLE"
+    else:
+        targets = [
+            anchor
+            for anchor in question_anchors
+            if _statement_names_anchor(narration, anchor.text)
+            and _is_math_bearing_question_token(anchor.text)
+        ]
+    return _attention_operations(
+        operation_id="focus-current-structure",
+        kind=kind,
+        target_ids=[anchor.token_id for anchor in targets],
+        color_role="AMBER",
+        persistence="PULSE",
+    )
+
+
+def _add_confirmed_source_highlights(
+    beats: list[CanvasTeachingBeat],
+    confirmed_source_targets: list[ConfirmedCanvasSource],
+    maximum_operations_per_beat: int,
+) -> list[CanvasTeachingBeat]:
+    """Make each demonstrated source visibly persist beside its reasoning note."""
+
+    updated = list(beats)
+    for source in confirmed_source_targets:
+        target_ids = source["target_ids"]
+        already_marked = {
+            target_id
+            for beat in updated
+            for operation in beat.operations
+            if operation.kind in {"HIGHLIGHT", "CIRCLE", "BOX", "CHECK"}
+            for target_id in operation.target_ids
+        }
+        missing_target_ids = [
+            target_id for target_id in target_ids if target_id not in already_marked
+        ]
+        kind, color_role = _confirmed_source_attention_style(source["evidence_ref"])
+        highlight_operations = _attention_operations(
+            operation_id=f"highlight-confirmed-source-{source['evidence_ref']}",
+            kind=kind,
+            target_ids=missing_target_ids,
+            color_role=color_role,
+            persistence="PERSIST",
+        )
+        if not highlight_operations:
+            continue
+        beat_index = next(
+            (
+                index
+                for index, beat in enumerate(updated)
+                if any(
+                    operation.evidence_ref == source["evidence_ref"]
+                    for operation in beat.operations
+                )
+                and len(beat.operations) + len(highlight_operations)
+                <= maximum_operations_per_beat
+            ),
+            None,
+        )
+        if beat_index is None:
+            continue
+        beat = updated[beat_index]
+        insert_at = next(
+            (
+                index
+                for index, operation in enumerate(beat.operations)
+                if operation.evidence_ref == source["evidence_ref"]
+            ),
+            len(beat.operations),
+        )
+        updated[beat_index] = beat.model_copy(
+            update={
+                "operations": [
+                    *beat.operations[:insert_at],
+                    *highlight_operations,
+                    *beat.operations[insert_at:],
+                ]
+            }
+        )
+    return updated
+
+
+def _confirmed_source_attention_style(
+    evidence_ref: str,
+) -> tuple[Literal["CIRCLE", "HIGHLIGHT"], Literal["NAVY", "AMBER", "TEAL"]]:
+    if "CHANGING_VALUE" in evidence_ref:
+        return "CIRCLE", "AMBER"
+    if "FIXED_VALUE" in evidence_ref:
+        return "HIGHLIGHT", "TEAL"
+    return "HIGHLIGHT", "NAVY"
 
 
 def _confirmed_source_targets(
@@ -345,10 +578,7 @@ def _confirmable_anchor_groups(
 
 
 def _is_confirmable_anchor(value: str) -> bool:
-    normalized = value.strip()
-    if re.search(r"\d", normalized) or re.search(r"[²³⁴⁵⁶⁷⁸⁹+\-−×÷/*=()]", normalized):
-        return True
-    return re.fullmatch(r"[A-Za-z]{1,3}", normalized) is not None
+    return _is_math_bearing_question_token(value)
 
 
 def _statement_names_anchor(statement: str, anchor_text: str) -> bool:
@@ -823,6 +1053,27 @@ def _question_marks(
     ]
 
 
+def _attention_operations(
+    operation_id: str,
+    kind: Literal["CIRCLE", "HIGHLIGHT"],
+    target_ids: list[str],
+    color_role: Literal["NAVY", "AMBER", "TEAL"],
+    persistence: Literal["PULSE", "PERSIST"],
+) -> list[CanvasTeachingOperation]:
+    return [
+        CanvasTeachingOperation(
+            operation_id=f"{operation_id}-{index}",
+            kind=kind,
+            target_kind="QUESTION_ANCHOR",
+            target_ids=target_ids[index:index + 4],
+            zone="QUESTION",
+            persistence=persistence,
+            color_role=color_role,
+        )
+        for index in range(0, len(target_ids), 4)
+    ]
+
+
 def _pattern_write(
     operation_id: str,
     kind: Literal["WRITE_TEXT", "WRITE_MATH"],
@@ -1228,7 +1479,17 @@ def _is_math_bearing_question_token(token: str) -> bool:
         return True
     if re.fullmatch(r"[b-df-hj-np-tv-z]{2,}", normalized.casefold()):
         return True
-    return normalized in {"+", "−", "-", "×", "/", "=", "(", ")"}
+    if re.fullmatch(r"\d+(?:\.\d+)?[A-Za-z](?:[⁰¹²³⁴⁵⁶⁷⁸⁹]+)?", normalized):
+        return True
+    if re.fullmatch(r"[A-Za-z]+[⁰¹²³⁴⁵⁶⁷⁸⁹]+", normalized):
+        return True
+    if re.fullmatch(r"[A-Za-z]+(?:[÷/][A-Za-z]+)+", normalized):
+        return True
+    if re.fullmatch(r"\d+(?:\.\d+)?\([^()]*\)", normalized):
+        return True
+    if normalized in {"½", "¼", "¾", "⅓", "⅔", "⅛", "⅜", "⅝", "⅞"}:
+        return True
+    return normalized in {"+", "−", "-", "×", "÷", "/", "=", "(", ")"}
 
 
 def _normalized(value: str) -> str:
