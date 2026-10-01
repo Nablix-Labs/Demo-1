@@ -1,4 +1,5 @@
 import sceneSlots from '@/config/canvasTeachingSceneSlots.json';
+import type { CanvasBBox } from '@/lib/canvasMemory';
 import type { CanvasTeachingColor, CanvasTeachingOperationKind } from '@/lib/canvasTeachingPlan';
 import type { TutorElement } from '@/store/useNumeraStore';
 
@@ -20,7 +21,23 @@ const SCENE_ROW_GAP = 0.12;
 const NOTE_SIZE = 24;
 const BOX_WIDTH = 0.2;
 const BOX_HEIGHT = 0.07;
-const ARROW_GAP = 0.055;
+/**
+ * A note tied to question tokens sits under them, but never left of the
+ * reasoning column: x < 0.40 is where the student writes (handoff rule 5).
+ */
+const NOTE_MIN_X = 0.44;
+const NOTE_MAX_X = 0.78;
+/** How far a note starts left of its token's centre, so the arrow lands on its first letters. */
+const NOTE_LEAD = 0.02;
+const NOTE_ROW_GAP = 0.085;
+const NOTE_LAST_Y = 0.86;
+/** Rough footprint of a note, for keeping two of them apart. */
+const NOTE_WIDTH = 0.22;
+const NOTE_HEIGHT = 0.06;
+
+export function sceneNoteId(questionId: string, slotId: string): string {
+  return `ctp:scene:${questionId}:${slotId}:note`;
+}
 
 function sceneSlot(slotId: string): SceneSlot | null {
   const baseSlotId = slotId.split(':', 1)[0];
@@ -45,10 +62,11 @@ export function sceneNoteElements(
   top: number,
   colors: Record<CanvasTeachingColor, string>,
   existing: TutorElement[],
+  source: CanvasBBox | null = null,
 ): TutorElement[] | null {
   const id = `ctp:scene:${questionId}:${slotId}`;
   if (existing.some((element) => element.id === `${id}:note`)) return [];
-  const placement = sceneNotePlacement(questionId, slotId, top, existing);
+  const placement = sceneNotePlacement(questionId, slotId, top, existing, source);
   if (placement === null) return null;
   const { slot, x, y } = placement;
   const ink = colors.NAVY;
@@ -63,18 +81,16 @@ export function sceneNoteElements(
         id: `${id}:note`, kind: 'text', x, y, text: handwritten, color: ink,
         size: NOTE_SIZE,
       };
-  const arrow: TutorElement = {
-    id: `${id}:arrow`, kind: 'arrow', color: colors[slot.accent], strokeWidth: 2,
-    from: [x + 0.035, Math.max(0, y - ARROW_GAP)],
-    to: [x + 0.035, y - 0.012],
-  };
   const box: TutorElement[] = slot.box
     ? [{
         id: `${id}:box`, kind: 'rect', x: x - 0.018, y: y - BOX_HEIGHT / 2,
         w: BOX_WIDTH, h: BOX_HEIGHT, color: ink, strokeWidth: 2,
       }]
     : [];
-  return [arrow, ...box, note];
+  // No arrow of its own: the only arrow into a note is the CONNECT from the
+  // question tokens it is about (TeachingConnectors). A stub drawn here pointed
+  // down from empty canvas, often through the question text (live, 1 Oct).
+  return [...box, note];
 }
 
 /**
@@ -107,11 +123,24 @@ export function sceneNotePlacement(
   slotId: string,
   top: number,
   existing: TutorElement[],
+  source: CanvasBBox | null = null,
 ): SceneNotePlacement | null {
   const slot = sceneSlot(slotId);
   if (slot === null) return null;
   const id = `ctp:scene:${questionId}:${slotId}`;
   if (existing.some((element) => element.id === `${id}:note`)) return null;
+  if (source !== null) {
+    // Under the tokens the note is about, so the arrow from them is short and
+    // reads as "this, here". The slot's fixed column ignored the tokens and
+    // put the note wherever the slot table said.
+    const x = Math.min(NOTE_MAX_X, Math.max(NOTE_MIN_X, source.x + source.w / 2 - NOTE_LEAD));
+    let y = Math.max(top, source.y + source.h + NOTE_ROW_GAP);
+    while (y < NOTE_LAST_Y && existing.some((el) => el.x !== undefined && el.y !== undefined
+      && Math.abs(el.y - y) < NOTE_HEIGHT && Math.abs(el.x - x) < NOTE_WIDTH)) {
+      y += NOTE_ROW_GAP;
+    }
+    return { x, y: Math.min(NOTE_LAST_Y, y), slot };
+  }
   const genericRows = slotId.startsWith('generic_confirmation:')
     ? existing.filter((element) => element.id.startsWith(`ctp:scene:${questionId}:generic_confirmation:`) && element.id.endsWith(':note')).length
     : 0;

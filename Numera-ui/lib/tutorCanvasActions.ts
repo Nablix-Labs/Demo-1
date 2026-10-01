@@ -210,6 +210,32 @@ export function questionStripBottom(doc: Document | undefined): number | null {
   return stripRect.bottom - canvas.getBoundingClientRect().top;
 }
 
+/**
+ * Where these question tokens are on the canvas right now, as fractions of it
+ * (their union), or null when any of them is not rendered.
+ */
+export function questionTokenBox(doc: Document | undefined, tokenIds: string[]): CanvasBBox | null {
+  const canvas = doc?.querySelector<HTMLElement>('[aria-label="Drawing canvas"]');
+  if (!canvas || tokenIds.length === 0) return null;
+  const frame = canvas.getBoundingClientRect();
+  if (frame.width === 0 || frame.height === 0) return null;
+  const boxes = tokenIds.map((tokenId) => doc
+    ?.querySelector<HTMLElement>(`[data-qtoken="${CSS.escape(tokenId)}"]`)
+    ?.getBoundingClientRect());
+  if (boxes.some((b) => !b)) return null;
+  const rects = boxes as DOMRect[];
+  const left = Math.min(...rects.map((b) => b.left));
+  const right = Math.max(...rects.map((b) => b.right));
+  const top = Math.min(...rects.map((b) => b.top));
+  const bottom = Math.max(...rects.map((b) => b.bottom));
+  return {
+    x: (left - frame.left) / frame.width,
+    y: (top - frame.top) / frame.height,
+    w: (right - left) / frame.width,
+    h: (bottom - top) / frame.height,
+  };
+}
+
 /** The first row of a ladder, clear of the question strip. */
 export function ladderTop(
   fixedTop: number,

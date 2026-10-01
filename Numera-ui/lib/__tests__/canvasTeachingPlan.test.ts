@@ -201,8 +201,8 @@ describe('the reasoning trail', () => {
       latex: null,
       kind: 'WRITE_TEXT',
     })]), ctx());
+    // No arrow of its own: an arrow only ever comes from the question tokens.
     expect(fx.elements).toEqual([
-      expect.objectContaining({ id: 'ctp:scene:Q1:changing_conclusion:arrow', kind: 'arrow', color: '#FF9F1C' }),
       expect.objectContaining({ id: 'ctp:scene:Q1:changing_conclusion:note', kind: 'text', text: 'first numbers are different', color: '#1B2A4A' }),
     ]);
   });
@@ -212,10 +212,45 @@ describe('the reasoning trail', () => {
       evidence_ref: 'GENERAL_RULE', scene_slot: 'rule_conclusion', latex: 'n + 5',
     })]), ctx());
     expect(fx.elements).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'ctp:scene:Q1:rule_conclusion:arrow', kind: 'arrow' }),
       expect.objectContaining({ id: 'ctp:scene:Q1:rule_conclusion:box', kind: 'rect' }),
       expect.objectContaining({ id: 'ctp:scene:Q1:rule_conclusion:note', kind: 'text', text: 'n + 5' }),
     ]));
+  });
+
+  it('puts a note under the question tokens its CONNECT comes from, and aims the arrow at it', () => {
+    const connect = op({
+      operation_id: 'link', kind: 'CONNECT', target_ids: ['Q1:QTOKEN:1'],
+      persistence: 'PERSIST', scene_slot: 'changing_conclusion',
+    });
+    const note = write({
+      kind: 'WRITE_TEXT', latex: null, text: 'c: any value',
+      evidence_ref: 'CHANGING_VALUE', scene_slot: 'changing_conclusion',
+    });
+    const tokenBox = () => ({ x: 0.6, y: 0.05, w: 0.04, h: 0.04 });
+    const fx = beatEffects(plan(), beat([connect, note]), ctx({ tokenBox }));
+    const placed = fx.elements.find((el) => el.id === 'ctp:scene:Q1:changing_conclusion:note');
+    // Under the token's centre (0.62), not the slot's fixed column (0.44).
+    expect(placed?.x).toBeCloseTo(0.6);
+    expect(placed?.y).toBeGreaterThan(0.09);
+    expect(fx.connectors).toEqual([
+      expect.objectContaining({ kind: 'scene', fromTokenIds: ['Q1:QTOKEN:1'], toNoteId: 'ctp:scene:Q1:changing_conclusion:note' }),
+    ]);
+  });
+
+  it('keeps a token-placed note out of the student\'s writing area, and off an earlier note', () => {
+    const tokenBox = () => ({ x: 0.1, y: 0.05, w: 0.04, h: 0.04 });
+    const connect = (slot: string) => op({ operation_id: `link-${slot}`, kind: 'CONNECT', target_ids: ['Q1:QTOKEN:1'], scene_slot: slot });
+    const first = beatEffects(plan(), beat([connect('changing_conclusion'), write({
+      kind: 'WRITE_TEXT', latex: null, text: 'changes', scene_slot: 'changing_conclusion',
+    })]), ctx({ tokenBox }));
+    const second = beatEffects(plan(), beat([connect('variable_conclusion'), write({
+      kind: 'WRITE_TEXT', latex: null, text: 'c', scene_slot: 'variable_conclusion',
+    })]), ctx({ tokenBox, tutorElements: first.elements }));
+    const a = first.elements.find((el) => el.id.endsWith(':note'));
+    const b = second.elements.find((el) => el.id.endsWith(':note'));
+    expect(a?.x).toBe(0.44);
+    expect(b?.x).toBe(0.44);
+    expect((b?.y ?? 0) - (a?.y ?? 0)).toBeGreaterThanOrEqual(0.06);
   });
 
   it('stacks generic confirmations instead of replacing an earlier one', () => {

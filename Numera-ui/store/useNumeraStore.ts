@@ -33,7 +33,7 @@ import {
   type CanvasTeachingBeat, type CanvasTeachingPlan, type TeachingConnector, type TeachingTokenMark,
   type TeachingZoneFocus,
 } from '@/lib/canvasTeachingPlan';
-import { questionStripBottom } from '@/lib/tutorCanvasActions';
+import { questionStripBottom, questionTokenBox } from '@/lib/tutorCanvasActions';
 import type { LoginReview } from '@/lib/loginReview';
 import {
   resolveTarget, actionMarks, showsWriteAffordance, memoryActionType, memoryActor,
@@ -2192,6 +2192,7 @@ export const useNumeraStore = create<NumeraState>()(
       tutorElements: s.tutorElements,
       canvasSize: s.canvasSize,
       stripBottomPx: questionStripBottom(typeof document === 'undefined' ? undefined : document),
+      tokenBox: (tokenIds) => questionTokenBox(typeof document === 'undefined' ? undefined : document, tokenIds),
     });
     if (!effects.tokenMarks.length && !effects.connectors.length && !effects.elements.length && !effects.zoneFocus.length) return;
     set({

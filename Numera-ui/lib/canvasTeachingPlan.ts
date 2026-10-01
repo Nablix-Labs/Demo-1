@@ -30,7 +30,7 @@ import { itemBBox, type CanvasBBox, type CanvasSize } from '@/lib/canvasMemory';
 import {
   RESCUE_GAP, RESCUE_SUFFIX, RESCUE_WRAP_WIDTH, ladderTop,
 } from '@/lib/tutorCanvasActions';
-import { sceneNoteElements, sceneNotePlacement } from '@/lib/canvasTeachingScene';
+import { sceneNoteElements, sceneNoteId } from '@/lib/canvasTeachingScene';
 import type { DrawnItem, TutorElement } from '@/store/useNumeraStore';
 
 // ─── Contract (nablix-backend/app/models/canvas_teaching.py) ────────────────
@@ -111,7 +111,8 @@ export interface SceneTeachingConnector {
   kind: 'scene';
   id: string;
   fromTokenIds: string[];
-  toCanvasPoint: [number, number];
+  /** The tutor note it points at; drawn once that note is on the board. */
+  toNoteId: string;
   color: CanvasTeachingColor;
   pulse: boolean;
 }
@@ -265,6 +266,29 @@ export interface TeachingContext {
   canvasSize: CanvasSize;
   /** Bottom of the question strip in canvas px, from `questionStripBottom`. */
   stripBottomPx?: number | null;
+  /** Where these question tokens are now, as canvas fractions (read off the DOM). */
+  tokenBox?: (tokenIds: string[]) => CanvasBBox | null;
+}
+
+/**
+ * The question tokens a scene note is about: the CONNECT the plan aims at the
+ * same slot. The note is placed under them.
+ */
+function slotSourceTokens(
+  plan: CanvasTeachingPlan,
+  current: CanvasTeachingBeat,
+  slot: string,
+  anchors: QuestionAnchor[],
+): string[] {
+  for (const beat of [current, ...(plan.beats ?? [])]) {
+    for (const op of beat?.operations ?? []) {
+      if (op?.kind !== 'CONNECT' || op.target_kind !== 'QUESTION_ANCHOR' || op.scene_slot !== slot) continue;
+      if (!Array.isArray(op.target_ids)) continue;
+      const known = op.target_ids.filter((tokenId) => anchors.some((a) => a.token_id === tokenId));
+      if (known.length) return known;
+    }
+  }
+  return [];
 }
 
 const PAD = 0.012;
@@ -315,20 +339,14 @@ export function beatEffects(
 
       if (op.kind === 'CONNECT') {
         if (op.scene_slot) {
-          const placement = sceneNotePlacement(
-            plan.question_id,
-            op.scene_slot,
-            top,
-            [...ctx.tutorElements, ...out.elements],
-          );
-          if (placement === null) continue;
+          const toNoteId = sceneNoteId(plan.question_id, op.scene_slot);
           tokenGroups(tokens, ctx.anchors).forEach((fromTokenIds, i) => {
             const connectorId = `${id}:scene:${i}`;
             out.connectors.push({
               kind: 'scene',
               id: connectorId,
               fromTokenIds,
-              toCanvasPoint: [placement.x + 0.035, Math.max(0, placement.y - 0.012)],
+              toNoteId,
               color,
               pulse,
             });
@@ -389,6 +407,7 @@ export function beatEffects(
       const content = (op.kind === 'WRITE_MATH' ? op.latex ?? op.text : op.text ?? op.latex)?.trim();
       if (!content) continue;
       if (op.scene_slot) {
+        const sources = slotSourceTokens(plan, beat, op.scene_slot, ctx.anchors);
         const sceneElements = sceneNoteElements(
           plan.question_id,
           op.scene_slot,
@@ -397,6 +416,7 @@ export function beatEffects(
           top,
           TEACHING_COLORS,
           [...ctx.tutorElements, ...out.elements],
+          sources.length ? ctx.tokenBox?.(sources) ?? null : null,
         );
         if (sceneElements !== null) {
           out.elements.push(...sceneElements);

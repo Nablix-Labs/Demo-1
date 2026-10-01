@@ -12,10 +12,14 @@ import { useEffect, useLayoutEffect, useState } from 'react';
 import { drawablyArrow } from 'drawably';
 import 'drawably/style.css';
 import { TEACHING_COLORS, type SceneTeachingConnector } from '@/lib/canvasTeachingPlan';
-import { useNumeraStore } from '@/store/useNumeraStore';
+import { useNumeraStore, type TutorElement } from '@/store/useNumeraStore';
+import { useTutorReveal } from '@/store/useTutorReveal';
 
 /** Below this centre-to-centre distance an arrow is too short to read. */
 const MIN_ARROW_PX = 60;
+/** The arrow lands just above a note's first letters (text is centred on its y). */
+const NOTE_ARROW_INSET_PX = 12;
+const NOTE_ARROW_CLEAR_PX = 18;
 
 interface SceneArrowPath {
   id: string;
@@ -39,15 +43,28 @@ function sourceBounds(tokenIds: string[]): DOMRect | null {
   return new DOMRect(left, top, right - left, bottom - top);
 }
 
-function sceneArrowPath(connector: SceneTeachingConnector, stage: HTMLElement): SceneArrowPath | null {
+function sceneArrowPath(
+  connector: SceneTeachingConnector,
+  stage: HTMLElement,
+  notes: TutorElement[],
+  started: Set<string>,
+): SceneArrowPath | null {
   const source = sourceBounds(connector.fromTokenIds);
   if (source === null) return null;
+  // Points at the note itself, wherever it was placed, and only once the hand
+  // has started writing it: before that the arrow points at blank canvas.
+  const note = notes.find((el) => el.id === connector.toNoteId);
+  if (note?.x === undefined || note.y === undefined || !started.has(note.id)) return null;
   const stageBox = stage.getBoundingClientRect();
   if (stageBox.width === 0 || stageBox.height === 0) return null;
   const startX = source.left + source.width / 2;
-  const startY = source.bottom + 4;
-  const endX = stageBox.left + connector.toCanvasPoint[0] * stageBox.width;
-  const endY = stageBox.top + connector.toCanvasPoint[1] * stageBox.height;
+  // From just under the question text, below the token (which carries its own
+  // mark in the same colour). From the token itself, a token on the first
+  // line struck the arrow through every line under it.
+  const strip = document.querySelector<HTMLElement>('[data-question-text]')?.getBoundingClientRect();
+  const startY = Math.max(source.bottom, strip?.bottom ?? 0) + 4;
+  const endX = stageBox.left + note.x * stageBox.width + NOTE_ARROW_INSET_PX;
+  const endY = stageBox.top + note.y * stageBox.height - NOTE_ARROW_CLEAR_PX;
   const controlY = Math.max(startY + 28, (startY + endY) / 2);
   return {
     id: connector.id,
@@ -59,6 +76,12 @@ function sceneArrowPath(connector: SceneTeachingConnector, stage: HTMLElement): 
 
 export default function TeachingConnectors() {
   const connectors = useNumeraStore((state) => state.teachingConnectors);
+  const tutorElements = useNumeraStore((state) => state.tutorElements);
+  // Which target notes the hand has started; a string so that per-frame
+  // progress updates do not re-run the layout below.
+  const startedNotes = useTutorReveal((state) => connectors
+    .flatMap((c) => (c.kind === 'scene' && state.progress[c.toNoteId] > 0 ? [c.toNoteId] : []))
+    .join('|'));
   const [scenePaths, setScenePaths] = useState<SceneArrowPath[]>([]);
 
   useEffect(() => {
@@ -90,13 +113,14 @@ export default function TeachingConnectors() {
       (connector): connector is SceneTeachingConnector => connector.kind === 'scene',
     );
     const stage = document.querySelector<HTMLElement>('[data-canvas-stage]');
+    const started = new Set(startedNotes.split('|'));
     const updatePaths = () => {
       if (!stage) {
         setScenePaths([]);
         return;
       }
       setScenePaths(sceneConnectors.flatMap((connector) => {
-        const path = sceneArrowPath(connector, stage);
+        const path = sceneArrowPath(connector, stage, tutorElements, started);
         return path === null ? [] : [path];
       }));
     };
@@ -115,7 +139,7 @@ export default function TeachingConnectors() {
       window.removeEventListener('resize', updatePaths);
       window.removeEventListener('scroll', updatePaths, true);
     };
-  }, [connectors]);
+  }, [connectors, tutorElements, startedNotes]);
 
   if (scenePaths.length === 0) return null;
   return (
