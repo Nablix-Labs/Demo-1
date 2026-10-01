@@ -4337,13 +4337,16 @@ def composer_canvas_contract_rejection(
     allowed_target_ids = canvas_context.get("allowed_target_ids")
     authorized_evidence_ids = canvas_context.get("authorized_evidence_ids")
     require_guided_evidence_ink = canvas_context.get("require_guided_evidence_ink")
+    confirmed_evidence_writing_allowed = canvas_context.get(
+        "confirmed_evidence_writing_allowed"
+    )
     if not isinstance(allowed_target_ids, list) or not isinstance(authorized_evidence_ids, list):
         return "canvas_context_constraints_missing"
     if draft is None:
         return "canvas_draft_required" if require_guided_evidence_ink is True else None
     allowed_targets = set(allowed_target_ids)
     authorized_evidence = set(authorized_evidence_ids)
-    persistent_authorized_write = False
+    persistent_authorized_writes = 0
     for beat in draft.beats:
         for operation in beat.operations:
             if any(target_id not in allowed_targets for target_id in operation.target_ids):
@@ -4355,11 +4358,23 @@ def composer_canvas_contract_rejection(
                 return "canvas_evidence_not_authorized"
             if (
                 operation.kind in {"WRITE_TEXT", "WRITE_MATH"}
-                and operation.persistence == "PERSIST"
-                and operation.evidence_ref in authorized_evidence
             ):
-                persistent_authorized_write = True
-    if require_guided_evidence_ink is True and not persistent_authorized_write:
+                if confirmed_evidence_writing_allowed is not True:
+                    return "canvas_write_not_authorized"
+                if operation.target_kind != "CANVAS_ZONE" or operation.target_ids != [
+                    "ZONE:REASONING"
+                ]:
+                    return "canvas_write_must_target_reasoning_zone"
+                if operation.zone != "REASONING":
+                    return "canvas_write_must_use_reasoning_zone"
+                if operation.persistence != "PERSIST":
+                    return "canvas_write_must_persist"
+                if operation.color_role != "NAVY":
+                    return "canvas_write_must_use_navy"
+                if operation.evidence_ref not in authorized_evidence:
+                    return "canvas_write_evidence_not_authorized"
+                persistent_authorized_writes += 1
+    if require_guided_evidence_ink is True and persistent_authorized_writes != 1:
         return "canvas_guided_evidence_ink_required"
     return None
 
@@ -4432,6 +4447,7 @@ def write_redacted_response_aware_message(
             "authorized_evidence_ids": authorized_evidence_ids,
             "teaching_mode": "GUIDED",
             "require_guided_evidence_ink": bool(authorized_evidence_ids),
+            "confirmed_evidence_writing_allowed": bool(authorized_evidence_ids),
             "maximum_beats": canvas_config.maximum_beats,
             "maximum_operations_per_beat": canvas_config.maximum_operations_per_beat,
         }
