@@ -249,8 +249,9 @@ describe('the reasoning trail', () => {
     const a = first.elements.find((el) => el.id.endsWith(':note'));
     const b = second.elements.find((el) => el.id.endsWith(':note'));
     expect(a?.x).toBe(0.44);
-    expect(b?.x).toBe(0.44);
-    expect((b?.y ?? 0) - (a?.y ?? 0)).toBeGreaterThanOrEqual(0.06);
+    // Beside the first, on the same row — not under it, where its arrow would cross it.
+    expect(b?.x).toBeCloseTo(0.66);
+    expect(b?.y).toBe(a?.y);
   });
 
   it('stacks generic confirmations instead of replacing an earlier one', () => {

@@ -133,16 +133,28 @@ export function sceneNotePlacement(
     // Under the tokens the note is about, so the arrow from them is short and
     // reads as "this, here". The slot's fixed column ignored the tokens and
     // put the note wherever the slot table said.
-    const x = Math.min(NOTE_MAX_X, Math.max(NOTE_MIN_X, source.x + source.w / 2 - NOTE_LEAD));
-    let y = Math.max(top, source.y + source.h + NOTE_ROW_GAP);
-    while (y < NOTE_LAST_Y && existing.some((el) => el.x !== undefined && el.y !== undefined
-      && Math.abs(el.y - y) < NOTE_HEIGHT && Math.abs(el.x - x) < NOTE_WIDTH)) {
-      y += NOTE_ROW_GAP;
+    // Taken spots push the note RIGHT along the row before they push it down:
+    // a note stepped down under an earlier one had its arrow struck through
+    // that note (live, Q-T01-006, 1 Oct).
+    const x0 = Math.min(NOTE_MAX_X, Math.max(NOTE_MIN_X, source.x + source.w / 2 - NOTE_LEAD));
+    for (let y = Math.max(top, source.y + source.h + NOTE_ROW_GAP); y < NOTE_LAST_Y; y += NOTE_ROW_GAP) {
+      for (let x = x0; x <= NOTE_MAX_X; x += NOTE_WIDTH) {
+        if (!taken(existing, x, y)) return { x, y, slot };
+      }
     }
-    return { x, y: Math.min(NOTE_LAST_Y, y), slot };
+    return { x: x0, y: NOTE_LAST_Y, slot };
   }
   const genericRows = slotId.startsWith('generic_confirmation:')
     ? existing.filter((element) => element.id.startsWith(`ctp:scene:${questionId}:generic_confirmation:`) && element.id.endsWith(':note')).length
     : 0;
-  return { x: slot.x, y: top + (slot.row + genericRows) * SCENE_ROW_GAP, slot };
+  let y = top + (slot.row + genericRows) * SCENE_ROW_GAP;
+  // A note placed under its tokens may already sit in this slot.
+  while (y < NOTE_LAST_Y && taken(existing, slot.x, y)) y += SCENE_ROW_GAP;
+  return { x: slot.x, y, slot };
+}
+
+/** Is there already a mark within a note's footprint of (x, y)? */
+function taken(existing: TutorElement[], x: number, y: number): boolean {
+  return existing.some((el) => el.x !== undefined && el.y !== undefined
+    && Math.abs(el.y - y) < NOTE_HEIGHT && Math.abs(el.x - x) < NOTE_WIDTH);
 }
