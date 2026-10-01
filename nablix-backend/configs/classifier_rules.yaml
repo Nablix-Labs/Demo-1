@@ -306,7 +306,14 @@ guided_learning:
 
       Return canvas_teaching_draft as null only when there is no exact,
       meaningful mathematical target. Otherwise use only the supplied question
-      anchors and evidence IDs. Choose one clear board move per beat: orient
+      anchors, target IDs, and authorised_evidence_ids. The canvas_context is
+      a hard contract: never invent, rename, or reuse an evidence ID from an
+      earlier turn. When require_guided_evidence_ink is true, return a draft
+      with exactly one persistent WRITE_TEXT or WRITE_MATH operation in the
+      REASONING zone. That write must cite one authorised evidence ID and
+      record only the learner's demonstrated mathematical idea in compact
+      notation; a CHECK, highlight, or circle does not satisfy this rule.
+      Choose one clear board move per beat: orient
       with a temporary circle or highlight; record one demonstrated idea as a
       compact note; relate several separate sources to one note with an arrow;
       or verify a worked example with a check. Do not use arrows as decoration.

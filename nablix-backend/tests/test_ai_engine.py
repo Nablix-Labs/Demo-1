@@ -1791,6 +1791,96 @@ def test_response_aware_composer_preserves_writer_contract_and_attaches_draft() 
     assert "canvas_context" in composer.context
 
 
+def test_composer_canvas_contract_requires_authorized_persistent_ink() -> None:
+    draft = CanvasTeachingPlanDraft.model_validate(
+        {
+            "beats": [
+                {
+                    "beat_id": "record-confirmed-idea",
+                    "sequence": 1,
+                    "speech_anchor": {
+                        "start_char": 0,
+                        "end_char": 15,
+                        "text": "You found c + 4.",
+                    },
+                    "operations": [
+                        {
+                            "operation_id": "record-rule",
+                            "kind": "WRITE_MATH",
+                            "target_kind": "CANVAS_ZONE",
+                            "target_ids": ["ZONE:REASONING"],
+                            "zone": "REASONING",
+                            "persistence": "PERSIST",
+                            "evidence_ref": "REQUIRED_COMPONENT_1",
+                            "latex": "c + 4",
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    canvas_context = {
+        "allowed_target_ids": ["Q-T01-006:QTOKEN:7", "ZONE:REASONING"],
+        "authorized_evidence_ids": ["REQUIRED_COMPONENT_1"],
+        "require_guided_evidence_ink": True,
+    }
+
+    assert classifier.composer_canvas_contract_rejection(draft, canvas_context) is None
+
+    invalid_draft = draft.model_copy(
+        update={
+            "beats": [
+                draft.beats[0].model_copy(
+                    update={
+                        "operations": [
+                            draft.beats[0].operations[0].model_copy(
+                                update={"evidence_ref": "REQUIRED_COMPONENT_2"}
+                            )
+                        ]
+                    }
+                )
+            ]
+        }
+    )
+    assert (
+        classifier.composer_canvas_contract_rejection(invalid_draft, canvas_context)
+        == "canvas_evidence_not_authorized"
+    )
+
+
+def test_composer_schema_limits_canvas_targets_and_evidence_to_turn_context() -> None:
+    schema = openai_client.guided_teaching_composer_schema(
+        {
+            "canvas_context": {
+                "allowed_target_ids": ["Q-T01-006:QTOKEN:7", "ZONE:REASONING"],
+                "authorized_evidence_ids": ["REQUIRED_COMPONENT_1"],
+                "require_guided_evidence_ink": True,
+            }
+        }
+    )
+    operation_properties = cast(
+        dict[str, object],
+        cast(dict[str, object], schema["$defs"])["CanvasTeachingOperation"],
+    )["properties"]
+    properties = cast(dict[str, object], operation_properties)
+    target_ids = cast(dict[str, object], properties["target_ids"])
+    evidence_ref = cast(dict[str, object], properties["evidence_ref"])
+    draft = cast(
+        dict[str, object],
+        cast(dict[str, object], schema["properties"])["canvas_teaching_draft"],
+    )
+
+    assert cast(dict[str, object], target_ids["items"])["enum"] == [
+        "Q-T01-006:QTOKEN:7",
+        "ZONE:REASONING",
+    ]
+    assert cast(list[object], evidence_ref["anyOf"])[0] == {
+        "type": "string",
+        "enum": ["REQUIRED_COMPONENT_1"],
+    }
+    assert draft == {"$ref": "#/$defs/CanvasTeachingPlanDraft"}
+
+
 def test_response_aware_writer_prompt_adapts_and_requires_a_concrete_next_move() -> None:
     prompt = load_classifier_rules().guided_learning.response_aware_writer_system_prompt
 

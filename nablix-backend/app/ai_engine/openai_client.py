@@ -340,6 +340,30 @@ def guided_teaching_composer_schema(
     """Keep composer support requirements aligned with the writer contract."""
 
     schema = OpenAIGuidedTeachingComposer.model_json_schema()
+    canvas_context = wording_context.get("canvas_context")
+    if isinstance(canvas_context, dict):
+        allowed_target_ids = canvas_context.get("allowed_target_ids")
+        authorized_evidence_ids = canvas_context.get("authorized_evidence_ids")
+        operation_schema = schema.get("$defs", {}).get("CanvasTeachingOperation")
+        if isinstance(operation_schema, dict):
+            target_ids_schema = operation_schema.get("properties", {}).get("target_ids")
+            if isinstance(target_ids_schema, dict) and isinstance(allowed_target_ids, list):
+                target_ids_schema["items"] = {
+                    "type": "string",
+                    "enum": allowed_target_ids,
+                }
+            evidence_schema = operation_schema.get("properties", {}).get("evidence_ref")
+            if isinstance(evidence_schema, dict) and isinstance(authorized_evidence_ids, list):
+                evidence_schema["anyOf"] = [
+                    {"type": "string", "enum": authorized_evidence_ids},
+                    {"type": "null"},
+                ]
+        if canvas_context.get("require_guided_evidence_ink") is True:
+            properties = schema.get("properties")
+            if isinstance(properties, dict):
+                properties["canvas_teaching_draft"] = {
+                    "$ref": "#/$defs/CanvasTeachingPlanDraft"
+                }
     if (
         wording_context.get("assessment") == "INCORRECT"
         and wording_context.get("support_relevance")
