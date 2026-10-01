@@ -254,6 +254,18 @@ describe('the reasoning trail', () => {
     expect(b?.y).toBe(a?.y);
   });
 
+  it('places a note under the token its own beat highlights when nothing connects it', () => {
+    // Live, Q-T01-006: HIGHLIGHT on "4" and WRITE_MATH "\\Delta=4", no CONNECT.
+    const tokenBox = (ids: string[]) => (ids.join() === 'Q1:QTOKEN:2' ? { x: 0.6, y: 0.05, w: 0.02, h: 0.04 } : null);
+    const fx = beatEffects(plan(), beat([
+      op({ operation_id: 'hl', kind: 'HIGHLIGHT', target_ids: ['Q1:QTOKEN:2'], persistence: 'PERSIST' }),
+      write({ latex: '\\Delta=4', scene_slot: 'generic_confirmation:REQUIRED_COMPONENT_3' }),
+    ]), ctx({ tokenBox }));
+    const note = fx.elements.find((el) => el.id.endsWith(':note'));
+    expect(note?.x).toBeCloseTo(0.59);
+    expect(fx.connectors).toEqual([]);
+  });
+
   it('stacks generic confirmations instead of replacing an earlier one', () => {
     const first = beatEffects(plan(), beat([write({
       kind: 'WRITE_TEXT', latex: null, text: 'pq means p multiplied by q.',

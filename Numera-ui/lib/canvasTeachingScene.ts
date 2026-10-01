@@ -144,11 +144,9 @@ export function sceneNotePlacement(
     }
     return { x: x0, y: NOTE_LAST_Y, slot };
   }
-  const genericRows = slotId.startsWith('generic_confirmation:')
-    ? existing.filter((element) => element.id.startsWith(`ctp:scene:${questionId}:generic_confirmation:`) && element.id.endsWith(':note')).length
-    : 0;
-  let y = top + (slot.row + genericRows) * SCENE_ROW_GAP;
-  // A note placed under its tokens may already sit in this slot.
+  // The first free row from the slot's own: generic confirmations stack, and
+  // a note placed under its tokens may already sit here.
+  let y = top + slot.row * SCENE_ROW_GAP;
   while (y < NOTE_LAST_Y && taken(existing, slot.x, y)) y += SCENE_ROW_GAP;
   return { x: slot.x, y, slot };
 }

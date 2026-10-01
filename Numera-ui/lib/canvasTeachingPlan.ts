@@ -271,8 +271,10 @@ export interface TeachingContext {
 }
 
 /**
- * The question tokens a scene note is about: the CONNECT the plan aims at the
- * same slot. The note is placed under them.
+ * The question tokens a scene note is about, to place it under them: the
+ * CONNECT the plan aims at the same slot, or failing that the tokens its own
+ * beat marks. The planner often marks the token without connecting it — live,
+ * Q-T01-006 sent "HIGHLIGHT 4" beside the note "Δ = 4" and nothing else.
  */
 function slotSourceTokens(
   plan: CanvasTeachingPlan,
@@ -288,7 +290,10 @@ function slotSourceTokens(
       if (known.length) return known;
     }
   }
-  return [];
+  return current.operations
+    ?.filter((op) => op?.target_kind === 'QUESTION_ANCHOR' && op.kind !== 'CONNECT' && Array.isArray(op.target_ids))
+    .flatMap((op) => op.target_ids)
+    .filter((tokenId, i, all) => all.indexOf(tokenId) === i && anchors.some((a) => a.token_id === tokenId)) ?? [];
 }
 
 const PAD = 0.012;
