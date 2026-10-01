@@ -3860,62 +3860,10 @@ def classify_guided_learning_response(
             )
     if evaluation is None:
         if rules.guided_learning.production_boundary_enabled:
-            rejected_contribution = (
-                rejected_evaluation.contribution
-                if rejected_evaluation is not None
-                else None
+            raise last_error or AdapterError(
+                "openai_ai_engine",
+                "The combined Guided Practice response could not satisfy its contract.",
             )
-            if (
-                rejected_contribution is not None
-                and rejected_contribution.assessment == "INCORRECT"
-                and rejected_contribution.support_relevance
-                in {"UNMAPPED", "MISMATCHED"}
-                and rejected_contribution.generated_support_text is None
-            ):
-                raise last_error or AdapterError(
-                    "openai_ai_engine",
-                    "Safe replacement support could not be generated.",
-                )
-            if rejected_evaluation is not None:
-                fallback_message = response_aware_fallback_message(
-                    rejected_evaluation,
-                    rubric,
-                    rules,
-                )
-                fallback = rejected_evaluation.model_copy(update={
-                    "tutor_message": fallback_message,
-                    "tutor_message_voice": fallback_message,
-                })
-            else:
-                fallback = GuidedEvaluation(
-                    contribution=StudentContribution(
-                        kind="UNCLEAR_INPUT",
-                        assessment="NOT_ASSESSED",
-                        error_category=None,
-                        error_description=None,
-                        identified_difficulty=None,
-                        learner_question=None,
-                        explained_idea=None,
-                        generated_support_text=None,
-                        generated_visual_rows=None,
-                        support_relevance="NOT_NEEDED",
-                    ),
-                    student_state="UNCLEAR",
-                    newly_confirmed_concept_ids=[],
-                    preserved_concept_ids=objective.confirmed_concept_ids,
-                    contradicted_concept_ids=[],
-                    missing_concept_ids=objective.missing_concept_ids,
-                    selected_error_code=None,
-                    confidence=1.0,
-                    next_objective=objective,
-                    tutor_message=rules.guided_learning.production_boundary_clarification_message,
-                    tutor_message_voice=rules.guided_learning.production_boundary_clarification_message,
-                )
-            logger.warning(
-                "guided_production_boundary_clarification",
-                extra={"question_id": request.question_id, "detail": last_error.detail if last_error else None},
-            )
-            evaluation = fallback
         elif rules.guided_learning.response_aware_enabled:
             raise last_error or AdapterError(
                 "openai_ai_engine", "Guided response failed answer-reveal validation; no attempt was recorded."
