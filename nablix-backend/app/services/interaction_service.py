@@ -5372,7 +5372,10 @@ async def _process_interaction(
                 "canvas_teaching_plan": canvas_teaching_plan,
                 "tutor_canvas_actions": (
                     _non_visual_tutor_canvas_actions(tutor.tutor_canvas_actions)
-                    if canvas_teaching_plan is not None
+                    if (
+                        tutor.canvas_teaching_composer_used
+                        or canvas_teaching_plan is not None
+                    )
                     else tutor.tutor_canvas_actions
                 ),
             }

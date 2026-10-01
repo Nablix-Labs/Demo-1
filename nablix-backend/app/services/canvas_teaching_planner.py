@@ -77,6 +77,7 @@ def plan_canvas_teaching(
         composed_draft=None,
         allow_model_generation=True,
         allow_pattern_scene=True,
+        allow_structural_attention=True,
     )
 
 
@@ -97,7 +98,7 @@ def plan_composed_canvas_teaching(
 ) -> CanvasTeachingPlan | None:
     """Validate a board draft composed with the learner-safe tutor response."""
 
-    return _plan_canvas_teaching(
+    plan = _plan_canvas_teaching(
         question_id=question_id,
         question=question,
         source_turn_id=source_turn_id,
@@ -113,6 +114,27 @@ def plan_composed_canvas_teaching(
         composed_draft=composed_draft,
         allow_model_generation=False,
         allow_pattern_scene=False,
+        allow_structural_attention=False,
+    )
+    if plan is not None:
+        return plan
+    return _plan_canvas_teaching(
+        question_id=question_id,
+        question=question,
+        source_turn_id=source_turn_id,
+        tutor_turn_id=tutor_turn_id,
+        scene_revision=scene_revision,
+        tutor_message_voice=tutor_message_voice,
+        tutor=tutor,
+        question_anchors=question_anchors,
+        student_response=student_response,
+        canonical_answer=canonical_answer,
+        active_support_level=active_support_level,
+        current_unresolved_component_id=current_unresolved_component_id,
+        composed_draft=None,
+        allow_model_generation=True,
+        allow_pattern_scene=False,
+        allow_structural_attention=False,
     )
 
 
@@ -132,6 +154,7 @@ def _plan_canvas_teaching(
     composed_draft: CanvasTeachingPlanDraft | None,
     allow_model_generation: bool,
     allow_pattern_scene: bool,
+    allow_structural_attention: bool,
 ) -> CanvasTeachingPlan | None:
     """Create or validate a visual-only Guided Practice plan."""
 
@@ -166,9 +189,10 @@ def _plan_canvas_teaching(
     if teaching_mode in config.suppressed_main_canvas_modes:
         return None
 
-    deterministic_attention = _structural_attention_operations(
-        tutor_message_voice,
-        question_anchors,
+    deterministic_attention = (
+        _structural_attention_operations(tutor_message_voice, question_anchors)
+        if allow_structural_attention
+        else []
     )
     if teaching_mode in config.visual_only_modes and deterministic_attention:
         return CanvasTeachingPlan(

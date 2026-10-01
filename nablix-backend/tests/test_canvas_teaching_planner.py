@@ -519,11 +519,23 @@ def test_composed_draft_is_validated_without_a_second_openai_call(monkeypatch) -
     )
 
 
-def test_composed_turn_does_not_use_the_pattern_scene_when_its_draft_is_missing(
+def test_composed_turn_retries_openai_without_using_the_pattern_scene(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
     question = "3 + 5 | 9 + 5 | 14 + 5. Use n for the changing starting number."
+    voice = "Let us record that on the canvas."
+    retry_draft = _confirmed_example_draft(
+        voice=voice,
+        target_ids=[],
+        evidence_ref="CHANGING_VALUE",
+        expression="3, 9, 14 \\text{ change}",
+    )
+    monkeypatch.setattr(
+        canvas_teaching_planner,
+        "build_openai_ai_engine_client",
+        lambda _: FakeCanvasTeachingClient(retry_draft),
+    )
 
     plan = canvas_teaching_planner.plan_composed_canvas_teaching(
         question_id="Q1",
@@ -531,17 +543,22 @@ def test_composed_turn_does_not_use_the_pattern_scene_when_its_draft_is_missing(
         source_turn_id="TURN-1",
         tutor_turn_id="TUTOR-1",
         scene_revision=3,
-        tutor_message_voice="Let us record that on the canvas.",
+        tutor_message_voice=voice,
         tutor=_pattern_tutor("CHANGING_VALUE", ["CHANGING_VALUE"]),
         question_anchors=question_text_tokens("Q1", question),
-        student_response="The starting numbers are different.",
+        student_response="3, 9, and 14 change.",
         canonical_answer="n + 5",
         active_support_level=None,
         current_unresolved_component_id=None,
         composed_draft=None,
     )
 
-    assert plan is None
+    assert plan is not None
+    assert plan.beats[0].beat_id == "confirmed-example"
+    assert any(
+        operation.kind == "WRITE_MATH"
+        for operation in plan.beats[0].operations
+    )
 
 
 def test_planner_skips_unclear_learner_input(monkeypatch) -> None:
