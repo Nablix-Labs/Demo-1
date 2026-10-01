@@ -33,6 +33,20 @@ def test_every_span_selects_its_own_token_text() -> None:
         assert _NAMES_THE_VARIABLE[token.char_start : token.char_end] == token.text
 
 
+def test_math_expressions_are_one_addressable_anchor() -> None:
+    question = "Decode 4n, pq, r², c/d and 2(x + 1)."
+
+    anchors = question_text_tokens(_QUESTION_ID, question)
+
+    assert [anchor.text for anchor in anchors if anchor.text in {"4n", "pq", "r²", "c/d", "2(x + 1)"}] == [
+        "4n",
+        "pq",
+        "r²",
+        "c/d",
+        "2(x + 1)",
+    ]
+
+
 def test_changing_step_anchors_the_named_variable() -> None:
     anchors = plan_question_anchors(
         _QUESTION_ID, _NAMES_THE_VARIABLE, _answer_spec(), "CHANGING_VALUE"

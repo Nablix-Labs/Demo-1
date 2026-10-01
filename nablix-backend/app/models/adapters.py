@@ -11,6 +11,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.canvas_memory import CanvasEvent
+from app.models.canvas_teaching import CanvasTeachingPlanDraft
 from app.models.student_model_session import AnswerSpec, QuestionType
 from app.models.guided_learning import (
     ActiveTeachingObjective,
@@ -287,6 +288,8 @@ class TutorResult(BaseModel):
     write_instruction: str | None = Field(default=None, max_length=160)
     canvas_intentions: list[CanvasPedagogyIntent] = Field(default_factory=list)
     tutor_canvas_actions: list[TutorCanvasAction] = Field(default_factory=list)
+    canvas_teaching_draft: CanvasTeachingPlanDraft | None = None
+    canvas_teaching_composer_used: bool = False
 
 
 class VoiceResult(BaseModel):
