@@ -3,9 +3,8 @@
 /**
  * /dev-screens/canvas-plan — where the teaching plan's notes land on the canvas.
  *
- * The real canvas, with the plan the backend's pattern scene sends for the
- * counter question (nablix-backend `_pattern_guided_operations`), played beat
- * by beat through the real store action. Each note should sit under the
+ * The real canvas, with the plans the live backend sent for the counter
+ * question, played beat by beat through the real store action. Each note should sit under the
  * question token its arrow starts from, right of the student's writing area,
  * with no arrow that starts from empty canvas (Sanya, 1 Oct 2026).
  */
@@ -17,11 +16,11 @@ import type { CanvasTeachingOperation, CanvasTeachingPlan } from '@/lib/canvasTe
 import type { QuestionAnchor } from '@/lib/questionAnchors';
 import { useNumeraStore } from '@/store/useNumeraStore';
 
-const QUESTION_ID = 'DEV-CANVAS-PLAN';
+const QUESTION_ID = 'Q-T01-006';
 const QUESTION = 'A counter starts at any value c and increases by 4. Write the general rule and state what changes and what stays fixed.';
 const ANCHORS: QuestionAnchor[] = [
-  { token_id: `${QUESTION_ID}:QTOKEN:1`, text: 'c', char_start: 30, char_end: 31 },
-  { token_id: `${QUESTION_ID}:QTOKEN:2`, text: '4', char_start: 49, char_end: 50 },
+  { token_id: `${QUESTION_ID}:QTOKEN:7`, text: 'c', char_start: 30, char_end: 31 },
+  { token_id: `${QUESTION_ID}:QTOKEN:11`, text: '4', char_start: 49, char_end: 50 },
 ];
 const [C, FOUR] = ANCHORS.map((a) => a.token_id);
 
@@ -47,23 +46,20 @@ function mark(id: string, kind: 'CIRCLE' | 'HIGHLIGHT', tokens: string[], color:
   };
 }
 
-/** One plan per confirmed turn, as the backend sends them. */
+/**
+ * The three plans the live backend sent on Q-T01-006, 1 Oct 2026, in order
+ * (answers "c represents a changing number", "c+4", "+4 stays the same").
+ */
 const TURNS: CanvasTeachingOperation[][] = [
+  [note('op-1', 'c: changing value', 'generic_confirmation:REQUIRED_COMPONENT_2')],
   [
-    mark('circle-changing', 'CIRCLE', [C], 'AMBER'),
-    connect('connect-changing', [C], 'changing_conclusion', 'AMBER'),
-    note('write-changing', 'c: any value', 'changing_conclusion'),
+    note('op-1', 'c+4', 'generic_confirmation:REQUIRED_COMPONENT_1', 'WRITE_MATH'),
+    { ...connect('op-2', [C, FOUR], 'generic_confirmation:REQUIRED_COMPONENT_1', 'AMBER'), color_role: 'NAVY', zone: 'REASONING' },
   ],
   [
-    mark('highlight-fixed', 'HIGHLIGHT', [FOUR], 'TEAL'),
-    connect('connect-fixed', [FOUR], 'fixed_conclusion', 'TEAL'),
-    note('write-fixed', '+ 4 stays the same', 'fixed_conclusion'),
+    { ...mark('op-1', 'HIGHLIGHT', [FOUR], 'TEAL'), color_role: undefined },
+    note('op-2', '\\Delta=4', 'generic_confirmation:REQUIRED_COMPONENT_3', 'WRITE_MATH'),
   ],
-  [
-    connect('connect-variable', [C], 'variable_conclusion', 'AMBER'),
-    note('write-variable', 'c changes', 'variable_conclusion'),
-  ],
-  [note('write-rule', 'c + 4', 'rule_conclusion', 'WRITE_MATH')],
 ];
 
 function plan(turn: number): CanvasTeachingPlan {
