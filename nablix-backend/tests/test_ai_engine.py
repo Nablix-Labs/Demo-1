@@ -1665,6 +1665,13 @@ def test_production_boundary_rewrites_an_unsafe_writer_reply_once() -> None:
         tutor_message_voice="unused",
     )
     writer = Writer()
+    rules = load_classifier_rules()
+    canvas_teaching = rules.guided_learning.canvas_teaching.model_copy(
+        update={"composer_enabled": False}
+    )
+    guided_learning = rules.guided_learning.model_copy(
+        update={"canvas_teaching": canvas_teaching}
+    )
 
     rewritten = classifier.write_redacted_response_aware_message(
         evaluation,
@@ -1672,7 +1679,7 @@ def test_production_boundary_rewrites_an_unsafe_writer_reply_once() -> None:
         rubric,
         objective,
         cast(openai_client.OpenAIAIEngineClient, writer),
-        load_classifier_rules(),
+        rules.model_copy(update={"guided_learning": guided_learning}),
     )
 
     assert writer.calls == 2
@@ -1959,6 +1966,13 @@ def test_completed_response_aware_turn_retries_follow_up_question() -> None:
         tutor_message_voice="unused",
     )
     writer = Writer()
+    rules = load_classifier_rules()
+    canvas_teaching = rules.guided_learning.canvas_teaching.model_copy(
+        update={"composer_enabled": False}
+    )
+    guided_learning = rules.guided_learning.model_copy(
+        update={"canvas_teaching": canvas_teaching}
+    )
 
     rewritten = classifier.write_redacted_response_aware_message(
         evaluation,
@@ -1966,7 +1980,7 @@ def test_completed_response_aware_turn_retries_follow_up_question() -> None:
         rubric,
         objective,
         cast(openai_client.OpenAIAIEngineClient, writer),
-        load_classifier_rules(),
+        rules.model_copy(update={"guided_learning": guided_learning}),
     )
 
     assert len(writer.contexts) == 2
