@@ -413,7 +413,12 @@ def canvas_operation_output_schema(
     write_properties.update({
         "kind": {"type": "string", "enum": ["WRITE_TEXT", "WRITE_MATH"]},
         "target_kind": {"type": "string", "enum": ["CANVAS_ZONE"]},
-        "target_ids": {"type": "array", "const": ["ZONE:REASONING"]},
+        "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1,
+            "items": {"type": "string", "enum": ["ZONE:REASONING"]},
+        },
         "zone": {"type": "string", "enum": ["REASONING"]},
         "persistence": {"type": "string", "enum": ["PERSIST"]},
         "evidence_ref": {"type": "string", "enum": evidence_ids},
