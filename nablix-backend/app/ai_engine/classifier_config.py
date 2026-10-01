@@ -201,6 +201,8 @@ class PatternAddConstantSceneConfig(StrictSchema):
 
 class CanvasTeachingConfig(StrictSchema):
     enabled: StrictBool
+    composer_enabled: StrictBool
+    composer_system_prompt: str
     maximum_beats: int = Field(ge=1, le=8)
     maximum_operations_per_beat: int = Field(ge=1, le=4)
     direct_explanation_enabled: StrictBool
