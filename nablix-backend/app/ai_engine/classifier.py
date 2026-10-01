@@ -53,6 +53,7 @@ from app.models.adapters import (
     SpatialMathToken,
 )
 from app.models.canvas_memory import CanvasEvent
+from app.models.canvas_teaching import CanvasTeachingPlanDraft
 from app.models.guided_learning import (
     ActiveTeachingObjective,
     FocusedComponentEvidence,
@@ -4325,6 +4326,44 @@ def write_deterministic_guided_follow_up(
     )
 
 
+def composer_canvas_contract_rejection(
+    draft: CanvasTeachingPlanDraft | None,
+    canvas_context: object,
+) -> str | None:
+    """Return the exact composer-contract violation before publishing a tutor turn."""
+
+    if not isinstance(canvas_context, dict):
+        return "canvas_context_missing"
+    allowed_target_ids = canvas_context.get("allowed_target_ids")
+    authorized_evidence_ids = canvas_context.get("authorized_evidence_ids")
+    require_guided_evidence_ink = canvas_context.get("require_guided_evidence_ink")
+    if not isinstance(allowed_target_ids, list) or not isinstance(authorized_evidence_ids, list):
+        return "canvas_context_constraints_missing"
+    if draft is None:
+        return "canvas_draft_required" if require_guided_evidence_ink is True else None
+    allowed_targets = set(allowed_target_ids)
+    authorized_evidence = set(authorized_evidence_ids)
+    persistent_authorized_write = False
+    for beat in draft.beats:
+        for operation in beat.operations:
+            if any(target_id not in allowed_targets for target_id in operation.target_ids):
+                return "canvas_target_not_authorized"
+            if (
+                operation.evidence_ref is not None
+                and operation.evidence_ref not in authorized_evidence
+            ):
+                return "canvas_evidence_not_authorized"
+            if (
+                operation.kind in {"WRITE_TEXT", "WRITE_MATH"}
+                and operation.persistence == "PERSIST"
+                and operation.evidence_ref in authorized_evidence
+            ):
+                persistent_authorized_write = True
+    if require_guided_evidence_ink is True and not persistent_authorized_write:
+        return "canvas_guided_evidence_ink_required"
+    return None
+
+
 def write_redacted_response_aware_message(
     evaluation: GuidedEvaluation,
     request: ClassificationRequest,
@@ -4376,6 +4415,7 @@ def write_redacted_response_aware_message(
     }
     if composer_enabled:
         composer_anchors = question_text_tokens(request.question_id, request.question)
+        authorized_evidence_ids = sorted(set(evaluation.newly_confirmed_concept_ids))
         context["canvas_context"] = {
             "question_id": request.question_id,
             "allowed_question_anchors": [
@@ -4388,7 +4428,10 @@ def write_redacted_response_aware_message(
                 "ZONE:REASONING",
                 "ZONE:TUTOR_SOLUTION",
             ],
-            "current_turn_evidence_ids": evaluation.newly_confirmed_concept_ids,
+            "current_turn_evidence_ids": authorized_evidence_ids,
+            "authorized_evidence_ids": authorized_evidence_ids,
+            "teaching_mode": "GUIDED",
+            "require_guided_evidence_ink": bool(authorized_evidence_ids),
             "maximum_beats": canvas_config.maximum_beats,
             "maximum_operations_per_beat": canvas_config.maximum_operations_per_beat,
         }
@@ -4416,16 +4459,23 @@ def write_redacted_response_aware_message(
                 composer_used = True
             except AdapterError as error:
                 logger.warning(
-                    "guided_teaching_composer_not_used",
+                    "guided_teaching_composer_retry",
                     extra={
                         "question_id": request.question_id,
+                        "attempt": attempt + 1,
                         "reason": error.detail,
                     },
                 )
-                message = openai_client.write_guided_fact_budget_message(
-                    system_prompt=rules.guided_learning.response_aware_writer_system_prompt,
-                    wording_context=context,
-                )
+                if attempt >= rules.guided_learning.production_boundary_writer_maximum_retries:
+                    raise
+                context = {
+                    **context,
+                    "writer_validation_feedback": (
+                        "Return a complete valid tutor response and canvas draft. "
+                        "Use only the supplied target and evidence IDs."
+                    ),
+                }
+                continue
         else:
             message = openai_client.write_guided_fact_budget_message(
                 system_prompt=rules.guided_learning.response_aware_writer_system_prompt,
@@ -4454,6 +4504,14 @@ def write_redacted_response_aware_message(
             ),
             "canvas_teaching_composer_used": composer_used,
         })
+        canvas_rejection = (
+            composer_canvas_contract_rejection(
+                message.canvas_teaching_draft,
+                context["canvas_context"],
+            )
+            if composer_used
+            else None
+        )
         writer_action = getattr(message, "learner_action", None)
         required_action = required_response_aware_learner_action(rewritten)
         action_rejection = (
@@ -4473,6 +4531,8 @@ def write_redacted_response_aware_message(
                 rewritten, request, rubric, objective, rules,
             )
         if rejection is None:
+            rejection = canvas_rejection
+        if rejection is None:
             return rewritten
         if attempt >= rules.guided_learning.production_boundary_writer_maximum_retries:
             raise AdapterError("openai_ai_engine", f"Redacted tutor wording rejected: {rejection}.")
@@ -4486,7 +4546,10 @@ def write_redacted_response_aware_message(
         )
         context = {
             **context,
-            "writer_validation_feedback": rules.guided_learning.production_boundary_writer_retry_feedback,
+            "writer_validation_feedback": (
+                f"{rules.guided_learning.production_boundary_writer_retry_feedback} "
+                f"Canvas draft correction: {rejection}"
+            ),
         }
     raise RuntimeError("Production-boundary writer retry loop exited unexpectedly.")
 
