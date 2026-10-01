@@ -2647,6 +2647,27 @@ def _canvas_events_for_context(
     return [*stored_events, *new_events]
 
 
+def _non_visual_tutor_canvas_actions(
+    actions: list[TutorCanvasAction],
+) -> list[TutorCanvasAction]:
+    """Keep support controls when the canvas teaching plan owns the visual layer."""
+
+    visual_types = {
+        "HIGHLIGHT",
+        "FOCUS",
+        "GROUP",
+        "ARROW",
+        "INSERT_LABEL",
+        "INSERT_MATH",
+    }
+    return [
+        action
+        for action in actions
+        if action.type not in visual_types
+        or action.target_kind == "QUESTION_OPTION"
+    ]
+
+
 def _canvas_memory_update_with_tutor_actions(
     request: InteractionRequest,
     session: SessionRecord,
@@ -5321,7 +5342,7 @@ async def _process_interaction(
             "phase3_review_evidence": tutor.phase3_review_evidence,
         }
     )
-    if response.current_phase == "GUIDED_PRACTICE":
+    if response.current_phase == "GUIDED_PRACTICE" and not question_advanced:
         canvas_plan_arguments = {
             "question_id": response.question_id,
             "question": response.current_question,
@@ -5336,18 +5357,35 @@ async def _process_interaction(
             "active_support_level": response.active_support_level,
             "current_unresolved_component_id": response.first_unresolved_concept_id,
         }
+        canvas_teaching_plan = (
+            plan_composed_canvas_teaching(
+                **canvas_plan_arguments,
+                composed_draft=tutor.canvas_teaching_draft,
+            )
+            if tutor.canvas_teaching_composer_used
+            else plan_canvas_teaching(
+                **canvas_plan_arguments,
+            )
+        )
         response = response.model_copy(
             update={
-                "canvas_teaching_plan": (
-                    plan_composed_canvas_teaching(
-                        **canvas_plan_arguments,
-                        composed_draft=tutor.canvas_teaching_draft,
-                    )
-                    if tutor.canvas_teaching_composer_used
-                    else plan_canvas_teaching(
-                        **canvas_plan_arguments,
-                    )
-                )
+                "canvas_teaching_plan": canvas_teaching_plan,
+                "tutor_canvas_actions": (
+                    _non_visual_tutor_canvas_actions(tutor.tutor_canvas_actions)
+                    if canvas_teaching_plan is not None
+                    else tutor.tutor_canvas_actions
+                ),
+            }
+        )
+    elif question_advanced:
+        # The student response and legacy visual actions belong to the question
+        # just completed. They must not annotate the question that just opened.
+        response = response.model_copy(
+            update={
+                "canvas_teaching_plan": None,
+                "tutor_canvas_actions": _non_visual_tutor_canvas_actions(
+                    tutor.tutor_canvas_actions
+                ),
             }
         )
     # Both sides of the turn must be a live Phase 3 question: turn_session keeps

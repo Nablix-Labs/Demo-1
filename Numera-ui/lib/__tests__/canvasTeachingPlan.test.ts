@@ -4,6 +4,7 @@
  */
 
 import { handwrittenMath } from '@/lib/canvasTeachingScene';
+import { actionsOutsideTeachingPlan } from '@/lib/interactionPresentation';
 import { describe, expect, it } from 'vitest';
 import {
   beatEffects, beatStart, nextTrailRow, operationPermitted, planMatchesResponse, planStillVisible,
@@ -89,6 +90,39 @@ describe('which plan applies (rule 1)', () => {
     expect(planStillVisible(plan(), { ...scene, questionId: 'Q2' })).toBe(false);
     expect(planStillVisible(plan(), { ...scene, phase: 'INDEPENDENT_PRACTICE' })).toBe(false);
     expect(planStillVisible(plan(), { ...scene, version: 4 })).toBe(false);
+  });
+});
+
+describe('legacy tutor actions beside a teaching plan', () => {
+  it('keeps support controls but drops duplicate visual actions', () => {
+    const actions = actionsOutsideTeachingPlan([
+      {
+        action_id: 'highlight-c', type: 'HIGHLIGHT', target_kind: 'QUESTION_ANCHOR',
+        target_object_id: 'Q1:QTOKEN:1', confirmed_component_id: 'C1', text: null,
+        source_id: null, answer_reveal_allowed: false,
+      },
+      {
+        action_id: 'write-c', type: 'INSERT_LABEL', target_kind: 'TUTOR_ANCHOR',
+        target_object_id: 'TUTOR_ANCHOR:CONFIRMED:Q1:1', confirmed_component_id: 'C1', text: 'c changes',
+        source_id: null, answer_reveal_allowed: false,
+      },
+      {
+        action_id: 'cue', type: 'SHOW_CUE', target_kind: 'QUESTION_ANCHOR',
+        target_object_id: 'Q1:QTOKEN:1', confirmed_component_id: null, text: null,
+        source_id: null, answer_reveal_allowed: false,
+      },
+    ], plan());
+
+    expect(actions.map((action) => action.action_id)).toEqual(['cue']);
+  });
+
+  it('keeps legacy actions when no teaching plan exists', () => {
+    const action = {
+      action_id: 'highlight-c', type: 'HIGHLIGHT' as const, target_kind: 'QUESTION_ANCHOR' as const,
+      target_object_id: 'Q1:QTOKEN:1', confirmed_component_id: 'C1', text: null,
+      source_id: null, answer_reveal_allowed: false,
+    };
+    expect(actionsOutsideTeachingPlan([action], null)).toEqual([action]);
   });
 });
 

@@ -334,6 +334,9 @@ def _plan_canvas_teaching(
     )
     if accepted is None:
         return None
+    accepted = _remove_unpaired_connectors(accepted)
+    if not accepted:
+        return None
     accepted = _add_confirmed_source_highlights(
         accepted,
         confirmed_source_targets,
@@ -349,6 +352,29 @@ def _plan_canvas_teaching(
         teaching_mode=teaching_mode,
         beats=accepted,
     )
+
+
+def _remove_unpaired_connectors(
+    beats: list[CanvasTeachingBeat],
+) -> list[CanvasTeachingBeat]:
+    """Keep arrows only when their own beat also draws the note they explain."""
+
+    result: list[CanvasTeachingBeat] = []
+    for beat in beats:
+        note_keys = {
+            (operation.evidence_ref, operation.scene_slot)
+            for operation in beat.operations
+            if operation.kind in {"WRITE_TEXT", "WRITE_MATH"}
+        }
+        operations = [
+            operation
+            for operation in beat.operations
+            if operation.kind != "CONNECT"
+            or (operation.evidence_ref, operation.scene_slot) in note_keys
+        ]
+        if operations:
+            result.append(beat.model_copy(update={"operations": operations}))
+    return result
 
 
 def _structural_attention_operations(

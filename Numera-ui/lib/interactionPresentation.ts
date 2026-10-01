@@ -85,6 +85,24 @@ export function acceptResponse(response: VersionedResponse): boolean {
   return true;
 }
 
+export function actionsOutsideTeachingPlan(
+  actions: TutorCanvasAction[],
+  plan: CanvasTeachingPlan | null | undefined,
+): TutorCanvasAction[] {
+  if (!plan?.beats.length) return actions;
+  return actions.filter((action) => {
+    if (action.type === 'HIGHLIGHT' && action.target_kind === 'QUESTION_OPTION') return true;
+    return !(
+      action.type === 'HIGHLIGHT'
+      || action.type === 'FOCUS'
+      || action.type === 'GROUP'
+      || action.type === 'ARROW'
+      || action.type === 'INSERT_LABEL'
+      || action.type === 'INSERT_MATH'
+    );
+  });
+}
+
 /**
  * A hint the backend has already authorised on this turn.
  *
@@ -252,7 +270,9 @@ export function applyInteractionSupport(response: SupportPresentation): string {
   const tutorCanvasActions = response.tutor_canvas_actions
     ?? (response as InteractionResponse).tutor_canvas_actions
     ?? [];
-  useNumeraStore.getState().applyTutorCanvasActions(tutorCanvasActions);
+  useNumeraStore.getState().applyTutorCanvasActions(
+    actionsOutsideTeachingPlan(tutorCanvasActions, response.canvas_teaching_plan),
+  );
 
   // The visual plan for this turn, drawn in step with the voice. Scheduled on
   // EVERY reply, including one without a plan: a new reply supersedes the last

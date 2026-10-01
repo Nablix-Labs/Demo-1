@@ -33,6 +33,7 @@ from app.models.adapters import (
     VisionOCRResult,
 )
 from app.models.canvas import CanvasSubmitRequest
+from app.models.guided_learning import TutorCanvasAction
 from app.models.session import SessionRecord
 from app.services import canvas_evidence, canvas_service, interaction_service, session_service
 from app.services.snapshot_store import get_snapshot
@@ -50,6 +51,39 @@ from tests.test_session_events import (
 client = TestClient(app, headers={"Authorization": "Bearer test-token"})
 
 VALID_SNAPSHOT_DATA_URL = "data:image/png;base64,aGVsbG8="
+
+
+def test_canvas_plan_owns_legacy_visual_actions_when_present() -> None:
+    actions = [
+        TutorCanvasAction(
+            action_id="highlight-c",
+            type="HIGHLIGHT",
+            target_kind="QUESTION_ANCHOR",
+            target_object_id="Q1:QTOKEN:1",
+            confirmed_component_id="CHANGING_VALUE",
+            text=None,
+            source_id=None,
+        ),
+        TutorCanvasAction(
+            action_id="rescue-step",
+            type="TUTOR_SOLVED_STEP",
+            target_kind="TUTOR_ANCHOR",
+            target_object_id="TUTOR_ANCHOR:RESCUE:R1:STEP:1",
+            confirmed_component_id=None,
+            text="c + 4",
+            source_id="R1",
+            answer_reveal_allowed=False,
+            rescue_id="R1",
+            step_index=1,
+            total_steps=2,
+            presentation_mode="TUTOR_SOLVED",
+            return_target_object_id="Q1:QTOKEN:1",
+        ),
+    ]
+
+    accepted = interaction_service._non_visual_tutor_canvas_actions(actions)
+
+    assert [action.action_id for action in accepted] == ["rescue-step"]
 
 
 def _real_png_data_url() -> str:

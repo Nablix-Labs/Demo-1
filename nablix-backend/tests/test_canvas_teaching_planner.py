@@ -3,7 +3,12 @@ import pytest
 from app.ai_engine.classifier_config import load_classifier_rules
 from app.core.config import Settings
 from app.models.adapters import TutorResult
-from app.models.canvas_teaching import CanvasTeachingPlanDraft
+from app.models.canvas_teaching import (
+    CanvasSpeechAnchor,
+    CanvasTeachingBeat,
+    CanvasTeachingOperation,
+    CanvasTeachingPlanDraft,
+)
 from app.models.guided_learning import (
     GeneratedConcept,
     GeneratedQuestionRubric,
@@ -30,6 +35,115 @@ class FakeCanvasTeachingClient:
         assert context["question_id"]
         assert context["allowed_scene_slots"]
         return self.draft
+
+
+def test_planner_removes_a_connector_without_a_matching_reasoning_note() -> None:
+    beat = CanvasTeachingBeat(
+        beat_id="unpaired-connector",
+        sequence=1,
+        speech_anchor=CanvasSpeechAnchor(start_char=0, end_char=4, text="Look"),
+        operations=[
+            CanvasTeachingOperation(
+                operation_id="connector",
+                kind="CONNECT",
+                target_kind="QUESTION_ANCHOR",
+                target_ids=["Q1:QTOKEN:1"],
+                zone="REASONING",
+                persistence="PERSIST",
+                evidence_ref="CHANGING_VALUE",
+                color_role="NAVY",
+                scene_slot="changing_conclusion",
+            )
+        ],
+    )
+
+    assert canvas_teaching_planner._remove_unpaired_connectors([beat]) == []
+
+
+def test_planner_keeps_a_connector_when_its_reasoning_note_is_present() -> None:
+    beat = CanvasTeachingBeat(
+        beat_id="paired-connector",
+        sequence=1,
+        speech_anchor=CanvasSpeechAnchor(start_char=0, end_char=4, text="Look"),
+        operations=[
+            CanvasTeachingOperation(
+                operation_id="connector",
+                kind="CONNECT",
+                target_kind="QUESTION_ANCHOR",
+                target_ids=["Q1:QTOKEN:1"],
+                zone="REASONING",
+                persistence="PERSIST",
+                evidence_ref="CHANGING_VALUE",
+                color_role="NAVY",
+                scene_slot="changing_conclusion",
+            ),
+            CanvasTeachingOperation(
+                operation_id="note",
+                kind="WRITE_TEXT",
+                target_kind="CANVAS_ZONE",
+                target_ids=["ZONE:REASONING"],
+                zone="REASONING",
+                persistence="PERSIST",
+                evidence_ref="CHANGING_VALUE",
+                text="starts change",
+                color_role="NAVY",
+                scene_slot="changing_conclusion",
+            ),
+        ],
+    )
+
+    accepted = canvas_teaching_planner._remove_unpaired_connectors([beat])
+
+    assert [operation.kind for operation in accepted[0].operations] == [
+        "CONNECT",
+        "WRITE_TEXT",
+    ]
+
+
+def test_planner_removes_a_connector_that_would_precede_its_note() -> None:
+    connector_beat = CanvasTeachingBeat(
+        beat_id="connector-first",
+        sequence=1,
+        speech_anchor=CanvasSpeechAnchor(start_char=0, end_char=4, text="Look"),
+        operations=[
+            CanvasTeachingOperation(
+                operation_id="connector",
+                kind="CONNECT",
+                target_kind="QUESTION_ANCHOR",
+                target_ids=["Q1:QTOKEN:1"],
+                zone="REASONING",
+                persistence="PERSIST",
+                evidence_ref="CHANGING_VALUE",
+                color_role="NAVY",
+                scene_slot="changing_conclusion",
+            )
+        ],
+    )
+    note_beat = CanvasTeachingBeat(
+        beat_id="note-second",
+        sequence=2,
+        speech_anchor=CanvasSpeechAnchor(start_char=5, end_char=9, text="This"),
+        operations=[
+            CanvasTeachingOperation(
+                operation_id="note",
+                kind="WRITE_TEXT",
+                target_kind="CANVAS_ZONE",
+                target_ids=["ZONE:REASONING"],
+                zone="REASONING",
+                persistence="PERSIST",
+                evidence_ref="CHANGING_VALUE",
+                text="starts change",
+                color_role="NAVY",
+                scene_slot="changing_conclusion",
+            )
+        ],
+    )
+
+    accepted = canvas_teaching_planner._remove_unpaired_connectors(
+        [connector_beat, note_beat]
+    )
+
+    assert [beat.beat_id for beat in accepted] == ["note-second"]
 
 
 def _confirmed_example_draft(
