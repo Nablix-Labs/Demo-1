@@ -519,6 +519,31 @@ def test_composed_draft_is_validated_without_a_second_openai_call(monkeypatch) -
     )
 
 
+def test_composed_turn_does_not_use_the_pattern_scene_when_its_draft_is_missing(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
+    question = "3 + 5 | 9 + 5 | 14 + 5. Use n for the changing starting number."
+
+    plan = canvas_teaching_planner.plan_composed_canvas_teaching(
+        question_id="Q1",
+        question=question,
+        source_turn_id="TURN-1",
+        tutor_turn_id="TUTOR-1",
+        scene_revision=3,
+        tutor_message_voice="Let us record that on the canvas.",
+        tutor=_pattern_tutor("CHANGING_VALUE", ["CHANGING_VALUE"]),
+        question_anchors=question_text_tokens("Q1", question),
+        student_response="The starting numbers are different.",
+        canonical_answer="n + 5",
+        active_support_level=None,
+        current_unresolved_component_id=None,
+        composed_draft=None,
+    )
+
+    assert plan is None
+
+
 def test_planner_skips_unclear_learner_input(monkeypatch) -> None:
     rules = _enabled_rules()
     contribution = StudentContribution(
