@@ -346,18 +346,11 @@ def guided_teaching_composer_schema(
         authorized_evidence_ids = canvas_context.get("authorized_evidence_ids")
         operation_schema = schema.get("$defs", {}).get("CanvasTeachingOperation")
         if isinstance(operation_schema, dict):
-            target_ids_schema = operation_schema.get("properties", {}).get("target_ids")
-            if isinstance(target_ids_schema, dict) and isinstance(allowed_target_ids, list):
-                target_ids_schema["items"] = {
-                    "type": "string",
-                    "enum": allowed_target_ids,
-                }
-            evidence_schema = operation_schema.get("properties", {}).get("evidence_ref")
-            if isinstance(evidence_schema, dict) and isinstance(authorized_evidence_ids, list):
-                evidence_schema["anyOf"] = [
-                    {"type": "string", "enum": authorized_evidence_ids},
-                    {"type": "null"},
-                ]
+            schema["$defs"]["CanvasTeachingOperation"] = canvas_operation_output_schema(
+                operation_schema,
+                allowed_target_ids if isinstance(allowed_target_ids, list) else [],
+                authorized_evidence_ids if isinstance(authorized_evidence_ids, list) else [],
+            )
         if canvas_context.get("require_guided_evidence_ink") is True:
             properties = schema.get("properties")
             if isinstance(properties, dict):
@@ -376,6 +369,76 @@ def guided_teaching_composer_schema(
             "maxLength": 280,
         }
     return schema
+
+
+def canvas_operation_output_schema(
+    operation_schema: dict[str, object],
+    allowed_target_ids: list[object],
+    authorized_evidence_ids: list[object],
+) -> dict[str, object]:
+    """Restrict each canvas operation kind to its valid output shape."""
+
+    target_ids = [target_id for target_id in allowed_target_ids if isinstance(target_id, str)]
+    question_target_ids = [target_id for target_id in target_ids if not target_id.startswith("ZONE:")]
+    evidence_ids = [evidence_id for evidence_id in authorized_evidence_ids if isinstance(evidence_id, str)]
+
+    def variant() -> dict[str, object]:
+        return deepcopy(operation_schema)
+
+    attention = variant()
+    attention_properties = attention["properties"]
+    assert isinstance(attention_properties, dict)
+    attention_properties.update({
+        "kind": {"type": "string", "enum": ["FOCUS", "HIGHLIGHT", "CIRCLE", "BOX", "CHECK"]},
+        "target_kind": {"type": "string", "enum": ["QUESTION_ANCHOR"]},
+        "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": {"type": "string", "enum": question_target_ids},
+        },
+        "zone": {"type": "string", "enum": ["QUESTION"]},
+        "evidence_ref": {"type": "null"},
+        "text": {"type": "null"},
+        "latex": {"type": "null"},
+        "scene_slot": {"type": "null"},
+    })
+
+    if not evidence_ids:
+        return {"anyOf": [attention]}
+
+    write = variant()
+    write_properties = write["properties"]
+    assert isinstance(write_properties, dict)
+    write_properties.update({
+        "kind": {"type": "string", "enum": ["WRITE_TEXT", "WRITE_MATH"]},
+        "target_kind": {"type": "string", "enum": ["CANVAS_ZONE"]},
+        "target_ids": {"type": "array", "const": ["ZONE:REASONING"]},
+        "zone": {"type": "string", "enum": ["REASONING"]},
+        "persistence": {"type": "string", "enum": ["PERSIST"]},
+        "evidence_ref": {"type": "string", "enum": evidence_ids},
+        "color_role": {"type": "string", "enum": ["NAVY"]},
+    })
+
+    connector = variant()
+    connector_properties = connector["properties"]
+    assert isinstance(connector_properties, dict)
+    connector_properties.update({
+        "kind": {"type": "string", "enum": ["CONNECT"]},
+        "target_kind": {"type": "string", "enum": ["QUESTION_ANCHOR"]},
+        "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": {"type": "string", "enum": question_target_ids},
+        },
+        "zone": {"type": "string", "enum": ["REASONING"]},
+        "persistence": {"type": "string", "enum": ["PERSIST"]},
+        "evidence_ref": {"type": "string", "enum": evidence_ids},
+        "text": {"type": "null"},
+        "latex": {"type": "null"},
+    })
+    return {"anyOf": [write, attention, connector]}
 
 
 @dataclass(frozen=True)

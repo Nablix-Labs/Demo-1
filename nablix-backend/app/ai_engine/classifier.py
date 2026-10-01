@@ -5176,7 +5176,12 @@ def guided_tutor_message_reveal_reason(
             message,
             flags=re.IGNORECASE,
         )
-    if guided_message_reveals_active_roles(role_checked_message, request, objective):
+    if guided_message_reveals_active_roles(
+        role_checked_message,
+        request,
+        rubric,
+        objective,
+    ):
         return "ACTIVE_ROLE_REVEAL"
     if guided_message_reveals_fixed_amount_for_mismatched_rule(message, request):
         return "FIXED_AMOUNT_REVEAL"
@@ -5190,7 +5195,12 @@ def guided_tutor_message_reveal_reason(
         or guided_message_reveals_fixed_amount_for_mismatched_rule(
             generated_support, request
         )
-        or guided_message_reveals_active_roles(generated_support, request, objective)
+            or guided_message_reveals_active_roles(
+                generated_support,
+                request,
+                rubric,
+                objective,
+            )
     ):
         return "GENERATED_SUPPORT_REVEAL"
     if evaluation.contribution is not None:
@@ -5199,7 +5209,12 @@ def guided_tutor_message_reveal_reason(
             if (
                 contains_answer_reveal(row_text, request.correct_answer, rules)
                 or guided_message_reveals_fixed_amount_for_mismatched_rule(row_text, request)
-                or guided_message_reveals_active_roles(row_text, request, objective)
+                or guided_message_reveals_active_roles(
+                    row_text,
+                    request,
+                    rubric,
+                    objective,
+                )
             ):
                 return "GENERATED_VISUAL_REVEAL"
     return None
@@ -5208,6 +5223,7 @@ def guided_tutor_message_reveal_reason(
 def guided_message_reveals_active_roles(
     message: str,
     request: ClassificationRequest,
+    rubric: GeneratedQuestionRubric,
     objective: ActiveTeachingObjective,
 ) -> bool:
     """Keep role teaching from silently supplying unresolved active-expression facts."""
@@ -5220,16 +5236,38 @@ def guided_message_reveals_active_roles(
         return False
     variable, _, fixed_value = expression
     missing = set(objective.missing_concept_ids)
+    changing_component_ids = {
+        concept.concept_id
+        for concept in rubric.required_concepts
+        if re.search(r"\b(chang(?:e|es|ing)|var(?:y|ies|iable))\b", concept.description, re.IGNORECASE)
+    }
+    fixed_component_ids = {
+        concept.concept_id
+        for concept in rubric.required_concepts
+        if re.search(r"\b(fixed|stays? (?:the )?same|constant|repeats?)\b", concept.description, re.IGNORECASE)
+    }
+    changing_role_missing = bool(missing & changing_component_ids)
+    fixed_role_missing = bool(missing & fixed_component_ids)
     checks: list[str] = []
-    role_objective_is_explicit = bool(
-        missing.intersection({"CHANGING_VALUE", "FIXED_VALUE"})
-    )
-    if not role_objective_is_explicit or "CHANGING_VALUE" in missing:
+    changing_role_is_described = bool(changing_component_ids)
+    fixed_role_is_described = bool(fixed_component_ids)
+    role_objective_is_explicit = bool(missing.intersection({"CHANGING_VALUE", "FIXED_VALUE"}))
+    if (
+        changing_role_missing
+        or (not changing_role_is_described and (
+            not role_objective_is_explicit or "CHANGING_VALUE" in missing
+        ))
+    ):
         checks.extend((
             rf"\b{re.escape(variable)}\b.{{0,40}}\b(?:changes|change|varies|vary|variable)\b",
             rf"\b(?:changes|change|varies|vary|variable)\b.{{0,40}}\b{re.escape(variable)}\b",
         ))
-    if not role_objective_is_explicit or "FIXED_VALUE" in missing:
+    if (
+        fixed_role_missing
+        or (not fixed_role_is_described and (
+            not role_objective_is_explicit or "FIXED_VALUE" in missing
+        ))
+    ):
         checks.extend((
             rf"\b{re.escape(fixed_value)}\b.{{0,40}}\b(?:fixed|stays the same|constant)\b",
             rf"\b(?:fixed|stays the same|constant)\b.{{0,40}}\b{re.escape(fixed_value)}\b",
