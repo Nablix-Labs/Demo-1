@@ -1962,7 +1962,9 @@ def test_composer_schema_limits_canvas_targets_and_evidence_to_turn_context() ->
 
     assert write_properties["target_ids"] == {
         "type": "array",
-        "const": ["ZONE:REASONING"],
+        "minItems": 1,
+        "maxItems": 1,
+        "items": {"type": "string", "enum": ["ZONE:REASONING"]},
     }
     assert write_properties["evidence_ref"] == {
         "type": "string",
