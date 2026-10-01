@@ -96,9 +96,9 @@ def plan_composed_canvas_teaching(
     current_unresolved_component_id: str | None,
     composed_draft: CanvasTeachingPlanDraft | None,
 ) -> CanvasTeachingPlan | None:
-    """Validate a board draft composed with the learner-safe tutor response."""
+    """Publish only the board draft composed with the learner-safe tutor response."""
 
-    plan = _plan_canvas_teaching(
+    return _plan_canvas_teaching(
         question_id=question_id,
         question=question,
         source_turn_id=source_turn_id,
@@ -113,26 +113,6 @@ def plan_composed_canvas_teaching(
         current_unresolved_component_id=current_unresolved_component_id,
         composed_draft=composed_draft,
         allow_model_generation=False,
-        allow_pattern_scene=False,
-        allow_structural_attention=False,
-    )
-    if plan is not None:
-        return plan
-    return _plan_canvas_teaching(
-        question_id=question_id,
-        question=question,
-        source_turn_id=source_turn_id,
-        tutor_turn_id=tutor_turn_id,
-        scene_revision=scene_revision,
-        tutor_message_voice=tutor_message_voice,
-        tutor=tutor,
-        question_anchors=question_anchors,
-        student_response=student_response,
-        canonical_answer=canonical_answer,
-        active_support_level=active_support_level,
-        current_unresolved_component_id=current_unresolved_component_id,
-        composed_draft=None,
-        allow_model_generation=True,
         allow_pattern_scene=False,
         allow_structural_attention=False,
     )
@@ -258,7 +238,7 @@ def _plan_canvas_teaching(
     }
     require_guided_evidence_ink = (
         config.guided_evidence_writing_enabled
-        and teaching_mode == "GUIDED"
+        and teaching_mode in {"GUIDED", "HINT"}
         and bool(authorized_evidence)
     )
     if composed_draft is None and not allow_model_generation:
@@ -1283,6 +1263,7 @@ def _validate_draft(
                 question_anchor_texts=question_anchor_texts,
                 confirmed_source_targets=confirmed_source_targets,
                 current_evidence=current_evidence,
+                guided_evidence_writing_allowed=require_guided_evidence_ink,
                 learner_answer_confirmed=learner_answer_confirmed,
                 teaching_mode=teaching_mode,
                 direct_explanation=direct_explanation,
@@ -1320,7 +1301,7 @@ def _validate_draft(
                 )
                 continue
             if (
-                teaching_mode == "GUIDED"
+                require_guided_evidence_ink
                 and is_write
                 and guided_evidence_writes
                 >= config.guided_evidence_maximum_written_operations
@@ -1335,7 +1316,7 @@ def _validate_draft(
                 continue
             if is_write:
                 direct_explanation_writes += int(direct_explanation)
-                guided_evidence_writes += int(teaching_mode == "GUIDED")
+                guided_evidence_writes += int(require_guided_evidence_ink)
             operations.append(_with_scene_slot(operation, config))
         if not operations:
             logger.warning(
@@ -1399,6 +1380,7 @@ def _operation_rejection_rule(
     question_anchor_texts: dict[str, str],
     confirmed_source_targets: list[ConfirmedCanvasSource],
     current_evidence: set[str],
+    guided_evidence_writing_allowed: bool,
     learner_answer_confirmed: bool,
     teaching_mode: CanvasTeachingMode,
     direct_explanation: bool,
@@ -1421,7 +1403,7 @@ def _operation_rejection_rule(
     if operation.zone == "QUESTION" and operation.kind in {"WRITE_TEXT", "WRITE_MATH"}:
         return "writing_in_question_zone"
     if operation.kind == "CONNECT":
-        if teaching_mode != "GUIDED":
+        if teaching_mode != "GUIDED" and not guided_evidence_writing_allowed:
             return "connect_not_allowed_outside_guided_mode"
         if operation.target_kind != "QUESTION_ANCHOR":
             return "connect_source_must_be_question_anchor"
@@ -1444,7 +1426,10 @@ def _operation_rejection_rule(
             if operation.evidence_ref is None
             else "attention_mark_must_not_reference_evidence"
         )
-    if teaching_mode in config.visual_only_modes:
+    if (
+        teaching_mode in config.visual_only_modes
+        and not guided_evidence_writing_allowed
+    ):
         return "writing_not_allowed_in_visual_only_mode"
     content = operation.latex or operation.text or ""
     if (
@@ -1474,7 +1459,7 @@ def _operation_rejection_rule(
         if not _content_terms_are_spoken(content, " ".join(tutor_solved_step_texts)):
             return "tutor_solved_content_not_in_approved_step"
         return None
-    if teaching_mode == "GUIDED":
+    if guided_evidence_writing_allowed:
         matching_sources = [
             source
             for source in confirmed_source_targets

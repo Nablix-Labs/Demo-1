@@ -1830,6 +1830,7 @@ def test_composer_canvas_contract_requires_authorized_persistent_ink() -> None:
         "allowed_target_ids": ["Q-T01-006:QTOKEN:7", "ZONE:REASONING"],
         "authorized_evidence_ids": ["REQUIRED_COMPONENT_1"],
         "require_guided_evidence_ink": True,
+        "confirmed_evidence_writing_allowed": True,
     }
 
     assert classifier.composer_canvas_contract_rejection(draft, canvas_context) is None

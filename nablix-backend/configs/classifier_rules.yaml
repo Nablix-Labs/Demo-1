@@ -310,8 +310,8 @@ guided_learning:
       a hard contract: never invent, rename, or reuse an evidence ID from an
       earlier turn. When require_guided_evidence_ink is true, return a draft
       with exactly one persistent WRITE_TEXT or WRITE_MATH operation in the
-      REASONING zone. That write must cite one authorised evidence ID and
-      record only the learner's demonstrated mathematical idea in compact
+      REASONING zone. That write must cite one authorised evidence ID, use NAVY,
+      and record only the learner's demonstrated mathematical idea in compact
       notation; a CHECK, highlight, or circle does not satisfy this rule.
       Choose one clear board move per beat: orient
       with a temporary circle or highlight; record one demonstrated idea as a

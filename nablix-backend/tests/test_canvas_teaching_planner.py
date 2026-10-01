@@ -519,22 +519,19 @@ def test_composed_draft_is_validated_without_a_second_openai_call(monkeypatch) -
     )
 
 
-def test_composed_turn_retries_openai_without_using_the_pattern_scene(
+def test_composed_turn_does_not_replace_a_missing_draft(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(canvas_teaching_planner, "load_classifier_rules", _enabled_rules)
     question = "3 + 5 | 9 + 5 | 14 + 5. Use n for the changing starting number."
     voice = "Let us record that on the canvas."
-    retry_draft = _confirmed_example_draft(
-        voice=voice,
-        target_ids=[],
-        evidence_ref="CHANGING_VALUE",
-        expression="3, 9, 14 \\text{ change}",
-    )
+    def unexpected_client(*args: object, **kwargs: object) -> FakeCanvasTeachingClient:
+        raise AssertionError("a composed turn must not be replaced by another plan")
+
     monkeypatch.setattr(
         canvas_teaching_planner,
         "build_openai_ai_engine_client",
-        lambda _: FakeCanvasTeachingClient(retry_draft),
+        unexpected_client,
     )
 
     plan = canvas_teaching_planner.plan_composed_canvas_teaching(
@@ -553,12 +550,7 @@ def test_composed_turn_retries_openai_without_using_the_pattern_scene(
         composed_draft=None,
     )
 
-    assert plan is not None
-    assert plan.beats[0].beat_id == "confirmed-example"
-    assert any(
-        operation.kind == "WRITE_MATH"
-        for operation in plan.beats[0].operations
-    )
+    assert plan is None
 
 
 def test_planner_skips_unclear_learner_input(monkeypatch) -> None:
