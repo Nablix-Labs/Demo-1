@@ -31,8 +31,10 @@ dotenv.load_dotenv = lambda *args, **kwargs: False
 from collections.abc import Iterator
 
 import pytest
+import yaml
 
 from app.adapters import provider
+from app.ai_engine import classifier_config
 from app.core.config import Settings, get_settings
 from app.models.session import SessionRecord
 from app.services import session_service
@@ -88,3 +90,31 @@ def force_mock_adapters(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr(session_service, "save_session", _skip_session_persistence)
     yield
     get_settings.cache_clear()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def force_default_classifier_flags(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[None]:
+    """Keep legacy tests independent from feature flags changed on a VM."""
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        raw_config: object = yaml.safe_load(
+            classifier_config.CONFIG_PATH.read_text()
+        )
+        if not isinstance(raw_config, dict):
+            raise RuntimeError("Classifier rules fixture must be a mapping.")
+        guided_learning = raw_config.get("guided_learning")
+        if not isinstance(guided_learning, dict):
+            raise RuntimeError("Classifier rules fixture is missing guided_learning.")
+        guided_learning["response_aware_enabled"] = False
+        guided_learning["production_boundary_enabled"] = False
+        fixture_path = (
+            tmp_path_factory.mktemp("classifier-rules")
+            / "classifier_rules.yaml"
+        )
+        fixture_path.write_text(yaml.safe_dump(raw_config, sort_keys=False))
+        monkeypatch.setattr(classifier_config, "CONFIG_PATH", fixture_path)
+        classifier_config.load_classifier_rules.cache_clear()
+        yield
+        classifier_config.load_classifier_rules.cache_clear()
