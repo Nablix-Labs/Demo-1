@@ -2114,6 +2114,8 @@ def test_response_aware_writer_prompt_adapts_and_requires_a_concrete_next_move()
     assert "recent conversation" in prompt
     assert "smallest useful next step" in prompt
     assert "one specific thing to do" in prompt
+    assert "writer_validation_feedback" in prompt
+    assert "ACTIVE_ROLE_REVEAL" in prompt
     assert "state the remaining idea in your own words" in prompt
 
 

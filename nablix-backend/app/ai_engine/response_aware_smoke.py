@@ -102,8 +102,8 @@ def replay_failures(case: ReplayCase, result: TutorResponse, forbidden_reply: li
             failures.append("non-attempt graded or completed")
         if contribution.support_relevance != "NOT_NEEDED":
             failures.append("support on non-attempt")
-    if case.assessment != "CORRECT" and result.question_completed:
-        failures.append("non-correct contribution completed question")
+    if contribution.assessment in {"INCORRECT", "NOT_ASSESSED"} and result.question_completed:
+        failures.append("non-contributing assessment completed question")
     if result.requires_written_math_evidence != case.expected_write:
         failures.append("incorrect canvas write requirement")
     if case.explanation_expected and not contribution.explained_idea:

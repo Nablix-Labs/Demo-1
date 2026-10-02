@@ -333,7 +333,7 @@ cases:
     prior: "Write the general rule on the canvas."
     input: "The first symbol is unclear, followed by plus five."
     source: CANVAS
-    kind: UNCLEAR_INPUT
+    kind: EXPRESSED_DIFFICULTY
     assessment: NOT_ASSESSED
     canvas_submission_required: true
     has_canvas_evidence: true

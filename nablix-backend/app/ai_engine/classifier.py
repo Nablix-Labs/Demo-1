@@ -4445,7 +4445,7 @@ def write_redacted_response_aware_message(
             **context,
             "writer_validation_feedback": (
                 f"{rules.guided_learning.production_boundary_writer_retry_feedback} "
-                f"Canvas draft correction: {rejection}"
+                f"Contract rejection: {rejection}"
             ),
         }
     raise RuntimeError("Production-boundary writer retry loop exited unexpectedly.")
