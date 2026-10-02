@@ -13,7 +13,8 @@ guided_learning:
   production_boundary_enabled: false
   production_boundary_clarification_message: "I did not understand that clearly. Could you say it another way?"
   production_boundary_safe_wording_message: "I want to make sure I follow you. Which part of the problem would you like to look at together?"
-  production_boundary_writer_maximum_retries: 1
+  production_boundary_assessment_maximum_retries: 1
+  production_boundary_writer_maximum_retries: 2
   production_boundary_writer_retry_feedback: >-
     Your previous output did not satisfy the response contract. If assessment
     is CORRECT and remaining_concept_ids is empty, return only one brief
@@ -25,7 +26,10 @@ guided_learning:
     their own words. Do not name, state, complete, or imply any unresolved
     value, variable, operation, expression, option, or answer component.
     Do not say what an unresolved token represents, whether it changes or stays
-    fixed, or which operation applies to it.
+    fixed, or which operation applies to it. If the rejection is
+    ACTIVE_ROLE_REVEAL, rewrite as one focused question about the visible
+    examples without naming any number, letter, sign, expression, or role that
+    has not been confirmed by the learner.
   production_boundary_assessment_system_prompt: |
     Assess the CURRENT learner contribution only. Return the assessment schema;
     never create learner-facing prose, a tutor message, explanation, hint,
@@ -52,7 +56,11 @@ guided_learning:
     mark. “What do I answer now?” and “Didn't I already write it?” are
     TASK_CLARIFICATION and NOT_ASSESSED; they do not add evidence or request
     support. A response is unclear only when no reasonable
-    mathematical or conversational meaning can be recovered.
+    mathematical or conversational meaning can be recovered. For voice input,
+    do not turn an unrecognised word into a mathematical claim merely because it
+    sounds like a value or role. If it cannot be matched to a visible question
+    token or a reasonable spoken form of one, return UNCLEAR_INPUT and
+    NOT_ASSESSED.
 
     For a clear attempt, assess only claims actually made this turn. Preserve
     every demonstrated component and mark only a specific contradicted component.
@@ -61,6 +69,12 @@ guided_learning:
     the visible problem. Set support_relevance to UNMAPPED when no supplied error
     code fits; never invent a code. Never infer, disclose, or record unspoken
     answer components merely because they are in the answer contract.
+    An INCORRECT assessment must leave at least one required concept missing or
+    contradicted. Do not classify a response as INCORRECT while also confirming
+    every required concept. A compact symbolic response such as "1/2x" or
+    "n+5" is a MATHEMATICAL_ATTEMPT, not an acknowledgement. If
+    assessment_validation_feedback is provided, your previous assessment was
+    rejected: return a corrected assessment that resolves that exact conflict.
 
     Assess submission_state separately from mathematical understanding. Use
     NOT_REQUIRED when canvas work is not required or the mathematics is still
@@ -104,6 +118,10 @@ guided_learning:
     token is visible in the question: do not say what it represents, whether it
     changes or stays fixed, or which operation applies to it. Return only the
     specified JSON schema.
+    When a writer_validation_feedback field is present, correct that exact
+    contract violation before returning. In particular, for ACTIVE_ROLE_REVEAL,
+    use a focused question about comparing the visible examples; do not repeat
+    the protected number, letter, sign, expression, or its role.
     When the task is unresolved, always tell the learner one specific thing to do
     next: a small action or focused question tied to the visible problem and the
     active unresolved idea. Use the supplied question, learner response, and

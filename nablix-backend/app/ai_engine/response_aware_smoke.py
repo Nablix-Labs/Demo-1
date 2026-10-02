@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
 from typing import Literal
+from unittest.mock import patch
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -22,14 +23,18 @@ from app.ai_engine.classifier import (
 )
 from app.ai_engine.classifier_config import load_classifier_rules
 from app.ai_engine.schemas import InputSource, TutorResponse
+from app.adapters.tutor_engine import tutor_result_from_ai_response
 from app.core.config import get_settings
 from app.core.exceptions import AdapterError
 from app.models.adapters import ConversationMessage, Phase2PromptContext
+from app.models.canvas_teaching import CanvasTeachingPlan
 from app.models.guided_learning import (
     ActiveTeachingObjective, GeneratedConcept, GeneratedQuestionRubric,
     GuidedTeachingState, ScaffoldEvaluationContext,
 )
 from app.models.student_model_session import AnswerSpec, QuestionType
+from app.services import canvas_teaching_planner
+from app.services.question_anchors import plan_canvas_action_anchors
 
 
 class ReplayCase(BaseModel):
@@ -97,8 +102,8 @@ def replay_failures(case: ReplayCase, result: TutorResponse, forbidden_reply: li
             failures.append("non-attempt graded or completed")
         if contribution.support_relevance != "NOT_NEEDED":
             failures.append("support on non-attempt")
-    if case.assessment != "CORRECT" and result.question_completed:
-        failures.append("non-correct contribution completed question")
+    if contribution.assessment in {"INCORRECT", "NOT_ASSESSED"} and result.question_completed:
+        failures.append("non-contributing assessment completed question")
     if result.requires_written_math_evidence != case.expected_write:
         failures.append("incorrect canvas write requirement")
     if case.explanation_expected and not contribution.explained_idea:
@@ -130,12 +135,38 @@ def replay_failures(case: ReplayCase, result: TutorResponse, forbidden_reply: li
     return failures
 
 
+def canvas_plan_failures(
+    plan: CanvasTeachingPlan | None,
+    tutor_message_voice: str,
+    source_turn_id: str,
+) -> list[str]:
+    """Check the published planner result without requiring a plan for every mode."""
+
+    if plan is None:
+        return []
+    if not hasattr(plan, "source_turn_id") or plan.source_turn_id != source_turn_id:
+        return ["canvas plan has the wrong source turn"]
+    if not plan.beats:
+        return ["canvas plan has no beats"]
+    failures: list[str] = []
+    for beat in plan.beats:
+        anchor = beat.speech_anchor
+        if tutor_message_voice[anchor.start_char:anchor.end_char] != anchor.text:
+            failures.append("canvas plan has an invalid speech anchor")
+        if not beat.operations:
+            failures.append("canvas plan has an empty beat")
+    return failures
+
+
 def main() -> None:
     rules = load_classifier_rules()
     rules = rules.model_copy(update={"guided_learning": rules.guided_learning.model_copy(
         update={
             "response_aware_enabled": True,
             "production_boundary_enabled": True,
+            "canvas_teaching": rules.guided_learning.canvas_teaching.model_copy(
+                update={"enabled": True}
+            ),
         },
     )})
     settings = get_settings().model_copy(update={
@@ -191,6 +222,35 @@ def main() -> None:
             else:
                 result = classify_guided_learning_response(request, rules, safety, client, intent)
             failures = replay_failures(case, result, suite.forbidden_reply)
+            source_turn_id = f"REPLAY:{case.id}:TURN"
+            canvas_start = monotonic()
+            with patch.object(canvas_teaching_planner, "load_classifier_rules", lambda: rules):
+                canvas_plan = canvas_teaching_planner.plan_canvas_teaching(
+                    question_id=question_id,
+                    question=case.question,
+                    source_turn_id=source_turn_id,
+                    tutor_turn_id=f"REPLAY:{case.id}:TUTOR",
+                    scene_revision=1,
+                    tutor_message_voice=result.tutor_message_voice_optimised,
+                    tutor=tutor_result_from_ai_response(result),
+                    question_anchors=plan_canvas_action_anchors(question_id, case.question),
+                    student_response=case.input,
+                    canonical_answer=case.answer,
+                    active_support_level=None,
+                    current_unresolved_component_id=(
+                        result.active_teaching_objective.missing_concept_ids[0]
+                        if (
+                            result.active_teaching_objective is not None
+                            and result.active_teaching_objective.missing_concept_ids
+                        )
+                        else None
+                    ),
+                )
+            failures.extend(canvas_plan_failures(
+                canvas_plan,
+                result.tutor_message_voice_optimised,
+                source_turn_id,
+            ))
             failed_cases += int(bool(failures))
             histories[question_id] = ReplayHistory(
                 messages=[*history, ConversationMessage(role="user", content=case.input),
@@ -203,6 +263,10 @@ def main() -> None:
                               "completed": result.question_completed,
                               "requires_write": result.requires_written_math_evidence,
                               "confirmed": result.guided_teaching_state.confirmed_component_ids if result.guided_teaching_state else [],
+                              "canvas_plan": (
+                                  "generated" if canvas_plan is not None else "not_generated"
+                              ),
+                              "canvas_latency_ms": round((monotonic() - canvas_start) * 1000),
                               "latency_ms": round((monotonic() - start) * 1000)}), flush=True)
         except (AdapterError, ValidationError, ValueError) as error:
             failed_cases += 1

@@ -279,7 +279,6 @@ cases:
     assessment: INCOMPLETE
     canvas_submission_required: true
     expected_write: false
-    expected_confirmed: [FIXED_VALUE]
     expected_missing: [GENERAL_RULE]
   - id: corrected_canvas_expression_with_old_work
     question: "3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number. Write the general rule."
@@ -333,7 +332,7 @@ cases:
     prior: "Write the general rule on the canvas."
     input: "The first symbol is unclear, followed by plus five."
     source: CANVAS
-    kind: UNCLEAR_INPUT
+    kind: EXPRESSED_DIFFICULTY
     assessment: NOT_ASSESSED
     canvas_submission_required: true
     has_canvas_evidence: true

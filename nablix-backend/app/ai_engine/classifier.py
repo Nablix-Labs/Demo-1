@@ -3681,7 +3681,7 @@ def classify_guided_learning_response(
     model_call_count = 0
     guided_tutor_context = guided_tutor_context_for(request, rubric, objective)
     maximum_turn_retries = (
-        0
+        rules.guided_learning.production_boundary_assessment_maximum_retries
         if rules.guided_learning.production_boundary_enabled
         else
         rules.guided_learning.response_aware_turn_maximum_retries
@@ -3693,6 +3693,7 @@ def classify_guided_learning_response(
         or rules.guided_learning.production_boundary_enabled
     )
     for attempt in range(maximum_turn_retries + 1):
+        assessment_contract_validated = False
         try:
             model_call_count += 1
             if rules.guided_learning.production_boundary_enabled:
@@ -3714,6 +3715,7 @@ def classify_guided_learning_response(
                     recent_conversation=request.conversation_history[
                         -rules.guided_learning.maximum_recent_history_turns:
                     ],
+                    validation_feedback=validation_feedback,
                     evaluator_prompt_version=rules.guided_learning.evaluator_prompt_version,
                     system_prompt=rules.guided_learning.production_boundary_assessment_system_prompt,
                 )
@@ -3770,6 +3772,7 @@ def classify_guided_learning_response(
                 allowed_errors,
                 rules,
             )
+            assessment_contract_validated = True
             if response_aware_mode_enabled:
                 evaluation = apply_reliable_canvas_rule_evidence(
                     evaluation,
@@ -3843,6 +3846,11 @@ def classify_guided_learning_response(
             break
         except AdapterError as error:
             last_error = error
+            if (
+                rules.guided_learning.production_boundary_enabled
+                and assessment_contract_validated
+            ):
+                raise
             if rules.guided_learning.production_boundary_enabled:
                 # The assessment placeholder is internal-only. A rejected writer
                 # response must never leave that placeholder in the learner path.
@@ -4437,7 +4445,7 @@ def write_redacted_response_aware_message(
             **context,
             "writer_validation_feedback": (
                 f"{rules.guided_learning.production_boundary_writer_retry_feedback} "
-                f"Canvas draft correction: {rejection}"
+                f"Contract rejection: {rejection}"
             ),
         }
     raise RuntimeError("Production-boundary writer retry loop exited unexpectedly.")
