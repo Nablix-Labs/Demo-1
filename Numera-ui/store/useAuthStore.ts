@@ -124,6 +124,9 @@ interface AuthState {
   // Workbook student code (ST###) for tutoring calls. Null until the backend
   // returns it on login — see LoginResponse.student_code.
   studentCode: string | null;
+  // The name auth returned on login (LoginResponse.name), sent on every
+  // /session/start as student_name. Null for an account without one.
+  studentName: string | null;
   // Server ids for an in-progress sign-up (lib/auth/registrationApi), carried
   // from /onboard to /consent. Null once the account is active.
   registrationId: string | null;
@@ -143,7 +146,10 @@ interface AuthState {
   grantConsent: (purpose: ConsentPurpose) => void; // (re-)grant a single consent
 
   // Lifecycle
-  loginSuccess: (p: { token: string; role: Role; tier: string; email: string; studentCode?: string | null }) => void;
+  loginSuccess: (p: {
+    token: string; role: Role; tier: string; email: string;
+    studentCode?: string | null; studentName?: string | null;
+  }) => void;
   setStudentCode: (code: string | null) => void;
   activateAccount: () => void;
   suspend: () => void;
@@ -171,6 +177,7 @@ const initial = {
   accessToken: null as string | null,
   tier: null as string | null,
   studentCode: null as string | null,
+  studentName: null as string | null,
   registrationId: null as string | null,
   guardianId: null as string | null,
 };
@@ -242,7 +249,7 @@ export const useAuthStore = create<AuthState>()(
       // consent state, mark the mandatory consents satisfied so the feature
       // gates (voice/canvas §10) don't block a legitimately logged-in user.
       // TODO(auth): replace with real consent state once /consent endpoints exist.
-      loginSuccess: ({ token, role, tier, email, studentCode }) =>
+      loginSuccess: ({ token, role, tier, email, studentCode, studentName }) =>
         set((s) => {
           const now = new Date().toISOString();
           const consents = { ...s.consents };
@@ -251,6 +258,7 @@ export const useAuthStore = create<AuthState>()(
             accessToken: token,
             tier,
             studentCode: studentCode ?? null,
+            studentName: studentName?.trim() || null,
             role,
             email,
             authMethod: 'password',
@@ -276,6 +284,7 @@ export const useAuthStore = create<AuthState>()(
           accessToken: null,
           tier: null,
           studentCode: null,
+          studentName: null,
           registrationId: null,
           guardianId: null,
           role: null,

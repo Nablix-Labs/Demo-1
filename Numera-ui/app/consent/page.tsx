@@ -127,6 +127,8 @@ export default function ConsentPage() {
       useAuthStore.getState().loginSuccess({
         token: res.access_token, role: 'student', tier: res.tier,
         email: useAuthStore.getState().email, studentCode: res.student_code,
+        // The name typed at sign-up; this response does not echo one back.
+        studentName: useAuthStore.getState().student.name,
       });
     } else if (!registrationLive()) {
       activateAccount();

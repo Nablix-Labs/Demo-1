@@ -675,6 +675,8 @@ export interface StartSessionPayload {
    * must be sent as; sending it as `concept_id` is a 422.
    */
   topic_code?: string;
+  /** 1–80 chars; anything else is a 422, so `startPayloadFor` cleans it. */
+  student_name?: string;
   interaction_mode: InteractionMode;
 }
 

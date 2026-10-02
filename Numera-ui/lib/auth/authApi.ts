@@ -43,6 +43,12 @@ export interface LoginResponse {
    */
   student_code?: string | null;
   /**
+   * The student's name (auth TokenResponse.name, 2 Oct 2026). Forwarded on
+   * `/session/start` as `student_name` so the tutor can address them; null for
+   * an account that never gave one.
+   */
+  name?: string | null;
+  /**
    * Where this student left off, projected from student_model by the auth
    * service. Null for a student who has never started a topic — which is the
    * signal to send them to the diagnostic. `current_phase` uses the Student

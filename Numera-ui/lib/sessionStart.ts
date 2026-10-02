@@ -22,10 +22,30 @@ export function startPayloadFor(
   conceptId: string,
   topicCode: string | null | undefined,
   mode: InteractionMode,
+  studentName?: string | null,
 ): StartSessionPayload {
   const code = topicCode?.trim();
-  if (code) return { student_id: studentId, topic_code: code, interaction_mode: mode };
-  return { student_id: studentId, concept_id: conceptId, interaction_mode: mode };
+  const named = sessionStudentName(studentName);
+  const name = named ? { student_name: named } : {};
+  if (code) return { student_id: studentId, topic_code: code, interaction_mode: mode, ...name };
+  return { student_id: studentId, concept_id: conceptId, interaction_mode: mode, ...name };
+}
+
+/** The backend's limit on `student_name` (models/session.py: 1–80 chars). */
+const MAX_NAME = 80;
+
+/**
+ * The name as `/session/start` will accept it, or null to leave it out.
+ *
+ * The field is validated `min_length=1, max_length=80`, and a 422 there means
+ * no session at all — so an empty name is omitted rather than sent, and a long
+ * one is cut rather than refused. The tutor greeting someone by a truncated
+ * name is a far smaller failure than the lesson not opening.
+ */
+export function sessionStudentName(raw: string | null | undefined): string | null {
+  const name = raw?.trim().replace(/\s+/g, ' ');
+  if (!name) return null;
+  return name.length > MAX_NAME ? name.slice(0, MAX_NAME).trimEnd() : name;
 }
 
 /**

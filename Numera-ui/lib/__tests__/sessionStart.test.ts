@@ -14,6 +14,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { SessionRecord } from '@/lib/api';
+import { sessionStudentName, startPayloadFor } from '@/lib/sessionStart';
 
 const startSession = vi.fn();
 const getSession = vi.fn();
@@ -222,5 +223,26 @@ describe('the topic a session is for', () => {
     const { beginSession, useNumeraStore } = await loadTutor();
     await beginSession('ALG_LINEAR_ONE_STEP');
     expect(useNumeraStore.getState().currentTopicId).toBe('ALG-ORI-02');
+  });
+});
+
+describe('student_name on /session/start', () => {
+  it('sends the login name with either topic form', () => {
+    expect(startPayloadFor('ST009', 'C1', 'ALG-ORI-02', 'VOICE', 'Sanya')).toEqual({
+      student_id: 'ST009', topic_code: 'ALG-ORI-02', interaction_mode: 'VOICE', student_name: 'Sanya',
+    });
+    expect(startPayloadFor('ST009', 'C1', null, 'VOICE', 'Sanya').student_name).toBe('Sanya');
+  });
+
+  it('leaves the field out rather than send a name the backend rejects', () => {
+    for (const blank of [null, undefined, '', '   ']) {
+      expect('student_name' in startPayloadFor('ST009', 'C1', null, 'VOICE', blank)).toBe(false);
+    }
+  });
+
+  it('trims, collapses spaces, and cuts to the 80-char limit', () => {
+    expect(sessionStudentName('  Sanya   Wadhawan ')).toBe('Sanya Wadhawan');
+    const long = sessionStudentName('x'.repeat(200));
+    expect(long).toHaveLength(80);
   });
 });

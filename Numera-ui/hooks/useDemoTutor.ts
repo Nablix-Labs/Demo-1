@@ -67,6 +67,7 @@ import {
 } from '@/lib/canvasSubmission';
 import { canvasEvidenceFor } from '@/lib/canvasEvidence';
 import { startPayloadFor, unknownTopicRejection } from '@/lib/sessionStart';
+import { useAuthStore } from '@/store/useAuthStore';
 import type { QuestionAnchor } from '@/lib/questionAnchors';
 import { isPhase3 } from '@/lib/phase3';
 import { phase3Destination } from '@/lib/phase3Routing';
@@ -141,6 +142,15 @@ export function recoverIfStaleSession(err: unknown): boolean {
  * sending blank canvas snapshots to the backend (and the live OCR provider) when
  * there's no activity. Read at call time so it doesn't re-subscribe the hook.
  */
+/**
+ * The name to open a session with: what auth returned on login, else what was
+ * typed at sign-up, else the onboarding name. Cleaned by `startPayloadFor`.
+ */
+function sessionNameFor(): string | null {
+  const auth = useAuthStore.getState();
+  return auth.studentName || auth.student.name || useNumeraStore.getState().studentName || null;
+}
+
 function hasCanvasActivity(): boolean {
   return useNumeraStore.getState().items.length > 0;
 }
@@ -732,13 +742,13 @@ export async function beginSession(
   inFlight = (async () => {
     try {
       const rec = await startSession(
-        startPayloadFor(studentId(), conceptId, handoffTopic, mode),
+        startPayloadFor(studentId(), conceptId, handoffTopic, mode, sessionNameFor()),
       ).catch(async (err: unknown) => {
         // The topic we named is one the Student Model does not know. Try
         // once by concept alone; the backend then opens the journey's own
         // current topic. See unknownTopicRejection.
         if (!handoffTopic || !unknownTopicRejection(err)) throw err;
-        return startSession(startPayloadFor(studentId(), conceptId, null, mode));
+        return startSession(startPayloadFor(studentId(), conceptId, null, mode, sessionNameFor()));
       });
       if (handoffTopic) useNumeraStore.getState().setPendingTopicCode(null);
       const s = useNumeraStore.getState();
