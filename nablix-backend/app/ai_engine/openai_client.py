@@ -690,48 +690,6 @@ class OpenAIAIEngineClient:
             f"invalid canvas teaching plan: {validation_feedback}",
         )
 
-
-def canvas_connector_contract_rejection(
-    draft: CanvasTeachingPlanDraft,
-    context: dict[str, object],
-) -> str | None:
-    """Require each model-written confirmed note to retain its exact source arrow."""
-
-    sources = context.get("confirmed_source_targets")
-    if not isinstance(sources, list):
-        return None
-    for beat in draft.beats:
-        written_evidence = {
-            operation.evidence_ref
-            for operation in beat.operations
-            if operation.kind in {"WRITE_TEXT", "WRITE_MATH"}
-            and operation.evidence_ref is not None
-        }
-        for source in sources:
-            if not isinstance(source, dict):
-                continue
-            evidence_ref = source.get("evidence_ref")
-            target_ids = source.get("target_ids")
-            if (
-                not isinstance(evidence_ref, str)
-                or not isinstance(target_ids, list)
-                or evidence_ref not in written_evidence
-            ):
-                continue
-            expected_ids = [target_id for target_id in target_ids if isinstance(target_id, str)]
-            connected_ids = [
-                target_id
-                for operation in beat.operations
-                if operation.kind == "CONNECT" and operation.evidence_ref == evidence_ref
-                for target_id in operation.target_ids
-            ]
-            if connected_ids != expected_ids:
-                return (
-                    "a confirmed WRITE operation must include persistent CONNECT operations "
-                    f"for evidence_ref={evidence_ref} covering target_ids={expected_ids} exactly once"
-                )
-    return None
-
     def evaluate_guided_turn(
         self,
         question_type: QuestionType | None,
@@ -1301,6 +1259,50 @@ def canvas_connector_contract_rejection(
         if last_error is not None:
             raise AdapterError("openai_ai_engine", f"request failed: {last_error}") from last_error
         raise AdapterError("openai_ai_engine", "request failed without a response")
+
+
+def canvas_connector_contract_rejection(
+    draft: CanvasTeachingPlanDraft,
+    context: dict[str, object],
+) -> str | None:
+    """Require each model-written confirmed note to retain its exact source arrow."""
+
+    sources = context.get("confirmed_source_targets")
+    if not isinstance(sources, list):
+        return None
+    for beat in draft.beats:
+        written_evidence = {
+            operation.evidence_ref
+            for operation in beat.operations
+            if operation.kind in {"WRITE_TEXT", "WRITE_MATH"}
+            and operation.evidence_ref is not None
+        }
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            evidence_ref = source.get("evidence_ref")
+            target_ids = source.get("target_ids")
+            if (
+                not isinstance(evidence_ref, str)
+                or not isinstance(target_ids, list)
+                or evidence_ref not in written_evidence
+            ):
+                continue
+            expected_ids = [
+                target_id for target_id in target_ids if isinstance(target_id, str)
+            ]
+            connected_ids = [
+                target_id
+                for operation in beat.operations
+                if operation.kind == "CONNECT" and operation.evidence_ref == evidence_ref
+                for target_id in operation.target_ids
+            ]
+            if connected_ids != expected_ids:
+                return (
+                    "a confirmed WRITE operation must include persistent CONNECT operations "
+                    f"for evidence_ref={evidence_ref} covering target_ids={expected_ids} exactly once"
+                )
+    return None
 
 
 def extract_openai_usage_metrics(payload: object) -> OpenAIUsageMetrics:
