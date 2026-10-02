@@ -1509,6 +1509,13 @@ export interface InteractionPayload {
     audio_ref: null;
     transcript: string | null;
   };
+  /**
+   * Answer now, plan the canvas afterwards (Sanya, 2 Oct 2026). The reply then
+   * carries `canvas_teaching_plan_pending` instead of a plan, and the plan is
+   * collected from `fetchDeferredCanvasTeachingPlan`. Set by `sendInteraction`
+   * on every request, so no call site has to remember it.
+   */
+  defer_canvas_teaching_plan?: boolean;
 }
 
 /** Supporting picture the backend asks the frontend to show (e.g. an equation
@@ -1669,6 +1676,13 @@ export interface InteractionResponse extends GuidedStateFields, Phase3ResponseFi
   tutor_canvas_actions?: TutorCanvasAction[];
   /** Voice-synchronised visual plan (Sanya, PR #364). Guided Practice only; null when off. */
   canvas_teaching_plan?: CanvasTeachingPlan | null;
+  /**
+   * The plan is still being made and will be served by
+   * `fetchDeferredCanvasTeachingPlan` for this `accepted_turn_id`. While it is
+   * pending the backend has already stripped the visual tutor actions the plan
+   * replaces, so there is nothing to hold back here.
+   */
+  canvas_teaching_plan_pending?: boolean;
   /** OCR from the frozen voice-turn canvas. */
   ocr?: OcrResult | null;
   /** Whether to show the supporting visual cue after this turn. The backend also
@@ -1820,12 +1834,29 @@ export function activeScaffold(res: InteractionResponse | null | undefined): Act
  */
 export const SUBMISSION_TIMEOUT_MS = 90_000;
 
+const interactionSentListeners = new Set<() => void>();
+
+/**
+ * Called as each /interaction request goes out — the student (or the system)
+ * has started a new turn. A deferred canvas plan for the previous turn stops
+ * being worth collecting at that moment. Returns the unsubscribe.
+ *
+ * `currentTurnId` cannot stand in for this: a listening turn is minted the
+ * moment a reply lands, long before the student says anything.
+ */
+export function onInteractionSent(listener: () => void): () => void {
+  interactionSentListeners.add(listener);
+  return () => { interactionSentListeners.delete(listener); };
+}
+
 /** POST /interaction — core tutoring call. Requires a started, owned session. */
 export async function sendInteraction(payload: InteractionPayload): Promise<InteractionResult> {
+  interactionSentListeners.forEach((listener) => listener());
+  const deferred = { ...payload, defer_canvas_teaching_plan: true };
   try {
     const res = payload.interaction_type === 'ANSWER_SUBMISSION'
-      ? await api.post<InteractionResponse>('/interaction', payload, { timeout: SUBMISSION_TIMEOUT_MS })
-      : await api.post<InteractionResponse>('/interaction', payload);
+      ? await api.post<InteractionResponse>('/interaction', deferred, { timeout: SUBMISSION_TIMEOUT_MS })
+      : await api.post<InteractionResponse>('/interaction', deferred);
     return res.data;
   } catch (error) {
     if (axios.isAxiosError(error) && error.response?.status === 409) {
@@ -1888,12 +1919,51 @@ export async function submitInterventionInput(payload: {
   selected_reason_codes: string[];
   voice_input: { provided: boolean; audio_ref: null; transcript: string | null };
 }): Promise<InteractionResponse> {
+  interactionSentListeners.forEach((listener) => listener());
   const res = await api.post<InteractionResponse>('/interaction', {
     ...payload,
     interaction_type: 'INTERVENTION_INPUT_SUBMITTED',
     input_source: 'CHOICE',
+    defer_canvas_teaching_plan: true,
   } satisfies InteractionPayload);
   return res.data;
+}
+
+/** Matches models/interaction.py:DeferredCanvasTeachingPlanResponse. */
+export interface DeferredCanvasTeachingPlan {
+  status: 'PENDING' | 'READY' | 'UNAVAILABLE';
+  accepted_turn_id: string;
+  interaction_state_version: number;
+  question_id: string | null;
+  canvas_teaching_plan?: CanvasTeachingPlan | null;
+}
+
+/**
+ * GET /interaction/{session_id}/canvas-teaching-plan/{turn_id} — the plan for a
+ * reply that arrived with `canvas_teaching_plan_pending`.
+ *
+ * A 404 (no plan was ever started for this turn, or the session ended and the
+ * backend dropped it) is returned as UNAVAILABLE: to the caller both mean the
+ * same thing — stop asking, show nothing.
+ */
+export async function fetchDeferredCanvasTeachingPlan(
+  sessionId: string,
+  turnId: string,
+): Promise<DeferredCanvasTeachingPlan> {
+  try {
+    const res = await api.get<DeferredCanvasTeachingPlan>(
+      `/interaction/${encodeURIComponent(sessionId)}/canvas-teaching-plan/${encodeURIComponent(turnId)}`,
+      { params: { student_id: studentId() } },
+    );
+    return res.data;
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 404) {
+      return {
+        status: 'UNAVAILABLE', accepted_turn_id: turnId, interaction_state_version: 0, question_id: null,
+      };
+    }
+    throw error;
+  }
 }
 
 export interface RescueStepResponse {

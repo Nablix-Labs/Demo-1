@@ -8,6 +8,7 @@ import { useNumeraStore } from '@/store/useNumeraStore';
 import type { TutorCanvasAction } from '@/store/useNumeraStore';
 import type { CanvasTeachingPlan } from '@/lib/canvasTeachingPlan';
 import { scheduleTeachingPlan } from '@/lib/canvasTeachingScheduler';
+import { awaitDeferredTeachingPlan } from '@/lib/deferredCanvasPlan';
 import {
   shouldApply,
   noteApplied,
@@ -66,6 +67,8 @@ export type SupportPresentation = Pick<
    * payload by allow-list cannot drop the plan OR its identity.
    */
   canvas_teaching_plan?: CanvasTeachingPlan | null;
+  /** The plan is coming later, for this `accepted_turn_id` (lib/deferredCanvasPlan). */
+  canvas_teaching_plan_pending?: boolean | null;
   interaction_state_version?: number | null;
   accepted_turn_id?: string | null;
 };
@@ -279,6 +282,10 @@ export function applyInteractionSupport(response: SupportPresentation): string {
   // one's unspoken beats either way. Separate from the actions above — it adds
   // to the board and never stands in for support state (handoff rule 6).
   scheduleTeachingPlan(response.canvas_teaching_plan, response, response.message_voice);
+  // Or the plan is still being made: collect it, and draw it against THIS
+  // reply when it lands. Also called when nothing is pending, so a newer reply
+  // ends the wait for an older one's plan.
+  awaitDeferredTeachingPlan(response);
 
   // The reliability gate fired: the tutor could not read the student and is
   // asking for the answer in writing. Set unconditionally — clearing it on an

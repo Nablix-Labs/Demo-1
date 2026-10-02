@@ -26,6 +26,7 @@ import { useInactivityNudge } from '@/hooks/useInactivityNudge';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { demoFor } from '@/lib/demoContent';
 import { setStudentWriting, tutorSay } from '@/lib/tutorSpeech';
+import { cancelDeferredTeachingPlan } from '@/lib/deferredCanvasPlan';
 
 // Voice turn transport. 'rest' (default): browser STT (useVoiceTurn) → REST +
 // browser TTS. 'server': stream mic audio to the :8004 voice server, which does
@@ -69,6 +70,9 @@ export default function LessonPage() {
   // writing earlier would persist default state over the saved placement.
   const [hydrated, setHydrated] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
+  // Leaving the lesson: a canvas plan still being made has no board to land on.
+  useEffect(() => () => cancelDeferredTeachingPlan(), []);
+
   useEffect(() => {
     if (useNumeraStore.persist.hasHydrated()) setHydrated(true);
     return useNumeraStore.persist.onFinishHydration(() => setHydrated(true));

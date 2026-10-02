@@ -79,6 +79,10 @@ export function voiceSupportFrame(msg: VoiceTutorFrame): SupportPresentation {
       msg.canvas_teaching_plan && typeof msg.canvas_teaching_plan === 'object'
         ? (msg.canvas_teaching_plan as SupportPresentation['canvas_teaching_plan'])
         : null,
+    // A deferred plan (lib/deferredCanvasPlan). The voice server does not ask
+    // for deferral today, but if it ever does, losing this flag here would be
+    // a plan that never draws on voice only — the allow-list's usual failure.
+    canvas_teaching_plan_pending: msg.canvas_teaching_plan_pending === true,
     interaction_state_version: msg.interaction_state_version as number | null | undefined,
     accepted_turn_id: str(msg.accepted_turn_id),
 

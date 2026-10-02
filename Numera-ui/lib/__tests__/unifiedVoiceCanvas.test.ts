@@ -38,6 +38,10 @@ describe('unified voice canvas interaction', () => {
     await sendInteraction(payload);
 
     expect(post).toHaveBeenCalledOnce();
-    expect(post).toHaveBeenCalledWith('/interaction', payload, { timeout: SUBMISSION_TIMEOUT_MS });
+    expect(post).toHaveBeenCalledWith(
+      '/interaction',
+      { ...payload, defer_canvas_teaching_plan: true },
+      { timeout: SUBMISSION_TIMEOUT_MS },
+    );
   });
 });
