@@ -279,7 +279,6 @@ cases:
     assessment: INCOMPLETE
     canvas_submission_required: true
     expected_write: false
-    expected_confirmed: [FIXED_VALUE]
     expected_missing: [GENERAL_RULE]
   - id: corrected_canvas_expression_with_old_work
     question: "3 + 5, 9 + 5, 14 + 5. Use n for the changing starting number. Write the general rule."

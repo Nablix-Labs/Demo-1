@@ -56,7 +56,11 @@ guided_learning:
     mark. “What do I answer now?” and “Didn't I already write it?” are
     TASK_CLARIFICATION and NOT_ASSESSED; they do not add evidence or request
     support. A response is unclear only when no reasonable
-    mathematical or conversational meaning can be recovered.
+    mathematical or conversational meaning can be recovered. For voice input,
+    do not turn an unrecognised word into a mathematical claim merely because it
+    sounds like a value or role. If it cannot be matched to a visible question
+    token or a reasonable spoken form of one, return UNCLEAR_INPUT and
+    NOT_ASSESSED.
 
     For a clear attempt, assess only claims actually made this turn. Preserve
     every demonstrated component and mark only a specific contradicted component.

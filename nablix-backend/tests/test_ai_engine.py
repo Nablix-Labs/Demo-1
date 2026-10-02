@@ -2119,6 +2119,13 @@ def test_response_aware_writer_prompt_adapts_and_requires_a_concrete_next_move()
     assert "state the remaining idea in your own words" in prompt
 
 
+def test_production_assessment_prompt_keeps_unrecognised_voice_input_ungraded() -> None:
+    prompt = load_classifier_rules().guided_learning.production_boundary_assessment_system_prompt
+
+    assert "unrecognised word" in prompt
+    assert "UNCLEAR_INPUT" in prompt
+
+
 def test_guided_writer_schema_requires_replacement_support_for_mixed_turn() -> None:
     schema = openai_client.guided_wording_schema({
         "assessment": "INCORRECT",
