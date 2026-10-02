@@ -1,4 +1,5 @@
 import asyncio
+import os
 from threading import Event
 
 import pytest
@@ -10,6 +11,7 @@ from app.models.canvas_teaching import (
     CanvasTeachingPlan,
 )
 from app.services import interaction_service, session_service
+from tests.test_canvas_teaching_planner import _anchor, _tutor
 
 
 def _plan(turn_id: str) -> CanvasTeachingPlan:
@@ -117,3 +119,46 @@ def test_deferred_canvas_plan_failure_does_not_escape_the_tutor_turn(
     assert unavailable is not None
     assert unavailable.status == "UNAVAILABLE"
     assert unavailable.canvas_teaching_plan is None
+
+
+def test_openai_deferred_canvas_plan_smoke() -> None:
+    """Run the background delivery path against OpenAI only when explicitly enabled."""
+
+    if os.getenv("NABLIX_RUN_OPENAI_SMOKE") != "true":
+        pytest.skip("Set NABLIX_RUN_OPENAI_SMOKE=true to run the billed OpenAI smoke test.")
+
+    session_id = "SESSIONdeferredopenai"
+    turn_id = "TURN-DEFERRED-OPENAI"
+    session_service.start_deferred_canvas_teaching_plan(
+        session_id,
+        turn_id,
+        3,
+        "Q1",
+    )
+
+    asyncio.run(
+        interaction_service._generate_deferred_canvas_teaching_plan(
+            session_id,
+            turn_id,
+            {
+                "question_id": "Q1",
+                "question": "3 + 5 | 9 + 5 | 14 + 5",
+                "source_turn_id": turn_id,
+                "tutor_turn_id": "TUTOR-DEFERRED-OPENAI",
+                "scene_revision": 3,
+                "tutor_message_voice": "Those first numbers are different.",
+                "tutor": _tutor(),
+                "question_anchors": [_anchor()],
+                "student_response": "They are different.",
+                "canonical_answer": "n + 5",
+                "active_support_level": "HINT",
+                "current_unresolved_component_id": "FIXED_VALUE",
+            },
+        )
+    )
+
+    ready = session_service.deferred_canvas_teaching_plan_for(session_id, turn_id)
+    assert ready is not None
+    assert ready.status == "READY"
+    assert ready.canvas_teaching_plan is not None
+    assert ready.canvas_teaching_plan.source_turn_id == turn_id
