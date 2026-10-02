@@ -1384,6 +1384,21 @@ def test_planner_writes_a_confirmed_notation_example_and_connects_its_source(mon
         evidence_ref="JUXTAPOSITION",
         expression=r"p \times q",
     )
+    draft = draft.model_copy(
+        update={
+            "beats": [
+                draft.beats[0].model_copy(
+                    update={
+                        "operations": [
+                            operation
+                            for operation in draft.beats[0].operations
+                            if operation.kind != "CONNECT"
+                        ]
+                    }
+                )
+            ]
+        }
+    )
     client = FakeCanvasTeachingClient(draft)
     monkeypatch.setattr(
         canvas_teaching_planner,
@@ -1409,10 +1424,11 @@ def test_planner_writes_a_confirmed_notation_example_and_connects_its_source(mon
     assert plan is not None
     assert [(operation.kind, operation.scene_slot) for operation in plan.beats[0].operations] == [
         ("HIGHLIGHT", None),
-        ("CONNECT", "generic_confirmation:JUXTAPOSITION"),
         ("WRITE_MATH", "generic_confirmation:JUXTAPOSITION"),
+        ("CONNECT", "generic_confirmation:JUXTAPOSITION"),
     ]
-    assert plan.beats[0].operations[2].latex == r"p \times q"
+    assert plan.beats[0].operations[1].latex == r"p \times q"
+    assert plan.beats[0].operations[2].target_ids == [pq_anchor.token_id]
 
     client.draft = _confirmed_example_draft(
         voice=tutor.tutor_message_voice,
@@ -1438,7 +1454,9 @@ def test_planner_writes_a_confirmed_notation_example_and_connects_its_source(mon
     assert [operation.kind for operation in partial_plan.beats[0].operations] == [
         "HIGHLIGHT",
         "WRITE_MATH",
+        "CONNECT",
     ]
+    assert partial_plan.beats[0].operations[2].target_ids == [pq_anchor.token_id]
     client.draft = _confirmed_example_draft(
         voice=tutor.tutor_message_voice,
         target_ids=[pq_anchor.token_id],

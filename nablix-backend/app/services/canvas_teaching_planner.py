@@ -345,10 +345,13 @@ def _plan_canvas_teaching(
     accepted = _remove_unpaired_connectors(accepted)
     if not accepted:
         return None
+    accepted = _add_confirmed_source_connectors(
+        accepted,
+        confirmed_source_targets,
+    )
     accepted = _add_confirmed_source_highlights(
         accepted,
         confirmed_source_targets,
-        config.maximum_operations_per_beat,
     )
     return CanvasTeachingPlan(
         plan_id=f"{question_id}:{source_turn_id}:canvas-teaching",
@@ -382,6 +385,70 @@ def _remove_unpaired_connectors(
         ]
         if operations:
             result.append(beat.model_copy(update={"operations": operations}))
+    return result
+
+
+def _add_confirmed_source_connectors(
+    beats: list[CanvasTeachingBeat],
+    confirmed_source_targets: list[ConfirmedCanvasSource],
+) -> list[CanvasTeachingBeat]:
+    """Compile model-selected evidence notes into trusted source arrows."""
+
+    source_ids_by_evidence = {
+        source["evidence_ref"]: source["target_ids"]
+        for source in confirmed_source_targets
+    }
+    result: list[CanvasTeachingBeat] = []
+    for beat in beats:
+        operations = list(beat.operations)
+        existing_connections = {
+            (operation.evidence_ref, operation.scene_slot, target_id)
+            for operation in operations
+            if operation.kind == "CONNECT"
+            for target_id in operation.target_ids
+        }
+        for operation in beat.operations:
+            if operation.kind not in {"WRITE_TEXT", "WRITE_MATH"}:
+                continue
+            if operation.evidence_ref is None:
+                continue
+            source_ids = source_ids_by_evidence.get(operation.evidence_ref)
+            if not source_ids:
+                continue
+            missing_source_ids = [
+                source_id
+                for source_id in source_ids
+                if (
+                    operation.evidence_ref,
+                    operation.scene_slot,
+                    source_id,
+                ) not in existing_connections
+                and (None, operation.scene_slot, source_id) not in existing_connections
+            ]
+            for index in range(0, len(missing_source_ids), 4):
+                target_ids = missing_source_ids[index:index + 4]
+                operations.append(
+                    CanvasTeachingOperation(
+                        operation_id=f"source-link-{operation.operation_id}-{index // 4 + 1}",
+                        kind="CONNECT",
+                        target_kind="QUESTION_ANCHOR",
+                        target_ids=target_ids,
+                        zone="REASONING",
+                        persistence="PERSIST",
+                        evidence_ref=operation.evidence_ref,
+                        color_role="NAVY",
+                        scene_slot=operation.scene_slot,
+                    )
+                )
+                existing_connections.update(
+                    (
+                        operation.evidence_ref,
+                        operation.scene_slot,
+                        source_id,
+                    )
+                    for source_id in target_ids
+                )
+        result.append(beat.model_copy(update={"operations": operations}))
     return result
 
 
@@ -433,7 +500,6 @@ def _structural_attention_operations(
 def _add_confirmed_source_highlights(
     beats: list[CanvasTeachingBeat],
     confirmed_source_targets: list[ConfirmedCanvasSource],
-    maximum_operations_per_beat: int,
 ) -> list[CanvasTeachingBeat]:
     """Make each demonstrated source visibly persist beside its reasoning note."""
 
@@ -468,8 +534,6 @@ def _add_confirmed_source_highlights(
                     operation.evidence_ref == source["evidence_ref"]
                     for operation in beat.operations
                 )
-                and len(beat.operations) + len(highlight_operations)
-                <= maximum_operations_per_beat
             ),
             None,
         )

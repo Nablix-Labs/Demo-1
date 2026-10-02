@@ -432,25 +432,35 @@ def canvas_operation_output_schema(
         "color_role": {"type": "string", "enum": ["NAVY"]},
     })
 
-    connector = variant()
-    connector_properties = connector["properties"]
-    assert isinstance(connector_properties, dict)
-    connector_properties.update({
-        "kind": {"type": "string", "enum": ["CONNECT"]},
-        "target_kind": {"type": "string", "enum": ["QUESTION_ANCHOR"]},
-        "target_ids": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 4,
-            "items": {"type": "string", "enum": question_target_ids},
-        },
-        "zone": {"type": "string", "enum": ["REASONING"]},
-        "persistence": {"type": "string", "enum": ["PERSIST"]},
-        "evidence_ref": {"type": "string", "enum": evidence_ids},
-        "text": {"type": "null"},
-        "latex": {"type": "null"},
-    })
-    return {"anyOf": [write, attention, connector]}
+    return {"anyOf": [write, attention]}
+
+
+def canvas_teaching_plan_schema(context: dict[str, object]) -> dict[str, object]:
+    """Constrain model canvas output to semantic notes and attention marks.
+
+    Source connectors are derived from the authoritative confirmed-source
+    context after the model selects a written evidence reference. The model
+    must never choose raw connector target IDs.
+    """
+
+    schema = CanvasTeachingPlanDraft.model_json_schema()
+    definitions = schema.get("$defs")
+    operation_schema = (
+        definitions.get("CanvasTeachingOperation")
+        if isinstance(definitions, dict)
+        else None
+    )
+    if not isinstance(operation_schema, dict):
+        raise RuntimeError("CanvasTeachingOperation schema definition is missing.")
+    allowed_target_ids = context.get("allowed_target_ids")
+    authorized_evidence_ids = context.get("authorized_evidence_ids")
+    assert isinstance(definitions, dict)
+    definitions["CanvasTeachingOperation"] = canvas_operation_output_schema(
+        operation_schema,
+        allowed_target_ids if isinstance(allowed_target_ids, list) else [],
+        authorized_evidence_ids if isinstance(authorized_evidence_ids, list) else [],
+    )
+    return schema
 
 
 @dataclass(frozen=True)
@@ -647,48 +657,19 @@ class OpenAIAIEngineClient:
     ) -> CanvasTeachingPlanDraft:
         """Generate visual-only steps after the tutor turn is already final."""
 
-        validation_feedback: str | None = None
-        for attempt in range(2):
-            retry_prompt = system_prompt
-            retry_context = context
-            if validation_feedback is not None:
-                retry_prompt = (
-                    f"{system_prompt}\n\n"
-                    "Your previous canvas plan was rejected. Return a new complete plan "
-                    f"that fixes this exact issue: {validation_feedback}"
-                )
-                retry_context = {
-                    **context,
-                    "canvas_plan_validation_feedback": validation_feedback,
-                }
-            content = self._request_guided_json(
-                name="canvas_teaching_plan",
-                schema=CanvasTeachingPlanDraft.model_json_schema(),
-                system_prompt=retry_prompt,
-                user_payload=retry_context,
-            )
-            try:
-                draft = CanvasTeachingPlanDraft.model_validate(content)
-            except ValidationError as error:
-                raise AdapterError(
-                    "openai_ai_engine",
-                    f"invalid canvas teaching plan: {error}",
-                ) from error
-            validation_feedback = canvas_connector_contract_rejection(draft, context)
-            if validation_feedback is None:
-                return draft
-            logger.warning(
-                "canvas_teaching_plan_retry",
-                extra={
-                    "attempt": attempt + 1,
-                    "reason": validation_feedback,
-                    "question_id": context.get("question_id"),
-                },
-            )
-        raise AdapterError(
-            "openai_ai_engine",
-            f"invalid canvas teaching plan: {validation_feedback}",
+        content = self._request_guided_json(
+            name="canvas_teaching_plan",
+            schema=canvas_teaching_plan_schema(context),
+            system_prompt=system_prompt,
+            user_payload=context,
         )
+        try:
+            return CanvasTeachingPlanDraft.model_validate(content)
+        except ValidationError as error:
+            raise AdapterError(
+                "openai_ai_engine",
+                f"invalid canvas teaching plan: {error}",
+            ) from error
 
     def evaluate_guided_turn(
         self,
@@ -1259,50 +1240,6 @@ class OpenAIAIEngineClient:
         if last_error is not None:
             raise AdapterError("openai_ai_engine", f"request failed: {last_error}") from last_error
         raise AdapterError("openai_ai_engine", "request failed without a response")
-
-
-def canvas_connector_contract_rejection(
-    draft: CanvasTeachingPlanDraft,
-    context: dict[str, object],
-) -> str | None:
-    """Require each model-written confirmed note to retain its exact source arrow."""
-
-    sources = context.get("confirmed_source_targets")
-    if not isinstance(sources, list):
-        return None
-    for beat in draft.beats:
-        written_evidence = {
-            operation.evidence_ref
-            for operation in beat.operations
-            if operation.kind in {"WRITE_TEXT", "WRITE_MATH"}
-            and operation.evidence_ref is not None
-        }
-        for source in sources:
-            if not isinstance(source, dict):
-                continue
-            evidence_ref = source.get("evidence_ref")
-            target_ids = source.get("target_ids")
-            if (
-                not isinstance(evidence_ref, str)
-                or not isinstance(target_ids, list)
-                or evidence_ref not in written_evidence
-            ):
-                continue
-            expected_ids = [
-                target_id for target_id in target_ids if isinstance(target_id, str)
-            ]
-            connected_ids = [
-                target_id
-                for operation in beat.operations
-                if operation.kind == "CONNECT" and operation.evidence_ref == evidence_ref
-                for target_id in operation.target_ids
-            ]
-            if connected_ids != expected_ids:
-                return (
-                    "a confirmed WRITE operation must include persistent CONNECT operations "
-                    f"for evidence_ref={evidence_ref} covering target_ids={expected_ids} exactly once"
-                )
-    return None
 
 
 def extract_openai_usage_metrics(payload: object) -> OpenAIUsageMetrics:

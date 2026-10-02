@@ -211,3 +211,22 @@ def test_openai_deferred_canvas_plan_smoke(
     assert ready.status == "READY"
     assert ready.canvas_teaching_plan is not None
     assert ready.canvas_teaching_plan.source_turn_id == turn_id
+    operations = [
+        operation
+        for beat in ready.canvas_teaching_plan.beats
+        for operation in beat.operations
+    ]
+    assert any(
+        operation.kind in {"WRITE_TEXT", "WRITE_MATH"}
+        and operation.evidence_ref == "JUXTAPOSITION"
+        for operation in operations
+    )
+    connectors = [
+        operation
+        for operation in operations
+        if operation.kind == "CONNECT"
+        and operation.evidence_ref == "JUXTAPOSITION"
+    ]
+    assert [target_id for operation in connectors for target_id in operation.target_ids] == [
+        pq_anchor.token_id
+    ]

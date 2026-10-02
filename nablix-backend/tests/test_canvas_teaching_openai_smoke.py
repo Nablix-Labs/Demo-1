@@ -191,10 +191,4 @@ def test_openai_canvas_teaching_confirmed_math_example_smoke() -> None:
         for operation in beat.operations
         if operation.kind == "CONNECT"
     ]
-    connected_ids = [
-        target_id
-        for operation in connectors
-        for target_id in operation.target_ids
-        if operation.evidence_ref == "JUXTAPOSITION"
-    ]
-    assert connected_ids == source_ids
+    assert connectors == []

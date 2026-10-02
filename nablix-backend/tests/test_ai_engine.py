@@ -2053,34 +2053,16 @@ def test_generated_support_requires_comparison_rows() -> None:
     )
 
 
-def test_canvas_writer_requires_source_connectors_for_confirmed_note() -> None:
-    draft = CanvasTeachingPlanDraft(
-        beats=[
-            CanvasTeachingBeat(
-                beat_id="beat-1",
-                sequence=1,
-                speech_anchor=CanvasSpeechAnchor(
-                    start_char=0,
-                    end_char=11,
-                    text="pq means p q",
-                ),
-                operations=[
-                    CanvasTeachingOperation(
-                        operation_id="write-pq",
-                        kind="WRITE_MATH",
-                        target_kind="CANVAS_ZONE",
-                        target_ids=["ZONE:REASONING"],
-                        zone="REASONING",
-                        persistence="PERSIST",
-                        evidence_ref="JUXTAPOSITION",
-                        latex="pq=p\\times q",
-                        color_role="NAVY",
-                    ),
-                ],
-            ),
-        ],
-    )
+def test_canvas_writer_schema_reserves_source_connectors_for_backend() -> None:
     context: dict[str, object] = {
+        "allowed_target_ids": [
+            "Q1:QTOKEN:4",
+            "Q1:QTOKEN:5",
+            "ZONE:QUESTION",
+            "ZONE:REASONING",
+            "ZONE:TUTOR_SOLUTION",
+        ],
+        "authorized_evidence_ids": ["JUXTAPOSITION"],
         "confirmed_source_targets": [
             {
                 "evidence_ref": "JUXTAPOSITION",
@@ -2088,30 +2070,24 @@ def test_canvas_writer_requires_source_connectors_for_confirmed_note() -> None:
             },
         ],
     }
-
-    assert openai_client.canvas_connector_contract_rejection(draft, context) is not None
-
-    connector = CanvasTeachingOperation(
-        operation_id="connect-pq",
-        kind="CONNECT",
-        target_kind="QUESTION_ANCHOR",
-        target_ids=["Q1:QTOKEN:4", "Q1:QTOKEN:5"],
-        zone="QUESTION",
-        persistence="PERSIST",
-        evidence_ref="JUXTAPOSITION",
-        color_role="NAVY",
-    )
-    paired_draft = draft.model_copy(
-        update={
-            "beats": [
-                draft.beats[0].model_copy(
-                    update={"operations": [*draft.beats[0].operations, connector]}
-                )
-            ]
-        }
-    )
-
-    assert openai_client.canvas_connector_contract_rejection(paired_draft, context) is None
+    schema = openai_client.canvas_teaching_plan_schema(context)
+    operation = schema["$defs"]["CanvasTeachingOperation"]
+    assert isinstance(operation, dict)
+    variants = operation["anyOf"]
+    assert isinstance(variants, list)
+    kinds = {
+        kind
+        for variant in variants
+        if isinstance(variant, dict)
+        for properties in [variant.get("properties")]
+        if isinstance(properties, dict)
+        for kind_schema in [properties.get("kind")]
+        if isinstance(kind_schema, dict)
+        for kind in kind_schema.get("enum", [])
+        if isinstance(kind, str)
+    }
+    assert "CONNECT" not in kinds
+    assert {"WRITE_TEXT", "WRITE_MATH"}.issubset(kinds)
 
 
 def test_completed_response_aware_turn_retries_follow_up_question() -> None:
