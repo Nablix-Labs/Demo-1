@@ -55,7 +55,12 @@ from app.models.guided_learning import (
     GuidedCanvasEvidence,
     StudentContribution,
 )
-from app.models.canvas_teaching import CanvasTeachingPlanDraft
+from app.models.canvas_teaching import (
+    CanvasSpeechAnchor,
+    CanvasTeachingBeat,
+    CanvasTeachingOperation,
+    CanvasTeachingPlanDraft,
+)
 
 
 client = TestClient(app)
@@ -1704,7 +1709,10 @@ def test_production_boundary_rewrites_an_unsafe_writer_reply_once() -> None:
                     if self.calls > 1
                     else "Compare the repeated amount in the visible examples."
                 ),
-                generated_visual_rows=None,
+                generated_visual_rows=[
+                    {"expression": "n + 6", "annotation": "Your proposed rule."},
+                    {"expression": "each example", "annotation": "Inspect the amount after the sign."},
+                ],
                 confidence=0.9,
             )
 
@@ -1773,54 +1781,29 @@ def test_production_boundary_rewrites_an_unsafe_writer_reply_once() -> None:
     ]
 
 
-def test_response_aware_composer_preserves_writer_contract_and_attaches_draft() -> None:
-    class Composer:
+def test_response_aware_writer_is_independent_from_canvas_composer_configuration() -> None:
+    class Writer:
         def __init__(self) -> None:
             self.context: dict[str, object] | None = None
 
-        def write_guided_teaching_composer(
+        def write_guided_fact_budget_message(
             self,
             **kwargs: object,
-        ) -> openai_client.OpenAIGuidedTeachingComposer:
+        ) -> openai_client.OpenAIGuidedWording:
             self.context = cast(dict[str, object], kwargs["wording_context"])
             message = "Compare the first number in each visible example. What changes?"
-            return openai_client.OpenAIGuidedTeachingComposer(
+            return openai_client.OpenAIGuidedWording(
                 tutor_message=message,
                 tutor_message_voice_optimised=message,
                 learner_action="CONTINUE",
                 generated_support_text=(
                     "Compare the first number in each visible example."
                 ),
-                generated_visual_rows=None,
+                generated_visual_rows=[
+                    {"expression": "first expression", "annotation": "Inspect its first number."},
+                    {"expression": "next expression", "annotation": "Compare its first number."},
+                ],
                 confidence=0.9,
-                canvas_plan_status="VISUAL_CUE",
-                canvas_board_goal="FOCUS_NEXT_SYMBOL",
-                canvas_teaching_draft=CanvasTeachingPlanDraft.model_validate(
-                    {
-                        "beats": [
-                            {
-                                "beat_id": "focus-first-number",
-                                "sequence": 1,
-                                "speech_anchor": {
-                                    "start_char": 0,
-                                    "end_char": 42,
-                                    "text": "Compare the first number in each visible",
-                                },
-                                "operations": [
-                                    {
-                                        "operation_id": "focus-first-number",
-                                        "kind": "FOCUS",
-                                        "target_kind": "QUESTION_ANCHOR",
-                                        "target_ids": ["Q-T01-001:QTOKEN:1"],
-                                        "zone": "QUESTION",
-                                        "persistence": "PULSE",
-                                        "color_role": "AMBER",
-                                    }
-                                ],
-                            }
-                        ]
-                    }
-                ),
             )
 
     request = _plain_general_rule_request("n + 6")
@@ -1858,22 +1841,22 @@ def test_response_aware_composer_preserves_writer_contract_and_attaches_draft() 
     guided_learning = rules.guided_learning.model_copy(
         update={"canvas_teaching": canvas_teaching}
     )
-    composer = Composer()
+    writer = Writer()
 
     rewritten = classifier.write_redacted_response_aware_message(
         evaluation,
         request,
         rubric,
         objective,
-        cast(openai_client.OpenAIAIEngineClient, composer),
+        cast(openai_client.OpenAIAIEngineClient, writer),
         rules.model_copy(update={"guided_learning": guided_learning}),
     )
 
     assert rewritten.tutor_message.startswith("Compare the first number")
-    assert rewritten.canvas_teaching_composer_used is True
-    assert rewritten.canvas_teaching_draft is not None
-    assert composer.context is not None
-    assert "canvas_context" in composer.context
+    assert rewritten.canvas_teaching_composer_used is False
+    assert rewritten.canvas_teaching_draft is None
+    assert writer.context is not None
+    assert "canvas_context" not in writer.context
 
 
 def test_composer_canvas_contract_requires_authorized_persistent_ink() -> None:
@@ -2028,6 +2011,83 @@ def test_guided_writer_schema_requires_replacement_support_for_mixed_turn() -> N
         "minLength": 1,
         "maxLength": 280,
     }
+    assert properties["generated_visual_rows"] == {
+        "title": "Generated Visual Rows",
+        "type": "array",
+        "minItems": 2,
+        "maxItems": 4,
+        "items": {"$ref": "#/$defs/GuidedComparisonRow"},
+    }
+
+
+def test_generated_support_requires_comparison_rows() -> None:
+    request = _plain_general_rule_request("n + 6")
+    evaluation = GuidedEvaluation(
+        contribution=StudentContribution(
+            kind="MATHEMATICAL_ATTEMPT",
+            assessment="INCORRECT",
+            error_category="EXPRESSION_STRUCTURE",
+            error_description="The fixed amount does not match the examples.",
+            identified_difficulty=None,
+            learner_question=None,
+            explained_idea=None,
+            generated_support_text="Compare the visible added amount.",
+            generated_visual_rows=None,
+            support_relevance="UNMAPPED",
+        ),
+        student_state="WRONG",
+        newly_confirmed_concept_ids=[],
+        preserved_concept_ids=[],
+        contradicted_concept_ids=["GENERAL_RULE"],
+        missing_concept_ids=["GENERAL_RULE"],
+        selected_error_code=None,
+        confidence=0.9,
+        next_objective=None,
+        tutor_message="Compare the examples.",
+        tutor_message_voice="Compare the examples.",
+    )
+
+    assert (
+        classifier.generated_support_grounding_rejection(evaluation, request)
+        == "MISSING_GENERATED_VISUAL"
+    )
+
+
+def test_canvas_writer_schema_reserves_source_connectors_for_backend() -> None:
+    context: dict[str, object] = {
+        "allowed_target_ids": [
+            "Q1:QTOKEN:4",
+            "Q1:QTOKEN:5",
+            "ZONE:QUESTION",
+            "ZONE:REASONING",
+            "ZONE:TUTOR_SOLUTION",
+        ],
+        "authorized_evidence_ids": ["JUXTAPOSITION"],
+        "confirmed_source_targets": [
+            {
+                "evidence_ref": "JUXTAPOSITION",
+                "target_ids": ["Q1:QTOKEN:4", "Q1:QTOKEN:5"],
+            },
+        ],
+    }
+    schema = openai_client.canvas_teaching_plan_schema(context)
+    operation = schema["$defs"]["CanvasTeachingOperation"]
+    assert isinstance(operation, dict)
+    variants = operation["anyOf"]
+    assert isinstance(variants, list)
+    kinds = {
+        kind
+        for variant in variants
+        if isinstance(variant, dict)
+        for properties in [variant.get("properties")]
+        if isinstance(properties, dict)
+        for kind_schema in [properties.get("kind")]
+        if isinstance(kind_schema, dict)
+        for kind in kind_schema.get("enum", [])
+        if isinstance(kind, str)
+    }
+    assert "CONNECT" not in kinds
+    assert {"WRITE_TEXT", "WRITE_MATH"}.issubset(kinds)
 
 
 def test_completed_response_aware_turn_retries_follow_up_question() -> None:

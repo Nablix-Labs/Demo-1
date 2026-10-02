@@ -320,11 +320,9 @@ guided_learning:
       notation; a CHECK, highlight, or circle does not satisfy this rule.
       Choose one clear board move per beat: orient
       with a temporary circle or highlight; record one demonstrated idea as a
-      compact note; relate several separate sources to one note with an arrow;
-      or verify a worked example with a check. Do not use arrows as decoration.
-      A connector is useful only when it explains where a summary note came
-      from; every connector must share an evidence ID and scene slot with its
-      written note. For a wrong or unresolved idea, point to the exact source
+      compact note; or verify a worked example with a check. Source arrows are
+      derived from the written note's evidence ID and must not be returned as
+      raw operations. For a wrong or unresolved idea, point to the exact source
       with a circle or highlight; do not write the missing answer. Build on the
       supplied reasoning trail rather than repeating a prior note. Never use
       coordinates, student writing space, a completed unrevealed rule, or
@@ -372,12 +370,13 @@ guided_learning:
       canvas output. A WRITE_TEXT or WRITE_MATH operation normally cites one
       current-turn evidence ID.
       FOCUS, HIGHLIGHT, CIRCLE, BOX, and CHECK operations must use a null
-      evidence_ref. CONNECT is a persistent source-to-note arrow: target_ids
-      must be exact confirmed question-anchor IDs, evidence_ref must match the
-      demonstrated idea, and zone may be QUESTION or REASONING because the
-      arrow starts at a question token and ends at a reasoning note. Do not
-      add text or latex to a CONNECT. Use only the scene slot IDs listed in
-      allowed_scene_slots; do not invent slot names.
+      evidence_ref. Do not return CONNECT operations. A persistent source
+      arrow is added automatically for every written learner-confirmed idea,
+      using the exact confirmed_source_targets entry for that evidence_ref.
+      Choose the evidence_ref for each written note carefully: it is the
+      model's explicit declaration of which demonstrated idea the note records.
+      Use only the scene slot IDs listed in allowed_scene_slots; do not invent
+      slot names.
 
       DIRECT_EXPLANATION is the sole pre-support writing exception. Use it
       only when direct_explanation_authorized is true, cite
@@ -395,11 +394,9 @@ guided_learning:
       for fixed/repeated structure, navy for learner-confirmed conclusions.
       A good board alternates attention and reasoning: first point to a symbol
       or example, then write a compact conclusion only after the learner has
-      demonstrated it. Do not put a down-arrow above every note. Use CONNECT
-      only when two or more separate visible sources need to be related to the
-      same written conclusion; the paired WRITE operation must use the same
-      evidence_ref and scene slot. A mark-only beat and a note-only beat are
-      both valid teaching moves. Never return CONNECT without its paired note.
+      demonstrated it. Do not put a down-arrow above every note. A mark-only
+      beat and a note-only beat are both valid teaching moves. The backend
+      derives any source arrow from the written note's evidence_ref.
       When require_guided_evidence_ink is true, return exactly one persistent
       navy WRITE_TEXT or WRITE_MATH operation in the REASONING zone. It must
       cite one authorized_evidence_id and record only the idea the learner
@@ -410,10 +407,6 @@ guided_learning:
       Use only symbols and values grounded in that source, learner response,
       or tutor confirmation. If the confirmed idea is not mathematical, use a
       concise label. Do not write the canonical answer unless it is authorized.
-      When a connector is useful, it must be persistent, use the same
-      evidence_ref as its paired note, and target only the exact relevant
-      confirmed source IDs. Keep each operation within the schema's target
-      limit.
       The content must extend the existing reasoning trail rather than restart it.
       When the demonstrated evidence is CHANGING_VALUE, also circle the exact
       changing values in amber when each is available as a question anchor.
@@ -424,9 +417,8 @@ guided_learning:
       For QUESTION_ANCHOR operations, use allowed_question_anchors to target
       only mathematical values, variables, operators, or expressions. Never
       decorate instruction or prose words such as "Write", "without", or
-      "calculating". Use CONNECT only to link an exact confirmed_source_targets
-      entry to its corresponding reasoning note; never invent targets. Return
-      no plan when there is no precise, meaningful mathematical target.
+      "calculating". Return no plan when there is no precise, meaningful
+      mathematical target.
   evaluation_mode: LLM_STATE_MACHINE
   confidence_threshold: 0.75
   state_confidence_thresholds:

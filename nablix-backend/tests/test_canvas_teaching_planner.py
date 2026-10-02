@@ -746,10 +746,13 @@ def test_planner_circles_a_confirmed_changing_source_before_its_note(monkeypatch
     assert [operation.kind for operation in plan.beats[0].operations] == [
         "CIRCLE",
         "WRITE_MATH",
+        "CONNECT",
     ]
     assert plan.beats[0].operations[0].target_ids == [anchor.token_id]
     assert plan.beats[0].operations[0].color_role == "AMBER"
     assert plan.beats[0].operations[0].persistence == "PERSIST"
+    assert plan.beats[0].operations[2].target_ids == [anchor.token_id]
+    assert plan.beats[0].operations[2].evidence_ref == "CHANGING_VALUE"
 
 
 def test_pattern_scene_writes_only_after_the_learner_names_the_changing_part(monkeypatch) -> None:
@@ -1384,6 +1387,21 @@ def test_planner_writes_a_confirmed_notation_example_and_connects_its_source(mon
         evidence_ref="JUXTAPOSITION",
         expression=r"p \times q",
     )
+    draft = draft.model_copy(
+        update={
+            "beats": [
+                draft.beats[0].model_copy(
+                    update={
+                        "operations": [
+                            operation
+                            for operation in draft.beats[0].operations
+                            if operation.kind != "CONNECT"
+                        ]
+                    }
+                )
+            ]
+        }
+    )
     client = FakeCanvasTeachingClient(draft)
     monkeypatch.setattr(
         canvas_teaching_planner,
@@ -1409,10 +1427,11 @@ def test_planner_writes_a_confirmed_notation_example_and_connects_its_source(mon
     assert plan is not None
     assert [(operation.kind, operation.scene_slot) for operation in plan.beats[0].operations] == [
         ("HIGHLIGHT", None),
-        ("CONNECT", "generic_confirmation:JUXTAPOSITION"),
         ("WRITE_MATH", "generic_confirmation:JUXTAPOSITION"),
+        ("CONNECT", "generic_confirmation:JUXTAPOSITION"),
     ]
-    assert plan.beats[0].operations[2].latex == r"p \times q"
+    assert plan.beats[0].operations[1].latex == r"p \times q"
+    assert plan.beats[0].operations[2].target_ids == [pq_anchor.token_id]
 
     client.draft = _confirmed_example_draft(
         voice=tutor.tutor_message_voice,
@@ -1438,7 +1457,9 @@ def test_planner_writes_a_confirmed_notation_example_and_connects_its_source(mon
     assert [operation.kind for operation in partial_plan.beats[0].operations] == [
         "HIGHLIGHT",
         "WRITE_MATH",
+        "CONNECT",
     ]
+    assert partial_plan.beats[0].operations[2].target_ids == [pq_anchor.token_id]
     client.draft = _confirmed_example_draft(
         voice=tutor.tutor_message_voice,
         target_ids=[pq_anchor.token_id],
@@ -1572,7 +1593,10 @@ def test_planner_keeps_a_valid_note_when_a_reasoning_arrow_is_malformed(monkeypa
     assert [operation.kind for operation in plan.beats[0].operations] == [
         "HIGHLIGHT",
         "WRITE_MATH",
+        "CONNECT",
     ]
+    assert plan.beats[0].operations[2].target_ids == [pq_anchor.token_id]
+    assert plan.beats[0].operations[2].evidence_ref == "JUXTAPOSITION"
     assert rejected_operations == [
         {
             "question_id": "Q-NOTATION",

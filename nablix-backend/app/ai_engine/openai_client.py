@@ -331,6 +331,13 @@ def guided_wording_schema(
             "minLength": 1,
             "maxLength": 280,
         }
+        schema["properties"]["generated_visual_rows"] = {
+            "title": "Generated Visual Rows",
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 4,
+            "items": {"$ref": "#/$defs/GuidedComparisonRow"},
+        }
     return schema
 
 
@@ -425,25 +432,35 @@ def canvas_operation_output_schema(
         "color_role": {"type": "string", "enum": ["NAVY"]},
     })
 
-    connector = variant()
-    connector_properties = connector["properties"]
-    assert isinstance(connector_properties, dict)
-    connector_properties.update({
-        "kind": {"type": "string", "enum": ["CONNECT"]},
-        "target_kind": {"type": "string", "enum": ["QUESTION_ANCHOR"]},
-        "target_ids": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 4,
-            "items": {"type": "string", "enum": question_target_ids},
-        },
-        "zone": {"type": "string", "enum": ["REASONING"]},
-        "persistence": {"type": "string", "enum": ["PERSIST"]},
-        "evidence_ref": {"type": "string", "enum": evidence_ids},
-        "text": {"type": "null"},
-        "latex": {"type": "null"},
-    })
-    return {"anyOf": [write, attention, connector]}
+    return {"anyOf": [write, attention]}
+
+
+def canvas_teaching_plan_schema(context: dict[str, object]) -> dict[str, object]:
+    """Constrain model canvas output to semantic notes and attention marks.
+
+    Source connectors are derived from the authoritative confirmed-source
+    context after the model selects a written evidence reference. The model
+    must never choose raw connector target IDs.
+    """
+
+    schema = CanvasTeachingPlanDraft.model_json_schema()
+    definitions = schema.get("$defs")
+    operation_schema = (
+        definitions.get("CanvasTeachingOperation")
+        if isinstance(definitions, dict)
+        else None
+    )
+    if not isinstance(operation_schema, dict):
+        raise RuntimeError("CanvasTeachingOperation schema definition is missing.")
+    allowed_target_ids = context.get("allowed_target_ids")
+    authorized_evidence_ids = context.get("authorized_evidence_ids")
+    assert isinstance(definitions, dict)
+    definitions["CanvasTeachingOperation"] = canvas_operation_output_schema(
+        operation_schema,
+        allowed_target_ids if isinstance(allowed_target_ids, list) else [],
+        authorized_evidence_ids if isinstance(authorized_evidence_ids, list) else [],
+    )
+    return schema
 
 
 @dataclass(frozen=True)
@@ -642,7 +659,7 @@ class OpenAIAIEngineClient:
 
         content = self._request_guided_json(
             name="canvas_teaching_plan",
-            schema=CanvasTeachingPlanDraft.model_json_schema(),
+            schema=canvas_teaching_plan_schema(context),
             system_prompt=system_prompt,
             user_payload=context,
         )
