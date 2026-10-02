@@ -42,7 +42,7 @@ from app.ai_engine.schemas import (
     VisualCue,
 )
 from app.core.config import Settings, get_settings
-from app.services.question_anchors import plan_question_anchors, question_text_tokens
+from app.services.question_anchors import plan_question_anchors
 from app.core.exceptions import AdapterError
 from app.core.logger import logger
 from app.models.adapters import (
@@ -4340,12 +4340,6 @@ def write_redacted_response_aware_message(
     contribution = evaluation.contribution
     if contribution is None:
         raise AdapterError("openai_ai_engine", "Response-aware wording requires a validated contribution.")
-    canvas_config = rules.guided_learning.canvas_teaching
-    composer_enabled = (
-        canvas_config.enabled
-        and canvas_config.composer_enabled
-        and request.question_id is not None
-    )
     context = {
         "question": request.question,
         "student_response": current_learner_response(request),
@@ -4376,29 +4370,6 @@ def write_redacted_response_aware_message(
         "canvas_submission_required": request.canvas_submission_required,
         "required_learner_action": required_response_aware_learner_action(evaluation),
     }
-    if composer_enabled:
-        composer_anchors = question_text_tokens(request.question_id, request.question)
-        authorized_evidence_ids = sorted(set(evaluation.newly_confirmed_concept_ids))
-        context["canvas_context"] = {
-            "question_id": request.question_id,
-            "allowed_question_anchors": [
-                {"id": anchor.token_id, "text": anchor.text}
-                for anchor in composer_anchors
-            ],
-            "allowed_target_ids": [
-                *[anchor.token_id for anchor in composer_anchors],
-                "ZONE:QUESTION",
-                "ZONE:REASONING",
-                "ZONE:TUTOR_SOLUTION",
-            ],
-            "current_turn_evidence_ids": authorized_evidence_ids,
-            "authorized_evidence_ids": authorized_evidence_ids,
-            "teaching_mode": "GUIDED",
-            "require_guided_evidence_ink": bool(authorized_evidence_ids),
-            "confirmed_evidence_writing_allowed": bool(authorized_evidence_ids),
-            "maximum_beats": canvas_config.maximum_beats,
-            "maximum_operations_per_beat": canvas_config.maximum_operations_per_beat,
-        }
     explained_topic = (
         contribution.identified_difficulty or contribution.learner_question
         if contribution.kind in {"EXPLANATION_REQUEST", "EXPRESSED_DIFFICULTY"}
@@ -4409,42 +4380,10 @@ def write_redacted_response_aware_message(
         "explained_idea": explained_topic,
     })
     for attempt in range(rules.guided_learning.production_boundary_writer_maximum_retries + 1):
-        composer_used = False
-        if composer_enabled:
-            try:
-                message = openai_client.write_guided_teaching_composer(
-                    system_prompt=(
-                        rules.guided_learning.response_aware_writer_system_prompt
-                        + "\n\n"
-                        + canvas_config.composer_system_prompt
-                    ),
-                    wording_context=context,
-                )
-                composer_used = True
-            except AdapterError as error:
-                logger.warning(
-                    "guided_teaching_composer_retry",
-                    extra={
-                        "question_id": request.question_id,
-                        "attempt": attempt + 1,
-                        "reason": error.detail,
-                    },
-                )
-                if attempt >= rules.guided_learning.production_boundary_writer_maximum_retries:
-                    raise
-                context = {
-                    **context,
-                    "writer_validation_feedback": (
-                        "Return a complete valid tutor response and canvas draft. "
-                        "Use only the supplied target and evidence IDs."
-                    ),
-                }
-                continue
-        else:
-            message = openai_client.write_guided_fact_budget_message(
-                system_prompt=rules.guided_learning.response_aware_writer_system_prompt,
-                wording_context=context,
-            )
+        message = openai_client.write_guided_fact_budget_message(
+            system_prompt=rules.guided_learning.response_aware_writer_system_prompt,
+            wording_context=context,
+        )
         replacement_required = (
             contribution.assessment == "INCORRECT"
             and contribution.support_relevance in {"UNMAPPED", "MISMATCHED"}
@@ -4463,19 +4402,7 @@ def write_redacted_response_aware_message(
             "contribution": rewritten_contribution,
             "tutor_message": message.tutor_message,
             "tutor_message_voice": message.tutor_message_voice_optimised,
-            "canvas_teaching_draft": (
-                message.canvas_teaching_draft if composer_used else None
-            ),
-            "canvas_teaching_composer_used": composer_used,
         })
-        canvas_rejection = (
-            composer_canvas_contract_rejection(
-                message.canvas_teaching_draft,
-                context["canvas_context"],
-            )
-            if composer_used
-            else None
-        )
         writer_action = getattr(message, "learner_action", None)
         required_action = required_response_aware_learner_action(rewritten)
         action_rejection = (
@@ -4494,8 +4421,6 @@ def write_redacted_response_aware_message(
             rejection = response_aware_message_rejection_reason(
                 rewritten, request, rubric, objective, rules,
             )
-        if rejection is None:
-            rejection = canvas_rejection
         if rejection is None:
             return rewritten
         if attempt >= rules.guided_learning.production_boundary_writer_maximum_retries:
@@ -5361,6 +5286,9 @@ def generated_support_grounding_rejection(
     contribution = evaluation.contribution
     if contribution is None or contribution.generated_support_text is None:
         return "MISSING_GENERATED_SUPPORT"
+    visual_rows = contribution.generated_visual_rows
+    if visual_rows is None or not 2 <= len(visual_rows) <= 4:
+        return "MISSING_GENERATED_VISUAL"
     grounding_tokens = significant_component_tokens(
         " ".join(
             value
@@ -5376,7 +5304,7 @@ def generated_support_grounding_rejection(
         contribution.generated_support_text
     ).intersection(grounding_tokens):
         return "UNGROUNDED_GENERATED_SUPPORT"
-    for row in contribution.generated_visual_rows or []:
+    for row in visual_rows:
         row_tokens = significant_component_tokens(
             f"{row.expression} {row.annotation}"
         )

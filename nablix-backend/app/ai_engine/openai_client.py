@@ -331,6 +331,13 @@ def guided_wording_schema(
             "minLength": 1,
             "maxLength": 280,
         }
+        schema["properties"]["generated_visual_rows"] = {
+            "title": "Generated Visual Rows",
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 4,
+            "items": {"$ref": "#/$defs/GuidedComparisonRow"},
+        }
     return schema
 
 

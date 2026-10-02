@@ -115,7 +115,6 @@ from app.services.canvas_annotations import (
 from app.services.question_anchors import plan_canvas_action_anchors
 from app.services.canvas_teaching_planner import (
     plan_canvas_teaching,
-    plan_composed_canvas_teaching,
 )
 from app.services.canvas_evidence import (
     CanvasEvidence,
@@ -5357,25 +5356,13 @@ async def _process_interaction(
             "active_support_level": response.active_support_level,
             "current_unresolved_component_id": response.first_unresolved_concept_id,
         }
-        canvas_teaching_plan = (
-            plan_composed_canvas_teaching(
-                **canvas_plan_arguments,
-                composed_draft=tutor.canvas_teaching_draft,
-            )
-            if tutor.canvas_teaching_composer_used
-            else plan_canvas_teaching(
-                **canvas_plan_arguments,
-            )
-        )
+        canvas_teaching_plan = plan_canvas_teaching(**canvas_plan_arguments)
         response = response.model_copy(
             update={
                 "canvas_teaching_plan": canvas_teaching_plan,
                 "tutor_canvas_actions": (
                     _non_visual_tutor_canvas_actions(tutor.tutor_canvas_actions)
-                    if (
-                        tutor.canvas_teaching_composer_used
-                        or canvas_teaching_plan is not None
-                    )
+                    if canvas_teaching_plan is not None
                     else tutor.tutor_canvas_actions
                 ),
             }
