@@ -746,10 +746,13 @@ def test_planner_circles_a_confirmed_changing_source_before_its_note(monkeypatch
     assert [operation.kind for operation in plan.beats[0].operations] == [
         "CIRCLE",
         "WRITE_MATH",
+        "CONNECT",
     ]
     assert plan.beats[0].operations[0].target_ids == [anchor.token_id]
     assert plan.beats[0].operations[0].color_role == "AMBER"
     assert plan.beats[0].operations[0].persistence == "PERSIST"
+    assert plan.beats[0].operations[2].target_ids == [anchor.token_id]
+    assert plan.beats[0].operations[2].evidence_ref == "CHANGING_VALUE"
 
 
 def test_pattern_scene_writes_only_after_the_learner_names_the_changing_part(monkeypatch) -> None:
@@ -1590,7 +1593,10 @@ def test_planner_keeps_a_valid_note_when_a_reasoning_arrow_is_malformed(monkeypa
     assert [operation.kind for operation in plan.beats[0].operations] == [
         "HIGHLIGHT",
         "WRITE_MATH",
+        "CONNECT",
     ]
+    assert plan.beats[0].operations[2].target_ids == [pq_anchor.token_id]
+    assert plan.beats[0].operations[2].evidence_ref == "JUXTAPOSITION"
     assert rejected_operations == [
         {
             "question_id": "Q-NOTATION",
