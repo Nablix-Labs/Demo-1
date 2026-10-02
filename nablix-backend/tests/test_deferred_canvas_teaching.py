@@ -10,8 +10,8 @@ from app.models.canvas_teaching import (
     CanvasTeachingOperation,
     CanvasTeachingPlan,
 )
-from app.services import interaction_service, session_service
-from tests.test_canvas_teaching_planner import _anchor, _tutor
+from app.services import canvas_teaching_planner, interaction_service, session_service
+from tests.test_canvas_teaching_planner import _anchor, _enabled_rules, _tutor
 
 
 def _plan(turn_id: str) -> CanvasTeachingPlan:
@@ -121,11 +121,19 @@ def test_deferred_canvas_plan_failure_does_not_escape_the_tutor_turn(
     assert unavailable.canvas_teaching_plan is None
 
 
-def test_openai_deferred_canvas_plan_smoke() -> None:
+def test_openai_deferred_canvas_plan_smoke(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Run the background delivery path against OpenAI only when explicitly enabled."""
 
     if os.getenv("NABLIX_RUN_OPENAI_SMOKE") != "true":
         pytest.skip("Set NABLIX_RUN_OPENAI_SMOKE=true to run the billed OpenAI smoke test.")
+
+    monkeypatch.setattr(
+        canvas_teaching_planner,
+        "load_classifier_rules",
+        _enabled_rules,
+    )
 
     session_id = "SESSIONdeferredopenai"
     turn_id = "TURN-DEFERRED-OPENAI"
