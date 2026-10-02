@@ -11,8 +11,10 @@ from app.models.canvas_teaching import (
     CanvasTeachingPlan,
 )
 from app.core.config import Settings
+from app.models.guided_learning import GuidedEvidenceClaim, TutorCanvasAction
+from app.services.question_anchors import question_text_tokens
 from app.services import canvas_teaching_planner, interaction_service, session_service
-from tests.test_canvas_teaching_planner import _anchor, _enabled_rules, _tutor
+from tests.test_canvas_teaching_planner import _enabled_rules, _tutor
 
 
 def _plan(turn_id: str) -> CanvasTeachingPlan:
@@ -142,11 +144,45 @@ def test_openai_deferred_canvas_plan_smoke(
 
     session_id = "SESSIONdeferredopenai"
     turn_id = "TURN-DEFERRED-OPENAI"
+    question_id = "Q-DEFERRED-OPENAI"
+    question = "Decode pq without calculating."
+    anchors = question_text_tokens(question_id, question)
+    pq_anchor = next(anchor for anchor in anchors if anchor.text == "pq")
+    tutor = _tutor()
+    state = tutor.guided_teaching_state
+    assert state is not None
+    tutor = tutor.model_copy(
+        update={
+            "tutor_message": "Yes — pq means p multiplied by q.",
+            "tutor_message_voice": "Yes — pq means p multiplied by q.",
+            "guided_teaching_state": state.model_copy(
+                update={
+                    "last_turn_evidence": [
+                        GuidedEvidenceClaim(
+                            concept_id="JUXTAPOSITION",
+                            status="DEMONSTRATED",
+                            source="TEXT",
+                        )
+                    ]
+                }
+            ),
+            "tutor_canvas_actions": [
+                TutorCanvasAction(
+                    action_id="CONFIRMED-PQ",
+                    type="HIGHLIGHT",
+                    target_kind="QUESTION_ANCHOR",
+                    target_object_id=pq_anchor.token_id,
+                    confirmed_component_id="JUXTAPOSITION",
+                    source_id=None,
+                ),
+            ],
+        }
+    )
     session_service.start_deferred_canvas_teaching_plan(
         session_id,
         turn_id,
         3,
-        "Q1",
+        question_id,
     )
 
     asyncio.run(
@@ -154,18 +190,18 @@ def test_openai_deferred_canvas_plan_smoke(
             session_id,
             turn_id,
             {
-                "question_id": "Q1",
-                "question": "3 + 5 | 9 + 5 | 14 + 5",
+                "question_id": question_id,
+                "question": question,
                 "source_turn_id": turn_id,
                 "tutor_turn_id": "TUTOR-DEFERRED-OPENAI",
                 "scene_revision": 3,
-                "tutor_message_voice": "Those first numbers are different.",
-                "tutor": _tutor(),
-                "question_anchors": [_anchor()],
-                "student_response": "They are different.",
-                "canonical_answer": "n + 5",
-                "active_support_level": "HINT",
-                "current_unresolved_component_id": "FIXED_VALUE",
+                "tutor_message_voice": "Yes — pq means p multiplied by q.",
+                "tutor": tutor,
+                "question_anchors": anchors,
+                "student_response": "p multiplied by q",
+                "canonical_answer": "pq",
+                "active_support_level": None,
+                "current_unresolved_component_id": "EXPONENT",
             },
         )
     )
