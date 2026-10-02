@@ -21,6 +21,7 @@
 const AUTH_BASE = (process.env.NEXT_PUBLIC_AUTH_BASE_URL ?? '/nablix-auth').replace(/\/+$/, '');
 
 export interface LoginResponse {
+  name?: string | null;
   access_token: string;
   token_type: string;
   role: string;

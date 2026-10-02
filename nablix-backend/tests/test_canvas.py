@@ -1110,7 +1110,12 @@ def test_canvas_submit_sends_full_ocr_context_and_forwards_events(
         "classify_student_response",
         capture_classification,
     )
-    session_id = _start_session("ST011")
+    opened = client.post("/session/start", json={
+        "student_id": "ST011", "student_name": "  Maya Chen  ",
+        "concept_id": "ALG_LINEAR_ONE_STEP", "interaction_mode": "TEXT",
+    })
+    assert opened.status_code == 200, opened.text
+    session_id = opened.json()["session_id"]
     question_id = session_service._sessions[session_id].question_id
 
     response = client.post(
@@ -1126,6 +1131,7 @@ def test_canvas_submit_sends_full_ocr_context_and_forwards_events(
     assert response.status_code == 200
     assert len(captured_contexts) == 1
     context = captured_contexts[0]
+    assert context.student_name == "Maya Chen"
     assert context.question == "Solve for x: x + 4 = 9"
     assert context.correct_answer == "x = 5"
     assert context.current_phase == "GUIDED_PRACTICE"
@@ -1141,6 +1147,7 @@ def test_canvas_submit_sends_full_ocr_context_and_forwards_events(
     assert context.has_canvas_evidence is True
     assert [event.order_index for event in context.canvas_events] == [0]
     assert len(classifier_requests) == 1
+    assert classifier_requests[0].student_name == "Maya Chen"
     assert classifier_requests[0].canvas_events == context.canvas_events
     assert [event.event_type for event in captured_events] == [
         "SESSION_OPENED",
@@ -1155,6 +1162,7 @@ def test_canvas_submit_sends_full_ocr_context_and_forwards_events(
     )
     assert attempt_event.expected_journey_version > 0
     stored = client.get(f"/session/{session_id}", params={"student_id": "ST011"}).json()
+    assert stored["student_name"] == "Maya Chen"
     assert stored["attempt_count"] == 0
     assert len(stored["per_question_history"]) == 1
     persisted_session = session_service._get_owned_session(session_id, "ST011")

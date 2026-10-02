@@ -53,7 +53,7 @@ describe('starting the next topic', () => {
     // `topic_id` is a topic CODE. The backend resolves concept_id through a map
     // holding one entry, so sending it there is a 422 and the next topic never
     // starts.
-    expect(startPayloadFor('ST1', 'ALG_LINEAR_ONE_STEP', 'ALG-KS3-01', 'TEXT')).toEqual({
+    expect(startPayloadFor('ST1', 'ALG_LINEAR_ONE_STEP', 'ALG-KS3-01', 'TEXT', null)).toEqual({
       student_id: 'ST1',
       topic_code: 'ALG-KS3-01',
       interaction_mode: 'TEXT',
@@ -61,7 +61,7 @@ describe('starting the next topic', () => {
   });
 
   it('falls back to concept_id when there is no topic code', () => {
-    expect(startPayloadFor('ST1', 'ALG_LINEAR_ONE_STEP', null, 'TEXT')).toEqual({
+    expect(startPayloadFor('ST1', 'ALG_LINEAR_ONE_STEP', null, 'TEXT', null)).toEqual({
       student_id: 'ST1',
       concept_id: 'ALG_LINEAR_ONE_STEP',
       interaction_mode: 'TEXT',
@@ -69,7 +69,7 @@ describe('starting the next topic', () => {
   });
 
   it('never sends both — topic_code alone identifies the topic', () => {
-    const payload = startPayloadFor('ST1', 'ALG_LINEAR_ONE_STEP', 'ALG-KS3-01', 'VOICE');
+    const payload = startPayloadFor('ST1', 'ALG_LINEAR_ONE_STEP', 'ALG-KS3-01', 'VOICE', 'Maya');
     expect('concept_id' in payload).toBe(false);
   });
 });

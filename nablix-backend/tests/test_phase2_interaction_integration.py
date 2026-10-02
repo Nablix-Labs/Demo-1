@@ -3,12 +3,14 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from app.adapters import provider
+from app.adapters import provider, tutor_engine
 from app.adapters.student_model import StudentModelServiceAdapter
 from app.adapters.tutor_engine import TutorEngineServiceAdapter
 from app.models.adapters import TutorEngineRequest, TutorResult
+from app.ai_engine.classifier import ClassificationRequest
 from app.ai_engine import classifier
 from app.ai_engine.schemas import (
+    TutorResponse,
     ExplainAgainRequest,
     ExplainAgainResponse,
     OpenAIExplainAgainMessage,
@@ -141,6 +143,7 @@ def _start(student_id: str) -> dict[str, object]:
         "/session/start",
         json={
             "student_id": student_id,
+            "student_name": "Maya Chen",
             "concept_id": "ALG_LINEAR_ONE_STEP",
             "interaction_mode": "TEXT",
         },
@@ -197,7 +200,16 @@ def _pedagogical_state(session_id: object) -> dict[str, object]:
     return {field: getattr(session, field) for field in fields}
 
 
-def test_text_duplicate_and_stale_turns_do_not_mutate_state() -> None:
+def test_text_duplicate_and_stale_turns_do_not_mutate_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_requests: list[ClassificationRequest] = []
+    original_classify = interaction_service.classify_student_response
+
+    def capture_classification(request: ClassificationRequest) -> TutorResponse:
+        captured_requests.append(request)
+        return original_classify(request)
+
+    monkeypatch.setattr(interaction_service, "classify_student_response", capture_classification)
+    monkeypatch.setattr(tutor_engine, "classify_student_response", capture_classification)
     student_id = "ST151"
     session = _start(student_id)
     request = _interaction(
@@ -211,6 +223,8 @@ def test_text_duplicate_and_stale_turns_do_not_mutate_state() -> None:
     first = client.post("/interaction", json=request)
     assert first.status_code == 200, first.text
     first_body = first.json()
+    assert captured_requests
+    assert captured_requests[0].student_name == "Maya Chen"
 
     duplicate = client.post("/interaction", json=request)
     assert duplicate.status_code == 200

@@ -49,6 +49,12 @@ describe('registration on the live path', () => {
     });
   });
 
+  it('preserves the authenticated student name returned by consent activation', async () => {
+    live(json({ access_token: 'test', token_type: 'bearer', role: 'student', tier: 'basic', name: 'Maya Chen', student_code: 'ST1', account_status: 'active' }));
+    const response = await acceptConsents({ registration_id: 'REG-1', guardian_id: 'GRD-1', accepted_purposes: [], disclosure_version: 'v1.0' });
+    expect(response?.name).toBe('Maya Chen');
+  });
+
   it('sends a guardian with no phone as null, not an empty string', async () => {
     const f = live(json({ guardian_id: 'G1', otp_sent_to: 'p•••@x.com', expires_in_s: 600 }));
     await submitGuardian({ registration_id: 'REG-1', name: 'Pat', relationship: 'Parent', email: 'p@x.com', phone: null });

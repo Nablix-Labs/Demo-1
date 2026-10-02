@@ -72,3 +72,18 @@ describe('a 401 from the tutoring backend', () => {
     expect(useAuthStore.getState().accessToken).not.toBeNull();
   });
 });
+
+
+it('replaces authenticated names for login and consent activation, then clears both stores on logout', async () => {
+  const { useNumeraStore } = await import('@/store/useNumeraStore');
+  const identity = { token: 'test', role: 'student' as const, tier: 'basic', email: 'student@example.com', studentCode: 'ST1' };
+  for (const name of ['  Maya Chen  ', 'Sam', null, undefined, '   ']) {
+    useAuthStore.getState().loginSuccess({ ...identity, name });
+    expect(useAuthStore.getState().student.name).toBe(name?.trim() || '');
+    expect(useNumeraStore.getState().studentName).toBe(name?.trim() || '');
+  }
+  useAuthStore.getState().loginSuccess({ ...identity, name: 'Maya' });
+  useAuthStore.getState().logout();
+  expect(useAuthStore.getState().student.name).toBe('');
+  expect(useNumeraStore.getState().studentName).toBe('');
+});

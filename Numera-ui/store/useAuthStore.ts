@@ -15,6 +15,7 @@
 
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import { useNumeraStore } from '@/store/useNumeraStore';
 import { isTokenValid } from '@/lib/auth/authApi';
 
 // account_status values from §12 of the proposal.
@@ -143,7 +144,7 @@ interface AuthState {
   grantConsent: (purpose: ConsentPurpose) => void; // (re-)grant a single consent
 
   // Lifecycle
-  loginSuccess: (p: { token: string; role: Role; tier: string; email: string; studentCode?: string | null }) => void;
+  loginSuccess: (p: { token: string; role: Role; tier: string; email: string; studentCode?: string | null; name: string | null | undefined }) => void;
   setStudentCode: (code: string | null) => void;
   activateAccount: () => void;
   suspend: () => void;
@@ -242,12 +243,15 @@ export const useAuthStore = create<AuthState>()(
       // consent state, mark the mandatory consents satisfied so the feature
       // gates (voice/canvas §10) don't block a legitimately logged-in user.
       // TODO(auth): replace with real consent state once /consent endpoints exist.
-      loginSuccess: ({ token, role, tier, email, studentCode }) =>
+      loginSuccess: ({ token, role, tier, email, studentCode, name }) => {
+        const studentName = role === 'student' ? name?.trim() || '' : '';
+        useNumeraStore.getState().setStudentName(studentName);
         set((s) => {
           const now = new Date().toISOString();
           const consents = { ...s.consents };
           for (const p of MANDATORY_PURPOSES) consents[p] = { acceptedAt: now, withdrawnAt: null };
           return {
+            student: { ...s.student, name: studentName },
             accessToken: token,
             tier,
             studentCode: studentCode ?? null,
@@ -258,7 +262,8 @@ export const useAuthStore = create<AuthState>()(
             consents,
             disclosureAck: { acknowledged: true, version: SAFETY_DISCLOSURE_VERSION, at: now },
           };
-        }),
+        });
+      },
 
       setStudentCode: (studentCode) => set({ studentCode }),
 
@@ -269,8 +274,10 @@ export const useAuthStore = create<AuthState>()(
       // accessDecision fell through to the client-side chain and let a
       // signed-out person straight back into the app (2026-07-28). Consents go
       // too — they belong to the account that just left, not the next one.
-      logout: () =>
+      logout: () => {
+        useNumeraStore.getState().setStudentName('');
         set({
+          student: { ...useAuthStore.getState().student, name: '' },
           authMethod: null,
           ssoProvider: null,
           accessToken: null,
@@ -284,7 +291,8 @@ export const useAuthStore = create<AuthState>()(
           accountStatus: 'registration_started',
           consents: emptyConsents(),
           disclosureAck: { acknowledged: false, version: SAFETY_DISCLOSURE_VERSION, at: null },
-        }),
+        });
+      },
       reset: () => set({ ...initial, consents: emptyConsents() }),
     }),
     {

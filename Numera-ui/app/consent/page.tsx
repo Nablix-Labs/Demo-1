@@ -126,7 +126,7 @@ export default function ConsentPage() {
       // The server's account is active and this is its token: sign in with it.
       useAuthStore.getState().loginSuccess({
         token: res.access_token, role: 'student', tier: res.tier,
-        email: useAuthStore.getState().email, studentCode: res.student_code,
+        email: useAuthStore.getState().email, studentCode: res.student_code, name: res.name,
       });
     } else if (!registrationLive()) {
       activateAccount();
