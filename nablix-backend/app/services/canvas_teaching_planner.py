@@ -76,8 +76,8 @@ def plan_canvas_teaching(
         current_unresolved_component_id=current_unresolved_component_id,
         composed_draft=None,
         allow_model_generation=True,
-        allow_pattern_scene=False,
-        allow_structural_attention=False,
+        allow_pattern_scene=True,
+        allow_structural_attention=True,
     )
 
 

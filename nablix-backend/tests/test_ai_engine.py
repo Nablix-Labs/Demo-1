@@ -1705,8 +1705,8 @@ def test_production_boundary_rewrites_an_unsafe_writer_reply_once() -> None:
                     else "Compare the repeated amount in the visible examples."
                 ),
                 generated_visual_rows=[
-                    {"expression": "n + 6", "annotation": "Compare the added amount."},
-                    {"expression": "3 + 5", "annotation": "Use the visible example."},
+                    {"expression": "n + 6", "annotation": "Your proposed rule."},
+                    {"expression": "each example", "annotation": "Inspect the amount after the sign."},
                 ],
                 confidence=0.9,
             )
@@ -1795,8 +1795,8 @@ def test_response_aware_writer_is_independent_from_canvas_composer_configuration
                     "Compare the first number in each visible example."
                 ),
                 generated_visual_rows=[
-                    {"expression": "3 + 5", "annotation": "Look at the first number."},
-                    {"expression": "9 + 5", "annotation": "Compare it with the first example."},
+                    {"expression": "first expression", "annotation": "Inspect its first number."},
+                    {"expression": "next expression", "annotation": "Compare its first number."},
                 ],
                 confidence=0.9,
             )
