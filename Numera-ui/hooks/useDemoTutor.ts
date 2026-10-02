@@ -12,6 +12,7 @@
  * Backend calls are gated on NEXT_PUBLIC_API_BASE_URL: when it's unset (local
  * UI-only runs) the hook is a no-op so the mock UX keeps working untouched.
  */
+import { useAuthStore } from '@/store/useAuthStore';
 import { useCallback, useRef, useState } from 'react';
 import {
   startSession,
@@ -728,17 +729,18 @@ export async function beginSession(
   // Cleared as soon as it is used: it names ONE session, and a stale one would
   // send the student back into the topic they just left.
   const handoffTopic = topicCode ?? store.pendingTopicCode;
+  const studentName = useAuthStore.getState().student.name || null;
 
   inFlight = (async () => {
     try {
       const rec = await startSession(
-        startPayloadFor(studentId(), conceptId, handoffTopic, mode),
+        startPayloadFor(studentId(), conceptId, handoffTopic, mode, studentName),
       ).catch(async (err: unknown) => {
         // The topic we named is one the Student Model does not know. Try
         // once by concept alone; the backend then opens the journey's own
         // current topic. See unknownTopicRejection.
         if (!handoffTopic || !unknownTopicRejection(err)) throw err;
-        return startSession(startPayloadFor(studentId(), conceptId, null, mode));
+        return startSession(startPayloadFor(studentId(), conceptId, null, mode, studentName));
       });
       if (handoffTopic) useNumeraStore.getState().setPendingTopicCode(null);
       const s = useNumeraStore.getState();

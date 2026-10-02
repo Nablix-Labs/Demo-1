@@ -60,7 +60,7 @@ export default function LoginPage() {
     try {
       const res = await login(email.trim(), password);
       const role: Role = res.role === 'parent_guardian' ? 'parent_guardian' : 'student';
-      useAuthStore.getState().loginSuccess({ token: res.access_token, role, tier: res.tier, email: email.trim(), studentCode: res.student_code });
+      useAuthStore.getState().loginSuccess({ token: res.access_token, role, tier: res.tier, email: email.trim(), studentCode: res.student_code, name: res.name });
       // Land on the phase the backend says this student is in — for a new
       // student that's the topic diagnostic, not the guided lesson.
       const store = useNumeraStore.getState();

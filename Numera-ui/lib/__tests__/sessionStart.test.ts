@@ -13,6 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { startPayloadFor } from '@/lib/sessionStart';
 import type { SessionRecord } from '@/lib/api';
 
 const startSession = vi.fn();
@@ -222,5 +223,34 @@ describe('the topic a session is for', () => {
     const { beginSession, useNumeraStore } = await loadTutor();
     await beginSession('ALG_LINEAR_ONE_STEP');
     expect(useNumeraStore.getState().currentTopicId).toBe('ALG-ORI-02');
+  });
+});
+
+
+describe('student name in session payloads', () => {
+  beforeEach(() => { startSession.mockReset(); getSession.mockReset(); });
+  afterEach(() => { delete process.env.NEXT_PUBLIC_API_BASE_URL; });
+  it('preserves the name for topic and concept starts without inventing a missing name', () => {
+    for (const topic of ['ALG-KS3-01', null]) {
+      expect(startPayloadFor('ST1', 'ALG_LINEAR_ONE_STEP', topic, 'VOICE', '  Maya Chen  '))
+        .toHaveProperty('student_name', 'Maya Chen');
+      for (const name of [null, '', '  ']) {
+        expect(startPayloadFor('ST1', 'ALG_LINEAR_ONE_STEP', topic, 'TEXT', name))
+          .not.toHaveProperty('student_name');
+      }
+    }
+  });
+
+  it('carries the authenticated name through a rejected-topic retry', async () => {
+    startSession.mockRejectedValueOnce({ response: { status: 404, data: { error_code: 'UNKNOWN_TOPIC' } } })
+      .mockResolvedValue(RECORD);
+    const { beginSession } = await loadTutor();
+    const { useAuthStore } = await import('@/store/useAuthStore');
+    useAuthStore.getState().loginSuccess({ token: 'test', role: 'student', tier: 'basic', email: 'maya@example.com', studentCode: 'ST1', name: 'Maya Chen' });
+    await beginSession('ALG_LINEAR_ONE_STEP', 'VOICE', 'ALG-KS3-01');
+    expect(startSession).toHaveBeenCalledTimes(2);
+    for (const [payload] of startSession.mock.calls) expect(payload.student_name).toBe('Maya Chen');
+    expect(startSession.mock.calls[1][0]).toHaveProperty('concept_id', 'ALG_LINEAR_ONE_STEP');
+    useAuthStore.getState().logout();
   });
 });

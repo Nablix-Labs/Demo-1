@@ -549,6 +549,7 @@ export interface OrientationMessages {
 }
 
 export interface SessionRecord {
+  student_name?: string | null;
   session_id: string;
   student_id: string;
   concept_id: string;
@@ -661,6 +662,7 @@ export interface NudgeDelivery {
 
 // ── /session/start ────────────────────────────────────────────────────────────
 export interface StartSessionPayload {
+  student_name?: string | null;
   student_id: string;
   /**
    * The RAG/Qdrant key. Optional since the backend made it so: a topic the

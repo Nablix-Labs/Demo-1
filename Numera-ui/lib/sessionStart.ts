@@ -22,10 +22,13 @@ export function startPayloadFor(
   conceptId: string,
   topicCode: string | null | undefined,
   mode: InteractionMode,
+  studentName: string | null,
 ): StartSessionPayload {
   const code = topicCode?.trim();
-  if (code) return { student_id: studentId, topic_code: code, interaction_mode: mode };
-  return { student_id: studentId, concept_id: conceptId, interaction_mode: mode };
+  const name = studentName?.trim();
+  const identity: Pick<StartSessionPayload, 'student_id' | 'student_name'> = { student_id: studentId, ...(name ? { student_name: name } : {}) };
+  if (code) return { ...identity, topic_code: code, interaction_mode: mode };
+  return { ...identity, concept_id: conceptId, interaction_mode: mode };
 }
 
 /**
