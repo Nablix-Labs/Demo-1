@@ -1687,6 +1687,126 @@ def test_production_boundary_discards_evaluator_generated_prose() -> None:
     assert redacted.contribution.generated_visual_rows is None
 
 
+def test_production_boundary_repairs_an_inconsistent_assessment_once() -> None:
+    class AssessmentClient:
+        def __init__(self) -> None:
+            self.feedback: list[str | None] = []
+
+        def with_guided_model(self, *args: object) -> "AssessmentClient":
+            return self
+
+        def evaluate_guided_assessment(self, **kwargs: object) -> GuidedEvaluation:
+            feedback = kwargs["validation_feedback"]
+            assert feedback is None or isinstance(feedback, str)
+            self.feedback.append(feedback)
+            objective = kwargs["active_objective"]
+            assert isinstance(objective, ActiveTeachingObjective)
+            if len(self.feedback) == 1:
+                return GuidedEvaluation(
+                    contribution=StudentContribution(
+                        kind="MATHEMATICAL_ATTEMPT",
+                        assessment="INCORRECT",
+                        error_category="EXPRESSION_STRUCTURE",
+                        error_description="The response does not use the required notation.",
+                        identified_difficulty=None,
+                        learner_question=None,
+                        explained_idea=None,
+                        generated_support_text=None,
+                        generated_visual_rows=None,
+                        support_relevance="UNMAPPED",
+                    ),
+                    student_state="WRONG",
+                    newly_confirmed_concept_ids=objective.missing_concept_ids,
+                    preserved_concept_ids=[],
+                    contradicted_concept_ids=[],
+                    missing_concept_ids=[],
+                    selected_error_code=None,
+                    confidence=0.9,
+                    next_objective=None,
+                    tutor_message="Internal assessment completed.",
+                    tutor_message_voice="Internal assessment completed.",
+                )
+            return GuidedEvaluation(
+                contribution=StudentContribution(
+                    kind="MATHEMATICAL_ATTEMPT",
+                    assessment="INCOMPLETE",
+                    error_category=None,
+                    error_description=None,
+                    identified_difficulty=None,
+                    learner_question=None,
+                    explained_idea=None,
+                    generated_support_text=None,
+                    generated_visual_rows=None,
+                    support_relevance="NOT_NEEDED",
+                ),
+                student_state="PARTIAL",
+                newly_confirmed_concept_ids=[objective.missing_concept_ids[0]],
+                preserved_concept_ids=[],
+                contradicted_concept_ids=[],
+                missing_concept_ids=objective.missing_concept_ids[1:],
+                selected_error_code=None,
+                confidence=0.9,
+                next_objective=objective,
+                tutor_message="Internal assessment completed.",
+                tutor_message_voice="Internal assessment completed.",
+            )
+
+        def write_guided_fact_budget_message(self, **kwargs: object) -> openai_client.OpenAIGuidedWording:
+            message = "You found the operation. What does the notation show about the two letters?"
+            return openai_client.OpenAIGuidedWording(
+                tutor_message=message,
+                tutor_message_voice_optimised=message,
+                learner_action="CONTINUE",
+                generated_support_text=None,
+                generated_visual_rows=None,
+                confidence=0.9,
+            )
+
+    request = ClassificationRequest(
+        question_id="Q-T02-002",
+        question_type="SHORT_RESPONSE",
+        question="What does cd mean?",
+        correct_answer="c multiplied by d",
+        answer_spec=AnswerSpec(
+            answer_spec_id="ANS-T02-002",
+            canonical_answer="c multiplied by d",
+            accepted_answers=[],
+            verification_method="CONCEPT_TEXT_MATCH",
+            explanation_required=False,
+        ),
+        phase_2_prompt_context=_guided_context(0),
+        generated_question_rubric=_guided_rubric(),
+        student_input="It means multiplication.",
+        current_phase="GUIDED_PRACTICE",
+        input_source="TEXT",
+        transcript_confidence=None,
+        attempt_count=0,
+        current_hint_level=None,
+    )
+    rules = load_classifier_rules()
+    rules = rules.model_copy(update={
+        "guided_learning": rules.guided_learning.model_copy(update={
+            "response_aware_enabled": True,
+            "production_boundary_enabled": True,
+            "production_boundary_assessment_maximum_retries": 1,
+        })
+    })
+    assessment_client = AssessmentClient()
+
+    response = classifier.classify_guided_learning_response(
+        request,
+        rules,
+        classifier.SafetyCheck(passed=True, flag_type=None, action_taken=None),
+        cast(openai_client.OpenAIAIEngineClient, assessment_client),
+        "SUBMITTING_ANSWER",
+    )
+
+    assert len(assessment_client.feedback) == 2
+    assert assessment_client.feedback[0] is None
+    assert assessment_client.feedback[1] is not None
+    assert response.guided_student_state == "PARTIAL"
+
+
 def test_production_boundary_rewrites_an_unsafe_writer_reply_once() -> None:
     class Writer:
         def __init__(self) -> None:

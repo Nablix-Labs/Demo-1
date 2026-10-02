@@ -13,6 +13,7 @@ guided_learning:
   production_boundary_enabled: false
   production_boundary_clarification_message: "I did not understand that clearly. Could you say it another way?"
   production_boundary_safe_wording_message: "I want to make sure I follow you. Which part of the problem would you like to look at together?"
+  production_boundary_assessment_maximum_retries: 1
   production_boundary_writer_maximum_retries: 1
   production_boundary_writer_retry_feedback: >-
     Your previous output did not satisfy the response contract. If assessment
@@ -61,6 +62,12 @@ guided_learning:
     the visible problem. Set support_relevance to UNMAPPED when no supplied error
     code fits; never invent a code. Never infer, disclose, or record unspoken
     answer components merely because they are in the answer contract.
+    An INCORRECT assessment must leave at least one required concept missing or
+    contradicted. Do not classify a response as INCORRECT while also confirming
+    every required concept. A compact symbolic response such as "1/2x" or
+    "n+5" is a MATHEMATICAL_ATTEMPT, not an acknowledgement. If
+    assessment_validation_feedback is provided, your previous assessment was
+    rejected: return a corrected assessment that resolves that exact conflict.
 
     Assess submission_state separately from mathematical understanding. Use
     NOT_REQUIRED when canvas work is not required or the mathematics is still
