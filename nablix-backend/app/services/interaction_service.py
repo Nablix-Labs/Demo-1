@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import re
@@ -158,6 +159,9 @@ from app.services.session_service import (
     update_nudge_delivery_status,
     update_side_channel_state,
     update_interaction_state,
+    complete_deferred_canvas_teaching_plan,
+    fail_deferred_canvas_teaching_plan,
+    start_deferred_canvas_teaching_plan,
 )
 from app.services.student_model_session import (
     PHASE_FROM_STUDENT_MODEL,
@@ -3059,6 +3063,36 @@ async def _cache_response(
     return response
 
 
+async def _generate_deferred_canvas_teaching_plan(
+    session_id: str,
+    turn_id: str,
+    canvas_plan_arguments: dict[str, object],
+) -> None:
+    """Generate a visual plan without delaying the accepted tutor response."""
+
+    try:
+        plan = await asyncio.to_thread(
+            plan_canvas_teaching,
+            **canvas_plan_arguments,
+        )
+    except Exception:
+        logger.exception(
+            "deferred_canvas_teaching_plan_failed",
+            extra={"session_id": session_id, "turn_id": turn_id},
+        )
+        fail_deferred_canvas_teaching_plan(session_id, turn_id)
+        return
+    complete_deferred_canvas_teaching_plan(session_id, turn_id, plan)
+    logger.info(
+        "deferred_canvas_teaching_plan_completed",
+        extra={
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "generated": plan is not None,
+        },
+    )
+
+
 def _request_fingerprint(request: InteractionRequest) -> str:
     payload = request.model_dump(mode="json", exclude_none=True)
     canvas_state = payload.get("canvas_state")
@@ -5356,17 +5390,42 @@ async def _process_interaction(
             "active_support_level": response.active_support_level,
             "current_unresolved_component_id": response.first_unresolved_concept_id,
         }
-        canvas_teaching_plan = plan_canvas_teaching(**canvas_plan_arguments)
-        response = response.model_copy(
-            update={
-                "canvas_teaching_plan": canvas_teaching_plan,
-                "tutor_canvas_actions": (
-                    _non_visual_tutor_canvas_actions(tutor.tutor_canvas_actions)
-                    if canvas_teaching_plan is not None
-                    else tutor.tutor_canvas_actions
+        if request.defer_canvas_teaching_plan:
+            start_deferred_canvas_teaching_plan(
+                request.session_id,
+                request.turn_id,
+                response.interaction_state_version,
+                response.question_id,
+            )
+            asyncio.create_task(
+                _generate_deferred_canvas_teaching_plan(
+                    request.session_id,
+                    request.turn_id,
+                    canvas_plan_arguments,
                 ),
-            }
-        )
+                name=f"canvas-plan-{request.turn_id}",
+            )
+            response = response.model_copy(
+                update={
+                    "canvas_teaching_plan": None,
+                    "canvas_teaching_plan_pending": True,
+                    "tutor_canvas_actions": _non_visual_tutor_canvas_actions(
+                        tutor.tutor_canvas_actions
+                    ),
+                }
+            )
+        else:
+            canvas_teaching_plan = plan_canvas_teaching(**canvas_plan_arguments)
+            response = response.model_copy(
+                update={
+                    "canvas_teaching_plan": canvas_teaching_plan,
+                    "tutor_canvas_actions": (
+                        _non_visual_tutor_canvas_actions(tutor.tutor_canvas_actions)
+                        if canvas_teaching_plan is not None
+                        else tutor.tutor_canvas_actions
+                    ),
+                }
+            )
     elif question_advanced:
         # The student response and legacy visual actions belong to the question
         # just completed. They must not annotate the question that just opened.

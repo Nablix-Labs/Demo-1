@@ -28,7 +28,11 @@ from app.models.remediation import (
     StudentModelIntervention,
     intervention_input_request,
 )
-from app.models.interaction import InteractionResponse
+from app.models.interaction import (
+    DeferredCanvasTeachingPlanResponse,
+    InteractionResponse,
+)
+from app.models.canvas_teaching import CanvasTeachingPlan
 from app.models.session import (
     CanvasState,
     FinalTurnReceipt,
@@ -110,6 +114,9 @@ _interaction_locks: dict[str, asyncio.Lock] = {}
 _last_interaction_responses: dict[tuple[str, str], InteractionResponse] = {}
 _interaction_payload_fingerprints: dict[tuple[str, str], str] = {}
 _nudge_deliveries: dict[tuple[str, str], NudgeDeliveryRecord] = {}
+_deferred_canvas_teaching_plans: dict[
+    tuple[str, str], DeferredCanvasTeachingPlanResponse
+] = {}
 
 # Every control off. A halted topic and a frozen intervention both leave the
 # learner on a screen with nothing to answer, so both lower the same flags.
@@ -188,6 +195,60 @@ def cache_interaction_response(
 
 def interaction_payload_fingerprint_for(session_id: str, turn_id: str) -> str | None:
     return _interaction_payload_fingerprints.get((session_id, turn_id))
+
+
+def start_deferred_canvas_teaching_plan(
+    session_id: str,
+    turn_id: str,
+    interaction_state_version: int,
+    question_id: str | None,
+) -> None:
+    _deferred_canvas_teaching_plans[(session_id, turn_id)] = (
+        DeferredCanvasTeachingPlanResponse(
+            status="PENDING",
+            accepted_turn_id=turn_id,
+            interaction_state_version=interaction_state_version,
+            question_id=question_id,
+        )
+    )
+
+
+def complete_deferred_canvas_teaching_plan(
+    session_id: str,
+    turn_id: str,
+    plan: CanvasTeachingPlan | None,
+) -> None:
+    current = deferred_canvas_teaching_plan_for(session_id, turn_id)
+    if current is None:
+        return
+    _deferred_canvas_teaching_plans[(session_id, turn_id)] = current.model_copy(
+        update={
+            "status": "READY" if plan is not None else "UNAVAILABLE",
+            "canvas_teaching_plan": plan,
+        }
+    )
+
+
+def fail_deferred_canvas_teaching_plan(session_id: str, turn_id: str) -> None:
+    current = deferred_canvas_teaching_plan_for(session_id, turn_id)
+    if current is None:
+        return
+    _deferred_canvas_teaching_plans[(session_id, turn_id)] = current.model_copy(
+        update={"status": "UNAVAILABLE"}
+    )
+
+
+def deferred_canvas_teaching_plan_for(
+    session_id: str,
+    turn_id: str,
+) -> DeferredCanvasTeachingPlanResponse | None:
+    return _deferred_canvas_teaching_plans.get((session_id, turn_id))
+
+
+def clear_deferred_canvas_teaching_plans_for_session(session_id: str) -> None:
+    keys = [key for key in _deferred_canvas_teaching_plans if key[0] == session_id]
+    for key in keys:
+        del _deferred_canvas_teaching_plans[key]
 
 
 async def record_final_turn_receipt(
@@ -3002,6 +3063,7 @@ async def end_session(request: SessionEndRequest) -> SessionRecord:
     _sessions[request.session_id] = ended_session
     await save_session(ended_session)
     clear_nudge_deliveries_for_session(request.session_id)
+    clear_deferred_canvas_teaching_plans_for_session(request.session_id)
     return ended_session
 
 

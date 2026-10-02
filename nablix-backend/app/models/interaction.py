@@ -104,6 +104,7 @@ class InteractionRequest(BaseModel):
     selected_reason_codes: list[InterventionReason] | None = None
     voice_input: InterventionVoiceInput | None = None
     timestamp: str | None = None
+    defer_canvas_teaching_plan: bool = False
 
     @model_validator(mode="after")
     def validate_turn(self) -> "InteractionRequest":
@@ -251,6 +252,7 @@ class InteractionResponse(BaseModel):
     nudge_delivery: NudgeDeliveryRecord | None = None
     canvas_draw: list[CanvasDrawPayload] = Field(default_factory=list)
     canvas_teaching_plan: CanvasTeachingPlan | None = None
+    canvas_teaching_plan_pending: bool = False
     tutor_canvas_actions: list[TutorCanvasAction] = Field(default_factory=list)
     # Authored visual cues for the question that has just arrived. These are
     # separate from turn actions, which annotate the question being left.
@@ -283,6 +285,24 @@ class InteractionResponse(BaseModel):
     # A null phase4_review with no state here would say the same thing as a
     # failure, which is how "accepted" and "could not be prepared" got confused.
     review_materialization_state: ReviewMaterializationState | None = None
+
+
+class DeferredCanvasTeachingPlanResponse(BaseModel):
+    """Status of a canvas plan requested after its tutor turn was accepted."""
+
+    status: Literal["PENDING", "READY", "UNAVAILABLE"]
+    accepted_turn_id: TurnId
+    interaction_state_version: int = Field(ge=0)
+    question_id: QuestionId | None
+    canvas_teaching_plan: CanvasTeachingPlan | None = None
+
+    @model_validator(mode="after")
+    def validate_ready_plan(self) -> "DeferredCanvasTeachingPlanResponse":
+        if self.status == "READY" and self.canvas_teaching_plan is None:
+            raise ValueError("READY deferred canvas plans require canvas_teaching_plan.")
+        if self.status != "READY" and self.canvas_teaching_plan is not None:
+            raise ValueError("Only READY deferred canvas plans may include canvas_teaching_plan.")
+        return self
 
 
 class StaleTurnResponse(BaseModel):
