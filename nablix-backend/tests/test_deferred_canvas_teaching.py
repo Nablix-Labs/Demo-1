@@ -10,6 +10,7 @@ from app.models.canvas_teaching import (
     CanvasTeachingOperation,
     CanvasTeachingPlan,
 )
+from app.core.config import Settings
 from app.services import canvas_teaching_planner, interaction_service, session_service
 from tests.test_canvas_teaching_planner import _anchor, _enabled_rules, _tutor
 
@@ -134,6 +135,10 @@ def test_openai_deferred_canvas_plan_smoke(
         "load_classifier_rules",
         _enabled_rules,
     )
+    live_settings = Settings(use_openai_ai_engine=True)
+    if live_settings.openai_api_key == "":
+        pytest.skip("Set NABLIX_OPENAI_API_KEY to run the billed OpenAI smoke test.")
+    monkeypatch.setattr(canvas_teaching_planner, "get_settings", lambda: live_settings)
 
     session_id = "SESSIONdeferredopenai"
     turn_id = "TURN-DEFERRED-OPENAI"
