@@ -15,6 +15,7 @@
 
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import { useNumeraStore } from '@/store/useNumeraStore';
 import { isTokenValid } from '@/lib/auth/authApi';
 
 // account_status values from §12 of the proposal.
@@ -249,7 +250,12 @@ export const useAuthStore = create<AuthState>()(
       // consent state, mark the mandatory consents satisfied so the feature
       // gates (voice/canvas §10) don't block a legitimately logged-in user.
       // TODO(auth): replace with real consent state once /consent endpoints exist.
-      loginSuccess: ({ token, role, tier, email, studentCode, studentName }) =>
+      loginSuccess: ({ token, role, tier, email, studentCode, studentName }) => {
+        // The greetings ("Nice to meet you, …", "Well done, …") read the
+        // lesson store's name. Replaced on every login, including with
+        // nothing, so one account never greets the next one by name.
+        const name = studentName?.trim() || null;
+        useNumeraStore.getState().setStudentName(role === 'student' ? name ?? '' : '');
         set((s) => {
           const now = new Date().toISOString();
           const consents = { ...s.consents };
@@ -258,7 +264,7 @@ export const useAuthStore = create<AuthState>()(
             accessToken: token,
             tier,
             studentCode: studentCode ?? null,
-            studentName: studentName?.trim() || null,
+            studentName: name,
             role,
             email,
             authMethod: 'password',
@@ -266,7 +272,8 @@ export const useAuthStore = create<AuthState>()(
             consents,
             disclosureAck: { acknowledged: true, version: SAFETY_DISCLOSURE_VERSION, at: now },
           };
-        }),
+        });
+      },
 
       setStudentCode: (studentCode) => set({ studentCode }),
 
@@ -277,8 +284,10 @@ export const useAuthStore = create<AuthState>()(
       // accessDecision fell through to the client-side chain and let a
       // signed-out person straight back into the app (2026-07-28). Consents go
       // too — they belong to the account that just left, not the next one.
-      logout: () =>
-        set({
+      logout: () => {
+        useNumeraStore.getState().setStudentName('');
+        set((s) => ({
+          student: { ...s.student, name: '' },
           authMethod: null,
           ssoProvider: null,
           accessToken: null,
@@ -293,7 +302,8 @@ export const useAuthStore = create<AuthState>()(
           accountStatus: 'registration_started',
           consents: emptyConsents(),
           disclosureAck: { acknowledged: false, version: SAFETY_DISCLOSURE_VERSION, at: null },
-        }),
+        }));
+      },
       reset: () => set({ ...initial, consents: emptyConsents() }),
     }),
     {

@@ -246,3 +246,47 @@ describe('student_name on /session/start', () => {
     expect(long).toHaveLength(80);
   });
 });
+
+// From Chirudeva's #391.
+describe('the login name across starts and accounts', () => {
+  beforeEach(() => { startSession.mockReset(); getSession.mockReset(); });
+  afterEach(() => { delete process.env.NEXT_PUBLIC_API_BASE_URL; });
+
+  const identity = { token: 'test', role: 'student' as const, tier: 'basic', email: 'maya@example.com', studentCode: 'ST1' };
+
+  it('carries the name through a rejected-topic retry', async () => {
+    startSession.mockRejectedValueOnce({ response: { status: 404, data: { error_code: 'UNKNOWN_TOPIC' } } })
+      .mockResolvedValue(RECORD);
+    const { beginSession } = await loadTutor();
+    const { useAuthStore } = await import('@/store/useAuthStore');
+    useAuthStore.getState().loginSuccess({ ...identity, studentName: 'Maya Chen' });
+    await beginSession('ALG_LINEAR_ONE_STEP', 'VOICE', 'ALG-KS3-01');
+    expect(startSession).toHaveBeenCalledTimes(2);
+    for (const [payload] of startSession.mock.calls) expect(payload.student_name).toBe('Maya Chen');
+    expect(startSession.mock.calls[1][0]).toHaveProperty('concept_id', 'ALG_LINEAR_ONE_STEP');
+    useAuthStore.getState().logout();
+  });
+
+  it('replaces the greeting name on every login and clears it on logout', async () => {
+    const { useAuthStore } = await import('@/store/useAuthStore');
+    const { useNumeraStore } = await import('@/store/useNumeraStore');
+    for (const name of ['  Maya Chen  ', 'Sam', null, undefined, '   ']) {
+      useAuthStore.getState().loginSuccess({ ...identity, studentName: name });
+      expect(useAuthStore.getState().studentName).toBe(name?.trim() || null);
+      expect(useNumeraStore.getState().studentName).toBe(name?.trim() || '');
+    }
+    useAuthStore.getState().loginSuccess({ ...identity, studentName: 'Maya' });
+    useAuthStore.getState().logout();
+    expect(useAuthStore.getState().studentName).toBeNull();
+    expect(useAuthStore.getState().student.name).toBe('');
+    expect(useNumeraStore.getState().studentName).toBe('');
+  });
+
+  it('does not greet a guardian by the name on the account', async () => {
+    const { useAuthStore } = await import('@/store/useAuthStore');
+    const { useNumeraStore } = await import('@/store/useNumeraStore');
+    useAuthStore.getState().loginSuccess({ ...identity, role: 'parent_guardian', studentName: 'Pat' });
+    expect(useNumeraStore.getState().studentName).toBe('');
+    useAuthStore.getState().logout();
+  });
+});
