@@ -33,8 +33,10 @@ export default function OrientationBoardDevScreen() {
   const show = (m: boolean) => { setMerged(m); setIndex(0); setRun((r) => r + 1); };
 
   return (
-    <main className="min-h-screen bg-white px-6 py-5">
-      <div className="mx-auto max-w-[860px]">
+    // `w-full`: the focus-route frame otherwise sizes the page to its content,
+    // which left the board in the left half with the backdrop showing (4 Oct).
+    <main className="min-h-screen w-full bg-white px-6 py-5">
+      <div className="mx-auto max-w-[1000px]">
         <div className="flex flex-wrap items-center gap-3 text-[12.5px] mb-4">
           <Link href="/dev-screens" className="text-slate-blue hover:text-ink">← Dev screens</Link>
           <span className="text-slate-blue">Phase 1 worked example · ALG-ORI-02 (8 one-step examples)</span>

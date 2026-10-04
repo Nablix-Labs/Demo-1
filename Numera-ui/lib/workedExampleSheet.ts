@@ -121,17 +121,70 @@ export function stepLines(content: string): string {
  * 4 Oct). So the sheet is laid out in LINES: each step takes as many rows as it
  * has lines, and the type size is chosen from the total line count.
  */
-export function sheetLayout(steps: SchemaWorkedExampleStep[]): { y: number[]; size: number; lines: number } {
+export interface SheetLayout {
+  /** Baseline of each step, as a fraction of canvas height. */
+  y: number[];
+  /** Left edge of each step's number; its working starts a fixed gap right of it. */
+  x: number[];
+  size: number;
+  wrap: number;
+  lines: number;
+  columns: 1 | 2;
+}
+
+/**
+ * Past this many lines a single column turns into small writing down the left
+ * third of an empty board (ALG-ORI-02: nine lines at 19px, 4 Oct). Two columns
+ * use the width and let each line be written larger.
+ */
+const ONE_COLUMN_MAX_LINES = 5;
+const COLUMN_2_X = 0.52;
+const COLUMN_WRAP = 0.4;
+
+export function sheetLayout(steps: SchemaWorkedExampleStep[]): SheetLayout {
   const heights = steps.map((step) => {
     const content = step.screen_content?.trim();
     return content ? stepLines(content).split('\n').length : 0;
   });
   const lines = Math.max(1, heights.reduce((a, b) => a + b, 0));
-  const unit = rowHeight(lines);
+
+  if (lines <= ONE_COLUMN_MAX_LINES) {
+    const unit = rowHeight(lines);
+    const y: number[] = [];
+    let used = 0;
+    for (const h of heights) { y.push(TOP + unit * used); used += h; }
+    return { y, x: heights.map(() => NUMBER_X), size: contentSize(lines), wrap: CONTENT_WRAP, lines, columns: 1 };
+  }
+
+  // Split at the step boundary closest to half the lines, so the columns are
+  // as even as they can be without breaking a step across them.
+  let split = 1;
+  let best = Infinity;
+  let running = 0;
+  for (let i = 0; i < heights.length - 1; i++) {
+    running += heights[i];
+    const diff = Math.abs(lines / 2 - running);
+    if (diff < best) { best = diff; split = i + 1; }
+  }
+  const leftLines = heights.slice(0, split).reduce((a, b) => a + b, 0);
+  const tallest = Math.max(leftLines, lines - leftLines);
+  const unit = rowHeight(tallest);
+  // Sized from the longest LINE that has to fit a column, not the longest
+  // step: a two-case step is long as a string but short once split.
+  const longest = Math.max(...steps.map((st) =>
+    Math.max(...stepLines(st.screen_content?.trim() ?? '').split('\n').map((l) => l.length))));
+  const size = longest <= 24 ? 32 : longest <= 30 ? 28 : 24;
+
   const y: number[] = [];
+  const x: number[] = [];
   let used = 0;
-  for (const h of heights) { y.push(TOP + unit * used); used += h; }
-  return { y, size: contentSize(lines), lines };
+  heights.forEach((h, i) => {
+    if (i === split) used = 0;
+    y.push(TOP + unit * used);
+    x.push(i < split ? NUMBER_X : COLUMN_2_X);
+    used += h;
+  });
+  return { y, x, size, wrap: COLUMN_WRAP, lines, columns: 2 };
 }
 
 /**
@@ -145,16 +198,18 @@ export function workedExampleStepElements(
   step: SchemaWorkedExampleStep,
   index: number,
   total: number,
-  layout?: { y: number[]; size: number },
+  layout?: Pick<SheetLayout, 'y' | 'size'> & Partial<Pick<SheetLayout, 'x' | 'wrap'>>,
 ): Array<Omit<TutorElement, 'id'>> {
   const content = step.screen_content?.trim();
   if (!content) return [];
   const y = layout?.y[index] ?? rowY(index, total);
   const size = layout?.size ?? contentSize(total);
+  const numberX = layout?.x?.[index] ?? NUMBER_X;
+  const contentX = numberX + (CONTENT_X - NUMBER_X);
   return [
     {
       kind: 'text',
-      x: NUMBER_X,
+      x: numberX,
       y,
       text: `${index + 1}`,
       // Small enough to read as a margin number rather than as working.
@@ -163,12 +218,12 @@ export function workedExampleStepElements(
     },
     {
       kind: 'text',
-      x: CONTENT_X,
+      x: contentX,
       y,
       text: stepLines(content),
       size,
       color: step.emphasis ? inkFor(step.emphasis) : CONTENT_COLOR,
-      wrapWidth: CONTENT_WRAP,
+      wrapWidth: layout?.wrap ?? CONTENT_WRAP,
     },
   ];
 }

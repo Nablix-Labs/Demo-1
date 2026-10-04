@@ -171,3 +171,34 @@ describe('sheetLayout — steps of different heights', () => {
     expect(num.y).toBeCloseTo(layout.y[2]);
   });
 });
+
+describe('sheetLayout — two columns for a long example', () => {
+  const eight = [
+    '3y = 3 × y = y + y + y', 'y + y + y → 3 × y → 3y', 'a × b → ab',
+    'a × a = a² | a × a × a = a³', 'a²b = a × a × b', 'a/b means a ÷ b',
+    '3(x + 2) = 3 × (x + 2)', '½x = ½ × x',
+  ].map((c) => step({ screen_content: c }));
+
+  it('uses one column for a short example', () => {
+    expect(sheetLayout(eight.slice(0, 3)).columns).toBe(1);
+  });
+
+  it('splits nine lines into two columns at a step boundary', () => {
+    const l = sheetLayout(eight);
+    expect(l.columns).toBe(2);
+    const right = l.x.findIndex((x) => x > 0.5);
+    expect(right).toBe(4);              // 1-4 left (5 lines), 5-8 right (4 lines)
+    expect(l.y[right]).toBeCloseTo(l.y[0]); // the right column starts at the top
+  });
+
+  it('writes larger than the one-column layout would', () => {
+    expect(sheetLayout(eight).size).toBeGreaterThan(contentSize(9));
+  });
+
+  it('keeps every line inside its column', () => {
+    const l = sheetLayout(eight);
+    const [, content] = workedExampleStepElements(eight[5], 5, 8, l);
+    expect(content.x).toBeGreaterThan(0.5);
+    expect((content.x ?? 0) + (content.wrapWidth ?? 0)).toBeLessThanOrEqual(1);
+  });
+});
