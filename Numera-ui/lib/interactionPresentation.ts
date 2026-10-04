@@ -281,6 +281,9 @@ export function applyInteractionSupport(response: SupportPresentation): string {
   // EVERY reply, including one without a plan: a new reply supersedes the last
   // one's unspoken beats either way. Separate from the actions above — it adds
   // to the board and never stands in for support state (handoff rule 6).
+  // The last reply's held token pulses end here, once per reply — not in the
+  // scheduler, which the deferred plan calls again for this same reply.
+  useNumeraStore.getState().releaseHeldPulses();
   scheduleTeachingPlan(response.canvas_teaching_plan, response, response.message_voice);
   // Or the plan is still being made: collect it, and draw it against THIS
   // reply when it lands. Also called when nothing is pending, so a newer reply

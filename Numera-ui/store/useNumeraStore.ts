@@ -1003,6 +1003,8 @@ export interface NumeraState {
   /** Draw one beat of a canvas teaching plan (lib/canvasTeachingPlan). */
   applyTeachingBeat: (plan: CanvasTeachingPlan, beat: CanvasTeachingBeat) => void;
   /** `mode: replace` — drop the plan's own marks; never student ink or other tutor marks. */
+  /** Drop the question-token pulses held over from the previous reply. */
+  releaseHeldPulses: () => void;
   replaceTeachingLayer: () => void;
   /** Tutor asked the student to write here. Never carries the answer itself. */
   clearWriteAffordance: () => void;
@@ -1085,7 +1087,7 @@ const initial: Omit<
   | 'addTrailEntry' | 'clearTrail' | 'setActiveTool'
   | 'setShapeKind' | 'setEraserMode'
   | 'setStrokeColor' | 'setStrokeWidth' | 'addItem' | 'removeItem' | 'undo' | 'redo'
-  | 'clearCanvas' | 'applyCanvasDraw' | 'applyTutorCanvasActions' | 'applyTeachingBeat' | 'replaceTeachingLayer' | 'setLoginReview' | 'clearWriteAffordance' | 'clearTutorMarks' | 'setCanvasSize' | 'recordSupportEvent'
+  | 'clearCanvas' | 'applyCanvasDraw' | 'applyTutorCanvasActions' | 'applyTeachingBeat' | 'releaseHeldPulses' | 'replaceTeachingLayer' | 'setLoginReview' | 'clearWriteAffordance' | 'clearTutorMarks' | 'setCanvasSize' | 'recordSupportEvent'
   | 'setInputMode' | 'setTextInput' | 'setPanelSide' | 'setPanelWidth' | 'resetPanelWidth' | 'setSupportWidth' | 'resetSupportWidth' | 'togglePanelSide' | 'togglePanelCollapsed'
   | 'toggleTranscript' | 'setToolbarPos' | 'toggleToolbarCollapsed' | 'setToolbarOrientation' | 'setMicButtonPos' | 'setCanvasGrid' | 'setTtsVoice' | 'setActiveScaffold'
   | 'setCanvasExporter' | 'startGroupSession' | 'endGroupSession'
@@ -2203,8 +2205,17 @@ export const useNumeraStore = create<NumeraState>()(
     });
     // PULSE is temporary (handoff rule 4). Filtered by id, so a question change
     // in the meantime — which has already cleared everything — is a no-op.
-    if (effects.pulseIds.length) {
-      const gone = new Set(effects.pulseIds);
+    //
+    // Except a pulse on a QUESTION TOKEN: that one is held until the next reply
+    // (`releaseHeldPulses`). Gone after 2.4 s, it had usually vanished before
+    // the tutor reached the word it was pointing at, while a confirmed `+` from
+    // an earlier turn stayed up all question — so the only highlight a student
+    // could actually see was the stale one (Manjusha, 4 Oct). The ripple still
+    // plays once; only the wash stays.
+    const held = new Set(effects.tokenMarks.filter((m) => m.pulse).map((m) => m.id));
+    const timed = effects.pulseIds.filter((pid) => !held.has(pid));
+    if (timed.length) {
+      const gone = new Set(timed);
       setTimeout(() => set((cur) => ({
         teachingMarks: cur.teachingMarks.filter((m) => !gone.has(m.id)),
         teachingConnectors: cur.teachingConnectors.filter((c) => !gone.has(c.id)),
@@ -2215,6 +2226,12 @@ export const useNumeraStore = create<NumeraState>()(
   },
 
   setLoginReview: (loginReview) => set({ loginReview }),
+
+  releaseHeldPulses: () => set((s) => (
+    s.teachingMarks.some((m) => m.pulse)
+      ? { teachingMarks: s.teachingMarks.filter((m) => !m.pulse) }
+      : {}
+  )),
 
   replaceTeachingLayer: () => set((s) => ({
     teachingMarks: [],

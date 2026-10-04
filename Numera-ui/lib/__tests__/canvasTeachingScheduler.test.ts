@@ -157,3 +157,38 @@ describe('scheduling against the voice', () => {
     expect(marked()).toEqual(['T1', 'T2']);
   });
 });
+
+/**
+ * Manjusha, 4 Oct: "the highlighting just flashes sometimes — doesn't stay".
+ * A PULSE on a question token used to be gone 2.4 s after it was drawn, often
+ * before the tutor had finished the sentence about it, while a confirmed `+`
+ * from an earlier turn stayed up all question.
+ */
+describe('a pulse on a question token', () => {
+  const pulsePlan: CanvasTeachingPlan = {
+    ...PLAN,
+    beats: [{
+      ...beat('b1', 0, 'T1'),
+      operations: [{ ...beat('b1', 0, 'T1').operations[0], kind: 'HIGHLIGHT', persistence: 'PULSE' }],
+    }],
+  };
+
+  it('stays for the whole reply, not 2.4 seconds', () => {
+    useNumeraStore.getState().applyTeachingBeat(pulsePlan, pulsePlan.beats[0]);
+    vi.advanceTimersByTime(30_000);
+    expect(marked()).toEqual(['T1']);
+  });
+
+  it('goes when the next reply arrives', () => {
+    useNumeraStore.getState().applyTeachingBeat(pulsePlan, pulsePlan.beats[0]);
+    useNumeraStore.getState().releaseHeldPulses();
+    expect(marked()).toEqual([]);
+  });
+
+  it('leaves persistent marks alone when it goes', () => {
+    useNumeraStore.getState().applyTeachingBeat(PLAN, PLAN.beats[1]);
+    useNumeraStore.getState().applyTeachingBeat(pulsePlan, pulsePlan.beats[0]);
+    useNumeraStore.getState().releaseHeldPulses();
+    expect(marked()).toEqual(['T2']);
+  });
+});
