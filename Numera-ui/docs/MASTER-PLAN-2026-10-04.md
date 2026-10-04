@@ -7,6 +7,8 @@
 
 ## 0. Done today
 
+- **4 Oct, later:** Phase 1 board fix deployed (`01942bd`, build `mB9HDuyPZ4uJzb0nh_EyG`). The eight one-step examples are merged into one board that builds down the page; rows are spaced by line count; ink-role colours are supported. Preview at `/app/dev-screens/orientation-board/`.
+
 | What | Status |
 |---|---|
 | Phase 0: make the question change visible (Manjusha, 22 Sep + 4 Oct) | **Deployed**, build `M56EcXTKUJO5bOVLFGBMH`, commit `eac5bf3`. Counter is now a "Question 2 / 8" chip that flashes amber, the question block rises in, and "Next question coming →" shows while the tutor speaks. |
@@ -19,14 +21,14 @@ Manjusha's ask (22 Sep): "more tutor writing on the canvas with proper explanati
 
 **What today's live run showed (ALG-ORI-02, "Decoding Compact Algebraic Notation"):**
 
-- The worked example arrives as **one step** ("Step 1 of 1") holding every case (3y, ab, a², a³, ½x). The frontend already lays out one row per step and leaves earlier rows up (fix for #303). With a single step there is only one row, so each case replaces the last and the board never shows more than one line.
-- The pen hand sits on top of the line it has just written.
+- The worked example arrives as **eight one-step worked examples sharing a title** ("Step 1 of 1" each), covering 3y, ab, a², a³, ½x and so on. The frontend already lays out one row per step and leaves earlier rows up (fix for #303). With a single step there is only one row, so each case replaces the last and the board never shows more than one line.
+- ~~The pen hand sits on top of the line it has just written.~~ **Withdrawn:** the capture tab was hidden, so animation frames were paused and the hand never moved off line 1. Not a real bug.
 - "Skip the walkthrough" goes straight to guided practice, so the teach-back step is skipped too.
 
 | # | Task | Owner | Needs |
 |---|---|---|---|
 | 1.1 | **Board builds up.** One row per case, earlier rows stay up, Phase 4 board spacing. Split an authored multi-case step into rows on the frontend, so this works even before content is re-authored. | Manav | Nothing |
-| 1.2 | Move the hand off the ink it has just written. | Manav | Nothing |
+| 1.2 | ~~Move the hand off the ink~~ withdrawn (a hidden-tab artifact, see above). | — | — |
 | 1.3 | **Different ink by role:** amber for what changes, teal for what stays fixed, navy with a box for the conclusion. One colour map shared with Phase 2. | Manav | Palette confirmed by Manjusha |
 | 1.4 | Decide whether "Skip the walkthrough" should still offer teach-back. | Manjusha decides, Manav builds | A decision |
 | 1.5 | **Re-author worked examples as one case per step**, using the existing `steps[]`. | **Sanya** (content) | — |
