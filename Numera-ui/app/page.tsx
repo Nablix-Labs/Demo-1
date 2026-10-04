@@ -47,7 +47,6 @@ export default function LessonPage() {
   const setTranscript = useNumeraStore((s) => s.setTranscript);
   const clearTutorMarks = useNumeraStore((s) => s.clearTutorMarks);
   const micMuted = useNumeraStore((s) => s.micMuted);
-  const setMicMuted = useNumeraStore((s) => s.setMicMuted);
   const activeConceptId = useNumeraStore((s) => s.activeConceptId);
   const currentPhase = useNumeraStore((s) => s.currentPhase);
   const updatePartialTranscript = useNumeraStore((s) => s.updatePartialTranscript);
@@ -132,10 +131,10 @@ export default function LessonPage() {
   }, [hydrated, apiEnabled, sessionId, backendSession]);
 
   // Start a backend session on lesson entry and let it drive the displayed
-  // question/number/opening message. Mic starts muted so capture is opt-in.
+  // question/number/opening message. The mic comes on with the new session
+  // (beginSession in useDemoTutor).
   useEffect(() => {
     if (!hydrated || !apiEnabled || sessionId) return;
-    setMicMuted(true);
     void startSession(activeConceptId, 'VOICE', liveTopicCode(currentTopicId)).then((rec) => {
       if (!rec) {
         // The lesson used to swallow this entirely, leaving the student on a
@@ -172,7 +171,7 @@ export default function LessonPage() {
       // until the student opts in; half-duplex gating does the rest.
       if (rec.current_phase !== 'GUIDED_PRACTICE') beginListeningTurn();
     });
-  }, [hydrated, apiEnabled, sessionId, activeConceptId, startSession, setMicMuted, setQuestionText, setQuestionNumber, setTranscript, clearTutorMarks, beginListeningTurn]);
+  }, [hydrated, apiEnabled, sessionId, activeConceptId, startSession, setQuestionText, setQuestionNumber, setTranscript, clearTutorMarks, beginListeningTurn]);
 
   // Speak the line the previous screen queued for us.
   //

@@ -754,6 +754,15 @@ export async function beginSession(
       const s = useNumeraStore.getState();
       s.clearTrail();
       s.setSessionId(rec.session_id);
+      // A new lesson starts with the mic ON. It used to start muted so capture
+      // was opt-in, and the student then sat through "Now say why you picked
+      // it" with nothing listening until they found the button (Manjusha,
+      // 4 Oct: "this is not enabled automatically"). Nothing is captured while
+      // the tutor speaks — the half-duplex gate on the lesson page shuts the
+      // mic for every tutor turn and reopens it after — so on is safe. A
+      // student's own mute still holds across a reload of the same lesson:
+      // it is persisted, and this runs only when a NEW session opens.
+      s.setMicMuted(false);
       // The record names the topic this session is for. Adopt it BEFORE the
       // sync, whose ownership guard compares the reply's concept_id against
       // the store's — a session started by topic_code carries a concept the
