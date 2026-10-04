@@ -65,6 +65,7 @@ const SCREENS: Screen[] = [
   { path: '/dev-screens/phase4', label: 'Phase 4 review', group: 'Fixtures' },
   { path: '/dev-screens/support-deck', label: 'Phase 2 support deck', group: 'Fixtures' },
   { path: '/dev-screens/intervention', label: 'Phase 3 intervention input', group: 'Fixtures' },
+  { path: '/dev-screens/orientation-board', label: 'Phase 1 worked example board', group: 'Fixtures' },
 ];
 
 // Inlined at build time like every NEXT_PUBLIC_*, so this is the same value the

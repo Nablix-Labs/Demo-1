@@ -487,6 +487,11 @@ export interface SchemaWorkedExampleStep {
   screen_content: string | null;
   /** What the tutor says while it's shown. */
   narration_text: string | null;
+  /**
+   * Optional ink role for this step — CHANGE / FIXED / CONCLUSION (see
+   * lib/inkRoles.ts). Not sent yet; absent means navy, as before.
+   */
+  emphasis?: string | null;
 }
 
 export interface SchemaWorkedExample {

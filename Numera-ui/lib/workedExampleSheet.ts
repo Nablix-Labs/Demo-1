@@ -32,6 +32,7 @@
 
 import type { SchemaWorkedExampleStep } from '@/lib/api';
 import type { TutorElement } from '@/store/useNumeraStore';
+import { inkFor } from '@/lib/inkRoles';
 
 /** First row's baseline. Clear of the heading that sits above the canvas. */
 const TOP = 0.12;
@@ -96,7 +97,8 @@ export function rowY(index: number, total: number): number {
  * is unaffected by this — Konva already renders `\n`.
  */
 export function stepLines(content: string): string {
-  const parts = content.split(' / ').map((part) => part.trim());
+  // ' | ' is the same separator in newer content ('a × a = a² | a × a × a = a³').
+  const parts = content.split(/ [/|] /).map((part) => part.trim());
   if (parts.length < 2) return content;
   // A spaced " / " between non-empty parts is the authored case separator
   // ("2 + 4 / 7 + 4 / 12 + 4"); a fraction is written without spaces (a/b).
@@ -111,6 +113,28 @@ export function stepLines(content: string): string {
 }
 
 /**
+ * Where each step goes when steps can be more than one line tall.
+ *
+ * `rowY` spaces steps evenly, which is right while every step is one line. A
+ * step authored as two cases ('a × a = a² | a × a × a = a³') is two lines tall,
+ * and its second line ran into the next step (dev-screens/orientation-board,
+ * 4 Oct). So the sheet is laid out in LINES: each step takes as many rows as it
+ * has lines, and the type size is chosen from the total line count.
+ */
+export function sheetLayout(steps: SchemaWorkedExampleStep[]): { y: number[]; size: number; lines: number } {
+  const heights = steps.map((step) => {
+    const content = step.screen_content?.trim();
+    return content ? stepLines(content).split('\n').length : 0;
+  });
+  const lines = Math.max(1, heights.reduce((a, b) => a + b, 0));
+  const unit = rowHeight(lines);
+  const y: number[] = [];
+  let used = 0;
+  for (const h of heights) { y.push(TOP + unit * used); used += h; }
+  return { y, size: contentSize(lines), lines };
+}
+
+/**
  * One step's marks: its number, and the working beside it.
  *
  * Returns nothing for a step with no `screen_content`. Some authored steps are
@@ -121,11 +145,12 @@ export function workedExampleStepElements(
   step: SchemaWorkedExampleStep,
   index: number,
   total: number,
+  layout?: { y: number[]; size: number },
 ): Array<Omit<TutorElement, 'id'>> {
   const content = step.screen_content?.trim();
   if (!content) return [];
-  const y = rowY(index, total);
-  const size = contentSize(total);
+  const y = layout?.y[index] ?? rowY(index, total);
+  const size = layout?.size ?? contentSize(total);
   return [
     {
       kind: 'text',
@@ -142,7 +167,7 @@ export function workedExampleStepElements(
       y,
       text: stepLines(content),
       size,
-      color: CONTENT_COLOR,
+      color: step.emphasis ? inkFor(step.emphasis) : CONTENT_COLOR,
       wrapWidth: CONTENT_WRAP,
     },
   ];

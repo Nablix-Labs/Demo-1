@@ -18,7 +18,7 @@
  * next. (Phase 2 lets both write; Phase 3 is the student alone.)
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { notFound, useRouter } from 'next/navigation';
 import { topicById } from '@/lib/topics';
 import dynamic from 'next/dynamic';
@@ -49,13 +49,13 @@ import {
   startOrientation,
   studentFacingError,
   studentId,
-  type SchemaOrientationItem,
   type SchemaWorkedExample,
   type SchemaWorkedExampleStep,
 } from '@/lib/api';
 import { applyPhaseHandoff } from '@/lib/phaseHandoff';
 import { useWorkedExamplePlayer } from '@/hooks/useWorkedExamplePlayer';
-import { workedExampleStepElements } from '@/lib/workedExampleSheet';
+import { sheetLayout, workedExampleStepElements } from '@/lib/workedExampleSheet';
+import { mergeWorkedExampleRuns, type BoardOrientationItem } from '@/lib/orientationBoard';
 import {
   PLAYBACK_RATES, currentRate, rememberRate, rateLabel, type PlaybackRate,
 } from '@/lib/playbackSpeed';
@@ -636,7 +636,10 @@ function BackendOrientation({ topicId }: { topicId: string }) {
   // Guards React 18's double-invoke from opening orientation twice.
   const requested = useRef(false);
 
-  const items = orientationSequence(backendSession);
+  // Same-titled one-step examples become one board that builds up — see
+  // lib/orientationBoard.ts. Memoised: a fresh steps array every render would
+  // restart the worked-example player mid-sentence.
+  const items = useMemo(() => mergeWorkedExampleRuns(orientationSequence(backendSession)), [backendSession]);
   const topicCode = sessionTopicCode(backendSession);
   const required = requiredOrientationContent(backendSession);
   const messages = backendSession?.orientation_messages ?? null;
@@ -852,9 +855,8 @@ function BackendOrientation({ topicId }: { topicId: string }) {
                 if (completed?.videoId) {
                   setDoneVideoIds((ids) => (ids.includes(completed.videoId!) ? ids : [...ids, completed.videoId!]));
                 }
-                if (completed?.workedExampleId) {
-                  setDoneExampleIds((ids) =>
-                    ids.includes(completed.workedExampleId!) ? ids : [...ids, completed.workedExampleId!]);
+                if (completed?.workedExampleIds?.length) {
+                  setDoneExampleIds((ids) => [...ids, ...completed.workedExampleIds!.filter((id) => !ids.includes(id))]);
                 }
                 setItemIndex((n) => Math.min(n + 1, items.length - 1));
               }}
@@ -887,13 +889,14 @@ function BackendOrientation({ topicId }: { topicId: string }) {
 /** What a finished item reports back, so its id can be sent on completion. */
 interface CompletedContent {
   videoId?: string;
-  workedExampleId?: string;
+  /** Every example a (possibly merged) worked example board covered. */
+  workedExampleIds?: string[];
 }
 
 function OrientationItem({
   item, topicCode, messages, onFinished, isLast,
 }: {
-  item: SchemaOrientationItem;
+  item: BoardOrientationItem;
   topicCode: string | null;
   messages: OrientationMessages | null;
   onFinished: (completed?: CompletedContent) => void;
@@ -969,7 +972,7 @@ function OrientationItem({
       <WorkedExampleCanvas
         example={item.worked_example}
         closingMessage={messages?.worked_example_to_guided_message ?? null}
-        onFinished={() => onFinished({ workedExampleId: item.worked_example!.worked_example_id })}
+        onFinished={() => onFinished({ workedExampleIds: item.workedExampleIds })}
       />
     );
   }
@@ -989,7 +992,7 @@ function OrientationItem({
  * Only the tutor writes here; the student watches and explains it back in
  * Teacher Mode next, so the canvas is mounted `tutorOnly`.
  */
-function WorkedExampleCanvas({
+export function WorkedExampleCanvas({
   example, closingMessage, onFinished,
 }: {
   example: SchemaWorkedExample;
@@ -1019,16 +1022,18 @@ function WorkedExampleCanvas({
    * `clearTutorMarks` — which the player calls on arrival and on restart —
    * clears that window along with the marks.
    */
+  // Rows by line count, so a two-case step doesn't run into the next one.
+  const layout = useMemo(() => sheetLayout(example.steps), [example.steps]);
   const draw = useCallback(
     (step: SchemaWorkedExampleStep, index: number, total: number) => {
       applyCanvasDraw({
         author: 'tutor',
         mode: 'append',
         actionId: `${example.worked_example_id}-${step.step_id}`,
-        elements: workedExampleStepElements(step, index, total),
+        elements: workedExampleStepElements(step, index, total, layout),
       });
     },
-    [applyCanvasDraw, example.worked_example_id],
+    [applyCanvasDraw, example.worked_example_id, layout],
   );
 
   const {

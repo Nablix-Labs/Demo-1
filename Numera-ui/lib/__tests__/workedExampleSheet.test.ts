@@ -10,7 +10,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  workedExampleStepElements, rowY, rowHeight, contentSize, stepLines,
+  workedExampleStepElements, rowY, rowHeight, contentSize, stepLines, sheetLayout,
 } from '@/lib/workedExampleSheet';
 import type { SchemaWorkedExampleStep } from '@/lib/api';
 
@@ -120,6 +120,17 @@ describe('a step authored as two lines in one string', () => {
     expect(stepLines('a/b = c/d')).toBe('a/b = c/d');
   });
 
+  it('treats a spaced pipe as the same separator (current ALG-ORI-02 content)', () => {
+    expect(stepLines('a × a = a² | a × a × a = a³')).toBe('a × a = a²\na × a × a = a³');
+  });
+
+  it('writes a step in its role ink, and navy without one', () => {
+    const [, plain] = workedExampleStepElements(step({ screen_content: 'x + 4' }), 0, 2);
+    const [, fixed] = workedExampleStepElements(step({ screen_content: '+4 stays', emphasis: 'FIXED' }), 1, 2);
+    expect(plain.color).toBe('#1B2A4A');
+    expect(fixed.color).toBe('#0F8A7E');
+  });
+
   it('breaks a three-part step too', () => {
     expect(stepLines('x = 1 / y = 2 / z = 3')).toBe('x = 1\ny = 2\nz = 3');
   });
@@ -135,5 +146,28 @@ describe('stepLines — cases without an equals sign', () => {
   });
   it('leaves a fraction alone', () => {
     expect(stepLines('x/2 = 3')).toBe('x/2 = 3');
+  });
+});
+
+describe('sheetLayout — steps of different heights', () => {
+  const steps = [
+    step({ screen_content: '3y = y + y + y' }),
+    step({ screen_content: 'a × a = a² | a × a × a = a³' }),
+    step({ screen_content: 'a²b = a × a × b' }),
+  ];
+
+  it('gives a two-line step two rows, so the next step starts below it', () => {
+    const { y, lines } = sheetLayout(steps);
+    expect(lines).toBe(4);
+    const unit = y[1] - y[0];
+    expect(y[2] - y[1]).toBeCloseTo(unit * 2);
+  });
+
+  it('feeds the step elements, which then use its rows and size', () => {
+    const layout = sheetLayout(steps);
+    const [num, content] = workedExampleStepElements(steps[2], 2, 3, layout);
+    expect(content.y).toBeCloseTo(layout.y[2]);
+    expect(content.size).toBe(layout.size);
+    expect(num.y).toBeCloseTo(layout.y[2]);
   });
 });

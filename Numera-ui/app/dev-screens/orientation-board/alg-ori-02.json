@@ -1,0 +1,154 @@
+[
+ {
+  "sequence_no": 2,
+  "content_type": "WORKED_EXAMPLE",
+  "video": null,
+  "worked_example": {
+   "worked_example_id": "WE-KS3-T02-01",
+   "title": "Decoding Compact Algebraic Notation",
+   "final_answer": "y + y + y = 3 × y = 3y; a × b = ab; a × a = a²; a × a × a = a³; a × a × b = a²b; a/b means a ÷ b; 3(x + 2) means 3 × (x + 2); ½x means ½ × x.",
+   "student_answer_required": false,
+   "steps": [
+    {
+     "step_id": "S1",
+     "sequence_no": 1,
+     "screen_content": "3y = 3 × y = y + y + y",
+     "narration_text": "The coefficient three tells us there are three equal y terms. Three y means three times y."
+    }
+   ]
+  }
+ },
+ {
+  "sequence_no": 3,
+  "content_type": "WORKED_EXAMPLE",
+  "video": null,
+  "worked_example": {
+   "worked_example_id": "WE-KS3-T02-02",
+   "title": "Decoding Compact Algebraic Notation",
+   "final_answer": "y + y + y = 3 × y = 3y; a × b = ab; a × a = a²; a × a × a = a³; a × a × b = a²b; a/b means a ÷ b; 3(x + 2) means 3 × (x + 2); ½x means ½ × x.",
+   "student_answer_required": false,
+   "steps": [
+    {
+     "step_id": "S2",
+     "sequence_no": 1,
+     "screen_content": "y + y + y → 3 × y → 3y",
+     "narration_text": "Starting from repeated addition, count the three y terms and write the compact notation three y."
+    }
+   ]
+  }
+ },
+ {
+  "sequence_no": 4,
+  "content_type": "WORKED_EXAMPLE",
+  "video": null,
+  "worked_example": {
+   "worked_example_id": "WE-KS3-T02-03",
+   "title": "Decoding Compact Algebraic Notation",
+   "final_answer": "y + y + y = 3 × y = 3y; a × b = ab; a × a = a²; a × a × a = a³; a × a × b = a²b; a/b means a ÷ b; 3(x + 2) means 3 × (x + 2); ½x means ½ × x.",
+   "student_answer_required": false,
+   "steps": [
+    {
+     "step_id": "S3",
+     "sequence_no": 1,
+     "screen_content": "a × b → ab",
+     "narration_text": "When letters are multiplied, algebra normally omits the multiplication sign. The operation remains multiplication."
+    }
+   ]
+  }
+ },
+ {
+  "sequence_no": 5,
+  "content_type": "WORKED_EXAMPLE",
+  "video": null,
+  "worked_example": {
+   "worked_example_id": "WE-KS3-T02-04",
+   "title": "Decoding Compact Algebraic Notation",
+   "final_answer": "y + y + y = 3 × y = 3y; a × b = ab; a × a = a²; a × a × a = a³; a × a × b = a²b; a/b means a ÷ b; 3(x + 2) means 3 × (x + 2); ½x means ½ × x.",
+   "student_answer_required": false,
+   "steps": [
+    {
+     "step_id": "S4",
+     "sequence_no": 1,
+     "screen_content": "a × a = a² | a × a × a = a³",
+     "narration_text": "A power shortens repeated multiplication of the same base. A squared uses two a factors, and a cubed uses three."
+    }
+   ]
+  }
+ },
+ {
+  "sequence_no": 6,
+  "content_type": "WORKED_EXAMPLE",
+  "video": null,
+  "worked_example": {
+   "worked_example_id": "WE-KS3-T02-05",
+   "title": "Decoding Compact Algebraic Notation",
+   "final_answer": "y + y + y = 3 × y = 3y; a × b = ab; a × a = a²; a × a × a = a³; a × a × b = a²b; a/b means a ÷ b; 3(x + 2) means 3 × (x + 2); ½x means ½ × x.",
+   "student_answer_required": false,
+   "steps": [
+    {
+     "step_id": "S5",
+     "sequence_no": 1,
+     "screen_content": "a²b = a × a × b",
+     "narration_text": "In a squared b, the exponent applies to a. The adjacent b is then multiplied by the two a factors."
+    }
+   ]
+  }
+ },
+ {
+  "sequence_no": 7,
+  "content_type": "WORKED_EXAMPLE",
+  "video": null,
+  "worked_example": {
+   "worked_example_id": "WE-KS3-T02-06",
+   "title": "Decoding Compact Algebraic Notation",
+   "final_answer": "y + y + y = 3 × y = 3y; a × b = ab; a × a = a²; a × a × a = a³; a × a × b = a²b; a/b means a ÷ b; 3(x + 2) means 3 × (x + 2); ½x means ½ × x.",
+   "student_answer_required": false,
+   "steps": [
+    {
+     "step_id": "S6",
+     "sequence_no": 1,
+     "screen_content": "a/b means a ÷ b",
+     "narration_text": "The fraction bar represents division. The expression is read as a divided by b."
+    }
+   ]
+  }
+ },
+ {
+  "sequence_no": 8,
+  "content_type": "WORKED_EXAMPLE",
+  "video": null,
+  "worked_example": {
+   "worked_example_id": "WE-KS3-T02-07",
+   "title": "Decoding Compact Algebraic Notation",
+   "final_answer": "y + y + y = 3 × y = 3y; a × b = ab; a × a = a²; a × a × a = a³; a × a × b = a²b; a/b means a ÷ b; 3(x + 2) means 3 × (x + 2); ½x means ½ × x.",
+   "student_answer_required": false,
+   "steps": [
+    {
+     "step_id": "S7",
+     "sequence_no": 1,
+     "screen_content": "3(x + 2) = 3 × (x + 2)",
+     "narration_text": "The brackets keep x plus two together as one group. The three multiplies the whole group."
+    }
+   ]
+  }
+ },
+ {
+  "sequence_no": 9,
+  "content_type": "WORKED_EXAMPLE",
+  "video": null,
+  "worked_example": {
+   "worked_example_id": "WE-KS3-T02-08",
+   "title": "Decoding Compact Algebraic Notation",
+   "final_answer": "y + y + y = 3 × y = 3y; a × b = ab; a × a = a²; a × a × a = a³; a × a × b = a²b; a/b means a ÷ b; 3(x + 2) means 3 × (x + 2); ½x means ½ × x.",
+   "student_answer_required": false,
+   "steps": [
+    {
+     "step_id": "S8",
+     "sequence_no": 1,
+     "screen_content": "½x = ½ × x",
+     "narration_text": "A coefficient can also be a fraction. One half x means one half multiplied by x."
+    }
+   ]
+  }
+ }
+]
