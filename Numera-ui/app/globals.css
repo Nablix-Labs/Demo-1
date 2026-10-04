@@ -379,6 +379,23 @@ body {
   .teach-fade-up, .teach-bob, .teach-pop { animation: none; }
 }
 
+/* ── Topic diagnostic: make the question change visible ───────────────────────
+   Testers could not tell question 1 from question 2 — the text swapped in place
+   under the same options (Manjusha, 22 Sep + 4 Oct). The block keyed by
+   question_id re-mounts and rises in; the number chip flashes amber and
+   settles; the outgoing block dims while the tutor says the transition. */
+@keyframes diag-chip-flash {
+  0%, 35% { background-color: var(--highlight-amber); color: #0f1b2d; transform: scale(1.08); }
+  100%    { background-color: rgb(15 27 45 / 0.06); transform: scale(1); }
+}
+.diag-chip-flash { animation: diag-chip-flash 1.1s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.diag-leaving    { opacity: 0.45; transition: opacity 0.3s ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  .diag-chip-flash { animation: none; }
+  .diag-leaving    { transition: none; }
+}
+
 /* ── Book (components/ui/book.tsx) ────────────────────────────────────────────
    The binding gradient — the band of light and shade running down the hinge of
    a hardback. Two stacked gradients: highlights, then the shadow that sits in

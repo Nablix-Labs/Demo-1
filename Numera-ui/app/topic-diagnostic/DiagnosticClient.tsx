@@ -325,6 +325,8 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
   const question = questions[i];
   if (!question) return null;
   const picked = answers[question.question_id];
+  // Between the tap and the next question: the tutor is saying the transition.
+  const leaving = Boolean(picked) && i + 1 < questions.length;
 
   return (
     <Centered>
@@ -339,9 +341,18 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
             <span key={idx} className={cn('h-1.5 flex-1 rounded-full', idx <= i ? 'bg-focus-navy' : 'bg-reading-surface')} />
           ))}
         </div>
-        <div className="text-[10px] tracking-widest uppercase text-slate-blue mb-2">
-          {topic.title} · Question {i + 1} of {questions.length}
+        {/*
+          Keyed by question_id so each question re-mounts: the block rises in and
+          the chip flashes, instead of the text swapping silently in place.
+        */}
+        <div key={question.question_id} className={cn('teach-fade-up', leaving && 'diag-leaving')}>
+        <div className="flex items-center gap-2.5 mb-3">
+          <span className="diag-chip-flash inline-flex items-center rounded-full px-3 py-1 text-[13px] font-semibold text-ink tabular-nums">
+            Question {i + 1} <span className="text-slate-blue font-normal ml-1">/ {questions.length}</span>
+          </span>
+          <span className="text-[10px] tracking-widest uppercase text-slate-blue">{topic.title}</span>
         </div>
+        <span className="sr-only" aria-live="polite">Question {i + 1} of {questions.length}</span>
         <h2 className="text-[20px] font-semibold text-ink font-[Cambria_Math,Georgia,serif] mb-5">
           {question.student_view.question_text}
         </h2>
@@ -363,6 +374,7 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
             </button>
           ))}
         </div>
+        </div>
         {/* No score, no verdict: the backend decides what this means. */}
         <p className="text-[11.5px] text-slate-blue mt-5">
           Tap an answer to move on — this only tells Numera where to begin.
@@ -371,7 +383,7 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
           className="min-h-5 text-[12.5px] text-slate-blue mt-2"
           aria-live="polite"
         >
-          {picked && i + 1 < questions.length
+          {leaving
             ? diagnosticTransitionFor(
                 backendSession?.diagnostic_transition_messages,
                 backendSession?.diagnostic_transition_message,
@@ -379,6 +391,11 @@ function BackendDiagnostic({ topicId }: { topicId: string }) {
               )
             : ''}
         </p>
+        {leaving && (
+          <p className="inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-ink mt-1">
+            Next question coming <ArrowRight size={14} strokeWidth={2} />
+          </p>
+        )}
       </div>
     </Centered>
   );
