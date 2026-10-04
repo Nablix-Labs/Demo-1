@@ -60,6 +60,9 @@ const TURNS: CanvasTeachingOperation[][] = [
     { ...mark('op-1', 'HIGHLIGHT', [FOUR], 'TEAL'), color_role: undefined },
     note('op-2', '\\Delta=4', 'generic_confirmation:REQUIRED_COMPONENT_3', 'WRITE_MATH'),
   ],
+  // The tutor pointing, not confirming: the backend's `focus-changing-values`
+  // is a PULSE. It must still be up long after 2.4 s (Manjusha, 4 Oct).
+  [{ ...mark('op-1', 'HIGHLIGHT', [C], 'AMBER'), persistence: 'PULSE' }],
 ];
 
 function plan(turn: number): CanvasTeachingPlan {
