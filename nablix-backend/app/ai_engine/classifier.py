@@ -2411,12 +2411,11 @@ def enforce_explicit_choice_selection(
         for concept in rubric.required_concepts
         if concept.required
     }
-    if (
-        "ANSWER_SELECTION" not in required_ids
-        or "ANSWER_SELECTION" in objective.confirmed_concept_ids
-    ):
+    if "ANSWER_SELECTION" not in required_ids:
         return evaluation
     current_selection = typed_choice_selection(request)
+    if current_selection is None and "ANSWER_SELECTION" in objective.confirmed_concept_ids:
+        return evaluation
     accepted_choices = (
         {
             normalized_choice_response(answer)
@@ -2428,9 +2427,16 @@ def enforce_explicit_choice_selection(
         if request.answer_spec is not None
         else set()
     )
+    selected_text = selected_option_text_for_choice(request, current_selection)
     if (
         current_selection is not None
-        and normalized_choice_response(current_selection) in accepted_choices
+        and (
+            normalized_choice_response(current_selection) in accepted_choices
+            or (
+                selected_text is not None
+                and normalized_choice_response(selected_text) in accepted_choices
+            )
+        )
     ):
         return evaluation
     contribution = evaluation.contribution
@@ -2440,7 +2446,7 @@ def enforce_explicit_choice_selection(
         *evaluation.newly_confirmed_concept_ids,
         *evaluation.preserved_concept_ids,
     }
-    if evaluation.student_state not in {"CORRECT", "PARTIAL"} and not claimed_selection:
+    if current_selection is None and evaluation.student_state not in {"CORRECT", "PARTIAL"} and not claimed_selection:
         return evaluation
 
     newly_confirmed = set(evaluation.newly_confirmed_concept_ids)
@@ -2465,12 +2471,15 @@ def enforce_explicit_choice_selection(
     normalized_contribution = (
         contribution.model_copy(
             update={
-                "assessment": "INCOMPLETE",
-                "error_category": None,
-                "error_description": None,
+                "assessment": "INCORRECT" if explicit_wrong_selection else "INCOMPLETE",
+                "error_category": "OTHER" if explicit_wrong_selection else None,
+                "error_description": (
+                    rules.guided_learning.critical_thinking.wrong_choice_error_description
+                    if explicit_wrong_selection else None
+                ),
                 "generated_support_text": None,
                 "generated_visual_rows": None,
-                "support_relevance": "NOT_NEEDED",
+                "support_relevance": "UNMAPPED" if explicit_wrong_selection else "NOT_NEEDED",
             }
         )
         if contribution is not None
@@ -3772,7 +3781,6 @@ def classify_guided_learning_response(
                 allowed_errors,
                 rules,
             )
-            assessment_contract_validated = True
             if response_aware_mode_enabled:
                 evaluation = apply_reliable_canvas_rule_evidence(
                     evaluation,
@@ -3785,6 +3793,7 @@ def classify_guided_learning_response(
                     request,
                 )
                 evaluation = validate_response_aware_submission(evaluation, request)
+            assessment_contract_validated = True
             if rules.guided_learning.production_boundary_enabled:
                 evaluation = redact_untrusted_response_aware_fields(evaluation)
                 evaluation = write_redacted_response_aware_message(
@@ -6548,7 +6557,13 @@ def validate_response_aware_evidence(
     if not incorrect and (contradicted or evaluation.selected_error_code is not None):
         raise AdapterError("openai_ai_engine", "Contradicted evidence requires an incorrect mathematical assessment.")
     if incorrect and not missing:
-        raise AdapterError("openai_ai_engine", "An incorrect attempt cannot simultaneously complete all required evidence.")
+        raise AdapterError(
+            "openai_ai_engine",
+            "An incorrect attempt cannot simultaneously complete all required evidence. "
+            f"Required concepts: {sorted(confirmed)}. "
+            f"Previously confirmed concepts: {sorted(objective.confirmed_concept_ids)}. "
+            f"{rules.guided_learning.inconsistent_evidence_retry_feedback}",
+        )
     selected = evaluation.next_objective
     target_ids = [
         concept_id for concept_id in (selected or objective).target_concept_ids
@@ -6590,9 +6605,13 @@ def normalize_production_assessment(evaluation: GuidedEvaluation) -> GuidedEvalu
         and evaluation.submission_state == "MISSING"
     ):
         return evaluation.model_copy(update={"submission_state": "NOT_REQUIRED"})
-    if contribution.assessment == "INCORRECT" and contribution.support_relevance == "NOT_NEEDED":
+    if contribution.assessment == "INCORRECT":
         normalized_contribution = contribution.model_copy(update={
-            "support_relevance": "UNMAPPED",
+            "support_relevance": (
+                "MATCHED" if evaluation.selected_error_code is not None
+                else "UNMAPPED" if contribution.support_relevance in {"MATCHED", "NOT_NEEDED"}
+                else contribution.support_relevance
+            ),
         })
         return evaluation.model_copy(update={"contribution": normalized_contribution})
     return evaluation

@@ -1687,7 +1687,8 @@ def test_production_boundary_discards_evaluator_generated_prose() -> None:
     assert redacted.contribution.generated_visual_rows is None
 
 
-def test_production_boundary_repairs_an_inconsistent_assessment_once() -> None:
+@pytest.mark.parametrize("rejection", ["evidence", "submission"])
+def test_production_boundary_repairs_an_inconsistent_assessment_once(rejection: str) -> None:
     class AssessmentClient:
         def __init__(self) -> None:
             self.feedback: list[str | None] = []
@@ -1702,7 +1703,7 @@ def test_production_boundary_repairs_an_inconsistent_assessment_once() -> None:
             objective = kwargs["active_objective"]
             assert isinstance(objective, ActiveTeachingObjective)
             if len(self.feedback) == 1:
-                return GuidedEvaluation(
+                candidate = GuidedEvaluation(
                     contribution=StudentContribution(
                         kind="MATHEMATICAL_ATTEMPT",
                         assessment="INCORRECT",
@@ -1726,6 +1727,15 @@ def test_production_boundary_repairs_an_inconsistent_assessment_once() -> None:
                     tutor_message="Internal assessment completed.",
                     tutor_message_voice="Internal assessment completed.",
                 )
+                if rejection == "submission":
+                    return candidate.model_copy(update={
+                        "newly_confirmed_concept_ids": [],
+                        "contradicted_concept_ids": [objective.missing_concept_ids[0]],
+                        "missing_concept_ids": objective.missing_concept_ids,
+                        "next_objective": objective,
+                        "submission_state": "MISSING",
+                    })
+                return candidate
             return GuidedEvaluation(
                 contribution=StudentContribution(
                     kind="MATHEMATICAL_ATTEMPT",
@@ -1782,6 +1792,7 @@ def test_production_boundary_repairs_an_inconsistent_assessment_once() -> None:
         transcript_confidence=None,
         attempt_count=0,
         current_hint_level=None,
+        canvas_submission_required=rejection == "submission",
     )
     rules = load_classifier_rules()
     rules = rules.model_copy(update={
@@ -1804,6 +1815,10 @@ def test_production_boundary_repairs_an_inconsistent_assessment_once() -> None:
     assert len(assessment_client.feedback) == 2
     assert assessment_client.feedback[0] is None
     assert assessment_client.feedback[1] is not None
+    assert (
+        "MISSING canvas submission" if rejection == "submission"
+        else "Previously confirmed concepts"
+    ) in assessment_client.feedback[1]
     assert response.guided_student_state == "PARTIAL"
 
 

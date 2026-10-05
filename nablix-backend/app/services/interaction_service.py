@@ -369,7 +369,11 @@ def _guided_attempt_event_type(
     if tutor.contribution is not None:
         if tutor.contribution.assessment == "INCORRECT":
             return "INCORRECT_ATTEMPT"
-        if tutor.contribution.assessment == "CORRECT" and tutor.evaluation == "CORRECT":
+        if (
+            tutor.contribution.assessment in {"CORRECT", "INCOMPLETE"}
+            and tutor.evaluation == "CORRECT"
+            and tutor.question_completed
+        ):
             return "CORRECT_ATTEMPT"
         return None
     configured_event = (
@@ -4156,7 +4160,10 @@ async def _process_interaction(
     if request.interaction_type == "EXPLAIN_AGAIN":
         return await _explain_again_interaction_response(request, session)
     if request.interaction_type == "OPTION_SELECTED":
-        return await _option_selected_interaction_response(request, session)
+        if session.current_phase != "GUIDED_PRACTICE":
+            raise HTTPException(status_code=409, detail="OPTION_SELECTED is available only in Guided Practice.")
+        if not response_aware:
+            return await _option_selected_interaction_response(request, session)
     if request.interaction_type == "INACTIVITY_NUDGE":
         nudge_res = await _claim_inactivity_nudge(request, session)
         return nudge_res
@@ -4170,6 +4177,9 @@ async def _process_interaction(
     if request.interaction_type == "TEACH_BACK_SUBMISSION":
         request = request.model_copy(update={"interaction_type": "ANSWER_SUBMISSION"})
 
+    answer_submission: bool = request.interaction_type in {
+        "ANSWER_SUBMISSION", "OPTION_SELECTED",
+    }
 
     student_message = _student_message_from(request, session)
     rules: ClassifierRulesConfig = load_classifier_rules()
@@ -4271,7 +4281,7 @@ async def _process_interaction(
     if (
         session.student_model_event is not None
         and session.current_phase in {"GUIDED_PRACTICE", "INDEPENDENT_PRACTICE"}
-        and request.interaction_type == "ANSWER_SUBMISSION"
+        and answer_submission
     ):
         session = await _initialize_restored_schema_phase(
             session,
@@ -4284,6 +4294,16 @@ async def _process_interaction(
             status_code=409,
             detail="The current phase has no active question.",
         )
+
+    if request.interaction_type == "OPTION_SELECTED":
+        if request.selected_option_id is None:
+            raise HTTPException(status_code=422, detail="selected_option_id is required.")
+        option_text = _selected_option_message(session, request.selected_option_id)[2]
+        session = session.model_copy(update={
+            "guided_teaching_state": _guided_state_with_selected_option(
+                session, request.selected_option_id, option_text,
+            ),
+        })
 
     turn_session = session
     recent_history: list[ConversationMessage] = _recent_conversation_history(
@@ -4456,7 +4476,7 @@ async def _process_interaction(
             ),
         )
     scaffold_turn = (
-        request.interaction_type == "ANSWER_SUBMISSION"
+        answer_submission
         and session.current_scaffold_step_id is not None
     )
     if scaffold_turn and session.scaffold_expected_response is None:
@@ -4473,7 +4493,7 @@ async def _process_interaction(
             else 1
         )
         if (
-            request.interaction_type == "ANSWER_SUBMISSION"
+            answer_submission
             and not session.answer_value_confirmed
         )
         else session.attempt_count
@@ -4689,7 +4709,7 @@ async def _process_interaction(
         )
 
     schema_session = session.student_model_event is not None
-    if schema_session and request.interaction_type == "ANSWER_SUBMISSION":
+    if schema_session and answer_submission:
         (
             student,
             tutor,
@@ -4817,12 +4837,12 @@ async def _process_interaction(
         0
         if scaffold_turn and not tutor.scaffold_original_answer_correct
         else tutor.attempt_increment
-        if request.interaction_type == "ANSWER_SUBMISSION"
+        if answer_submission
         else 0
     )
     completed: bool = (
         tutor.question_completed
-        if request.interaction_type == "ANSWER_SUBMISSION"
+        if answer_submission
         else session.question_completed
     )
     applied_attempt_count: int = session.attempt_count + effective_attempt_increment
@@ -4864,7 +4884,11 @@ async def _process_interaction(
     # Persisted every turn: the real attempt counter and completion state Sanya
     # reads back on the next turn.
     schema_question_changed = (
-        schema_response is not None and session.question_id != turn_session.question_id
+        schema_response is not None
+        and (
+            session.question_id != turn_session.question_id
+            or session.current_phase != turn_session.current_phase
+        )
     )
     state_updates: dict[str, object] = {
         "interaction_state_version": session.interaction_state_version + 1,
@@ -5001,7 +5025,7 @@ async def _process_interaction(
     if schema_response is None:
         state_updates["last_student_model"] = student
     if (
-        request.interaction_type == "ANSWER_SUBMISSION"
+        answer_submission
         and (not scaffold_turn or tutor.scaffold_original_answer_correct)
         and effective_attempt_increment == 1
     ):
@@ -5025,9 +5049,15 @@ async def _process_interaction(
     )
     question_advanced = (
         isinstance(resulting_question_id, str)
-        and resulting_question_id != turn_session.question_id
         and isinstance(resulting_question, str)
         and resulting_question.strip() != ""
+        and (
+            resulting_question_id != turn_session.question_id
+            or (
+                turn_session.current_phase == "GUIDED_PRACTICE"
+                and session.current_phase == "INDEPENDENT_PRACTICE"
+            )
+        )
     )
     if question_advanced:
         resulting_question_type = state_updates.get(

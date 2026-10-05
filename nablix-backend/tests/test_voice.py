@@ -261,10 +261,13 @@ def test_voice_transcript_normalizes_spoken_correct_answer() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["message"] == "Correct. Nice work explaining your answer."
+    assert body["conversation_action"] == "ADVANCE_TO_NEXT_QUESTION"
+    assert body["advance_to_next_question"] is True
+    assert body["current_question"] in body["message"]
     assert body["message_voice"] == body["message"]
-    assert body["answer_value_confirmed"] is True
-    assert body["question_completed"] is True
+    assert body["current_phase"] == "INDEPENDENT_PRACTICE"
+    assert body["answer_value_confirmed"] is False
+    assert body["question_completed"] is False
 
 
 def test_low_confidence_voice_requires_written_input_without_penalty() -> None:

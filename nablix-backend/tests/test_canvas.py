@@ -344,7 +344,9 @@ def test_voice_interaction_with_reliable_voice_attached_canvas_clears_pending_an
 
     stored = session_service._get_owned_session(session_id, "ST412")
     assert stored.pending_canvas_submission_question_id is None
-    assert body["question_completed"] is True or stored.question_completed is True or stored.question_id != before.question_id
+    assert body["advance_to_next_question"] is True
+    assert stored.question_id != before.question_id or stored.current_phase != before.current_phase
+    assert stored.question_completed is False
 
 
 def test_voice_interaction_with_unreliable_attached_canvas_keeps_pending_requirement(
