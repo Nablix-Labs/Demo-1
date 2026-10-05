@@ -232,6 +232,7 @@ class CriticalThinkingConfig(StrictSchema):
     repeated_confusion_scaffold_message: str
     confusion_phrases: list[str]
     wrong_choice_prompt: str
+    wrong_choice_error_description: str
     wrong_direct_rule_prompt: str
     typed_option_prompt: str
     choice_selection_prompt: str
@@ -266,6 +267,7 @@ class GuidedLearningConfig(StrictSchema):
     production_boundary_writer_maximum_retries: int = Field(ge=0, le=2)
     production_boundary_writer_retry_feedback: str
     production_boundary_assessment_system_prompt: str
+    inconsistent_evidence_retry_feedback: str
     response_aware_writer_system_prompt: str
     response_aware_system_prompt: str
     response_aware_scaffold_prompt: str

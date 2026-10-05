@@ -17,7 +17,7 @@ from app.ai_engine.openai_client import OpenAITutorMessage
 from app.core.config import Settings
 from app.main import app
 from app.models.adapters import VisualCue as AdapterVisualCue
-from app.models.guided_learning import GeneratedConcept, GeneratedQuestionRubric
+from app.models.guided_learning import GeneratedConcept, GeneratedQuestionRubric, StudentContribution
 
 from app.models.student_model_session import (
     GuidedSupportEvent,
@@ -195,6 +195,75 @@ def _pedagogical_state(session_id: object) -> dict[str, object]:
         "current_phase",
     )
     return {field: getattr(session, field) for field in fields}
+
+
+@pytest.mark.parametrize("completed", [True, False])
+def test_guided_option_selection_uses_answer_progression_and_replays_safely(
+    monkeypatch: pytest.MonkeyPatch,
+    completed: bool,
+) -> None:
+    rules = interaction_service.load_classifier_rules()
+    rules = rules.model_copy(update={"guided_learning": rules.guided_learning.model_copy(
+        update={"response_aware_enabled": True},
+    )})
+    monkeypatch.setattr(interaction_service, "load_classifier_rules", lambda: rules)
+    original = TutorEngineServiceAdapter._respond
+    calls: list[str] = []
+
+    def assessed_choice(adapter: TutorEngineServiceAdapter, request: TutorEngineRequest) -> TutorResult:
+        calls.append(request.context.message)
+        tutor = original(adapter, request)
+        return tutor.model_copy(update={
+            "evaluation": "CORRECT" if completed else "PARTIALLY_CORRECT",
+            "intent": "SUBMITTING_ANSWER",
+            "guided_student_state": "CORRECT" if completed else "PARTIAL",
+            "contribution": StudentContribution(
+                kind="MATHEMATICAL_ATTEMPT", assessment="INCOMPLETE",
+                error_category=None, error_description=None, identified_difficulty=None,
+                learner_question=None, explained_idea=None, generated_support_text=None,
+                support_relevance="NOT_NEEDED",
+            ),
+            "question_completed": completed,
+            "answer_value_confirmed": completed,
+            "reasoning_complete": completed,
+            "guided_teaching_state": request.context.guided_teaching_state,
+            "attempt_increment": 1 if completed else 0,
+            "recommended_conversation_action": "ADVANCE_TO_NEXT_QUESTION" if completed else "REQUEST_EXPLANATION",
+            "tutor_message": "Your explanation and choice complete the question." if completed else "Why does that option work?",
+            "tutor_message_voice": "Your explanation and choice complete the question." if completed else "Why does that option work?",
+        })
+
+    monkeypatch.setattr(TutorEngineServiceAdapter, "_respond", assessed_choice)
+    student_id = "ST158" if completed else "ST159"
+    session = _start(student_id)
+    stored = session_service._sessions[str(session["session_id"])]
+    question = stored.active_student_model_question
+    assert question is not None
+    option_id = question.student_view.options[0].option_id
+    request = _interaction(session, student_id, "TURN-GUIDED-CHOICE", "OPTION_SELECTED", None)
+    request.update({"input_source": "CHOICE", "selected_option_id": option_id, "text_input": None})
+
+    response = client.post("/interaction", json=request)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["accepted_turn_id"] == "TURN-GUIDED-CHOICE"
+    if completed:
+        assert body["current_phase"] == "INDEPENDENT_PRACTICE"
+        assert body["conversation_action"] == "ADVANCE_TO_NEXT_QUESTION"
+        assert body["advance_to_next_question"] is True
+    else:
+        assert body["question_id"] == session["question_id"]
+        assert body["current_phase"] == "GUIDED_PRACTICE"
+        assert body["advance_to_next_question"] is False
+        selected_state = session_service._sessions[str(session["session_id"])].guided_teaching_state
+        assert selected_state is not None
+        assert selected_state.selected_option_id == option_id
+
+    duplicate = client.post("/interaction", json=request)
+    assert duplicate.status_code == 200, duplicate.text
+    assert duplicate.json()["status"] == "DUPLICATE_TURN"
+    assert duplicate.json()["interaction_state_version"] == body["interaction_state_version"]
+    assert len(calls) == 1
 
 
 def test_text_duplicate_and_stale_turns_do_not_mutate_state() -> None:

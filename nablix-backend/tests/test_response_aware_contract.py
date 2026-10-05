@@ -11,6 +11,7 @@ from app.ai_engine.classifier import (
     apply_reliable_canvas_rule_evidence,
     build_guided_tutor_response,
     current_learner_response,
+    enforce_explicit_choice_selection,
     normalize_production_assessment,
     required_response_aware_learner_action,
     request_with_reliable_canvas_evidence,
@@ -42,6 +43,52 @@ from app.services.interaction_service import (
     _guided_attempt_event_type, _is_support_failure, _is_unresolved_scaffold_turn,
     _verified_canvas_completion_event_type,
 )
+
+
+@pytest.mark.parametrize("previous_selection", [False, True])
+def test_wrong_choice_retracts_selection_without_invalidating_the_assessment(previous_selection: bool) -> None:
+    rules = load_classifier_rules()
+    rules = rules.model_copy(update={"guided_learning": rules.guided_learning.model_copy(
+        update={"response_aware_enabled": True},
+    )})
+    rubric = GeneratedQuestionRubric(
+        question_id="REPLAY-CHOICE", required_concepts=[
+            GeneratedConcept(concept_id="ANSWER_SELECTION", description="Select B", required=True),
+            GeneratedConcept(concept_id="ANSWER_EXPLANATION", description="Explain the general rule", required=True),
+        ], completion_rule="ALL_REQUIRED_CONCEPTS", cache_key="replay", prompt_version="replay",
+    )
+    objective = ActiveTeachingObjective(
+        objective_type="ANSWER_QUESTION", target_concept_ids=["ANSWER_SELECTION"],
+        confirmed_concept_ids=["ANSWER_EXPLANATION", *(["ANSWER_SELECTION"] if previous_selection else [])],
+        missing_concept_ids=[] if previous_selection else ["ANSWER_SELECTION"],
+    )
+    request = ClassificationRequest(
+        question_id=rubric.question_id, question_type="CHOICE_WITH_EXPLANATION",
+        question="Which rule is general? A: 12 + 4. B: n + 4.", correct_answer="B",
+        answer_spec=AnswerSpec(answer_spec_id="replay", canonical_answer="B", accepted_answers=["n + 4"],
+            verification_method="EXACT_CHOICE_MATCH", explanation_required=True),
+        student_input="Selected A: 12 + 4", current_phase="GUIDED_PRACTICE", input_source="CHOICE",
+        transcript_confidence=None, attempt_count=1, current_hint_level=None,
+    )
+    candidate = GuidedEvaluation(
+        contribution=StudentContribution(
+            kind="MATHEMATICAL_ATTEMPT", assessment="CORRECT", error_category=None, error_description=None,
+            identified_difficulty=None, learner_question=None, explained_idea=None,
+            generated_support_text=None, support_relevance="NOT_NEEDED",
+        ),
+        student_state="CORRECT", newly_confirmed_concept_ids=["ANSWER_SELECTION"],
+        preserved_concept_ids=objective.confirmed_concept_ids, contradicted_concept_ids=[],
+        missing_concept_ids=[], selected_error_code=None, confidence=0.95, next_objective=None,
+        tutor_message="Complete.", tutor_message_voice="Complete.",
+    )
+    enforced = enforce_explicit_choice_selection(candidate, request, rubric, objective, rules)
+    validated = validate_guided_evaluation(enforced, rubric, objective, [], rules)
+    assert validated.contribution is not None
+    assert validated.contribution.assessment == "INCORRECT"
+    assert validated.student_state == "WRONG"
+    assert validated.contradicted_concept_ids == ["ANSWER_SELECTION"]
+    assert validated.missing_concept_ids == ["ANSWER_SELECTION"]
+    assert validated.preserved_concept_ids == ["ANSWER_EXPLANATION"]
 
 
 @pytest.mark.parametrize("kind", [

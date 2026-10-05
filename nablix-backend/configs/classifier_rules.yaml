@@ -30,6 +30,11 @@ guided_learning:
     ACTIVE_ROLE_REVEAL, rewrite as one focused question about the visible
     examples without naming any number, letter, sign, expression, or role that
     has not been confirmed by the learner.
+  inconsistent_evidence_retry_feedback: >-
+    Identify the specific required concept contradicted by the CURRENT incorrect
+    claim in contradicted_concept_ids and remove it from newly_confirmed_concept_ids.
+    Prior confirmation is revoked when the current claim contradicts it.
+    If there is no incorrect claim, correct the assessment instead.
   production_boundary_assessment_system_prompt: |
     Assess the CURRENT learner contribution only. Return the assessment schema;
     never create learner-facing prose, a tutor message, explanation, hint,
@@ -71,7 +76,13 @@ guided_learning:
     answer components merely because they are in the answer contract.
     An INCORRECT assessment must leave at least one required concept missing or
     contradicted. Do not classify a response as INCORRECT while also confirming
-    every required concept. A compact symbolic response such as "1/2x" or
+    every required concept. Previously confirmed concepts are not permanent:
+    when the current claim contradicts one, include that exact concept in
+    contradicted_concept_ids, even if it was confirmed on an earlier turn.
+    Never include that concept in newly_confirmed_concept_ids. Merely listing it
+    in missing_concept_ids does not revoke earlier evidence. For a supplied
+    selected_error_code, use MATCHED support; otherwise use UNMAPPED or
+    MISMATCHED for an incorrect attempt. A compact symbolic response such as "1/2x" or
     "n+5" is a MATHEMATICAL_ATTEMPT, not an acknowledgement. If
     assessment_validation_feedback is provided, your previous assessment was
     rejected: return a corrected assessment that resolves that exact conflict.
@@ -828,6 +839,7 @@ guided_learning:
       - "not sure"
       - "i have no idea"
     wrong_choice_prompt: "Let’s test that choice with a different starting number. Would it still describe the new case?"
+    wrong_choice_error_description: "The selected option does not match the answer contract."
     wrong_direct_rule_prompt: "Compare the amount after the operation in each example. Which amount stays the same?"
     typed_option_prompt: "That rule matches one of the choices. Which option would you select?"
     choice_selection_prompt: "Tap the option you choose. Which option is the general rule?"
